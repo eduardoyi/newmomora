@@ -1,0 +1,27 @@
+appId: com.momora.app
+---
+- launchApp:
+    appId: com.momora.app
+    arguments:
+      EXDevMenuIsOnboardingFinished: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- runFlow:
+    when:
+      visible: "Welcome back"
+    file: sign-in.yaml
+- extendedWaitUntil:
+    visible: "Timeline"
+    timeout: 90000

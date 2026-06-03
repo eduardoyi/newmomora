@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "expo-web",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": ["/tmp/expo-web-start.sh"],
+      "port": 8081,
+      "autoPort": false
+    }
+  ]
+}

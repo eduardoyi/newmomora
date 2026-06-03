@@ -1,0 +1,14 @@
+appId: com.momora.app
+---
+- tapOn:
+    id: login-email-input
+- eraseText
+- inputText: ${TEST_EMAIL}
+- tapOn:
+    id: login-password-input
+- eraseText
+- inputText: ${TEST_PASSWORD}
+- tapOn:
+    id: login-submit-button
+- assertNotVisible:
+    text: "Invalid login credentials"

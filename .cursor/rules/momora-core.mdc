@@ -1,0 +1,42 @@
+---
+description: Core Momora project standards — MVP scope, stack, security, and change hygiene
+alwaysApply: true
+---
+
+# Momora Core
+
+Read `AGENTS.md` and `docs/TECH_SPEC.md` before non-trivial changes.
+
+## MVP scope
+
+In scope: auth, family profiles, plain-text + voice memories, AI portraits/illustrations, timeline/calendar/search, daily reminders.
+
+Out of scope: monetization, data export, SSO, photo-upload illustrations, family sharing, pets.
+
+## Stack (fixed)
+
+Expo SDK 56 · Expo Router · TanStack Query · Supabase · `expo-audio` · EAS dev client.
+
+Do not introduce Redux, `expo-av`, or Expo Go assumptions.
+
+## Non-negotiables
+
+- Memory **text saves before** AI runs; illustration failure never blocks save.
+- Max **4 tags** per memory (UI + backend).
+- **RLS** on all user data; **signed URLs** for private images.
+- **No secrets in git** — `.env*`, API keys, keystores are gitignored; use `.env.example` only.
+- **No OpenAI/service keys** in client or `EXPO_PUBLIC_*`.
+- **Voice audio not stored** — only transcribed text.
+- **Minimal diffs** — no drive-by refactors.
+
+## Schema/API changes
+
+Migration + regenerate `src/types/database.ts` + update `docs/TECH_SPEC.md` in same change.
+
+## Feature docs
+
+Major features require `docs/features/<name>.md` in the same PR. Read existing feature docs before extending.
+
+## Testing
+
+Major features require **unit + integration** tests in the same PR; **e2e** for user-facing flows. See `docs/TESTING.md`.

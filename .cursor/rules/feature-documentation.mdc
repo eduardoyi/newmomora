@@ -1,0 +1,39 @@
+---
+description: Require feature docs for major capabilities — docs/features for AI agent reference
+alwaysApply: true
+---
+
+# Feature Documentation
+
+Major features **must** be documented in `docs/features/` in the **same PR** as implementation.
+
+## Read before extending
+
+Before modifying auth, memories, voice, illustrations, family profiles, notifications, or onboarding:
+
+1. Check [docs/features/README.md](../../docs/features/README.md) index
+2. Read the relevant `docs/features/<name>.md`
+3. Read TECH_SPEC for API/schema contracts
+
+## Write when shipping
+
+Copy [docs/features/_template.md](../../docs/features/_template.md). Document:
+
+- Purpose, user behavior, architecture flow
+- Tables, Edge Functions, client hooks/routes (file paths)
+- **Extension guide** — how future features should integrate
+- Constraints, async behavior, security gotchas
+
+Update the index in `docs/features/README.md`.
+
+## Tests
+
+Same PR: unit + integration (+ e2e if user-facing). See [docs/TESTING.md](../../docs/TESTING.md).
+
+## Major vs trivial
+
+| Document | Skip |
+|----------|------|
+| New flow, Edge Function, AI pipeline, cross-feature dependency | Copy/style-only, single-line fixes |
+
+If an agent would need 3+ files to understand integration → write the doc.

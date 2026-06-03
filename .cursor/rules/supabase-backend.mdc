@@ -1,0 +1,47 @@
+---
+description: Supabase migrations, RLS, storage, and Edge Function standards
+globs: "supabase/**"
+alwaysApply: false
+---
+
+# Momora Supabase Backend
+
+See `docs/TECH_SPEC.md` for schema and function contracts.
+
+## Migrations
+
+- One concern per migration file; never edit applied migrations in place.
+- Enable RLS on every new `public` table.
+- Policies: `auth.uid() = user_id` for user-owned rows.
+- Add indexes for query paths (memories by user + date, family by user).
+
+## Object storage (Cloudflare R2)
+
+All images in R2 — **not** Supabase Storage. See `docs/COST_OPTIMIZATION.md`.
+
+| R2 bucket | Access |
+|-----------|--------|
+| `momora-profile-pictures` | Private — presigned URLs |
+| `momora-character-portraits` | Private |
+| `momora-memory-illustrations` | Private |
+| `momora-public-assets` | Public CDN |
+
+Object key prefix: `{userId}/...` — enforce in Edge Functions before presign.
+
+## Edge Functions
+
+- Validate JWT (except cron handlers using `CRON_SECRET`).
+- Return `{ error, code? }` on failure.
+- OpenAI keys from Deno env only.
+- Enforce max 4 memory tags server-side.
+- Voice: reject >2min audio; do not write audio to storage.
+
+## Account deletion
+
+Soft delete: set `deleted_at`, `scheduled_hard_delete_at` (+15 days). Cron hard-deletes expired accounts + R2 prefix `{userId}/`.
+
+## After schema change
+
+```bash
+npx supabase gen types typescript --local > src/types/database.ts
+```

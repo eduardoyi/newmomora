@@ -1,0 +1,15 @@
+appId: com.momora.app
+---
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: tab-family
+- tapOn:
+    id: family-add-member
+    optional: true
+- tapOn:
+    id: family-add-first-member
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: add-family-member-name
+    timeout: 10000

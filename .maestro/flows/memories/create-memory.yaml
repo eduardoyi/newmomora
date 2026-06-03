@@ -1,0 +1,26 @@
+appId: com.momora.app
+---
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: new-memory-content
+    timeout: 10000
+- tapOn:
+    id: new-memory-content
+- eraseText
+- inputText: "Emma said her first full sentence today."
+- tapOn: "New memory"
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    notVisible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000

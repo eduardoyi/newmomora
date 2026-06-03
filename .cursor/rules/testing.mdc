@@ -1,0 +1,49 @@
+---
+description: Test-as-you-build — unit, integration, e2e, and Deno tests required with major features
+alwaysApply: true
+---
+
+# Testing (test-as-you-build)
+
+Read [docs/TESTING.md](../../docs/TESTING.md) for full strategy.
+
+## Non-negotiable (same PR as feature)
+
+| Layer | When |
+|-------|------|
+| **Unit** | Utils, validators, isolated hook logic |
+| **Integration** | Services, hooks, hook+UI flows (mocked Supabase/API) |
+| **E2E (Maestro)** | New user-facing flows (≥1 happy path) |
+| **Deno** | Edge Function auth, validation, error shapes |
+| **Regression** | Every bug fix |
+
+## Commands
+
+```bash
+npm test                      # unit + integration
+npm run test:edge             # Deno Edge Functions
+maestro test .maestro/flows/  # e2e
+```
+
+## Integration tests
+
+Use `.integration.test.ts(x)` — test service + hook + component wiring with mocked I/O.
+
+- Mock `@/lib/supabase` at boundary; use real service/hook code
+- Wrap hooks in `QueryClientProvider` with `retry: false`
+- Cover success **and** failure paths (401, validation, max tags)
+
+## E2E
+
+Add stable `testID` to interactive elements:
+
+```tsx
+<Pressable testID="new-memory-save" ... />
+```
+
+## Do not
+
+- Merge major features with zero unit/integration tests on business logic
+- Skip integration tests ("e2e is enough") — e2e is slow and flaky for edge cases
+- Call real OpenAI/prod Supabase from unit/integration/CI
+- Defer tests to a follow-up PR

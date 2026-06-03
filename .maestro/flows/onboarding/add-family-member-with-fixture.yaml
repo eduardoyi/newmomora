@@ -1,0 +1,10 @@
+appId: com.momora.app
+---
+- runFlow: ../shared/open-add-family-member.yaml
+- tapOn:
+    id: add-family-member-photo-fixture
+- extendedWaitUntil:
+    visible:
+      id: family-change-photo
+    timeout: 10000
+- runFlow: ../shared/save-family-member-form.yaml

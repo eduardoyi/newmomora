@@ -1,0 +1,29 @@
+appId: com.momora.app
+---
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: new-memory-attach-media
+    timeout: 10000
+- tapOn:
+    id: new-memory-attach-media
+- tapOn: "Photo library"
+- runFlow: ../shared/pick-first-image.yaml
+- extendedWaitUntil:
+    visible:
+      id: new-memory-media-preview
+    timeout: 15000
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    notVisible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000

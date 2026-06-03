@@ -1,0 +1,48 @@
+---
+description: Expo Router client patterns for Momora screens, hooks, and components
+globs: "{app/**,src/**}"
+alwaysApply: false
+---
+
+# Momora Client (Expo)
+
+## Structure
+
+- `app/` — routes only; keep screens thin
+- `src/hooks/` — data hooks (`useMemories`, `useFamilyMembers`, `useVoiceInput`)
+- `src/services/` — Edge Function invocations
+- `src/components/` — presentational + small composed UI
+
+## Patterns
+
+```tsx
+// ✅ Query for server state
+const { data, isLoading, error } = useMemories();
+
+// ✅ Early return for loading/error
+if (isLoading) return <LoadingState />;
+if (error) return <ErrorState message={error.message} />;
+
+// ❌ Don't fetch in useEffect when TanStack Query fits
+```
+
+- Use `Pressable`, `expo-image`, safe area context.
+- For every `TextInput`/search field in a screen, modal, bottom sheet, or drawer, add keyboard avoidance (`KeyboardAvoidingView`, keyboard-aware scroll/content insets, or the established local pattern) so focused inputs and primary actions remain visible above the keyboard on iOS and Android.
+- Show illustration/portrait status: `pending | generating | ready | failed` + retry.
+- Voice: tap start/stop, 2-min cap, editable transcript before save.
+- Onboarding nudges **child first**; block new memory until ≥1 portrait is `ready`.
+- Plain text memories only — multiline `TextInput`, no rich text.
+
+## Lists
+
+Virtualize timeline (`FlashList` or `FlatList`). Stable `keyExtractor`. Avoid inline objects in `renderItem`.
+
+## Conditional render
+
+```tsx
+// ❌ Crashes if count is 0
+{count && <Text>{count}</Text>}
+
+// ✅
+{count > 0 ? <Text>{count}</Text> : null}
+```

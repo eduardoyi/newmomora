@@ -1,0 +1,23 @@
+appId: com.momora.app
+---
+- addMedia:
+    - ../../assets/profile-fixture.jpg
+- runFlow: ../shared/open-add-family-member.yaml
+- tapOn:
+    id: add-family-member-photo
+- tapOn:
+    text: "Choose from library"
+- tapOn:
+    text: "Allow Full Access"
+    optional: true
+- tapOn:
+    text: "Allow Access to All Photos"
+    optional: true
+- tapOn:
+    text: "Select Photos"
+    optional: true
+- runFlow: ../shared/pick-first-image.yaml
+- tapOn:
+    text: "Choose"
+    optional: true
+- runFlow: ../shared/save-family-member-form.yaml

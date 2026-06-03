@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(supabase *)",
+      "Bash(git *)"
+    ],
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Write(**/.env)",
+      "Write(**/.env.*)",
+      "Read(**/supabase/.env.local)",
+      "Write(**/supabase/.env.local)"
+    ]
+  }
+}

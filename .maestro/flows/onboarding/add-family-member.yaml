@@ -1,0 +1,7 @@
+appId: com.momora.app
+---
+# Smoke: opens the add-family-member screen after login.
+# For upload coverage, use:
+# - add-family-member-with-fixture.yaml (CI default)
+# - add-family-member-with-picker.yaml (real system picker)
+- runFlow: ../shared/open-add-family-member.yaml

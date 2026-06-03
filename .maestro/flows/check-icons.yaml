@@ -1,0 +1,63 @@
+appId: com.momora.app
+---
+# Launch and connect to dev server
+- launchApp:
+    appId: com.momora.app
+    arguments:
+      EXDevMenuIsOnboardingFinished: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+
+# Sign in if needed — triggered by login screen title
+- runFlow:
+    when:
+      visible: "Welcome back"
+    file: auth/sign-in.yaml
+
+# Wait for main app to load (header shows "Your moments." or tab bar appears)
+- extendedWaitUntil:
+    visible:
+      id: "tab-timeline"
+    timeout: 90000
+
+# --- Timeline tab ---
+- takeScreenshot: timeline-tab
+
+# --- Calendar tab ---
+- tapOn:
+    id: tab-calendar
+- waitForAnimationToEnd
+- takeScreenshot: calendar-tab
+
+# --- Family tab ---
+- tapOn:
+    id: tab-family
+- waitForAnimationToEnd
+- takeScreenshot: family-tab
+
+# --- Settings tab ---
+- tapOn:
+    id: tab-settings
+- waitForAnimationToEnd
+- takeScreenshot: settings-tab
+
+# --- New memory form ---
+- tapOn:
+    id: tab-timeline
+- waitForAnimationToEnd
+- tapOn:
+    id: new-memory-fab
+- waitForAnimationToEnd
+- takeScreenshot: new-memory-form

@@ -1,0 +1,36 @@
+---
+description: OpenAI illustration and voice pipeline rules for Edge Functions
+globs: "supabase/functions/**"
+alwaysApply: false
+---
+
+# Momora AI Pipelines
+
+Functions (names are fixed — extend, don't rename):
+
+| Function | Purpose |
+|----------|---------|
+| `generate-portrait-illustration` | Character portrait on profile save |
+| `analyze-emotion` | Emotion + palette from memory text |
+| `generate-illustration` | Memory illustration with portrait refs |
+| `process-voice-memory` | Transcribe + tag + cleanup |
+
+## Flow rules
+
+1. **Portraits** at profile save; **illustrations** after memory save.
+2. Safety pre-check memory text before image generation; retry once on moderation block.
+3. Resolve `illustration_style` token → style reference URL from `public-assets`.
+4. Use `gpt-image-2`, fallback `gpt-image-1`.
+5. Update status columns before/after async work (`generating` → `ready`|`failed`).
+6. Delete superseded illustration/portrait objects on regeneration.
+
+## Voice pipeline
+
+1. Transcribe with family name/nickname prompt context.
+2. Parse names → `mentionedMemberIds`.
+3. LLM cleanup + self-reference → add user profile id if needed.
+4. Return `{ cleanedText, mentionedMemberIds }` — never store audio.
+
+## Shared code
+
+Put prompts and style maps in `_shared/prompts.ts`, `_shared/styles.ts` — avoid duplicating strings across functions.

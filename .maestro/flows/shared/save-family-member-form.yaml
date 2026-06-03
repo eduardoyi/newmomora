@@ -1,0 +1,13 @@
+appId: com.momora.app
+---
+- scrollUntilVisible:
+    element:
+      id: add-family-member-save
+    direction: DOWN
+    timeout: 15000
+    visibilityPercentage: 50
+- tapOn:
+    id: add-family-member-save
+- extendedWaitUntil:
+    visible: "Maestro Test Child"
+    timeout: 60000
