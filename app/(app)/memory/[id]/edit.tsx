@@ -257,7 +257,7 @@ export default function EditMemoryScreen() {
           multiline
           value={content}
           onChangeText={handleContentChange}
-          placeholder={isMedia ? 'Add a caption (optional)…' : 'Edit your memory…'}
+          placeholder="What happened on this day?"
           placeholderTextColor={colors.ink3}
           style={[styles.textarea, hasAttachment ? styles.textareaCaption : null]}
           testID="edit-memory-content"
@@ -455,13 +455,10 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   textareaCaption: {
-    flex: 0,
-    minHeight: 64,
-    fontSize: 18,
-    lineHeight: 18 * 1.5,
+    minHeight: 120,
   },
   mediaWrap: {
-    flex: 1,
+    flex: 0,
     marginBottom: spacing.md,
   },
   attachmentImage: {

@@ -32,6 +32,10 @@ Deno.test('isAllowedUploadKey accepts valid family photo and memory media keys',
     ),
     true,
   );
+  assertEquals(
+    isAllowedUploadKey(`${USER_ID}/memories/${MEMORY_ID}/media/asset-photo-1.jpg`, USER_ID),
+    true,
+  );
 });
 
 Deno.test('getAllowedContentTypes is pattern-specific', () => {
@@ -53,6 +57,10 @@ Deno.test('isDeletableUserObjectKey accepts known user object patterns', () => {
       buildMemoryMediaAssetKey(USER_ID, MEMORY_ID, '44444444-4444-4444-8444-444444444444', 'jpg'),
       USER_ID,
     ),
+    true,
+  );
+  assertEquals(
+    isDeletableUserObjectKey(`${USER_ID}/memories/${MEMORY_ID}/media/asset-photo-1.jpg`, USER_ID),
     true,
   );
   assertEquals(isDeletableUserObjectKey(`${USER_ID}/unknown/path.jpg`, USER_ID), false);

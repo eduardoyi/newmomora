@@ -40,6 +40,16 @@ describe('media validation utils', () => {
     ).toBeNull();
   });
 
+  it('rejects oversized videos', () => {
+    expect(
+      validateMediaFile({
+        sizeBytes: 101 * 1024 * 1024,
+        durationMs: 30_000,
+        contentType: 'video/mp4',
+      }),
+    ).toMatch(/100 MB/i);
+  });
+
   it('rejects unknown mime types', () => {
     expect(
       validateMediaFile({

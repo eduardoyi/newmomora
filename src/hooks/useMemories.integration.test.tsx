@@ -10,7 +10,7 @@ import {
   runMediaPhotoEmotionAnalysis,
   updateMemory,
 } from '@/services/memories';
-import { getUploadUrl, uploadToPresignedUrl } from '@/services/media';
+import { uploadMediaObject } from '@/services/media';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -31,8 +31,7 @@ jest.mock('@/services/memories', () => ({
 
 jest.mock('@/services/media', () => ({
   deleteStorageObject: jest.fn(),
-  getUploadUrl: jest.fn(),
-  uploadToPresignedUrl: jest.fn(),
+  uploadMediaObject: jest.fn(),
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
@@ -42,10 +41,7 @@ const mockedUpdateMemory = updateMemory as jest.MockedFunction<typeof updateMemo
 const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.MockedFunction<
   typeof runMediaPhotoEmotionAnalysis
 >;
-const mockedGetUploadUrl = getUploadUrl as jest.MockedFunction<typeof getUploadUrl>;
-const mockedUploadToPresignedUrl = uploadToPresignedUrl as jest.MockedFunction<
-  typeof uploadToPresignedUrl
->;
+const mockedUploadMediaObject = uploadMediaObject as jest.MockedFunction<typeof uploadMediaObject>;
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -75,11 +71,10 @@ describe('useMemories integration', () => {
     });
 
     mockedFetchMemories.mockResolvedValue({ data: [], error: null });
-    mockedGetUploadUrl.mockResolvedValue({
-      data: { uploadUrl: 'https://example.com/upload', objectKey: 'key', expiresIn: 900 },
+    mockedUploadMediaObject.mockResolvedValue({
+      data: { objectKey: 'key', success: true },
       error: null,
     });
-    mockedUploadToPresignedUrl.mockResolvedValue({ error: null });
   });
 
   it('runs photo emotion analysis after creating a photo media memory', async () => {
@@ -111,6 +106,15 @@ describe('useMemories integration', () => {
       memoryDate: '2026-05-26',
       taggedMemberIds: [],
     });
+
+    expect(mockedUploadMediaObject).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^user-1\/memories\/memory-photo-1\/media\/[0-9a-f-]{36}\.jpg$/i,
+      ),
+      'file:///photo.jpg',
+      'image/jpeg',
+    );
+    expect(mockedUploadMediaObject.mock.calls[0]?.[0]).not.toContain('asset-photo-1');
 
     await waitFor(() => {
       expect(mockedRunMediaPhotoEmotionAnalysis).toHaveBeenCalledWith('memory-photo-1');

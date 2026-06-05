@@ -359,9 +359,25 @@ Presigned PUT for direct client → R2 upload.
 
 - Reject `objectKey` not matching any allowed pattern
 - Reject `contentType` not in the allowed set for the matched pattern
-- Client is responsible for enforcing video duration ≤ 60 seconds and image size ≤ 20 MB before requesting a presigned URL
+- Client is responsible for enforcing video duration ≤ 60 seconds, video size ≤ 100 MB, and image size ≤ 20 MB before upload
 
 **Response:** `{ uploadUrl, objectKey, expiresIn }`
+
+### 4.0a `upload-media`
+
+Authenticated binary upload proxy for mobile clients that cannot reliably reach the R2 S3 endpoint directly.
+
+**Request:** `POST` raw file bytes with headers:
+
+| Header | Purpose |
+|--------|---------|
+| `Authorization: Bearer <jwt>` | User auth |
+| `Content-Type` | Actual media MIME type |
+| `x-object-key` | R2 object key matching the same allowed upload patterns as `get-upload-url` |
+
+The function validates the user, object key, content type, and basic file size before uploading to R2 server-side.
+
+**Response:** `{ success: true, objectKey }`
 
 ### 4.0b `get-media-url`
 

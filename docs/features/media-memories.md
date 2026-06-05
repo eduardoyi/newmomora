@@ -83,6 +83,7 @@ The `{ext}` should reflect the actual format: `jpg`, `png`, `heic`, `webp`, `mp4
 | Function | Role | Auth |
 |----------|------|------|
 | `get-upload-url` | Presign PUT for memory media asset keys | JWT |
+| `upload-media` | Authenticated binary upload proxy for mobile media uploads | JWT |
 | `get-media-url` | Presign GET for display (same function as illustrations/portraits) | JWT |
 | `delete-storage-object` | Delete user-owned memory media (and rollback on failed create) | JWT |
 | `analyze-emotion` | Photo emotion + palette (`gpt-4o-mini` vision); optional caption | JWT |
@@ -97,7 +98,7 @@ contentType: image/jpeg | image/png | image/heic | image/webp | video/mp4 | vide
 
 The Edge Function rejects unknown content types and object keys that do not match an allowed pattern. See TECH_SPEC §4.0 for the full contract.
 
-Upload flow uses `get-upload-url` + `get-media-url`. Photo emotion uses `analyze-emotion` (see TECH_SPEC §4.2).
+Mobile upload flow uses `upload-media` so the device only talks to Supabase; `get-upload-url` remains available for direct presigned uploads. Display still uses `get-media-url`. Photo emotion uses `analyze-emotion` (see TECH_SPEC §4.2).
 
 ## Client integration
 
@@ -114,9 +115,9 @@ Upload flow uses `get-upload-url` + `get-media-url`. Photo emotion uses `analyze
 
 To create a `media` memory programmatically:
 
-1. Validate each file (size ≤ 20 MB for images; duration ≤ 60 s for videos) before requesting upload URLs.
+1. Validate each file (size ≤ 20 MB for images; size ≤ 100 MB and duration ≤ 60 s for videos) before upload.
 2. Call `memoriesService.createMediaMemory({ mediaAssets, caption?, taggedMemberIds?, memoryDate? })`.
-3. The service handles: generate UUID → presign → upload → DB insert in order.
+3. The service handles: generate UUID → upload through `upload-media` → DB insert in order.
 4. On success, invalidate the `useMemories` query. For **photos**, the hook also runs `runMediaPhotoEmotionAnalysis` and refetches when complete.
 5. Timeline may poll briefly (3 min window) while photo `media` rows have `emotion = null`.
 

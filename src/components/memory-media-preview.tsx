@@ -1,12 +1,26 @@
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
-import { useMemo } from 'react';
-import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import {
+  PanResponder,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 
-import { colors, fonts, radius, spacing } from '@/constants/theme';
 import type { MediaAttachment } from '@/components/memory-media-picker';
+import { colors, fonts, radius, spacing } from '@/constants/theme';
+import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { formatVideoDurationLabel } from '@/utils/memories';
 import { isVideoContentType } from '@/utils/media-validation';
+
+const GRID_COLUMNS = 3;
+const GRID_GAP = spacing.sm;
+const DEFAULT_TILE_SIZE = 96;
+const MAX_GRID_HEIGHT = 336;
 
 interface MemoryMediaPreviewProps {
   attachments: MediaAttachment[];
@@ -20,6 +34,20 @@ function clampIndex(index: number, length: number): number {
   return Math.min(Math.max(index, 0), length - 1);
 }
 
+function getTargetIndex(
+  index: number,
+  dx: number,
+  dy: number,
+  tileSize: number,
+  length: number,
+): number {
+  const step = tileSize + GRID_GAP;
+  const columnOffset = Math.round(dx / step);
+  const rowOffset = Math.round(dy / step);
+
+  return clampIndex(index + rowOffset * GRID_COLUMNS + columnOffset, length);
+}
+
 interface MemoryMediaTileProps {
   attachment: MediaAttachment;
   attachmentsLength: number;
@@ -28,6 +56,7 @@ interface MemoryMediaTileProps {
   onMove: (fromIndex: number, toIndex: number) => void;
   onRemove: (attachmentId: string) => void;
   onSelect: (attachmentId: string | null) => void;
+  tileSize: number;
 }
 
 function MemoryMediaTile({
@@ -38,30 +67,51 @@ function MemoryMediaTile({
   onMove,
   onRemove,
   onSelect,
+  tileSize,
 }: MemoryMediaTileProps) {
   const isVideo = isVideoContentType(attachment.contentType);
+  const thumbnailUri = useVideoThumbnail(isVideo ? attachment.uri : null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
   const panResponder = useMemo(
     () => PanResponder.create({
+      onStartShouldSetPanResponder: () => isSelected,
       onMoveShouldSetPanResponder: (_event, gestureState) =>
-        isSelected && Math.abs(gestureState.dx) > 12 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy),
+        isSelected && Math.max(Math.abs(gestureState.dx), Math.abs(gestureState.dy)) > 8,
+      onPanResponderGrant: () => {
+        setDragOffset({ x: 0, y: 0 });
+      },
+      onPanResponderMove: (_event, gestureState) => {
+        setDragOffset({ x: gestureState.dx, y: gestureState.dy });
+      },
       onPanResponderRelease: (_event, gestureState) => {
-        const tileStep = 92;
-        const offset = Math.round(gestureState.dx / tileStep);
-        if (offset === 0) {
-          return;
-        }
+        setDragOffset({ x: 0, y: 0 });
 
-        onMove(index, clampIndex(index + offset, attachmentsLength));
+        const targetIndex = getTargetIndex(
+          index,
+          gestureState.dx,
+          gestureState.dy,
+          tileSize,
+          attachmentsLength,
+        );
+
+        if (targetIndex !== index) {
+          onMove(index, targetIndex);
+          onSelect(null);
+        }
+      },
+      onPanResponderTerminate: () => {
+        setDragOffset({ x: 0, y: 0 });
       },
     }),
-    [attachmentsLength, index, isSelected, onMove],
+    [attachmentsLength, index, isSelected, onMove, onSelect, tileSize],
   );
 
   return (
     <Pressable
+      accessibilityHint="Long press, then drag to reorder"
       accessibilityRole="button"
       accessibilityLabel="Attached media"
-      key={attachment.id}
       onLongPress={() => onSelect(isSelected ? null : attachment.id)}
       onPress={() => {
         if (isSelected) {
@@ -70,23 +120,53 @@ function MemoryMediaTile({
       }}
       style={[
         styles.tile,
+        { height: tileSize, width: tileSize },
         isSelected && styles.tileSelected,
+        isSelected && styles.tileRaised,
+        isSelected && {
+          transform: [
+            { translateX: dragOffset.x },
+            { translateY: dragOffset.y },
+          ],
+        },
       ]}
       testID={`memory-media-tile-${index}`}
       {...panResponder.panHandlers}
     >
       {isVideo ? (
-        <View style={styles.videoPlaceholder}>
-          <SymbolView
-            name={{ ios: 'play.fill', android: 'play_arrow' }}
-            size={22}
-            tintColor={colors.primary}
-            fallback={<Text style={styles.videoIcon}>▶</Text>}
-          />
+        <View style={styles.videoWrap}>
+          {thumbnailUri ? (
+            <Image contentFit="cover" source={{ uri: thumbnailUri }} style={styles.image} />
+          ) : (
+            <View style={styles.videoPlaceholder}>
+              <SymbolView
+                name={{ ios: 'video', android: 'videocam' }}
+                size={26}
+                tintColor={colors.white}
+                fallback={<Text style={styles.videoIcon}>▻</Text>}
+              />
+            </View>
+          )}
+          <View style={styles.playBadge}>
+            <SymbolView
+              name={{ ios: 'play.fill', android: 'play_arrow' }}
+              size={20}
+              tintColor={colors.ink}
+              fallback={<Text style={styles.playIcon}>▶</Text>}
+            />
+          </View>
           {attachment.durationMs != null ? (
-            <Text style={styles.durationLabel}>
-              {formatVideoDurationLabel(attachment.durationMs)}
-            </Text>
+            <View style={styles.durationBadge}>
+              <SymbolView
+                name={{ ios: 'play.fill', android: 'play_arrow' }}
+                size={8}
+                tintColor={colors.white}
+                fallback={<Text style={styles.durationIcon}>▶</Text>}
+              />
+              <Text style={styles.durationLabel}>
+                {formatVideoDurationLabel(attachment.durationMs)}
+              </Text>
+            </View>
           ) : null}
         </View>
       ) : (
@@ -106,42 +186,6 @@ function MemoryMediaTile({
       >
         <Text style={styles.removeButtonText}>×</Text>
       </Pressable>
-
-      {isSelected ? (
-        <View style={styles.reorderControls}>
-          <Pressable
-            accessibilityRole="button"
-            disabled={index === 0}
-            onPress={() => onMove(index, clampIndex(index - 1, attachmentsLength))}
-            style={[styles.reorderButton, index === 0 && styles.reorderButtonDisabled]}
-            testID={`memory-media-move-left-${index}`}
-          >
-            <SymbolView
-              name={{ ios: 'chevron.left', android: 'chevron_left' }}
-              size={16}
-              tintColor={colors.white}
-              fallback={<Text style={styles.reorderText}>‹</Text>}
-            />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            disabled={index === attachmentsLength - 1}
-            onPress={() => onMove(index, clampIndex(index + 1, attachmentsLength))}
-            style={[
-              styles.reorderButton,
-              index === attachmentsLength - 1 && styles.reorderButtonDisabled,
-            ]}
-            testID={`memory-media-move-right-${index}`}
-          >
-            <SymbolView
-              name={{ ios: 'chevron.right', android: 'chevron_right' }}
-              size={16}
-              tintColor={colors.white}
-              fallback={<Text style={styles.reorderText}>›</Text>}
-            />
-          </Pressable>
-        </View>
-      ) : null}
     </Pressable>
   );
 }
@@ -153,87 +197,172 @@ export function MemoryMediaPreview({
   selectedId,
   onSelect,
 }: MemoryMediaPreviewProps) {
+  const [gridWidth, setGridWidth] = useState(0);
+  const tileSize = gridWidth > 0
+    ? Math.floor((gridWidth - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS)
+    : DEFAULT_TILE_SIZE;
+
   return (
     <View style={styles.container} testID="new-memory-media-preview">
-      <ScrollView
-        contentContainerStyle={styles.tileRow}
-        horizontal
-        keyboardShouldPersistTaps="handled"
-        showsHorizontalScrollIndicator={false}
+      <View style={styles.header}>
+        <Text style={styles.headerLabel}>Photos & videos</Text>
+        <Text style={styles.headerCount}>{attachments.length}/10</Text>
+      </View>
+      <View
+        onLayout={(event: LayoutChangeEvent) => {
+          const width = event.nativeEvent.layout.width;
+          if (width > 0) {
+            setGridWidth(width);
+          }
+        }}
+        style={styles.gridMeasure}
       >
-        {attachments.map((attachment, index) => {
-          const isSelected = selectedId === attachment.id;
+        <ScrollView
+          contentContainerStyle={styles.tileGrid}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
+          style={styles.tileScroll}
+        >
+          {attachments.map((attachment, index) => {
+            const isSelected = selectedId === attachment.id;
 
-          return (
-            <MemoryMediaTile
-              attachment={attachment}
-              attachmentsLength={attachments.length}
-              index={index}
-              isSelected={isSelected}
-              key={attachment.id}
-              onMove={onMove}
-              onRemove={onRemove}
-              onSelect={onSelect}
-            />
-          );
-        })}
-      </ScrollView>
+            return (
+              <MemoryMediaTile
+                attachment={attachment}
+                attachmentsLength={attachments.length}
+                index={index}
+                isSelected={isSelected}
+                key={attachment.id}
+                onMove={onMove}
+                onRemove={onRemove}
+                onSelect={onSelect}
+                tileSize={tileSize}
+              />
+            );
+          })}
+        </ScrollView>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    gap: spacing.xs,
-  },
-  tileRow: {
     gap: spacing.sm,
-    paddingVertical: spacing.xs,
+  },
+  header: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  headerLabel: {
+    color: colors.ink3,
+    fontFamily: fonts.sansBold,
+    fontSize: 11,
+    letterSpacing: 1.8,
+    textTransform: 'uppercase',
+  },
+  headerCount: {
+    color: colors.ink2,
+    fontFamily: fonts.sansBold,
+    fontSize: 14,
+  },
+  gridMeasure: {
+    width: '100%',
+  },
+  tileScroll: {
+    maxHeight: MAX_GRID_HEIGHT,
+  },
+  tileGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: GRID_GAP,
   },
   tile: {
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderRadius: radius.md,
     borderWidth: 1,
-    height: 104,
     overflow: 'hidden',
     position: 'relative',
-    width: 84,
   },
   tileSelected: {
     borderColor: colors.primary,
     borderWidth: 2,
   },
+  tileRaised: {
+    opacity: 0.94,
+    zIndex: 2,
+  },
   image: {
+    height: '100%',
+    width: '100%',
+  },
+  videoWrap: {
     height: '100%',
     width: '100%',
   },
   videoPlaceholder: {
     alignItems: 'center',
+    backgroundColor: colors.ink3,
     height: '100%',
     justifyContent: 'center',
     width: '100%',
   },
   videoIcon: {
-    color: colors.primary,
+    color: colors.white,
     fontSize: 22,
     fontWeight: '700',
   },
+  playBadge: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 26,
+    height: 52,
+    justifyContent: 'center',
+    left: '50%',
+    marginLeft: -26,
+    marginTop: -26,
+    position: 'absolute',
+    top: '50%',
+    width: 52,
+  },
+  playIcon: {
+    color: colors.ink,
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  durationBadge: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(44,36,24,0.62)',
+    borderRadius: 10,
+    bottom: 7,
+    flexDirection: 'row',
+    gap: 3,
+    left: 7,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    position: 'absolute',
+  },
+  durationIcon: {
+    color: colors.white,
+    fontSize: 8,
+  },
   durationLabel: {
-    color: colors.textMuted,
+    color: colors.white,
     fontFamily: fonts.sansBold,
     fontSize: 11,
-    marginTop: 5,
   },
   positionBadge: {
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.55)',
     borderRadius: 9,
+    bottom: 7,
     height: 18,
     justifyContent: 'center',
-    left: 6,
     position: 'absolute',
-    top: 6,
+    right: 7,
     width: 18,
   },
   positionText: {
@@ -255,33 +384,6 @@ const styles = StyleSheet.create({
   removeButtonText: {
     color: colors.white,
     fontSize: 17,
-    fontWeight: '700',
-    lineHeight: 18,
-  },
-  reorderControls: {
-    alignItems: 'center',
-    bottom: 7,
-    flexDirection: 'row',
-    gap: 8,
-    justifyContent: 'center',
-    left: 0,
-    position: 'absolute',
-    right: 0,
-  },
-  reorderButton: {
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-    borderRadius: 14,
-    height: 28,
-    justifyContent: 'center',
-    width: 28,
-  },
-  reorderButtonDisabled: {
-    opacity: 0.35,
-  },
-  reorderText: {
-    color: colors.white,
-    fontSize: 18,
     fontWeight: '700',
     lineHeight: 18,
   },

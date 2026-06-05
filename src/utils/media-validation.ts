@@ -1,4 +1,5 @@
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 export const MAX_VIDEO_DURATION_MS = 60 * 1000;
 
 export const ALLOWED_IMAGE_CONTENT_TYPES = new Set([
@@ -42,6 +43,10 @@ export function validateMediaFile(input: ValidateMediaFileInput): string | null 
 
     if (input.durationMs > MAX_VIDEO_DURATION_MS) {
       return 'Videos must be 60 seconds or shorter.';
+    }
+
+    if (input.sizeBytes > MAX_VIDEO_BYTES) {
+      return 'Videos must be 100 MB or smaller.';
     }
 
     return null;

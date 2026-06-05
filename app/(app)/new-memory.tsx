@@ -209,7 +209,7 @@ export default function NewMemoryScreen() {
           multiline
           value={content}
           onChangeText={handleContentChange}
-          placeholder={attachedMedia.length > 0 ? 'Add a caption (optional)…' : 'What just happened?'}
+          placeholder="What happened on this day?"
           placeholderTextColor={colors.ink3}
           style={[styles.textarea, attachedMedia.length > 0 ? styles.textareaCaption : null]}
           testID="new-memory-content"
@@ -374,13 +374,10 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   textareaCaption: {
-    flex: 0,
-    minHeight: 64,
-    fontSize: 18,
-    lineHeight: 18 * 1.5,
+    minHeight: 120,
   },
   mediaWrap: {
-    flex: 1,
+    flex: 0,
     marginBottom: spacing.md,
   },
   wordCount: {

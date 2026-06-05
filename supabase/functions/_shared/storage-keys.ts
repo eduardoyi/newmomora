@@ -15,7 +15,7 @@ const MEMORY_MEDIA_CONTENT_TYPES = new Set([
 
 const MEMORY_MEDIA_EXTENSION_PATTERN = /^([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
 const MEMORY_MEDIA_ASSET_EXTENSION_PATTERN =
-  /^([^/]+)\/media\/([^/]+)\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
+  /^([^/]+)\/media\/([A-Za-z0-9_-]{1,128})\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
 
 export function buildFamilyPhotoKey(userId: string, familyMemberId: string): string {
   return `${userId}/family/${familyMemberId}/photo.webp`;
@@ -77,7 +77,7 @@ export function isMemoryMediaKey(objectKey: string, userId: string): boolean {
     return false;
   }
 
-  return UUID_PATTERN.test(assetMatch[1]) && UUID_PATTERN.test(assetMatch[2]);
+  return UUID_PATTERN.test(assetMatch[1]);
 }
 
 export function isAllowedUploadKey(objectKey: string, userId: string): boolean {

@@ -19,11 +19,72 @@ export interface GetMediaUrlResponse {
   expiresIn: number;
 }
 
+export interface UploadMediaResponse {
+  objectKey: string;
+  success: true;
+}
+
+const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+
 function mapFunctionError(error: { message: string; context?: { status?: number } }): ServiceError {
   return {
     message: error.message,
     code: error.context?.status ? String(error.context.status) : undefined,
   };
+}
+
+async function mapResponseError(response: Response): Promise<ServiceError> {
+  try {
+    const body = await response.json();
+    if (body && typeof body.error === 'string') {
+      return {
+        message: body.error,
+        code: typeof body.code === 'string' ? body.code : String(response.status),
+      };
+    }
+  } catch {
+    // Fall through to generic status-based message.
+  }
+
+  return {
+    message: 'Media upload failed',
+    code: String(response.status),
+  };
+}
+
+async function getUploadFunctionHeaders(
+  objectKey: string,
+  contentType: string,
+): Promise<{ headers: Record<string, string>; error: ServiceError | null }> {
+  const { data, error } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+
+  if (error || !token) {
+    return {
+      headers: {},
+      error: {
+        message: error?.message ?? 'You must be signed in to upload media',
+        code: 'unauthorized',
+      },
+    };
+  }
+
+  return {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': contentType,
+      'x-object-key': objectKey,
+    },
+    error: null,
+  };
+}
+
+function getUploadFunctionUrl(): string {
+  if (!supabaseUrl) {
+    throw new Error('Missing EXPO_PUBLIC_SUPABASE_URL');
+  }
+
+  return `${supabaseUrl.replace(/\/$/, '')}/functions/v1/upload-media`;
 }
 
 export async function getUploadUrl(
@@ -61,6 +122,75 @@ export async function getMediaUrls(
   }
 
   return { data, error: null };
+}
+
+export async function uploadMediaObject(
+  objectKey: string,
+  fileUri: string,
+  contentType: string,
+): Promise<{ data: UploadMediaResponse | null; error: ServiceError | null }> {
+  const { headers, error: authError } = await getUploadFunctionHeaders(objectKey, contentType);
+  if (authError) {
+    return { data: null, error: authError };
+  }
+
+  const uploadUrl = getUploadFunctionUrl();
+
+  if (Platform.OS === 'web') {
+    const fileResponse = await fetch(fileUri);
+    const blob = await fileResponse.blob();
+
+    const uploadResponse = await fetch(uploadUrl, {
+      method: 'POST',
+      headers,
+      body: blob,
+    });
+
+    if (!uploadResponse.ok) {
+      return { data: null, error: await mapResponseError(uploadResponse) };
+    }
+
+    return { data: await uploadResponse.json(), error: null };
+  }
+
+  const uploadResult = await FileSystem.uploadAsync(uploadUrl, fileUri, {
+    httpMethod: 'POST',
+    headers,
+    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+  });
+
+  if (uploadResult.status < 200 || uploadResult.status >= 300) {
+    try {
+      const body = JSON.parse(uploadResult.body);
+      if (body && typeof body.error === 'string') {
+        return {
+          data: null,
+          error: {
+            message: body.error,
+            code: typeof body.code === 'string' ? body.code : String(uploadResult.status),
+          },
+        };
+      }
+    } catch {
+      // Fall through to generic status-based message.
+    }
+
+    return {
+      data: null,
+      error: {
+        message: 'Media upload failed',
+        code: String(uploadResult.status),
+      },
+    };
+  }
+
+  return {
+    data: {
+      objectKey,
+      success: true,
+    },
+    error: null,
+  };
 }
 
 export async function uploadToPresignedUrl(

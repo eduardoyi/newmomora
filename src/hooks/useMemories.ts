@@ -16,7 +16,7 @@ import {
   updateMemory,
   type MemoryWithTags,
 } from '@/services/memories';
-import { deleteStorageObject, getUploadUrl, uploadToPresignedUrl } from '@/services/media';
+import { deleteStorageObject, uploadMediaObject } from '@/services/media';
 import {
   needsIllustrationRecovery,
   type MemoryType,
@@ -30,6 +30,10 @@ import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
 import { getMediaExtensionFromContentType, isVideoContentType } from '@/utils/media-validation';
 
 export const memoriesQueryKey = ['memories'] as const;
+
+const MEDIA_UPLOAD_CONCURRENCY = 3;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isMemoriesListQueryKey(queryKey: readonly unknown[]): boolean {
   return queryKey[0] === memoriesQueryKey[0] && queryKey[1] !== 'detail';
@@ -91,6 +95,58 @@ function hasImageMediaAsset(assets: Array<{ contentType: string }>): boolean {
   return assets.some((asset) => !isVideoContentType(asset.contentType));
 }
 
+function getStorageMediaAssetId(mediaAssetId?: string): string {
+  return mediaAssetId && UUID_PATTERN.test(mediaAssetId) ? mediaAssetId : createUuid();
+}
+
+async function mapMediaUploads<T>(
+  assets: MemoryMediaMutationAsset[],
+  uploadAsset: (asset: MemoryMediaMutationAsset) => Promise<T>,
+): Promise<T[]> {
+  const results = new Array<T>(assets.length);
+  let nextIndex = 0;
+  let firstError: unknown = null;
+
+  async function worker() {
+    while (nextIndex < assets.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+
+      try {
+        results[currentIndex] = await uploadAsset(assets[currentIndex]);
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+  }
+
+  const workerCount = Math.min(MEDIA_UPLOAD_CONCURRENCY, assets.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  if (firstError) {
+    throw firstError;
+  }
+
+  return results;
+}
+
+function toError(error: unknown, fallbackMessage: string): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return new Error(error.message);
+  }
+
+  return new Error(fallbackMessage);
+}
+
 export function useMemories(searchQuery = '') {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -105,7 +161,7 @@ export function useMemories(searchQuery = '') {
         : await fetchMemories();
 
       if (error) {
-        throw error;
+        throw toError(error, 'Could not load memories');
       }
 
       return data ?? [];
@@ -213,7 +269,7 @@ export function useMemories(searchQuery = '') {
       });
 
       if (error) {
-        throw error;
+        throw toError(error, 'Could not save memory');
       }
 
       return data as MemoryWithTags;
@@ -249,30 +305,21 @@ export function useMemories(searchQuery = '') {
           throw new Error('Unsupported file type');
         }
 
-        const mediaAssetId = asset.mediaAssetId ?? createUuid();
+        const mediaAssetId = getStorageMediaAssetId(asset.mediaAssetId);
         const mediaKey = buildMemoryMediaAssetKey(
           user.id,
           input.memoryId,
           mediaAssetId,
           extension,
         );
-        const { data: uploadData, error: uploadUrlError } = await getUploadUrl(
+        const { error: uploadError } = await uploadMediaObject(
           mediaKey,
-          asset.contentType,
-        );
-
-        if (uploadUrlError || !uploadData?.uploadUrl) {
-          throw uploadUrlError ?? new Error('Upload URL was not returned');
-        }
-
-        const { error: uploadError } = await uploadToPresignedUrl(
-          uploadData.uploadUrl,
           asset.fileUri,
           asset.contentType,
         );
 
         if (uploadError) {
-          throw uploadError;
+          throw toError(uploadError, 'Media upload failed');
         }
 
         uploadedKeys.push(mediaKey);
@@ -285,10 +332,7 @@ export function useMemories(searchQuery = '') {
       };
 
       try {
-        const mediaAssets = [];
-        for (const asset of input.mediaAssets) {
-          mediaAssets.push(await uploadAsset(asset));
-        }
+        const mediaAssets = await mapMediaUploads(input.mediaAssets, uploadAsset);
 
         const { data, error } = await createMediaMemory({
           userId: user.id,
@@ -300,7 +344,7 @@ export function useMemories(searchQuery = '') {
         });
 
         if (error) {
-          throw error;
+          throw toError(error, 'Could not save memory');
         }
 
         const memory = data as MemoryWithTags;
@@ -314,7 +358,7 @@ export function useMemories(searchQuery = '') {
         return memory;
       } catch (error) {
         await Promise.all(uploadedKeys.map((key) => deleteStorageObject(key)));
-        throw error;
+        throw toError(error, 'Could not save memory');
       }
     },
     onSuccess: () => {
@@ -354,30 +398,21 @@ export function useMemories(searchQuery = '') {
           throw new Error('Unsupported file type');
         }
 
-        const mediaAssetId = asset.mediaAssetId ?? createUuid();
+        const mediaAssetId = getStorageMediaAssetId(asset.mediaAssetId);
         const mediaKey = buildMemoryMediaAssetKey(
           user.id,
           input.memoryId,
           mediaAssetId,
           extension,
         );
-        const { data: uploadData, error: uploadUrlError } = await getUploadUrl(
+        const { error: uploadError } = await uploadMediaObject(
           mediaKey,
-          asset.contentType,
-        );
-
-        if (uploadUrlError || !uploadData?.uploadUrl) {
-          throw uploadUrlError ?? new Error('Upload URL was not returned');
-        }
-
-        const { error: uploadError } = await uploadToPresignedUrl(
-          uploadData.uploadUrl,
           asset.fileUri,
           asset.contentType,
         );
 
         if (uploadError) {
-          throw uploadError;
+          throw toError(uploadError, 'Media upload failed');
         }
 
         uploadedKeys.push(mediaKey);
@@ -392,13 +427,7 @@ export function useMemories(searchQuery = '') {
       let data: MemoryWithTags | null = null;
       try {
         const mediaAssets = input.mediaAssets
-          ? await (async () => {
-              const uploaded = [];
-              for (const asset of input.mediaAssets ?? []) {
-                uploaded.push(await uploadAsset(asset));
-              }
-              return uploaded;
-            })()
+          ? await mapMediaUploads(input.mediaAssets, uploadAsset)
           : undefined;
 
         const result = await updateMemory(input.memoryId, {
@@ -409,13 +438,13 @@ export function useMemories(searchQuery = '') {
         });
 
         if (result.error) {
-          throw result.error;
+          throw toError(result.error, 'Could not update memory');
         }
 
         data = result.data;
       } catch (error) {
         await Promise.all(uploadedKeys.map((key) => deleteStorageObject(key)));
-        throw error;
+        throw toError(error, 'Could not update memory');
       }
 
       const memory = data as MemoryWithTags;
@@ -443,7 +472,7 @@ export function useMemories(searchQuery = '') {
       const { error } = await deleteMemory(memoryId);
 
       if (error) {
-        throw error;
+        throw toError(error, 'Could not delete memory');
       }
     },
     onSuccess: () => {
@@ -456,7 +485,7 @@ export function useMemories(searchQuery = '') {
       const { error } = await retryMemoryIllustration(memoryId);
 
       if (error) {
-        throw error;
+        throw toError(error, 'Could not retry illustration');
       }
     },
     onMutate: async (memoryId) => {
@@ -473,7 +502,7 @@ export function useMemories(searchQuery = '') {
       const { error } = await regenerateMemoryIllustration(memoryId);
 
       if (error) {
-        throw error;
+        throw toError(error, 'Could not regenerate illustration');
       }
     },
     onMutate: async (memoryId) => {
@@ -523,7 +552,7 @@ export function useMemory(memoryId: string | undefined) {
       const { data, error } = await fetchMemoryById(memoryId);
 
       if (error) {
-        throw error;
+        throw toError(error, 'Could not load memory');
       }
 
       return data;
