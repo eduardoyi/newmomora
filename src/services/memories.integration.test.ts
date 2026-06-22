@@ -3,6 +3,8 @@ import {
   createMemory,
   deleteMemory,
   fetchMemories,
+  fetchMemoriesInDateRange,
+  fetchOldestMemoryDate,
   markMemoryIllustrationFailed,
   regenerateMemoryIllustration,
   retryMemoryIllustration,
@@ -48,7 +50,10 @@ function createQueryBuilder(finalResult: QueryResult) {
   builder.update = jest.fn(() => builder);
   builder.delete = jest.fn(() => builder);
   builder.eq = jest.fn(() => builder);
+  builder.gte = jest.fn(() => builder);
   builder.in = jest.fn(() => builder);
+  builder.limit = jest.fn(() => builder);
+  builder.lte = jest.fn(() => builder);
   builder.or = jest.fn(() => builder);
   builder.order = jest.fn(() => builder);
   builder.single = jest.fn(async () => finalResult);
@@ -463,5 +468,87 @@ describe('memories service integration', () => {
     expect(error).toBeNull();
     expect(data?.[0]?.taggedMembers).toHaveLength(1);
     expect(data?.[0]?.taggedMembers[0]?.name).toBe('Emma');
+  });
+
+  it('fetchOldestMemoryDate loads only the earliest memory date', async () => {
+    const memoriesBuilder = createQueryBuilder({
+      data: { memory_date: '2024-01-09' },
+      error: null,
+    });
+
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        return memoriesBuilder;
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const { data, error } = await fetchOldestMemoryDate();
+
+    expect(error).toBeNull();
+    expect(data).toBe('2024-01-09');
+    expect(memoriesBuilder.select).toHaveBeenCalledWith('memory_date');
+    expect(memoriesBuilder.order).toHaveBeenCalledWith('memory_date', { ascending: true });
+    expect(memoriesBuilder.limit).toHaveBeenCalledWith(1);
+  });
+
+  it('fetchMemoriesInDateRange bounds calendar preview rows by memory_date', async () => {
+    const memoriesBuilder = createQueryBuilder({
+      data: [
+        {
+          id: 'memory-range-1',
+          user_id: 'user-1',
+          content: 'Windowed memory',
+          memory_date: '2026-05-24',
+          memory_type: 'media',
+          emotion: 'joy',
+          illustration_key: null,
+          illustration_status: 'none',
+          illustration_prompt: null,
+          media_key: 'user-1/memories/memory-range-1/media.jpg',
+          media_content_type: 'image/jpeg',
+          created_at: '2026-05-24T00:00:00Z',
+          updated_at: '2026-05-24T00:00:00Z',
+        },
+      ],
+      error: null,
+    });
+    const mediaBuilder = createQueryBuilder({
+      data: [
+        {
+          id: 'asset-1',
+          memory_id: 'memory-range-1',
+          object_key: 'user-1/memories/memory-range-1/media.jpg',
+          content_type: 'image/jpeg',
+          duration_ms: null,
+          position: 0,
+          created_at: '2026-05-24T00:00:00Z',
+          updated_at: '2026-05-24T00:00:00Z',
+        },
+      ],
+      error: null,
+    });
+
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        return memoriesBuilder;
+      }
+
+      if (table === 'memory_media') {
+        return mediaBuilder;
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const { data, error } = await fetchMemoriesInDateRange('2026-05-01', '2026-05-31');
+
+    expect(error).toBeNull();
+    expect(memoriesBuilder.gte).toHaveBeenCalledWith('memory_date', '2026-05-01');
+    expect(memoriesBuilder.lte).toHaveBeenCalledWith('memory_date', '2026-05-31');
+    expect(data?.[0]?.id).toBe('memory-range-1');
+    expect(data?.[0]?.mediaAssets).toHaveLength(1);
+    expect(data?.[0]?.taggedMembers).toEqual([]);
   });
 });

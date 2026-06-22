@@ -26,7 +26,7 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
 - Memory detail shows full content, media or illustration, tagged members, date, emotion (if any), edit/delete. The detail background carries a soft top-down gradient tinted by the emotion (`getEmotionGradient` in `src/constants/theme.ts`), falling back to a neutral surface→bg fade when no emotion is set.
 - Illustrated memory detail header includes a regenerate control (left of edit) to manually rerun the illustration pipeline; confirms before replacing a ready image. Regeneration calls `generate-illustration` with `forceRegenerate: true` so an already-`ready` memory is not short-circuited.
 - Failed illustration shows retry option; no retry concept for media memories.
-- Calendar highlights days with memories; tap opens first memory for that day.
+- Calendar renders virtualized week rows back to the user's oldest memory. It fetches only the visible date window plus a small buffer; tap opens the first memory for that day.
 - Search bar on Timeline filters by content/emotion (`ilike`).
 
 ## Architecture
@@ -87,7 +87,7 @@ See TECH_SPEC §4.0, §4.2–4.3 for contracts.
 | Layer | Files |
 |-------|-------|
 | Routes | `app/(app)/new-memory.tsx`, `app/(app)/memory/[id]/index.tsx`, `app/(app)/memory/[id]/edit.tsx`, `app/(app)/(tabs)/timeline.tsx`, `calendar.tsx` |
-| Hooks | `src/hooks/useMemories.ts`, `src/hooks/useAutoMemoryTags.ts`, `src/hooks/useVoiceInput.ts` |
+| Hooks | `src/hooks/useMemories.ts`, `src/hooks/useCalendarMemories.ts`, `src/hooks/useAutoMemoryTags.ts`, `src/hooks/useVoiceInput.ts` |
 | Utils | `src/utils/member-mentions.ts`, `src/utils/auto-memory-tags.ts` |
 | Services | `src/services/memories.ts`, `src/services/ai.ts` |
 | Components | `src/components/memory-card.tsx`, `memory-tag-picker.tsx`, `memory-fab.tsx`, `search-input.tsx`, `memory-media-picker.tsx` |
@@ -109,6 +109,7 @@ See TECH_SPEC §4.0, §4.2–4.3 for contracts.
 - Reference images are capped to **1024px** max edge server-side before the OpenAI edit call.
 - `illustration_status = 'pending'` must only be set for `text_illustration` rows; all other types use `'none'`.
 - Poll every 5s while `illustration_status` is `pending`/`generating`.
+- Calendar range loading uses `fetchOldestMemoryDate` for scroll extent and `fetchMemoriesInDateRange` for buffered visible rows, so do not reintroduce full-list loading for the calendar.
 - `media_key` must be null for non-`media` types; for `media`, it mirrors `memory_media` position 0 for compatibility.
 - Voice audio is **not stored** — only transcribed text.
 - `content` is nullable in the schema but must be non-empty after trim for `text_illustration` and `text_only` — enforced in client and Edge Function layer.
@@ -117,7 +118,7 @@ See TECH_SPEC §4.0, §4.2–4.3 for contracts.
 
 | Layer | File |
 |-------|------|
-| Unit | `src/utils/memories.test.ts`, `src/utils/member-mentions.test.ts`, `src/utils/auto-memory-tags.test.ts`, `src/utils/profile-photo.test.ts` |
-| Integration | `src/services/memories.integration.test.ts`, `src/hooks/useAutoMemoryTags.integration.test.tsx` |
+| Unit | `src/utils/memories.test.ts`, `src/utils/calendar.test.ts`, `src/utils/member-mentions.test.ts`, `src/utils/auto-memory-tags.test.ts`, `src/utils/profile-photo.test.ts` |
+| Integration | `src/services/memories.integration.test.ts`, `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/useAutoMemoryTags.integration.test.tsx` |
 | E2E | `.maestro/flows/memories/create-memory.yaml`, `.maestro/flows/memories/auto-tag.yaml` |
 | Deno | `supabase/functions/analyze-emotion/index.test.ts`, `generate-illustration/index.test.ts`, `_shared/member-mentions.test.ts`, `_shared/illustration-references.test.ts`, `_shared/image-bytes.test.ts` |

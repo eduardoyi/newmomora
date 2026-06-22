@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
+import { calendarMemoriesQueryKey, memoriesQueryKey } from '@/hooks/queryKeys';
 import {
   createMediaMemory,
   createMemory,
@@ -29,11 +30,14 @@ import {
 import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
 import { getMediaExtensionFromContentType, isVideoContentType } from '@/utils/media-validation';
 
-export const memoriesQueryKey = ['memories'] as const;
-
 const MEDIA_UPLOAD_CONCURRENCY = 3;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function invalidateMemoryQueries(queryClient: ReturnType<typeof useQueryClient>): void {
+  queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+  queryClient.invalidateQueries({ queryKey: calendarMemoriesQueryKey });
+}
 
 function isMemoriesListQueryKey(queryKey: readonly unknown[]): boolean {
   return queryKey[0] === memoriesQueryKey[0] && queryKey[1] !== 'detail';
@@ -205,7 +209,7 @@ export function useMemories(searchQuery = '') {
         })
         .finally(() => {
           recoveringIllustrationsRef.current.delete(memory.id);
-          queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+          invalidateMemoryQueries(queryClient);
         });
     }
   }, [query.data, queryClient]);
@@ -249,7 +253,7 @@ export function useMemories(searchQuery = '') {
           );
         })
         .finally(() => {
-          queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+          invalidateMemoryQueries(queryClient);
         });
     }
   }, [query.data, queryClient]);
@@ -275,7 +279,7 @@ export function useMemories(searchQuery = '') {
       return data as MemoryWithTags;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+      invalidateMemoryQueries(queryClient);
     },
   });
 
@@ -351,7 +355,7 @@ export function useMemories(searchQuery = '') {
 
         if (hasImageMediaAsset(mediaAssets)) {
           void runMediaPhotoEmotionAnalysis(memory.id).finally(() => {
-            queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+            invalidateMemoryQueries(queryClient);
           });
         }
 
@@ -362,7 +366,7 @@ export function useMemories(searchQuery = '') {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+      invalidateMemoryQueries(queryClient);
     },
   });
 
@@ -456,14 +460,14 @@ export function useMemories(searchQuery = '') {
 
       if ((captionChanged || mediaChanged) && isPhotoMedia) {
         void runMediaPhotoEmotionAnalysis(memory.id).finally(() => {
-          queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+          invalidateMemoryQueries(queryClient);
         });
       }
 
       return memory;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+      invalidateMemoryQueries(queryClient);
     },
   });
 
@@ -476,7 +480,7 @@ export function useMemories(searchQuery = '') {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+      invalidateMemoryQueries(queryClient);
     },
   });
 
@@ -493,7 +497,7 @@ export function useMemories(searchQuery = '') {
       setMemoryIllustrationPendingInCache(queryClient, memoryId);
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+      invalidateMemoryQueries(queryClient);
     },
   });
 
@@ -510,7 +514,7 @@ export function useMemories(searchQuery = '') {
       setMemoryIllustrationPendingInCache(queryClient, memoryId);
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+      invalidateMemoryQueries(queryClient);
     },
   });
 
@@ -594,7 +598,7 @@ export function useMemory(memoryId: string | undefined) {
       })
       .finally(() => {
         recoveringIllustrationRef.current = false;
-        queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
+        invalidateMemoryQueries(queryClient);
       });
   }, [query.data, queryClient]);
 
@@ -613,6 +617,7 @@ export function useMemory(memoryId: string | undefined) {
 
     void query.refetch();
     queryClient.invalidateQueries({ queryKey: ['media-urls'] });
+    queryClient.invalidateQueries({ queryKey: calendarMemoriesQueryKey });
   }, [query.data, query.refetch, queryClient]);
 
   return query;

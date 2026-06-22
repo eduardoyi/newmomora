@@ -87,6 +87,14 @@ function attachTags(memories: Memory[], tagMap: Map<string, FamilyMember[]>): Me
   }));
 }
 
+function attachCalendarPreviewTags(memories: Memory[]): MemoryWithTags[] {
+  return memories.map((memory) => ({
+    ...memory,
+    taggedMembers: [],
+    mediaAssets: [],
+  }));
+}
+
 function attachMediaAssets(
   memories: MemoryWithTags[],
   mediaMap: Map<string, MemoryMediaAsset[]>,
@@ -218,6 +226,70 @@ export async function fetchMemories(): Promise<{
   const mediaMap = await fetchMediaForMemories(memoryIds);
 
   return { data: attachMediaAssets(attachTags(memories, tagMap), mediaMap), error: null };
+}
+
+export async function fetchOldestMemoryDate(): Promise<{
+  data: string | null;
+  error: ServiceError | null;
+}> {
+  const { data, error } = await supabase
+    .from('memories')
+    .select('memory_date')
+    .order('memory_date', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  return { data: data?.memory_date ?? null, error: null };
+}
+
+export async function fetchMemoriesInDateRange(
+  startDate: string,
+  endDate: string,
+): Promise<{
+  data: MemoryWithTags[] | null;
+  error: ServiceError | null;
+}> {
+  const startDateError = validateMemoryDate(startDate);
+  const endDateError = validateMemoryDate(endDate);
+
+  if (startDateError || endDateError) {
+    return {
+      data: null,
+      error: {
+        message: startDateError ?? endDateError ?? 'Invalid date range',
+        code: 'validation_error',
+      },
+    };
+  }
+
+  if (startDate > endDate) {
+    return {
+      data: null,
+      error: { message: 'Start date must be before end date', code: 'validation_error' },
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('memories')
+    .select('*')
+    .gte('memory_date', startDate)
+    .lte('memory_date', endDate)
+    .order('memory_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  const memories = data ?? [];
+  const memoryIds = memories.map((memory) => memory.id);
+  const mediaMap = await fetchMediaForMemories(memoryIds);
+
+  return { data: attachMediaAssets(attachCalendarPreviewTags(memories), mediaMap), error: null };
 }
 
 export async function fetchMemoryById(memoryId: string): Promise<{

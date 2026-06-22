@@ -1,67 +1,40 @@
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useMemo } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  FlatList,
+  type ListRenderItemInfo,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
+  type ViewToken,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MemoryFab } from '@/components/memory-fab';
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
-import { useMemories } from '@/hooks/useMemories';
+import { useCalendarMemoriesInRange, useOldestMemoryDate } from '@/hooks/useCalendarMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
+import {
+  buildCalendarWeeks,
+  getCalendarFetchRange,
+  type CalendarDay,
+  type CalendarWeek,
+  type CalendarVisibleWeekRange,
+} from '@/utils/calendar';
 
-function buildWeeks(memories: MemoryWithTags[]) {
-  const today = new Date();
-  const todayIso = today.toISOString().slice(0, 10);
+const CALENDAR_FETCH_BUFFER_WEEKS = 4;
+const INITIAL_VISIBLE_WEEK_RANGE: CalendarVisibleWeekRange = { startIndex: 0, endIndex: 3 };
 
-  // Days elapsed since Monday of the current calendar week (0 when today is Monday)
-  const todayDow = today.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  const daysSinceMonday = todayDow === 0 ? 6 : todayDow - 1;
-
-  const weeks: Array<{
-    label: string;
-    days: Array<{ dow: string; n: number; iso: string; today: boolean; memory: MemoryWithTags | undefined }>;
-  }> = [];
-
-  for (let w = 0; w < 4; w++) {
-    // Offset from today to the newest day of the week (end) and oldest day (start/Monday)
-    const endOffset = w === 0 ? 0 : daysSinceMonday + 1 + (w - 1) * 7;   // today or Sunday of past week
-    const startOffset = w === 0 ? daysSinceMonday : daysSinceMonday + w * 7; // Monday of that week
-
-    const days = [];
-    // Descending: newest first (endOffset is smallest = closest to today)
-    for (let d = endOffset; d <= startOffset; d++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() - d);
-      const iso = date.toISOString().slice(0, 10);
-      const dayLabel = date.toLocaleDateString('en-US', { weekday: 'short' });
-      days.push({
-        dow: dayLabel,
-        n: date.getDate(),
-        iso,
-        today: iso === todayIso,
-        memory: memories.find((m) => m.memory_date === iso),
-      });
-    }
-
-    weeks.push({
-      label: w === 0 ? 'this week' : w === 1 ? 'last week' : `${w} weeks ago`,
-      days,
-    });
-  }
-
-  return weeks;
-}
+type RibbonCalendarDay = CalendarDay & {
+  memory: MemoryWithTags | undefined;
+};
 
 function MemoryStamp({ memory }: { memory: MemoryWithTags }) {
   const emo = getEmotionColors(memory.emotion);
@@ -147,7 +120,7 @@ function RibbonDay({
   day,
   onPress,
 }: {
-  day: { dow: string; n: number; iso: string; today: boolean; memory: MemoryWithTags | undefined };
+  day: RibbonCalendarDay;
   onPress: (m: MemoryWithTags) => void;
 }) {
   const hasMemory = !!day.memory;
@@ -201,43 +174,118 @@ function RibbonDay({
 }
 
 export default function CalendarScreen() {
-  const { memories, isRefetching, refetch } = useMemories();
-  const weeks = useMemo(() => buildWeeks(memories), [memories]);
+  const referenceDateRef = useRef(new Date());
+  const [visibleWeekRange, setVisibleWeekRange] = useState(INITIAL_VISIBLE_WEEK_RANGE);
+  const {
+    data: oldestMemoryDate,
+    isRefetching: isOldestMemoryDateRefetching,
+    refetch: refetchOldestMemoryDate,
+  } = useOldestMemoryDate();
+  const weeks = useMemo(
+    () => buildCalendarWeeks({
+      referenceDate: referenceDateRef.current,
+      oldestMemoryDate,
+      minimumWeeks: 4,
+    }),
+    [oldestMemoryDate],
+  );
+  const fetchRange = useMemo(
+    () => getCalendarFetchRange(weeks, visibleWeekRange, CALENDAR_FETCH_BUFFER_WEEKS),
+    [visibleWeekRange, weeks],
+  );
+  const {
+    data: memories = [],
+    isRefetching: isCalendarMemoriesRefetching,
+    refetch: refetchCalendarMemories,
+  } = useCalendarMemoriesInRange(fetchRange);
+  const memoriesByDate = useMemo(() => {
+    const map = new Map<string, MemoryWithTags>();
 
-  const now = new Date();
-  const monthYear = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    for (const memory of memories) {
+      if (!map.has(memory.memory_date)) {
+        map.set(memory.memory_date, memory);
+      }
+    }
+
+    return map;
+  }, [memories]);
+
+  const monthYear = referenceDateRef.current.toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
+  const isRefetching = isOldestMemoryDateRefetching || isCalendarMemoriesRefetching;
+
+  const handleRefresh = useCallback(() => {
+    void Promise.all([refetchOldestMemoryDate(), refetchCalendarMemories()]);
+  }, [refetchCalendarMemories, refetchOldestMemoryDate]);
+
+  const handleViewableItemsChanged = useRef((info: { viewableItems: ViewToken[] }) => {
+    const indices = info.viewableItems
+      .map((item) => item.index)
+      .filter((index): index is number => typeof index === 'number');
+
+    if (indices.length === 0) {
+      return;
+    }
+
+    const startIndex = Math.min(...indices);
+    const endIndex = Math.max(...indices);
+
+    setVisibleWeekRange((current) => {
+      if (current.startIndex === startIndex && current.endIndex === endIndex) {
+        return current;
+      }
+
+      return { startIndex, endIndex };
+    });
+  }).current;
+
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 15 }).current;
+
+  const renderHeader = useCallback(() => (
+    <SafeAreaView>
+      <View style={styles.header}>
+        <Text style={styles.eyebrow}>{monthYear}</Text>
+        <Text style={styles.title}>Backwards.</Text>
+        <Text style={styles.subtitle}>Each row is a moment. Scroll to walk back in time.</Text>
+      </View>
+    </SafeAreaView>
+  ), [monthYear]);
+
+  const renderWeek = useCallback(({ item: week }: ListRenderItemInfo<CalendarWeek>) => (
+    <View style={styles.week}>
+      <Text style={styles.weekLabel}>{week.label}</Text>
+      <View style={styles.weekDays}>
+        {week.days.map((day) => (
+          <RibbonDay
+            key={day.iso}
+            day={{ ...day, memory: memoriesByDate.get(day.iso) }}
+            onPress={(memory) => router.push(memoryDetailRoute(memory.id))}
+          />
+        ))}
+      </View>
+    </View>
+  ), [memoriesByDate]);
 
   return (
     <View style={styles.container}>
-      <ScrollView
+      <FlatList
+        data={weeks}
+        keyExtractor={(week) => week.startIso}
+        renderItem={renderWeek}
+        ListHeaderComponent={renderHeader}
         contentContainerStyle={styles.scrollContent}
+        initialNumToRender={6}
+        maxToRenderPerBatch={6}
+        onViewableItemsChanged={handleViewableItemsChanged}
+        removeClippedSubviews
         refreshControl={
-          <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
+          <RefreshControl refreshing={isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
         }
-      >
-        <SafeAreaView>
-          <View style={styles.header}>
-            <Text style={styles.eyebrow}>{monthYear}</Text>
-            <Text style={styles.title}>Backwards.</Text>
-            <Text style={styles.subtitle}>Each row is a moment. Scroll to walk back in time.</Text>
-          </View>
-        </SafeAreaView>
-
-        {weeks.map((week, wi) => (
-          <View key={wi} style={styles.week}>
-            <Text style={styles.weekLabel}>{week.label}</Text>
-            <View style={styles.weekDays}>
-              {week.days.map((day, di) => (
-                <RibbonDay
-                  key={day.iso}
-                  day={day}
-                  onPress={(m) => router.push(memoryDetailRoute(m.id))}
-                />
-              ))}
-            </View>
-          </View>
-        ))}
-      </ScrollView>
+        viewabilityConfig={viewabilityConfig}
+        windowSize={7}
+      />
 
       <MemoryFab onPress={() => router.push(newMemoryRoute)} />
     </View>
