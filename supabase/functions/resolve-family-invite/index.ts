@@ -6,6 +6,7 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
 import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { sendTransactionalEmail } from '../_shared/bento.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
@@ -28,6 +29,14 @@ interface InviteRow {
   role: string;
   status: string;
   redeemed_by: string | null;
+}
+
+function buildApprovalEmailHtml(familyName: string): string {
+  return `
+    <p>You're in!</p>
+    <p>Welcome to <strong>${familyName}</strong> on Momora. Open the app to see the timeline and start adding your own memories.</p>
+    <p>-- The Momora team</p>
+  `.trim();
 }
 
 export async function processResolution(
@@ -138,25 +147,38 @@ export async function processResolution(
     return errorResponse('Failed to resolve the invite', 500, 'internal_error');
   }
 
-  // Push to the redeemer (best-effort).
+  // Push + email to the redeemer are both best-effort -- neither may throw
+  // past this point, the invite is already committed as approved.
+  let familyName = 'the family';
   try {
-    const [{ data: family }, { data: redeemerProfile }] = await Promise.all([
-      serviceClient.from('families').select('name').eq('id', invite.family_id).maybeSingle(),
-      serviceClient
-        .from('user_profiles')
-        .select('expo_push_token')
-        .eq('id', invite.redeemed_by)
-        .maybeSingle(),
-    ]);
+    const { data: family } = await serviceClient
+      .from('families')
+      .select('name')
+      .eq('id', invite.family_id)
+      .maybeSingle();
+    familyName = (family?.name as string | undefined) ?? familyName;
+  } catch (familyLookupError) {
+    console.error(
+      'resolve-family-invite family-name lookup failed',
+      familyLookupError instanceof Error ? familyLookupError.message : 'unknown',
+    );
+  }
+
+  try {
+    const { data: redeemerProfile } = await serviceClient
+      .from('user_profiles')
+      .select('expo_push_token')
+      .eq('id', invite.redeemed_by)
+      .maybeSingle();
 
     const pushToken = redeemerProfile?.expo_push_token as string | null | undefined;
 
     if (pushToken) {
-      const familyName = (family?.name as string | undefined) ?? 'the family';
       await sendExpoPushNotification(
         pushToken,
         'Momora',
         `You're in! Welcome to ${familyName} — open Momora to start exploring.`,
+        { route: 'timeline', familyId: invite.family_id },
       );
     }
   } catch (pushError) {
@@ -166,7 +188,27 @@ export async function processResolution(
     );
   }
 
-  // TODO(family-sharing Phase 6): send approval email via Bento.
+  // "You're in!" welcome email via Bento (best-effort, same failure
+  // convention as the push above). The redeemer's email lives on
+  // auth.users, not user_profiles, so it's fetched via the service-role
+  // admin API.
+  try {
+    const { data: redeemerAuth } = await serviceClient.auth.admin.getUserById(invite.redeemed_by);
+    const redeemerEmail = redeemerAuth?.user?.email;
+
+    if (redeemerEmail) {
+      await sendTransactionalEmail({
+        to: redeemerEmail,
+        subject: `You're in! Welcome to ${familyName}`,
+        htmlBody: buildApprovalEmailHtml(familyName),
+      });
+    }
+  } catch (emailError) {
+    console.error(
+      'resolve-family-invite redeemer email failed',
+      emailError instanceof Error ? emailError.message : 'unknown',
+    );
+  }
 
   const response: ResolveFamilyInviteResponse = { success: true, status: 'approved' };
   return jsonResponse(response);

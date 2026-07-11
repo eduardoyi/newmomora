@@ -25,11 +25,21 @@ interface FakeState {
   families: Array<{ id: string; name: string; owner_id: string; deleted_at: string | null }>;
   memberships: Array<{ family_id: string; user_id: string; role: string }>;
   profiles: Array<{ id: string; expo_push_token?: string | null; active_family_id?: string | null }>;
+  authUsers: Array<{ id: string; email: string | null }>;
   membershipInsertError?: { code: string; message: string } | null;
 }
 
 function createFakeServiceClient(state: FakeState) {
   return {
+    auth: {
+      admin: {
+        getUserById: (id: string) =>
+          Promise.resolve({
+            data: { user: state.authUsers.find((user) => user.id === id) ?? null },
+            error: null,
+          }),
+      },
+    },
     from(table: string) {
       if (table === 'family_invites') {
         return {
@@ -155,24 +165,66 @@ function baseState(overrides?: Partial<FakeState>): FakeState {
     profiles: [
       { id: REDEEMER_ID, expo_push_token: 'ExponentPushToken[carmen]', active_family_id: null },
     ],
+    authUsers: [{ id: REDEEMER_ID, email: 'carmen@example.com' }],
     ...overrides,
   };
 }
 
-function withMockedPush(run: () => Promise<void>): Promise<unknown[]> {
+/**
+ * Captures every fetch call (push + Bento email both go through
+ * `globalThis.fetch`) tagged with its URL so assertions can filter by
+ * destination instead of assuming a fixed call count/order.
+ */
+function withMockedNetwork(
+  run: () => Promise<void>,
+): Promise<Array<{ url: string; body: unknown }>> {
   const originalFetch = globalThis.fetch;
-  const pushCalls: unknown[] = [];
+  const calls: Array<{ url: string; body: unknown }> = [];
 
-  globalThis.fetch = (_url: string | URL | Request, init?: RequestInit) => {
-    pushCalls.push(JSON.parse(init?.body as string));
+  globalThis.fetch = (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({
+      url: url.toString(),
+      body: init?.body ? JSON.parse(init.body as string) : undefined,
+    });
     return Promise.resolve(new Response(JSON.stringify({ data: {} }), { status: 200 }));
   };
 
   return run()
-    .then(() => pushCalls)
+    .then(() => calls)
     .finally(() => {
       globalThis.fetch = originalFetch;
     });
+}
+
+function withMockedPush(run: () => Promise<void>): Promise<unknown[]> {
+  return withMockedNetwork(run).then((calls) => calls.map((call) => call.body));
+}
+
+const BENTO_ENV_KEYS = [
+  'BENTO_SITE_UUID',
+  'BENTO_PUBLISHABLE_KEY',
+  'BENTO_SECRET_KEY',
+  'BENTO_FROM_EMAIL',
+] as const;
+
+/** Sets fake Bento env vars for the duration of `run`, then restores them. */
+function withBentoEnv(run: () => Promise<void>): Promise<void> {
+  const previous = new Map(BENTO_ENV_KEYS.map((key) => [key, Deno.env.get(key)]));
+
+  Deno.env.set('BENTO_SITE_UUID', 'test-site-uuid');
+  Deno.env.set('BENTO_PUBLISHABLE_KEY', 'test-publishable-key');
+  Deno.env.set('BENTO_SECRET_KEY', 'test-secret-key');
+  Deno.env.set('BENTO_FROM_EMAIL', 'hello@usemomora.com');
+
+  return run().finally(() => {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        Deno.env.delete(key);
+      } else {
+        Deno.env.set(key, value);
+      }
+    }
+  });
 }
 
 Deno.test('resolve-family-invite rejects unauthenticated requests', async () => {
@@ -342,4 +394,101 @@ Deno.test('approve fails cleanly when the redeemer account no longer exists', as
   assertEquals(response.status, 409);
   const body = await response.json();
   assertEquals(body.code, 'invalid_status');
+});
+
+// --- Bento "You're in!" approval email (plan §10) ---------------------------
+
+Deno.test('approve sends a "You\'re in!" Bento email to the redeemer alongside the push', async () => {
+  const state = baseState();
+  const client = createFakeServiceClient(state);
+
+  let calls: Array<{ url: string; body: unknown }> = [];
+  await withBentoEnv(async () => {
+    calls = await withMockedNetwork(async () => {
+      const response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+      assertEquals(response.status, 200);
+      await response.body?.cancel();
+    });
+  });
+
+  const pushCall = calls.find((call) => call.url.includes('exp.host'));
+  const emailCall = calls.find((call) => call.url.includes('bentonow.com'));
+
+  // Both channels fired -- the email doesn't replace the push.
+  assertEquals(Boolean(pushCall), true);
+  assertEquals(Boolean(emailCall), true);
+
+  const emailBody = emailCall!.body as { site_uuid: string; emails: Array<{ to: string; from: string; subject: string; html_body: string; transactional: boolean }> };
+  // site_uuid rides in the POST body, matching the official bento-node-sdk.
+  assertEquals(emailBody.site_uuid, 'test-site-uuid');
+  const email = emailBody.emails[0];
+  assertEquals(email.to, 'carmen@example.com');
+  assertEquals(email.from, 'hello@usemomora.com');
+  assertEquals(email.transactional, true);
+  assertStringIncludes(email.subject, "You're in!");
+  assertStringIncludes(email.subject, "Rosa's family");
+  assertStringIncludes(email.html_body, "Rosa's family");
+});
+
+Deno.test('approve does not send an email when Bento env vars are missing', async () => {
+  const state = baseState();
+  const client = createFakeServiceClient(state);
+
+  const calls = await withMockedNetwork(async () => {
+    const response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+    assertEquals(response.status, 200);
+    await response.body?.cancel();
+  });
+
+  assertEquals(
+    calls.some((call) => call.url.includes('bentonow.com')),
+    false,
+  );
+});
+
+Deno.test('approve skips the email (but still succeeds) when the redeemer has no auth email on file', async () => {
+  const state = baseState({ authUsers: [{ id: REDEEMER_ID, email: null }] });
+  const client = createFakeServiceClient(state);
+
+  let response!: Response;
+  let calls: Array<{ url: string; body: unknown }> = [];
+  await withBentoEnv(async () => {
+    calls = await withMockedNetwork(async () => {
+      response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+    });
+  });
+
+  assertEquals(response.status, 200);
+  assertEquals(state.invites[0].status, 'approved');
+  assertEquals(
+    calls.some((call) => call.url.includes('bentonow.com')),
+    false,
+  );
+  await response.body?.cancel();
+});
+
+Deno.test('a Bento send failure does not fail the approval', async () => {
+  const state = baseState();
+  const client = createFakeServiceClient(state);
+
+  let response!: Response;
+  await withBentoEnv(async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (url: string | URL | Request) => {
+      if (url.toString().includes('bentonow.com')) {
+        return Promise.resolve(new Response('server error', { status: 500 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    };
+
+    try {
+      response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  assertEquals(response.status, 200);
+  assertEquals(state.invites[0].status, 'approved');
+  await response.body?.cancel();
 });

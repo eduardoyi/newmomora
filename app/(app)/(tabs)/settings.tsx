@@ -343,7 +343,8 @@ export default function SettingsScreen() {
   } = useUserProfile();
 
   const remindersEnabled = profile?.enable_daily_reminder ?? false;
-  useNotificationsRegistration(remindersEnabled);
+  const newMemoryAlertsEnabled = profile?.notify_new_memories ?? true;
+  useNotificationsRegistration(remindersEnabled || newMemoryAlertsEnabled);
 
   const handleToggleReminders = async (value: boolean) => {
     await updateProfile({
@@ -351,6 +352,10 @@ export default function SettingsScreen() {
       timezone: profile?.timezone ?? getDeviceTimezone(),
       notificationTime: profile?.notification_time ?? '20:00:00',
     });
+  };
+
+  const handleToggleNewMemoryAlerts = async (value: boolean) => {
+    await updateProfile({ notifyNewMemories: value });
   };
 
   return (
@@ -397,7 +402,7 @@ export default function SettingsScreen() {
           </View>
   
           <View style={styles.sections}>
-            <SettingsBlock title="Daily reminder">
+            <SettingsBlock title="Notifications">
               <SettingsRow
                 first
                 label="Remind me to journal"
@@ -418,6 +423,18 @@ export default function SettingsScreen() {
                   chevron
                 />
               )}
+              <SettingsRow
+                label="New memory alerts"
+                caption="Get notified when a family member adds a memory."
+                right={
+                  <Switch
+                    onValueChange={handleToggleNewMemoryAlerts}
+                    testID="settings-new-memory-alerts-toggle"
+                    value={newMemoryAlertsEnabled}
+                    trackColor={{ false: colors.border, true: colors.primary }}
+                  />
+                }
+              />
             </SettingsBlock>
   
             <FamilySection />

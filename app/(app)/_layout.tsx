@@ -4,11 +4,16 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { useNotificationResponseRouting } from '@/hooks/useNotifications';
 import { noFamilyRoute } from '@/lib/routes';
 
 export default function AppLayout() {
   const { session, isLoading: isAuthLoading } = useAuth();
   const { familyId, isLoading: isFamilyLoading } = useFamily();
+  // Deep-link routing for tapped push notifications (plan §10) -- lives at
+  // the app root so it's active for the whole authenticated session
+  // regardless of which screen is focused.
+  useNotificationResponseRouting();
   const segments = useSegments();
   // expo-router's typed useSegments() return type is a union of per-depth
   // literal tuples, which collapses .includes()'s element type to `never`

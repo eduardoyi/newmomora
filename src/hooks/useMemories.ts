@@ -10,6 +10,7 @@ import {
   memoryDetailQueryKey,
 } from '@/hooks/queryKeys';
 import { canEditFamilyContent } from '@/utils/roles';
+import { notifyFamilyActivity } from '@/services/ai';
 import {
   createMediaMemory,
   createMemory,
@@ -145,6 +146,25 @@ async function mapMediaUploads<T>(
   }
 
   return results;
+}
+
+// Fire-and-forget family-activity push (plan §10). Never awaited by
+// callers -- a failure here must not delay or fail the create-memory UX,
+// so it's swallowed down to a console.warn.
+function notifyFamilyActivityFireAndForget(memoryId: string): void {
+  void notifyFamilyActivity(memoryId)
+    .then(({ error }) => {
+      if (error) {
+        console.warn('Failed to notify family of new memory', memoryId, error.message);
+      }
+    })
+    .catch((error) => {
+      console.warn(
+        'Failed to notify family of new memory',
+        memoryId,
+        error instanceof Error ? error.message : 'unknown',
+      );
+    });
 }
 
 function toError(error: unknown, fallbackMessage: string): Error {
@@ -305,8 +325,9 @@ export function useMemories(searchQuery = '') {
 
       return data as MemoryWithTags;
     },
-    onSuccess: () => {
+    onSuccess: (memory) => {
       invalidateMemoryQueries(queryClient);
+      notifyFamilyActivityFireAndForget(memory.id);
     },
   });
 
@@ -398,8 +419,9 @@ export function useMemories(searchQuery = '') {
         throw toError(error, 'Could not save memory');
       }
     },
-    onSuccess: () => {
+    onSuccess: (memory) => {
       invalidateMemoryQueries(queryClient);
+      notifyFamilyActivityFireAndForget(memory.id);
     },
   });
 

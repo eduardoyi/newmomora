@@ -238,6 +238,7 @@ export async function processRedemption(
         pushToken,
         'Momora',
         `${redeemerName} wants to join ${family.name} — open Momora to approve`,
+        { route: 'approvals', familyId: invite.family_id },
       );
     }
   } catch (pushError) {

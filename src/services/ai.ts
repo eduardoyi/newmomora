@@ -107,6 +107,25 @@ export async function processVoiceMemory(
   });
 }
 
+export interface NotifyFamilyActivityResponse {
+  sent: boolean;
+  reason?: 'debounced';
+  recipientCount?: number;
+}
+
+/**
+ * Fire-and-forget: announces the caller's own new memory to the rest of
+ * the family (docs/plans/family-sharing.md §10). Callers must not await
+ * this on the create-memory happy path -- see useMemories.ts, which wraps
+ * it in `void ... .catch(console.warn)` so a notify failure never blocks
+ * or fails the create UX.
+ */
+export async function notifyFamilyActivity(
+  memoryId: string,
+): Promise<{ data: NotifyFamilyActivityResponse | null; error: ServiceError | null }> {
+  return invokeEdgeFunction('notify-family-activity', { memoryId });
+}
+
 export async function deleteUserAccount(): Promise<{ error: ServiceError | null }> {
   const { error } = await invokeEdgeFunction('delete-user-account', {});
   return { error };

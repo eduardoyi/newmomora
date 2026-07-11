@@ -17,6 +17,8 @@ export interface UpdateUserProfileInput {
   hasCompletedOnboarding?: boolean;
   /** Switches the caller's active family (FamilyProvider.setActiveFamily). */
   activeFamilyId?: string;
+  /** "New memory alerts" Settings toggle (plan §10). */
+  notifyNewMemories?: boolean;
 }
 
 function mapSupabaseError(error: { message: string; code?: string }): ServiceError {
@@ -68,6 +70,9 @@ export async function updateUserProfile(
         ? { has_completed_onboarding: input.hasCompletedOnboarding }
         : {}),
       ...(input.activeFamilyId !== undefined ? { active_family_id: input.activeFamilyId } : {}),
+      ...(input.notifyNewMemories !== undefined
+        ? { notify_new_memories: input.notifyNewMemories }
+        : {}),
     })
     .eq('id', user.id)
     .select('*')
