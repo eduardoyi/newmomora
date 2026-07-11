@@ -5,6 +5,8 @@ import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { AuthButton, AuthErrorMessage, AuthScreen } from '@/components/auth-screen';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { sharingRedeemRoute } from '@/lib/routes';
+import { getPendingInviteCode } from '@/utils/pending-invite-code';
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -57,7 +59,11 @@ export default function VerifyOtpScreen() {
       return;
     }
 
-    router.replace('/(app)/(tabs)/timeline');
+    // A pending invite code (stored by app/invite.tsx before signup) wins
+    // over the default landing: route straight to the redeem screen so the
+    // universal-link flow finishes where it started (plan §9).
+    const pendingInviteCode = await getPendingInviteCode();
+    router.replace(pendingInviteCode ? sharingRedeemRoute : '/(app)/(tabs)/timeline');
   };
 
   const handleChangeCode = (text: string) => {

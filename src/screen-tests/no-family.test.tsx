@@ -10,7 +10,8 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import NoFamilyScreen from '../../app/(app)/no-family';
 import { useFamily } from '@/hooks/use-family';
 import { createFamily } from '@/services/family';
-import { timelineRoute } from '@/lib/routes';
+import { sharingRedeemRoute, timelineRoute } from '@/lib/routes';
+import { getPendingInviteCode } from '@/utils/pending-invite-code';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -28,8 +29,15 @@ jest.mock('@/services/family', () => ({
   createFamily: jest.fn(),
 }));
 
+jest.mock('@/utils/pending-invite-code', () => ({
+  getPendingInviteCode: jest.fn(),
+}));
+
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedCreateFamily = createFamily as jest.MockedFunction<typeof createFamily>;
+const mockedGetPendingInviteCode = getPendingInviteCode as jest.MockedFunction<
+  typeof getPendingInviteCode
+>;
 
 function renderScreen() {
   return render(
@@ -47,6 +55,7 @@ function renderScreen() {
 describe('NoFamilyScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedGetPendingInviteCode.mockResolvedValue(null);
     mockedUseFamily.mockReturnValue({
       family: null,
       familyId: null,
@@ -113,6 +122,24 @@ describe('NoFamilyScreen', () => {
     });
     await waitFor(() => {
       expect(router.replace).toHaveBeenCalledWith(timelineRoute);
+    });
+  });
+
+  it('navigates to the redeem screen from the invite-code button', () => {
+    const { getByTestId } = renderScreen();
+
+    fireEvent.press(getByTestId('no-family-invite-code-button'));
+
+    expect(router.push).toHaveBeenCalledWith(sharingRedeemRoute);
+  });
+
+  it('auto-forwards to the redeem screen when a pendingInviteCode is stored (guard precedence)', async () => {
+    mockedGetPendingInviteCode.mockResolvedValue('sunny-tiger-lake');
+
+    renderScreen();
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith(sharingRedeemRoute);
     });
   });
 

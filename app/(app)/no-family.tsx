@@ -1,13 +1,14 @@
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AuthErrorMessage, AuthField, AuthInput } from '@/components/auth-screen';
 import { KeyboardAwareFormScreen } from '@/components/keyboard-aware-form-screen';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
-import { timelineRoute } from '@/lib/routes';
+import { sharingRedeemRoute, timelineRoute } from '@/lib/routes';
 import { createFamily } from '@/services/family';
+import { getPendingInviteCode } from '@/utils/pending-invite-code';
 
 function friendlyCreateFamilyError(message: string, code?: string): string {
   if (code === 'P0001' && /maximum 5 owned families/i.test(message)) {
@@ -29,6 +30,24 @@ export default function NoFamilyScreen() {
       router.replace(timelineRoute);
     }
   }, [familyId]);
+
+  // Guard precedence (plan §9): a stored pendingInviteCode wins. If a
+  // universal-link code got the user redirected here (FamilyProvider's
+  // no-membership guard), forward to the redeem screen prefilled -- the code
+  // itself stays in storage until a redemption attempt consumes it.
+  useEffect(() => {
+    let isMounted = true;
+
+    void getPendingInviteCode().then((pendingCode) => {
+      if (isMounted && pendingCode) {
+        router.replace(sharingRedeemRoute);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleCreate = async () => {
     const trimmed = name.trim();
@@ -58,11 +77,7 @@ export default function NoFamilyScreen() {
   };
 
   const handleInviteCodePress = () => {
-    // TODO(family-sharing Phase 5): navigate to the redeem-code screen
-    // (app/(app)/sharing/redeem.tsx per the plan) once it exists. Also wire
-    // up the pendingInviteCode AsyncStorage check here so a code carried
-    // through a universal link survives this guard (plan §9).
-    Alert.alert('Coming soon', 'Joining with an invite code will be available in a future update.');
+    router.push(sharingRedeemRoute);
   };
 
   return (

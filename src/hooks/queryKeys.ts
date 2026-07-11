@@ -10,6 +10,7 @@ export const memoriesQueryKeyBase = 'memories' as const;
 export const calendarMemoriesQueryKeyBase = 'calendar-memories' as const;
 export const familyMembersQueryKeyBase = 'family-members' as const;
 export const familyMemberProfilesQueryKeyBase = 'family-member-profiles' as const;
+export const familyInvitesQueryKeyBase = 'family-invites' as const;
 
 export function memoriesQueryKey(familyId: string | null | undefined) {
   return [memoriesQueryKeyBase, familyId] as const;
@@ -29,4 +30,8 @@ export function familyMembersQueryKey(familyId: string | null | undefined) {
 
 export function familyMemberProfilesQueryKey(familyId: string | null | undefined) {
   return [familyMemberProfilesQueryKeyBase, familyId] as const;
+}
+
+export function familyInvitesQueryKey(familyId: string | null | undefined) {
+  return [familyInvitesQueryKeyBase, familyId] as const;
 }

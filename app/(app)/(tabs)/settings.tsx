@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -17,9 +18,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { familyMembershipsQueryKey, useFamily } from '@/hooks/use-family';
+import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import {
+  sharingApprovalsRoute,
+  sharingInviteRoute,
+  sharingPendingInvitesRoute,
+  sharingRedeemRoute,
+} from '@/lib/routes';
 import { getDeviceTimezone } from '@/services/auth';
 import { leaveFamily, updateFamilyName } from '@/services/family';
 import { canEditFamilyContent, isOwnerRole } from '@/utils/roles';
@@ -44,6 +52,8 @@ function SettingsRow({
   chevron,
   right,
   first,
+  onPress,
+  testID,
 }: {
   label: string;
   caption?: string;
@@ -51,9 +61,11 @@ function SettingsRow({
   chevron?: boolean;
   right?: React.ReactNode;
   first?: boolean;
+  onPress?: () => void;
+  testID?: string;
 }) {
-  return (
-    <View style={[styles.row, !first && styles.rowBorder]}>
+  const content = (
+    <>
       <View style={styles.rowContent}>
         <Text style={styles.rowLabel}>{label}</Text>
         {caption && <Text style={styles.rowCaption}>{caption}</Text>}
@@ -61,6 +73,25 @@ function SettingsRow({
       {value && <Text style={styles.rowValue}>{value}</Text>}
       {right}
       {chevron && <Text style={styles.chevron}>›</Text>}
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => [styles.row, !first && styles.rowBorder, pressed && styles.rowPressed]}
+        testID={testID}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.row, !first && styles.rowBorder]} testID={testID}>
+      {content}
     </View>
   );
 }
@@ -79,6 +110,9 @@ function FamilySection() {
   const queryClient = useQueryClient();
   const canEditName = canEditFamilyContent(role);
   const isOwner = isOwnerRole(role);
+  // Approvals badge: the invites query is manager+-only under RLS, so it is
+  // gated on role rather than fired (and denied) for viewers.
+  const { redeemedInvites } = useFamilyInvites(familyId, { enabled: canEditName });
 
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(family?.name ?? '');
@@ -227,6 +261,38 @@ function FamilySection() {
           value={profile.is_active_member ? roleLabel(profile.role) : 'Former member'}
         />
       ))}
+
+      {canEditName && (
+        <>
+          <SettingsRow
+            chevron
+            label="Invite a family member"
+            onPress={() => router.push(sharingInviteRoute)}
+            testID="settings-invite-family-member"
+          />
+          <SettingsRow
+            chevron
+            label="Pending invites"
+            onPress={() => router.push(sharingPendingInvitesRoute)}
+            testID="settings-pending-invites"
+          />
+          <SettingsRow
+            chevron
+            label="Approvals"
+            onPress={() => router.push(sharingApprovalsRoute)}
+            testID="settings-approvals"
+            value={redeemedInvites.length > 0 ? String(redeemedInvites.length) : undefined}
+          />
+        </>
+      )}
+
+      <SettingsRow
+        chevron
+        label="Join a family"
+        caption="Have an invite code from another family?"
+        onPress={() => router.push(sharingRedeemRoute)}
+        testID="settings-join-family"
+      />
 
       {memberships.length > 1 && (
         <View style={[styles.row, styles.rowBorder]}>
@@ -530,6 +596,9 @@ const styles = StyleSheet.create({
   rowBorder: {
     borderTopWidth: 1,
     borderTopColor: colors.border,
+  },
+  rowPressed: {
+    backgroundColor: colors.surface,
   },
   rowContent: {
     flex: 1,

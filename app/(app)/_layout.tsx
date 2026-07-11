@@ -14,6 +14,11 @@ export default function AppLayout() {
   // literal tuples, which collapses .includes()'s element type to `never`
   // for an arbitrary string -- widen to string[] for this membership check.
   const isOnNoFamilyRoute = (segments as string[]).includes('no-family');
+  // The redeem/waiting screens must stay reachable for users with zero
+  // memberships (that's exactly who redeems invites), so the whole sharing
+  // group is exempt from the no-family redirect. Manager-only sharing
+  // screens guard themselves on role.
+  const isOnSharingRoute = (segments as string[]).includes('sharing');
 
   if (isAuthLoading) {
     return (
@@ -37,9 +42,10 @@ export default function AppLayout() {
 
   // Guard precedence (docs/plans/family-sharing.md §9): this only redirects
   // away from OTHER routes -- the no-family route itself must still render
-  // through the Stack below so the user can act on it (create a family, or
-  // in Phase 5, redeem an invite code carried in AsyncStorage).
-  if (!familyId && !isOnNoFamilyRoute) {
+  // through the Stack below so the user can act on it (create a family or
+  // redeem an invite code carried in AsyncStorage), and the sharing group
+  // (redeem/waiting) must not be clobbered while a redemption is in flight.
+  if (!familyId && !isOnNoFamilyRoute && !isOnSharingRoute) {
     return <Redirect href={noFamilyRoute} />;
   }
 
@@ -69,6 +75,14 @@ export default function AppLayout() {
         name="family/[id]/edit"
         options={{ presentation: 'modal' }}
       />
+      <Stack.Screen
+        name="sharing/invite"
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen name="sharing/pending-invites" />
+      <Stack.Screen name="sharing/approvals" />
+      <Stack.Screen name="sharing/redeem" />
+      <Stack.Screen name="sharing/waiting" />
     </Stack>
   );
 }

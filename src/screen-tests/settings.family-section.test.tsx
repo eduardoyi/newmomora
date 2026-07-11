@@ -7,12 +7,31 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import SettingsScreen from '../../app/(app)/(tabs)/settings';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import {
+  sharingApprovalsRoute,
+  sharingInviteRoute,
+  sharingPendingInvitesRoute,
+  sharingRedeemRoute,
+} from '@/lib/routes';
 import { leaveFamily, updateFamilyName } from '@/services/family';
+
+jest.mock('expo-router', () => ({
+  router: {
+    replace: jest.fn(),
+    push: jest.fn(),
+    back: jest.fn(),
+  },
+}));
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
+}));
+
+jest.mock('@/hooks/useFamilyInvites', () => ({
+  useFamilyInvites: jest.fn(),
 }));
 
 jest.mock('@/hooks/use-family', () => ({
@@ -35,6 +54,7 @@ jest.mock('@/services/family', () => ({
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
+const mockedUseFamilyInvites = useFamilyInvites as jest.MockedFunction<typeof useFamilyInvites>;
 const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.MockedFunction<
   typeof useFamilyMemberProfiles
 >;
@@ -87,6 +107,18 @@ describe('Settings Family section', () => {
       isDeletingAccount: false,
       cancelAccountDeletion: jest.fn(),
       isCancelingDeletion: false,
+    } as never);
+
+    mockedUseFamilyInvites.mockReturnValue({
+      invites: [],
+      pendingInvites: [],
+      redeemedInvites: [],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+      revokeInvite: jest.fn(),
+      isRevoking: false,
     } as never);
 
     mockedUseFamilyMemberProfiles.mockReturnValue({
@@ -235,6 +267,82 @@ describe('Settings Family section', () => {
     });
 
     alertSpy.mockRestore();
+  });
+
+  it('shows manager sharing entry points and routes to each sharing screen', () => {
+    const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'manager',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'manager', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    const { getByTestId } = renderScreen();
+
+    fireEvent.press(getByTestId('settings-invite-family-member'));
+    expect(router.push).toHaveBeenCalledWith(sharingInviteRoute);
+
+    fireEvent.press(getByTestId('settings-pending-invites'));
+    expect(router.push).toHaveBeenCalledWith(sharingPendingInvitesRoute);
+
+    fireEvent.press(getByTestId('settings-approvals'));
+    expect(router.push).toHaveBeenCalledWith(sharingApprovalsRoute);
+
+    fireEvent.press(getByTestId('settings-join-family'));
+    expect(router.push).toHaveBeenCalledWith(sharingRedeemRoute);
+  });
+
+  it('hides manager-only sharing rows from viewers but keeps Join a family', () => {
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'viewer',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'viewer', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    const { queryByTestId } = renderScreen();
+
+    expect(queryByTestId('settings-invite-family-member')).toBeNull();
+    expect(queryByTestId('settings-pending-invites')).toBeNull();
+    expect(queryByTestId('settings-approvals')).toBeNull();
+    expect(queryByTestId('settings-join-family')).toBeTruthy();
+  });
+
+  it('badges the approvals row with the redeemed-invite count', () => {
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseFamilyInvites.mockReturnValue({
+      invites: [],
+      pendingInvites: [],
+      redeemedInvites: [{ id: 'invite-1' }, { id: 'invite-2' }],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+      revokeInvite: jest.fn(),
+      isRevoking: false,
+    } as never);
+
+    const { getByText } = renderScreen();
+
+    expect(getByText('2')).toBeTruthy();
   });
 
   it('only renders the family picker when there is more than one membership', () => {
