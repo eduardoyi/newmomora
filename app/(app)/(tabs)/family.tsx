@@ -4,10 +4,14 @@ import { router } from 'expo-router';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { CastCard } from '@/components/cast-card';
+import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { addFamilyMemberRoute, familyMemberRoute } from '@/lib/routes';
+import { canEditFamilyContent } from '@/utils/roles';
 
 export default function FamilyScreen() {
+  const { role } = useFamily();
+  const canEdit = canEditFamilyContent(role);
   const { members, isLoading, isRefetching, isError, refetch } = useFamilyMembers();
 
   if (isLoading) {
@@ -57,20 +61,26 @@ export default function FamilyScreen() {
             </Pressable>
           ))}
 
-          <Pressable
-            onPress={() => router.push(addFamilyMemberRoute)}
-            style={({ pressed }) => [styles.addTile, pressed && styles.addTilePressed]}
-            accessibilityRole="button"
-            testID="family-add-member"
-          >
-            <View style={styles.addIcon}>
-              <Text style={styles.addIconText}>+</Text>
-            </View>
-            <View>
-              <Text style={styles.addTitle}>Add someone</Text>
-              <Text style={styles.addSubtitle}>A sibling, a partner, a grandparent</Text>
-            </View>
-          </Pressable>
+          {canEdit ? (
+            <Pressable
+              onPress={() => router.push(addFamilyMemberRoute)}
+              style={({ pressed }) => [styles.addTile, pressed && styles.addTilePressed]}
+              accessibilityRole="button"
+              testID="family-add-member"
+            >
+              <View style={styles.addIcon}>
+                <Text style={styles.addIconText}>+</Text>
+              </View>
+              <View>
+                <Text style={styles.addTitle}>Add someone</Text>
+                <Text style={styles.addSubtitle}>A sibling, a partner, a grandparent</Text>
+              </View>
+            </Pressable>
+          ) : members.length === 0 ? (
+            <Text style={styles.emptyViewerText} testID="family-empty-viewer">
+              Ask a family manager to add the first family member.
+            </Text>
+          ) : null}
         </View>
       </ScrollView>
     </View>
@@ -129,6 +139,14 @@ const styles = StyleSheet.create({
   },
   castCardPressed: {
     opacity: 0.85,
+  },
+  emptyViewerText: {
+    fontFamily: fonts.sans,
+    fontSize: 13.5,
+    lineHeight: 20,
+    color: colors.ink3,
+    textAlign: 'center',
+    paddingVertical: spacing.lg,
   },
   addTile: {
     backgroundColor: 'transparent',

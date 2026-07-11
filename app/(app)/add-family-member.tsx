@@ -20,8 +20,10 @@ import { NicknameInputRow } from '@/components/nickname-input-row';
 import { SelectField } from '@/components/select-field';
 import { GENDER_OPTIONS } from '@/constants/gender-options';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
+import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { canEditFamilyContent } from '@/utils/roles';
 import {
   E2E_FAMILY_MEMBER_DOB,
   E2E_FAMILY_MEMBER_GENDER,
@@ -40,8 +42,16 @@ import {
 } from '@/utils/family-profile-photo-picker';
 
 export default function AddFamilyMemberScreen() {
+  const { role } = useFamily();
   const { createMember, isCreating } = useFamilyMembers();
   const { updateProfile } = useUserProfile();
+
+  // Guard on mount: viewers reaching this route directly get bounced back.
+  useEffect(() => {
+    if (!canEditFamilyContent(role)) {
+      router.back();
+    }
+  }, [role]);
   const [name, setName] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [gender, setGender] = useState('');

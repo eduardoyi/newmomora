@@ -19,10 +19,13 @@ import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { colors, fonts, getEmotionColors, getEmotionGradient, radius, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
+import { useFamily } from '@/hooks/use-family';
+import { useFamilyMemberProfiles, resolveAttributionName } from '@/hooks/useFamilyMemberProfiles';
 import { useMemory, useMemories } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { navigateBack } from '@/lib/navigation';
 import { editMemoryRoute } from '@/lib/routes';
+import { canEditFamilyContent } from '@/utils/roles';
 import { formatAgeCompactFromDob } from '@/utils/family-members';
 import {
   formatDisplayDate,
@@ -145,6 +148,8 @@ function MemberPill({ member }: { member: FamilyMember }) {
 function MemoryDetailFramed({
   memory,
   illustrationUrl,
+  attributionName,
+  canEdit,
   onBack,
   onRegenerateIllustration,
   onEdit,
@@ -157,10 +162,12 @@ function MemoryDetailFramed({
 }: {
   memory: NonNullable<ReturnType<typeof useMemory>['data']>;
   illustrationUrl: string | null | undefined;
+  attributionName: string;
+  canEdit: boolean;
   onBack: () => void;
   onRegenerateIllustration?: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
   isDeleting: boolean;
   isRegeneratingIllustration: boolean;
   regenerateIllustrationDisabled: boolean;
@@ -230,6 +237,7 @@ function MemoryDetailFramed({
           {/* Content inside card */}
           <View style={styles.framedCardBody}>
             <Text style={styles.detailDate}>{formatDisplayDate(memory.memory_date)}</Text>
+            <Text style={styles.attributionText}>Added by {attributionName}</Text>
             {emo && memory.emotion ? (
               <View style={[styles.emotionChip, { backgroundColor: emo.soft, alignSelf: 'flex-start' }]}>
                 <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
@@ -244,7 +252,8 @@ function MemoryDetailFramed({
                 <MemberPill key={m.id} member={m} />
               ))}
             </View>
-            {memory.memory_type === 'text_illustration' &&
+            {canEdit &&
+              memory.memory_type === 'text_illustration' &&
               (memory.illustration_status === 'failed' || needsIllustrationRecovery(memory)) && (
               <Pressable
                 onPress={onRetry}
@@ -265,15 +274,17 @@ function MemoryDetailFramed({
 // ── Detail B — Editorial text (text_only) ─────────────────────────────────────
 function MemoryDetailEditorial({
   memory,
+  attributionName,
   onBack,
   onEdit,
   onDelete,
   isDeleting,
 }: {
   memory: NonNullable<ReturnType<typeof useMemory>['data']>;
+  attributionName: string;
   onBack: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
   isDeleting: boolean;
 }) {
   const emo = getEmotionColors(memory.emotion);
@@ -306,6 +317,7 @@ function MemoryDetailEditorial({
         {/* Overlapping paper card */}
         <View style={styles.editorialCard}>
           <Text style={styles.editorialDate}>{formatDisplayDate(memory.memory_date)}</Text>
+          <Text style={styles.attributionText}>Added by {attributionName}</Text>
           <Text style={styles.editorialText}>{memory.content}</Text>
           {memory.taggedMembers.length > 0 && (
             <View style={[styles.memberRow, styles.editorialMemberRow]}>
@@ -324,6 +336,10 @@ function MemoryDetailEditorial({
 export default function MemoryDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: memory, isLoading, isError } = useMemory(id);
+  const { familyId, role } = useFamily();
+  const canEdit = canEditFamilyContent(role);
+  const { profiles: memberProfiles } = useFamilyMemberProfiles(familyId);
+  const attributionName = resolveAttributionName(memberProfiles, memory?.user_id);
   const {
     deleteMemory,
     retryIllustration,
@@ -434,10 +450,11 @@ export default function MemoryDetailScreen() {
     return (
       <MemoryDetailEditorial
         memory={memory}
+        attributionName={attributionName}
         isDeleting={isDeleting}
         onBack={leaveMemoryDetail}
-        onEdit={() => router.push(editMemoryRoute(id))}
-        onDelete={handleDelete}
+        onEdit={canEdit ? () => router.push(editMemoryRoute(id)) : undefined}
+        onDelete={canEdit ? handleDelete : undefined}
       />
     );
   }
@@ -446,12 +463,14 @@ export default function MemoryDetailScreen() {
     <MemoryDetailFramed
       memory={memory}
       illustrationUrl={illustrationUrl}
+      attributionName={attributionName}
+      canEdit={canEdit}
       onBack={leaveMemoryDetail}
       onRegenerateIllustration={
-        memory.memory_type === 'text_illustration' ? handleRegenerateIllustration : undefined
+        canEdit && memory.memory_type === 'text_illustration' ? handleRegenerateIllustration : undefined
       }
-      onEdit={() => router.push(editMemoryRoute(id))}
-      onDelete={handleDelete}
+      onEdit={canEdit ? () => router.push(editMemoryRoute(id)) : undefined}
+      onDelete={canEdit ? handleDelete : undefined}
       isDeleting={isDeleting}
       isRegeneratingIllustration={isRegenerating}
       regenerateIllustrationDisabled={regenerateIllustrationDisabled}
@@ -590,6 +609,11 @@ const styles = StyleSheet.create({
     fontSize: 11,
     letterSpacing: 0.14 * 11,
     textTransform: 'uppercase',
+    color: colors.ink3,
+  },
+  attributionText: {
+    fontFamily: fonts.sans,
+    fontSize: 12,
     color: colors.ink3,
   },
   detailText: {

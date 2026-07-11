@@ -25,9 +25,11 @@ import { MemoryTagPicker } from '@/components/memory-tag-picker';
 import { VoiceSpeakItModal } from '@/components/voice-speak-it-modal';
 import { colors, fonts, spacing } from '@/constants/theme';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
+import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemories, useMemory } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
+import { canEditFamilyContent } from '@/utils/roles';
 
 const TYPE_CONFIGS = {
   text_illustration: { label: 'Illustrated', color: colors.primary, bg: colors.primaryTint, border: colors.primarySoft },
@@ -39,9 +41,19 @@ const TYPE_CONFIGS = {
 
 export default function EditMemoryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { role } = useFamily();
   const { data: memory, isLoading } = useMemory(id);
   const { members } = useFamilyMembers();
   const { updateMemory, isUpdating } = useMemories();
+
+  // Guard on mount: viewers reaching this route via a deep link or stale
+  // navigation state get bounced back rather than seeing an edit form whose
+  // save would be RLS-rejected.
+  useEffect(() => {
+    if (!canEditFamilyContent(role)) {
+      router.back();
+    }
+  }, [role]);
   const { url: illustrationUrl } = useMediaUrl(
     memory?.illustration_key ?? null,
     memory?.updated_at,

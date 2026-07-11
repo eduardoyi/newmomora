@@ -18,10 +18,12 @@ import { MemoryCard } from '@/components/memory-card';
 import { MemoryFab } from '@/components/memory-fab';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { useFamily } from '@/hooks/use-family';
 import { useMemories } from '@/hooks/useMemories';
 import type { MemoryWithTags } from '@/services/memories';
 import { useOnboardingStatus } from '@/hooks/useFamilyMembers';
 import { addFamilyMemberRoute, memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
+import { canEditFamilyContent } from '@/utils/roles';
 import { isVideoContentType } from '@/utils/media-validation';
 
 function toLocalDateString(d: Date) {
@@ -83,6 +85,8 @@ function TimelineHeader({ memories }: { memories: MemoryWithTags[] }) {
 
 export default function TimelineScreen() {
   const { user } = useAuth();
+  const { role } = useFamily();
+  const canEdit = canEditFamilyContent(role);
   const { isLoading: isOnboardingLoading, needsFamilyMember } = useOnboardingStatus();
   const [searchQuery] = useState('');
   const { memories, isLoading, isRefetching, isError, refetch } = useMemories(searchQuery);
@@ -115,17 +119,20 @@ export default function TimelineScreen() {
         <View style={styles.onboardingWrap}>
           <Text style={styles.onboardingTitle}>Who comes first?</Text>
           <Text style={styles.onboardingBody}>
-            Add your child first — Momora is about their moments. We'll draw their portrait so every
-            memory features them.
+            {canEdit
+              ? "Add your child first — Momora is about their moments. We'll draw their portrait so every memory features them."
+              : 'Ask a family manager to add the first family member — their portrait will bring every memory to life.'}
           </Text>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.push(addFamilyMemberRoute)}
-            style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-            testID="timeline-add-family-member"
-          >
-            <Text style={styles.buttonText}>Add family member</Text>
-          </Pressable>
+          {canEdit && (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push(addFamilyMemberRoute)}
+              style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+              testID="timeline-add-family-member"
+            >
+              <Text style={styles.buttonText}>Add family member</Text>
+            </Pressable>
+          )}
         </View>
       </SafeAreaView>
     );
@@ -201,7 +208,7 @@ export default function TimelineScreen() {
         />
       )}
 
-      <MemoryFab onPress={() => router.push(newMemoryRoute)} />
+      {canEdit && <MemoryFab onPress={() => router.push(newMemoryRoute)} />}
     </View>
   );
 }

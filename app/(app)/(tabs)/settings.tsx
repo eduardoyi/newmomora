@@ -1,12 +1,30 @@
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { familyMembershipsQueryKey, useFamily } from '@/hooks/use-family';
+import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { getDeviceTimezone } from '@/services/auth';
+import { leaveFamily, updateFamilyName } from '@/services/family';
+import { canEditFamilyContent, isOwnerRole } from '@/utils/roles';
 import { AuthField, AuthInput } from '@/components/auth-screen';
+import { SelectField } from '@/components/select-field';
 
 function SettingsBlock({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -47,6 +65,205 @@ function SettingsRow({
   );
 }
 
+function roleLabel(role: string | null): string {
+  if (role === 'owner') return 'Owner';
+  if (role === 'manager') return 'Manager';
+  if (role === 'viewer') return 'Viewer';
+  return 'Former member';
+}
+
+function FamilySection() {
+  const { user } = useAuth();
+  const { family, familyId, role, memberships, setActiveFamily, refetchMemberships } = useFamily();
+  const { profiles } = useFamilyMemberProfiles(familyId);
+  const queryClient = useQueryClient();
+  const canEditName = canEditFamilyContent(role);
+  const isOwner = isOwnerRole(role);
+
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(family?.name ?? '');
+  const [isSavingName, setIsSavingName] = useState(false);
+  const [nameError, setNameError] = useState('');
+  const [isLeaving, setIsLeaving] = useState(false);
+  const [leaveError, setLeaveError] = useState('');
+
+  useEffect(() => {
+    if (!isEditingName) {
+      setNameDraft(family?.name ?? '');
+    }
+  }, [family?.name, isEditingName]);
+
+  if (!family || !familyId) {
+    return null;
+  }
+
+  const handleSaveName = async () => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed) {
+      setNameError('Family name is required');
+      return;
+    }
+
+    setNameError('');
+    setIsSavingName(true);
+    try {
+      const { error } = await updateFamilyName(familyId, trimmed);
+      if (error) {
+        throw new Error(error.message);
+      }
+      await queryClient.invalidateQueries({ queryKey: familyMembershipsQueryKey });
+      setIsEditingName(false);
+    } catch (error) {
+      setNameError(error instanceof Error ? error.message : 'Could not update family name');
+    } finally {
+      setIsSavingName(false);
+    }
+  };
+
+  const handleLeave = () => {
+    Alert.alert(
+      'Leave family',
+      `Leave ${family.name}? You will lose access to its memories unless you're invited back.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              if (!user) return;
+              setLeaveError('');
+              setIsLeaving(true);
+              try {
+                const { error } = await leaveFamily(familyId, user.id);
+                if (error) {
+                  throw new Error(error.message);
+                }
+                await refetchMemberships();
+              } catch (error) {
+                setLeaveError(error instanceof Error ? error.message : 'Could not leave family');
+              } finally {
+                setIsLeaving(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
+
+  const handlePickFamily = async (nextFamilyId: string) => {
+    if (nextFamilyId === familyId) {
+      return;
+    }
+    try {
+      await setActiveFamily(nextFamilyId);
+    } catch {
+      Alert.alert('Could not switch families', 'Please try again.');
+    }
+  };
+
+  return (
+    <SettingsBlock title="Family">
+      {isEditingName ? (
+        <View style={[styles.row, styles.familyEditRow]}>
+          <View style={styles.familyEditForm}>
+            <AuthInput
+              autoCapitalize="words"
+              onChangeText={setNameDraft}
+              testID="settings-family-name-input"
+              value={nameDraft}
+            />
+            {nameError ? <Text style={styles.familyNameError}>{nameError}</Text> : null}
+            <View style={styles.familyEditActions}>
+              <Pressable
+                onPress={() => {
+                  setIsEditingName(false);
+                  setNameError('');
+                  setNameDraft(family.name);
+                }}
+                style={styles.familyEditCancel}
+                testID="settings-family-name-cancel"
+              >
+                <Text style={styles.familyEditCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                disabled={isSavingName}
+                onPress={() => void handleSaveName()}
+                style={styles.familyEditSave}
+                testID="settings-family-name-save"
+              >
+                {isSavingName ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text style={styles.familyEditSaveText}>Save</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      ) : (
+        <SettingsRow
+          first
+          label={family.name}
+          caption={roleLabel(role)}
+          right={
+            canEditName ? (
+              <Pressable
+                onPress={() => setIsEditingName(true)}
+                testID="settings-family-name-edit"
+              >
+                <Text style={styles.familyEditTrigger}>Edit</Text>
+              </Pressable>
+            ) : undefined
+          }
+        />
+      )}
+
+      {profiles.map((profile) => (
+        <SettingsRow
+          key={profile.user_id}
+          label={profile.name}
+          value={profile.is_active_member ? roleLabel(profile.role) : 'Former member'}
+        />
+      ))}
+
+      {memberships.length > 1 && (
+        <View style={[styles.row, styles.rowBorder]}>
+          <View style={styles.rowContent}>
+            <Text style={styles.rowLabel}>Switch family</Text>
+          </View>
+          <SelectField
+            onChange={(value) => void handlePickFamily(value)}
+            options={memberships.map((membership) => ({
+              value: membership.familyId,
+              label: membership.name,
+            }))}
+            testID="settings-family-picker"
+            value={familyId}
+          />
+        </View>
+      )}
+
+      {!isOwner && (
+        <View style={[styles.row, styles.rowBorder]}>
+          <Pressable
+            disabled={isLeaving}
+            onPress={handleLeave}
+            testID="settings-leave-family"
+          >
+            <Text style={styles.leaveFamilyText}>
+              {isLeaving ? 'Leaving…' : 'Leave family'}
+            </Text>
+          </Pressable>
+        </View>
+      )}
+
+      {leaveError ? <Text style={styles.familyNameError}>{leaveError}</Text> : null}
+    </SettingsBlock>
+  );
+}
+
 export default function SettingsScreen() {
   const { user, signOut } = useAuth();
   const {
@@ -72,124 +289,131 @@ export default function SettingsScreen() {
 
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <SafeAreaView>
-          <View style={styles.header}>
-            <Text style={styles.eyebrow}>Account</Text>
-            <Text style={styles.title}>Settings.</Text>
-          </View>
-        </SafeAreaView>
-
-        {/* Identity card */}
-        <View style={styles.identityCard}>
-          <View style={styles.identityAvatar}>
-            <Text style={styles.identityInitial}>
-              {(profile?.name ?? user?.email ?? 'U').charAt(0).toUpperCase()}
-            </Text>
-          </View>
-          <View style={styles.identityContent}>
-            <Text style={styles.identityName}>{profile?.name ?? 'You'}</Text>
-            <Text style={styles.identityEmail}>{user?.email ?? ''}</Text>
-          </View>
-          <Pressable style={styles.identityEdit}>
-            <Text style={styles.identityEditIcon}>✎</Text>
-          </Pressable>
-        </View>
-
-        {/* Display name */}
-        <View style={styles.section}>
-          <AuthField label="Display name">
-            <AuthInput
-              autoCapitalize="words"
-              onChangeText={(name) => void updateProfile({ name })}
-              placeholder="Your name"
-              testID="settings-display-name"
-              value={profile?.name ?? ''}
-            />
-          </AuthField>
-        </View>
-
-        <View style={styles.sections}>
-          <SettingsBlock title="Daily reminder">
-            <SettingsRow
-              first
-              label="Remind me to journal"
-              caption="Get a gentle nudge to capture a moment."
-              right={
-                <Switch
-                  onValueChange={handleToggleReminders}
-                  testID="settings-daily-reminder-toggle"
-                  value={remindersEnabled}
-                  trackColor={{ false: colors.border, true: colors.primary }}
-                />
-              }
-            />
-            {remindersEnabled && (
-              <SettingsRow
-                label="Reminder time"
-                value={(profile?.notification_time ?? '20:00:00').slice(0, 5)}
-                chevron
-              />
-            )}
-          </SettingsBlock>
-
-          <SettingsBlock title="Privacy">
-            <SettingsRow first label="Private storage" caption="Your moments live in your account only." />
-            <SettingsRow label="Export data" chevron />
-          </SettingsBlock>
-
-          <SettingsBlock title="Help">
-            <SettingsRow first label="How illustrations work" chevron />
-            <SettingsRow label="Send feedback" chevron />
-            <SettingsRow label="Privacy policy" chevron />
-          </SettingsBlock>
-
-          {/* Account deletion banner */}
-          {profile?.deleted_at ? (
-            <View style={styles.deletionBanner}>
-              <Text style={styles.deletionTitle}>Account scheduled for deletion</Text>
-              <Text style={styles.deletionBody}>
-                Hard delete on {profile.scheduled_hard_delete_at?.slice(0, 10) ?? 'soon'}.
-              </Text>
-              <Pressable
-                onPress={() => void cancelAccountDeletion()}
-                disabled={isCancelingDeletion}
-                style={styles.cancelDeletionBtn}
-                testID="settings-cancel-deletion"
-              >
-                <Text style={styles.cancelDeletionText}>
-                  {isCancelingDeletion ? 'Canceling…' : 'Cancel deletion'}
-                </Text>
-              </Pressable>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.container}
+      >
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          <SafeAreaView>
+            <View style={styles.header}>
+              <Text style={styles.eyebrow}>Account</Text>
+              <Text style={styles.title}>Settings.</Text>
             </View>
-          ) : null}
-
-          {/* Actions */}
-          <View style={styles.actions}>
-            <Pressable
-              onPress={() => signOut()}
-              style={({ pressed }) => [styles.signOutBtn, pressed && { opacity: 0.8 }]}
-              testID="settings-sign-out-button"
-            >
-              <Text style={styles.signOutText}>Sign out</Text>
+          </SafeAreaView>
+  
+          {/* Identity card */}
+          <View style={styles.identityCard}>
+            <View style={styles.identityAvatar}>
+              <Text style={styles.identityInitial}>
+                {(profile?.name ?? user?.email ?? 'U').charAt(0).toUpperCase()}
+              </Text>
+            </View>
+            <View style={styles.identityContent}>
+              <Text style={styles.identityName}>{profile?.name ?? 'You'}</Text>
+              <Text style={styles.identityEmail}>{user?.email ?? ''}</Text>
+            </View>
+            <Pressable style={styles.identityEdit}>
+              <Text style={styles.identityEditIcon}>✎</Text>
             </Pressable>
-
-            {!profile?.deleted_at && (
-              <Pressable
-                onPress={() => void deleteAccount()}
-                disabled={isDeletingAccount || isUpdating}
-                testID="settings-delete-account"
-              >
-                <Text style={styles.deleteText}>
-                  {isDeletingAccount ? 'Scheduling deletion…' : 'Delete account'}
-                </Text>
-              </Pressable>
-            )}
           </View>
-
-          <Text style={styles.version}>Momora · v1.0</Text>
-        </View>
-      </ScrollView>
+  
+          {/* Display name */}
+          <View style={styles.section}>
+            <AuthField label="Display name">
+              <AuthInput
+                autoCapitalize="words"
+                onChangeText={(name) => void updateProfile({ name })}
+                placeholder="Your name"
+                testID="settings-display-name"
+                value={profile?.name ?? ''}
+              />
+            </AuthField>
+          </View>
+  
+          <View style={styles.sections}>
+            <SettingsBlock title="Daily reminder">
+              <SettingsRow
+                first
+                label="Remind me to journal"
+                caption="Get a gentle nudge to capture a moment."
+                right={
+                  <Switch
+                    onValueChange={handleToggleReminders}
+                    testID="settings-daily-reminder-toggle"
+                    value={remindersEnabled}
+                    trackColor={{ false: colors.border, true: colors.primary }}
+                  />
+                }
+              />
+              {remindersEnabled && (
+                <SettingsRow
+                  label="Reminder time"
+                  value={(profile?.notification_time ?? '20:00:00').slice(0, 5)}
+                  chevron
+                />
+              )}
+            </SettingsBlock>
+  
+            <FamilySection />
+  
+            <SettingsBlock title="Privacy">
+              <SettingsRow first label="Private storage" caption="Your moments live in your account only." />
+              <SettingsRow label="Export data" chevron />
+            </SettingsBlock>
+  
+            <SettingsBlock title="Help">
+              <SettingsRow first label="How illustrations work" chevron />
+              <SettingsRow label="Send feedback" chevron />
+              <SettingsRow label="Privacy policy" chevron />
+            </SettingsBlock>
+  
+            {/* Account deletion banner */}
+            {profile?.deleted_at ? (
+              <View style={styles.deletionBanner}>
+                <Text style={styles.deletionTitle}>Account scheduled for deletion</Text>
+                <Text style={styles.deletionBody}>
+                  Hard delete on {profile.scheduled_hard_delete_at?.slice(0, 10) ?? 'soon'}.
+                </Text>
+                <Pressable
+                  onPress={() => void cancelAccountDeletion()}
+                  disabled={isCancelingDeletion}
+                  style={styles.cancelDeletionBtn}
+                  testID="settings-cancel-deletion"
+                >
+                  <Text style={styles.cancelDeletionText}>
+                    {isCancelingDeletion ? 'Canceling…' : 'Cancel deletion'}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+  
+            {/* Actions */}
+            <View style={styles.actions}>
+              <Pressable
+                onPress={() => signOut()}
+                style={({ pressed }) => [styles.signOutBtn, pressed && { opacity: 0.8 }]}
+                testID="settings-sign-out-button"
+              >
+                <Text style={styles.signOutText}>Sign out</Text>
+              </Pressable>
+  
+              {!profile?.deleted_at && (
+                <Pressable
+                  onPress={() => void deleteAccount()}
+                  disabled={isDeletingAccount || isUpdating}
+                  testID="settings-delete-account"
+                >
+                  <Text style={styles.deleteText}>
+                    {isDeletingAccount ? 'Scheduling deletion…' : 'Delete account'}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+  
+            <Text style={styles.version}>Momora · v1.0</Text>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -330,6 +554,59 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: colors.ink3,
     fontWeight: '300',
+  },
+  familyEditTrigger: {
+    fontFamily: fonts.sansBold,
+    fontSize: 13,
+    color: colors.primary,
+  },
+  familyEditRow: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
+  familyEditForm: {
+    flex: 1,
+    gap: spacing.sm,
+  },
+  familyEditActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+  },
+  familyEditCancel: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  familyEditCancelText: {
+    fontFamily: fonts.sansBold,
+    fontSize: 13,
+    color: colors.ink3,
+  },
+  familyEditSave: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.md,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 64,
+  },
+  familyEditSaveText: {
+    fontFamily: fonts.sansBold,
+    fontSize: 13,
+    color: colors.white,
+  },
+  familyNameError: {
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    color: colors.error,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  leaveFamilyText: {
+    fontFamily: fonts.sansBold,
+    fontSize: 13.5,
+    color: colors.error,
   },
   deletionBanner: {
     backgroundColor: colors.errorSoft,

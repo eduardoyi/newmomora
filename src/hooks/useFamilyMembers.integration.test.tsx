@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useAuth } from '@/hooks/use-auth';
-import { useUserProfile } from '@/hooks/useUserProfile';
+import { useFamily } from '@/hooks/use-family';
 import {
   fetchFamilyMembers,
   createFamilyMemberWithPhoto,
@@ -16,8 +16,8 @@ jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
 }));
 
-jest.mock('@/hooks/useUserProfile', () => ({
-  useUserProfile: jest.fn(),
+jest.mock('@/hooks/use-family', () => ({
+  useFamily: jest.fn(),
 }));
 
 jest.mock('@/services/family-members', () => ({
@@ -44,7 +44,7 @@ const mockedGeneratePortraitIllustration = generatePortraitIllustration as jest.
   typeof generatePortraitIllustration
 >;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
-const mockedUseUserProfile = useUserProfile as jest.MockedFunction<typeof useUserProfile>;
+const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -74,9 +74,16 @@ describe('useFamilyMembers integration', () => {
       signOut: jest.fn(),
     });
 
-    mockedUseUserProfile.mockReturnValue({
-      profile: { active_family_id: 'family-1' } as never,
-    } as never);
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Test's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Test's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
   });
 
   it('loads family members for the signed-in user', async () => {

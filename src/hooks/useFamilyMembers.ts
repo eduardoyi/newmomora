@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
-import { useUserProfile } from '@/hooks/useUserProfile';
+import { useFamily } from '@/hooks/use-family';
+import { familyMembersQueryKey as buildFamilyMembersQueryKey } from '@/hooks/queryKeys';
 import {
   createFamilyMemberWithPhoto,
   deleteFamilyMember,
@@ -13,17 +14,12 @@ import {
 } from '@/services/family-members';
 import { generatePortraitIllustration } from '@/services/ai';
 
-export const familyMembersQueryKey = ['family-members'] as const;
-
 export function useFamilyMembers() {
   const { user } = useAuth();
-  // TODO(family-sharing Phase 4): source familyId from FamilyProvider once
-  // it exists. Until then, active_family_id is correct for every user --
-  // the Phase 2 backfill guarantees exactly one family per pre-existing
-  // user, and new users get one from `create_family`/invite redemption.
-  const { profile } = useUserProfile();
+  const { familyId } = useFamily();
   const queryClient = useQueryClient();
   const previousPortraitStatusRef = useRef<Map<string, string>>(new Map());
+  const familyMembersQueryKey = buildFamilyMembersQueryKey(familyId);
 
   const query = useQuery({
     queryKey: familyMembersQueryKey,
@@ -36,7 +32,7 @@ export function useFamilyMembers() {
 
       return data ?? [];
     },
-    enabled: Boolean(user),
+    enabled: Boolean(user) && Boolean(familyId),
     refetchInterval: (queryState) => {
       const members = queryState.state.data ?? [];
       const hasGeneratingPortrait = members.some(
@@ -54,14 +50,14 @@ export function useFamilyMembers() {
       if (!user) {
         throw new Error('You must be signed in to add a family member');
       }
-      if (!profile?.active_family_id) {
+      if (!familyId) {
         throw new Error('You must have a family to add a family member');
       }
 
       const { data, error } = await createFamilyMemberWithPhoto({
         ...input,
         userId: user.id,
-        familyId: profile.active_family_id,
+        familyId,
       });
 
       if (error) {
@@ -95,14 +91,14 @@ export function useFamilyMembers() {
       if (!user) {
         throw new Error('You must be signed in to update a family member');
       }
-      if (!profile?.active_family_id) {
+      if (!familyId) {
         throw new Error('You must have a family to update a family member');
       }
 
       const { data, error } = await updateFamilyMemberWithPhoto({
         memberId: input.memberId,
         userId: user.id,
-        familyId: profile.active_family_id,
+        familyId,
         name: input.name,
         dateOfBirth: input.dateOfBirth,
         gender: input.gender,

@@ -20,7 +20,9 @@ import { NicknameInputRow } from '@/components/nickname-input-row';
 import { SelectField } from '@/components/select-field';
 import { GENDER_OPTIONS } from '@/constants/gender-options';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
+import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { canEditFamilyContent } from '@/utils/roles';
 import { validateDateOfBirth, validateFamilyMemberName } from '@/utils/family-members';
 import {
   type FamilyProfilePhotoPickResult,
@@ -32,9 +34,17 @@ import {
 
 export default function EditFamilyMemberScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { role } = useFamily();
   const { members, isLoading, updateMember, isUpdating, deleteMember, isDeleting } = useFamilyMembers();
 
   const member = members.find((m) => m.id === id);
+
+  // Guard on mount: viewers reaching this route directly get bounced back.
+  useEffect(() => {
+    if (!canEditFamilyContent(role)) {
+      router.back();
+    }
+  }, [role]);
 
   const [name, setName] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');

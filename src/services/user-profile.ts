@@ -15,6 +15,8 @@ export interface UpdateUserProfileInput {
   notificationTime?: string | null;
   expoPushToken?: string | null;
   hasCompletedOnboarding?: boolean;
+  /** Switches the caller's active family (FamilyProvider.setActiveFamily). */
+  activeFamilyId?: string;
 }
 
 function mapSupabaseError(error: { message: string; code?: string }): ServiceError {
@@ -65,6 +67,7 @@ export async function updateUserProfile(
       ...(input.hasCompletedOnboarding !== undefined
         ? { has_completed_onboarding: input.hasCompletedOnboarding }
         : {}),
+      ...(input.activeFamilyId !== undefined ? { active_family_id: input.activeFamilyId } : {}),
     })
     .eq('id', user.id)
     .select('*')

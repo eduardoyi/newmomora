@@ -2,8 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
-import { useUserProfile } from '@/hooks/useUserProfile';
-import { calendarMemoriesQueryKey, memoriesQueryKey } from '@/hooks/queryKeys';
+import { useFamily } from '@/hooks/use-family';
+import {
+  calendarMemoriesQueryKeyBase,
+  memoriesQueryKey,
+  memoriesQueryKeyBase,
+  memoryDetailQueryKey,
+} from '@/hooks/queryKeys';
+import { canEditFamilyContent } from '@/utils/roles';
 import {
   createMediaMemory,
   createMemory,
@@ -35,17 +41,23 @@ const MEDIA_UPLOAD_CONCURRENCY = 3;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// Invalidates every family's cached list/detail data (React Query prefix-
+// matches array keys, so passing just the base string covers every
+// `[base, familyId, ...]` variant). Simpler and safer than tracking the
+// current familyId here -- stale entries for other families just refetch
+// lazily the next time they're viewed.
 function invalidateMemoryQueries(queryClient: ReturnType<typeof useQueryClient>): void {
-  queryClient.invalidateQueries({ queryKey: memoriesQueryKey });
-  queryClient.invalidateQueries({ queryKey: calendarMemoriesQueryKey });
+  queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase] });
+  queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
 }
 
 function isMemoriesListQueryKey(queryKey: readonly unknown[]): boolean {
-  return queryKey[0] === memoriesQueryKey[0] && queryKey[1] !== 'detail';
+  return queryKey[0] === memoriesQueryKeyBase && queryKey[2] !== 'detail';
 }
 
 function setMemoryIllustrationPendingInCache(
   queryClient: ReturnType<typeof useQueryClient>,
+  familyId: string | null | undefined,
   memoryId: string,
 ): void {
   const patchMemory = (memory: MemoryWithTags): MemoryWithTags =>
@@ -56,7 +68,7 @@ function setMemoryIllustrationPendingInCache(
   }, (current) => (Array.isArray(current) ? current.map(patchMemory) : current));
 
   queryClient.setQueryData<MemoryWithTags | null>(
-    [...memoriesQueryKey, 'detail', memoryId],
+    memoryDetailQueryKey(familyId, memoryId),
     (current) => (current ? patchMemory(current) : current),
   );
 }
@@ -154,17 +166,14 @@ function toError(error: unknown, fallbackMessage: string): Error {
 
 export function useMemories(searchQuery = '') {
   const { user } = useAuth();
-  // TODO(family-sharing Phase 4): source familyId from FamilyProvider once
-  // it exists. Until then, active_family_id is correct for every user --
-  // the Phase 2 backfill guarantees exactly one family per pre-existing
-  // user, and new users get one from `create_family`/invite redemption.
-  const { profile } = useUserProfile();
+  const { familyId, role } = useFamily();
   const queryClient = useQueryClient();
   const recoveringIllustrationsRef = useRef(new Set<string>());
   const recoveringEmotionsRef = useRef(new Set<string>());
+  const canRecoverIllustrations = canEditFamilyContent(role);
 
   const query = useQuery({
-    queryKey: [...memoriesQueryKey, searchQuery],
+    queryKey: [...memoriesQueryKey(familyId), searchQuery],
     queryFn: async () => {
       const { data, error } = searchQuery.trim()
         ? await searchMemories(searchQuery)
@@ -191,7 +200,15 @@ export function useMemories(searchQuery = '') {
     },
   });
 
+  // Viewers' writes are RLS-rejected (memories: update requires manager+),
+  // so a viewer running this would have its illustration_status UPDATE and
+  // generate-illustration call rejected every time -- a permanent retry
+  // loop (plan §7's analyze-emotion row explains the same failure shape).
   useEffect(() => {
+    if (!canRecoverIllustrations) {
+      return;
+    }
+
     const memories = query.data ?? [];
 
     for (const memory of memories) {
@@ -218,7 +235,7 @@ export function useMemories(searchQuery = '') {
           invalidateMemoryQueries(queryClient);
         });
     }
-  }, [query.data, queryClient]);
+  }, [query.data, queryClient, canRecoverIllustrations]);
 
   // Backfill emotion tags for memories that were never analyzed or whose
   // analysis previously failed (e.g. older text_only entries). One attempt per
@@ -269,13 +286,13 @@ export function useMemories(searchQuery = '') {
       if (!user) {
         throw new Error('You must be signed in to save a memory');
       }
-      if (!profile?.active_family_id) {
+      if (!familyId) {
         throw new Error('You must have a family to save a memory');
       }
 
       const { data, error } = await createMemory({
         userId: user.id,
-        familyId: profile.active_family_id,
+        familyId,
         content: input.content,
         memoryDate: input.memoryDate,
         taggedMemberIds: input.taggedMemberIds,
@@ -298,11 +315,11 @@ export function useMemories(searchQuery = '') {
       if (!user) {
         throw new Error('You must be signed in to save a memory');
       }
-      if (!profile?.active_family_id) {
+      if (!familyId) {
         throw new Error('You must have a family to save a memory');
       }
 
-      const activeFamilyId = profile.active_family_id;
+      const activeFamilyId = familyId;
       const uploadedKeys: string[] = [];
 
       const uploadAsset = async (asset: MemoryMediaMutationAsset) => {
@@ -355,7 +372,7 @@ export function useMemories(searchQuery = '') {
 
         const { data, error } = await createMediaMemory({
           userId: user.id,
-          familyId: profile.active_family_id,
+          familyId: activeFamilyId,
           memoryId: input.memoryId,
           mediaAssets,
           content: input.content,
@@ -397,11 +414,11 @@ export function useMemories(searchQuery = '') {
       if (!user) {
         throw new Error('You must be signed in to update a memory');
       }
-      if (!profile?.active_family_id) {
+      if (!familyId) {
         throw new Error('You must have a family to update a memory');
       }
 
-      const activeFamilyId = profile.active_family_id;
+      const activeFamilyId = familyId;
       const uploadedKeys: string[] = [];
 
       const uploadAsset = async (asset: MemoryMediaMutationAsset) => {
@@ -514,8 +531,8 @@ export function useMemories(searchQuery = '') {
       }
     },
     onMutate: async (memoryId) => {
-      await queryClient.cancelQueries({ queryKey: memoriesQueryKey });
-      setMemoryIllustrationPendingInCache(queryClient, memoryId);
+      await queryClient.cancelQueries({ queryKey: memoriesQueryKey(familyId) });
+      setMemoryIllustrationPendingInCache(queryClient, familyId, memoryId);
     },
     onSettled: () => {
       invalidateMemoryQueries(queryClient);
@@ -531,8 +548,8 @@ export function useMemories(searchQuery = '') {
       }
     },
     onMutate: async (memoryId) => {
-      await queryClient.cancelQueries({ queryKey: memoriesQueryKey });
-      setMemoryIllustrationPendingInCache(queryClient, memoryId);
+      await queryClient.cancelQueries({ queryKey: memoriesQueryKey(familyId) });
+      setMemoryIllustrationPendingInCache(queryClient, familyId, memoryId);
     },
     onSettled: () => {
       invalidateMemoryQueries(queryClient);
@@ -563,12 +580,14 @@ export function useMemories(searchQuery = '') {
 
 export function useMemory(memoryId: string | undefined) {
   const { user } = useAuth();
+  const { familyId, role } = useFamily();
   const queryClient = useQueryClient();
   const recoveringIllustrationRef = useRef(false);
   const previousIllustrationStatusRef = useRef<string | null>(null);
+  const canRecoverIllustrations = canEditFamilyContent(role);
 
   const query = useQuery({
-    queryKey: [...memoriesQueryKey, 'detail', memoryId],
+    queryKey: memoryDetailQueryKey(familyId, memoryId),
     queryFn: async () => {
       if (!memoryId) {
         return null;
@@ -603,7 +622,12 @@ export function useMemory(memoryId: string | undefined) {
   useEffect(() => {
     const memory = query.data;
 
-    if (!memory || !needsIllustrationRecovery(memory) || recoveringIllustrationRef.current) {
+    if (
+      !canRecoverIllustrations ||
+      !memory ||
+      !needsIllustrationRecovery(memory) ||
+      recoveringIllustrationRef.current
+    ) {
       return;
     }
 
@@ -621,7 +645,7 @@ export function useMemory(memoryId: string | undefined) {
         recoveringIllustrationRef.current = false;
         invalidateMemoryQueries(queryClient);
       });
-  }, [query.data, queryClient]);
+  }, [query.data, queryClient, canRecoverIllustrations]);
 
   useEffect(() => {
     const memory = query.data;
@@ -638,7 +662,7 @@ export function useMemory(memoryId: string | undefined) {
 
     void query.refetch();
     queryClient.invalidateQueries({ queryKey: ['media-urls'] });
-    queryClient.invalidateQueries({ queryKey: calendarMemoriesQueryKey });
+    queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
   }, [query.data, query.refetch, queryClient]);
 
   return query;

@@ -1,6 +1,6 @@
 import { navigateBack } from '@/lib/navigation';
 import { SymbolView } from 'expo-symbols';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -24,9 +24,11 @@ import { VoiceSpeakItModal } from '@/components/voice-speak-it-modal';
 import { DatePickerField } from '@/components/date-picker-field';
 import { colors, fonts, spacing } from '@/constants/theme';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
+import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemories } from '@/hooks/useMemories';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { canEditFamilyContent } from '@/utils/roles';
 import { todayIsoDate } from '@/utils/dates';
 import {
   deriveMemoryType,
@@ -54,9 +56,19 @@ const TYPE_CONFIGS = {
 } as const;
 
 export default function NewMemoryScreen() {
+  const { role } = useFamily();
   const { members } = useFamilyMembers();
   const { createMemory, createMediaMemory, isCreating, isCreatingMedia } = useMemories();
   const { updateProfile } = useUserProfile();
+
+  // Guard on mount: viewers reaching this route directly (FAB is hidden for
+  // them) get bounced back rather than seeing a form whose save would be
+  // RLS-rejected.
+  useEffect(() => {
+    if (!canEditFamilyContent(role)) {
+      navigateBack();
+    }
+  }, [role]);
   const [content, setContent] = useState('');
   const [memoryDate, setMemoryDate] = useState(todayIsoDate());
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);

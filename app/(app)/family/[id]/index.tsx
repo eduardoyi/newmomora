@@ -15,12 +15,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
 import { CastCard } from '@/components/cast-card';
+import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemories } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { editFamilyMemberRoute, memoryDetailRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
+import { canEditFamilyContent } from '@/utils/roles';
 import { formatDisplayDate } from '@/utils/memories';
 
 // ── Thumbnail for the memories list ──────────────────────────────────────────
@@ -96,6 +98,8 @@ function MemoryThumb({ memory }: { memory: MemoryWithTags }) {
 
 export default function ViewFamilyMemberScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { role } = useFamily();
+  const canEdit = canEditFamilyContent(role);
   const { members, isLoading, deleteMember, isDeleting } = useFamilyMembers();
   const { memories } = useMemories();
   const [deleteError, setDeleteError] = useState('');
@@ -160,37 +164,39 @@ export default function ViewFamilyMemberScreen() {
                 fallback={<Text style={styles.iconBtnText}>‹</Text>}
               />
             </Pressable>
-            <View style={styles.headerRight}>
-              <Pressable
-                onPress={() => router.push(editFamilyMemberRoute(member.id))}
-                style={styles.iconBtn}
-                testID="view-member-edit"
-              >
-                <SymbolView
-                  name={{ ios: 'pencil', android: 'edit' }}
-                  size={16}
-                  tintColor={colors.ink2}
-                  fallback={<Text style={styles.iconBtnText}>✎</Text>}
-                />
-              </Pressable>
-              <Pressable
-                onPress={handleDelete}
-                disabled={isDeleting}
-                style={styles.iconBtn}
-                testID="view-member-delete"
-              >
-                {isDeleting ? (
-                  <ActivityIndicator size="small" color={colors.error} />
-                ) : (
+            {canEdit && (
+              <View style={styles.headerRight}>
+                <Pressable
+                  onPress={() => router.push(editFamilyMemberRoute(member.id))}
+                  style={styles.iconBtn}
+                  testID="view-member-edit"
+                >
                   <SymbolView
-                    name={{ ios: 'trash', android: 'delete' }}
+                    name={{ ios: 'pencil', android: 'edit' }}
                     size={16}
-                    tintColor={colors.error}
-                    fallback={<Text style={{ fontSize: 15, color: colors.error }}>🗑</Text>}
+                    tintColor={colors.ink2}
+                    fallback={<Text style={styles.iconBtnText}>✎</Text>}
                   />
-                )}
-              </Pressable>
-            </View>
+                </Pressable>
+                <Pressable
+                  onPress={handleDelete}
+                  disabled={isDeleting}
+                  style={styles.iconBtn}
+                  testID="view-member-delete"
+                >
+                  {isDeleting ? (
+                    <ActivityIndicator size="small" color={colors.error} />
+                  ) : (
+                    <SymbolView
+                      name={{ ios: 'trash', android: 'delete' }}
+                      size={16}
+                      tintColor={colors.error}
+                      fallback={<Text style={{ fontSize: 15, color: colors.error }}>🗑</Text>}
+                    />
+                  )}
+                </Pressable>
+              </View>
+            )}
           </View>
         </SafeAreaView>
 

@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 
 import { useMemories } from '@/hooks/useMemories';
 import { useAuth } from '@/hooks/use-auth';
-import { useUserProfile } from '@/hooks/useUserProfile';
+import { useFamily } from '@/hooks/use-family';
 import {
   createMediaMemory,
   fetchMemories,
@@ -17,8 +17,8 @@ jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
 }));
 
-jest.mock('@/hooks/useUserProfile', () => ({
-  useUserProfile: jest.fn(),
+jest.mock('@/hooks/use-family', () => ({
+  useFamily: jest.fn(),
 }));
 
 jest.mock('@/services/memories', () => ({
@@ -40,7 +40,7 @@ jest.mock('@/services/media', () => ({
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
-const mockedUseUserProfile = useUserProfile as jest.MockedFunction<typeof useUserProfile>;
+const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedFetchMemories = fetchMemories as jest.MockedFunction<typeof fetchMemories>;
 const mockedCreateMediaMemory = createMediaMemory as jest.MockedFunction<typeof createMediaMemory>;
 const mockedUpdateMemory = updateMemory as jest.MockedFunction<typeof updateMemory>;
@@ -77,9 +77,16 @@ describe('useMemories integration', () => {
       signOut: jest.fn(),
     });
 
-    mockedUseUserProfile.mockReturnValue({
-      profile: { active_family_id: 'family-1' } as never,
-    } as never);
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Test's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Test's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
 
     mockedFetchMemories.mockResolvedValue({ data: [], error: null });
     mockedUploadMediaObject.mockResolvedValue({

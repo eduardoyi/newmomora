@@ -4,10 +4,15 @@ import type { ReactNode } from 'react';
 
 import { useCalendarMemoriesInRange, useOldestMemoryDate } from '@/hooks/useCalendarMemories';
 import { useAuth } from '@/hooks/use-auth';
+import { useFamily } from '@/hooks/use-family';
 import { fetchMemoriesInDateRange, fetchOldestMemoryDate } from '@/services/memories';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
+}));
+
+jest.mock('@/hooks/use-family', () => ({
+  useFamily: jest.fn(),
 }));
 
 jest.mock('@/services/memories', () => ({
@@ -16,6 +21,7 @@ jest.mock('@/services/memories', () => ({
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
+const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedFetchMemoriesInDateRange = fetchMemoriesInDateRange as jest.MockedFunction<
   typeof fetchMemoriesInDateRange
 >;
@@ -49,6 +55,17 @@ describe('useCalendarMemories hooks', () => {
       verifyOtp: jest.fn(),
       signInWithPassword: jest.fn(),
       signOut: jest.fn(),
+    });
+
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Test's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Test's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
     });
   });
 

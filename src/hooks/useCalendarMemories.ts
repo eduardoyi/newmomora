@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import { useAuth } from '@/hooks/use-auth';
+import { useFamily } from '@/hooks/use-family';
 import { calendarMemoriesQueryKey } from '@/hooks/queryKeys';
 import {
   fetchMemoriesInDateRange,
@@ -33,9 +34,10 @@ function toError(error: unknown, fallbackMessage: string): Error {
 
 export function useOldestMemoryDate() {
   const { user } = useAuth();
+  const { familyId } = useFamily();
 
   return useQuery({
-    queryKey: [...calendarMemoriesQueryKey, 'oldest-date'],
+    queryKey: [...calendarMemoriesQueryKey(familyId), 'oldest-date'],
     queryFn: async () => {
       const { data, error } = await fetchOldestMemoryDate();
 
@@ -45,15 +47,16 @@ export function useOldestMemoryDate() {
 
       return data;
     },
-    enabled: Boolean(user),
+    enabled: Boolean(user && familyId),
   });
 }
 
 export function useCalendarMemoriesInRange(range: CalendarMemoryRange | null) {
   const { user } = useAuth();
+  const { familyId } = useFamily();
 
   return useQuery({
-    queryKey: [...calendarMemoriesQueryKey, 'range', range?.startDate, range?.endDate],
+    queryKey: [...calendarMemoriesQueryKey(familyId), 'range', range?.startDate, range?.endDate],
     queryFn: async () => {
       if (!range) {
         return [];
@@ -67,7 +70,7 @@ export function useCalendarMemoriesInRange(range: CalendarMemoryRange | null) {
 
       return data ?? [];
     },
-    enabled: Boolean(user && range),
+    enabled: Boolean(user && familyId && range),
     placeholderData: keepPreviousData,
     refetchInterval: (queryState) => {
       const memories = (queryState.state.data ?? []) as MemoryWithTags[];
