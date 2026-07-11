@@ -1,4 +1,4 @@
-appId: com.momora.app
+appId: com.memora.app
 ---
 # Viewer-role read-only assertions (docs/features/family-sharing.md).
 # Assumes TEST_EMAIL_2/TEST_PASSWORD_2 is a viewer member of a family with

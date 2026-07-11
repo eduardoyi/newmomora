@@ -1,4 +1,4 @@
-appId: com.momora.app
+appId: com.memora.app
 ---
 - tapOn:
     id: login-dev-toggle-button

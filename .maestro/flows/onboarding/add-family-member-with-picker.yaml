@@ -1,4 +1,4 @@
-appId: com.momora.app
+appId: com.memora.app
 ---
 - addMedia:
     - ../../assets/profile-fixture.jpg

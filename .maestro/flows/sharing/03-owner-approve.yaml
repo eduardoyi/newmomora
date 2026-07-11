@@ -1,4 +1,4 @@
-appId: com.momora.app
+appId: com.memora.app
 ---
 # Step 3/4 -- see 01-owner-create-invite.yaml and README.md.
 - launchApp:

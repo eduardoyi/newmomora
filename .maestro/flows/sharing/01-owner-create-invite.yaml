@@ -1,4 +1,4 @@
-appId: com.momora.app
+appId: com.memora.app
 ---
 # Step 1/4 of the two-account family-sharing invite loop. Run together with
 # 02/03/04 in ONE `maestro test` invocation (see README.md in this

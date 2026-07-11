@@ -311,21 +311,22 @@ history, ahead of this plan's own Phase 8.
   `20260711120000_family_sharing.sql`. Worth a follow-up if `supabase
   start` becomes viable in CI.
 - **Bundle identifier drift** (surfaced during this Phase 8 pass, not a
-  prior-phase decision): `app.json` in this repo uses
+  prior-phase decision): `app.json` in this repo used
   `com.momora.app`, but the **already-published** app store listings and
   the marketing repo's `/invite` page, `assetlinks.json`, and store links
-  all use `com.memora.app` (see the marketing repo's own comment: "Store
-  URLs match the published listings"). Universal links and Android App
-  Links verification will not work end-to-end until this is resolved one
-  way or the other — see Outstanding TODOs below.
+  all use `com.memora.app`. **RESOLVED 2026-07-11:** Eduardo confirmed the
+  published `com.memora.app` listings are the app this repo will replace
+  (same records, new binaries), so `app.json` and every Maestro flow were
+  reverted to `com.memora.app`. All identifiers now agree across both
+  repos and both stores.
 
 ### Outstanding human TODOs
 
 These cannot be completed or verified from a coding environment:
 
-1. **Resolve the `com.momora.app` vs. `com.memora.app` bundle-id drift**
-   (see above) — decide which is correct and make `app.json`, the
-   marketing repo, and the actual App Store/Play Store listings agree.
+1. ~~Resolve the `com.momora.app` vs. `com.memora.app` bundle-id drift~~ —
+   **done**: everything standardized on the published `com.memora.app`
+   (see above).
 2. **Apple Team ID + Android signing SHA-256** — `momora-marketing/dist/.well-known/apple-app-site-association`
    and `assetlinks.json` both still have literal `TODO_REPLACE_WITH_*`
    placeholders. Get the Team ID from the Apple Developer account and the

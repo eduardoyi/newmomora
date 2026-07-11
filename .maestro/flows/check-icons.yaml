@@ -1,8 +1,8 @@
-appId: com.momora.app
+appId: com.memora.app
 ---
 # Launch and connect to dev server
 - launchApp:
-    appId: com.momora.app
+    appId: com.memora.app
     arguments:
       EXDevMenuIsOnboardingFinished: true
 - tapOn:

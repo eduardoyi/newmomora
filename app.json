@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.momora.app",
+      "bundleIdentifier": "com.memora.app",
       "associatedDomains": ["applinks:usemomora.com"],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
@@ -22,7 +22,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "package": "com.momora.app",
+      "package": "com.memora.app",
       "predictiveBackGestureEnabled": false,
       "intentFilters": [
         {

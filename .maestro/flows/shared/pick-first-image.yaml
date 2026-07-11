@@ -1,4 +1,4 @@
-appId: com.momora.app
+appId: com.memora.app
 ---
 - runFlow:
     when:

@@ -1,4 +1,4 @@
-appId: com.momora.app
+appId: com.memora.app
 ---
 # Smoke: opens the add-family-member screen after login.
 # For upload coverage, use:

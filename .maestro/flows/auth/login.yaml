@@ -1,7 +1,7 @@
-appId: com.momora.app
+appId: com.memora.app
 ---
 - launchApp:
-    appId: com.momora.app
+    appId: com.memora.app
     arguments:
       EXDevMenuIsOnboardingFinished: true
 - tapOn:
