@@ -1,0 +1,57 @@
+appId: com.momora.app
+---
+# Step 2/4 -- see 01-owner-create-invite.yaml and README.md for the run
+# command and required env vars. `launchApp: clearState: true` stands in for
+# "sign out": the waiting screen this flow ends on has no sign-out
+# affordance while a redemption is pending, so every step after 01 starts
+# with a clean local session instead of navigating a Sign out button.
+- launchApp:
+    clearState: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- assertVisible: "Welcome back"
+- runFlow:
+    file: ../auth/sign-in.yaml
+    env:
+      TEST_EMAIL: ${TEST_EMAIL_2}
+      TEST_PASSWORD: ${TEST_PASSWORD_2}
+
+# Entry point varies: a brand-new account lands on no-family.tsx; an account
+# that already belongs to a family (e.g. re-running this flow group without
+# resetting test data) lands on the tab shell instead. Cover both paths to
+# the redeem screen.
+- runFlow:
+    when:
+      visible: "Start your family journal"
+    commands:
+      - tapOn:
+          id: no-family-invite-code-button
+- runFlow:
+    when:
+      visible:
+        id: tab-settings
+    commands:
+      - tapOn:
+          id: tab-settings
+      - tapOn:
+          id: settings-join-family
+
+- tapOn:
+    id: redeem-code-input
+- inputText: ${maestro.copiedText}
+- tapOn:
+    id: redeem-submit-button
+- assertVisible:
+    id: waiting-title

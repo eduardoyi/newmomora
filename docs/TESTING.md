@@ -92,6 +92,7 @@ describe('validateMemoryTags', () => {
 - Illustration/portrait status label helpers
 - Error code mapping from Edge Function JSON
 - Prompt builders and style token resolution (pure functions)
+- Family sharing: invite-code normalize/format/shape validation, role-gating helpers (`src/utils/roles.ts`), share-message builder, waiting-screen outcome derivation, `pendingInviteCode` storage helpers
 
 ### What not to unit test
 
@@ -115,6 +116,7 @@ Integration tests prove **multiple layers cooperate correctly** with mocked I/O 
 | **Screen flows** | New memory form: fill text → select tags → save → calls service with correct payload |
 | **Onboarding gates** | Layout redirects when no portrait ready; allows memory when portrait `ready` |
 | **Edge Function handlers** | Full request → mocked DB/OpenAI → response shape (in Deno, see below) |
+| **Family sharing** | `FamilyProvider` membership resolution + stale `active_family_id` correction; Settings family section by role; no-family screen create/redeem entry points + `pendingInviteCode` guard precedence; redeem screen definitive-vs-transient error handling |
 
 ### Stack
 
@@ -182,6 +184,17 @@ Deno.test('rejects more than 4 tagged members', async () => {
 
 Mock OpenAI and Supabase service client. Test auth, validation, error JSON, audio length rejection, idempotent regeneration.
 
+**Family sharing:** `redeem-family-invite`, `resolve-family-invite`, and
+`notify-family-activity` cover the invite/redeem/approve/notify Edge
+Functions (rate limiting, atomic claim, "manager of *this* family" checks,
+debounce, Bento email success/skip/failure). `get-upload-url`,
+`get-media-url`, `delete-storage-object`, `generate-illustration`,
+`generate-portrait-illustration`, and `analyze-emotion` all gained
+family-role authorization tests on top of their existing coverage. There is
+no separate Deno-level RLS test suite — the DB-level RLS matrix (every
+shared table × role × operation) is covered by the Jest integration tests
+above (`use-family.integration.test.tsx` and the screen tests), not Deno.
+
 Run: `npm run test:edge` or `deno test supabase/functions/`
 
 ---
@@ -201,6 +214,8 @@ Examples:
 - `onboarding/add-family-member-with-picker.yaml` — real system gallery picker
 - `memories/create-text-memory.yaml`
 - `memories/voice-memory.yaml`
+- `sharing/01-owner-create-invite.yaml` … `04-second-account-sees-timeline.yaml` — numbered sub-flows for the two-account invite → redeem → approve loop (see `.maestro/flows/sharing/README.md` for why it's split and the required run command)
+- `sharing/viewer-readonly.yaml` — viewer sees timeline but no create FAB / no edit affordances
 
 ### Photo upload E2E (family profiles)
 

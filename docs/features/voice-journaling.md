@@ -40,6 +40,14 @@ Auth: JWT. Audio is discarded after processing.
 | Service | `src/services/ai.ts` (`processVoiceMemory`) |
 | UI | `app/(app)/new-memory.tsx` |
 
+## Family sharing
+
+`process-voice-memory` itself is stateless and unchanged, but the client
+now passes the **active family's** members (not a single user's) as
+`familyMembers` for name-aware transcription and tag suggestion. Memory
+creation from the resulting text still goes through the family-scoped
+`memories` insert path — see [family-sharing.md](./family-sharing.md).
+
 ## Constraints
 
 - **`expo-audio` only** (not `expo-av`).

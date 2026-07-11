@@ -125,7 +125,9 @@ export default function PendingInvitesScreen() {
               const card = (
                 <View key={invite.id} style={styles.card} testID={`pending-invite-${invite.id}`}>
                   <View style={styles.cardHeader}>
-                    <Text style={styles.code}>{invite.code}</Text>
+                    <Text style={styles.code} testID={`pending-invite-${invite.id}-code`}>
+                      {invite.code}
+                    </Text>
                     <View style={[styles.roleChip, isRedeemed && styles.redeemedChip]}>
                       <Text style={[styles.roleChipText, isRedeemed && styles.redeemedChipText]}>
                         {invite.role === 'manager' ? 'Manager' : 'Viewer'}

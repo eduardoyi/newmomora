@@ -1,0 +1,28 @@
+appId: com.momora.app
+---
+# Step 4/4 -- see 01-owner-create-invite.yaml and README.md.
+- launchApp:
+    clearState: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- assertVisible: "Welcome back"
+- runFlow:
+    file: ../auth/sign-in.yaml
+    env:
+      TEST_EMAIL: ${TEST_EMAIL_2}
+      TEST_PASSWORD: ${TEST_PASSWORD_2}
+- extendedWaitUntil:
+    visible: "Timeline"
+    timeout: 90000

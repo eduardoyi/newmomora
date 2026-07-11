@@ -1,0 +1,37 @@
+appId: com.momora.app
+---
+# Step 1/4 of the two-account family-sharing invite loop. Run together with
+# 02/03/04 in ONE `maestro test` invocation (see README.md in this
+# directory) so Maestro's `copiedText` carries the invite code across files.
+# Requires TEST_EMAIL/TEST_PASSWORD (an existing owner account) and
+# TEST_EMAIL_2/TEST_PASSWORD_2 (the invitee, used starting in step 2).
+#
+# NOT executed as part of this change -- authored lint-by-eye only against
+# the testIDs in app/(app)/sharing/invite.tsx, pending-invites.tsx, and
+# app/(app)/(tabs)/settings.tsx. See docs/features/family-sharing.md.
+- runFlow: ../auth/login.yaml
+
+- tapOn:
+    id: tab-settings
+- tapOn:
+    id: settings-invite-family-member
+- tapOn:
+    id: sharing-invite-role-viewer
+- tapOn:
+    id: sharing-invite-create-button
+# The invite screen opens the native share sheet on success before
+# navigating away (src/app/(app)/sharing/invite.tsx `handleInvite`). Dismiss
+# it -- exact affordance is platform/OS-version dependent, hence optional.
+- tapOn:
+    text: "Cancel"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: pending-invites-back
+    timeout: 10000
+
+# Capture the freshly created code. Exactly one invite exists at this point
+# on a clean run, so a partial id match against the `pending-invite-<id>-code`
+# testID (added to pending-invites.tsx for this flow) is unambiguous.
+- copyTextFrom:
+    id: "pending-invite-.*-code"

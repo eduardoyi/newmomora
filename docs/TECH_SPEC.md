@@ -49,6 +49,20 @@ flowchart TB
     client -. presigned URLs .-> Edge
 ```
 
+### Auth
+
+Email OTP (one-time code) for every user via Supabase Auth — see
+[docs/features/auth.md](./features/auth.md) for the full client flow
+(`signInWithOtp`/`verifyOtp`, sign-up metadata trigger, resend cooldown).
+Passwords are not part of the production UX; a `__DEV__`-only password
+sign-in path stays enabled so Maestro E2E can authenticate deterministically
+without reading a real inbox (`src/utils/e2e-fixtures.ts#isE2eFixturesEnabled`
+gates the UI; the Supabase Email password provider itself stays enabled
+server-side). Supabase dashboard prerequisites (custom SMTP, OTP email
+template, OTP expiry) are documented in `docs/features/auth.md` — none of
+them are verifiable from a coding environment; a human must confirm them
+against the live project.
+
 ### Client
 
 | Concern | Choice |
@@ -79,6 +93,16 @@ flowchart TB
 
 ## 2. Database Schema
 
+**Family sharing (2026-07-11):** every table below reflects the
+post-family-sharing state. `user_id` on `memories`/`family_members` is now
+**creator attribution**, not ownership — nullable, `on delete set null`,
+and immutable once set. Tenancy lives in the new `family_id` column on both
+tables (`not null`, also immutable once set). `user_profiles.illustration_style`
+moved to `families.illustration_style`. See
+[§2.6 Family sharing](#26-family-sharing-tenancy-roles-rls) below and
+[docs/features/family-sharing.md](./features/family-sharing.md) for the full
+tenancy model, roles, and RLS rewrite — this section only lists schema.
+
 ### 2.1 Tables
 
 ```sql
@@ -87,20 +111,23 @@ create table public.user_profiles (
   id uuid references auth.users primary key,
   name text not null,
   timezone text not null default 'UTC',
-  illustration_style text not null default 'default',
   enable_daily_reminder boolean not null default false,
   notification_time time,
   expo_push_token text,
   has_completed_onboarding boolean not null default false,
   deleted_at timestamptz,
   scheduled_hard_delete_at timestamptz,
+  active_family_id uuid references public.families on delete set null,  -- which family the client shows
+  notify_new_memories boolean not null default true,                    -- new-memory push opt-out
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- illustration_style column dropped (2026-07-11) -- moved to families.illustration_style.
 
 create table public.family_members (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid references auth.users not null,
+  user_id uuid references auth.users on delete set null,  -- creator attribution (nullable, was NOT NULL)
+  family_id uuid not null references public.families on delete cascade,  -- tenancy
   name text not null,
   nicknames text[] default '{}',
   date_of_birth date,
@@ -117,7 +144,8 @@ create table public.family_members (
 
 create table public.memories (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid references auth.users not null,
+  user_id uuid references auth.users on delete set null,  -- creator attribution (nullable, was NOT NULL)
+  family_id uuid not null references public.families on delete cascade,  -- tenancy
   content text,                              -- required for text_illustration and text_only; optional caption for media
   memory_date date not null default current_date,
   memory_type text not null default 'text_illustration'
@@ -131,6 +159,68 @@ create table public.memories (
   media_content_type text,                   -- MIME type e.g. image/jpeg, video/mp4
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+-- Family sharing (2026-07-11): tenancy + invite tables. Full lifecycle,
+-- roles, and RLS in docs/features/family-sharing.md; schema only here.
+create table public.families (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users on delete cascade,  -- family dies with owner
+  name text not null,
+  illustration_style text not null default 'default',
+  deleted_at timestamptz,                    -- owner soft-delete; owner-exempt from RLS invisibility
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.family_memberships (
+  id uuid primary key default gen_random_uuid(),
+  family_id uuid not null references public.families on delete cascade,
+  user_id uuid not null references auth.users on delete cascade,
+  role text not null check (role in ('owner', 'manager', 'viewer')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (family_id, user_id)
+);
+-- Exactly one 'owner' row per family:
+create unique index one_owner_per_family on public.family_memberships (family_id) where role = 'owner';
+
+create table public.family_invites (
+  id uuid primary key default gen_random_uuid(),
+  family_id uuid not null references public.families on delete cascade,
+  code text not null unique,                 -- normalized "word-word-word"
+  role text not null check (role in ('manager', 'viewer')),
+  status text not null default 'pending'
+    check (status in ('pending', 'redeemed', 'approved', 'rejected', 'revoked')),
+  invited_by uuid not null references auth.users on delete cascade,
+  redeemed_by uuid references auth.users on delete set null,
+  redeemed_at timestamptz,
+  resolved_by uuid,
+  resolved_at timestamptz,
+  expires_at timestamptz not null default now() + interval '7 days',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- ~1,000-word curated seed list create_family_invite samples 3 words from.
+-- Service-role/definer-only -- RLS enabled with NO policies (see §2.6).
+create table public.invite_code_words (
+  word text primary key
+);
+
+-- Rate-limit log for redeem-family-invite. Service-role/definer-only.
+create table public.invite_redemption_attempts (
+  user_id uuid not null,
+  ip text,
+  attempted_at timestamptz not null default now()
+);
+
+-- New-memory push debounce log. Service-role/definer-only.
+create table public.family_activity_log (
+  family_id uuid not null references public.families on delete cascade,
+  actor_id uuid not null,
+  kind text not null,                        -- 'new_memory'
+  created_at timestamptz not null default now()
 );
 
 create table public.memory_family_members (
@@ -157,24 +247,55 @@ create table public.memory_media (
 
 ```sql
 create index idx_family_members_user_id on public.family_members (user_id);
-create index idx_memories_user_id on public.memories (user_id);
-create index idx_memories_memory_date on public.memories (user_id, memory_date desc);
+create index idx_memories_family_id_memory_date on public.memories (family_id, memory_date desc);
 create index idx_memories_content_search on public.memories using gin (to_tsvector('english', content));
 create index idx_user_profiles_scheduled_delete on public.user_profiles (scheduled_hard_delete_at)
   where scheduled_hard_delete_at is not null;
+
+-- Family sharing (2026-07-11):
+create index idx_family_memberships_user_id_family_id on public.family_memberships (user_id, family_id);
+create index idx_family_invites_family_id on public.family_invites (family_id);
+create index idx_family_invites_redeemed_by on public.family_invites (redeemed_by) where redeemed_by is not null;
+create index idx_invite_redemption_attempts_user_id on public.invite_redemption_attempts (user_id, attempted_at);
+create index idx_invite_redemption_attempts_ip on public.invite_redemption_attempts (ip, attempted_at);
+create index idx_family_activity_log_family_actor_kind
+  on public.family_activity_log (family_id, actor_id, kind, created_at desc);
 ```
+
+`idx_memories_user_id` and the old `idx_memories_memory_date (user_id,
+memory_date desc)` were **dropped** — timeline/calendar now filter by
+`family_id`, not `user_id`.
 
 ### 2.3 Row Level Security
 
-All tables enable RLS. Users may only access their own data.
+All tables enable RLS. Access is scoped by **family membership**, not
+`auth.uid() = user_id` directly — that pivot is the core of the
+family-sharing migration. Full policy list, the `is_family_member`/
+`has_family_role` helper functions, and the definer RPCs
+(`create_family`, `create_family_invite`, `get_family_member_profiles`,
+`get_invite_redeemer`, `get_my_redeemed_invite_status`,
+`replace_memory_media_assets`) are in
+`supabase/migrations/20260711120000_family_sharing.sql` and documented in
+[docs/features/family-sharing.md](./features/family-sharing.md) (roles
+table, RLS matrix, RPC list, and the specific bugs the design guards
+against — cross-tenant tag leakage, `family_id` reparenting, "manager
+anywhere" instead of "manager of this specific family").
+
+Shape, for reference (`user_profiles` is unchanged — still "own row only"):
 
 ```sql
 alter table public.user_profiles enable row level security;
 alter table public.family_members enable row level security;
 alter table public.memories enable row level security;
 alter table public.memory_family_members enable row level security;
+alter table public.memory_media enable row level security;
+alter table public.families enable row level security;
+alter table public.family_memberships enable row level security;
+alter table public.family_invites enable row level security;
+-- invite_code_words / invite_redemption_attempts / family_activity_log:
+-- RLS enabled with NO policies -- service-role/definer-function access only.
 
--- user_profiles
+-- user_profiles (unchanged)
 create policy "Users can view own profile"
   on public.user_profiles for select using (auth.uid() = id);
 create policy "Users can update own profile"
@@ -182,23 +303,13 @@ create policy "Users can update own profile"
 create policy "Users can insert own profile"
   on public.user_profiles for insert with check (auth.uid() = id);
 
--- family_members
-create policy "Users can CRUD own family members"
-  on public.family_members for all using (auth.uid() = user_id);
+-- family_members, memories, memory_family_members, memory_media:
+-- select = is_family_member(family_id); insert/update/delete = manager+
+-- (has_family_role(family_id, ['owner','manager'])), with additional
+-- with-check guards on tag/media inserts -- see the migration + feature doc.
 
--- memories
-create policy "Users can CRUD own memories"
-  on public.memories for all using (auth.uid() = user_id);
-
--- memory_family_members (via memory ownership)
-create policy "Users can CRUD own memory tags"
-  on public.memory_family_members for all
-  using (
-    exists (
-      select 1 from public.memories m
-      where m.id = memory_id and m.user_id = auth.uid()
-    )
-  );
+-- families / family_memberships / family_invites: see feature doc roles
+-- table for the exact select/insert/update/delete matrix per role.
 ```
 
 ### 2.4 Triggers
@@ -252,6 +363,35 @@ create trigger on_auth_user_created
 - `memories.media_key`: required (non-null) when `memory_type = 'media'`; must be null for other types — enforced in Edge Function / client layer
 - `memories.illustration_status`: set to `'pending'` only for `text_illustration` memories on insert; `'none'` for all other types
 - `family_members.profile_picture_key`: required before portrait generation
+- `family_memberships`: exactly one `role = 'owner'` row per `family_id` (partial unique index); max 50 rows per `family_id` (trigger); `user_id`/`family_id` immutable once inserted (a manager can only ever change `role`, and never to/from `'owner'`)
+- `family_invites.role`: `'manager'` or `'viewer'` only — invites can never carry the owner role
+- `memories.family_id` / `family_members.family_id`: immutable once set (`before update` trigger — see §2.6)
+- `memories.user_id` / `family_members.user_id`: immutable once set, except the FK's own `on delete set null` (same trigger)
+- `families.owner_id`: immutable; `families.deleted_at` can only be changed by the owner (or a service-role/no-JWT context) — enforced by a `before update` trigger, not RLS alone
+- A user may own at most 5 `families` rows (`create_family` RPC)
+
+### 2.6 Family sharing (tenancy, roles, RLS)
+
+Full model — roles table, tenancy diagram, invite lifecycle, RPC/Edge
+Function contracts, storage authorization, notifications, and the
+`children roster` vs. `household roster` naming hazard — lives in
+[docs/features/family-sharing.md](./features/family-sharing.md). This
+section is the schema-only summary; treat the feature doc as canonical for
+**behavior**, this doc as canonical for **shapes**.
+
+Quick reference:
+
+- **Helper functions:** `is_family_member(fam uuid)`, `has_family_role(fam
+  uuid, roles text[])` — both `security definer stable`, gate every RLS
+  policy on shared tables, include an owner exemption on `deleted_at`.
+- **Definer RPCs:** `create_family`, `create_family_invite`,
+  `get_family_member_profiles`, `get_invite_redeemer`,
+  `get_my_redeemed_invite_status`, `replace_memory_media_assets`.
+- **New Edge Functions:** `redeem-family-invite`, `resolve-family-invite`,
+  `notify-family-activity` — see §4.10–§4.12.
+- **Migration:** `supabase/migrations/20260711120000_family_sharing.sql`
+  (schema + RLS + backfill) and `20260711120001_invite_code_words_seed.sql`
+  (word list).
 
 ---
 
@@ -708,6 +848,80 @@ Cron function run daily.
 
 ---
 
+### 4.10 `redeem-family-invite`
+
+Redeems a 3-word invite code. Behavior/call-order narrative in
+[docs/features/family-sharing.md](./features/family-sharing.md#redeem-family-invite--call-order);
+this is the contract.
+
+**Request**
+
+```json
+{ "code": "sunny-tiger-lake" }
+```
+
+**Response**
+
+```json
+{ "familyName": "Rivera family", "role": "viewer" }
+```
+
+**Auth:** JWT. Rate-limited: ≤10 attempts/hour/user and ≤30/hour/IP (best-effort, from the last `x-forwarded-for` hop).
+
+**Errors:** `validation_error` (missing code), `invalid_code` (400 — covers invalid, expired, revoked, already-redeemed, family soft-deleted, and lost-race claims — deliberately indistinguishable so the endpoint isn't an oracle), `already_member` (409), `rate_limited` (429), `internal_error` (500)
+
+---
+
+### 4.11 `resolve-family-invite`
+
+Approves or rejects a redeemed invite. Caller must be owner/manager of **that invite's** family.
+
+**Request**
+
+```json
+{ "inviteId": "uuid", "action": "approve" }
+```
+
+**Response**
+
+```json
+{ "success": true, "status": "approved" }
+```
+
+**Auth:** JWT, owner/manager of the invite's family.
+
+**Errors:** `validation_error`, `not_found` (404), `forbidden` (403 — wrong family or insufficient role), `invalid_status` (409 — not `redeemed`, or redeemer account hard-deleted), `family_full` (409 — 50-member cap), `internal_error` (500)
+
+---
+
+### 4.12 `notify-family-activity`
+
+Fire-and-forget push after a successful memory create. Only ever announces the caller's own new memory.
+
+**Request**
+
+```json
+{ "memoryId": "uuid" }
+```
+
+**Response**
+
+```json
+{ "sent": true, "recipientCount": 2 }
+```
+
+or, when debounced (another push for this `(family, actor)` fired within the last 15 minutes):
+
+```json
+{ "sent": false, "reason": "debounced" }
+```
+
+**Auth:** JWT; caller must be both the memory's creator (`memory.user_id`) **and** owner/manager of its family.
+
+**Errors:** `validation_error`, `not_found` (404), `forbidden` (403), `internal_error` (500)
+
+---
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)
@@ -767,6 +981,23 @@ Cron function run daily.
 
 Note: the client generates `memoryId` upfront so the R2 object key is known before the DB insert, mirroring the family-member photo flow (§5.3).
 
+### 5.6 Family sharing: invite → redeem → approve
+
+```
+1. Manager+: Settings → Invite → pick role → create_family_invite RPC → share sheet (universal link + raw code)
+2. Redeemer: enter code (or arrive prefilled via app/invite.tsx universal link) → redeem-family-invite EF
+3. Redeemer: waiting screen polls get_my_redeemed_invite_status RPC every 5s
+4. Manager+: Settings → Approvals (redeemed invites, via get_invite_redeemer RPC for name+email) → resolve-family-invite EF
+5. On approve: membership row created, redeemer's active_family_id set, push + Bento email
+6. Redeemer's client invalidates user_profiles + family-memberships queries → FamilyProvider resolves the new family → timeline
+```
+
+After any successful memory create, the client also fire-and-forgets
+`notify-family-activity(memoryId)` (step 3 of §5.1/§5.5) to push the rest of
+the family — never awaited, never blocks the save. See
+[docs/features/family-sharing.md](./features/family-sharing.md) for the
+full lifecycle, RPC list, and Edge Function call order.
+
 ---
 
 ## 6. Style Token Resolution
@@ -785,7 +1016,9 @@ function getStyleReferenceUrl(token: string): string {
 }
 ```
 
-MVP: all users have `illustration_style = 'default'`. No style picker UI.
+MVP: every family has `illustration_style = 'default'` (moved from
+`user_profiles` to `families` in the family-sharing migration — one style
+per family, not per user). No style picker UI.
 
 ---
 
@@ -810,6 +1043,10 @@ MVP: all users have `illustration_style = 'default'`. No style picker UI.
 | `R2_SECRET_ACCESS_KEY` | R2 S3 API secret |
 | `R2_ENDPOINT` | R2 S3 endpoint URL |
 | `R2_PUBLIC_ASSETS_BASE_URL` | Public URL for style reference images |
+| `BENTO_SITE_UUID` | Bento site UUID — sent in the JSON body (not a query param) of transactional email sends |
+| `BENTO_PUBLISHABLE_KEY` | Bento publishable key — HTTP Basic auth username |
+| `BENTO_SECRET_KEY` | Bento secret key — HTTP Basic auth password |
+| `BENTO_FROM_EMAIL` | Sender address; must be pre-registered as an author on the Bento site |
 
 ---
 
@@ -819,13 +1056,15 @@ MVP: all users have `illustration_style = 'default'`. No style picker UI.
 Momora2/
 ├── app/                          # Expo Router screens
 │   ├── (auth)/                   # login, signup, verify-otp
-│   ├── (app)/                    # timeline, calendar, family, settings
+│   ├── (app)/                    # timeline, calendar, family (children), settings
+│   │   └── sharing/               # household: invite, pending-invites, approvals, redeem, waiting
+│   ├── invite.tsx                 # universal-link entry point (outside auth/app groups)
 │   └── (modals)/                 # new-memory, edit-memory, add-family-member
 ├── src/
 │   ├── components/
-│   ├── hooks/                    # useMemories, useFamilyMembers, useVoiceInput
+│   ├── hooks/                    # useMemories, useFamilyMembers, useVoiceInput, use-family, useFamilyInvites
 │   ├── lib/                      # supabase client, query client
-│   ├── services/                 # API wrappers for Edge Functions
+│   ├── services/                 # API wrappers for Edge Functions (incl. family.ts, invites.ts)
 │   └── types/                    # generated Supabase types
 ├── supabase/
 │   ├── migrations/
@@ -840,10 +1079,15 @@ Momora2/
 │       ├── schedule-daily-reminders/
 │       ├── delete-user-account/
 │       ├── cancel-account-deletion/
-│       └── hard-delete-expired-accounts/
+│       ├── hard-delete-expired-accounts/
+│       ├── redeem-family-invite/
+│       ├── resolve-family-invite/
+│       ├── notify-family-activity/
+│       └── _shared/               # family-access.ts, storage-keys.ts, bento.ts, expo-push.ts, ...
 ├── docs/
 │   ├── PRD.md
-│   └── TECH_SPEC.md
+│   ├── TECH_SPEC.md
+│   └── features/family-sharing.md
 ├── app.json
 └── package.json
 ```
@@ -876,6 +1120,9 @@ All AI operations are **async** — client shows status and allows navigation aw
 - [ ] Voice audio not persisted after transcription
 - [ ] Input validation on all Edge Function payloads
 - [ ] Max 4 family member tags enforced server-side
+- [ ] Family-scoped RLS goes through `is_family_member`/`has_family_role`, never a hand-rolled join
+- [ ] Role/family checks are bound to one specific `family_id`, never "has this role somewhere"
+- [ ] Invite codes are rate-limited (user + IP) and never logged in plaintext
 
 ---
 

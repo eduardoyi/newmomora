@@ -74,9 +74,9 @@ Legacy single-media objects remain accepted at `{userId}/memories/{memoryId}/med
 
 The `{ext}` should reflect the actual format: `jpg`, `png`, `heic`, `webp`, `mp4`, `mov`. Using the content type to derive the extension is acceptable.
 
-**RLS:** covered by the existing `memories` RLS policy (`auth.uid() = user_id`). No additional policy needed.
+**RLS:** covered by the family-scoped `memories`/`memory_media` policies (`is_family_member` for select, owner/manager for insert/update/delete) — see [family-sharing.md](./family-sharing.md). No `media`-specific policy needed.
 
-**Account deletion:** `hard-delete-expired-accounts` already deletes all objects under `{userId}/` prefix in the R2 bucket, which covers `{userId}/memories/{memoryId}/media.{ext}` automatically.
+**Account deletion:** `hard-delete-expired-accounts` no longer does a blanket delete of everything under `{userId}/`. For an **owner**, it collects `memory_media.object_key` (plus other family R2 keys) across every creator in each family they own before deleting; for a **non-owner**, it deletes only objects under their own prefix that no surviving row still references (their created media can outlive their account). See [family-sharing.md](./family-sharing.md#constraints--gotchas) and TECH_SPEC §4.9.
 
 ## API & Edge Functions
 
@@ -152,6 +152,14 @@ To create a `media` memory programmatically:
 - **HEIC emotion** — if Edge cannot decode HEIC for vision, emotion stays unset (`unsupported_image_format`); client-side JPEG conversion is backlog.
 - **Edit flow: removing media** — at least one asset must remain. Converting media memories to `text_only` is out of scope.
 - **HEIC format** — iOS default photo format. `expo-image` handles display, but if you need to transcode server-side (e.g. for thumbnails), note that Deno has limited HEIC support.
+
+## Family sharing
+
+Uploads carry a `familyId` (owner/manager check in `get-upload-url`/
+`upload-media`); reads resolve the owning family from the key itself via
+`_shared/storage-keys.ts#parseStorageKey`, not from `memory_media`
+references. Viewers can view media but cannot attach/reorder/remove it. See
+[family-sharing.md](./family-sharing.md#storage-authorization-model).
 
 ## Dependencies
 

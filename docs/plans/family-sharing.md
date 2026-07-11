@@ -1,6 +1,6 @@
 # Family Sharing — Implementation Plan
 
-**Status:** planned · **Branch:** `family-sharing` (single branch, phase-per-commit checkpoints)
+**Status:** implemented · **Branch:** `family-sharing` (single branch, phase-per-commit checkpoints)
 **Decision record:** agreed 2026-07-10 (see §2). App is pre-production (single user) — clean breaking cutover, no backward compatibility required.
 
 ---
@@ -254,3 +254,106 @@ Run: `npm test`, `npm run test:edge`, `tsc`/lint (Node 20 via nvm — known env 
 ## 15. Out of scope (explicitly)
 
 Billing/quotas (only `family_id` stamping on generation), likes/comments, relationship labels, owner transfer, per-memory privacy, invite emails (share sheet only), family switcher beyond the Settings picker, web app for viewers.
+
+## 16. Outcome
+
+Phases 1–6 (client + backend) and Phase 7 (marketing site) are both
+implemented. Phase 8 (this doc's own §12/§13 — docs, Maestro flows,
+cleanup) is done as of 2026-07-11; see
+[docs/features/family-sharing.md](../features/family-sharing.md) for the
+resulting canonical feature doc.
+
+### Commits on `family-sharing` (this repo)
+
+```
+4490943 Add family sharing implementation plan
+9433027 Add family tenancy schema, RLS rewrite, and backfill migration
+abab261 Migrate auth to email OTP with dev-only password path
+9a7b977 Rewrite storage and Edge Function authorization for family tenancy
+734d01f Adopt family tenancy in the client with role-gated UX
+b28a7f1 Add invite, redemption, and approval flow with universal links
+ec59f28 Remove stray eslint config generated during verification
+a3f5c59 Add family activity notifications and Bento transactional email
+```
+
+Phase 7 (marketing site) lives in the sibling `momora-marketing` repo —
+`Add /invite landing page and universal-link well-known files` and a
+follow-up `Use published store ids` commit are already in that repo's
+history, ahead of this plan's own Phase 8.
+
+### Where reality deviated from the plan
+
+- **Bento `site_uuid` placement:** the plan didn't specify body vs. query
+  param. `_shared/bento.ts` sends it in the JSON body for the batch-emails
+  POST (verified against Bento's docs + the official Node SDK, not a live
+  account — see the file's header comment). Flagged as unverified against
+  a real Bento account.
+- **Attribution not on timeline cards:** §8 said "memory detail (and card,
+  space permitting)." Only the detail screen shows "Added by {name}"
+  (`app/(app)/memory/[id]/index.tsx`); `memory-card.tsx` does not. Cheap
+  follow-up if wanted — `useFamilyMemberProfiles` + `resolveAttributionName`
+  are already available to any component with the memory's `user_id`.
+- **Invite share message has no `familyName` slot:** §9's template says
+  "our family's memories" verbatim, not interpolated. The implementation
+  (`buildInviteShareMessage` in `src/utils/invites.ts`) keeps `familyName`
+  as a parameter (`void familyName` — deliberately unused) "for future copy
+  iterations" per its own comment, but never wires it in. Intentional
+  per-commit choice, not an oversight, but worth a product decision if the
+  personalized copy is wanted.
+- **No standalone RLS-matrix test suite:** §13 called for a Jest +
+  local-Supabase integration layer testing every shared table × role ×
+  operation directly against real RLS. That layer doesn't exist — role/RLS
+  behavior is covered instead by (a) Deno tests against the Edge Functions
+  that enforce family-role checks in application code, and (b) Jest
+  integration tests that mock the Supabase client rather than exercising
+  real Postgres RLS. This is a real coverage gap: nothing in CI currently
+  fails if a future migration accidentally weakens a policy in
+  `20260711120000_family_sharing.sql`. Worth a follow-up if `supabase
+  start` becomes viable in CI.
+- **Bundle identifier drift** (surfaced during this Phase 8 pass, not a
+  prior-phase decision): `app.json` in this repo uses
+  `com.momora.app`, but the **already-published** app store listings and
+  the marketing repo's `/invite` page, `assetlinks.json`, and store links
+  all use `com.memora.app` (see the marketing repo's own comment: "Store
+  URLs match the published listings"). Universal links and Android App
+  Links verification will not work end-to-end until this is resolved one
+  way or the other — see Outstanding TODOs below.
+
+### Outstanding human TODOs
+
+These cannot be completed or verified from a coding environment:
+
+1. **Resolve the `com.momora.app` vs. `com.memora.app` bundle-id drift**
+   (see above) — decide which is correct and make `app.json`, the
+   marketing repo, and the actual App Store/Play Store listings agree.
+2. **Apple Team ID + Android signing SHA-256** — `momora-marketing/dist/.well-known/apple-app-site-association`
+   and `assetlinks.json` both still have literal `TODO_REPLACE_WITH_*`
+   placeholders. Get the Team ID from the Apple Developer account and the
+   release-keystore SHA-256 from EAS credentials (`eas credentials`), then
+   redeploy the marketing site.
+3. **DNS + hosting migration** (plan §4 Phase 0) — move `usemomora.com` to
+   Cloudflare, migrate `momora-marketing` from GitHub Pages to Cloudflare
+   Pages. Not verifiable from this environment; confirm live before relying
+   on universal links.
+4. **Bento account setup** (plan §4 Phase 0) — transactional plan, verified
+   From-address author, site UUID + publishable/secret keys → set as
+   `BENTO_SITE_UUID`/`BENTO_PUBLISHABLE_KEY`/`BENTO_SECRET_KEY`/`BENTO_FROM_EMAIL`
+   Edge Function secrets. Nothing sends without these; `sendTransactionalEmail`
+   fails closed (logs + returns `false`) if any are missing.
+5. **Supabase dashboard config** (plan §4 Phase 0, detailed in
+   [auth.md](../features/auth.md)) — custom SMTP via the Bento relay, the
+   Magic Link/OTP email template must include `{{ .Token }}` (default
+   template only sends a link), OTP expiry set to 10 minutes. Unverifiable
+   from here; OTP sign-in will silently misbehave (send a link, not a code)
+   until confirmed.
+6. **New EAS build** — `app.json`'s `associatedDomains`/`intentFilters`
+   (already present in this repo) are compile-time native config; every
+   device needs a fresh dev/production build before universal links work,
+   independent of the bundle-id decision above.
+7. **Deploy the migrations** — `20260711120000_family_sharing.sql` and
+   `20260711120001_invite_code_words_seed.sql` need to run against the real
+   Supabase project (`supabase db push` or the dashboard SQL editor);
+   nothing in this repo does that automatically.
+8. **Verify universal links end-to-end** once 1–6 land — Apple CDN check
+   for AASA propagation (cached up to ~24h) and
+   `adb shell pm verify-app-links` for Android.

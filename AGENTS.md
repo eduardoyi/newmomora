@@ -16,7 +16,7 @@ Memory journal for parents. Capture moments in text or voice; AI generates consi
 - **Privacy:** Private storage, RLS everywhere, signed URLs for images, no public sharing in MVP.
 - **Account deletion:** 15-day grace period before hard delete.
 - **Illustration style:** Single token (`illustration_style: 'default'`) — extensible later.
-- **Out of scope:** Monetization, data export, SSO, photo-based illustrations, family sharing.
+- **Out of scope:** Monetization, data export, SSO, photo-based illustrations, owner transfer, per-memory privacy, likes/comments, relationship labels, web app for viewers. (Family sharing itself — multi-user households, roles, invites — shipped; see [docs/features/family-sharing.md](docs/features/family-sharing.md) and [docs/plans/family-sharing.md](docs/plans/family-sharing.md) §15 for its own out-of-scope list.)
 
 ---
 
@@ -147,14 +147,15 @@ Momora handles family and child data. Treat security as a feature, not an aftert
 
 ### Application security
 
-- **RLS:** Every user-owned table filtered by `auth.uid() = user_id`. No exceptions.
-- **Storage:** Private buckets only for user content. Path prefix `{userId}/...`. Display via signed URLs (short TTL).
+- **RLS:** Every family-owned table filtered by family membership (`is_family_member`/`has_family_role`, not `auth.uid() = user_id` — see [docs/features/family-sharing.md](docs/features/family-sharing.md)). No exceptions.
+- **Storage:** Private buckets only for user content. Path prefix `{userId}/...` (the uploader's own uid — read/delete authorization is family-membership-based, not prefix-based; see the feature doc). Display via signed URLs (short TTL).
 - **Client:** Anon key + RLS only. Never import or ship the service role key.
 - **Edge Functions:** Validate JWT on user-facing endpoints. Cron/scheduler endpoints require `CRON_SECRET` header.
 - **Input:** Validate and sanitize on server; enforce max 4 memory tags, 2-min voice limit server-side.
 - **Logging:** Never log memory content, transcripts, audio, or child PII in production. Log ids and status codes only.
 - **Voice:** Process audio in memory; discard after transcription — do not write to storage.
 - **Dependencies:** Prefer well-maintained Expo/Supabase packages; review new native deps for data collection.
+- **Family sharing:** invite codes (`family_invites.code`) are single-use, rate-limited secrets — never log raw codes. Shared-table RLS goes through the `is_family_member`/`has_family_role` security-definer helpers, not a hand-rolled join — and every role check must bind to one specific `family_id`, never "has this role somewhere" (a Family A manager must have zero authority in Family B). Definer RPCs (`create_family`, `create_family_invite`, `get_invite_redeemer`, `resolve-family-invite`, …) carry their own authorization inside the function body — don't weaken it when extending them. See [docs/features/family-sharing.md](docs/features/family-sharing.md).
 
 ### Child & family data
 
@@ -171,7 +172,7 @@ Momora handles family and child data. Treat security as a feature, not an aftert
 
 ## Data access patterns
 
-- **RLS:** Every user-owned table filtered by `auth.uid() = user_id`.
+- **RLS:** Every family-owned table filtered by family membership/role (`is_family_member`/`has_family_role`); `user_profiles` stays own-row-only.
 - **Storage:** Cloudflare R2 (not Supabase Storage). Private buckets; keys in DB; presigned URLs via `get-media-url` / `get-upload-url`.
 - **Client DB access:** Anon key + RLS only. No service role in app. No R2 credentials in client.
 - **Edge Functions:** Validate JWT; cron functions require `CRON_SECRET`.
@@ -319,7 +320,8 @@ When working in a subdirectory, also read:
 | Term | Meaning |
 |------|---------|
 | Memory | Journal entry (`memories` table) |
-| Family member | Person profile with optional AI character portrait |
+| Family member | Child/person profile with optional AI character portrait (`family_members` table — the **children** roster) |
+| Family | Household/tenant that shares one journal (`families` + `family_memberships` tables) — **not** the same thing as "family member" above; see [docs/features/family-sharing.md](docs/features/family-sharing.md) for the naming hazard |
 | Portrait | AI character illustration for a family member |
 | Illustration | AI image for a specific memory |
 | Style token | `illustration_style` value mapping to a reference image |

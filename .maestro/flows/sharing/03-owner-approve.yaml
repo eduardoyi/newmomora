@@ -1,0 +1,35 @@
+appId: com.momora.app
+---
+# Step 3/4 -- see 01-owner-create-invite.yaml and README.md.
+- launchApp:
+    clearState: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- assertVisible: "Welcome back"
+- runFlow: ../auth/sign-in.yaml
+- extendedWaitUntil:
+    visible: "Timeline"
+    timeout: 90000
+
+- tapOn:
+    id: tab-settings
+- tapOn:
+    id: settings-approvals
+# Exactly one redeemed invite is awaiting approval at this point on a clean
+# run; a partial id match against `approval-<inviteId>-approve` is enough.
+- tapOn:
+    id: "approval-.*-approve"
+- assertNotVisible:
+    text: "Nothing to approve"

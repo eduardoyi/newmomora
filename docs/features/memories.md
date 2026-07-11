@@ -100,6 +100,15 @@ See TECH_SPEC §4.0, §4.2–4.3 for contracts.
 4. New memory type → add value to `memory_type` check constraint, update `createMemory` service, update timeline card renderer, update `hard-delete-expired-accounts` if it introduces new storage keys.
 5. For media type details (upload flow, validation, video playback) see [media-memories.md](./media-memories.md).
 
+## Family sharing
+
+Memories are family-scoped, not user-scoped: `memories.family_id` (not
+`user_id`) drives every query, and RLS requires owner/manager to
+create/edit/delete (viewers get read-only). `user_id` is now creator
+attribution only — shown as "Added by {name}" on the detail screen (not on
+timeline cards). See [family-sharing.md](./family-sharing.md) for the full
+role/tenancy model and the RLS rewrite.
+
 ## Constraints & gotchas
 
 - Max **4 tags** (UI + DB trigger).

@@ -1,0 +1,48 @@
+appId: com.momora.app
+---
+# Viewer-role read-only assertions (docs/features/family-sharing.md).
+# Assumes TEST_EMAIL_2/TEST_PASSWORD_2 is a viewer member of a family with
+# at least one existing memory -- e.g. the state left behind by running
+# 01-04 in this directory once (owner invited that account with the
+# "Viewer" role in step 1). NOT executed as part of this change; authored
+# lint-by-eye only.
+- launchApp:
+    clearState: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- assertVisible: "Welcome back"
+- runFlow:
+    file: ../auth/sign-in.yaml
+    env:
+      TEST_EMAIL: ${TEST_EMAIL_2}
+      TEST_PASSWORD: ${TEST_PASSWORD_2}
+- extendedWaitUntil:
+    visible: "Timeline"
+    timeout: 90000
+
+# No create FAB for a viewer (app/(app)/(tabs)/timeline.tsx gates
+# MemoryFab on canEditFamilyContent(role)).
+- assertNotVisible:
+    id: new-memory-fab
+
+# Open the first memory and confirm no edit affordances
+# (app/(app)/memory/[id]/index.tsx only renders onEdit/onDelete when
+# canEditFamilyContent(role) is true).
+- tapOn:
+    id: "memory-card-.*"
+- assertNotVisible:
+    id: memory-detail-edit
+- assertNotVisible:
+    id: memory-detail-delete
