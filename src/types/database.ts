@@ -34,11 +34,127 @@ export type Database = {
   }
   public: {
     Tables: {
+      families: {
+        Row: {
+          created_at: string
+          deleted_at: string | null
+          id: string
+          illustration_style: string
+          name: string
+          owner_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          deleted_at?: string | null
+          id?: string
+          illustration_style?: string
+          name: string
+          owner_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          deleted_at?: string | null
+          id?: string
+          illustration_style?: string
+          name?: string
+          owner_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      family_activity_log: {
+        Row: {
+          actor_id: string
+          created_at: string
+          family_id: string
+          kind: string
+        }
+        Insert: {
+          actor_id: string
+          created_at?: string
+          family_id: string
+          kind: string
+        }
+        Update: {
+          actor_id?: string
+          created_at?: string
+          family_id?: string
+          kind?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_activity_log_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      family_invites: {
+        Row: {
+          code: string
+          created_at: string
+          expires_at: string
+          family_id: string
+          id: string
+          invited_by: string
+          redeemed_at: string | null
+          redeemed_by: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          role: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          expires_at?: string
+          family_id: string
+          id?: string
+          invited_by: string
+          redeemed_at?: string | null
+          redeemed_by?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          role: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          expires_at?: string
+          family_id?: string
+          id?: string
+          invited_by?: string
+          redeemed_at?: string | null
+          redeemed_by?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          role?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_invites_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       family_members: {
         Row: {
           additional_info: string | null
           created_at: string
           date_of_birth: string | null
+          family_id: string
           gender: string | null
           id: string
           illustrated_profile_key: string | null
@@ -48,12 +164,13 @@ export type Database = {
           nicknames: string[] | null
           profile_picture_key: string | null
           updated_at: string
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           additional_info?: string | null
           created_at?: string
           date_of_birth?: string | null
+          family_id: string
           gender?: string | null
           id?: string
           illustrated_profile_key?: string | null
@@ -63,12 +180,13 @@ export type Database = {
           nicknames?: string[] | null
           profile_picture_key?: string | null
           updated_at?: string
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           additional_info?: string | null
           created_at?: string
           date_of_birth?: string | null
+          family_id?: string
           gender?: string | null
           id?: string
           illustrated_profile_key?: string | null
@@ -78,6 +196,79 @@ export type Database = {
           nicknames?: string[] | null
           profile_picture_key?: string | null
           updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_members_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      family_memberships: {
+        Row: {
+          created_at: string
+          family_id: string
+          id: string
+          role: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          family_id: string
+          id?: string
+          role: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          family_id?: string
+          id?: string
+          role?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_memberships_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      invite_code_words: {
+        Row: {
+          word: string
+        }
+        Insert: {
+          word: string
+        }
+        Update: {
+          word?: string
+        }
+        Relationships: []
+      }
+      invite_redemption_attempts: {
+        Row: {
+          attempted_at: string
+          ip: string | null
+          user_id: string
+        }
+        Insert: {
+          attempted_at?: string
+          ip?: string | null
+          user_id: string
+        }
+        Update: {
+          attempted_at?: string
+          ip?: string | null
           user_id?: string
         }
         Relationships: []
@@ -87,6 +278,7 @@ export type Database = {
           content: string | null
           created_at: string
           emotion: string | null
+          family_id: string
           id: string
           illustration_key: string | null
           illustration_prompt: string | null
@@ -96,12 +288,13 @@ export type Database = {
           memory_date: string
           memory_type: string
           updated_at: string
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           content?: string | null
           created_at?: string
           emotion?: string | null
+          family_id: string
           id?: string
           illustration_key?: string | null
           illustration_prompt?: string | null
@@ -111,12 +304,13 @@ export type Database = {
           memory_date?: string
           memory_type?: string
           updated_at?: string
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           content?: string | null
           created_at?: string
           emotion?: string | null
+          family_id?: string
           id?: string
           illustration_key?: string | null
           illustration_prompt?: string | null
@@ -126,9 +320,17 @@ export type Database = {
           memory_date?: string
           memory_type?: string
           updated_at?: string
-          user_id?: string
+          user_id?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "memories_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       memory_family_members: {
         Row: {
@@ -203,54 +405,129 @@ export type Database = {
       }
       user_profiles: {
         Row: {
+          active_family_id: string | null
           created_at: string
           deleted_at: string | null
           enable_daily_reminder: boolean
           expo_push_token: string | null
           has_completed_onboarding: boolean
           id: string
-          illustration_style: string
           name: string
           notification_time: string | null
+          notify_new_memories: boolean
           scheduled_hard_delete_at: string | null
           timezone: string
           updated_at: string
         }
         Insert: {
+          active_family_id?: string | null
           created_at?: string
           deleted_at?: string | null
           enable_daily_reminder?: boolean
           expo_push_token?: string | null
           has_completed_onboarding?: boolean
           id: string
-          illustration_style?: string
           name: string
           notification_time?: string | null
+          notify_new_memories?: boolean
           scheduled_hard_delete_at?: string | null
           timezone?: string
           updated_at?: string
         }
         Update: {
+          active_family_id?: string | null
           created_at?: string
           deleted_at?: string | null
           enable_daily_reminder?: boolean
           expo_push_token?: string | null
           has_completed_onboarding?: boolean
           id?: string
-          illustration_style?: string
           name?: string
           notification_time?: string | null
+          notify_new_memories?: boolean
           scheduled_hard_delete_at?: string | null
           timezone?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "user_profiles_active_family_id_fkey"
+            columns: ["active_family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      create_family: {
+        Args: { name: string }
+        Returns: {
+          created_at: string
+          deleted_at: string | null
+          id: string
+          illustration_style: string
+          name: string
+          owner_id: string
+          updated_at: string
+        }
+      }
+      create_family_invite: {
+        Args: { fam: string; invite_role: string }
+        Returns: {
+          code: string
+          created_at: string
+          expires_at: string
+          family_id: string
+          id: string
+          invited_by: string
+          redeemed_at: string | null
+          redeemed_by: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          role: string
+          status: string
+          updated_at: string
+        }
+      }
+      get_family_member_profiles: {
+        Args: { fam: string }
+        Returns: {
+          created_at: string
+          is_active_member: boolean
+          name: string
+          role: string | null
+          user_id: string
+        }[]
+      }
+      get_invite_redeemer: {
+        Args: { invite_id: string }
+        Returns: {
+          email: string | null
+          name: string
+        }[]
+      }
+      get_my_redeemed_invite_status: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          family_name: string
+          family_unavailable: boolean
+          invite_id: string
+          status: string
+        }[]
+      }
+      has_family_role: {
+        Args: { fam: string; roles: string[] }
+        Returns: boolean
+      }
+      is_family_member: {
+        Args: { fam: string }
+        Returns: boolean
+      }
       replace_memory_media_assets: {
         Args: { assets: Json; target_memory_id: string }
         Returns: undefined

@@ -50,6 +50,7 @@ export async function createFamilyMember(
     .from('family_members')
     .insert({
       user_id: input.userId,
+      family_id: input.familyId,
       name: input.name.trim(),
       date_of_birth: input.dateOfBirth,
       gender: input.gender?.trim() || null,

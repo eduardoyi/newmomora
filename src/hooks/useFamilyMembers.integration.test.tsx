@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useAuth } from '@/hooks/use-auth';
+import { useUserProfile } from '@/hooks/useUserProfile';
 import {
   fetchFamilyMembers,
   createFamilyMemberWithPhoto,
@@ -13,6 +14,10 @@ import { generatePortraitIllustration } from '@/services/ai';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
+}));
+
+jest.mock('@/hooks/useUserProfile', () => ({
+  useUserProfile: jest.fn(),
 }));
 
 jest.mock('@/services/family-members', () => ({
@@ -39,6 +44,7 @@ const mockedGeneratePortraitIllustration = generatePortraitIllustration as jest.
   typeof generatePortraitIllustration
 >;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
+const mockedUseUserProfile = useUserProfile as jest.MockedFunction<typeof useUserProfile>;
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -66,6 +72,10 @@ describe('useFamilyMembers integration', () => {
       signOut: jest.fn(),
       resetPassword: jest.fn(),
     });
+
+    mockedUseUserProfile.mockReturnValue({
+      profile: { active_family_id: 'family-1' } as never,
+    } as never);
   });
 
   it('loads family members for the signed-in user', async () => {

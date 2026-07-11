@@ -497,6 +497,7 @@ export async function createMemory(input: CreateMemoryInput): Promise<{
     .from('memories')
     .insert({
       user_id: input.userId,
+      family_id: input.familyId,
       content: normalizeOptionalContent(input.content),
       memory_date: input.memoryDate,
       memory_type: memoryType,
@@ -556,6 +557,7 @@ export async function createMediaMemory(input: CreateMediaMemoryInput): Promise<
     .insert({
       id: input.memoryId,
       user_id: input.userId,
+      family_id: input.familyId,
       content: normalizeOptionalContent(input.content),
       memory_date: input.memoryDate,
       memory_type: 'media',

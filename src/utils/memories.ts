@@ -24,6 +24,7 @@ export interface MemoryMediaAssetInput {
 
 export interface CreateMemoryInput {
   userId: string;
+  familyId: string;
   content?: string;
   memoryDate: string;
   taggedMemberIds: string[];
@@ -32,6 +33,7 @@ export interface CreateMemoryInput {
 
 export interface CreateMediaMemoryInput {
   userId: string;
+  familyId: string;
   memoryId: string;
   mediaAssets: MemoryMediaAssetInput[];
   content?: string;

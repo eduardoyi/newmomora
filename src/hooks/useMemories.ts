@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
+import { useUserProfile } from '@/hooks/useUserProfile';
 import { calendarMemoriesQueryKey, memoriesQueryKey } from '@/hooks/queryKeys';
 import {
   createMediaMemory,
@@ -153,6 +154,11 @@ function toError(error: unknown, fallbackMessage: string): Error {
 
 export function useMemories(searchQuery = '') {
   const { user } = useAuth();
+  // TODO(family-sharing Phase 4): source familyId from FamilyProvider once
+  // it exists. Until then, active_family_id is correct for every user --
+  // the Phase 2 backfill guarantees exactly one family per pre-existing
+  // user, and new users get one from `create_family`/invite redemption.
+  const { profile } = useUserProfile();
   const queryClient = useQueryClient();
   const recoveringIllustrationsRef = useRef(new Set<string>());
   const recoveringEmotionsRef = useRef(new Set<string>());
@@ -263,9 +269,13 @@ export function useMemories(searchQuery = '') {
       if (!user) {
         throw new Error('You must be signed in to save a memory');
       }
+      if (!profile?.active_family_id) {
+        throw new Error('You must have a family to save a memory');
+      }
 
       const { data, error } = await createMemory({
         userId: user.id,
+        familyId: profile.active_family_id,
         content: input.content,
         memoryDate: input.memoryDate,
         taggedMemberIds: input.taggedMemberIds,
@@ -287,6 +297,9 @@ export function useMemories(searchQuery = '') {
     mutationFn: async (input: CreateMediaMemoryMutationInput) => {
       if (!user) {
         throw new Error('You must be signed in to save a memory');
+      }
+      if (!profile?.active_family_id) {
+        throw new Error('You must have a family to save a memory');
       }
 
       const uploadedKeys: string[] = [];
@@ -340,6 +353,7 @@ export function useMemories(searchQuery = '') {
 
         const { data, error } = await createMediaMemory({
           userId: user.id,
+          familyId: profile.active_family_id,
           memoryId: input.memoryId,
           mediaAssets,
           content: input.content,

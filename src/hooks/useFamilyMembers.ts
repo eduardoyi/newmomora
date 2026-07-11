@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
+import { useUserProfile } from '@/hooks/useUserProfile';
 import {
   createFamilyMemberWithPhoto,
   deleteFamilyMember,
@@ -16,6 +17,11 @@ export const familyMembersQueryKey = ['family-members'] as const;
 
 export function useFamilyMembers() {
   const { user } = useAuth();
+  // TODO(family-sharing Phase 4): source familyId from FamilyProvider once
+  // it exists. Until then, active_family_id is correct for every user --
+  // the Phase 2 backfill guarantees exactly one family per pre-existing
+  // user, and new users get one from `create_family`/invite redemption.
+  const { profile } = useUserProfile();
   const queryClient = useQueryClient();
   const previousPortraitStatusRef = useRef<Map<string, string>>(new Map());
 
@@ -44,14 +50,18 @@ export function useFamilyMembers() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (input: Omit<CreateFamilyMemberWithPhotoInput, 'userId'>) => {
+    mutationFn: async (input: Omit<CreateFamilyMemberWithPhotoInput, 'userId' | 'familyId'>) => {
       if (!user) {
         throw new Error('You must be signed in to add a family member');
+      }
+      if (!profile?.active_family_id) {
+        throw new Error('You must have a family to add a family member');
       }
 
       const { data, error } = await createFamilyMemberWithPhoto({
         ...input,
         userId: user.id,
+        familyId: profile.active_family_id,
       });
 
       if (error) {
