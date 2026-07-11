@@ -128,3 +128,81 @@ export function isDeletableUserObjectKey(objectKey: string, userId: string): boo
     isMemoryIllustrationKey(objectKey, userId)
   );
 }
+
+// ---------------------------------------------------------------------------
+// Family-sharing Phase 3: parse a key WITHOUT knowing the caller's uid up
+// front, returning the entity id embedded in the key. Authorization then
+// resolves the entity's *owning row* (memories.family_id or
+// family_members.family_id) by this parsed entity id -- never by whether
+// some memory_media row happens to reference the key, which is spoofable
+// (direct memory_media inserts don't constrain object_key). The `{uid}`
+// path segment (`ownerUserId`) is returned for completeness but must NOT be
+// used as the authorization signal for read/delete -- it only matters for
+// the caller-prefix rule on uploads.
+// ---------------------------------------------------------------------------
+
+export type StorageKeyKind =
+  | 'family_photo'
+  | 'family_portrait'
+  | 'memory_media'
+  | 'memory_illustration';
+
+export interface ParsedStorageKey {
+  kind: StorageKeyKind;
+  /** The `{uid}` path segment the key was written under. Not an auth signal for reads/deletes. */
+  ownerUserId: string;
+  /** The id embedded in the key: a family_members.id for family_photo/family_portrait, a memories.id otherwise. */
+  entityId: string;
+}
+
+const FAMILY_MEMBER_PATTERN = /^([^/]+)\/family\/([^/]+)\/(photo|portrait)\.webp$/;
+const MEMORY_ILLUSTRATION_FULL_PATTERN =
+  /^([^/]+)\/memories\/([^/]+)\/illustration\.webp$/;
+const MEMORY_MEDIA_FULL_PATTERN =
+  /^([^/]+)\/memories\/([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
+const MEMORY_MEDIA_ASSET_FULL_PATTERN =
+  /^([^/]+)\/memories\/([^/]+)\/media\/[A-Za-z0-9_-]{1,128}\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
+
+export function parseStorageKey(objectKey: string): ParsedStorageKey | null {
+  const familyMemberMatch = objectKey.match(FAMILY_MEMBER_PATTERN);
+  if (familyMemberMatch) {
+    const [, ownerUserId, entityId, type] = familyMemberMatch;
+    if (!UUID_PATTERN.test(ownerUserId) || !UUID_PATTERN.test(entityId)) {
+      return null;
+    }
+    return {
+      kind: type === 'photo' ? 'family_photo' : 'family_portrait',
+      ownerUserId,
+      entityId,
+    };
+  }
+
+  const illustrationMatch = objectKey.match(MEMORY_ILLUSTRATION_FULL_PATTERN);
+  if (illustrationMatch) {
+    const [, ownerUserId, entityId] = illustrationMatch;
+    if (!UUID_PATTERN.test(ownerUserId) || !UUID_PATTERN.test(entityId)) {
+      return null;
+    }
+    return { kind: 'memory_illustration', ownerUserId, entityId };
+  }
+
+  const mediaMatch = objectKey.match(MEMORY_MEDIA_FULL_PATTERN);
+  if (mediaMatch) {
+    const [, ownerUserId, entityId] = mediaMatch;
+    if (!UUID_PATTERN.test(ownerUserId) || !UUID_PATTERN.test(entityId)) {
+      return null;
+    }
+    return { kind: 'memory_media', ownerUserId, entityId };
+  }
+
+  const mediaAssetMatch = objectKey.match(MEMORY_MEDIA_ASSET_FULL_PATTERN);
+  if (mediaAssetMatch) {
+    const [, ownerUserId, entityId] = mediaAssetMatch;
+    if (!UUID_PATTERN.test(ownerUserId) || !UUID_PATTERN.test(entityId)) {
+      return null;
+    }
+    return { kind: 'memory_media', ownerUserId, entityId };
+  }
+
+  return null;
+}

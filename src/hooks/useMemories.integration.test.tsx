@@ -124,6 +124,7 @@ describe('useMemories integration', () => {
       ),
       'file:///photo.jpg',
       'image/jpeg',
+      'family-1',
     );
     expect(mockedUploadMediaObject.mock.calls[0]?.[0]).not.toContain('asset-photo-1');
 

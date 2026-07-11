@@ -2,6 +2,7 @@ import { describeAgeAtDate, isAdultAtDate } from '../_shared/age.ts';
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { editImageWithReferences, generateImage } from '../_shared/openai.ts';
 import { capImageMaxEdge } from '../_shared/image-bytes.ts';
 import { MAX_PORTRAIT_REFERENCE_EDGE } from '../_shared/image-limits.ts';
@@ -11,10 +12,7 @@ import {
   getIllustrationStyle,
   loadStyleReferenceBytes,
 } from '../_shared/styles.ts';
-import {
-  buildFamilyPortraitKey,
-  assertUserOwnedKey,
-} from '../_shared/storage-keys.ts';
+import { buildFamilyPortraitKey, parseStorageKey } from '../_shared/storage-keys.ts';
 import { getObjectBytes, putObjectBytes } from '../_shared/r2.ts';
 import { createUserClient } from '../_shared/supabase-admin.ts';
 
@@ -66,7 +64,6 @@ export async function handleGeneratePortraitIllustration(req: Request): Promise<
     .from('family_members')
     .select('*')
     .eq('id', familyMemberId)
-    .eq('user_id', user.id)
     .maybeSingle();
 
   if (memberError) {
@@ -78,25 +75,34 @@ export async function handleGeneratePortraitIllustration(req: Request): Promise<
     return errorResponse('Family member not found', 404, 'MEMBER_NOT_FOUND');
   }
 
+  const callerRole = await getCallerFamilyRole(supabase, member.family_id, user.id);
+  if (!isManagerRole(callerRole)) {
+    return errorResponse('Not authorized for this family member', 403, 'forbidden');
+  }
+
   if (!member.profile_picture_key) {
     return errorResponse('Profile photo is required', 400, 'PHOTO_MISSING');
   }
 
-  try {
-    assertUserOwnedKey(member.profile_picture_key, user.id);
-  } catch {
+  // The DB row is the trust anchor for this key now (a manager may have
+  // replaced the photo under their own uid prefix) -- no caller-prefix
+  // assertion. The portrait output key's {uid} prefix is derived from the
+  // member's *current* profile_picture_key prefix, not from the caller, so
+  // photo and portrait stay under the same uid segment.
+  const parsedPhotoKey = parseStorageKey(member.profile_picture_key);
+  if (!parsedPhotoKey) {
     return errorResponse('Invalid profile photo key', 400, 'validation_error');
   }
 
-  const { data: profile } = await supabase
-    .from('user_profiles')
+  const { data: family } = await supabase
+    .from('families')
     .select('illustration_style')
-    .eq('id', user.id)
+    .eq('id', member.family_id)
     .maybeSingle();
 
-  const styleToken = profile?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN;
+  const styleToken = family?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN;
   const style = getIllustrationStyle(styleToken);
-  const portraitKey = buildFamilyPortraitKey(user.id, familyMemberId);
+  const portraitKey = buildFamilyPortraitKey(parsedPhotoKey.ownerUserId, familyMemberId);
 
   await supabase
     .from('family_members')

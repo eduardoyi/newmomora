@@ -1,12 +1,23 @@
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { createPresignedPutUrl, R2_URL_EXPIRY } from '../_shared/r2.ts';
-import { getAllowedContentTypes } from '../_shared/storage-keys.ts';
+import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { assertUserOwnedKey, getAllowedContentTypes } from '../_shared/storage-keys.ts';
 
 export interface GetUploadUrlRequest {
   objectKey: string;
   contentType: string;
+  /**
+   * The memory-row lookup that would otherwise authorize this upload isn't
+   * possible yet: the client uploads assets *before* inserting the
+   * `memories` row. Instead, the caller declares which (non-deleted) family
+   * they're uploading into and must be manager+ there. Cross-family binding
+   * integrity is enforced later at insert/RPC time (memories RLS +
+   * `replace_memory_media_assets` key validation).
+   */
+  familyId: string;
 }
 
 export interface GetUploadUrlResponse {
@@ -37,7 +48,7 @@ export async function handleGetUploadUrl(req: Request): Promise<Response> {
     return errorResponse('Invalid JSON body', 400, 'invalid_json');
   }
 
-  const { objectKey, contentType } = body;
+  const { objectKey, contentType, familyId } = body;
 
   if (!objectKey || typeof objectKey !== 'string') {
     return errorResponse('objectKey is required', 400, 'validation_error');
@@ -47,6 +58,19 @@ export async function handleGetUploadUrl(req: Request): Promise<Response> {
     return errorResponse('contentType is required', 400, 'validation_error');
   }
 
+  if (!familyId || typeof familyId !== 'string') {
+    return errorResponse('familyId is required', 400, 'validation_error');
+  }
+
+  // Uploads are always written under the caller's own uid -- the family
+  // check below authorizes *which family* this upload belongs to, not the
+  // key path itself.
+  try {
+    assertUserOwnedKey(objectKey, user.id);
+  } catch {
+    return errorResponse('Invalid object key', 400, 'validation_error');
+  }
+
   const allowedContentTypes = getAllowedContentTypes(objectKey, user.id);
   if (!allowedContentTypes) {
     return errorResponse('Invalid object key', 400, 'validation_error');
@@ -54,6 +78,13 @@ export async function handleGetUploadUrl(req: Request): Promise<Response> {
 
   if (!allowedContentTypes.has(contentType)) {
     return errorResponse('Unsupported content type', 400, 'validation_error');
+  }
+
+  const serviceClient = createServiceClient();
+  const role = await getCallerFamilyRole(serviceClient, familyId, user.id);
+
+  if (!isManagerRole(role)) {
+    return errorResponse('Not authorized for this family', 403, 'forbidden');
   }
 
   try {

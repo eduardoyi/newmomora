@@ -95,10 +95,14 @@ export function useFamilyMembers() {
       if (!user) {
         throw new Error('You must be signed in to update a family member');
       }
+      if (!profile?.active_family_id) {
+        throw new Error('You must have a family to update a family member');
+      }
 
       const { data, error } = await updateFamilyMemberWithPhoto({
         memberId: input.memberId,
         userId: user.id,
+        familyId: profile.active_family_id,
         name: input.name,
         dateOfBirth: input.dateOfBirth,
         gender: input.gender,

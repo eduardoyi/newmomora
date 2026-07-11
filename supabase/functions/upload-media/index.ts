@@ -1,8 +1,10 @@
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { putObjectBytes } from '../_shared/r2.ts';
-import { getAllowedContentTypes } from '../_shared/storage-keys.ts';
+import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { assertUserOwnedKey, getAllowedContentTypes } from '../_shared/storage-keys.ts';
 
 export interface UploadMediaResponse {
   objectKey: string;
@@ -42,6 +44,7 @@ export async function handleUploadMedia(req: Request): Promise<Response> {
 
   const objectKey = req.headers.get('x-object-key');
   const contentType = req.headers.get('content-type')?.split(';')[0]?.trim();
+  const familyId = req.headers.get('x-family-id');
 
   if (!objectKey) {
     return errorResponse('x-object-key is required', 400, 'validation_error');
@@ -51,6 +54,19 @@ export async function handleUploadMedia(req: Request): Promise<Response> {
     return errorResponse('content-type is required', 400, 'validation_error');
   }
 
+  if (!familyId) {
+    return errorResponse('x-family-id is required', 400, 'validation_error');
+  }
+
+  // Uploads are always written under the caller's own uid -- the family
+  // check below authorizes *which family* this upload belongs to, not the
+  // key path itself.
+  try {
+    assertUserOwnedKey(objectKey, user.id);
+  } catch {
+    return errorResponse('Invalid object key', 400, 'validation_error');
+  }
+
   const allowedContentTypes = getAllowedContentTypes(objectKey, user.id);
   if (!allowedContentTypes) {
     return errorResponse('Invalid object key', 400, 'validation_error');
@@ -58,6 +74,13 @@ export async function handleUploadMedia(req: Request): Promise<Response> {
 
   if (!allowedContentTypes.has(contentType)) {
     return errorResponse('Unsupported content type', 400, 'validation_error');
+  }
+
+  const serviceClient = createServiceClient();
+  const role = await getCallerFamilyRole(serviceClient, familyId, user.id);
+
+  if (!isManagerRole(role)) {
+    return errorResponse('Not authorized for this family', 403, 'forbidden');
   }
 
   const maxBytes = maxBytesForContentType(contentType);

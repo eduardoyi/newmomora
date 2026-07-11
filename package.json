@@ -12,7 +12,7 @@
     "lint": "expo lint",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:edge": "deno test --allow-env --allow-net supabase/functions/",
+    "test:edge": "deno test --allow-env --allow-net --allow-read=supabase/functions supabase/functions/",
     "eval:portrait": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-portrait.ts",
     "test:e2e:family-fixture": "maestro test .maestro/flows/onboarding/add-family-member-with-fixture.yaml",
     "test:e2e:family-picker": "maestro test .maestro/flows/onboarding/add-family-member-with-picker.yaml"

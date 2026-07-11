@@ -2,6 +2,7 @@ import { describeAgeAtDate } from '../_shared/age.ts';
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { chatJson, editImageWithReferences } from '../_shared/openai.ts';
 import {
   prepareIllustrationReferences,
@@ -85,9 +86,10 @@ export async function handleGenerateIllustration(req: Request): Promise<Response
 
   const { data: memory, error: memoryError } = await supabase
     .from('memories')
-    .select('id, content, memory_date, emotion, illustration_key, illustration_status, updated_at, memory_type')
+    .select(
+      'id, family_id, content, memory_date, emotion, illustration_key, illustration_status, updated_at, memory_type',
+    )
     .eq('id', memoryId)
-    .eq('user_id', user.id)
     .maybeSingle();
 
   if (memoryError) {
@@ -97,6 +99,11 @@ export async function handleGenerateIllustration(req: Request): Promise<Response
 
   if (!memory) {
     return errorResponse('Memory not found', 404, 'MEMORY_NOT_FOUND');
+  }
+
+  const callerRole = await getCallerFamilyRole(supabase, memory.family_id, user.id);
+  if (!isManagerRole(callerRole)) {
+    return errorResponse('Not authorized for this memory', 403, 'forbidden');
   }
 
   if (memory.memory_type !== 'text_illustration' || !memory.content?.trim()) {
@@ -143,7 +150,7 @@ export async function handleGenerateIllustration(req: Request): Promise<Response
     const { data: nameRows, error: nameRowsError } = await supabase
       .from('family_members')
       .select('id, name, nicknames')
-      .eq('user_id', user.id);
+      .eq('family_id', memory.family_id);
 
     if (nameRowsError) {
       console.error('generate-illustration name lookup failed', nameRowsError.message);
@@ -158,7 +165,7 @@ export async function handleGenerateIllustration(req: Request): Promise<Response
     .select(
       'id, name, nicknames, date_of_birth, gender, additional_info, illustrated_profile_key, illustrated_profile_status, profile_picture_key',
     )
-    .eq('user_id', user.id)
+    .eq('family_id', memory.family_id)
     .in('id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID]);
 
   if (membersError) {
@@ -179,14 +186,14 @@ export async function handleGenerateIllustration(req: Request): Promise<Response
     return errorResponse('No ready character portraits for tagged members', 400, 'NO_PORTRAITS');
   }
 
-  const { data: profile } = await supabase
-    .from('user_profiles')
+  const { data: family } = await supabase
+    .from('families')
     .select('illustration_style')
-    .eq('id', user.id)
+    .eq('id', memory.family_id)
     .maybeSingle();
 
   const styleDescription = getStyleDescription(
-    profile?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN,
+    family?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN,
   );
 
   const illustrationKey = buildMemoryIllustrationKey(user.id, memoryId);

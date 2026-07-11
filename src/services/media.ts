@@ -55,6 +55,7 @@ async function mapResponseError(response: Response): Promise<ServiceError> {
 async function getUploadFunctionHeaders(
   objectKey: string,
   contentType: string,
+  familyId: string,
 ): Promise<{ headers: Record<string, string>; error: ServiceError | null }> {
   const { data, error } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -74,6 +75,7 @@ async function getUploadFunctionHeaders(
       Authorization: `Bearer ${token}`,
       'Content-Type': contentType,
       'x-object-key': objectKey,
+      'x-family-id': familyId,
     },
     error: null,
   };
@@ -90,9 +92,10 @@ function getUploadFunctionUrl(): string {
 export async function getUploadUrl(
   objectKey: string,
   contentType: string,
+  familyId: string,
 ): Promise<{ data: GetUploadUrlResponse | null; error: ServiceError | null }> {
   const { data, error } = await supabase.functions.invoke<GetUploadUrlResponse>('get-upload-url', {
-    body: { objectKey, contentType },
+    body: { objectKey, contentType, familyId },
   });
 
   if (error) {
@@ -128,8 +131,13 @@ export async function uploadMediaObject(
   objectKey: string,
   fileUri: string,
   contentType: string,
+  familyId: string,
 ): Promise<{ data: UploadMediaResponse | null; error: ServiceError | null }> {
-  const { headers, error: authError } = await getUploadFunctionHeaders(objectKey, contentType);
+  const { headers, error: authError } = await getUploadFunctionHeaders(
+    objectKey,
+    contentType,
+    familyId,
+  );
   if (authError) {
     return { data: null, error: authError };
   }

@@ -104,6 +104,7 @@ describe('family-members service integration', () => {
 
     const result = await createFamilyMemberWithPhoto({
       userId: 'user-1',
+      familyId: 'family-1',
       name: 'Maya',
       dateOfBirth: '2020-05-24',
       photoUri: 'file:///photo.jpg',
@@ -115,6 +116,7 @@ describe('family-members service integration', () => {
     expect(mockedGetUploadUrl).toHaveBeenCalledWith(
       'user-1/family/member-1/photo.webp',
       'image/jpeg',
+      'family-1',
     );
     expect(mockedUploadToPresignedUrl).toHaveBeenCalledWith(
       'https://upload.example',
@@ -150,6 +152,7 @@ describe('family-members service integration', () => {
 
     const result = await createFamilyMemberWithPhoto({
       userId: 'user-1',
+      familyId: 'family-1',
       name: 'Maya',
       dateOfBirth: '2020-05-24',
       photoUri: 'file:///photo.jpg',
@@ -197,6 +200,7 @@ describe('family-members service integration', () => {
     await updateFamilyMemberWithPhoto({
       memberId: 'member-1',
       userId: 'user-1',
+      familyId: 'family-1',
       photoUri: 'file:///photo.jpg',
       photoContentType: 'image/jpeg',
       regeneratePortrait: false,
@@ -245,6 +249,7 @@ describe('family-members service integration', () => {
     await updateFamilyMemberWithPhoto({
       memberId: 'member-1',
       userId: 'user-1',
+      familyId: 'family-1',
       photoUri: 'file:///photo.jpg',
       photoContentType: 'image/jpeg',
       regeneratePortrait: true,

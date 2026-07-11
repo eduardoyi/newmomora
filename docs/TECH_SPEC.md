@@ -286,25 +286,35 @@ sequenceDiagram
     participant Edge as Edge_Function
     participant R2
 
-    Note over App,R2: Upload profile photo
-    App->>Edge: get-upload-url bucket,key,contentType
-    Edge->>Edge: Verify JWT + user owns path prefix
+    Note over App,R2: Upload profile photo or memory media
+    App->>Edge: get-upload-url objectKey,contentType,familyId
+    Edge->>Edge: Verify JWT + key prefix = caller uid + caller is owner/manager of familyId
     Edge-->>App: presigned PUT URL
     App->>R2: PUT file directly
 
     Note over App,R2: Display private image
     App->>Edge: get-media-url keys
-    Edge->>Edge: Verify JWT + key prefix matches auth.uid()
+    Edge->>Edge: Parse each key -> resolve owning memory/family_member -> assert caller is a member of that family
     Edge-->>App: presigned GET URLs TTL 1h
     App->>R2: GET via presigned URL
 ```
 
 | Edge Function | Purpose |
 |---------------|---------|
-| `get-upload-url` | Presigned PUT for client → R2 upload (profile photos) |
+| `get-upload-url` | Presigned PUT for client → R2 upload (profile photos, memory media) |
+| `upload-media` | Authenticated binary upload proxy (same authorization as `get-upload-url`) |
 | `get-media-url` | Presigned GET batch for timeline/detail display |
+| `delete-storage-object` | Delete a single object (rollback, memory delete cleanup) |
 
 AI generation functions (`generate-portrait-illustration`, `generate-illustration`) read/write R2 via S3-compatible API using server credentials.
+
+### Family-sharing storage authorization (Phase 3)
+
+R2 keys keep the `{creatorUserId}/...` shape (see patterns below), but authorization no longer means "prefix = caller." It means "caller has the required role in the family that owns the entity the key belongs to," resolved through the DB with the service-role client:
+
+- **Uploads** (`get-upload-url`, `upload-media`): the key itself still must be written under the *caller's own* uid prefix (`assertUserOwnedKey`) — a memory row doesn't exist yet at upload time (client uploads assets before inserting the `memories` row), so per-entity authorization isn't possible yet. Instead the request carries an explicit `familyId`, and the caller must be **owner/manager** in that (non-deleted) family. Cross-family binding integrity is enforced later, at insert/RPC time, by `memories` RLS and `replace_memory_media_assets` key validation.
+- **Reads/deletes** (`get-media-url`, `delete-storage-object`): `_shared/storage-keys.ts#parseStorageKey` extracts `{ kind, ownerUserId, entityId }` from the key shape alone (no DB lookup). The `entityId` (a `memories.id` or `family_members.id`) is then used to look up that row's `family_id` — **never** by checking whether some `memory_media` row happens to reference the key, since direct `memory_media` inserts don't constrain `object_key` and a reference-based check would be spoofable. `get-media-url` requires the caller be a member (any role) of the resolved family; `delete-storage-object` requires owner/manager. Keys that don't parse, or whose entity has no owning row, are denied.
+- Shared helpers: `_shared/family-access.ts` (`getCallerFamilyRoles`, `resolveStorageKeyFamilyIds`) and `_shared/storage-keys.ts#parseStorageKey`.
 
 ### R2 credentials (Edge Functions only)
 
@@ -320,9 +330,9 @@ Shared helper: `supabase/functions/_shared/r2.ts` (S3 client, put/get/delete, pr
 
 ### Authorization
 
-- Object keys **must** start with `{auth.uid()}/` for private buckets.
-- Edge Functions validate JWT and key prefix before presigning.
-- DB RLS remains the source of truth for *which* keys a user may request (join through `family_members` / `memories`).
+- Object keys **must** start with `{auth.uid()}/` for private buckets (the uploader's own uid — not necessarily the family owner's or the entity's original creator's, since a manager may replace another member's child photo under their own prefix; see `delete-storage-object`/`get-media-url` below).
+- Edge Functions validate JWT and key prefix before presigning uploads; **read/delete authorization is family-membership-based**, not prefix-based (see "Family-sharing storage authorization" above).
+- DB RLS remains the source of truth for *which* rows (not keys) a user may read/write (family membership via `is_family_member`/`has_family_role`).
 
 ### Public style assets
 
@@ -330,7 +340,7 @@ Shared helper: `supabase/functions/_shared/r2.ts` (S3 client, put/get/delete, pr
 
 ### Account deletion
 
-`hard-delete-expired-accounts` deletes all R2 objects under prefix `{userId}/` across private buckets (list + delete), then DB + auth.
+`hard-delete-expired-accounts` (family-sharing Phase 3): **owner** case — before deleting any rows, collects every R2 key belonging to each owned family across ALL creators (`memory_media.object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key` — these can live under other members' `{uid}/` prefixes), deletes those R2 objects, then deletes the `families` row (FK cascades remove the rest). **Non-owner** case — their created content survives (`user_id` → null via `on delete set null`), so the old blanket `{userId}/`-prefix delete is gone; instead it enumerates objects under the prefix and deletes only the ones no surviving row references.
 
 ---
 
@@ -345,7 +355,7 @@ All Edge Functions:
 
 Presigned PUT for direct client → R2 upload.
 
-**Request:** `{ objectKey, contentType }` — `objectKey` must start with `{auth.uid()}/` and match one of the allowed upload patterns below. Bucket comes from `R2_BUCKET` env.
+**Request:** `{ objectKey, contentType, familyId }` — `objectKey` must start with `{auth.uid()}/` and match one of the allowed upload patterns below. `familyId` (added in family-sharing Phase 3) is the family this upload belongs to; the caller must be **owner/manager** in that non-deleted family (checked with the service-role client against `family_memberships` + `families`). Bucket comes from `R2_BUCKET` env.
 
 **Allowed upload patterns**
 
@@ -357,8 +367,9 @@ Presigned PUT for direct client → R2 upload.
 
 **Validation**
 
-- Reject `objectKey` not matching any allowed pattern
+- Reject `objectKey` not matching any allowed pattern (still caller-prefix-scoped)
 - Reject `contentType` not in the allowed set for the matched pattern
+- Reject if `familyId` missing or caller isn't owner/manager of that family (`403 forbidden`)
 - Client is responsible for enforcing video duration ≤ 60 seconds, video size ≤ 100 MB, and image size ≤ 20 MB before upload
 
 **Response:** `{ uploadUrl, objectKey, expiresIn }`
@@ -374,8 +385,9 @@ Authenticated binary upload proxy for mobile clients that cannot reliably reach 
 | `Authorization: Bearer <jwt>` | User auth |
 | `Content-Type` | Actual media MIME type |
 | `x-object-key` | R2 object key matching the same allowed upload patterns as `get-upload-url` |
+| `x-family-id` | Family this upload belongs to — same owner/manager check as `get-upload-url` (family-sharing Phase 3) |
 
-The function validates the user, object key, content type, and basic file size before uploading to R2 server-side.
+The function validates the user, object key, content type, family role, and basic file size before uploading to R2 server-side.
 
 **Response:** `{ success: true, objectKey }`
 
@@ -383,21 +395,23 @@ The function validates the user, object key, content type, and basic file size b
 
 Presigned GET for private image display (timeline, detail, family).
 
-**Request:** `{ keys: string[] }` — keys verified against authenticated user
+**Request:** `{ keys: string[] }` — each key is parsed (`_shared/storage-keys.ts#parseStorageKey`) to recover its entity id (a `memories.id` or `family_members.id`); that row's `family_id` is resolved and the caller must be a **member (any role)** of it. Unparsable keys, or keys whose entity has no owning row, are rejected outright — this is *not* the same as "belongs to the authenticated user."
 
 **Response:** `{ urls: Record<string, string>, expiresIn }` (TTL ~1 hour)
 
+**Errors:** `401 unauthorized`, `400 validation_error` (unresolvable key), `403 forbidden` (resolved but caller isn't a member)
+
 ### 4.0c `delete-storage-object`
 
-Deletes a single user-owned R2 object (memory media rollback, memory delete cleanup).
+Deletes a single R2 object (memory media rollback, memory delete cleanup).
 
-**Request:** `{ objectKey: string }` — must match an allowed deletable pattern under `{auth.uid()}/`
+**Request:** `{ objectKey: string }` — same parse-and-resolve as `get-media-url`, but requires the caller be **owner/manager** of the resolved family (not just a member).
 
 **Allowed patterns:** family photo, family portrait, memory illustration, memory media
 
 **Response:** `{ success: true }`
 
-**Errors:** `401 unauthorized`, `400 validation_error`, `500 internal_error`
+**Errors:** `401 unauthorized`, `400 validation_error`, `403 forbidden`, `500 internal_error`
 
 ---
 
@@ -415,16 +429,19 @@ Generates a character portrait when a family member is saved with a photo.
 }
 ```
 
+**Authorization (family-sharing Phase 3):** family member is looked up by id alone (no `user_id` filter); caller must be **owner/manager** of `member.family_id`. No caller-prefix check on `profile_picture_key` — the DB row is the trust anchor (a manager may have replaced another member's child photo under their own uid prefix). The output portrait key's `{uid}` prefix is derived from the member's *current* `profile_picture_key` prefix, not from the caller, so photo and portrait stay under the same uid segment.
+
 **Logic**
 
-1. Fetch family member + user profile (`illustration_style`)
-2. Set `illustrated_profile_status = 'generating'`
-3. Fetch profile photo from R2 (`momora-profile-pictures`)
-4. Resolve style reference from R2 public assets (`momora-public-assets/_assets/styles/{token}.png`); fetch via `R2_PUBLIC_ASSETS_BASE_URL`
-5. Build prompt: age, gender, style description, identity/style reference instructions
-6. Call OpenAI image edit API with person photo + style reference (`gpt-image-2`, fallback `gpt-image-1`)
-7. Upload result to R2 `momora-character-portraits`
-8. Update `illustrated_profile_key`, set status `ready` (or `failed`)
+1. Fetch family member by id; assert caller owner/manager of its family
+2. Fetch `families.illustration_style` for that family (moved off `user_profiles` in the family-sharing migration)
+3. Set `illustrated_profile_status = 'generating'`
+4. Fetch profile photo from R2 (`momora-profile-pictures`)
+5. Resolve style reference from R2 public assets (`momora-public-assets/_assets/styles/{token}.png`); fetch via `R2_PUBLIC_ASSETS_BASE_URL`
+6. Build prompt: age, gender, style description, identity/style reference instructions
+7. Call OpenAI image edit API with person photo + style reference (`gpt-image-2`, fallback `gpt-image-1`)
+8. Upload result to R2 `momora-character-portraits`
+9. Update `illustrated_profile_key`, set status `ready` (or `failed`)
 
 **Response**
 
@@ -460,6 +477,8 @@ All client-side triggers retry once in the background after the per-memory coold
 
 Does **not** invoke `generate-illustration` for `media`.
 
+**Authorization (family-sharing Phase 3):** memory looked up by id alone; caller must be a **member (any role, including viewer)** of its family — analysis can be triggered by anyone who can see the memory. No caller-prefix assertions on media keys (they come from the trusted DB row). **The emotion write runs on the service-role client**, not the caller's user client: a viewer's user-client UPDATE would silently match zero rows under the manager+ `memories` RLS policy (200 with a no-op), leaving `isEmotionAnalyzable` true and causing a permanent client-side retry loop. Membership authorizes triggering analysis; the write itself is a system write.
+
 **Request**
 
 ```json
@@ -470,20 +489,20 @@ Does **not** invoke `generate-illustration` for `media`.
 
 **Logic (text_illustration / text_only)**
 
-1. Fetch memory (JWT + RLS)
+1. Fetch memory (JWT + RLS); assert caller is a family member
 2. Call `gpt-4o-mini` with text emotion prompt
-3. Update `memories.emotion`
+3. Update `memories.emotion` via the **service-role client**
 
 **Logic (media photo)**
 
-1. Fetch memory including ordered `memory_media` assets and `updated_at`
-2. Select the first ordered image asset; assert the object key belongs to the authenticated user
+1. Fetch memory including ordered `memory_media` assets and `updated_at`; assert caller is a family member
+2. Select the first ordered image asset
 3. Reject/skip all-video media memories
 4. Snapshot `updated_at` and `content` for stale-write guard
 5. `getObjectBytes` from R2; reject if `> 20 MB`
 6. Downscale via `capImageMaxEdge` (max edge 768px); reject undecodable HEIC (`unsupported_image_format`)
 7. Vision call: caption + image when caption present; image-only otherwise
-8. `UPDATE emotion` only if `updated_at` still matches snapshot
+8. `UPDATE emotion` via the **service-role client**, only if `updated_at` still matches snapshot
 9. Per-memory cooldown: 5s between calls (`429` `rate_limited`)
 
 **Response**
@@ -522,18 +541,21 @@ Generates memory illustration using tagged character portraits.
 
 Set `forceRegenerate: true` when the client manually regenerates an illustration that is already `ready` (same R2 key is overwritten).
 
+**Authorization (family-sharing Phase 3):** memory looked up by id alone; caller must be **owner/manager** of `memory.family_id` (not `memory.user_id = caller`). Internal lookups are re-scoped from `family_members.user_id = caller` to `family_members.family_id = memory.family_id` — otherwise a manager tagging children the family *owner* created would find zero portraits and fail with `NO_PORTRAITS`. `illustration_style` is read from `families` (moved off `user_profiles` in the family-sharing migration).
+
 **Logic**
 
-1. Set `illustration_status = 'generating'`
-2. Fetch memory content + tagged family members (max 4)
-3. **Safety pre-check:** `gpt-4o-mini` rewrites unsafe content → child-safe scene description
-4. Fetch ready character portraits from R2 (`momora-character-portraits`)
-5. Build prompt: safe content, labeled character reference map, style description from token, color palette, age at memory date
-6. Call OpenAI image edit API with all ready portrait references (up to 4; `input_fidelity=high` only on `gpt-image-1` fallback when multiple)
-7. On moderation failure: rewrite + retry once
-8. Upload to R2 `momora-memory-illustrations`
-9. Update `illustration_key`, `illustration_prompt`, status `ready` (or `failed`)
-10. Delete previous illustration object from R2 if regenerating
+1. Fetch memory by id; assert caller owner/manager of its family
+2. Set `illustration_status = 'generating'`
+3. Fetch memory content + tagged family members (max 4) scoped to the memory's `family_id`
+4. **Safety pre-check:** `gpt-4o-mini` rewrites unsafe content → child-safe scene description
+5. Fetch ready character portraits from R2 (`momora-character-portraits`)
+6. Build prompt: safe content, labeled character reference map, style description from `families.illustration_style`, color palette, age at memory date
+7. Call OpenAI image edit API with all ready portrait references (up to 4; `input_fidelity=high` only on `gpt-image-1` fallback when multiple)
+8. On moderation failure: rewrite + retry once
+9. Upload to R2 `momora-memory-illustrations`
+10. Update `illustration_key`, `illustration_prompt`, status `ready` (or `failed`)
+11. Delete previous illustration object from R2 if regenerating
 
 **Response**
 
@@ -649,7 +671,7 @@ Initiates account deletion (soft delete).
 **Logic**
 
 1. Set `deleted_at = now()`, `scheduled_hard_delete_at = now() + interval '15 days'`
-2. Optionally revoke sessions
+2. **(family-sharing Phase 3)** For each family the caller **owns**: set `families.deleted_at = now()` via the service-role client (the `enforce_families_restricted_columns` trigger allows this when `auth.uid()` is null, i.e. no user JWT), then push a heads-up notification ("This family journal's owner deleted their account...") to every other member with an `expo_push_token`. Best-effort — failures are logged, not thrown; the account-deletion response only depends on step 1 succeeding. Push helper shared with `send-daily-reminder` via `_shared/expo-push.ts`.
 
 **Response**
 
@@ -665,7 +687,8 @@ Initiates account deletion (soft delete).
 
 **Logic**
 
-1. Clear `deleted_at` and `scheduled_hard_delete_at`
+1. Clear `deleted_at` and `scheduled_hard_delete_at` on the caller's `user_profiles` row
+2. **(family-sharing Phase 3)** Clear `families.deleted_at` for every family the caller owns, via the service-role client (same trigger exemption as above — this could also run on the caller's own JWT since they're the owner, but service-role is simplest)
 
 ---
 
@@ -676,7 +699,10 @@ Cron function run daily.
 **Logic**
 
 1. Find users where `scheduled_hard_delete_at <= now()`
-2. For each: delete all R2 objects under `{userId}/` in private buckets, delete DB rows, delete auth user
+2. For each user, **(family-sharing Phase 3, reworked)**:
+   - **Owner case:** for every family they own, collect R2 keys across *all creators* in that family (`memory_media.object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key`) *before* deleting any rows, delete those R2 objects, then delete the `families` row (FK cascades remove `memories`/`family_members`/`family_memberships`/`family_invites` for free)
+   - **Non-owner case:** their created content in families they don't own must survive — no blanket delete of `memories`/`family_members` by `user_id` anymore. Enumerate objects under their own `{userId}/` prefix and delete only the ones no surviving row references (checked against `memory_media.object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key`)
+   - Delete the `user_profiles` row, then `auth.admin.deleteUser` — the FK `on delete set null` on `memories.user_id`/`family_members.user_id` fires here, nulling attribution on any surviving (non-owned-family) content
 
 **Auth:** Service role + cron secret header
 

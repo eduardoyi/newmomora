@@ -1,6 +1,7 @@
 import { validateCronSecret } from '../_shared/cron.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 const REMINDER_MESSAGES = [
@@ -20,26 +21,9 @@ export interface SendDailyReminderResponse {
   skipped?: boolean;
 }
 
-export async function sendExpoPushNotification(
-  expoPushToken: string,
-  title: string,
-  body: string,
-): Promise<boolean> {
-  const response = await fetch('https://exp.host/--/api/v2/push/send', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      to: expoPushToken,
-      title,
-      body,
-      sound: 'default',
-    }),
-  });
-
-  return response.ok;
-}
+// Re-exported for existing importers -- the implementation now lives in
+// _shared/expo-push.ts so delete-user-account can reuse it.
+export { sendExpoPushNotification };
 
 export async function handleSendDailyReminder(req: Request): Promise<Response> {
   const corsResponse = handleCors(req);

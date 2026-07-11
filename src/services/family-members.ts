@@ -113,6 +113,7 @@ export async function deleteFamilyMember(
 export interface UpdateFamilyMemberWithPhotoInput {
   memberId: string;
   userId: string;
+  familyId: string;
   name?: string;
   dateOfBirth?: string | null;
   gender?: string | null;
@@ -135,6 +136,7 @@ export async function updateFamilyMemberWithPhoto(
     const { data: uploadData, error: uploadUrlError } = await getUploadUrl(
       objectKey,
       preparedPhoto.contentType,
+      input.familyId,
     );
     if (uploadUrlError || !uploadData) {
       return { data: null, error: uploadUrlError ?? { message: 'Upload URL was not returned' } };
@@ -177,6 +179,7 @@ export async function createFamilyMemberWithPhoto(
   const { data: uploadData, error: uploadUrlError } = await getUploadUrl(
     objectKey,
     preparedPhoto.contentType,
+    input.familyId,
   );
 
   if (uploadUrlError || !uploadData) {

@@ -1,6 +1,7 @@
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { getCallerFamilyRole } from '../_shared/family-access.ts';
 import {
   isAllowedImageMediaContentType,
   isVideoMediaContentType,
@@ -15,8 +16,7 @@ import {
   EMOTION_PALETTES,
 } from '../_shared/prompts.ts';
 import { getObjectBytes } from '../_shared/r2.ts';
-import { assertUserOwnedKey } from '../_shared/storage-keys.ts';
-import { createUserClient } from '../_shared/supabase-admin.ts';
+import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
 
 export interface AnalyzeEmotionRequest {
   memoryId: string;
@@ -111,7 +111,6 @@ export interface MediaPhotoValidationError {
 
 export function validateMediaPhotoMemoryRow(
   row: Pick<MemoryRow, 'memory_type' | 'media_key' | 'media_content_type'>,
-  userId: string,
   mediaAssets: MemoryMediaRow[] = [],
 ): MediaPhotoValidationError | null {
   if (row.memory_type !== 'media') {
@@ -122,21 +121,14 @@ export function validateMediaPhotoMemoryRow(
     };
   }
 
+  // No caller-prefix key assertion here: membership in the memory's family
+  // (checked before this is called) is the authorization signal, and these
+  // keys come from the DB row (trusted), not from client input.
   const imageAsset = mediaAssets.find((asset) =>
     isAllowedImageMediaContentType(asset.content_type)
   );
 
   if (imageAsset) {
-    try {
-      assertUserOwnedKey(imageAsset.object_key, userId);
-    } catch {
-      return {
-        status: 403,
-        message: 'Invalid media object key',
-        code: 'forbidden',
-      };
-    }
-
     return null;
   }
 
@@ -153,16 +145,6 @@ export function validateMediaPhotoMemoryRow(
       status: 400,
       message: 'Media key is required for media memories',
       code: 'validation_error',
-    };
-  }
-
-  try {
-    assertUserOwnedKey(row.media_key, userId);
-  } catch {
-    return {
-      status: 403,
-      message: 'Invalid media object key',
-      code: 'forbidden',
     };
   }
 
@@ -247,12 +229,17 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
   }
 
   const supabase = createUserClient(authHeader);
+  // Emotion writes must land through the service-role client: a viewer's
+  // user-client UPDATE would silently match zero rows under the manager+
+  // `memories` policy (200 with no-op), leaving `isEmotionAnalyzable` true
+  // and causing a permanent client retry loop. Membership (any role, below)
+  // authorizes triggering analysis; the enrichment write is a system write.
+  const serviceClient = createServiceClient();
 
   const { data: memory, error: memoryError } = await supabase
     .from('memories')
-    .select('id, content, memory_type, media_key, media_content_type, updated_at')
+    .select('id, family_id, content, memory_type, media_key, media_content_type, updated_at')
     .eq('id', memoryId)
-    .eq('user_id', user.id)
     .maybeSingle();
 
   if (memoryError) {
@@ -262,6 +249,11 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
 
   if (!memory) {
     return errorResponse('Memory not found', 404, 'MEMORY_NOT_FOUND');
+  }
+
+  const callerRole = await getCallerFamilyRole(supabase, memory.family_id, user.id);
+  if (!callerRole) {
+    return errorResponse('Not authorized for this memory', 403, 'forbidden');
   }
 
   const row = memory as MemoryRow;
@@ -283,7 +275,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
       }
 
       const analyzed = await analyzeTextIllustrationEmotion(row.content);
-      await supabase.from('memories').update({ emotion: analyzed.emotion }).eq('id', memoryId);
+      await serviceClient.from('memories').update({ emotion: analyzed.emotion }).eq('id', memoryId);
 
       const response: AnalyzeEmotionResponse = {
         emotion: analyzed.emotion,
@@ -305,7 +297,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
     }
 
     const orderedMedia = (mediaRows ?? []) as MemoryMediaRow[];
-    const mediaValidationError = validateMediaPhotoMemoryRow(row, user.id, orderedMedia);
+    const mediaValidationError = validateMediaPhotoMemoryRow(row, orderedMedia);
     if (mediaValidationError) {
       return errorResponse(
         mediaValidationError.message,
@@ -327,7 +319,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
     });
 
     const updated = await updateEmotionIfSnapshotMatches(
-      supabase,
+      serviceClient,
       memoryId,
       analyzed.emotion,
       snapshot,
@@ -349,10 +341,6 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
 
     if (message === 'unsupported_image_format') {
       return errorResponse('Image format is not supported for analysis', 400, 'unsupported_image_format');
-    }
-
-    if (message === 'Object key must belong to the authenticated user') {
-      return errorResponse('Invalid media object key', 403, 'forbidden');
     }
 
     console.error('analyze-emotion failed', message);

@@ -1,7 +1,7 @@
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
-import { createUserClient } from '../_shared/supabase-admin.ts';
+import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
 
 export interface CancelAccountDeletionResponse {
   success: true;
@@ -40,6 +40,21 @@ export async function handleCancelAccountDeletion(req: Request): Promise<Respons
   if (error) {
     console.error('cancel-account-deletion failed', error.message);
     return errorResponse('Failed to cancel account deletion', 500, 'internal_error');
+  }
+
+  // Restore any families this user owns and soft-deleted via
+  // delete-user-account. Service-role client is simplest here and is
+  // explicitly allowed by `enforce_families_restricted_columns` (it runs
+  // without a user JWT, so `auth.uid()` is null). Best-effort: the user's
+  // own account is already un-scheduled above, so a family-restore hiccup
+  // is logged rather than surfaced as a request failure.
+  const { error: familiesError } = await createServiceClient()
+    .from('families')
+    .update({ deleted_at: null })
+    .eq('owner_id', user.id);
+
+  if (familiesError) {
+    console.error('cancel-account-deletion family restore failed', familiesError.message);
   }
 
   const response: CancelAccountDeletionResponse = { success: true };

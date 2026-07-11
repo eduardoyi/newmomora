@@ -32,7 +32,7 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function base64ToBytes(base64: string): Uint8Array {
+function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
@@ -235,7 +235,9 @@ async function editImagesWithModel(
   for (const referenceImage of referenceImages) {
     formData.append(
       'image[]',
-      new Blob([referenceImage.bytes], { type: referenceImage.contentType }),
+      // Deno 2.9's TS treats `Uint8Array<ArrayBufferLike>` as non-BlobPart;
+      // these bytes are always backed by a real ArrayBuffer at runtime.
+      new Blob([referenceImage.bytes as Uint8Array<ArrayBuffer>], { type: referenceImage.contentType }),
       referenceImage.filename,
     );
   }

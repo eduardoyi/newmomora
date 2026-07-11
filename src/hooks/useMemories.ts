@@ -302,6 +302,7 @@ export function useMemories(searchQuery = '') {
         throw new Error('You must have a family to save a memory');
       }
 
+      const activeFamilyId = profile.active_family_id;
       const uploadedKeys: string[] = [];
 
       const uploadAsset = async (asset: MemoryMediaMutationAsset) => {
@@ -333,6 +334,7 @@ export function useMemories(searchQuery = '') {
           mediaKey,
           asset.fileUri,
           asset.contentType,
+          activeFamilyId,
         );
 
         if (uploadError) {
@@ -395,7 +397,11 @@ export function useMemories(searchQuery = '') {
       if (!user) {
         throw new Error('You must be signed in to update a memory');
       }
+      if (!profile?.active_family_id) {
+        throw new Error('You must have a family to update a memory');
+      }
 
+      const activeFamilyId = profile.active_family_id;
       const uploadedKeys: string[] = [];
 
       const uploadAsset = async (asset: MemoryMediaMutationAsset) => {
@@ -427,6 +433,7 @@ export function useMemories(searchQuery = '') {
           mediaKey,
           asset.fileUri,
           asset.contentType,
+          activeFamilyId,
         );
 
         if (uploadError) {

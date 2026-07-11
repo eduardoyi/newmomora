@@ -1,8 +1,13 @@
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import {
+  getCallerFamilyRole,
+  isManagerRole,
+  resolveStorageKeyFamilyIds,
+} from '../_shared/family-access.ts';
 import { deleteObject } from '../_shared/r2.ts';
-import { isDeletableUserObjectKey } from '../_shared/storage-keys.ts';
+import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 export interface DeleteStorageObjectRequest {
   objectKey: string;
@@ -40,8 +45,17 @@ export async function handleDeleteStorageObject(req: Request): Promise<Response>
     return errorResponse('objectKey is required', 400, 'validation_error');
   }
 
-  if (!isDeletableUserObjectKey(objectKey, user.id)) {
+  const serviceClient = createServiceClient();
+  const [resolved] = await resolveStorageKeyFamilyIds(serviceClient, [objectKey]);
+
+  if (!resolved.familyId) {
     return errorResponse('Invalid object key', 400, 'validation_error');
+  }
+
+  const role = await getCallerFamilyRole(serviceClient, resolved.familyId, user.id);
+
+  if (!isManagerRole(role)) {
+    return errorResponse('Not authorized for this object', 403, 'forbidden');
   }
 
   try {

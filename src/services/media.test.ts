@@ -115,6 +115,7 @@ describe('uploadMediaObject', () => {
       'user-1/memories/memory-1/media/asset.jpg',
       'file:///tmp/photo.jpg',
       'image/jpeg',
+      'family-1',
     );
 
     expect(result.error).toBeNull();
@@ -128,6 +129,7 @@ describe('uploadMediaObject', () => {
           Authorization: 'Bearer session-token',
           'Content-Type': 'image/jpeg',
           'x-object-key': 'user-1/memories/memory-1/media/asset.jpg',
+          'x-family-id': 'family-1',
         }),
       }),
     );
@@ -145,6 +147,7 @@ describe('uploadMediaObject', () => {
       'bad-key',
       'file:///tmp/photo.jpg',
       'image/jpeg',
+      'family-1',
     );
 
     expect(result.error).toEqual({

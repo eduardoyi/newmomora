@@ -1,8 +1,9 @@
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { getCallerFamilyRoles, resolveStorageKeyFamilyIds } from '../_shared/family-access.ts';
 import { createPresignedGetUrls, R2_URL_EXPIRY } from '../_shared/r2.ts';
-import { assertUserOwnedKey } from '../_shared/storage-keys.ts';
+import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 const MAX_KEYS = 50;
 
@@ -51,12 +52,23 @@ export async function handleGetMediaUrl(req: Request): Promise<Response> {
     if (typeof key !== 'string' || !key.trim()) {
       return errorResponse('Each key must be a non-empty string', 400, 'validation_error');
     }
+  }
 
-    try {
-      assertUserOwnedKey(key, user.id);
-    } catch {
-      return errorResponse('Invalid object key', 400, 'validation_error');
-    }
+  const serviceClient = createServiceClient();
+  const resolved = await resolveStorageKeyFamilyIds(serviceClient, keys);
+
+  // Unresolvable keys (unparsable, or the parsed entity has no owning row)
+  // are denied outright -- authorization derives strictly from the entity
+  // id parsed from the key, never from a memory_media row referencing it.
+  if (resolved.some((entry) => entry.familyId === null)) {
+    return errorResponse('Invalid object key', 400, 'validation_error');
+  }
+
+  const familyIds = resolved.map((entry) => entry.familyId as string);
+  const roles = await getCallerFamilyRoles(serviceClient, familyIds, user.id);
+
+  if (resolved.some((entry) => roles.get(entry.familyId as string) === null)) {
+    return errorResponse('Not authorized for one or more objects', 403, 'forbidden');
   }
 
   try {

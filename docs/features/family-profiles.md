@@ -56,8 +56,8 @@ Key object layout (single bucket):
 
 | Function | Input | Output | Auth |
 |----------|-------|--------|------|
-| `get-upload-url` | `{ objectKey, contentType }` | `{ uploadUrl, objectKey, expiresIn }` | JWT |
-| `get-media-url` | `{ keys: string[] }` | `{ urls, expiresIn }` | JWT |
+| `get-upload-url` | `{ objectKey, contentType, familyId }` | `{ uploadUrl, objectKey, expiresIn }` | JWT + owner/manager of `familyId` |
+| `get-media-url` | `{ keys: string[] }` | `{ urls, expiresIn }` | JWT + member of the key's resolved family |
 
 Bucket name comes from Edge Function secret `R2_BUCKET` — not from the client.
 
