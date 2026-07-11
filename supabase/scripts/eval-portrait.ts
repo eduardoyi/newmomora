@@ -6,6 +6,7 @@
  *   npm run eval:portrait -- --photo ./photo.jpg --age "36 years old" --adult --variant character-design
  *   npm run eval:portrait -- --member-id <uuid> --variants
  *   npm run eval:portrait -- --member-id <uuid> --variant character-sheet-abstraction --adult-prompt
+ *   npm run eval:portrait -- --member-id <uuid> --variant old-memora-short-transfer
  *
  * Requires OPENAI_API_KEY + R2/Supabase vars in supabase/.env.local when using --member-id.
  */
@@ -72,6 +73,23 @@ function inferIsAdultFromAgeDescription(ageDescription: string): boolean {
 const defaultStylePath = new URL('../../assets/styles/default.png', import.meta.url);
 const defaultOutputDir = new URL('./eval-output/', import.meta.url);
 
+function buildOldMemoraShortTransferPrompt(input: PortraitPromptInput): string {
+  const gender = input.gender?.trim() && input.gender !== 'Prefer not to say'
+    ? input.gender.trim().toLowerCase()
+    : 'person';
+  const additionalInfo = input.additionalInfo?.trim()
+    ? ` Additional info: ${input.additionalInfo.trim().endsWith('.') ? input.additionalInfo.trim() : `${input.additionalInfo.trim()}.`}`
+    : '';
+
+  return [
+    `Create a portrait illustration of the ${input.ageDescription} ${gender} shown in the first image.`,
+    'Render it in the style of the second image, which has a children\'s book cartoon style.',
+    `The person should be smiling and looking directly at the camera.${additionalInfo}`,
+    'The background should be simple white background.',
+    'Ensure no text or numbers appear in the image.',
+  ].join(' ');
+}
+
 const EVAL_VARIANTS: EvalVariant[] = [
   {
     label: 'character-design',
@@ -98,6 +116,11 @@ const EVAL_VARIANTS: EvalVariant[] = [
     label: 'style-transfer-template',
     styleFirst: false,
     buildPrompt: (input) => buildLegacyStyleTransferPortraitPrompt(input),
+  },
+  {
+    label: 'old-memora-short-transfer',
+    styleFirst: false,
+    buildPrompt: buildOldMemoraShortTransferPrompt,
   },
 ];
 

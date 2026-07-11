@@ -127,13 +127,22 @@ function IllustrationVisual({ memory }: { memory: MemoryWithTags }) {
 }
 
 // ── Media visual ──────────────────────────────────────────────────────────────
-function MediaVisual({ memory, isActive }: { memory: MemoryWithTags; isActive: boolean }) {
+function MediaVisual({
+  memory,
+  isActive,
+  onPress,
+}: {
+  memory: MemoryWithTags;
+  isActive: boolean;
+  onPress?: () => void;
+}) {
   if (memory.mediaAssets.length > 0) {
     return (
       <MemoryMediaCarousel
         assets={memory.mediaAssets}
         cacheVersion={memory.updated_at}
         isActive={isActive}
+        onPress={onPress}
         style={styles.cardImage}
       />
     );
@@ -150,6 +159,30 @@ function MediaVisual({ memory, isActive }: { memory: MemoryWithTags; isActive: b
 function SpreadCard({ memory, onPress, isVideoActive = false }: MemoryCardProps) {
   const excerpt = memory.content ? formatMemoryExcerpt(memory.content) : null;
 
+  if (memory.memory_type === 'media') {
+    return (
+      <View
+        style={styles.card}
+        testID={`memory-card-${memory.id}`}
+      >
+        <MediaVisual memory={memory} isActive={isVideoActive} onPress={onPress} />
+        <Pressable
+          accessibilityRole="button"
+          onPress={onPress}
+          style={({ pressed }) => [styles.contentPressArea, pressed && styles.cardPressed]}
+          testID={`memory-card-content-${memory.id}`}
+        >
+          {excerpt ? (
+            <View style={styles.captionWrap}>
+              <Text style={styles.caption} numberOfLines={3}>{excerpt}</Text>
+            </View>
+          ) : null}
+          <CardFooter memory={memory} />
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <Pressable
       accessibilityRole="button"
@@ -157,11 +190,7 @@ function SpreadCard({ memory, onPress, isVideoActive = false }: MemoryCardProps)
       style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
       testID={`memory-card-${memory.id}`}
     >
-      {memory.memory_type === 'text_illustration' ? (
-        <IllustrationVisual memory={memory} />
-      ) : (
-        <MediaVisual memory={memory} isActive={isVideoActive} />
-      )}
+      <IllustrationVisual memory={memory} />
       {excerpt ? (
         <View style={styles.captionWrap}>
           <Text style={styles.caption} numberOfLines={3}>{excerpt}</Text>
@@ -210,6 +239,9 @@ const styles = StyleSheet.create({
   },
   cardPressed: {
     opacity: 0.94,
+  },
+  contentPressArea: {
+    width: '100%',
   },
   // Spread card
   cardImage: {

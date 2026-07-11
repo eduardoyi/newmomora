@@ -1,9 +1,10 @@
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  GestureResponderEvent,
   NativeScrollEvent,
   NativeSyntheticEvent,
   ScrollView,
@@ -24,6 +25,7 @@ interface MemoryMediaCarouselProps {
   cacheVersion?: string | null;
   isActive?: boolean;
   nativeVideoControls?: boolean;
+  onPress?: () => void;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -117,20 +119,70 @@ export function MemoryMediaCarousel({
   cacheVersion,
   isActive = true,
   nativeVideoControls = false,
+  onPress,
   style,
 }: MemoryMediaCarouselProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [width, setWidth] = useState(0);
+  const tapStartRef = useRef<{ x: number; y: number; timestamp: number } | null>(null);
+  const hasMovedRef = useRef(false);
   const keys = assets.map((asset) => asset.object_key);
   const { data: urls = {} } = useMediaUrls(keys, cacheVersion);
   const showPaging = assets.length > 1;
 
-  const handleMomentumEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+  const handleScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (width <= 0) {
       return;
     }
 
     setActiveIndex(Math.round(event.nativeEvent.contentOffset.x / width));
+  };
+
+  const handleTouchStart = (event: GestureResponderEvent) => {
+    if (!onPress) {
+      return;
+    }
+
+    tapStartRef.current = {
+      x: event.nativeEvent.pageX,
+      y: event.nativeEvent.pageY,
+      timestamp: Date.now(),
+    };
+    hasMovedRef.current = false;
+  };
+
+  const handleTouchMove = (event: GestureResponderEvent) => {
+    const start = tapStartRef.current;
+    if (!start) {
+      return;
+    }
+
+    const dx = Math.abs(event.nativeEvent.pageX - start.x);
+    const dy = Math.abs(event.nativeEvent.pageY - start.y);
+    if (dx > 8 || dy > 8) {
+      hasMovedRef.current = true;
+    }
+  };
+
+  const handleTouchEnd = (event: GestureResponderEvent) => {
+    const start = tapStartRef.current;
+    if (!onPress || !start) {
+      return;
+    }
+
+    const dx = Math.abs(event.nativeEvent.pageX - start.x);
+    const dy = Math.abs(event.nativeEvent.pageY - start.y);
+    const elapsed = Date.now() - start.timestamp;
+    tapStartRef.current = null;
+
+    if (!hasMovedRef.current && dx <= 8 && dy <= 8 && elapsed < 600) {
+      onPress();
+    }
+  };
+
+  const handleTouchCancel = () => {
+    tapStartRef.current = null;
+    hasMovedRef.current = false;
   };
 
   return (
@@ -140,10 +192,17 @@ export function MemoryMediaCarousel({
     >
       <ScrollView
         horizontal
-        onMomentumScrollEnd={handleMomentumEnd}
+        nestedScrollEnabled
+        onMomentumScrollEnd={handleScrollEnd}
+        onScrollEndDrag={handleScrollEnd}
+        onTouchCancel={handleTouchCancel}
+        onTouchEnd={handleTouchEnd}
+        onTouchMove={handleTouchMove}
+        onTouchStart={handleTouchStart}
         pagingEnabled
         scrollEnabled={assets.length > 1}
         showsHorizontalScrollIndicator={false}
+        testID="memory-media-carousel-scroll"
       >
         {assets.map((asset, index) => (
           <View key={asset.id} style={[styles.pageWrap, { width: width || 1 }]}>
