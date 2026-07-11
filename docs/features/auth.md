@@ -1,18 +1,19 @@
 # Auth
 
-Email/password authentication via Supabase Auth. Session persistence uses AsyncStorage; protected routes live under `(app)`.
+Email OTP (one-time code) authentication via Supabase Auth. Session persistence uses AsyncStorage; protected routes live under `(app)`.
 
 ## Overview
 
-Users create an account or sign in, then land in the main tab shell. Sign-up metadata (`name`, `timezone`) seeds `user_profiles` through the database trigger on `auth.users`.
+Users request a 6-digit code sent to their email, enter it to sign in, then land in the main tab shell. Sign-up metadata (`name`, `timezone`) seeds `user_profiles` through the database trigger on `auth.users`. Passwords are not part of the production UX — a `__DEV__`-only password path exists purely so Maestro E2E flows can sign in deterministically without waiting on a real inbox.
 
 ## User-facing behavior
 
-- **Sign up:** name, email, password (min 8 chars)
-- **Sign in:** email + password
-- **Forgot password:** sends Supabase reset email
-- **Sign out:** from Settings tab
-- Unauthenticated users cannot access `(app)` routes
+- **Sign in:** email only → `Continue` → 6-digit code screen. If no account exists for that email, the app routes to sign-up instead of showing a generic error.
+- **Sign up:** name + email → `Create account` → same 6-digit code screen.
+- **Verify code:** 6-digit input, auto-submits once all digits are entered; "Resend code" button with a 60s cooldown; clear error states for expired/invalid codes.
+- **Sign out:** from Settings tab.
+- **Dev/E2E only** (`__DEV__` builds): login screen has a "Dev: password sign-in" toggle that reveals email+password fields calling `signInWithPassword` directly, so Maestro doesn't have to read a real email inbox. The toggle and the fields it reveals never render in production builds — the branch is dead-code-eliminated by the bundler the same way the family-member E2E photo fixture is (see `src/utils/e2e-fixtures.ts` / `add-family-member-photo-fixture`). The password provider itself stays enabled server-side in Supabase; only the client UI to reach it is gated.
+- Unauthenticated users cannot access `(app)` routes.
 
 ## Architecture / data flow
 
@@ -21,13 +22,21 @@ flowchart LR
     App[Expo app] --> AuthProvider
     AuthProvider --> SupabaseAuth[Supabase Auth]
     SupabaseAuth --> AsyncStorage
+    Login[login.tsx] -- signInWithOtp shouldCreateUser:false --> SupabaseAuth
+    SignUp[signup.tsx] -- signInWithOtp shouldCreateUser:true + name/timezone --> SupabaseAuth
+    Login --> VerifyOtp[verify-otp.tsx]
+    SignUp --> VerifyOtp
+    VerifyOtp -- verifyOtp type:email --> SupabaseAuth
     SignUp --> Trigger[handle_new_user trigger]
     Trigger --> Profiles[user_profiles]
 ```
 
 1. `AuthProvider` loads session on mount and listens to `onAuthStateChange`.
 2. Root `app/index.tsx` redirects to auth or app tabs based on session.
-3. Sign-up passes `raw_user_meta_data.name` and `timezone` for profile bootstrap.
+3. **Sign in:** `login.tsx` calls `signInWithOtp({ email, options: { shouldCreateUser: false } })`. If Supabase rejects because no account exists, the app routes to `signup.tsx` (prefilling the email) instead of surfacing a raw error. Otherwise it pushes to `verify-otp.tsx`.
+4. **Sign up:** `signup.tsx` calls `signInWithOtp({ email, options: { shouldCreateUser: true, data: { name, timezone } } })`, then pushes to `verify-otp.tsx`. `raw_user_meta_data.name`/`timezone` feed the `handle_new_user` trigger that bootstraps `user_profiles` — unchanged by this migration.
+5. `verify-otp.tsx` calls `verifyOtp({ email, token, type: 'email' })`. On success the session is set and the screen replaces itself with the timeline. Resend re-issues the same `signInWithOtp` call (with a 60s client-side cooldown).
+6. `src/hooks/use-auth-url-handler.ts` + `src/lib/create-session-from-url.ts` stay wired for `momora://auth/callback` deep links. They're no longer used for password-reset (that flow is gone), but remain as a fallback in case Supabase ever emails a magic link instead of a code, and are otherwise dormant. They play no role in family-invite links (`https://usemomora.com/invite?...`), which are handled by Expo Router file-based linking.
 
 ## Data model
 
@@ -46,11 +55,13 @@ No Edge Functions for auth in MVP — client uses Supabase Auth directly with an
 |-------|------|
 | Supabase client | `src/lib/supabase.ts` |
 | Query client | `src/lib/query-client.ts` |
-| Auth service helpers | `src/services/auth.ts` |
-| Auth hook + provider | `src/hooks/use-auth.tsx` |
+| Auth service helpers | `src/services/auth.ts` — `mapAuthError`, `isUserNotFoundOtpError`, `getDeviceTimezone` |
+| Auth hook + provider | `src/hooks/use-auth.tsx` — `requestSignInOtp`, `requestSignUpOtp`, `verifyOtp`, `signInWithPassword` (dev/E2E only), `signOut` |
+| Auth deep-link fallback | `src/hooks/use-auth-url-handler.ts`, `src/lib/create-session-from-url.ts` |
 | Providers wrapper | `src/components/app-providers.tsx` |
-| Auth screens | `app/(auth)/login.tsx`, `signup.tsx`, `forgot-password.tsx` |
+| Auth screens | `app/(auth)/login.tsx`, `signup.tsx`, `verify-otp.tsx` |
 | Route guards | `app/index.tsx`, `app/(auth)/_layout.tsx`, `app/(app)/_layout.tsx` |
+| Dev/E2E gate reused for the password toggle | `src/utils/e2e-fixtures.ts` (`isE2eFixturesEnabled`) |
 
 Env vars (client):
 
@@ -60,16 +71,17 @@ Env vars (client):
 ## Extension guide
 
 - Add OAuth: use `expo-auth-session` + Supabase provider methods; keep session in `AuthProvider`.
-- Add email confirmation UX: check `session` after sign-up and show a dedicated screen instead of redirecting immediately.
+- The invite-code field on `signup.tsx` is a planned extension point (family-sharing plan §9) — a later phase carries a pending invite code from `app/invite.tsx` through signup and into `requestSignUpOtp`'s metadata/redemption flow. Nothing in this phase builds that logic; keep the seam clean (don't hardcode assumptions about signup always being invite-less).
 - Profile edits: update `user_profiles` via Supabase client (RLS allows own row).
 
 ## Constraints & gotchas
 
 - Never put service role or OpenAI keys in the client.
-- Sign-up requires email confirmation if enabled in Supabase dashboard — adjust UX if toggled.
-- Password reset deep link uses `momora://auth/callback` via `getAuthRedirectUri()`.
+- The `__DEV__` password path must stay compile-time gated. Follow the same pattern used for the family-member E2E photo fixture: a helper that returns `__DEV__`, used to conditionally render the toggle and everything behind it. Do not add any other way to reach `signInWithPassword` from the UI.
+- `isUserNotFoundOtpError` currently keys off Supabase's `otp_disabled` error code (message "Signups not allowed for otp"), which is what GoTrue returns today when `shouldCreateUser: false` is rejected because the account doesn't exist. `user_not_found` is also treated as a match defensively, and there's a message-text fallback. **This is an assumption, not a documented contract** — verify against a real Supabase project before relying on it, and re-check if Supabase changes this behavior.
+- OTP codes expire after the window configured in the Supabase dashboard (see below) — expired/invalid codes surface as a `verifyOtp` error on `verify-otp.tsx`.
 
-### Supabase dashboard (required for email links)
+### Supabase dashboard (required)
 
 In [Auth → URL Configuration](https://supabase.com/dashboard/project/uglhonlaqkqvxcqudwlk/auth/url-configuration):
 
@@ -78,9 +90,13 @@ In [Auth → URL Configuration](https://supabase.com/dashboard/project/uglhonlaq
 | **Site URL** | `momora://auth/callback` |
 | **Redirect URLs** | `momora://**`, `momora://auth/callback`, `exp://**` |
 
-Without this, confirmation emails redirect to `localhost:3000` and fail on mobile.
+In Auth → Emails → **Magic Link** template: it must include `{{ .Token }}` — by default Supabase's template only sends a clickable link, not a numeric code, and `verifyOtp({ type: 'email' })` needs the code. Verify this before relying on the OTP UI end-to-end.
 
-**Dev shortcut:** Authentication → Providers → Email → disable **Confirm email**, or manually confirm the user under Authentication → Users.
+In Auth → Providers → Email: set **OTP expiry** to 10 minutes (family-sharing plan §4 Phase 0).
+
+Custom SMTP (Bento relay, `yubin.sentbybento.com:587` STARTTLS) delivers the OTP emails — configure under Auth → SMTP Settings. Until Phase 0 lands, OTP emails fall back to Supabase's default sender (rate-limited, fine for local dev).
+
+**Password provider:** stays enabled in Auth → Providers → Email so the `__DEV__` dev-sign-in path and Maestro's `TEST_EMAIL`/`TEST_PASSWORD` accounts keep working. It is not reachable from the production UI.
 
 ## Testing
 
@@ -88,7 +104,7 @@ Without this, confirmation emails redirect to `localhost:3000` and fail on mobil
 |-------|------|
 | Unit | `src/services/auth.test.ts` |
 | Integration | `src/hooks/use-auth.integration.test.tsx` |
-| E2E | `.maestro/flows/auth/login.yaml` |
+| E2E | `.maestro/flows/auth/login.yaml` (+ `.maestro/flows/auth/sign-in.yaml`, which drives the `__DEV__` password toggle) |
 
 ```bash
 npm test -- src/services/auth.test.ts src/hooks/use-auth.integration.test.tsx
@@ -99,4 +115,5 @@ maestro test .maestro/flows/auth/login.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-07-11 | Migrated to email OTP everywhere; removed password sign-in/sign-up/reset from the production UX; added `__DEV__`-only password path for Maestro |
 | 2026-05-24 | Initial auth shell + protected tab layout |

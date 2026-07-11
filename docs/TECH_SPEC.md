@@ -792,7 +792,7 @@ MVP: all users have `illustration_style = 'default'`. No style picker UI.
 ```
 Momora2/
 ├── app/                          # Expo Router screens
-│   ├── (auth)/                   # login, signup, forgot-password
+│   ├── (auth)/                   # login, signup, verify-otp
 │   ├── (app)/                    # timeline, calendar, family, settings
 │   └── (modals)/                 # new-memory, edit-memory, add-family-member
 ├── src/

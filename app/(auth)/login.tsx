@@ -11,21 +11,54 @@ import {
 } from '@/components/auth-screen';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { isE2eFixturesEnabled } from '@/utils/e2e-fixtures';
 
 export default function LoginScreen() {
-  const { signIn } = useAuth();
+  const { requestSignInOtp, signInWithPassword } = useAuth();
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSignIn = async () => {
+  // Dev/E2E only: password provider stays enabled server-side for Maestro, but the toggle
+  // that exposes it never renders (and this branch is dead-code-eliminated) in production
+  // builds — same __DEV__ gating pattern as the family-member photo fixture.
+  const showDevPasswordToggle = isE2eFixturesEnabled();
+  const [isDevPasswordVisible, setIsDevPasswordVisible] = useState(false);
+  const [devPassword, setDevPassword] = useState('');
+  const [isDevSubmitting, setIsDevSubmitting] = useState(false);
+
+  const handleContinue = async () => {
     setErrorMessage('');
     setIsSubmitting(true);
 
-    const { error } = await signIn({ email: email.trim(), password });
+    const trimmedEmail = email.trim();
+    const { error, userNotFound } = await requestSignInOtp(trimmedEmail);
 
     setIsSubmitting(false);
+
+    if (userNotFound) {
+      router.push({ pathname: '/(auth)/signup', params: { email: trimmedEmail } });
+      return;
+    }
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    router.push({
+      pathname: '/(auth)/verify-otp',
+      params: { email: trimmedEmail, mode: 'signin' },
+    });
+  };
+
+  const handleDevPasswordSignIn = async () => {
+    setErrorMessage('');
+    setIsDevSubmitting(true);
+
+    const { error } = await signInWithPassword({ email: email.trim(), password: devPassword });
+
+    setIsDevSubmitting(false);
 
     if (error) {
       setErrorMessage(error.message);
@@ -45,7 +78,7 @@ export default function LoginScreen() {
           </Link>
         </Text>
       }
-      subtitle="Sign in to capture and revisit your family's moments."
+      subtitle="Enter your email and we'll send you a sign-in code."
       title="Welcome back"
     >
       <AuthField label="Email">
@@ -61,33 +94,48 @@ export default function LoginScreen() {
         />
       </AuthField>
 
-      <AuthField label="Password">
-        <AuthInput
-          autoComplete="password"
-          onChangeText={setPassword}
-          placeholder="Your password"
-          secureTextEntry
-          testID="login-password-input"
-          textContentType="password"
-          value={password}
-        />
-      </AuthField>
-
-      <AuthButton
-        label="Forgot password?"
-        onPress={() => router.push('/(auth)/forgot-password')}
-        testID="login-forgot-password-button"
-        variant="ghost"
-      />
-
       <AuthErrorMessage message={errorMessage} />
 
       <AuthButton
-        disabled={isSubmitting || !email.trim() || !password}
-        label={isSubmitting ? 'Signing in…' : 'Sign in'}
-        onPress={handleSignIn}
+        disabled={isSubmitting || !email.trim()}
+        label={isSubmitting ? 'Sending code…' : 'Continue'}
+        onPress={handleContinue}
         testID="login-submit-button"
       />
+
+      {showDevPasswordToggle && (
+        <>
+          <AuthButton
+            label={isDevPasswordVisible ? 'Hide dev sign-in' : 'Dev: password sign-in'}
+            onPress={() => setIsDevPasswordVisible((visible) => !visible)}
+            testID="login-dev-toggle-button"
+            variant="ghost"
+          />
+
+          {isDevPasswordVisible && (
+            <>
+              <AuthField label="Password (dev only)">
+                <AuthInput
+                  autoComplete="password"
+                  onChangeText={setDevPassword}
+                  placeholder="Your password"
+                  secureTextEntry
+                  testID="login-password-input"
+                  textContentType="password"
+                  value={devPassword}
+                />
+              </AuthField>
+
+              <AuthButton
+                disabled={isDevSubmitting || !email.trim() || !devPassword}
+                label={isDevSubmitting ? 'Signing in…' : 'Sign in with password'}
+                onPress={handleDevPasswordSignIn}
+                testID="login-dev-submit-button"
+              />
+            </>
+          )}
+        </>
+      )}
     </AuthScreen>
   );
 }

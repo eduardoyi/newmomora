@@ -67,10 +67,11 @@ describe('useFamilyMembers integration', () => {
       session: { user: { id: 'user-1' } } as never,
       user: { id: 'user-1' } as never,
       isLoading: false,
-      signIn: jest.fn(),
-      signUp: jest.fn(),
+      requestSignInOtp: jest.fn(),
+      requestSignUpOtp: jest.fn(),
+      verifyOtp: jest.fn(),
+      signInWithPassword: jest.fn(),
       signOut: jest.fn(),
-      resetPassword: jest.fn(),
     });
 
     mockedUseUserProfile.mockReturnValue({

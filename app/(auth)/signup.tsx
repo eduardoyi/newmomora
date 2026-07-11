@@ -1,4 +1,4 @@
-import { Link, router } from 'expo-router';
+import { Link, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, Text } from 'react-native';
 
@@ -13,24 +13,21 @@ import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 
 export default function SignUpScreen() {
-  const { signUp } = useAuth();
+  const { requestSignUpOtp } = useAuth();
+  const params = useLocalSearchParams<{ email?: string }>();
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState(params.email ?? '');
   const [errorMessage, setErrorMessage] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSignUp = async () => {
     setErrorMessage('');
-    setSuccessMessage('');
     setIsSubmitting(true);
 
-    const { error, needsEmailConfirmation } = await signUp({
-      name: name.trim(),
-      email: email.trim(),
-      password,
-    });
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim();
+
+    const { error } = await requestSignUpOtp({ name: trimmedName, email: trimmedEmail });
 
     setIsSubmitting(false);
 
@@ -39,14 +36,10 @@ export default function SignUpScreen() {
       return;
     }
 
-    if (needsEmailConfirmation) {
-      setSuccessMessage(
-        'Account created. Open the confirmation link in your email on this device — it will return you to Momora.',
-      );
-      return;
-    }
-
-    router.replace('/(app)/(tabs)/timeline');
+    router.push({
+      pathname: '/(auth)/verify-otp',
+      params: { email: trimmedEmail, mode: 'signup', name: trimmedName },
+    });
   };
 
   return (
@@ -86,25 +79,11 @@ export default function SignUpScreen() {
         />
       </AuthField>
 
-      <AuthField label="Password">
-        <AuthInput
-          autoComplete="new-password"
-          onChangeText={setPassword}
-          placeholder="At least 8 characters"
-          secureTextEntry
-          testID="signup-password-input"
-          textContentType="newPassword"
-          value={password}
-        />
-      </AuthField>
-
       <AuthErrorMessage message={errorMessage} />
 
-      {successMessage ? <Text style={styles.success}>{successMessage}</Text> : null}
-
       <AuthButton
-        disabled={isSubmitting || !name.trim() || !email.trim() || password.length < 8}
-        label={isSubmitting ? 'Creating account…' : 'Create account'}
+        disabled={isSubmitting || !name.trim() || !email.trim()}
+        label={isSubmitting ? 'Sending code…' : 'Create account'}
         onPress={handleSignUp}
         testID="signup-submit-button"
       />
@@ -120,10 +99,5 @@ const styles = StyleSheet.create({
   link: {
     color: colors.primary,
     fontWeight: '700',
-  },
-  success: {
-    color: colors.text,
-    fontSize: 14,
-    lineHeight: 20,
   },
 });

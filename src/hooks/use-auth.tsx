@@ -10,25 +10,28 @@ import {
 } from 'react';
 
 import { useAuthUrlHandler } from '@/hooks/use-auth-url-handler';
-import { getAuthRedirectUri } from '@/lib/auth-redirect';
 import { supabase } from '@/lib/supabase';
 import {
   getDeviceTimezone,
+  isUserNotFoundOtpError,
   mapAuthError,
   type AuthError,
-  type SignInInput,
-  type SignUpInput,
-  type SignUpResult,
+  type PasswordSignInInput,
+  type RequestSignInOtpResult,
+  type RequestSignUpOtpInput,
+  type VerifyOtpInput,
 } from '@/services/auth';
 
 interface AuthContextValue {
   session: Session | null;
   user: User | null;
   isLoading: boolean;
-  signIn: (input: SignInInput) => Promise<{ error: AuthError | null }>;
-  signUp: (input: SignUpInput) => Promise<SignUpResult>;
+  requestSignInOtp: (email: string) => Promise<RequestSignInOtpResult>;
+  requestSignUpOtp: (input: RequestSignUpOtpInput) => Promise<{ error: AuthError | null }>;
+  verifyOtp: (input: VerifyOtpInput) => Promise<{ error: AuthError | null }>;
+  /** Dev/E2E only — password provider stays enabled server-side; UI access is __DEV__-gated. */
+  signInWithPassword: (input: PasswordSignInInput) => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<void>;
-  resetPassword: (email: string) => Promise<{ error: AuthError | null }>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -60,44 +63,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const signIn = useCallback(async (input: SignInInput) => {
-    const { error } = await supabase.auth.signInWithPassword(input);
-    return { error: error ? mapAuthError(error) : null };
+  const requestSignInOtp = useCallback(async (email: string): Promise<RequestSignInOtpResult> => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: {
+        shouldCreateUser: false,
+      },
+    });
+
+    if (!error) {
+      return { error: null, userNotFound: false };
+    }
+
+    return { error: mapAuthError(error), userNotFound: isUserNotFoundOtpError(error) };
   }, []);
 
-  const signUp = useCallback(async (input: SignUpInput): Promise<SignUpResult> => {
-    const { data, error } = await supabase.auth.signUp({
-      email: input.email,
-      password: input.password,
+  const requestSignUpOtp = useCallback(async ({ name, email }: RequestSignUpOtpInput) => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
       options: {
-        emailRedirectTo: getAuthRedirectUri(),
+        shouldCreateUser: true,
         data: {
-          name: input.name.trim(),
+          name: name.trim(),
           timezone: getDeviceTimezone(),
         },
       },
     });
 
-    if (error) {
-      return { error: mapAuthError(error), needsEmailConfirmation: false };
-    }
+    return { error: error ? mapAuthError(error) : null };
+  }, []);
 
-    return {
-      error: null,
-      needsEmailConfirmation: Boolean(data.user && !data.session),
-    };
+  const verifyOtp = useCallback(async ({ email, token }: VerifyOtpInput) => {
+    const { error } = await supabase.auth.verifyOtp({
+      email: email.trim(),
+      token,
+      type: 'email',
+    });
+
+    return { error: error ? mapAuthError(error) : null };
+  }, []);
+
+  const signInWithPassword = useCallback(async (input: PasswordSignInInput) => {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: input.email.trim(),
+      password: input.password,
+    });
+
+    return { error: error ? mapAuthError(error) : null };
   }, []);
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
-  }, []);
-
-  const resetPassword = useCallback(async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: getAuthRedirectUri(),
-    });
-
-    return { error: error ? mapAuthError(error) : null };
   }, []);
 
   const value = useMemo<AuthContextValue>(
@@ -105,12 +121,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       session,
       user: session?.user ?? null,
       isLoading,
-      signIn,
-      signUp,
+      requestSignInOtp,
+      requestSignUpOtp,
+      verifyOtp,
+      signInWithPassword,
       signOut,
-      resetPassword,
     }),
-    [session, isLoading, signIn, signUp, signOut, resetPassword],
+    [session, isLoading, requestSignInOtp, requestSignUpOtp, verifyOtp, signInWithPassword, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -3,18 +3,24 @@ export interface AuthError {
   code?: string;
 }
 
-export interface SignUpInput {
-  email: string;
-  password: string;
-  name: string;
-}
-
-export interface SignUpResult {
+export interface RequestSignInOtpResult {
   error: AuthError | null;
-  needsEmailConfirmation: boolean;
+  /** True when the account doesn't exist (shouldCreateUser: false rejected it) — route to signup. */
+  userNotFound: boolean;
 }
 
-export interface SignInInput {
+export interface RequestSignUpOtpInput {
+  name: string;
+  email: string;
+}
+
+export interface VerifyOtpInput {
+  email: string;
+  token: string;
+}
+
+/** Dev/E2E-only password sign-in. Password auth stays enabled server-side for Maestro. */
+export interface PasswordSignInInput {
   email: string;
   password: string;
 }
@@ -24,6 +30,21 @@ export function mapAuthError(error: { message: string; code?: string }): AuthErr
     message: error.message,
     code: error.code,
   };
+}
+
+/**
+ * True when signInWithOtp({ shouldCreateUser: false }) rejected the request because no
+ * account exists for the email. Supabase's GoTrue server currently surfaces this as the
+ * `otp_disabled` error code (message "Signups not allowed for otp") rather than a more
+ * literal "not found" code — `user_not_found` is included defensively in case that changes.
+ * The message check is a fallback for older/self-hosted GoTrue versions.
+ */
+export function isUserNotFoundOtpError(error: { code?: string; message?: string }): boolean {
+  if (error.code === 'otp_disabled' || error.code === 'user_not_found') {
+    return true;
+  }
+
+  return /signups?\s+not\s+allowed/i.test(error.message ?? '');
 }
 
 export function getDeviceTimezone(): string {

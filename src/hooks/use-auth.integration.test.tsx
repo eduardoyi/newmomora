@@ -8,19 +8,15 @@ jest.mock('@/hooks/use-auth-url-handler', () => ({
   useAuthUrlHandler: jest.fn(),
 }));
 
-jest.mock('@/lib/auth-redirect', () => ({
-  getAuthRedirectUri: jest.fn(() => 'momora://auth/callback'),
-}));
-
 jest.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
       getSession: jest.fn(),
       onAuthStateChange: jest.fn(),
+      signInWithOtp: jest.fn(),
+      verifyOtp: jest.fn(),
       signInWithPassword: jest.fn(),
-      signUp: jest.fn(),
       signOut: jest.fn(),
-      resetPasswordForEmail: jest.fn(),
     },
   },
 }));
@@ -49,29 +45,9 @@ describe('useAuth', () => {
     } as never);
   });
 
-  it('exposes sign-in errors from Supabase', async () => {
-    mockedSupabase.auth.signInWithPassword.mockResolvedValue({
-      data: { session: null, user: null },
-      error: { message: 'Invalid login credentials', code: 'invalid_credentials' } as never,
-    });
-
-    const { result } = renderHook(() => useAuth(), { wrapper });
-
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-
-    const response = await result.current.signIn({
-      email: 'parent@example.com',
-      password: 'password123',
-    });
-
-    expect(response.error?.message).toBe('Invalid login credentials');
-  });
-
-  it('passes signup metadata for profile creation', async () => {
-    mockedSupabase.auth.signUp.mockResolvedValue({
-      data: { session: null, user: { id: 'user-1' } as never, session: null },
+  it('requests a sign-in OTP without creating a new account', async () => {
+    mockedSupabase.auth.signInWithOtp.mockResolvedValue({
+      data: { user: null, session: null } as never,
       error: null,
     });
 
@@ -81,23 +57,144 @@ describe('useAuth', () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    const response = await result.current.signUp({
-      name: 'Alex',
-      email: 'alex@example.com',
-      password: 'password123',
+    const response = await result.current.requestSignInOtp('parent@example.com');
+
+    expect(response.error).toBeNull();
+    expect(response.userNotFound).toBe(false);
+    expect(mockedSupabase.auth.signInWithOtp).toHaveBeenCalledWith({
+      email: 'parent@example.com',
+      options: {
+        shouldCreateUser: false,
+      },
+    });
+  });
+
+  it('flags the user-not-found case so the caller can route to signup', async () => {
+    mockedSupabase.auth.signInWithOtp.mockResolvedValue({
+      data: { user: null, session: null } as never,
+      error: { message: 'Signups not allowed for otp', code: 'otp_disabled' } as never,
     });
 
-    expect(response.needsEmailConfirmation).toBe(true);
-    expect(mockedSupabase.auth.signUp).toHaveBeenCalledWith({
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const response = await result.current.requestSignInOtp('newperson@example.com');
+
+    expect(response.userNotFound).toBe(true);
+    expect(response.error?.message).toBe('Signups not allowed for otp');
+  });
+
+  it('exposes other sign-in OTP errors without flagging user-not-found', async () => {
+    mockedSupabase.auth.signInWithOtp.mockResolvedValue({
+      data: { user: null, session: null } as never,
+      error: { message: 'Email rate limit exceeded', code: 'over_email_send_rate_limit' } as never,
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const response = await result.current.requestSignInOtp('parent@example.com');
+
+    expect(response.userNotFound).toBe(false);
+    expect(response.error?.message).toBe('Email rate limit exceeded');
+  });
+
+  it('requests a sign-up OTP with name and timezone metadata', async () => {
+    mockedSupabase.auth.signInWithOtp.mockResolvedValue({
+      data: { user: null, session: null } as never,
+      error: null,
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const response = await result.current.requestSignUpOtp({
+      name: 'Alex',
       email: 'alex@example.com',
-      password: 'password123',
+    });
+
+    expect(response.error).toBeNull();
+    expect(mockedSupabase.auth.signInWithOtp).toHaveBeenCalledWith({
+      email: 'alex@example.com',
       options: {
-        emailRedirectTo: 'momora://auth/callback',
+        shouldCreateUser: true,
         data: expect.objectContaining({
           name: 'Alex',
           timezone: expect.any(String),
         }),
       },
+    });
+  });
+
+  it('verifies an OTP code against the email', async () => {
+    mockedSupabase.auth.verifyOtp.mockResolvedValue({
+      data: { user: null, session: null } as never,
+      error: null,
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const response = await result.current.verifyOtp({ email: 'alex@example.com', token: '123456' });
+
+    expect(response.error).toBeNull();
+    expect(mockedSupabase.auth.verifyOtp).toHaveBeenCalledWith({
+      email: 'alex@example.com',
+      token: '123456',
+      type: 'email',
+    });
+  });
+
+  it('exposes verifyOtp errors', async () => {
+    mockedSupabase.auth.verifyOtp.mockResolvedValue({
+      data: { user: null, session: null } as never,
+      error: { message: 'Token has expired or is invalid', code: 'otp_expired' } as never,
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const response = await result.current.verifyOtp({ email: 'alex@example.com', token: '000000' });
+
+    expect(response.error?.message).toBe('Token has expired or is invalid');
+  });
+
+  it('dev/E2E path: signs in with a password', async () => {
+    mockedSupabase.auth.signInWithPassword.mockResolvedValue({
+      data: { session: null, user: null } as never,
+      error: null,
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const response = await result.current.signInWithPassword({
+      email: 'parent@example.com',
+      password: 'password123',
+    });
+
+    expect(response.error).toBeNull();
+    expect(mockedSupabase.auth.signInWithPassword).toHaveBeenCalledWith({
+      email: 'parent@example.com',
+      password: 'password123',
     });
   });
 });

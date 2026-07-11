@@ -6,7 +6,7 @@ Parent instructions: [../AGENTS.md](../AGENTS.md)
 
 ```
 app/
-  (auth)/          login, signup, forgot-password
+  (auth)/          login, signup, verify-otp
   (app)/           timeline, calendar, family, settings — tab layout
   (modals)/        new-memory, edit-memory, add-family-member
 ```
