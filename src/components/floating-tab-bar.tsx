@@ -1,19 +1,10 @@
-import { useLayoutEffect } from 'react';
 import type { BottomTabBarProps } from 'expo-router/build/react-navigation/bottom-tabs/types';
 import { SymbolView } from 'expo-symbols';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import Animated, {
-  Easing,
-  interpolate,
-  interpolateColor,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, fonts } from '@/constants/theme';
-import { getTabTransitionKey, getTabTransitionStartProgress } from '@/utils/tab-transition';
 
 type TabMeta = {
   label: string;
@@ -44,9 +35,9 @@ const TAB_META: Record<string, TabMeta> = {
   },
 };
 
-const TIMING = { duration: 280, easing: Easing.out(Easing.cubic) };
+const LABEL_ENTERING = FadeIn.duration(160);
 
-function AnimatedTabItem({
+function TabItem({
   route,
   isActive,
   onPress,
@@ -56,24 +47,6 @@ function AnimatedTabItem({
   onPress: () => void;
 }) {
   const meta = TAB_META[route.name];
-  // A newly selected tab expands from 0, while the previously selected tab
-  // collapses from 1. The item key below makes this value fresh per transition.
-  const progress = useSharedValue(getTabTransitionStartProgress(isActive));
-
-  useLayoutEffect(() => {
-    progress.value = withTiming(isActive ? 1 : 0, TIMING);
-  }, [isActive, progress]);
-
-  const pillStyle = useAnimatedStyle(() => ({
-    paddingHorizontal: interpolate(progress.value, [0, 1], [8, 14]),
-    backgroundColor: interpolateColor(progress.value, [0, 1], ['rgba(214,62,120,0)', colors.primary]),
-  }));
-
-  const labelWrapperStyle = useAnimatedStyle(() => ({
-    maxWidth: interpolate(progress.value, [0, 1], [0, 100]),
-    opacity: interpolate(progress.value, [0, 0.5, 1], [0, 0, 1]),
-    marginLeft: interpolate(progress.value, [0, 1], [0, 6]),
-  }));
 
   const iconColor = isActive ? colors.white : colors.ink2;
   const symbol = isActive ? meta?.symbolActive : meta?.symbolInactive;
@@ -86,7 +59,10 @@ function AnimatedTabItem({
       accessibilityState={{ selected: isActive }}
       testID={`tab-${route.name}`}
     >
-      <Animated.View style={[styles.tabPill, pillStyle]}>
+      <View
+        style={[styles.tabPill, isActive && styles.activeTabPill]}
+        testID={`tab-pill-${route.name}`}
+      >
         {symbol && (
           <SymbolView
             name={symbol}
@@ -101,12 +77,14 @@ function AnimatedTabItem({
             }
           />
         )}
-        <Animated.View style={[styles.labelWrapper, labelWrapperStyle]}>
-          <Text style={styles.tabLabel} numberOfLines={1}>
-            {meta?.label ?? route.name}
-          </Text>
-        </Animated.View>
-      </Animated.View>
+        {isActive && (
+          <Animated.View entering={LABEL_ENTERING} style={styles.labelWrapper}>
+            <Text style={styles.tabLabel} numberOfLines={1}>
+              {meta?.label ?? route.name}
+            </Text>
+          </Animated.View>
+        )}
+      </View>
     </Pressable>
   );
 }
@@ -134,13 +112,8 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
             };
 
             return (
-              <AnimatedTabItem
-                // Recreate the two transitioning items when the selected route changes.
-                // A shared value belongs to its mounted view; retaining it after a native
-                // tab transition can leave its last animated frame on screen. Starting a
-                // fresh item from the opposite state keeps the expand/collapse animation
-                // while ensuring it always has a deterministic end state.
-                key={getTabTransitionKey(route.key, isActive)}
+              <TabItem
+                key={`${route.key}-${isActive ? 'active' : 'inactive'}`}
                 route={route}
                 isActive={isActive}
                 onPress={onPress}
@@ -184,10 +157,18 @@ const styles = StyleSheet.create({
   tabPill: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 8,
     paddingVertical: 8,
-    borderRadius: 999,
+    borderRadius: 0,
+  },
+  activeTabPill: {
+    paddingHorizontal: 14,
+    borderRadius: 17,
+    backgroundColor: colors.primary,
+    overflow: 'hidden',
   },
   labelWrapper: {
+    marginLeft: 6,
     overflow: 'hidden',
   },
   tabIconFallback: {
