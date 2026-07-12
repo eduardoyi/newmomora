@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MemoryCard } from '@/components/memory-card';
 import { MemoryFab } from '@/components/memory-fab';
+import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
@@ -170,6 +171,7 @@ export default function TimelineScreen() {
         >
           <SafeAreaView>
               <TimelineHeader memories={memories} />
+            <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.emptyScript}>nothing yet</Text>
               <Text style={styles.emptyHint}>but today is still happening.</Text>
@@ -187,6 +189,7 @@ export default function TimelineScreen() {
           ListHeaderComponent={
             <SafeAreaView>
               <TimelineHeader memories={memories} />
+              <PendingMemoryUploadsBanner />
             </SafeAreaView>
           }
           onViewableItemsChanged={onViewableItemsChanged}

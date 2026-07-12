@@ -6,13 +6,11 @@ import { useMemories } from '@/hooks/useMemories';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import {
-  createMediaMemory,
   createMemory,
   fetchMemories,
   runMediaPhotoEmotionAnalysis,
   updateMemory,
 } from '@/services/memories';
-import { uploadMediaObject } from '@/services/media';
 import { notifyFamilyActivity } from '@/services/ai';
 
 jest.mock('@/hooks/use-auth', () => ({
@@ -49,12 +47,10 @@ const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedFetchMemories = fetchMemories as jest.MockedFunction<typeof fetchMemories>;
 const mockedCreateMemory = createMemory as jest.MockedFunction<typeof createMemory>;
-const mockedCreateMediaMemory = createMediaMemory as jest.MockedFunction<typeof createMediaMemory>;
 const mockedUpdateMemory = updateMemory as jest.MockedFunction<typeof updateMemory>;
 const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.MockedFunction<
   typeof runMediaPhotoEmotionAnalysis
 >;
-const mockedUploadMediaObject = uploadMediaObject as jest.MockedFunction<typeof uploadMediaObject>;
 const mockedNotifyFamilyActivity = notifyFamilyActivity as jest.MockedFunction<
   typeof notifyFamilyActivity
 >;
@@ -99,90 +95,12 @@ describe('useMemories integration', () => {
     });
 
     mockedFetchMemories.mockResolvedValue({ data: [], error: null });
-    mockedUploadMediaObject.mockResolvedValue({
-      data: { objectKey: 'key', success: true },
-      error: null,
-    });
     mockedNotifyFamilyActivity.mockResolvedValue({ data: { sent: true }, error: null });
   });
 
-  it('runs photo emotion analysis after creating a photo media memory', async () => {
-    mockedCreateMediaMemory.mockResolvedValue({
-      data: {
-        id: 'memory-photo-1',
-        memory_type: 'media',
-        media_content_type: 'image/jpeg',
-        emotion: null,
-        taggedMembers: [],
-        mediaAssets: [{ content_type: 'image/jpeg' }],
-      },
-      error: null,
-    });
-
-    const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-
-    await result.current.createMediaMemory({
-      memoryId: 'memory-photo-1',
-      mediaAssets: [{
-        mediaAssetId: 'asset-photo-1',
-        fileUri: 'file:///photo.jpg',
-        contentType: 'image/jpeg',
-      }],
-      memoryDate: '2026-05-26',
-      taggedMemberIds: [],
-    });
-
-    expect(mockedUploadMediaObject).toHaveBeenCalledWith(
-      expect.stringMatching(
-        /^user-1\/memories\/memory-photo-1\/media\/[0-9a-f-]{36}\.jpg$/i,
-      ),
-      'file:///photo.jpg',
-      'image/jpeg',
-      'family-1',
-    );
-    expect(mockedUploadMediaObject.mock.calls[0]?.[0]).not.toContain('asset-photo-1');
-
-    await waitFor(() => {
-      expect(mockedRunMediaPhotoEmotionAnalysis).toHaveBeenCalledWith('memory-photo-1');
-    });
-  });
-
-  it('skips photo emotion analysis for video media memories', async () => {
-    mockedCreateMediaMemory.mockResolvedValue({
-      data: {
-        id: 'memory-video-1',
-        memory_type: 'media',
-        media_content_type: 'video/mp4',
-        emotion: null,
-        taggedMembers: [],
-        mediaAssets: [{ content_type: 'video/mp4' }],
-      },
-      error: null,
-    });
-
-    const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-
-    await result.current.createMediaMemory({
-      memoryId: 'memory-video-1',
-      mediaAssets: [{
-        mediaAssetId: 'asset-video-1',
-        fileUri: 'file:///clip.mp4',
-        contentType: 'video/mp4',
-      }],
-      memoryDate: '2026-05-26',
-      taggedMemberIds: [],
-    });
-
-    expect(mockedRunMediaPhotoEmotionAnalysis).not.toHaveBeenCalled();
-  });
+  // Media memory creation moved to the pending-uploads queue -- see
+  // src/hooks/use-pending-memory-uploads.test.tsx and
+  // src/services/memory-posting.test.ts for its coverage.
 
   it('re-runs photo emotion analysis when caption changes', async () => {
     mockedUpdateMemory.mockResolvedValue({
@@ -258,38 +176,6 @@ describe('useMemories integration', () => {
 
       await waitFor(() => {
         expect(mockedNotifyFamilyActivity).toHaveBeenCalledWith('memory-text-1');
-      });
-    });
-
-    it('fires notify-family-activity after a successful media memory create', async () => {
-      mockedCreateMediaMemory.mockResolvedValue({
-        data: {
-          id: 'memory-photo-4',
-          memory_type: 'media',
-          media_content_type: 'image/jpeg',
-          emotion: null,
-          taggedMembers: [],
-          mediaAssets: [{ content_type: 'image/jpeg' }],
-        },
-        error: null,
-      });
-
-      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
-      await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-      await result.current.createMediaMemory({
-        memoryId: 'memory-photo-4',
-        mediaAssets: [{
-          mediaAssetId: 'asset-photo-4',
-          fileUri: 'file:///photo4.jpg',
-          contentType: 'image/jpeg',
-        }],
-        memoryDate: '2026-05-26',
-        taggedMemberIds: [],
-      });
-
-      await waitFor(() => {
-        expect(mockedNotifyFamilyActivity).toHaveBeenCalledWith('memory-photo-4');
       });
     });
 

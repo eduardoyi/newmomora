@@ -18,6 +18,7 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
 - Once media is attached, compact ordered tiles appear in the form; the AI illustration toggle is hidden.
 - Long-pressing a tile enters reorder mode; users can move or remove tiles before saving.
 - Caption text is optional for `media` memories; the save button is enabled as soon as media is attached.
+- **Deferred posting (Instagram-style):** tapping Save closes the composer immediately. Compression + upload continue in a background queue; the Timeline and Calendar show a pending card ("Posting memory… — Uploading n of m") above the feed until the memory lands. Failures flip the card to Retry/Discard. The queue is in-memory only — force-quitting mid-upload loses the pending post (persistence is backlog).
 - On the Timeline and detail screen, `media` memories render an Instagram-style carousel with subtle dots and a small pagination counter when more than one asset exists.
 - **Photo** memories: after save, async emotion analysis may replace the Photo badge with an emotion chip (same labels as text memories). Failures do not block save.
 - **Video** memories: no emotion chip in MVP (Photo/Video badge only).
@@ -107,8 +108,11 @@ Mobile upload flow uses `upload-media` so the device only talks to Supabase; `ge
 | Layer | Files | Responsibility |
 |-------|-------|----------------|
 | Routes | `app/(app)/new-memory.tsx`, `app/(app)/memory/[id].tsx` | Emergent type logic, media picker trigger, caption field, save flow |
-| Hooks | `src/hooks/useMemories.ts` | Upload + save; triggers `runMediaPhotoEmotionAnalysis` for photos; polls for emotion chip |
+| Hooks | `src/hooks/useMemories.ts` | List/detail queries, edit/delete mutations; polls for emotion chip |
+| Hooks | `src/hooks/use-pending-memory-uploads.tsx` | Deferred posting queue (provider in `AppProviders`); runs `postMediaMemory`, kicks emotion analysis + family notify, exposes retry/discard |
+| Services | `src/services/memory-posting.ts` | `postMediaMemory` pipeline: compress → upload (3-way concurrency, per-asset progress) → insert, rollback on failure; shared `uploadMemoryMediaAssets` also backs the edit flow |
 | Services | `src/services/memories.ts` | `createMediaMemory`, `runMediaPhotoEmotionAnalysis` |
+| Components | `src/components/pending-memory-uploads-banner.tsx`, `pending-memory-upload-card.tsx` | Pending/failed post cards above the Timeline & Calendar feeds |
 | Components | `src/components/memory-card.tsx` | Conditional render: photo thumbnail vs video thumbnail vs illustration |
 | Components | `src/components/memory-media-picker.tsx` | New — wraps `expo-image-picker`; validates size/duration; emits `{ uri, contentType, duration? }` |
 | Components | `src/components/memory-media-preview.tsx` | New — inline form preview with remove button |
@@ -177,6 +181,8 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 |------|--------|
 | `src/utils/media-validation.test.ts` | File size limit, video duration limit, MIME type allow-list |
 | `src/services/memories.test.ts` | `createMediaMemory` — success, upload failure, insert failure |
+| `src/services/memory-posting.test.ts` | Upload pipeline — UUID-based keys, per-asset progress, rollback on upload/insert failure |
+| `src/hooks/use-pending-memory-uploads.test.tsx` | Queue lifecycle — posting → removed on success, failed → retry/discard, photo emotion kick, video skip, family notify |
 
 ### Integration tests
 
@@ -227,5 +233,6 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
+| 2026-07-12 | Deferred posting: Save closes the composer instantly; a pending-uploads queue (`use-pending-memory-uploads`) posts in the background with progress cards on Timeline/Calendar and Retry/Discard on failure |
 | 2026-05-26 | Photo media: async `analyze-emotion` vision; video emotion backlog |
 | 2026-05-25 | Initial planned spec — `media` memory type (photo + video), emergent UX, phased implementation |

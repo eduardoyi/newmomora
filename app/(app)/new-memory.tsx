@@ -1,6 +1,6 @@
 import { navigateBack } from '@/lib/navigation';
 import { SymbolView } from 'expo-symbols';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -27,6 +27,7 @@ import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemories } from '@/hooks/useMemories';
+import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { canEditFamilyContent } from '@/utils/roles';
 import { todayIsoDate } from '@/utils/dates';
@@ -58,7 +59,8 @@ const TYPE_CONFIGS = {
 export default function NewMemoryScreen() {
   const { role } = useFamily();
   const { members } = useFamilyMembers();
-  const { createMemory, createMediaMemory, isCreating, isCreatingMedia } = useMemories();
+  const { createMemory, isCreating } = useMemories();
+  const { enqueue: enqueuePendingMemoryUpload } = usePendingMemoryUploads();
   const { updateProfile } = useUserProfile();
 
   // Guard on mount: viewers reaching this route directly (FAB is hidden for
@@ -76,6 +78,11 @@ export default function NewMemoryScreen() {
   const [illustrationEnabled, setIllustrationEnabled] = useState(true);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  // Enqueueing a media post returns instantly, so React Query's isPending
+  // can't guard the Save button like it did for the old inline mutation. The
+  // ref blocks synchronous double-taps that land before the state re-render.
+  const [isPostingMedia, setIsPostingMedia] = useState(false);
+  const hasEnqueuedMediaRef = useRef(false);
 
   const memoryType = deriveMemoryType({ hasAttachedMedia: attachedMedia.length > 0, illustrationEnabled });
 
@@ -87,7 +94,7 @@ export default function NewMemoryScreen() {
   const typeCfg = TYPE_CONFIGS[typeKey];
 
   const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
-  const isSaving = isCreating || isCreatingMedia;
+  const isSaving = isCreating || isPostingMedia;
   const canSave = memoryType === 'media' ? attachedMedia.length > 0 : content.trim().length > 0;
 
   const tagMembers = useMemo(
@@ -147,7 +154,13 @@ export default function NewMemoryScreen() {
     try {
       if (memoryType === 'media') {
         if (attachedMedia.length === 0) { setErrorMessage('Attach a photo or video before saving.'); return; }
-        await createMediaMemory({
+        if (hasEnqueuedMediaRef.current) { return; }
+        hasEnqueuedMediaRef.current = true;
+        setIsPostingMedia(true);
+        // Media posting is deferred: the pending-uploads queue compresses and
+        // uploads in the background while the user returns to the timeline,
+        // which shows per-memory progress (Instagram-style).
+        enqueuePendingMemoryUpload({
           memoryId: createMemoryId(),
           mediaAssets: attachedMedia.map((attachment) => ({
             fileUri: attachment.uri,
@@ -169,6 +182,8 @@ export default function NewMemoryScreen() {
       }
       finishSave();
     } catch (error) {
+      hasEnqueuedMediaRef.current = false;
+      setIsPostingMedia(false);
       setErrorMessage(
         error instanceof Error ? error.message : 'Could not save memory',
       );

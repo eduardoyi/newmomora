@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MemoryFab } from '@/components/memory-fab';
+import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
 import { useCalendarMemoriesInRange, useOldestMemoryDate } from '@/hooks/useCalendarMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
@@ -250,6 +251,7 @@ export default function CalendarScreen() {
         <Text style={styles.title}>Backwards.</Text>
         <Text style={styles.subtitle}>Each row is a moment. Scroll to walk back in time.</Text>
       </View>
+      <PendingMemoryUploadsBanner />
     </SafeAreaView>
   ), [monthYear]);
 

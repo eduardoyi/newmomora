@@ -10,9 +10,7 @@ import {
   memoryDetailQueryKey,
 } from '@/hooks/queryKeys';
 import { canEditFamilyContent } from '@/utils/roles';
-import { notifyFamilyActivity } from '@/services/ai';
 import {
-  createMediaMemory,
   createMemory,
   deleteMemory,
   fetchMemories,
@@ -25,7 +23,13 @@ import {
   updateMemory,
   type MemoryWithTags,
 } from '@/services/memories';
-import { deleteStorageObject, uploadMediaObject } from '@/services/media';
+import { deleteStorageObject } from '@/services/media';
+import {
+  hasImageMediaAsset,
+  notifyFamilyActivityFireAndForget,
+  uploadMemoryMediaAssets,
+  type MemoryMediaMutationAsset,
+} from '@/services/memory-posting';
 import {
   needsIllustrationRecovery,
   type MemoryType,
@@ -35,13 +39,8 @@ import {
   memoriesNeedEmotionPolling,
   shouldPollForEmotion,
 } from '@/utils/media-emotion-polling';
-import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
-import { getMediaExtensionFromContentType, isVideoContentType } from '@/utils/media-validation';
-import { compressVideoForUpload } from '@/utils/video-compression';
 
-const MEDIA_UPLOAD_CONCURRENCY = 3;
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export type { MemoryMediaMutationAsset } from '@/services/memory-posting';
 
 // Invalidates every family's cached list/detail data (React Query prefix-
 // matches array keys, so passing just the base string covers every
@@ -80,92 +79,6 @@ export interface CreateMemoryMutationInput {
   memoryDate: string;
   taggedMemberIds: string[];
   memoryType?: MemoryType;
-}
-
-export interface CreateMediaMemoryMutationInput {
-  memoryId: string;
-  mediaAssets: MemoryMediaMutationAsset[];
-  content?: string;
-  memoryDate: string;
-  taggedMemberIds: string[];
-}
-
-export interface MemoryMediaMutationAsset {
-  objectKey?: string;
-  fileUri?: string;
-  mediaAssetId?: string;
-  contentType: string;
-  durationMs?: number | null;
-}
-
-function createUuid(): string {
-  if (typeof globalThis.crypto?.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
-  }
-
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
-    const random = Math.floor(Math.random() * 16);
-    const value = char === 'x' ? random : (random & 0x3) | 0x8;
-    return value.toString(16);
-  });
-}
-
-function hasImageMediaAsset(assets: Array<{ contentType: string }>): boolean {
-  return assets.some((asset) => !isVideoContentType(asset.contentType));
-}
-
-function getStorageMediaAssetId(mediaAssetId?: string): string {
-  return mediaAssetId && UUID_PATTERN.test(mediaAssetId) ? mediaAssetId : createUuid();
-}
-
-async function mapMediaUploads<T>(
-  assets: MemoryMediaMutationAsset[],
-  uploadAsset: (asset: MemoryMediaMutationAsset) => Promise<T>,
-): Promise<T[]> {
-  const results = new Array<T>(assets.length);
-  let nextIndex = 0;
-  let firstError: unknown = null;
-
-  async function worker() {
-    while (nextIndex < assets.length) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-
-      try {
-        results[currentIndex] = await uploadAsset(assets[currentIndex]);
-      } catch (error) {
-        firstError ??= error;
-      }
-    }
-  }
-
-  const workerCount = Math.min(MEDIA_UPLOAD_CONCURRENCY, assets.length);
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-
-  if (firstError) {
-    throw firstError;
-  }
-
-  return results;
-}
-
-// Fire-and-forget family-activity push (plan §10). Never awaited by
-// callers -- a failure here must not delay or fail the create-memory UX,
-// so it's swallowed down to a console.warn.
-function notifyFamilyActivityFireAndForget(memoryId: string): void {
-  void notifyFamilyActivity(memoryId)
-    .then(({ error }) => {
-      if (error) {
-        console.warn('Failed to notify family of new memory', memoryId, error.message);
-      }
-    })
-    .catch((error) => {
-      console.warn(
-        'Failed to notify family of new memory',
-        memoryId,
-        error instanceof Error ? error.message : 'unknown',
-      );
-    });
 }
 
 function toError(error: unknown, fallbackMessage: string): Error {
@@ -332,108 +245,6 @@ export function useMemories(searchQuery = '') {
     },
   });
 
-  const createMediaMutation = useMutation({
-    mutationFn: async (input: CreateMediaMemoryMutationInput) => {
-      if (!user) {
-        throw new Error('You must be signed in to save a memory');
-      }
-      if (!familyId) {
-        throw new Error('You must have a family to save a memory');
-      }
-
-      const activeFamilyId = familyId;
-      const uploadedKeys: string[] = [];
-
-      const uploadAsset = async (asset: MemoryMediaMutationAsset) => {
-        if (asset.objectKey) {
-          return {
-            objectKey: asset.objectKey,
-            contentType: asset.contentType,
-            durationMs: asset.durationMs ?? null,
-          };
-        }
-
-        if (!asset.fileUri) {
-          throw new Error('Media file is missing');
-        }
-
-        // Videos are transcoded to ~720p H.264 MP4 on-device before upload
-        // (best-effort; falls back to the original file), so the content type
-        // and extension may differ from the picked asset.
-        const upload = await compressVideoForUpload({
-          fileUri: asset.fileUri,
-          contentType: asset.contentType,
-        });
-
-        const extension = getMediaExtensionFromContentType(upload.contentType);
-        if (!extension) {
-          throw new Error('Unsupported file type');
-        }
-
-        const mediaAssetId = getStorageMediaAssetId(asset.mediaAssetId);
-        const mediaKey = buildMemoryMediaAssetKey(
-          user.id,
-          input.memoryId,
-          mediaAssetId,
-          extension,
-        );
-        const { error: uploadError } = await uploadMediaObject(
-          mediaKey,
-          upload.fileUri,
-          upload.contentType,
-          activeFamilyId,
-        );
-
-        if (uploadError) {
-          throw toError(uploadError, 'Media upload failed');
-        }
-
-        uploadedKeys.push(mediaKey);
-
-        return {
-          objectKey: mediaKey,
-          contentType: upload.contentType,
-          durationMs: asset.durationMs ?? null,
-        };
-      };
-
-      try {
-        const mediaAssets = await mapMediaUploads(input.mediaAssets, uploadAsset);
-
-        const { data, error } = await createMediaMemory({
-          userId: user.id,
-          familyId: activeFamilyId,
-          memoryId: input.memoryId,
-          mediaAssets,
-          content: input.content,
-          memoryDate: input.memoryDate,
-          taggedMemberIds: input.taggedMemberIds,
-        });
-
-        if (error) {
-          throw toError(error, 'Could not save memory');
-        }
-
-        const memory = data as MemoryWithTags;
-
-        if (hasImageMediaAsset(mediaAssets)) {
-          void runMediaPhotoEmotionAnalysis(memory.id).finally(() => {
-            invalidateMemoryQueries(queryClient);
-          });
-        }
-
-        return memory;
-      } catch (error) {
-        await Promise.all(uploadedKeys.map((key) => deleteStorageObject(key)));
-        throw toError(error, 'Could not save memory');
-      }
-    },
-    onSuccess: (memory) => {
-      invalidateMemoryQueries(queryClient);
-      notifyFamilyActivityFireAndForget(memory.id);
-    },
-  });
-
   const updateMutation = useMutation({
     mutationFn: async (input: {
       memoryId: string;
@@ -452,63 +263,16 @@ export function useMemories(searchQuery = '') {
       const activeFamilyId = familyId;
       const uploadedKeys: string[] = [];
 
-      const uploadAsset = async (asset: MemoryMediaMutationAsset) => {
-        if (asset.objectKey) {
-          return {
-            objectKey: asset.objectKey,
-            contentType: asset.contentType,
-            durationMs: asset.durationMs ?? null,
-          };
-        }
-
-        if (!asset.fileUri) {
-          throw new Error('Media file is missing');
-        }
-
-        // Videos are transcoded to ~720p H.264 MP4 on-device before upload
-        // (best-effort; falls back to the original file), so the content type
-        // and extension may differ from the picked asset.
-        const upload = await compressVideoForUpload({
-          fileUri: asset.fileUri,
-          contentType: asset.contentType,
-        });
-
-        const extension = getMediaExtensionFromContentType(upload.contentType);
-        if (!extension) {
-          throw new Error('Unsupported file type');
-        }
-
-        const mediaAssetId = getStorageMediaAssetId(asset.mediaAssetId);
-        const mediaKey = buildMemoryMediaAssetKey(
-          user.id,
-          input.memoryId,
-          mediaAssetId,
-          extension,
-        );
-        const { error: uploadError } = await uploadMediaObject(
-          mediaKey,
-          upload.fileUri,
-          upload.contentType,
-          activeFamilyId,
-        );
-
-        if (uploadError) {
-          throw toError(uploadError, 'Media upload failed');
-        }
-
-        uploadedKeys.push(mediaKey);
-
-        return {
-          objectKey: mediaKey,
-          contentType: upload.contentType,
-          durationMs: asset.durationMs ?? null,
-        };
-      };
-
       let data: MemoryWithTags | null = null;
       try {
         const mediaAssets = input.mediaAssets
-          ? await mapMediaUploads(input.mediaAssets, uploadAsset)
+          ? await uploadMemoryMediaAssets({
+              userId: user.id,
+              familyId: activeFamilyId,
+              memoryId: input.memoryId,
+              assets: input.mediaAssets,
+              uploadedKeys,
+            })
           : undefined;
 
         const result = await updateMemory(input.memoryId, {
@@ -604,8 +368,6 @@ export function useMemories(searchQuery = '') {
     refetch: query.refetch,
     createMemory: createMutation.mutateAsync,
     isCreating: createMutation.isPending,
-    createMediaMemory: createMediaMutation.mutateAsync,
-    isCreatingMedia: createMediaMutation.isPending,
     updateMemory: updateMutation.mutateAsync,
     isUpdating: updateMutation.isPending,
     deleteMemory: deleteMutation.mutateAsync,

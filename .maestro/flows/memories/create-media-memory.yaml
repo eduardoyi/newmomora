@@ -27,3 +27,12 @@ appId: com.memora.app
     visible:
       id: timeline-memory-list
     timeout: 30000
+# Posting is deferred (pending-uploads queue): the composer closes before the
+# upload finishes, so reaching the timeline no longer proves the save worked.
+# The pending banner must clear on its own -- a failed post keeps the banner
+# visible with a retry card, which makes this wait time out.
+- extendedWaitUntil:
+    notVisible:
+      id: pending-memory-uploads-banner
+    timeout: 60000
+- assertNotVisible: "Couldn't post memory"
