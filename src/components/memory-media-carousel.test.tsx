@@ -2,6 +2,7 @@ import { fireEvent, render } from '@testing-library/react-native';
 
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
+import { useVideoThumbnailResult } from '@/hooks/useVideoThumbnail';
 
 const mockVideoPlayer = {
   addListener: jest.fn(() => ({ remove: jest.fn() })),
@@ -15,6 +16,10 @@ jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrls: jest.fn(),
 }));
 
+jest.mock('@/hooks/useVideoThumbnail', () => ({
+  useVideoThumbnailResult: jest.fn(() => null),
+}));
+
 jest.mock('expo-video', () => ({
   useVideoPlayer: jest.fn((_source, setup) => {
     setup?.(mockVideoPlayer);
@@ -24,6 +29,9 @@ jest.mock('expo-video', () => ({
 }));
 
 const mockedUseMediaUrls = useMediaUrls as jest.MockedFunction<typeof useMediaUrls>;
+const mockedUseVideoThumbnailResult = useVideoThumbnailResult as jest.MockedFunction<
+  typeof useVideoThumbnailResult
+>;
 const mockRefetchMediaUrls = jest.fn();
 
 const assets = [
@@ -49,6 +57,7 @@ describe('MemoryMediaCarousel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockVideoPlayer.playing = true;
+    mockedUseVideoThumbnailResult.mockReturnValue(null);
     mockedUseMediaUrls.mockReturnValue({
       data: {
         'user/memory/media/photo-1.jpg': 'https://example.com/photo-1.jpg',
@@ -109,6 +118,28 @@ describe('MemoryMediaCarousel', () => {
     fireEvent(getByTestId('memory-media-image-asset-1'), 'load', {
       nativeEvent: { source: { width: 1080, height: 1920 } },
     });
+
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
+  });
+
+  it('uses the displayed thumbnail ratio for a rotated portrait video', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+    mockedUseVideoThumbnailResult.mockReturnValue({
+      uri: 'file:///portrait-frame.jpg',
+      width: 1080,
+      height: 1920,
+    });
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+    const { getByTestId } = render(<MemoryMediaCarousel assets={[videoAsset]} />);
 
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
   });

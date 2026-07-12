@@ -2,7 +2,7 @@ import { useEventListener } from 'expo';
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   GestureResponderEvent,
@@ -19,6 +19,7 @@ import {
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
+import { useVideoThumbnailResult } from '@/hooks/useVideoThumbnail';
 import type { MemoryMediaAsset } from '@/services/memories';
 import {
   DEFAULT_MEDIA_ASPECT_RATIO,
@@ -38,12 +39,14 @@ interface MemoryMediaCarouselProps {
 }
 
 function VideoAsset({
+  hasPreferredNaturalRatio,
   isActive,
   isMuted,
   tapToToggle,
   onNaturalRatio,
   url,
 }: {
+  hasPreferredNaturalRatio: boolean;
   isActive: boolean;
   isMuted: boolean;
   tapToToggle: boolean;
@@ -63,6 +66,9 @@ function VideoAsset({
   });
 
   useEventListener(player, 'sourceLoad', ({ availableVideoTracks }) => {
+    if (hasPreferredNaturalRatio) {
+      return;
+    }
     const size = availableVideoTracks[0]?.size;
     const ratio = aspectRatioFromDimensions(size?.width, size?.height);
     if (ratio) {
@@ -120,17 +126,40 @@ function MediaPage({
   onNaturalRatio,
   onUrlError,
   url,
+  shouldMeasureNaturalRatio,
 }: {
   asset: MemoryMediaAsset;
   isActive: boolean;
   cacheKey: string;
   mutedVideos: boolean;
   videoTapToToggle: boolean;
-  onNaturalRatio: (ratio: number) => void;
+  onNaturalRatio: (objectKey: string, ratio: number) => void;
   onUrlError: () => void;
   url?: string;
+  shouldMeasureNaturalRatio: boolean;
 }) {
   const isVideo = isVideoContentType(asset.content_type);
+  // Track metadata can report the encoded dimensions before phone rotation
+  // metadata is applied (for example 1920x1080 for a portrait 1080x1920
+  // clip). A generated frame has the display transform applied, so it is the
+  // authoritative aspect ratio for the asset that controls the container.
+  const videoThumbnail = useVideoThumbnailResult(
+    isVideo && shouldMeasureNaturalRatio ? url : null,
+  );
+  const reportNaturalRatio = useCallback(
+    (ratio: number) => onNaturalRatio(asset.object_key, ratio),
+    [asset.object_key, onNaturalRatio],
+  );
+
+  useEffect(() => {
+    if (!videoThumbnail) {
+      return;
+    }
+    const ratio = aspectRatioFromDimensions(videoThumbnail.width, videoThumbnail.height);
+    if (ratio) {
+      reportNaturalRatio(ratio);
+    }
+  }, [reportNaturalRatio, videoThumbnail]);
 
   if (!url) {
     return (
@@ -145,9 +174,10 @@ function MediaPage({
       <View style={styles.page}>
         {isActive ? (
           <VideoAsset
+            hasPreferredNaturalRatio={videoThumbnail !== null}
             isActive={isActive}
             isMuted={mutedVideos}
-            onNaturalRatio={onNaturalRatio}
+            onNaturalRatio={reportNaturalRatio}
             tapToToggle={videoTapToToggle}
             url={url}
           />
@@ -173,7 +203,7 @@ function MediaPage({
       onLoad={(event) => {
         const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
         if (ratio) {
-          onNaturalRatio(ratio);
+          reportNaturalRatio(ratio);
         }
       }}
       source={{ uri: url, cacheKey }}
@@ -212,9 +242,9 @@ export function MemoryMediaCarousel({
       : clampMediaAspectRatio(firstRatio)
     : DEFAULT_MEDIA_ASPECT_RATIO;
 
-  const handleNaturalRatio = (objectKey: string, ratio: number) => {
+  const handleNaturalRatio = useCallback((objectKey: string, ratio: number) => {
     setNaturalRatios((prev) => (prev[objectKey] === ratio ? prev : { ...prev, [objectKey]: ratio }));
-  };
+  }, []);
 
   const handleScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (width <= 0) {
@@ -298,10 +328,11 @@ export function MemoryMediaCarousel({
               cacheKey={`${asset.object_key}:${cacheVersion ?? ''}`}
               isActive={isActive && index === activeIndex}
               mutedVideos={mutedVideos}
-              onNaturalRatio={(ratio) => handleNaturalRatio(asset.object_key, ratio)}
+              onNaturalRatio={handleNaturalRatio}
               onUrlError={() => void refetchMediaUrls()}
               url={urls[asset.object_key]}
               videoTapToToggle={videoTapToToggle}
+              shouldMeasureNaturalRatio={index === 0}
             />
           </View>
         ))}
