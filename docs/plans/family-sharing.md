@@ -327,34 +327,29 @@ These cannot be completed or verified from a coding environment:
 1. ~~Resolve the `com.momora.app` vs. `com.memora.app` bundle-id drift~~ —
    **done**: everything standardized on the published `com.memora.app`
    (see above).
-2. **Apple Team ID + Android signing SHA-256** — `momora-marketing/dist/.well-known/apple-app-site-association`
-   and `assetlinks.json` both still have literal `TODO_REPLACE_WITH_*`
-   placeholders. Get the Team ID from the Apple Developer account and the
-   release-keystore SHA-256 from EAS credentials (`eas credentials`), then
-   redeploy the marketing site.
-3. **DNS + hosting migration** (plan §4 Phase 0) — move `usemomora.com` to
-   Cloudflare, migrate `momora-marketing` from GitHub Pages to Cloudflare
-   Pages. Not verifiable from this environment; confirm live before relying
-   on universal links.
-4. **Bento account setup** (plan §4 Phase 0) — transactional plan, verified
-   From-address author, site UUID + publishable/secret keys → set as
-   `BENTO_SITE_UUID`/`BENTO_PUBLISHABLE_KEY`/`BENTO_SECRET_KEY`/`BENTO_FROM_EMAIL`
-   Edge Function secrets. Nothing sends without these; `sendTransactionalEmail`
-   fails closed (logs + returns `false`) if any are missing.
-5. **Supabase dashboard config** (plan §4 Phase 0, detailed in
-   [auth.md](../features/auth.md)) — custom SMTP via the Bento relay, the
-   Magic Link/OTP email template must include `{{ .Token }}` (default
-   template only sends a link), OTP expiry set to 10 minutes. Unverifiable
-   from here; OTP sign-in will silently misbehave (send a link, not a code)
-   until confirmed.
-6. **New EAS build** — `app.json`'s `associatedDomains`/`intentFilters`
-   (already present in this repo) are compile-time native config; every
-   device needs a fresh dev/production build before universal links work,
-   independent of the bundle-id decision above.
-7. **Deploy the migrations** — `20260711120000_family_sharing.sql` and
-   `20260711120001_invite_code_words_seed.sql` need to run against the real
-   Supabase project (`supabase db push` or the dashboard SQL editor);
-   nothing in this repo does that automatically.
-8. **Verify universal links end-to-end** once 1–6 land — Apple CDN check
-   for AASA propagation (cached up to ~24h) and
-   `adb shell pm verify-app-links` for Android.
+2. ~~Apple Team ID + Android signing SHA-256~~ — **done 2026-07-12**:
+   Team ID `67B39P5MPN` + the Play app-signing SHA-256 filled in and
+   deployed; the EAS preview keystore's fingerprint was later added as a
+   second assetlinks entry so internal test APKs verify too. Signing
+   details now live in [push-credentials.md](../push-credentials.md)
+   ("Build signing").
+3. ~~DNS + hosting migration~~ — **done 2026-07-12**: `usemomora.com` on
+   Cloudflare Pages (direct-upload project `momora-marketing`, NOT
+   git-connected — deploys are `npx wrangler pages deploy dist`); AASA
+   verified served with `application/json` and picked up by Apple's CDN.
+4. ~~Bento account setup~~ — **done 2026-07-12**: secrets set, SMTP wired
+   (after fixing an initial config hang that caused 504s on `/auth/v1/otp`).
+5. ~~Supabase dashboard config~~ — **done 2026-07-12** (templates include
+   `{{ .Token }}`, OTP expiry 10 min, custom SMTP via Bento).
+6. ~~New EAS build~~ — **done 2026-07-12**: Android internal-distribution
+   builds tested on device. **No Play upload-key reset will be needed at
+   ship time** — the original upload keystore was carried over from the
+   legacy repo and wired into the production profile (supersedes earlier
+   advice; see [push-credentials.md](../push-credentials.md)).
+7. ~~Deploy the migrations~~ — **done 2026-07-11**: both migrations +
+   all Edge Functions deployed to `uglhonlaqkqvxcqudwlk`; backfill
+   verified against real data.
+8. **Verify universal links end-to-end** — AASA is live on Apple's CDN and
+   Android link-taps work on internal builds; remaining: verify on a
+   store-delivered build after the first Play release (Play re-signs with
+   the app-signing key, first assetlinks entry).
