@@ -65,11 +65,15 @@
         "expo-image-picker",
         {
           "photosPermission": "Momora uses your photo library to add family profile photos for character portraits.",
-          "cameraPermission": "Momora uses your camera to take family profile photos for character portraits.",
-          "microphonePermission": false
+          "cameraPermission": "Momora uses your camera to take family profile photos for character portraits."
         }
       ],
-      "expo-audio",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Momora uses your microphone to record voice memories, which are transcribed into journal entries."
+        }
+      ],
       [
         "expo-notifications",
         {
