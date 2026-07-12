@@ -13,6 +13,7 @@ Family profiles power memory tagging and AI character portraits. Each member has
 ## User-facing behavior
 
 - **Family tab:** list members or empty state — “Add your child first”
+- **Member ordering:** everywhere `useFamilyMembers()` renders members (family tab, memory tag chips in new/edit memory), the list is ordered by how often each member is tagged in memories (most-tagged first, ties by `created_at`). `fetchFamilyMembers` embeds a `memory_family_members(count)` aggregate and sorts client-side; memory create/update/delete invalidates the `family-members` query so the order stays fresh.
 - **Add member modal:** name, DOB (YYYY-MM-DD), optional gender/notes, required photo from camera or library
 - **Edit member:** changing the profile photo prompts to regenerate the AI portrait or save without regenerating (keeps the existing character portrait until the user chooses to regenerate)
 - **Profile photo source chooser:** tapping the photo circle shows **Take photo** and **Choose from library**. iOS uses a native action sheet; Android uses a standard alert chooser.
@@ -193,6 +194,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
+| 2026-07-12 | Members ordered by memory tag frequency (family tab + memory tag chips) |
 | 2026-07-12 | Ready character portraits open full screen from family-member detail |
 | 2026-07-12 | Hardened photo permission and picker presentation lifecycle |
 | 2026-07-12 | Recover timed-out portrait generation so manager-initiated replacement photos do not remain stuck in `generating` |

@@ -39,9 +39,14 @@ describe('family-members service integration', () => {
     jest.clearAllMocks();
   });
 
-  it('fetchFamilyMembers returns ordered members', async () => {
+  it('fetchFamilyMembers orders members by tag count, then created_at', async () => {
     const order = jest.fn().mockResolvedValue({
-      data: [{ id: 'member-1', name: 'Maya' }],
+      data: [
+        { id: 'member-1', name: 'Maya', memory_family_members: [{ count: 2 }] },
+        { id: 'member-2', name: 'Leo', memory_family_members: [{ count: 7 }] },
+        { id: 'member-3', name: 'Ana', memory_family_members: [] },
+        { id: 'member-4', name: 'Sol', memory_family_members: [{ count: 2 }] },
+      ],
       error: null,
     });
     const select = jest.fn().mockReturnValue({ order });
@@ -49,8 +54,14 @@ describe('family-members service integration', () => {
 
     const result = await fetchFamilyMembers();
 
-    expect(result.data).toEqual([{ id: 'member-1', name: 'Maya' }]);
+    expect(select).toHaveBeenCalledWith('*, memory_family_members(count)');
     expect(order).toHaveBeenCalledWith('created_at', { ascending: true });
+    expect(result.data).toEqual([
+      { id: 'member-2', name: 'Leo' },
+      { id: 'member-1', name: 'Maya' },
+      { id: 'member-4', name: 'Sol' },
+      { id: 'member-3', name: 'Ana' },
+    ]);
   });
 
   it('createFamilyMemberWithPhoto uploads photo and updates profile key', async () => {

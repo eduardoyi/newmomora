@@ -5,6 +5,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import {
   calendarMemoriesQueryKeyBase,
+  familyMembersQueryKeyBase,
   memoriesQueryKey,
   memoriesQueryKeyBase,
   memoryDetailQueryKey,
@@ -52,6 +53,14 @@ export type { MemoryMediaMutationAsset } from '@/services/memory-posting';
 function invalidateMemoryQueries(queryClient: ReturnType<typeof useQueryClient>): void {
   queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase] });
   queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+}
+
+// Family members are ordered by how often they're tagged in memories, so any
+// mutation that can change tags must refresh that ordering too.
+function invalidateFamilyMemberTagOrdering(
+  queryClient: ReturnType<typeof useQueryClient>,
+): void {
+  queryClient.invalidateQueries({ queryKey: [familyMembersQueryKeyBase] });
 }
 
 function isMemoriesListQueryKey(queryKey: readonly unknown[]): boolean {
@@ -255,6 +264,7 @@ export function useMemories(searchQuery = '') {
     },
     onSuccess: (memory, variables) => {
       invalidateMemoryQueries(queryClient);
+      invalidateFamilyMemberTagOrdering(queryClient);
       notifyFamilyActivityFireAndForget(memory.id);
 
       if (variables.content && extractUrls(variables.content).length > 0) {
@@ -328,6 +338,10 @@ export function useMemories(searchQuery = '') {
     onSuccess: (memory, variables) => {
       invalidateMemoryQueries(queryClient);
 
+      if (variables.taggedMemberIds !== undefined) {
+        invalidateFamilyMemberTagOrdering(queryClient);
+      }
+
       // Fire whenever content was part of the update -- not only when the
       // new content contains a URL. An edit that removes the last URL must
       // still invoke the function so its prune step clears stale
@@ -349,6 +363,7 @@ export function useMemories(searchQuery = '') {
     },
     onSuccess: () => {
       invalidateMemoryQueries(queryClient);
+      invalidateFamilyMemberTagOrdering(queryClient);
     },
   });
 

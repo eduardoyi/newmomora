@@ -27,20 +27,35 @@ function mapSupabaseError(error: { message: string; code?: string }): ServiceErr
   };
 }
 
+type FamilyMemberWithTagCount = FamilyMember & {
+  memory_family_members: { count: number }[] | null;
+};
+
 export async function fetchFamilyMembers(): Promise<{
   data: FamilyMember[] | null;
   error: ServiceError | null;
 }> {
   const { data, error } = await supabase
     .from('family_members')
-    .select('*')
+    .select('*, memory_family_members(count)')
     .order('created_at', { ascending: true });
 
   if (error) {
     return { data: null, error: mapSupabaseError(error) };
   }
 
-  return { data, error: null };
+  // Most-tagged members first so they surface at the top of the family
+  // screen and the front of the memory tag chips. The stable sort keeps
+  // created_at order within equal counts.
+  const members = ((data ?? []) as FamilyMemberWithTagCount[])
+    .map(({ memory_family_members, ...member }) => ({
+      member: member as FamilyMember,
+      tagCount: memory_family_members?.[0]?.count ?? 0,
+    }))
+    .sort((a, b) => b.tagCount - a.tagCount)
+    .map((entry) => entry.member);
+
+  return { data: members, error: null };
 }
 
 export async function createFamilyMember(
