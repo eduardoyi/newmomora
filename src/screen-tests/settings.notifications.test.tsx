@@ -1,6 +1,7 @@
 // See no-family.test.tsx for why screen tests live outside app/.
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Alert } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import SettingsScreen from '../../app/(app)/(tabs)/settings';
@@ -73,10 +74,12 @@ function renderScreen() {
 
 describe('Settings notifications toggles', () => {
   const updateProfile = jest.fn().mockResolvedValue(undefined);
+  const deleteAccount = jest.fn().mockResolvedValue(undefined);
 
   beforeEach(() => {
     jest.clearAllMocks();
     updateProfile.mockClear();
+    deleteAccount.mockClear();
 
     mockedUseAuth.mockReturnValue({
       session: { user: { id: 'user-1' } } as never,
@@ -134,7 +137,7 @@ describe('Settings notifications toggles', () => {
       error: null,
       updateProfile,
       isUpdating: false,
-      deleteAccount: jest.fn(),
+      deleteAccount,
       isDeletingAccount: false,
       cancelAccountDeletion: jest.fn(),
       isCancelingDeletion: false,
@@ -165,7 +168,7 @@ describe('Settings notifications toggles', () => {
       error: null,
       updateProfile,
       isUpdating: false,
-      deleteAccount: jest.fn(),
+      deleteAccount,
       isDeletingAccount: false,
       cancelAccountDeletion: jest.fn(),
       isCancelingDeletion: false,
@@ -213,5 +216,39 @@ describe('Settings notifications toggles', () => {
     expect(updateProfile).not.toHaveBeenCalledWith(
       expect.objectContaining({ enableDailyReminder: expect.anything() }),
     );
+  });
+
+  it('shows a confirmation before scheduling account deletion', () => {
+    mockProfile();
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
+
+    const { getByTestId } = renderScreen();
+    fireEvent.press(getByTestId('settings-delete-account'));
+
+    expect(deleteAccount).not.toHaveBeenCalled();
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Schedule account deletion?',
+      'Your account and family journal will be permanently deleted in 15 days. You can cancel at any time before then.',
+      expect.arrayContaining([
+        expect.objectContaining({ text: 'Cancel', style: 'cancel' }),
+        expect.objectContaining({ text: 'Schedule deletion', style: 'destructive' }),
+      ]),
+    );
+
+    alertSpy.mockRestore();
+  });
+
+  it('schedules account deletion only after confirming', () => {
+    mockProfile();
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      buttons?.find((button) => button.text === 'Schedule deletion')?.onPress?.();
+    });
+
+    const { getByTestId } = renderScreen();
+    fireEvent.press(getByTestId('settings-delete-account'));
+
+    expect(deleteAccount).toHaveBeenCalledTimes(1);
+
+    alertSpy.mockRestore();
   });
 });

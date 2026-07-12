@@ -306,6 +306,21 @@ export default function SettingsScreen() {
     await updateProfile({ notifyNewMemories: value });
   };
 
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Schedule account deletion?',
+      'Your account and family journal will be permanently deleted in 15 days. You can cancel at any time before then.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Schedule deletion',
+          style: 'destructive',
+          onPress: () => void deleteAccount(),
+        },
+      ],
+    );
+  };
+
   return (
     <View style={styles.container}>
       <KeyboardAvoidingView
@@ -430,7 +445,7 @@ export default function SettingsScreen() {
   
               {!profile?.deleted_at && (
                 <Pressable
-                  onPress={() => void deleteAccount()}
+                  onPress={handleDeleteAccount}
                   disabled={isDeletingAccount || isUpdating}
                   testID="settings-delete-account"
                 >
