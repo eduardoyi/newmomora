@@ -20,18 +20,27 @@ records what was migrated and what remains manual.
 
 ## Remaining manual steps (need your Apple login)
 
-### 1. iOS — link the APNs key
+### 1. iOS — link the APNs key — ✅ done 2026-07-12
 
-APNs keys are scoped to the Apple Developer team, not the app. Run
-`eas credentials -p ios` (or just the first `eas build -p ios`) and sign in
-with the Apple account that owns `com.memora.app` — choose **reuse** the
-existing push key rather than creating a new one (Apple caps teams at 2 keys).
+The legacy team APNs key (`88T397KNVV`, team `67B39P5MPN`) was assigned to
+`com.memora.app` via `eas credentials -p ios`. Gotchas hit along the way,
+for next time:
+
+- Pick a **device-build profile** (`preview`/`production`) at the profile
+  prompt — the `development` profile is `simulator: true`, and simulator
+  builds refuse credential setup ("A simulator distribution does not require
+  credentials").
+- Assign the key to the **Momora app target only**; the
+  `expo-sharing-extension` target doesn't receive pushes.
 
 ### 2. Rebuild
 
 `eas build --profile development --platform all` — the new build picks up
 `google-services.json` (Android token registration currently throws without
 it) and the `react-native-compressor` native module added 2026-07-12.
+Android done 2026-07-12 (`preview` build 091ffdc5). iOS still pending — use
+`--profile preview` to test push (simulator dev builds can't register for
+APNs).
 
 ## How it fits together
 
