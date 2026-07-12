@@ -9,6 +9,8 @@ jest.mock('@/hooks/useMediaUrls', () => ({
 
 jest.mock('expo-video', () => ({
   useVideoPlayer: jest.fn(() => ({
+    addListener: jest.fn(() => ({ remove: jest.fn() })),
+    removeListener: jest.fn(),
     pause: jest.fn(),
     play: jest.fn(),
   })),
@@ -71,5 +73,83 @@ describe('MemoryMediaCarousel', () => {
     fireEvent(scrollView, 'touchEnd', { nativeEvent: { pageX: 110, pageY: 32 } });
 
     expect(onPress).not.toHaveBeenCalled();
+  });
+
+  it('adopts the first asset natural aspect ratio, clamped, once it loads', () => {
+    const { getByTestId } = render(<MemoryMediaCarousel assets={assets} />);
+
+    // Defaults to 4:3 until dimensions are known.
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 4 / 3 });
+
+    // A portrait 3:4 photo resizes the container to match (no crop).
+    fireEvent(getByTestId('memory-media-image-asset-1'), 'load', {
+      nativeEvent: { source: { width: 1200, height: 1600 } },
+    });
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 3 / 4 });
+
+    // An extreme 9:16 asset is clamped to the 3:4 minimum.
+    fireEvent(getByTestId('memory-media-image-asset-1'), 'load', {
+      nativeEvent: { source: { width: 1080, height: 1920 } },
+    });
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 3 / 4 });
+
+    // The second asset's dimensions do not drive the container.
+    fireEvent(getByTestId('memory-media-image-asset-2'), 'load', {
+      nativeEvent: { source: { width: 1600, height: 900 } },
+    });
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 3 / 4 });
+  });
+
+  it('preloads a video player on the page adjacent to the active one', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: {
+        'user/memory/media/photo-1.jpg': 'https://example.com/photo-1.jpg',
+        'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4',
+      },
+    } as ReturnType<typeof useMediaUrls>);
+
+    const { getByTestId } = render(
+      <MemoryMediaCarousel
+        assets={[
+          assets[0],
+          {
+            ...assets[1],
+            id: 'asset-video',
+            object_key: 'user/memory/media/video-1.mp4',
+            content_type: 'video/mp4',
+          },
+        ]}
+      />,
+    );
+
+    // Active index is 0 (the photo); the adjacent video page should already
+    // have its player mounted so it buffers before the user swipes to it.
+    expect(getByTestId('memory-media-video')).toBeTruthy();
+  });
+
+  it('does not mount video players when the carousel is inactive', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: {
+        'user/memory/media/photo-1.jpg': 'https://example.com/photo-1.jpg',
+        'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4',
+      },
+    } as ReturnType<typeof useMediaUrls>);
+
+    const { queryByTestId } = render(
+      <MemoryMediaCarousel
+        assets={[
+          assets[0],
+          {
+            ...assets[1],
+            id: 'asset-video',
+            object_key: 'user/memory/media/video-1.mp4',
+            content_type: 'video/mp4',
+          },
+        ]}
+        isActive={false}
+      />,
+    );
+
+    expect(queryByTestId('memory-media-video')).toBeNull();
   });
 });

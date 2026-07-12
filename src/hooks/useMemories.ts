@@ -37,6 +37,7 @@ import {
 } from '@/utils/media-emotion-polling';
 import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
 import { getMediaExtensionFromContentType, isVideoContentType } from '@/utils/media-validation';
+import { compressVideoForUpload } from '@/utils/video-compression';
 
 const MEDIA_UPLOAD_CONCURRENCY = 3;
 const UUID_PATTERN =
@@ -356,7 +357,15 @@ export function useMemories(searchQuery = '') {
           throw new Error('Media file is missing');
         }
 
-        const extension = getMediaExtensionFromContentType(asset.contentType);
+        // Videos are transcoded to ~720p H.264 MP4 on-device before upload
+        // (best-effort; falls back to the original file), so the content type
+        // and extension may differ from the picked asset.
+        const upload = await compressVideoForUpload({
+          fileUri: asset.fileUri,
+          contentType: asset.contentType,
+        });
+
+        const extension = getMediaExtensionFromContentType(upload.contentType);
         if (!extension) {
           throw new Error('Unsupported file type');
         }
@@ -370,8 +379,8 @@ export function useMemories(searchQuery = '') {
         );
         const { error: uploadError } = await uploadMediaObject(
           mediaKey,
-          asset.fileUri,
-          asset.contentType,
+          upload.fileUri,
+          upload.contentType,
           activeFamilyId,
         );
 
@@ -383,7 +392,7 @@ export function useMemories(searchQuery = '') {
 
         return {
           objectKey: mediaKey,
-          contentType: asset.contentType,
+          contentType: upload.contentType,
           durationMs: asset.durationMs ?? null,
         };
       };
@@ -456,7 +465,15 @@ export function useMemories(searchQuery = '') {
           throw new Error('Media file is missing');
         }
 
-        const extension = getMediaExtensionFromContentType(asset.contentType);
+        // Videos are transcoded to ~720p H.264 MP4 on-device before upload
+        // (best-effort; falls back to the original file), so the content type
+        // and extension may differ from the picked asset.
+        const upload = await compressVideoForUpload({
+          fileUri: asset.fileUri,
+          contentType: asset.contentType,
+        });
+
+        const extension = getMediaExtensionFromContentType(upload.contentType);
         if (!extension) {
           throw new Error('Unsupported file type');
         }
@@ -470,8 +487,8 @@ export function useMemories(searchQuery = '') {
         );
         const { error: uploadError } = await uploadMediaObject(
           mediaKey,
-          asset.fileUri,
-          asset.contentType,
+          upload.fileUri,
+          upload.contentType,
           activeFamilyId,
         );
 
@@ -483,7 +500,7 @@ export function useMemories(searchQuery = '') {
 
         return {
           objectKey: mediaKey,
-          contentType: asset.contentType,
+          contentType: upload.contentType,
           durationMs: asset.durationMs ?? null,
         };
       };

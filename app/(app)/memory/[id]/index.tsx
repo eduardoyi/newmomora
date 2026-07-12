@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,6 +25,7 @@ import { useMemory, useMemories } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { navigateBack } from '@/lib/navigation';
 import { editMemoryRoute } from '@/lib/routes';
+import { aspectRatioFromDimensions, clampMediaAspectRatio } from '@/utils/media-aspect';
 import { canEditFamilyContent } from '@/utils/roles';
 import { formatAgeCompactFromDob } from '@/utils/family-members';
 import {
@@ -177,6 +178,9 @@ function MemoryDetailFramed({
   const emo = getEmotionColors(memory.emotion);
   const isMedia = memory.memory_type === 'media';
   const showIllustrationGenerating = isIllustrationInProgress(memory.illustration_status);
+  // Illustrations are generated square (1024×1024); measure on load so any
+  // legacy or future sizes still render uncropped.
+  const [illustrationRatio, setIllustrationRatio] = useState(1);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -207,7 +211,7 @@ function MemoryDetailFramed({
                   assets={memory.mediaAssets}
                   cacheVersion={memory.updated_at}
                   nativeVideoControls
-                  style={styles.framedImage}
+                  style={styles.framedMedia}
                 />
               ) : (
                 <View style={[styles.framedImage, styles.placeholderFrame]}>
@@ -215,7 +219,7 @@ function MemoryDetailFramed({
                 </View>
               )
             ) : showIllustrationGenerating || !illustrationUrl ? (
-              <View style={[styles.framedImage, styles.placeholderFrame, { aspectRatio: 4 / 5 }]}>
+              <View style={[styles.framedImage, styles.placeholderFrame, { aspectRatio: 1 }]}>
                 <GeneratingVisualOverlay
                   label={
                     getIllustrationStatusLabel(memory.illustration_status as IllustrationStatus) ??
@@ -228,8 +232,14 @@ function MemoryDetailFramed({
             ) : (
               <Image
                 contentFit="cover"
+                onLoad={(event) => {
+                  const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
+                  if (ratio) {
+                    setIllustrationRatio(clampMediaAspectRatio(ratio));
+                  }
+                }}
                 source={{ uri: illustrationUrl }}
-                style={[styles.framedImage, { aspectRatio: 4 / 5 }]}
+                style={[styles.framedImage, { aspectRatio: illustrationRatio }]}
               />
             )}
           </View>
@@ -585,6 +595,12 @@ const styles = StyleSheet.create({
   framedImage: {
     width: '100%',
     aspectRatio: 4 / 3,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    overflow: 'hidden',
+  },
+  framedMedia: {
+    width: '100%',
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
     overflow: 'hidden',

@@ -1,4 +1,5 @@
 import { Image } from 'expo-image';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
@@ -14,6 +15,7 @@ import {
   isIllustrationInProgress,
   type IllustrationStatus,
 } from '@/utils/memories';
+import { aspectRatioFromDimensions, clampMediaAspectRatio } from '@/utils/media-aspect';
 import { isVideoContentType } from '@/utils/media-validation';
 
 interface MemoryCardProps {
@@ -88,13 +90,24 @@ function IllustrationVisual({ memory }: { memory: MemoryWithTags }) {
   const status = (memory.illustration_status ?? 'pending') as IllustrationStatus;
   const showGenerating = isIllustrationInProgress(status);
   const showFailed = status === 'failed';
+  // Illustrations are generated square (1024×1024); measure on load so any
+  // legacy or future sizes still render uncropped.
+  const [illustrationRatio, setIllustrationRatio] = useState(1);
+
+  const handleLoad = (event: { source: { width: number; height: number } }) => {
+    const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
+    if (ratio) {
+      setIllustrationRatio(clampMediaAspectRatio(ratio));
+    }
+  };
 
   if (url && !showGenerating && !showFailed) {
     return (
       <Image
         contentFit="cover"
+        onLoad={handleLoad}
         source={{ uri: url }}
-        style={styles.cardImage}
+        style={[styles.cardImage, { aspectRatio: illustrationRatio }]}
       />
     );
   }
@@ -143,7 +156,7 @@ function MediaVisual({
         cacheVersion={memory.updated_at}
         isActive={isActive}
         onPress={onPress}
-        style={styles.cardImage}
+        style={styles.mediaVisual}
       />
     );
   }
@@ -248,6 +261,9 @@ const styles = StyleSheet.create({
     width: '100%',
     aspectRatio: 4 / 3,
     overflow: 'hidden',
+  },
+  mediaVisual: {
+    width: '100%',
   },
   placeholderVisual: {
     alignItems: 'center',

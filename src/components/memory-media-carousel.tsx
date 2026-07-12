@@ -1,3 +1,4 @@
+import { useEventListener } from 'expo';
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -18,6 +19,11 @@ import {
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
 import type { MemoryMediaAsset } from '@/services/memories';
+import {
+  DEFAULT_MEDIA_ASPECT_RATIO,
+  aspectRatioFromDimensions,
+  clampMediaAspectRatio,
+} from '@/utils/media-aspect';
 import { isVideoContentType } from '@/utils/media-validation';
 
 interface MemoryMediaCarouselProps {
@@ -32,15 +38,28 @@ interface MemoryMediaCarouselProps {
 function VideoAsset({
   isActive,
   nativeControls,
+  onNaturalRatio,
   url,
 }: {
   isActive: boolean;
   nativeControls: boolean;
+  onNaturalRatio: (ratio: number) => void;
   url: string;
 }) {
-  const player = useVideoPlayer(url, (p) => {
+  // useCaching keeps downloaded bytes on disk, so replays (timeline card →
+  // detail screen, revisits) don't re-stream from R2 while the presigned URL
+  // is still cached by useMediaUrls.
+  const player = useVideoPlayer({ uri: url, useCaching: true }, (p) => {
     p.loop = !nativeControls;
     p.muted = !nativeControls;
+  });
+
+  useEventListener(player, 'sourceLoad', ({ availableVideoTracks }) => {
+    const size = availableVideoTracks[0]?.size;
+    const ratio = aspectRatioFromDimensions(size?.width, size?.height);
+    if (ratio) {
+      onNaturalRatio(ratio);
+    }
   });
 
   useEffect(() => {
@@ -53,10 +72,11 @@ function VideoAsset({
 
   return (
     <VideoView
-      contentFit="cover"
+      contentFit="contain"
       nativeControls={nativeControls}
       player={player}
       style={StyleSheet.absoluteFill}
+      testID="memory-media-video"
     />
   );
 }
@@ -64,12 +84,16 @@ function VideoAsset({
 function MediaPage({
   asset,
   isActive,
+  preload,
   nativeVideoControls,
+  onNaturalRatio,
   url,
 }: {
   asset: MemoryMediaAsset;
   isActive: boolean;
+  preload: boolean;
   nativeVideoControls: boolean;
+  onNaturalRatio: (ratio: number) => void;
   url?: string;
 }) {
   const isVideo = isVideoContentType(asset.content_type);
@@ -83,16 +107,23 @@ function MediaPage({
   }
 
   if (isVideo) {
+    // Mount the (paused) player for pages adjacent to the active one so the
+    // video buffers before the user swipes to it; its first frame doubles as
+    // a poster behind the play overlay.
+    const showPlayer = isActive || preload;
+
     return (
       <View style={styles.page}>
-        {isActive ? (
+        {showPlayer ? (
           <VideoAsset
             isActive={isActive}
             nativeControls={nativeVideoControls}
+            onNaturalRatio={onNaturalRatio}
             url={url}
           />
-        ) : (
-          <View style={styles.videoInactive}>
+        ) : null}
+        {!isActive ? (
+          <View pointerEvents="none" style={styles.videoInactive}>
             <SymbolView
               name={{ ios: 'play.fill', android: 'play_arrow' }}
               size={28}
@@ -100,16 +131,23 @@ function MediaPage({
               fallback={<Text style={styles.playFallback}>▶</Text>}
             />
           </View>
-        )}
+        ) : null}
       </View>
     );
   }
 
   return (
     <Image
-      contentFit="cover"
+      contentFit="contain"
+      onLoad={(event) => {
+        const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
+        if (ratio) {
+          onNaturalRatio(ratio);
+        }
+      }}
       source={{ uri: url }}
       style={styles.page}
+      testID={`memory-media-image-${asset.id}`}
     />
   );
 }
@@ -124,11 +162,22 @@ export function MemoryMediaCarousel({
 }: MemoryMediaCarouselProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [width, setWidth] = useState(0);
+  const [naturalRatios, setNaturalRatios] = useState<Record<string, number>>({});
   const tapStartRef = useRef<{ x: number; y: number; timestamp: number } | null>(null);
   const hasMovedRef = useRef(false);
   const keys = assets.map((asset) => asset.object_key);
   const { data: urls = {} } = useMediaUrls(keys, cacheVersion);
   const showPaging = assets.length > 1;
+
+  // The container tracks the first asset's natural aspect ratio (clamped) so
+  // media renders uncropped; other pages letterbox via `contain` if they have
+  // a different shape. Falls back to 4:3 until dimensions are known.
+  const firstRatio = assets.length > 0 ? naturalRatios[assets[0].object_key] : undefined;
+  const containerRatio = firstRatio ? clampMediaAspectRatio(firstRatio) : DEFAULT_MEDIA_ASPECT_RATIO;
+
+  const handleNaturalRatio = (objectKey: string, ratio: number) => {
+    setNaturalRatios((prev) => (prev[objectKey] === ratio ? prev : { ...prev, [objectKey]: ratio }));
+  };
 
   const handleScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (width <= 0) {
@@ -188,7 +237,8 @@ export function MemoryMediaCarousel({
   return (
     <View
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
-      style={[styles.container, style]}
+      style={[styles.container, { aspectRatio: containerRatio }, style]}
+      testID="memory-media-carousel"
     >
       <ScrollView
         horizontal
@@ -209,7 +259,9 @@ export function MemoryMediaCarousel({
             <MediaPage
               asset={asset}
               isActive={isActive && index === activeIndex}
+              preload={isActive && Math.abs(index - activeIndex) === 1}
               nativeVideoControls={nativeVideoControls}
+              onNaturalRatio={(ratio) => handleNaturalRatio(asset.object_key, ratio)}
               url={urls[asset.object_key]}
             />
           </View>
@@ -237,7 +289,6 @@ export function MemoryMediaCarousel({
 
 const styles = StyleSheet.create({
   container: {
-    aspectRatio: 4 / 3,
     backgroundColor: colors.surface,
     overflow: 'hidden',
     width: '100%',

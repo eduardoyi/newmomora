@@ -1,7 +1,7 @@
 # Feature: Media memories (photo & video attachments)
 
 **Status:** `done`
-**Last updated:** 2026-05-26
+**Last updated:** 2026-07-12
 **PRD reference:** §6.3 Journal Entries (Memories) — `media` type
 
 ## Overview
@@ -49,6 +49,8 @@ sequenceDiagram
 
 Key points:
 - The client generates `memoryId` and a `mediaAssetId` UUID for each new file upfront so R2 object keys are known before DB writes.
+- **Video compression:** new video uploads are transcoded on-device to H.264 MP4 capped at 1280px (`src/utils/video-compression.ts`, `react-native-compressor`) during save, so a picked `.mov` is stored as `.mp4`. Compression is best-effort — any failure (and web) falls back to uploading the original file, so both `video/mp4` and `video/quicktime` remain accepted upload types. Requires a dev-client rebuild (native module).
+- **Playback:** the carousel preloads the (paused) player for pages adjacent to the active one and enables `expo-video` disk caching (`useCaching: true`), so swiping to a video or reopening it doesn't re-stream from R2.
 - `memory_media` stores the canonical ordered asset list; `memories.media_key` and `media_content_type` cache the cover asset for compatibility.
 - **Photo/mixed** memories: `analyze-emotion` runs asynchronously after save/edit; it uses the first ordered image asset + optional caption. Does **not** run `generate-illustration`.
 - **All-video** memories: no `analyze-emotion` call in MVP.
