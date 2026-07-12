@@ -1,0 +1,29 @@
+appId: com.memora.app
+tags:
+  - android
+---
+# Native share-sheet flow. Run on an Android emulator with Google Photos and a
+# freshly rebuilt dev client (the intent filter is native configuration).
+- runFlow: ../auth/login.yaml
+- addMedia:
+    - ../../assets/profile-fixture.jpg
+- launchApp:
+    appId: com.google.android.apps.photos
+- tapOn:
+    id: com.google.android.apps.photos:id/image
+    index: 0
+    optional: true
+- tapOn:
+    text: "Photo,.*"
+    index: 0
+    optional: true
+- tapOn:
+    text: "Share"
+- tapOn:
+    text: "Momora"
+- extendedWaitUntil:
+    visible:
+      id: new-memory-media-preview
+    timeout: 20000
+- assertVisible:
+    id: new-memory-save

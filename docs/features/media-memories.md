@@ -11,6 +11,9 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
 ## User-facing behavior
 
 - In the new-memory form, a media attach icon sits in the toolbar alongside the text field.
+- From the iOS or Android gallery, users can select photos/videos, tap Share,
+  and choose Momora. Momora opens the new-memory form with those assets already
+  attached and ready for captioning, tagging, reordering, or removal.
 - Tapping the icon lets users choose from the camera roll (`expo-image-picker`) or take a photo.
   - Accepted: JPEG, HEIC, PNG, WEBP (≤ 20 MB); MP4, MOV video (≤ 60 seconds duration).
   - Up to 10 assets can be attached to a single memory.
@@ -117,6 +120,8 @@ Mobile upload flow uses `upload-media` so the device only talks to Supabase; `ge
 | Components | `src/components/memory-card.tsx` | Conditional render: photo thumbnail vs video thumbnail vs illustration |
 | Components | `src/components/memory-media-picker.tsx` | New — wraps `expo-image-picker`; validates size/duration; emits `{ uri, contentType, duration? }` |
 | Components | `src/components/memory-media-preview.tsx` | New — inline form preview with remove button |
+| Native entry | `app/+native-intent.ts`, `app.json` | Registers Momora for image/video shares and routes incoming share intents to the composer |
+| Hook | `src/hooks/use-incoming-memory-share.ts` | Resolves native payloads, reads video duration, validates limits, and hands attachments to the composer |
 
 ### How to invoke from another feature
 
@@ -154,6 +159,12 @@ To create a `media` memory programmatically:
 - **`expo-video` is required for playback** — this is a new native dependency that requires a fresh EAS build. `expo-av` must not be used.
 - **`expo-image-picker` is already in the dependency list** (PRD §11) — no new native dep for photo selection.
 - **1-10 media assets per memory** — `memory_media` is canonical; `memories.media_key` remains a cover/cache field.
+- **A new development build is required** after enabling incoming sharing. The
+  iOS share extension and Android intent filters are native build artifacts and
+  are not added by an over-the-air JavaScript update.
+- Incoming shares use Expo's experimental receive-sharing API. On iOS, Expo's
+  share extension opens the main Momora target; this should be smoke-tested on
+  each supported iOS release before shipping.
 - **Illustration pipeline** — `generate-illustration` is not used for `media`. Photo emotion uses `analyze-emotion` only; `illustration_status` stays `'none'`.
 - **Privacy** — user-uploaded photos (and optional captions) are sent to OpenAI for emotion classification, same trust boundary as portrait generation.
 - **HEIC emotion** — if Edge cannot decode HEIC for vision, emotion stays unset (`unsupported_image_format`); client-side JPEG conversion is backlog.
@@ -181,6 +192,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | File | Covers |
 |------|--------|
 | `src/utils/media-validation.test.ts` | File size limit, video duration limit, MIME type allow-list |
+| `src/utils/prepare-shared-media.test.ts` | Incoming payload conversion, unsupported content, duration and 10-item limits |
 | `src/services/memories.test.ts` | `createMediaMemory` — success, upload failure, insert failure |
 | `src/services/memory-posting.test.ts` | Upload pipeline — UUID-based keys, per-asset progress, rollback on upload/insert failure |
 | `src/hooks/use-pending-memory-uploads.test.tsx` | Queue lifecycle — posting → removed on success, failed → retry/discard, photo emotion kick, video skip, family notify |
@@ -191,6 +203,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 |------|-----------|
 | `src/services/memories.integration.test.ts` | `media` memory create (mock R2 upload + mock Supabase insert), edit (replace media), delete (R2 + DB) |
 | `src/hooks/useMemories.integration.test.tsx` | Photo create/update triggers emotion analysis; video skips |
+| `src/hooks/use-incoming-memory-share.integration.test.tsx` | Native resolved payload → validated composer attachment → intent cleared |
 | `src/utils/media-emotion-polling.test.ts` | Poll window for photo media without emotion |
 
 ### E2E (Maestro)
@@ -199,6 +212,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 |------|----------|
 | `.maestro/flows/memories/create-media-memory.yaml` | Happy path: pick photo → optional caption → save → verify Timeline card shows thumbnail |
 | `.maestro/flows/memories/create-video-memory.yaml` | Happy path: pick video → save → open detail → video plays |
+| `.maestro/flows/memories/share-gallery-media.android.yaml` | Android gallery share sheet → Momora composer opens with attachment |
 
 ### Edge Function tests (Deno)
 
@@ -237,5 +251,6 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 | 2026-07-12 | Detail videos now loop with hidden native controls; tapping toggles play/pause |
 | 2026-07-12 | Single-asset media now uses its exact natural aspect ratio; multi-asset carousels retain the `3:4`-`16:9` clamp |
 | 2026-07-12 | Deferred posting: Save closes the composer instantly; a pending-uploads queue (`use-pending-memory-uploads`) posts in the background with progress cards on Timeline/Calendar and Retry/Discard on failure |
+| 2026-07-12 | Added iOS/Android gallery share target; incoming photos/videos now open pre-attached in the memory composer |
 | 2026-05-26 | Photo media: async `analyze-emotion` vision; video emotion backlog |
 | 2026-05-25 | Initial planned spec — `media` memory type (photo + video), emergent UX, phased implementation |

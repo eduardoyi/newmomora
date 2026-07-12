@@ -1,6 +1,6 @@
 import { navigateBack } from '@/lib/navigation';
 import { SymbolView } from 'expo-symbols';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -27,6 +27,7 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemories } from '@/hooks/useMemories';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
+import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { canEditFamilyContent } from '@/utils/roles';
 import { todayIsoDate } from '@/utils/dates';
@@ -82,6 +83,13 @@ export default function NewMemoryScreen() {
   // ref blocks synchronous double-taps that land before the state re-render.
   const [isPostingMedia, setIsPostingMedia] = useState(false);
   const hasEnqueuedMediaRef = useRef(false);
+  const handleIncomingSharePrepared = useCallback((attachments: MediaAttachment[], message: string | null) => {
+    setAttachedMedia(attachments);
+    setErrorMessage(message ?? '');
+  }, []);
+  const isPreparingIncomingShare = useIncomingMemoryShare({
+    onPrepared: handleIncomingSharePrepared,
+  });
 
   const memoryType = deriveMemoryType({ hasAttachedMedia: attachedMedia.length > 0, illustrationEnabled });
 
@@ -263,6 +271,12 @@ export default function NewMemoryScreen() {
 
         {errorMessage ? (
           <Text style={styles.errorText}>{errorMessage}</Text>
+        ) : null}
+        {isPreparingIncomingShare ? (
+          <View style={styles.sharedMediaLoading} testID="new-memory-shared-media-loading">
+            <ActivityIndicator color={colors.primary} size="small" />
+            <Text style={styles.sharedMediaLoadingText}>Preparing shared media…</Text>
+          </View>
         ) : null}
       </KeyboardAvoidingView>
 
@@ -467,6 +481,16 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sans,
     fontSize: 11,
     color: colors.ink3,
+  },
+  sharedMediaLoading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  sharedMediaLoadingText: {
+    color: colors.ink2,
+    fontFamily: fonts.sans,
+    fontSize: 13,
   },
   errorText: {
     fontFamily: fonts.sans,
