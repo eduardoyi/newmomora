@@ -18,6 +18,10 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
   - Accepted: JPEG, HEIC, PNG, WEBP (≤ 20 MB); MP4, MOV video (≤ 60 seconds duration).
   - Up to 10 assets can be attached to a single memory.
   - Exceeding limits shows an inline validation message; upload is blocked.
+- Camera/library access checks the existing permission before requesting it,
+  waits for permission/source-chooser UI to dismiss before presenting the
+  picker, and reports native launch failures inline instead of silently
+  leaving the composer stuck. Concurrent picker launches are ignored.
 - Once media is attached, compact ordered tiles appear in the form; the AI illustration toggle is hidden.
 - Long-pressing a tile enters reorder mode; users can move or remove tiles before saving.
 - Caption text is optional for `media` memories; the save button is enabled as soon as media is attached.
@@ -194,6 +198,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | File | Covers |
 |------|--------|
 | `src/utils/media-validation.test.ts` | File size limit, video duration limit, MIME type allow-list |
+| `src/utils/native-permissions.test.ts` | Existing-grant checks, one-time request, permanent denial, native presentation settling |
 | `src/utils/prepare-shared-media.test.ts` | Incoming payload conversion, unsupported content, duration and 10-item limits |
 | `src/services/memories.test.ts` | `createMediaMemory` — success, upload failure, insert failure |
 | `src/services/memory-posting.test.ts` | Upload pipeline — UUID-based keys, per-asset progress, rollback on upload/insert failure |
@@ -208,6 +213,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/hooks/use-incoming-memory-share.integration.test.tsx` | Native resolved payload → validated composer attachment → intent cleared |
 | `src/utils/media-emotion-polling.test.ts` | Poll window for photo media without emotion |
 | `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, close action |
+| `src/components/memory-media-picker.test.tsx` | Native launch failure feedback and concurrent-launch guard |
 
 ### E2E (Maestro)
 
@@ -252,6 +258,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 | Date | Change |
 |------|--------|
 | 2026-07-12 | Added full-screen photo/video viewing from memory detail, including mixed-carousel paging from the tapped item |
+| 2026-07-12 | Hardened camera/library permission and native picker presentation lifecycle |
 | 2026-07-12 | Detail videos now loop with hidden native controls |
 | 2026-07-12 | Single-asset media now uses its exact natural aspect ratio; multi-asset carousels retain the `3:4`-`16:9` clamp |
 | 2026-07-12 | Deferred posting: Save closes the composer instantly; a pending-uploads queue (`use-pending-memory-uploads`) posts in the background with progress cards on Timeline/Calendar and Retry/Discard on failure |

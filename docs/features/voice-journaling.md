@@ -13,6 +13,9 @@ Tap-to-record voice memos (max 2 minutes). Audio is transcribed server-side, cle
 - **New memory** → **Tap to record voice memory** → stop → transcript populates content + suggested tags.
 - User can edit text and tags before save.
 - Recording auto-stops at 2 minutes.
+- The microphone permission prompt is requested only after the voice modal is
+  fully presented. Existing grants skip a redundant request, permanent denial
+  points the user to Settings, and recorder startup failures are shown inline.
 
 ## Architecture
 
@@ -58,5 +61,7 @@ creation from the resulting text still goes through the family-scoped
 
 | Layer | File |
 |-------|------|
+| Unit | `src/utils/native-permissions.test.ts` |
+| Component | `src/components/voice-speak-it-modal.test.tsx` |
 | Deno | `supabase/functions/process-voice-memory/index.test.ts` |
 | E2E | Covered via new-memory flow (text path; voice optional in CI) |

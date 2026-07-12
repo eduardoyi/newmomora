@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -28,20 +28,30 @@ interface VoiceSpeakItModalProps {
   onResult: (result: { cleanedText: string; mentionedMemberIds: string[] }) => void;
 }
 
+interface VoiceSpeakItContentProps extends Omit<VoiceSpeakItModalProps, 'visible'> {
+  canStartRecording: boolean;
+}
+
 // Inner content is a separate component so the hook only mounts when visible=true
 function VoiceSpeakItContent({
   familyMembers,
+  canStartRecording,
   onDismiss,
   onResult,
-}: Omit<VoiceSpeakItModalProps, 'visible'>) {
+}: VoiceSpeakItContentProps) {
   const { isRecording, isProcessing, durationLabel, errorMessage, startRecording, stopRecording } =
     useVoiceInput(familyMembers);
 
-  // Auto-start recording as soon as this component mounts
+  // Wait for the native modal presentation to finish before asking the OS to
+  // present its microphone permission dialog.
   useEffect(() => {
+    if (!canStartRecording) {
+      return;
+    }
+
     void startRecording();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canStartRecording]);
 
   // Two ring animation values — ring2 lags ring1 by half a cycle for the ripple look
   const ring1 = useRef(new Animated.Value(0)).current;
@@ -186,28 +196,48 @@ function VoiceSpeakItContent({
   );
 }
 
+function PresentedVoiceSpeakItModal({
+  familyMembers,
+  onDismiss,
+  onResult,
+}: Omit<VoiceSpeakItModalProps, 'visible'>) {
+  const [isPresented, setIsPresented] = useState(false);
+
+  return (
+    <Modal
+      animationType="slide"
+      onShow={() => setIsPresented(true)}
+      onRequestClose={onDismiss}
+      statusBarTranslucent={false}
+      testID="voice-speak-it-modal"
+      visible
+    >
+      <VoiceSpeakItContent
+        canStartRecording={isPresented}
+        familyMembers={familyMembers}
+        onDismiss={onDismiss}
+        onResult={onResult}
+      />
+    </Modal>
+  );
+}
+
 export function VoiceSpeakItModal({
   visible,
   familyMembers,
   onDismiss,
   onResult,
 }: VoiceSpeakItModalProps) {
+  if (!visible) {
+    return null;
+  }
+
   return (
-    <Modal
-      animationType="slide"
-      onRequestClose={onDismiss}
-      statusBarTranslucent={false}
-      visible={visible}
-    >
-      {/* Only mount the content (and the hook) when the modal is actually open */}
-      {visible ? (
-        <VoiceSpeakItContent
-          familyMembers={familyMembers}
-          onDismiss={onDismiss}
-          onResult={onResult}
-        />
-      ) : null}
-    </Modal>
+    <PresentedVoiceSpeakItModal
+      familyMembers={familyMembers}
+      onDismiss={onDismiss}
+      onResult={onResult}
+    />
   );
 }
 

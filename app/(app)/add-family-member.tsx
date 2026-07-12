@@ -40,6 +40,7 @@ import {
   pickFamilyProfilePhotoFromCamera,
   pickFamilyProfilePhotoFromLibrary,
 } from '@/utils/family-profile-photo-picker';
+import { runAfterNativeChooserDismisses } from '@/utils/native-permissions';
 
 export default function AddFamilyMemberScreen() {
   const { role } = useFamily();
@@ -146,10 +147,10 @@ export default function AddFamilyMemberScreen() {
         },
         (buttonIndex) => {
           if (buttonIndex === 0) {
-            void takePhoto();
+            runAfterNativeChooserDismisses(() => { void takePhoto(); });
           }
           if (buttonIndex === 1) {
-            void choosePhotoFromLibrary();
+            runAfterNativeChooserDismisses(() => { void choosePhotoFromLibrary(); });
           }
         },
       );
@@ -157,8 +158,14 @@ export default function AddFamilyMemberScreen() {
     }
 
     Alert.alert('Profile photo', undefined, [
-      { text: 'Take photo', onPress: () => { void takePhoto(); } },
-      { text: 'Choose from library', onPress: () => { void choosePhotoFromLibrary(); } },
+      {
+        text: 'Take photo',
+        onPress: () => runAfterNativeChooserDismisses(() => { void takePhoto(); }),
+      },
+      {
+        text: 'Choose from library',
+        onPress: () => runAfterNativeChooserDismisses(() => { void choosePhotoFromLibrary(); }),
+      },
       { text: 'Cancel', style: 'cancel' },
     ]);
   };

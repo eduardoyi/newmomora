@@ -1,5 +1,10 @@
 import * as ImagePicker from 'expo-image-picker';
 
+import {
+  getOrRequestNativePermission,
+  waitForNativePresentationToSettle,
+} from '@/utils/native-permissions';
+
 export interface FamilyProfilePhotoSelection {
   uri: string;
   contentType: string;
@@ -84,9 +89,20 @@ function isCameraUnavailableError(error: unknown): boolean {
 
 export async function pickFamilyProfilePhotoFromLibrary(): Promise<FamilyProfilePhotoPickResult> {
   try {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const { permission, didRequest } = await getOrRequestNativePermission(
+      () => ImagePicker.getMediaLibraryPermissionsAsync(),
+      () => ImagePicker.requestMediaLibraryPermissionsAsync(),
+    );
     if (!permission.granted) {
-      return { error: LIBRARY_PERMISSION_ERROR };
+      return {
+        error: permission.canAskAgain === false
+          ? `${LIBRARY_PERMISSION_ERROR} Enable it in Settings.`
+          : LIBRARY_PERMISSION_ERROR,
+      };
+    }
+
+    if (didRequest) {
+      await waitForNativePresentationToSettle();
     }
 
     const result = await ImagePicker.launchImageLibraryAsync(PROFILE_PHOTO_PICKER_OPTIONS);
@@ -98,9 +114,20 @@ export async function pickFamilyProfilePhotoFromLibrary(): Promise<FamilyProfile
 
 export async function pickFamilyProfilePhotoFromCamera(): Promise<FamilyProfilePhotoPickResult> {
   try {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    const { permission, didRequest } = await getOrRequestNativePermission(
+      () => ImagePicker.getCameraPermissionsAsync(),
+      () => ImagePicker.requestCameraPermissionsAsync(),
+    );
     if (!permission.granted) {
-      return { error: CAMERA_PERMISSION_ERROR };
+      return {
+        error: permission.canAskAgain === false
+          ? `${CAMERA_PERMISSION_ERROR} Enable it in Settings.`
+          : CAMERA_PERMISSION_ERROR,
+      };
+    }
+
+    if (didRequest) {
+      await waitForNativePresentationToSettle();
     }
 
     const result = await ImagePicker.launchCameraAsync({

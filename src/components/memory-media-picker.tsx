@@ -1,7 +1,15 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { SymbolView } from 'expo-symbols';
-import { Alert, Platform, Pressable, StyleSheet, Text } from 'react-native';
+import { useRef } from 'react';
+import {
+  ActionSheetIOS,
+  Alert,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+} from 'react-native';
 
 import { colors } from '@/constants/theme';
 import {
@@ -9,6 +17,11 @@ import {
   isVideoContentType,
   validateMediaFile,
 } from '@/utils/media-validation';
+import {
+  getOrRequestNativePermission,
+  runAfterNativeChooserDismisses,
+  waitForNativePresentationToSettle,
+} from '@/utils/native-permissions';
 
 export interface MediaAttachment {
   id: string;
@@ -98,37 +111,138 @@ export function MemoryMediaPicker({
   compact = false,
   remainingSlots = 10,
 }: MemoryMediaPickerProps) {
+  const isPickerOpeningRef = useRef(false);
+
+  const runPicker = async (picker: () => Promise<void>, fallbackError: string) => {
+    if (isPickerOpeningRef.current) {
+      return;
+    }
+
+    isPickerOpeningRef.current = true;
+    try {
+      await picker();
+    } catch {
+      onError(fallbackError);
+    } finally {
+      isPickerOpeningRef.current = false;
+    }
+  };
+
   const handlePickMedia = async () => {
-    onError('');
+    await runPicker(async () => {
+      onError('');
 
-    if (remainingSlots <= 0) {
-      onError('You can attach up to 10 photos or videos.');
-      return;
-    }
+      if (remainingSlots <= 0) {
+        onError('You can attach up to 10 photos or videos.');
+        return;
+      }
 
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      onError('Photo library permission is required to attach media.');
-      return;
-    }
+      const { permission, didRequest } = await getOrRequestNativePermission(
+        () => ImagePicker.getMediaLibraryPermissionsAsync(),
+        () => ImagePicker.requestMediaLibraryPermissionsAsync(),
+      );
+      if (!permission.granted) {
+        onError(
+          permission.canAskAgain === false
+            ? 'Photo library permission is required to attach media. Enable it in Settings.'
+            : 'Photo library permission is required to attach media.',
+        );
+        return;
+      }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
-      allowsMultipleSelection: true,
-      selectionLimit: remainingSlots,
-      orderedSelection: true,
-      allowsEditing: false,
-      quality: 0.85,
-      videoMaxDuration: 60,
-    });
+      if (didRequest) {
+        await waitForNativePresentationToSettle();
+      }
 
-    if (result.canceled || result.assets.length === 0) {
-      return;
-    }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images', 'videos'],
+        allowsMultipleSelection: true,
+        selectionLimit: remainingSlots,
+        orderedSelection: true,
+        allowsEditing: false,
+        quality: 0.85,
+        videoMaxDuration: 60,
+      });
 
-    const attachments: MediaAttachment[] = [];
+      if (result.canceled || result.assets.length === 0) {
+        return;
+      }
 
-    for (const asset of result.assets.slice(0, remainingSlots)) {
+      const attachments: MediaAttachment[] = [];
+
+      for (const asset of result.assets.slice(0, remainingSlots)) {
+        const contentType = resolveContentType(asset);
+
+        if (!contentType || !getMediaExtensionFromContentType(contentType)) {
+          onError('Unsupported file type. Use JPEG, PNG, HEIC, WEBP, MP4, or MOV.');
+          return;
+        }
+
+        const sizeBytes = await resolveFileSize(asset);
+        const durationMs = isVideoContentType(contentType) ? asset.duration ?? null : null;
+        const validationError = validateMediaFile({
+          sizeBytes,
+          durationMs,
+          contentType,
+        });
+
+        if (validationError) {
+          onError(validationError);
+          return;
+        }
+
+        attachments.push({
+          id: createAttachmentId(),
+          uri: asset.uri,
+          contentType,
+          durationMs: durationMs ?? undefined,
+          sizeBytes: sizeBytes as number,
+        });
+      }
+
+      if (attachments.length > 0) {
+        onSelect(attachments);
+      }
+    }, 'Could not open the photo library. Please try again.');
+  };
+
+  const handleTakePhoto = async () => {
+    await runPicker(async () => {
+      onError('');
+
+      if (remainingSlots <= 0) {
+        onError('You can attach up to 10 photos or videos.');
+        return;
+      }
+
+      const { permission, didRequest } = await getOrRequestNativePermission(
+        () => ImagePicker.getCameraPermissionsAsync(),
+        () => ImagePicker.requestCameraPermissionsAsync(),
+      );
+      if (!permission.granted) {
+        onError(
+          permission.canAskAgain === false
+            ? 'Camera permission is required to take a photo. Enable it in Settings.'
+            : 'Camera permission is required to take a photo.',
+        );
+        return;
+      }
+
+      if (didRequest) {
+        await waitForNativePresentationToSettle();
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.85,
+      });
+
+      if (result.canceled || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
       const contentType = resolveContentType(asset);
 
       if (!contentType || !getMediaExtensionFromContentType(contentType)) {
@@ -137,10 +251,8 @@ export function MemoryMediaPicker({
       }
 
       const sizeBytes = await resolveFileSize(asset);
-      const durationMs = isVideoContentType(contentType) ? asset.duration ?? null : null;
       const validationError = validateMediaFile({
         sizeBytes,
-        durationMs,
         contentType,
       });
 
@@ -149,69 +261,13 @@ export function MemoryMediaPicker({
         return;
       }
 
-      attachments.push({
+      onSelect([{
         id: createAttachmentId(),
         uri: asset.uri,
         contentType,
-        durationMs: durationMs ?? undefined,
         sizeBytes: sizeBytes as number,
-      });
-    }
-
-    if (attachments.length > 0) {
-      onSelect(attachments);
-    }
-  };
-
-  const handleTakePhoto = async () => {
-    onError('');
-
-    if (remainingSlots <= 0) {
-      onError('You can attach up to 10 photos or videos.');
-      return;
-    }
-
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      onError('Camera permission is required to take a photo.');
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.85,
-    });
-
-    if (result.canceled || result.assets.length === 0) {
-      return;
-    }
-
-    const asset = result.assets[0];
-    const contentType = resolveContentType(asset);
-
-    if (!contentType || !getMediaExtensionFromContentType(contentType)) {
-      onError('Unsupported file type. Use JPEG, PNG, HEIC, WEBP, MP4, or MOV.');
-      return;
-    }
-
-    const sizeBytes = await resolveFileSize(asset);
-    const validationError = validateMediaFile({
-      sizeBytes,
-      contentType,
-    });
-
-    if (validationError) {
-      onError(validationError);
-      return;
-    }
-
-    onSelect([{
-      id: createAttachmentId(),
-      uri: asset.uri,
-      contentType,
-      sizeBytes: sizeBytes as number,
-    }]);
+      }]);
+    }, 'Could not open the camera. Please try again.');
   };
 
   const handleAttachPress = () => {
@@ -220,12 +276,37 @@ export function MemoryMediaPicker({
       return;
     }
 
+    const options = [
+      { text: 'Photo library', action: handlePickMedia },
+      { text: 'Take photo', action: handleTakePhoto },
+    ];
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: [...options.map((option) => option.text), 'Cancel'],
+          cancelButtonIndex: options.length,
+        },
+        (buttonIndex) => {
+          const selected = options[buttonIndex];
+          if (selected) {
+            runAfterNativeChooserDismisses(() => { void selected.action(); });
+          }
+        },
+      );
+      return;
+    }
+
     Alert.alert(
       'Add media',
       undefined,
       [
-        { text: 'Photo library', onPress: () => { void handlePickMedia(); } },
-        { text: 'Take photo', onPress: () => { void handleTakePhoto(); } },
+        ...options.map((option) => ({
+          text: option.text,
+          onPress: () => {
+            runAfterNativeChooserDismisses(() => { void option.action(); });
+          },
+        })),
         { text: 'Cancel', style: 'cancel' },
       ],
     );

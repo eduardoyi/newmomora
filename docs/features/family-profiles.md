@@ -83,6 +83,11 @@ Profile photo picking is centralized in `src/utils/family-profile-photo-picker.t
 | Library | Requests media library permission, launches the image picker, then returns a local image URI |
 | Android pending result | Add/edit screens call `ImagePicker.getPendingResultAsync()` on mount to recover selections if `MainActivity` was destroyed |
 
+Both sources check the current permission before requesting it, avoid
+re-requesting permanently denied access, and wait for the native source
+chooser or permission dialog to finish dismissing before launching the next
+native screen.
+
 Picker options intentionally set `exif: false` and `base64: false`; child profile photos are processed by local URI only and picker asset contents are not logged.
 
 ### How to invoke from another feature
@@ -133,6 +138,7 @@ Picker options intentionally set `exif: false` and `base64: false`; child profil
 | `src/utils/family-members.test.ts` | Validation, age formatting |
 | `src/utils/profile-photo.test.ts` | Profile photo resize before R2 upload |
 | `src/utils/family-profile-photo-picker.test.ts` | Camera/library picker permissions, options, content types, pending-result parsing |
+| `src/utils/native-permissions.test.ts` | Existing grants, request gating, permanent denial, presentation settling |
 | `src/utils/storage-keys.test.ts` | Key builder |
 | `src/utils/e2e-fixtures.test.ts` | E2E profile fixture loader |
 | `src/services/media.test.ts` | Presigned upload (native FileSystem path) |
@@ -188,6 +194,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 | Date | Change |
 |------|--------|
 | 2026-07-12 | Ready character portraits open full screen from family-member detail |
+| 2026-07-12 | Hardened photo permission and picker presentation lifecycle |
 | 2026-07-12 | Recover timed-out portrait generation so manager-initiated replacement photos do not remain stuck in `generating` |
 | 2026-05-29 | Added camera capture source for family profile photos with Android pending-result recovery |
 | 2026-05-25 | E2E photo upload flows (fixture + system picker) |

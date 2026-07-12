@@ -9,6 +9,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { processVoiceMemory, type VoiceFamilyMemberPayload } from '@/services/ai';
 import { readLocalFileAsBase64 } from '@/utils/local-files';
+import {
+  getOrRequestNativePermission,
+  waitForNativePresentationToSettle,
+} from '@/utils/native-permissions';
 
 const MAX_RECORDING_MS = 2 * 60 * 1000;
 
@@ -43,14 +47,29 @@ export function useVoiceInput(familyMembers: VoiceFamilyMemberPayload[]) {
   const startRecording = useCallback(async () => {
     setErrorMessage('');
 
-    const permission = await AudioModule.requestRecordingPermissionsAsync();
-    if (!permission.granted) {
-      setErrorMessage('Microphone access is required for voice memories.');
-      return;
-    }
+    try {
+      const { permission, didRequest } = await getOrRequestNativePermission(
+        () => AudioModule.getRecordingPermissionsAsync(),
+        () => AudioModule.requestRecordingPermissionsAsync(),
+      );
+      if (!permission.granted) {
+        setErrorMessage(
+          permission.canAskAgain === false
+            ? 'Microphone access is required for voice memories. Enable it in Settings.'
+            : 'Microphone access is required for voice memories.',
+        );
+        return;
+      }
 
-    await recorder.prepareToRecordAsync();
-    recorder.record();
+      if (didRequest) {
+        await waitForNativePresentationToSettle();
+      }
+
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch {
+      setErrorMessage('Could not start voice recording. Please try again.');
+    }
   }, [recorder]);
 
   const stopRecording = useCallback(async (): Promise<VoiceProcessingResult | null> => {

@@ -13,6 +13,8 @@ jest.mock('expo-image-picker', () => ({
     back: 'back',
     front: 'front',
   },
+  getCameraPermissionsAsync: jest.fn(),
+  getMediaLibraryPermissionsAsync: jest.fn(),
   launchCameraAsync: jest.fn(),
   launchImageLibraryAsync: jest.fn(),
   requestCameraPermissionsAsync: jest.fn(),
@@ -36,9 +38,21 @@ function imageAsset(
 describe('family profile photo picker', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as ImagePicker.CameraPermissionResponse);
+    mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as ImagePicker.MediaLibraryPermissionResponse);
   });
 
   it('returns an error when library permission is denied', async () => {
+    mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+      granted: false,
+      canAskAgain: true,
+    } as ImagePicker.MediaLibraryPermissionResponse);
     mockedImagePicker.requestMediaLibraryPermissionsAsync.mockResolvedValue({
       granted: false,
     } as ImagePicker.MediaLibraryPermissionResponse);
@@ -50,6 +64,10 @@ describe('family profile photo picker', () => {
   });
 
   it('returns an error when camera permission is denied', async () => {
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
+      granted: false,
+      canAskAgain: true,
+    } as ImagePicker.CameraPermissionResponse);
     mockedImagePicker.requestCameraPermissionsAsync.mockResolvedValue({
       granted: false,
     } as ImagePicker.CameraPermissionResponse);
@@ -61,9 +79,6 @@ describe('family profile photo picker', () => {
   });
 
   it('returns no selection when the user cancels', async () => {
-    mockedImagePicker.requestMediaLibraryPermissionsAsync.mockResolvedValue({
-      granted: true,
-    } as ImagePicker.MediaLibraryPermissionResponse);
     mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
       canceled: true,
       assets: null,
@@ -73,9 +88,6 @@ describe('family profile photo picker', () => {
   });
 
   it('returns a selected library asset with content type', async () => {
-    mockedImagePicker.requestMediaLibraryPermissionsAsync.mockResolvedValue({
-      granted: true,
-    } as ImagePicker.MediaLibraryPermissionResponse);
     mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
       canceled: false,
       assets: [imageAsset({ uri: 'file:///profile.png', mimeType: 'image/png' })],
@@ -87,9 +99,6 @@ describe('family profile photo picker', () => {
   });
 
   it('launches the camera with the front camera and private-safe options', async () => {
-    mockedImagePicker.requestCameraPermissionsAsync.mockResolvedValue({
-      granted: true,
-    } as ImagePicker.CameraPermissionResponse);
     mockedImagePicker.launchCameraAsync.mockResolvedValue({
       canceled: false,
       assets: [imageAsset({ uri: 'file:///camera.jpg' })],
@@ -110,17 +119,28 @@ describe('family profile photo picker', () => {
         cameraType: ImagePicker.CameraType.front,
       }),
     );
+    expect(mockedImagePicker.requestCameraPermissionsAsync).not.toHaveBeenCalled();
   });
 
   it('returns a safe camera unavailable error when launch throws', async () => {
-    mockedImagePicker.requestCameraPermissionsAsync.mockResolvedValue({
-      granted: true,
-    } as ImagePicker.CameraPermissionResponse);
     mockedImagePicker.launchCameraAsync.mockRejectedValue(new Error('launchCameraAsync unavailable'));
 
     await expect(pickFamilyProfilePhotoFromCamera()).resolves.toEqual({
       error: 'Camera is not available on this device.',
     });
+  });
+
+  it('directs a permanently denied camera permission to Settings without requesting again', async () => {
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
+      granted: false,
+      canAskAgain: false,
+    } as ImagePicker.CameraPermissionResponse);
+
+    await expect(pickFamilyProfilePhotoFromCamera()).resolves.toEqual({
+      error: 'Camera access is required to take a profile photo. Enable it in Settings.',
+    });
+    expect(mockedImagePicker.requestCameraPermissionsAsync).not.toHaveBeenCalled();
+    expect(mockedImagePicker.launchCameraAsync).not.toHaveBeenCalled();
   });
 
   it('parses pending success, cancel, and error results', () => {
