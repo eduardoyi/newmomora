@@ -23,7 +23,7 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
 - Single-asset memories use the asset's exact natural aspect ratio, including tall portrait videos; multi-asset carousels clamp the first asset's ratio to `3:4`-`16:9` so every page shares a practical, stable frame.
 - **Photo** memories: after save, async emotion analysis may replace the Photo badge with an emotion chip (same labels as text memories). Failures do not block save.
 - **Video** memories: no emotion chip in MVP (Photo/Video badge only).
-- On the memory detail screen, photos display full-width via presigned URL; videos play inline via `expo-video`.
+- On the memory detail screen, photos display full-width via presigned URL; videos play inline via `expo-video`, loop with sound, hide native controls, and toggle play/pause when tapped.
 - Editing a `media` memory allows adding, removing, and reordering assets, but at least one asset must remain.
 - Deleting a `media` memory deletes all R2 media objects before or alongside the DB row deletion.
 
@@ -234,6 +234,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
+| 2026-07-12 | Detail videos now loop with hidden native controls; tapping toggles play/pause |
 | 2026-07-12 | Single-asset media now uses its exact natural aspect ratio; multi-asset carousels retain the `3:4`-`16:9` clamp |
 | 2026-07-12 | Deferred posting: Save closes the composer instantly; a pending-uploads queue (`use-pending-memory-uploads`) posts in the background with progress cards on Timeline/Calendar and Retry/Discard on failure |
 | 2026-05-26 | Photo media: async `analyze-emotion` vision; video emotion backlog |

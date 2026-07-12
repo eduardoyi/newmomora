@@ -8,6 +8,7 @@ import {
   GestureResponderEvent,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -30,19 +31,22 @@ interface MemoryMediaCarouselProps {
   assets: MemoryMediaAsset[];
   cacheVersion?: string | null;
   isActive?: boolean;
-  nativeVideoControls?: boolean;
+  videoTapToToggle?: boolean;
+  mutedVideos?: boolean;
   onPress?: () => void;
   style?: StyleProp<ViewStyle>;
 }
 
 function VideoAsset({
   isActive,
-  nativeControls,
+  isMuted,
+  tapToToggle,
   onNaturalRatio,
   url,
 }: {
   isActive: boolean;
-  nativeControls: boolean;
+  isMuted: boolean;
+  tapToToggle: boolean;
   onNaturalRatio: (ratio: number) => void;
   url: string;
 }) {
@@ -50,8 +54,8 @@ function VideoAsset({
   // detail screen, revisits) don't re-stream from R2 while the presigned URL
   // is still cached by useMediaUrls.
   const player = useVideoPlayer({ uri: url, useCaching: true }, (p) => {
-    p.loop = !nativeControls;
-    p.muted = !nativeControls;
+    p.loop = true;
+    p.muted = isMuted;
   });
 
   useEventListener(player, 'sourceLoad', ({ availableVideoTracks }) => {
@@ -70,14 +74,36 @@ function VideoAsset({
     }
   }, [isActive, player]);
 
-  return (
+  const video = (
     <VideoView
       contentFit="contain"
-      nativeControls={nativeControls}
+      nativeControls={false}
       player={player}
       style={StyleSheet.absoluteFill}
       testID="memory-media-video"
     />
+  );
+
+  if (!tapToToggle) {
+    return video;
+  }
+
+  return (
+    <Pressable
+      accessibilityLabel="Play or pause video"
+      accessibilityRole="button"
+      onPress={() => {
+        if (player.playing) {
+          player.pause();
+        } else {
+          player.play();
+        }
+      }}
+      style={StyleSheet.absoluteFill}
+      testID="memory-media-video-toggle"
+    >
+      <View pointerEvents="none" style={StyleSheet.absoluteFill}>{video}</View>
+    </Pressable>
   );
 }
 
@@ -85,14 +111,16 @@ function MediaPage({
   asset,
   isActive,
   preload,
-  nativeVideoControls,
+  mutedVideos,
+  videoTapToToggle,
   onNaturalRatio,
   url,
 }: {
   asset: MemoryMediaAsset;
   isActive: boolean;
   preload: boolean;
-  nativeVideoControls: boolean;
+  mutedVideos: boolean;
+  videoTapToToggle: boolean;
   onNaturalRatio: (ratio: number) => void;
   url?: string;
 }) {
@@ -117,8 +145,9 @@ function MediaPage({
         {showPlayer ? (
           <VideoAsset
             isActive={isActive}
-            nativeControls={nativeVideoControls}
+            isMuted={mutedVideos}
             onNaturalRatio={onNaturalRatio}
+            tapToToggle={videoTapToToggle}
             url={url}
           />
         ) : null}
@@ -156,9 +185,10 @@ export function MemoryMediaCarousel({
   assets,
   cacheVersion,
   isActive = true,
-  nativeVideoControls = false,
+  mutedVideos = true,
   onPress,
   style,
+  videoTapToToggle = false,
 }: MemoryMediaCarouselProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [width, setWidth] = useState(0);
@@ -265,9 +295,10 @@ export function MemoryMediaCarousel({
               asset={asset}
               isActive={isActive && index === activeIndex}
               preload={isActive && Math.abs(index - activeIndex) === 1}
-              nativeVideoControls={nativeVideoControls}
+              mutedVideos={mutedVideos}
               onNaturalRatio={(ratio) => handleNaturalRatio(asset.object_key, ratio)}
               url={urls[asset.object_key]}
+              videoTapToToggle={videoTapToToggle}
             />
           </View>
         ))}

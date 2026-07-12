@@ -3,17 +3,23 @@ import { fireEvent, render } from '@testing-library/react-native';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
 
+const mockVideoPlayer = {
+  addListener: jest.fn(() => ({ remove: jest.fn() })),
+  removeListener: jest.fn(),
+  pause: jest.fn(),
+  play: jest.fn(),
+  playing: true,
+};
+
 jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrls: jest.fn(),
 }));
 
 jest.mock('expo-video', () => ({
-  useVideoPlayer: jest.fn(() => ({
-    addListener: jest.fn(() => ({ remove: jest.fn() })),
-    removeListener: jest.fn(),
-    pause: jest.fn(),
-    play: jest.fn(),
-  })),
+  useVideoPlayer: jest.fn((_source, setup) => {
+    setup?.(mockVideoPlayer);
+    return mockVideoPlayer;
+  }),
   VideoView: 'VideoView',
 }));
 
@@ -40,6 +46,8 @@ const assets = [
 
 describe('MemoryMediaCarousel', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
+    mockVideoPlayer.playing = true;
     mockedUseMediaUrls.mockReturnValue({
       data: {
         'user/memory/media/photo-1.jpg': 'https://example.com/photo-1.jpg',
@@ -162,5 +170,32 @@ describe('MemoryMediaCarousel', () => {
     );
 
     expect(queryByTestId('memory-media-video')).toBeNull();
+  });
+
+  it('loops an unmuted detail video and toggles playback when tapped', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+    } as ReturnType<typeof useMediaUrls>);
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+    const { getByTestId } = render(
+      <MemoryMediaCarousel assets={[videoAsset]} mutedVideos={false} videoTapToToggle />,
+    );
+
+    expect(mockVideoPlayer.loop).toBe(true);
+    expect(mockVideoPlayer.muted).toBe(false);
+    expect(getByTestId('memory-media-video').props.nativeControls).toBe(false);
+
+    fireEvent.press(getByTestId('memory-media-video-toggle'));
+    expect(mockVideoPlayer.pause).toHaveBeenCalled();
+
+    mockVideoPlayer.playing = false;
+    fireEvent.press(getByTestId('memory-media-video-toggle'));
+    expect(mockVideoPlayer.play).toHaveBeenCalled();
   });
 });

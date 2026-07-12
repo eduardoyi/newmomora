@@ -227,8 +227,9 @@ function MemoryDetailFramed({
                 <MemoryMediaCarousel
                   assets={memory.mediaAssets}
                   cacheVersion={memory.updated_at}
-                  nativeVideoControls
+                  mutedVideos={false}
                   style={styles.framedMedia}
+                  videoTapToToggle
                 />
               ) : (
                 <View style={[styles.framedImage, styles.placeholderFrame]}>
