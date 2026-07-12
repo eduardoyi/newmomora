@@ -18,7 +18,6 @@ import { MemoryCard } from '@/components/memory-card';
 import { MemoryFab } from '@/components/memory-fab';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
-import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useMemories } from '@/hooks/useMemories';
 import type { MemoryWithTags } from '@/services/memories';
@@ -85,7 +84,6 @@ function TimelineHeader({ memories }: { memories: MemoryWithTags[] }) {
 }
 
 export default function TimelineScreen() {
-  const { user } = useAuth();
   const { role } = useFamily();
   const canEdit = canEditFamilyContent(role);
   const { isLoading: isOnboardingLoading, needsFamilyMember } = useOnboardingStatus();

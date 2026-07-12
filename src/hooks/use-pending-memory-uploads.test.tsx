@@ -26,7 +26,7 @@ jest.mock('@/services/memories', () => ({
 jest.mock('@/services/memory-posting', () => ({
   postMediaMemory: jest.fn(),
   notifyFamilyActivityFireAndForget: jest.fn(),
-  hasImageMediaAsset: (assets: Array<{ contentType: string }>) =>
+  hasImageMediaAsset: (assets: { contentType: string }[]) =>
     assets.some((asset) => !asset.contentType.startsWith('video/')),
 }));
 

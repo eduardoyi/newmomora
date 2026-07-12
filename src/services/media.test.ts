@@ -1,6 +1,9 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
+import { supabase } from '@/lib/supabase';
+import { uploadMediaObject, uploadToPresignedUrl } from '@/services/media';
+
 jest.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -11,9 +14,6 @@ jest.mock('@/lib/supabase', () => ({
     },
   },
 }));
-
-import { supabase } from '@/lib/supabase';
-import { uploadMediaObject, uploadToPresignedUrl } from '@/services/media';
 
 jest.mock('expo-file-system/legacy', () => ({
   uploadAsync: jest.fn(),

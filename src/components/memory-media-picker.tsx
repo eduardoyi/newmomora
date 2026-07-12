@@ -1,9 +1,9 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { SymbolView } from 'expo-symbols';
-import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, StyleSheet, Text } from 'react-native';
 
-import { colors, spacing } from '@/constants/theme';
+import { colors } from '@/constants/theme';
 import {
   getMediaExtensionFromContentType,
   isVideoContentType,

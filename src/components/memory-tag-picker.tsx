@@ -117,7 +117,7 @@ export function MemoryTagPicker({
   return (
     <View style={styles.container}>
       <Text style={styles.label}>
-        WHO'S IN IT
+        WHO’S IN IT
         {selectedMemberIds.length > 0 ? (
           <Text style={styles.labelCount} testID="memory-tag-count">
             {' '}· {selectedMemberIds.length}/{MAX_MEMORY_TAGS}

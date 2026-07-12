@@ -229,7 +229,7 @@ export function formatDisplayDate(dateValue: string): string {
 
 export function groupMemoriesByDate<T extends { memory_date: string }>(
   memories: T[],
-): Array<{ date: string; items: T[] }> {
+): { date: string; items: T[] }[] {
   const groups = new Map<string, T[]>();
 
   for (const memory of memories) {

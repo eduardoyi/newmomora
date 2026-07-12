@@ -47,7 +47,7 @@ function getStorageMediaAssetId(mediaAssetId?: string): string {
   return mediaAssetId && UUID_PATTERN.test(mediaAssetId) ? mediaAssetId : createUuid();
 }
 
-export function hasImageMediaAsset(assets: Array<{ contentType: string }>): boolean {
+export function hasImageMediaAsset(assets: { contentType: string }[]): boolean {
   return assets.some((asset) => !isVideoContentType(asset.contentType));
 }
 

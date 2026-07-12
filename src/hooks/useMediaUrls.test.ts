@@ -1,3 +1,5 @@
+import { useMediaUrl } from '@/hooks/useMediaUrls';
+
 jest.mock('@/services/media', () => ({
   getMediaUrls: jest.fn(),
 }));
@@ -10,8 +12,6 @@ jest.mock('@tanstack/react-query', () => ({
     queryKey: options.queryKey,
   })),
 }));
-
-import { useMediaUrl } from '@/hooks/useMediaUrls';
 
 const { useQuery } = jest.requireMock('@tanstack/react-query') as {
   useQuery: jest.Mock;

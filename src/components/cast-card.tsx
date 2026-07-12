@@ -35,7 +35,7 @@ export function CastCard({ member }: CastCardProps) {
         <Text style={styles.castName}>{member.name}</Text>
         {age && <Text style={styles.castAge}>{age}</Text>}
         {member.nicknames && member.nicknames.length > 0 && (
-          <Text style={styles.castNicknames}>"{member.nicknames.join(', ')}"</Text>
+          <Text style={styles.castNicknames}>“{member.nicknames.join(', ')}”</Text>
         )}
       </View>
     </View>

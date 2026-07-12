@@ -55,7 +55,7 @@ function MemoryThumb({ memory }: { memory: MemoryWithTags }) {
   if (memory.memory_type === 'text_only') {
     return (
       <View style={[styles.thumb, { backgroundColor: emo?.soft ?? colors.surface, alignItems: 'center', justifyContent: 'center' }]}>
-        <Text style={[styles.thumbQuote, { color: emo?.ink ?? colors.ink3 }]}>"</Text>
+        <Text style={[styles.thumbQuote, { color: emo?.ink ?? colors.ink3 }]}>“</Text>
       </View>
     );
   }

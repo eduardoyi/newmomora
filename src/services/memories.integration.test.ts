@@ -5,12 +5,15 @@ import {
   fetchMemories,
   fetchMemoriesInDateRange,
   fetchOldestMemoryDate,
-  markMemoryIllustrationFailed,
   regenerateMemoryIllustration,
   retryMemoryIllustration,
   runMemoryIllustrationPipeline,
   runMediaPhotoEmotionAnalysis,
 } from '@/services/memories';
+
+import { supabase } from '@/lib/supabase';
+import { analyzeMemoryEmotion, generateMemoryIllustration } from '@/services/ai';
+import { deleteStorageObject } from '@/services/media';
 
 jest.mock('@/lib/supabase', () => ({
   supabase: {
@@ -33,10 +36,6 @@ jest.mock('@/services/ai', () => ({
 jest.mock('@/services/media', () => ({
   deleteStorageObject: jest.fn().mockResolvedValue({ error: null }),
 }));
-
-import { supabase } from '@/lib/supabase';
-import { analyzeMemoryEmotion, generateMemoryIllustration } from '@/services/ai';
-import { deleteStorageObject } from '@/services/media';
 
 type QueryResult = { data: unknown; error: { message: string; code?: string } | null };
 

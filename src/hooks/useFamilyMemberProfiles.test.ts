@@ -2,12 +2,12 @@
 // importing the module still pulls in `@/services/family` -> `@/lib/supabase`
 // -> AsyncStorage at module-load time. Mock the service to keep this a fast,
 // isolated unit test.
+import { resolveAttributionName } from '@/hooks/useFamilyMemberProfiles';
+import type { FamilyMemberProfile } from '@/services/family';
+
 jest.mock('@/services/family', () => ({
   fetchFamilyMemberProfiles: jest.fn(),
 }));
-
-import { resolveAttributionName } from '@/hooks/useFamilyMemberProfiles';
-import type { FamilyMemberProfile } from '@/services/family';
 
 function profile(overrides: Partial<FamilyMemberProfile> = {}): FamilyMemberProfile {
   return {

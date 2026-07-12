@@ -142,7 +142,7 @@ async function deleteStorageKeys(keys: string[]) {
 
 async function deleteMemoryStorageKeys(
   memory: Pick<Memory, 'media_key' | 'illustration_key'>,
-  mediaAssets: Array<Pick<MemoryMediaAsset, 'object_key'>> = [],
+  mediaAssets: Pick<MemoryMediaAsset, 'object_key'>[] = [],
 ) {
   await deleteStorageKeys([
     memory.media_key,
@@ -419,7 +419,7 @@ export async function runMemoryIllustrationPipeline(
     let colorPalette: string | undefined;
 
     if (options?.forceRegenerate) {
-      const { data: memory, error: fetchError } = await supabase
+      const { error: fetchError } = await supabase
         .from('memories')
         .select('emotion')
         .eq('id', memoryId)

@@ -154,7 +154,7 @@ export function FamilyRosterSheet({
 
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.headerTitle}>Who's in it</Text>
+            <Text style={styles.headerTitle}>Who’s in it</Text>
             <Text style={styles.headerCount}>
               {taggedCount} of {MAX_MEMORY_TAGS}
             </Text>
@@ -210,7 +210,7 @@ export function FamilyRosterSheet({
             ) : null}
 
             {hasNoResults ? (
-              <Text style={styles.emptyText}>No family members match "{searchQuery}"</Text>
+              <Text style={styles.emptyText}>No family members match “{searchQuery}”</Text>
             ) : null}
           </ScrollView>
 

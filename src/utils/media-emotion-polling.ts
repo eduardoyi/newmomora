@@ -13,7 +13,7 @@ type EmotionPollMemory = Pick<
   | 'content'
   | 'illustration_status'
 > & {
-  mediaAssets?: Array<{ content_type: string }>;
+  mediaAssets?: { content_type: string }[];
 };
 
 // A memory is analyzable for emotion when it carries usable source material:

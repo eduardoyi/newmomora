@@ -1,5 +1,5 @@
 export interface CalculateInlineTagCountInput {
-  chipWidths: ReadonlyArray<number | undefined>;
+  chipWidths: readonly (number | undefined)[];
   containerWidth: number;
   gap: number;
   moreChipWidth: number;
@@ -9,7 +9,7 @@ function isMeasuredWidth(width: number | undefined): width is number {
   return typeof width === 'number' && Number.isFinite(width) && width > 0;
 }
 
-function sumWidths(widths: ReadonlyArray<number>, count: number): number {
+function sumWidths(widths: readonly number[], count: number): number {
   return widths.slice(0, count).reduce((total, width) => total + width, 0);
 }
 
@@ -34,7 +34,7 @@ export function calculateInlineTagCount({
     return null;
   }
 
-  const measuredChipWidths = chipWidths as ReadonlyArray<number>;
+  const measuredChipWidths = chipWidths as readonly number[];
   const allChipsWidth =
     sumWidths(measuredChipWidths, totalMembers) + rowGap * Math.max(totalMembers - 1, 0);
 

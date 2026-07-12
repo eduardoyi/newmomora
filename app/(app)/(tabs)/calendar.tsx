@@ -70,7 +70,7 @@ function MemoryStamp({ memory }: { memory: MemoryWithTags }) {
   if (memory.memory_type === 'text_only') {
     return (
       <View style={[styles.stamp, { backgroundColor: emo?.soft ?? colors.surface }]}>
-        <Text style={[styles.stampQuote, { color: emo?.ink ?? colors.ink3 }]}>"</Text>
+        <Text style={[styles.stampQuote, { color: emo?.ink ?? colors.ink3 }]}>“</Text>
       </View>
     );
   }
