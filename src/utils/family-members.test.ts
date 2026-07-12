@@ -1,6 +1,7 @@
 import {
   formatAgeCompactFromDob,
   formatAgeFromDob,
+  formatTaggedMemberAge,
   getMemberAvatarImageKey,
   getProfilePortraitPhotoKey,
   isPortraitInProgress,
@@ -57,6 +58,28 @@ describe('formatAgeCompactFromDob', () => {
   it('shows compact years only at or above the years-only threshold', () => {
     expect(formatAgeCompactFromDob('1989-06-24', new Date('2026-05-27T12:00:00'))).toBe('36y');
     expect(formatAgeCompactFromDob('2020-06-01', new Date('2025-06-15T12:00:00'))).toBe('5y');
+  });
+});
+
+describe('formatTaggedMemberAge', () => {
+  it('formats a compact age for a young child', () => {
+    expect(formatTaggedMemberAge('2020-01-15', new Date('2023-09-20T12:00:00'))).toBe('3y 8m');
+  });
+
+  it('formats a compact age for a 17 year old', () => {
+    expect(formatTaggedMemberAge('2006-06-24', new Date('2023-06-27T12:00:00'))).toBe('17y');
+  });
+
+  it('returns null for an 18 year old', () => {
+    expect(formatTaggedMemberAge('2008-01-01', new Date('2026-01-01T12:00:00'))).toBeNull();
+  });
+
+  it('returns null for a 37 year old adult', () => {
+    expect(formatTaggedMemberAge('1988-06-15', new Date('2026-01-10T12:00:00'))).toBeNull();
+  });
+
+  it('returns null for an invalid date of birth', () => {
+    expect(formatTaggedMemberAge('not-a-date')).toBeNull();
   });
 });
 

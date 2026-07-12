@@ -137,6 +137,18 @@ export function formatAgeCompactFromDob(dateOfBirth: string, referenceDate = new
   return `${years}y ${months}m`;
 }
 
+/** Ages at or above this are hidden on memory member pills (adults show name only). */
+export const AGE_PILL_MAX_YEARS = 18;
+
+/** Compact age for memory member pills; null for adults so pills show just the name. */
+export function formatTaggedMemberAge(dateOfBirth: string, referenceDate = new Date()): string | null {
+  const age = getAgePartsFromDob(dateOfBirth, referenceDate);
+  if (!age || age.years >= AGE_PILL_MAX_YEARS) {
+    return null;
+  }
+  return formatAgeCompactFromDob(dateOfBirth, referenceDate);
+}
+
 export type IllustratedProfileStatus = 'pending' | 'generating' | 'ready' | 'failed';
 
 export function isPortraitInProgress(status: IllustratedProfileStatus): boolean {

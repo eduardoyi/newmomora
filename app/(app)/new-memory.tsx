@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
-  Platform,
   Pressable,
   StyleSheet,
   Switch,
@@ -217,10 +216,7 @@ export default function NewMemoryScreen() {
       </View>
 
       {/* ── Body: flex layout so textarea grows and tags sit at the bottom ── */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.body}
-      >
+      <KeyboardAvoidingView behavior="padding" style={styles.body}>
         {/* Date pill */}
         <View style={styles.datePillWrap}>
           <DatePickerField
@@ -401,10 +397,14 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   textareaCaption: {
-    minHeight: 120,
+    flex: 0,
+    flexGrow: 0,
+    minHeight: 96,
+    maxHeight: 200,
   },
   mediaWrap: {
-    flex: 0,
+    flex: 1,
+    minHeight: 160,
     marginBottom: spacing.md,
   },
   wordCount: {

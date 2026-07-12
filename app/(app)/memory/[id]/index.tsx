@@ -27,7 +27,7 @@ import { navigateBack } from '@/lib/navigation';
 import { editMemoryRoute } from '@/lib/routes';
 import { aspectRatioFromDimensions, clampMediaAspectRatio } from '@/utils/media-aspect';
 import { canEditFamilyContent } from '@/utils/roles';
-import { formatAgeCompactFromDob } from '@/utils/family-members';
+import { formatTaggedMemberAge } from '@/utils/family-members';
 import {
   formatDisplayDate,
   getIllustrationStatusLabel,
@@ -39,7 +39,6 @@ import {
 
 // ── Shared header chrome ──────────────────────────────────────────────────────
 function DetailChrome({
-  emotion,
   onBack,
   onRegenerateIllustration,
   onEdit,
@@ -48,7 +47,6 @@ function DetailChrome({
   isRegeneratingIllustration = false,
   regenerateIllustrationDisabled = false,
 }: {
-  emotion?: string | null;
   onBack: () => void;
   onRegenerateIllustration?: () => void;
   onEdit?: () => void;
@@ -57,7 +55,6 @@ function DetailChrome({
   isRegeneratingIllustration?: boolean;
   regenerateIllustrationDisabled?: boolean;
 }) {
-  const emo = getEmotionColors(emotion);
   const chromeActionDisabled = isDeleting || isRegeneratingIllustration;
   return (
     <View style={styles.chrome}>
@@ -70,12 +67,6 @@ function DetailChrome({
         />
       </Pressable>
       <View style={styles.chromeRight}>
-        {emo && (
-          <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
-            <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
-            <Text style={[styles.emotionLabel, { color: emo.ink }]}>{emotion}</Text>
-          </View>
-        )}
         {onRegenerateIllustration && (
           <Pressable
             disabled={chromeActionDisabled || regenerateIllustrationDisabled}
@@ -135,12 +126,39 @@ function DetailChrome({
 
 // ── Member tag pill ───────────────────────────────────────────────────────────
 function MemberPill({ member }: { member: FamilyMember }) {
-  const age = member.date_of_birth ? formatAgeCompactFromDob(member.date_of_birth) : null;
+  const age = member.date_of_birth ? formatTaggedMemberAge(member.date_of_birth) : null;
 
   return (
     <View style={styles.memberPill}>
       <FamilyMemberAvatar member={member} size={22} />
       <Text style={styles.memberName}>{member.name}{age ? `, ${age}` : ''}</Text>
+    </View>
+  );
+}
+
+// ── Shared meta row (date · attribution + emotion chip) ──────────────────────
+function MemoryMetaRow({
+  date,
+  attributionName,
+  emotion,
+}: {
+  date: string;
+  attributionName: string;
+  emotion?: string | null;
+}) {
+  const emo = getEmotionColors(emotion);
+  return (
+    <View style={styles.metaRow}>
+      <Text numberOfLines={1} style={styles.metaLeft}>
+        <Text style={styles.detailDate}>{formatDisplayDate(date)}</Text>
+        <Text style={styles.attributionText}>  ·  Added by {attributionName}</Text>
+      </Text>
+      {emo && emotion ? (
+        <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
+          <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
+          <Text style={[styles.emotionLabel, { color: emo.ink }]}>{emotion}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -175,7 +193,6 @@ function MemoryDetailFramed({
   isRetrying: boolean;
   onRetry: () => void;
 }) {
-  const emo = getEmotionColors(memory.emotion);
   const isMedia = memory.memory_type === 'media';
   const showIllustrationGenerating = isIllustrationInProgress(memory.illustration_status);
   // Illustrations are generated square (1024×1024); measure on load so any
@@ -201,7 +218,7 @@ function MemoryDetailFramed({
           onDelete={onDelete}
         />
       </SafeAreaView>
-      <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingVertical: 20 }}>
+      <ScrollView contentContainerStyle={styles.detailScrollContent}>
         <View style={styles.framedCard}>
           {/* Media / illustration */}
           <View style={styles.framedMediaWrap}>
@@ -246,14 +263,7 @@ function MemoryDetailFramed({
 
           {/* Content inside card */}
           <View style={styles.framedCardBody}>
-            <Text style={styles.detailDate}>{formatDisplayDate(memory.memory_date)}</Text>
-            <Text style={styles.attributionText}>Added by {attributionName}</Text>
-            {emo && memory.emotion ? (
-              <View style={[styles.emotionChip, { backgroundColor: emo.soft, alignSelf: 'flex-start' }]}>
-                <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
-                <Text style={[styles.emotionLabel, { color: emo.ink }]}>{memory.emotion}</Text>
-              </View>
-            ) : null}
+            <MemoryMetaRow date={memory.memory_date} attributionName={attributionName} emotion={memory.emotion} />
             {memory.content ? (
               <Text style={styles.detailText}>{memory.content}</Text>
             ) : null}
@@ -301,33 +311,19 @@ function MemoryDetailEditorial({
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
-        {/* Tinted header */}
-        <View style={styles.editorialHeader}>
-          <LinearGradient
-            colors={getEmotionGradient(memory.emotion)}
-            locations={[0, 0.7, 1]}
-            style={StyleSheet.absoluteFill}
-            pointerEvents="none"
-          />
-          {/* Large watermark quote */}
-          <Text style={[styles.watermarkQuote, { color: emo ? emo.ink : colors.ink3 }]}>"</Text>
-          <View style={styles.editorialFade} />
-          <SafeAreaView edges={['top']}>
-            <DetailChrome
-              emotion={memory.emotion}
-              isDeleting={isDeleting}
-              onBack={onBack}
-              onEdit={onEdit}
-              onDelete={onDelete}
-            />
-          </SafeAreaView>
-        </View>
-
-        {/* Overlapping paper card */}
+      <LinearGradient
+        colors={getEmotionGradient(memory.emotion)}
+        locations={[0, 0.45, 1]}
+        style={styles.emotionGradient}
+        pointerEvents="none"
+      />
+      <SafeAreaView edges={['top']}>
+        <DetailChrome isDeleting={isDeleting} onBack={onBack} onEdit={onEdit} onDelete={onDelete} />
+      </SafeAreaView>
+      <ScrollView contentContainerStyle={styles.detailScrollContent}>
         <View style={styles.editorialCard}>
-          <Text style={styles.editorialDate}>{formatDisplayDate(memory.memory_date)}</Text>
-          <Text style={styles.attributionText}>Added by {attributionName}</Text>
+          <MemoryMetaRow date={memory.memory_date} attributionName={attributionName} emotion={memory.emotion} />
+          <Text style={[styles.editorialQuote, { color: emo ? emo.ink : colors.ink3 }]}>“</Text>
           <Text style={styles.editorialText}>{memory.content}</Text>
           {memory.taggedMembers.length > 0 && (
             <View style={[styles.memberRow, styles.editorialMemberRow]}>
@@ -569,6 +565,24 @@ const styles = StyleSheet.create({
     height: '60%',
   },
 
+  // ── Shared meta row ──
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  metaLeft: {
+    flexShrink: 1,
+  },
+
+  // ── Shared scroll content ──
+  detailScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingVertical: 24,
+  },
+
   // ── Framed detail ──
   framedCard: {
     marginHorizontal: 20,
@@ -676,32 +690,8 @@ const styles = StyleSheet.create({
   },
 
   // ── Editorial detail ──
-  editorialHeader: {
-    position: 'relative',
-    height: 300,
-    overflow: 'hidden',
-  },
-  watermarkQuote: {
-    position: 'absolute',
-    top: 50,
-    left: 18,
-    fontFamily: fonts.display,
-    fontSize: 160,
-    fontWeight: '400',
-    lineHeight: 160,
-    opacity: 0.1,
-  },
-  editorialFade: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 160,
-    // In practice this renders over top so the fade is just bg
-  },
   editorialCard: {
     marginHorizontal: 20,
-    marginTop: -80,
     backgroundColor: colors.white,
     borderRadius: radius.xl,
     borderWidth: 1,
@@ -714,12 +704,13 @@ const styles = StyleSheet.create({
     elevation: 4,
     gap: 14,
   },
-  editorialDate: {
-    fontFamily: fonts.sansBold,
-    fontSize: 11,
-    letterSpacing: 0.14 * 11,
-    textTransform: 'uppercase',
-    color: colors.primary,
+  editorialQuote: {
+    fontFamily: fonts.display,
+    fontSize: 56,
+    lineHeight: 56,
+    height: 34,
+    opacity: 0.18,
+    marginBottom: -6,
   },
   editorialText: {
     fontFamily: fonts.display,
