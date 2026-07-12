@@ -29,6 +29,9 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
 - Failed illustration shows retry option; no retry concept for media memories.
 - Calendar renders virtualized week rows back to the user's oldest memory. It fetches only the visible date window plus a small buffer; tap opens the first memory for that day.
 - Search bar on Timeline filters by content/emotion (`ilike`).
+- Timeline tag/media enrichment batches memory IDs in groups of 100. This
+  keeps PostgREST `.in(...)` request URLs below proxy limits for large family
+  histories while preserving the existing virtualized full-history feed.
 
 ## Architecture
 
@@ -120,6 +123,9 @@ role/tenancy model and the RLS rewrite.
 - `illustration_status = 'pending'` must only be set for `text_illustration` rows; all other types use `'none'`.
 - Poll every 5s while `illustration_status` is `pending`/`generating`.
 - Calendar range loading uses `fetchOldestMemoryDate` for scroll extent and `fetchMemoriesInDateRange` for buffered visible rows, so do not reintroduce full-list loading for the calendar.
+- Full-history Timeline enrichment must keep batching relation lookups; a
+  single `.in(...)` containing hundreds of UUIDs can exceed the Supabase
+  request-line limit and return HTTP 400 even though the memory rows are valid.
 - `media_key` must be null for non-`media` types; for `media`, it mirrors `memory_media` position 0 for compatibility.
 - Voice audio is **not stored** — only transcribed text.
 - `content` is nullable in the schema but must be non-empty after trim for `text_illustration` and `text_only` — enforced in client and Edge Function layer.
@@ -129,6 +135,6 @@ role/tenancy model and the RLS rewrite.
 | Layer | File |
 |-------|------|
 | Unit | `src/utils/memories.test.ts`, `src/utils/calendar.test.ts`, `src/utils/member-mentions.test.ts`, `src/utils/auto-memory-tags.test.ts`, `src/utils/profile-photo.test.ts` |
-| Integration | `src/services/memories.integration.test.ts`, `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/useAutoMemoryTags.integration.test.tsx` |
+| Integration | `src/services/memories.integration.test.ts` (including large-timeline relation batching), `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/useAutoMemoryTags.integration.test.tsx` |
 | E2E | `.maestro/flows/memories/create-memory.yaml`, `.maestro/flows/memories/auto-tag.yaml` |
 | Deno | `supabase/functions/analyze-emotion/index.test.ts`, `generate-illustration/index.test.ts`, `_shared/member-mentions.test.ts`, `_shared/illustration-references.test.ts`, `_shared/image-bytes.test.ts` |

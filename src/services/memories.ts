@@ -42,6 +42,21 @@ export interface ServiceError {
   code?: string;
 }
 
+// Keep PostgREST `.in(...)` URLs comfortably below proxy/request-line limits.
+// A full family timeline can contain hundreds of memories; sending every UUID
+// in one enrichment request produced ~27 KB URLs and HTTP 400 responses.
+const MEMORY_RELATION_BATCH_SIZE = 100;
+
+function chunkMemoryIds(memoryIds: string[]): string[][] {
+  const chunks: string[][] = [];
+
+  for (let index = 0; index < memoryIds.length; index += MEMORY_RELATION_BATCH_SIZE) {
+    chunks.push(memoryIds.slice(index, index + MEMORY_RELATION_BATCH_SIZE));
+  }
+
+  return chunks;
+}
+
 function mapSupabaseError(error: { message: string; code?: string }): ServiceError {
   return {
     message: error.message,
@@ -54,18 +69,24 @@ async function fetchTagsForMemories(memoryIds: string[]): Promise<Map<string, Fa
     return new Map();
   }
 
-  const { data, error } = await supabase
-    .from('memory_family_members')
-    .select('memory_id, family_members(*)')
-    .in('memory_id', memoryIds);
+  const rows = [];
 
-  if (error) {
-    throw mapSupabaseError(error);
+  for (const memoryIdBatch of chunkMemoryIds(memoryIds)) {
+    const { data, error } = await supabase
+      .from('memory_family_members')
+      .select('memory_id, family_members(*)')
+      .in('memory_id', memoryIdBatch);
+
+    if (error) {
+      throw mapSupabaseError(error);
+    }
+
+    rows.push(...(data ?? []));
   }
 
   const tagMap = new Map<string, FamilyMember[]>();
 
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const member = row.family_members as FamilyMember | null;
     if (!member) {
       continue;
@@ -156,19 +177,25 @@ async function fetchMediaForMemories(memoryIds: string[]): Promise<Map<string, M
     return new Map();
   }
 
-  const { data, error } = await (supabase as any)
-    .from('memory_media')
-    .select('*')
-    .in('memory_id', memoryIds)
-    .order('position', { ascending: true });
+  const rows: MemoryMediaAsset[] = [];
 
-  if (error) {
-    throw mapSupabaseError(error);
+  for (const memoryIdBatch of chunkMemoryIds(memoryIds)) {
+    const { data, error } = await (supabase as any)
+      .from('memory_media')
+      .select('*')
+      .in('memory_id', memoryIdBatch)
+      .order('position', { ascending: true });
+
+    if (error) {
+      throw mapSupabaseError(error);
+    }
+
+    rows.push(...((data ?? []) as MemoryMediaAsset[]));
   }
 
   const mediaMap = new Map<string, MemoryMediaAsset[]>();
 
-  for (const row of (data ?? []) as MemoryMediaAsset[]) {
+  for (const row of rows) {
     const existing = mediaMap.get(row.memory_id) ?? [];
     existing.push(row);
     mediaMap.set(row.memory_id, existing);

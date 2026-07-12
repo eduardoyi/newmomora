@@ -469,6 +469,64 @@ describe('memories service integration', () => {
     expect(data?.[0]?.taggedMembers[0]?.name).toBe('Emma');
   });
 
+  it('fetchMemories batches tag and media enrichment for large timelines', async () => {
+    const memoryRows = Array.from({ length: 205 }, (_, index) => ({
+      id: `memory-${index}`,
+      user_id: 'user-1',
+      content: null,
+      memory_date: '2026-05-24',
+      memory_type: 'media',
+      emotion: null,
+      illustration_key: null,
+      illustration_status: 'none',
+      illustration_prompt: null,
+      media_key: `user-1/memories/memory-${index}/media.jpg`,
+      media_content_type: 'image/jpeg',
+      created_at: '2026-05-24T00:00:00Z',
+      updated_at: '2026-05-24T00:00:00Z',
+    }));
+    const memoriesBuilder = createQueryBuilder({ data: memoryRows, error: null });
+    const tagBuilders: ReturnType<typeof createQueryBuilder>[] = [];
+    const mediaBuilders: ReturnType<typeof createQueryBuilder>[] = [];
+
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        return memoriesBuilder;
+      }
+
+      if (table === 'memory_family_members') {
+        const builder = createQueryBuilder({ data: [], error: null });
+        tagBuilders.push(builder);
+        return builder;
+      }
+
+      if (table === 'memory_media') {
+        const builder = createQueryBuilder({ data: [], error: null });
+        mediaBuilders.push(builder);
+        return builder;
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const { data, error } = await fetchMemories();
+
+    expect(error).toBeNull();
+    expect(data).toHaveLength(205);
+    expect(tagBuilders).toHaveLength(3);
+    expect(mediaBuilders).toHaveLength(3);
+    expect(tagBuilders.map((builder) => builder.in.mock.calls[0]?.[1])).toEqual([
+      memoryRows.slice(0, 100).map((memory) => memory.id),
+      memoryRows.slice(100, 200).map((memory) => memory.id),
+      memoryRows.slice(200).map((memory) => memory.id),
+    ]);
+    expect(mediaBuilders.map((builder) => builder.in.mock.calls[0]?.[1])).toEqual([
+      memoryRows.slice(0, 100).map((memory) => memory.id),
+      memoryRows.slice(100, 200).map((memory) => memory.id),
+      memoryRows.slice(200).map((memory) => memory.id),
+    ]);
+  });
+
   it('fetchOldestMemoryDate loads only the earliest memory date', async () => {
     const memoriesBuilder = createQueryBuilder({
       data: { memory_date: '2024-01-09' },
