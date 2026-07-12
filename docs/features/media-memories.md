@@ -60,7 +60,8 @@ sequenceDiagram
 Key points:
 - The client generates `memoryId` and a `mediaAssetId` UUID for each new file upfront so R2 object keys are known before DB writes.
 - **Video compression:** new video uploads are transcoded on-device to H.264 MP4 capped at 1280px (`src/utils/video-compression.ts`, `react-native-compressor`) during save, so a picked `.mov` is stored as `.mp4`. Compression is best-effort — any failure (and web) falls back to uploading the original file, so both `video/mp4` and `video/quicktime` remain accepted upload types. Requires a dev-client rebuild (native module).
-- **Playback:** the carousel preloads the (paused) player for pages adjacent to the active one and enables `expo-video` disk caching (`useCaching: true`), so swiping to a video or reopening it doesn't re-stream from R2.
+- **Playback:** only the visible video page mounts an `expo-video` player. Each player targets an 8-second forward buffer with a 16 MiB byte cap and enables disk caching (`useCaching: true`), preventing legacy high-bitrate videos and adjacent pages from exhausting Android's Java heap.
+- **Signed URL recovery:** app foregrounding is wired to TanStack Query focus state. Private images use stable object-key/version cache keys and refetch their presigned URL after an image load error, so expired one-hour URLs recover without repeatedly downloading unchanged bytes.
 - `memory_media` stores the canonical ordered asset list; `memories.media_key` and `media_content_type` cache the cover asset for compatibility.
 - **Photo/mixed** memories: `analyze-emotion` runs asynchronously after save/edit; it uses the first ordered image asset + optional caption. Does **not** run `generate-illustration`.
 - **All-video** memories: no `analyze-emotion` call in MVP.
@@ -213,6 +214,8 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/hooks/use-incoming-memory-share.integration.test.tsx` | Native resolved payload → validated composer attachment → intent cleared |
 | `src/utils/media-emotion-polling.test.ts` | Poll window for photo media without emotion |
 | `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, close action |
+| `src/components/memory-media-carousel.test.tsx` | Active-page-only video mounting, bounded video buffers, stable image cache keys, signed-URL retry |
+| `src/components/app-providers.test.tsx` | AppState-to-TanStack-Query focus synchronization for foreground refetches |
 | `src/components/memory-media-picker.test.tsx` | Native launch failure feedback and concurrent-launch guard |
 
 ### E2E (Maestro)
@@ -258,6 +261,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 | Date | Change |
 |------|--------|
 | 2026-07-12 | Added full-screen photo/video viewing from memory detail, including mixed-carousel paging from the tapped item |
+| 2026-07-12 | Bounded video buffers, removed adjacent player preloading, and added signed-image URL expiry recovery |
 | 2026-07-12 | Hardened camera/library permission and native picker presentation lifecycle |
 | 2026-07-12 | Detail videos now loop with hidden native controls |
 | 2026-07-12 | Single-asset media now uses its exact natural aspect ratio; multi-asset carousels retain the `3:4`-`16:9` clamp |

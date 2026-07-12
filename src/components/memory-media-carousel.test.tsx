@@ -24,6 +24,7 @@ jest.mock('expo-video', () => ({
 }));
 
 const mockedUseMediaUrls = useMediaUrls as jest.MockedFunction<typeof useMediaUrls>;
+const mockRefetchMediaUrls = jest.fn();
 
 const assets = [
   {
@@ -53,6 +54,7 @@ describe('MemoryMediaCarousel', () => {
         'user/memory/media/photo-1.jpg': 'https://example.com/photo-1.jpg',
         'user/memory/media/photo-2.jpg': 'https://example.com/photo-2.jpg',
       },
+      refetch: mockRefetchMediaUrls,
     } as ReturnType<typeof useMediaUrls>);
   });
 
@@ -137,15 +139,16 @@ describe('MemoryMediaCarousel', () => {
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 3 / 4 });
   });
 
-  it('preloads a video player on the page adjacent to the active one', () => {
+  it('does not mount a video player on the page adjacent to the active one', () => {
     mockedUseMediaUrls.mockReturnValue({
       data: {
         'user/memory/media/photo-1.jpg': 'https://example.com/photo-1.jpg',
         'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4',
       },
+      refetch: mockRefetchMediaUrls,
     } as ReturnType<typeof useMediaUrls>);
 
-    const { getByTestId } = render(
+    const { queryByTestId } = render(
       <MemoryMediaCarousel
         assets={[
           assets[0],
@@ -159,9 +162,7 @@ describe('MemoryMediaCarousel', () => {
       />,
     );
 
-    // Active index is 0 (the photo); the adjacent video page should already
-    // have its player mounted so it buffers before the user swipes to it.
-    expect(getByTestId('memory-media-video')).toBeTruthy();
+    expect(queryByTestId('memory-media-video')).toBeNull();
   });
 
   it('does not mount video players when the carousel is inactive', () => {
@@ -170,6 +171,7 @@ describe('MemoryMediaCarousel', () => {
         'user/memory/media/photo-1.jpg': 'https://example.com/photo-1.jpg',
         'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4',
       },
+      refetch: mockRefetchMediaUrls,
     } as ReturnType<typeof useMediaUrls>);
 
     const { queryByTestId } = render(
@@ -193,6 +195,7 @@ describe('MemoryMediaCarousel', () => {
   it('loops an unmuted detail video and toggles playback when tapped', () => {
     mockedUseMediaUrls.mockReturnValue({
       data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
     } as ReturnType<typeof useMediaUrls>);
 
     const videoAsset = {
@@ -207,6 +210,10 @@ describe('MemoryMediaCarousel', () => {
 
     expect(mockVideoPlayer.loop).toBe(true);
     expect(mockVideoPlayer.muted).toBe(false);
+    expect(mockVideoPlayer.bufferOptions).toEqual({
+      preferredForwardBufferDuration: 8,
+      maxBufferBytes: 16 * 1024 * 1024,
+    });
     expect(getByTestId('memory-media-video').props.nativeControls).toBe(false);
 
     fireEvent.press(getByTestId('memory-media-video-toggle'));
@@ -215,5 +222,20 @@ describe('MemoryMediaCarousel', () => {
     mockVideoPlayer.playing = false;
     fireEvent.press(getByTestId('memory-media-video-toggle'));
     expect(mockVideoPlayer.play).toHaveBeenCalled();
+  });
+
+  it('uses a stable image cache key and refreshes an expired signed URL', () => {
+    const { getByTestId } = render(
+      <MemoryMediaCarousel assets={[assets[0]]} cacheVersion="version-1" />,
+    );
+
+    const image = getByTestId('memory-media-image-asset-1');
+    expect(image.props.source).toEqual([{
+      uri: 'https://example.com/photo-1.jpg',
+      cacheKey: 'user/memory/media/photo-1.jpg:version-1',
+    }]);
+
+    fireEvent(image, 'error', { nativeEvent: { error: 'expired' } });
+    expect(mockRefetchMediaUrls).toHaveBeenCalledTimes(1);
   });
 });

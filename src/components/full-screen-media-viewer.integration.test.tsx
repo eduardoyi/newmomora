@@ -24,6 +24,7 @@ jest.mock('expo-video', () => ({
 }));
 
 const mockedUseMediaUrls = useMediaUrls as jest.MockedFunction<typeof useMediaUrls>;
+const mockRefetchMediaUrls = jest.fn();
 
 describe('FullScreenMediaViewer integration', () => {
   beforeEach(() => {
@@ -34,6 +35,7 @@ describe('FullScreenMediaViewer integration', () => {
         'user/memory/photo.jpg': 'https://example.com/photo.jpg',
         'user/memory/video.mp4': 'https://example.com/video.mp4',
       },
+      refetch: mockRefetchMediaUrls,
     } as ReturnType<typeof useMediaUrls>);
   });
 
@@ -64,6 +66,10 @@ describe('FullScreenMediaViewer integration', () => {
     );
     expect(getByText('2 / 2')).toBeTruthy();
     expect(getByTestId('full-screen-media-video')).toBeTruthy();
+    expect(mockVideoPlayer.bufferOptions).toEqual({
+      preferredForwardBufferDuration: 8,
+      maxBufferBytes: 16 * 1024 * 1024,
+    });
 
     fireEvent(getByTestId('full-screen-media-scroll'), 'momentumScrollEnd', {
       nativeEvent: { contentOffset: { x: 0, y: 0 } },
@@ -88,5 +94,27 @@ describe('FullScreenMediaViewer integration', () => {
 
     expect(getByTestId('full-screen-media-image-illustration')).toBeTruthy();
     expect(queryByTestId('full-screen-media-counter')).toBeNull();
+  });
+
+  it('uses an object-key cache identity and refreshes a failed signed image URL', () => {
+    const { getByTestId } = render(
+      <FullScreenMediaViewer
+        cacheVersion="version-1"
+        items={[{
+          id: 'photo',
+          contentType: 'image/jpeg',
+          objectKey: 'user/memory/photo.jpg',
+        }]}
+        onClose={jest.fn()}
+      />,
+    );
+
+    const image = getByTestId('full-screen-media-image-photo');
+    expect(image.props.source).toEqual([{
+      uri: 'https://example.com/photo.jpg',
+      cacheKey: 'user/memory/photo.jpg:version-1',
+    }]);
+    fireEvent(image, 'error', { nativeEvent: { error: 'expired' } });
+    expect(mockRefetchMediaUrls).toHaveBeenCalledTimes(1);
   });
 });

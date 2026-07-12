@@ -54,6 +54,10 @@ function VideoAsset({
   // detail screen, revisits) don't re-stream from R2 while the presigned URL
   // is still cached by useMediaUrls.
   const player = useVideoPlayer({ uri: url, useCaching: true }, (p) => {
+    p.bufferOptions = {
+      preferredForwardBufferDuration: 8,
+      maxBufferBytes: 16 * 1024 * 1024,
+    };
     p.loop = true;
     p.muted = isMuted;
   });
@@ -110,18 +114,20 @@ function VideoAsset({
 function MediaPage({
   asset,
   isActive,
-  preload,
+  cacheKey,
   mutedVideos,
   videoTapToToggle,
   onNaturalRatio,
+  onUrlError,
   url,
 }: {
   asset: MemoryMediaAsset;
   isActive: boolean;
-  preload: boolean;
+  cacheKey: string;
   mutedVideos: boolean;
   videoTapToToggle: boolean;
   onNaturalRatio: (ratio: number) => void;
+  onUrlError: () => void;
   url?: string;
 }) {
   const isVideo = isVideoContentType(asset.content_type);
@@ -135,14 +141,9 @@ function MediaPage({
   }
 
   if (isVideo) {
-    // Mount the (paused) player for pages adjacent to the active one so the
-    // video buffers before the user swipes to it; its first frame doubles as
-    // a poster behind the play overlay.
-    const showPlayer = isActive || preload;
-
     return (
       <View style={styles.page}>
-        {showPlayer ? (
+        {isActive ? (
           <VideoAsset
             isActive={isActive}
             isMuted={mutedVideos}
@@ -168,13 +169,14 @@ function MediaPage({
   return (
     <Image
       contentFit="contain"
+      onError={onUrlError}
       onLoad={(event) => {
         const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
         if (ratio) {
           onNaturalRatio(ratio);
         }
       }}
-      source={{ uri: url }}
+      source={{ uri: url, cacheKey }}
       style={styles.page}
       testID={`memory-media-image-${asset.id}`}
     />
@@ -196,7 +198,7 @@ export function MemoryMediaCarousel({
   const tapStartRef = useRef<{ x: number; y: number; timestamp: number } | null>(null);
   const hasMovedRef = useRef(false);
   const keys = assets.map((asset) => asset.object_key);
-  const { data: urls = {} } = useMediaUrls(keys, cacheVersion);
+  const { data: urls = {}, refetch: refetchMediaUrls } = useMediaUrls(keys, cacheVersion);
   const showPaging = assets.length > 1;
 
   // A single asset can use its exact natural ratio. Multi-asset carousels keep
@@ -293,10 +295,11 @@ export function MemoryMediaCarousel({
           <View key={asset.id} style={[styles.pageWrap, { width: width || 1 }]}>
             <MediaPage
               asset={asset}
+              cacheKey={`${asset.object_key}:${cacheVersion ?? ''}`}
               isActive={isActive && index === activeIndex}
-              preload={isActive && Math.abs(index - activeIndex) === 1}
               mutedVideos={mutedVideos}
               onNaturalRatio={(ratio) => handleNaturalRatio(asset.object_key, ratio)}
+              onUrlError={() => void refetchMediaUrls()}
               url={urls[asset.object_key]}
               videoTapToToggle={videoTapToToggle}
             />

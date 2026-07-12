@@ -39,6 +39,10 @@ interface FullScreenMediaViewerProps {
 
 function FullScreenVideo({ isActive, uri }: { isActive: boolean; uri: string }) {
   const player = useVideoPlayer({ uri, useCaching: true }, (videoPlayer) => {
+    videoPlayer.bufferOptions = {
+      preferredForwardBufferDuration: 8,
+      maxBufferBytes: 16 * 1024 * 1024,
+    };
     videoPlayer.loop = true;
     videoPlayer.muted = false;
   });
@@ -105,7 +109,7 @@ export function FullScreenMediaViewer({
   const safeInitialIndex = Math.min(Math.max(initialIndex, 0), Math.max(items.length - 1, 0));
   const [activeIndex, setActiveIndex] = useState(safeInitialIndex);
   const keys = items.flatMap((item) => item.objectKey ? [item.objectKey] : []);
-  const { data: urls = {} } = useMediaUrls(keys, cacheVersion);
+  const { data: urls = {}, refetch: refetchMediaUrls } = useMediaUrls(keys, cacheVersion);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ animated: false, x: safeInitialIndex * width, y: 0 });
@@ -153,7 +157,7 @@ export function FullScreenMediaViewer({
                 {!uri ? (
                   <ActivityIndicator color={colors.white} size="large" />
                 ) : isVideoContentType(item.contentType) ? (
-                  Math.abs(index - activeIndex) <= 1 ? (
+                  index === activeIndex ? (
                     <FullScreenVideo isActive={index === activeIndex} uri={uri} />
                   ) : (
                     <View style={styles.mediaPage} />
@@ -162,7 +166,11 @@ export function FullScreenMediaViewer({
                   <Image
                     accessibilityLabel={`Media ${index + 1} of ${items.length}`}
                     contentFit="contain"
-                    source={{ uri }}
+                    onError={item.objectKey ? () => void refetchMediaUrls() : undefined}
+                    source={{
+                      uri,
+                      cacheKey: `${item.objectKey ?? item.uri ?? item.id}:${cacheVersion ?? ''}`,
+                    }}
                     style={styles.mediaPage}
                     testID={`full-screen-media-image-${item.id}`}
                   />
