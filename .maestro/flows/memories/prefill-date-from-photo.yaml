@@ -1,0 +1,103 @@
+appId: com.memora.app
+---
+# Native-picker smoke test for photo capture-date prefill
+# (docs/plans/media-exif-capture-date-prefill.md). Seeds the device gallery
+# with a fixture JPEG carrying a known EXIF DateTimeOriginal/DateTimeDigitized
+# (2024-03-05), attaches it from the new-memory composer, and asserts the
+# date pill picks it up with the "From photo" source hint. Then overrides the
+# date through the picker and confirms the override survives to save.
+#
+# Fixture: ../../assets/capture-date-fixture.jpg -- a 48x48 solid-color JPEG
+# with no other identifying metadata, produced with Pillow:
+#
+#   from PIL import Image
+#   img = Image.new("RGB", (48, 48), color=(94, 122, 168))
+#   exif = img.getexif()
+#   exif_ifd = exif.get_ifd(0x8769)  # Exif SubIFD
+#   exif_ifd[0x9003] = "2024:03:05 10:00:00"  # DateTimeOriginal
+#   exif_ifd[0x9004] = "2024:03:05 10:00:00"  # DateTimeDigitized
+#   img.save("capture-date-fixture.jpg", "jpeg", exif=exif, quality=90)
+#
+# Gallery/OS date-picker widgets vary by emulator and OS version more than
+# the rest of this flow; keep src/screen-tests/new-memory.integration.test.tsx as
+# the deterministic CI regression and treat this flow as a manual/native
+# smoke test to re-run on a real iOS and Android development build before
+# release.
+- runFlow: ../auth/login.yaml
+- addMedia:
+    - ../../assets/capture-date-fixture.jpg
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: new-memory-attach-media
+    timeout: 10000
+- tapOn:
+    id: new-memory-attach-media
+- tapOn: "Photo library"
+- runFlow: ../shared/pick-first-image.yaml
+- extendedWaitUntil:
+    visible:
+      id: new-memory-media-preview
+    timeout: 15000
+
+# The date pill renders via toLocaleDateString (src/utils/dates.ts), so the
+# full formatted string ("Mar 5, 2024") only matches on an en-US device --
+# assert the locale-agnostic year substring within the testID instead (see
+# v4 review finding on locale-dependent Maestro assertions).
+- assertVisible:
+    id: new-memory-date
+    text: ".*2024.*"
+- assertVisible:
+    id: new-memory-date-source
+    text: "From photo"
+
+# Override the date through the picker. The native widget differs by
+# platform/OS version (iOS: in-app spinner + Done button; Android: system
+# dialog) -- adjust the swipe/tap targets here if the OS picker chrome
+# changes on the target emulator/simulator image.
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          id: new-memory-date
+      - swipe:
+          start: "50%, 45%"
+          end: "50%, 30%"
+          duration: 300
+      - tapOn:
+          id: new-memory-date-done
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          id: new-memory-date
+      - swipe:
+          start: "50%, 45%"
+          end: "50%, 30%"
+          duration: 300
+      - tapOn: "OK"
+
+# The source hint must disappear once the user has overridden the date, and
+# the override must survive through save.
+- assertNotVisible:
+    id: new-memory-date-source
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    notVisible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
+- extendedWaitUntil:
+    notVisible:
+      id: pending-memory-uploads-banner
+    timeout: 60000
+- assertNotVisible: "Couldn't post memory"

@@ -85,4 +85,175 @@ describe('MemoryMediaPicker', () => {
       resolvePicker?.({ canceled: true, assets: null });
     });
   });
+
+  describe('includeCaptureDate', () => {
+    function buildImageAsset(overrides: Partial<ImagePicker.ImagePickerAsset> = {}) {
+      return {
+        uri: 'file:///photo.jpg',
+        width: 100,
+        height: 100,
+        fileSize: 1024,
+        mimeType: 'image/jpeg',
+        exif: { DateTimeOriginal: '2024:06:01 10:00:00' },
+        ...overrides,
+      } as ImagePicker.ImagePickerAsset;
+    }
+
+    async function pickLibraryAndFlush() {
+      const screen = render(
+        <MemoryMediaPicker onError={jest.fn()} onSelect={onSelect} includeCaptureDate={includeCaptureDate} />,
+      );
+      fireEvent.press(screen.getByTestId('new-memory-attach-media'));
+      choosePhotoLibrary();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(300);
+      });
+      return screen;
+    }
+
+    let onSelect: jest.Mock;
+    let includeCaptureDate: boolean | undefined;
+
+    beforeEach(() => {
+      onSelect = jest.fn();
+      includeCaptureDate = undefined;
+    });
+
+    it('passes exif: true to launchImageLibraryAsync when includeCaptureDate is true', async () => {
+      includeCaptureDate = true;
+      mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+        canceled: false,
+        assets: [buildImageAsset()],
+      } as ImagePicker.ImagePickerResult);
+
+      await pickLibraryAndFlush();
+
+      expect(mockedImagePicker.launchImageLibraryAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ exif: true }),
+      );
+    });
+
+    it('passes exif: false when includeCaptureDate is omitted (default false)', async () => {
+      mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+        canceled: false,
+        assets: [buildImageAsset()],
+      } as ImagePicker.ImagePickerResult);
+
+      await pickLibraryAndFlush();
+
+      expect(mockedImagePicker.launchImageLibraryAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ exif: false }),
+      );
+    });
+
+    it('passes exif: false when includeCaptureDate is explicitly false', async () => {
+      includeCaptureDate = false;
+      mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+        canceled: false,
+        assets: [buildImageAsset()],
+      } as ImagePicker.ImagePickerResult);
+
+      await pickLibraryAndFlush();
+
+      expect(mockedImagePicker.launchImageLibraryAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ exif: false }),
+      );
+    });
+
+    it('emits only a derived capturedAtIso scalar for an image with valid EXIF, never the raw EXIF object', async () => {
+      includeCaptureDate = true;
+      mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+        canceled: false,
+        assets: [
+          buildImageAsset({
+            exif: {
+              DateTimeOriginal: '2024:06:01 10:00:00',
+              GPSLatitude: [37, 46, 26.4],
+              GPSLongitude: [122, 25, 9.6],
+              Make: 'Apple',
+              Model: 'iPhone 15',
+            },
+          }),
+        ],
+      } as ImagePicker.ImagePickerResult);
+
+      await pickLibraryAndFlush();
+
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      const [[attachments]] = onSelect.mock.calls;
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0].capturedAtIso).toBe('2024-06-01');
+      expect(attachments[0]).not.toHaveProperty('exif');
+      expect(attachments[0]).not.toHaveProperty('GPSLatitude');
+      expect(attachments[0]).not.toHaveProperty('GPSLongitude');
+      expect(attachments[0]).not.toHaveProperty('Make');
+      expect(attachments[0]).not.toHaveProperty('Model');
+      expect(JSON.stringify(attachments[0])).not.toContain('GPS');
+    });
+
+    it('does not attach a capture date when includeCaptureDate is false, even if exif is present on the asset', async () => {
+      includeCaptureDate = false;
+      mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+        canceled: false,
+        assets: [buildImageAsset()],
+      } as ImagePicker.ImagePickerResult);
+
+      await pickLibraryAndFlush();
+
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      const [[attachments]] = onSelect.mock.calls;
+      expect(attachments[0].capturedAtIso).toBeUndefined();
+    });
+
+    it('ignores EXIF on a video asset', async () => {
+      includeCaptureDate = true;
+      mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+        canceled: false,
+        assets: [
+          buildImageAsset({
+            uri: 'file:///clip.mp4',
+            mimeType: 'video/mp4',
+            duration: 5000,
+            exif: { DateTimeOriginal: '2024:06:01 10:00:00' },
+          }),
+        ],
+      } as ImagePicker.ImagePickerResult);
+
+      await pickLibraryAndFlush();
+
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      const [[attachments]] = onSelect.mock.calls;
+      expect(attachments[0].contentType).toBe('video/mp4');
+      expect(attachments[0].capturedAtIso).toBeUndefined();
+    });
+
+    it('emits a valid attachment without a capture date when EXIF is absent', async () => {
+      includeCaptureDate = true;
+      mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+        canceled: false,
+        assets: [buildImageAsset({ exif: undefined })],
+      } as ImagePicker.ImagePickerResult);
+
+      await pickLibraryAndFlush();
+
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      const [[attachments]] = onSelect.mock.calls;
+      expect(attachments[0].capturedAtIso).toBeUndefined();
+      expect(attachments[0].uri).toBe('file:///photo.jpg');
+    });
+
+    it('emits a valid attachment without a capture date when EXIF is malformed', async () => {
+      includeCaptureDate = true;
+      mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+        canceled: false,
+        assets: [buildImageAsset({ exif: { DateTimeOriginal: 'not-a-date' } })],
+      } as ImagePicker.ImagePickerResult);
+
+      await pickLibraryAndFlush();
+
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      const [[attachments]] = onSelect.mock.calls;
+      expect(attachments[0].capturedAtIso).toBeUndefined();
+    });
+  });
 });

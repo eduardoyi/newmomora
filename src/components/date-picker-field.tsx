@@ -26,6 +26,9 @@ interface DatePickerFieldProps {
   minimumDate?: Date;
   maximumDate?: Date;
   defaultPickerDate?: Date;
+  /** Announced by screen readers alongside the field's accessibility label
+   * (e.g. to note that the current value is a suggestion). */
+  accessibilityHint?: string;
 }
 
 function resolvePickerDate(
@@ -57,6 +60,7 @@ export function DatePickerField({
   minimumDate,
   maximumDate,
   defaultPickerDate,
+  accessibilityHint,
 }: DatePickerFieldProps) {
   const insets = useSafeAreaInsets();
   const [showIosPicker, setShowIosPicker] = useState(false);
@@ -109,6 +113,7 @@ export function DatePickerField({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={displayValue ?? placeholder}
+        accessibilityHint={accessibilityHint}
         onPress={openPicker}
         style={({ pressed }) => [styles.field, pressed && styles.fieldPressed]}
         testID={testID}

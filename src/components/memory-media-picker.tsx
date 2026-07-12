@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 
 import { colors } from '@/constants/theme';
+import { extractCaptureDateIso } from '@/utils/media-capture-date';
 import {
   getMediaExtensionFromContentType,
   isVideoContentType,
@@ -30,6 +31,10 @@ export interface MediaAttachment {
   durationMs?: number;
   sizeBytes: number;
   objectKey?: string;
+  /** Derived `YYYY-MM-DD` EXIF capture date for library photos, when
+   * `includeCaptureDate` requested it and a valid date was found. Never the
+   * raw EXIF object -- see `src/utils/media-capture-date.ts`. */
+  capturedAtIso?: string;
 }
 
 interface MemoryMediaPickerProps {
@@ -39,6 +44,13 @@ interface MemoryMediaPickerProps {
   /** Render as a circular icon-only toolbar button instead of the full-width button */
   compact?: boolean;
   remainingSlots?: number;
+  /**
+   * Requests EXIF from the native library picker so capture dates can be
+   * derived client-side. Off by default -- the picker is shared with the
+   * edit-memory flow, which must never request EXIF. Only the create screen
+   * opts in. Has no effect on `launchCameraAsync`, which never requests EXIF.
+   */
+  includeCaptureDate?: boolean;
 }
 
 function createAttachmentId(): string {
@@ -110,6 +122,7 @@ export function MemoryMediaPicker({
   disabled = false,
   compact = false,
   remainingSlots = 10,
+  includeCaptureDate = false,
 }: MemoryMediaPickerProps) {
   const isPickerOpeningRef = useRef(false);
 
@@ -162,6 +175,7 @@ export function MemoryMediaPicker({
         allowsEditing: false,
         quality: 0.85,
         videoMaxDuration: 60,
+        exif: includeCaptureDate,
       });
 
       if (result.canceled || result.assets.length === 0) {
@@ -179,7 +193,8 @@ export function MemoryMediaPicker({
         }
 
         const sizeBytes = await resolveFileSize(asset);
-        const durationMs = isVideoContentType(contentType) ? asset.duration ?? null : null;
+        const isVideo = isVideoContentType(contentType);
+        const durationMs = isVideo ? asset.duration ?? null : null;
         const validationError = validateMediaFile({
           sizeBytes,
           durationMs,
@@ -191,12 +206,21 @@ export function MemoryMediaPicker({
           return;
         }
 
+        // Only image assets are candidates for a capture-date suggestion;
+        // the extracted value is a plain YYYY-MM-DD scalar -- asset.exif
+        // itself (which can include GPS/device fields) is never retained.
+        const capturedAtIso =
+          includeCaptureDate && !isVideo
+            ? extractCaptureDateIso(asset.exif) ?? undefined
+            : undefined;
+
         attachments.push({
           id: createAttachmentId(),
           uri: asset.uri,
           contentType,
           durationMs: durationMs ?? undefined,
           sizeBytes: sizeBytes as number,
+          capturedAtIso,
         });
       }
 

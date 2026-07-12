@@ -22,6 +22,23 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
   waits for permission/source-chooser UI to dismiss before presenting the
   picker, and reports native launch failures inline instead of silently
   leaving the composer stuck. Concurrent picker launches are ignored.
+- **Capture-date prefill (new-memory composer only):** picking library photos
+  in the create screen requests EXIF from `expo-image-picker` and derives a
+  `YYYY-MM-DD` suggestion from the earliest valid capture date across the
+  currently attached photos. When a suggestion applies, the date pill shows
+  that date with a muted "From photo" hint next to it (and an
+  `accessibilityHint` on the date field itself). Manually changing the date
+  overrides the suggestion for the rest of that composer session — no later
+  add, remove, reorder, or wholesale attachment replacement (including an
+  incoming share) can overwrite a user-chosen date. Removing every dated
+  photo before any override restores the date the screen started with when it
+  mounted (not a freshly recomputed "today"). Reordering alone never changes
+  the suggested date. Videos, camera captures, web picks, and incoming shared
+  media never carry a capture date, so they never move the date on their own.
+  Missing, stripped, or implausible EXIF (wrong types, impossible calendar
+  dates, dates more than one day in the future) is always a silent no-op —
+  never an error that blocks attaching the photo or saving the memory. The
+  edit-memory composer never requests EXIF and never suggests a date.
 - Once media is attached, compact ordered tiles appear in the form; the AI illustration toggle is hidden.
 - Long-pressing a tile enters reorder mode; users can move or remove tiles before saving.
 - Caption text is optional for `media` memories; the save button is enabled as soon as media is attached.
@@ -66,6 +83,7 @@ Key points:
 - **Photo/mixed** memories: `analyze-emotion` runs asynchronously after save/edit; it uses the first ordered image asset + optional caption. Does **not** run `generate-illustration`.
 - **All-video** memories: no `analyze-emotion` call in MVP.
 - `illustration_status` remains `'none'` for all `media` memories.
+- **Capture-date prefill data flow:** `expo-image-picker` → (`asset.exif`, only when the create screen's `includeCaptureDate` opts in) → `extractCaptureDateIso` derives a `YYYY-MM-DD` scalar per image asset → stored as `MediaAttachment.capturedAtIso` → `useSuggestedMemoryDate` derives the earliest valid one across attached photos via `deriveSuggestedMemoryDate` and applies it to the date pill unless the user has already overridden it. `capturedAtIso` is presentation-only: it is never included in the deferred upload payload (`enqueuePendingMemoryUpload`'s `mediaAssets`), never logged, and the raw EXIF object itself (which can include GPS/device fields) is discarded immediately after extraction — only the derived scalar exists in React state.
 
 ## Data model
 
@@ -118,13 +136,16 @@ Mobile upload flow uses `upload-media` so the device only talks to Supabase; `ge
 | Layer | Files | Responsibility |
 |-------|-------|----------------|
 | Routes | `app/(app)/new-memory.tsx`, `app/(app)/memory/[id].tsx` | Emergent type logic, media picker trigger, caption field, save flow |
+| Routes | `app/(app)/new-memory.tsx` | Also wires `useSuggestedMemoryDate`, passes `includeCaptureDate` to `MemoryMediaPicker` (create screen only), and renders the "From photo" hint next to the date pill |
 | Hooks | `src/hooks/useMemories.ts` | List/detail queries, edit/delete mutations; polls for emotion chip |
 | Hooks | `src/hooks/use-pending-memory-uploads.tsx` | Deferred posting queue (provider in `AppProviders`); runs `postMediaMemory`, kicks emotion analysis + family notify, exposes retry/discard |
+| Hooks | `src/hooks/use-suggested-memory-date.ts` | New — single-reducer `{ memoryDate, dateSource }` state machine; derives the earliest EXIF capture date across attached photos, restores the session baseline when none remain, and locks in a user override for the rest of the composer session |
 | Services | `src/services/memory-posting.ts` | `postMediaMemory` pipeline: compress → upload (3-way concurrency, per-asset progress) → insert, rollback on failure; shared `uploadMemoryMediaAssets` also backs the edit flow |
 | Services | `src/services/memories.ts` | `createMediaMemory`, `runMediaPhotoEmotionAnalysis` |
 | Components | `src/components/pending-memory-uploads-banner.tsx`, `pending-memory-upload-card.tsx` | Pending/failed post cards above the Timeline & Calendar feeds |
 | Components | `src/components/memory-card.tsx` | Conditional render: photo thumbnail vs video thumbnail vs illustration |
-| Components | `src/components/memory-media-picker.tsx` | New — wraps `expo-image-picker`; validates size/duration; emits `{ uri, contentType, duration? }` |
+| Components | `src/components/memory-media-picker.tsx` | New — wraps `expo-image-picker`; validates size/duration; emits `{ uri, contentType, duration? }`; opt-in `includeCaptureDate` prop passes `exif: true` to the library picker and attaches a derived `capturedAtIso` to image results only (never video, never the camera path, never raw EXIF) |
+| Utils | `src/utils/media-capture-date.ts` | New — `extractCaptureDateIso` (strict EXIF `DateTimeOriginal`/`DateTimeDigitized`/`DateTime` parsing + Gregorian validation, `today + 1 day` tolerance) and `deriveSuggestedMemoryDate` (earliest valid `capturedAtIso` across attachments) |
 | Components | `src/components/memory-media-preview.tsx` | New — inline form preview with remove button |
 | Components | `src/components/full-screen-media-viewer.tsx` | Shared full-screen image/video viewer; resolves private R2 keys, pages mixed carousels, and controls active video playback |
 | Native entry | `app/+native-intent.ts`, `app.json` | Registers Momora for image/video shares and routes incoming share intents to the composer |
@@ -159,6 +180,7 @@ To create a `media` memory programmatically:
 - **New media type (e.g. audio):** Add MIME type to `get-upload-url` allowed set, add handling in `memory-media-viewer`, update `media_content_type` documentation.
 - **Media replacement on edit:** Upload new file to same key (R2 PUT overwrites), update `media_content_type` if changed.
 - **Video thumbnailing:** Fetch the presigned URL in a Deno Edge Function, extract first frame, store as `{userId}/memories/{memoryId}/thumb.webp`, add `media_thumb_key` column.
+- **Capture-date location extension (Phase 2):** Do not extend `MediaAttachment` with the raw EXIF object. If a future phase needs location, extract a minimal typed value at the picker boundary, review Android scoped-media permission behavior (`ACCESS_MEDIA_LOCATION`) and iOS privacy copy, define explicit retention/storage semantics, and update PRD/TECH_SPEC/security docs before implementation.
 
 ## Constraints & gotchas
 
@@ -174,6 +196,11 @@ To create a `media` memory programmatically:
   each supported iOS release before shipping.
 - **Illustration pipeline** — `generate-illustration` is not used for `media`. Photo emotion uses `analyze-emotion` only; `illustration_status` stays `'none'`.
 - **Privacy** — user-uploaded photos (and optional captions) are sent to OpenAI for emotion classification, same trust boundary as portrait generation.
+- **Capture-date prefill is create-only and fail-open** — `includeCaptureDate`/EXIF is requested only by `app/(app)/new-memory.tsx`; the edit composer, incoming-share attachments, camera captures, and web picks never carry a capture date, so they never move the date on their own. Missing, stripped, or implausible EXIF (wrong types, impossible calendar dates, dates further than one day in the future) is always a silent no-op — never an error that blocks attaching or saving. Only the derived `YYYY-MM-DD` scalar ever enters React state, an attachment, a log line, or a request/queue payload; the raw EXIF object (which can include GPS/device fields) is discarded immediately after extraction at the picker boundary.
+- **`exif: true` has no measurable iCloud-latency cost in this SDK version** — the picker's `quality: 0.85` already forces iOS's slow path (`MediaHandler.swift` only takes the fast path at `quality >= 1`), so the full original asset — including an iCloud download for cloud-only assets — loads on every library pick regardless of the `exif` option. `exif: true` only parses metadata that was already fetched; do not reintroduce a latency rationale for gating it.
+- **EXIF shape is a confirmed, version-pinned platform contract, not a guess** — `expo-image-picker@56.0.20`'s `asset.exif` is a flat top-level object on both platforms (iOS merges TIFF fields in; Android emits flat `ExifInterface` tag names). `extractCaptureDateIso` is typed `unknown` and fails closed (returns null) rather than adding speculative nested `{ Exif }`/`{ TIFF }` handling. Re-verify this assumption when upgrading Expo SDK or `expo-image-picker`.
+- **Earliest-date rule** — when multiple attached photos have valid capture dates, the suggestion is always the earliest one, not the most-recently-attached one; a reorder that doesn't change which date is earliest is a no-op (no re-render-visible state change).
+- **Uploaded binaries are not guaranteed metadata-free** — this feature only governs the EXIF object surfaced to JS (React state, logs, request/queue payloads). On Android, `quality: 0.85` routes picks through `CompressionImageExporter`, which copies essentially all EXIF tags (GPS refs/timestamps, `DateTime*`, Make/Model, MakerNote) from the source into the uploaded file; that file is uploaded verbatim. This is pre-existing behavior, unrelated to this feature, and unaffected by whether `includeCaptureDate` is set. iOS's `quality < 1` slow path happens to re-encode via `UIImage` and drop metadata. Stripping EXIF/GPS from image binaries at upload time is a follow-up, not yet implemented.
 - **HEIC emotion** — if Edge cannot decode HEIC for vision, emotion stays unset (`unsupported_image_format`); client-side JPEG conversion is backlog.
 - **Edit flow: removing media** — at least one asset must remain. Converting media memories to `text_only` is out of scope.
 - **HEIC format** — iOS default photo format. `expo-image` handles display, but if you need to transcode server-side (e.g. for thumbnails), note that Deno has limited HEIC support.
@@ -204,6 +231,8 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/services/memories.test.ts` | `createMediaMemory` — success, upload failure, insert failure |
 | `src/services/memory-posting.test.ts` | Upload pipeline — UUID-based keys, per-asset progress, rollback on upload/insert failure |
 | `src/hooks/use-pending-memory-uploads.test.tsx` | Queue lifecycle — posting → removed on success, failed → retry/discard, photo emotion kick, video skip, family notify |
+| `src/utils/media-capture-date.test.ts` | `extractCaptureDateIso` key priority/fallback, flat-shape-only parsing, colon-format parsing without `Date()` coercion, NUL/whitespace trimming, Gregorian validation (zero fields, invalid month/day, leap years, year floor), deterministic `today`/`today+1` boundary; `deriveSuggestedMemoryDate` earliest-valid-date selection |
+| `src/hooks/use-suggested-memory-date.test.tsx` | Session-baseline capture, media/default suggestion application, earliest-across-batches, remove-restores-baseline, reorder-is-a-no-op, manual override survives append/remove/reorder/replace, midnight-crossing baseline stability, render-to-render state consistency |
 
 ### Integration tests
 
@@ -216,7 +245,8 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, close action |
 | `src/components/memory-media-carousel.test.tsx` | Active-page-only video mounting, bounded video buffers, stable image cache keys, signed-URL retry |
 | `src/components/app-providers.test.tsx` | AppState-to-TanStack-Query focus synchronization for foreground refetches |
-| `src/components/memory-media-picker.test.tsx` | Native launch failure feedback and concurrent-launch guard |
+| `src/components/memory-media-picker.test.tsx` | Native launch failure feedback and concurrent-launch guard; `includeCaptureDate` → `exif` option wiring; image EXIF → `capturedAtIso`-only attachment (no raw EXIF/GPS/device fields); video EXIF ignored; absent/malformed EXIF still emits a valid attachment |
+| `src/screen-tests/new-memory.integration.test.tsx` | Full screen wiring (deliberately under `src/`, not `app/` — see file header): EXIF-dated photo updates the date pill and shows the "From photo" hint; manual date override survives further attach/remove; an incoming-share replacement without metadata follows default/override rules; Save passes only the final `memoryDate` to the posting queue with no EXIF/capture metadata in the payload |
 
 ### E2E (Maestro)
 
@@ -225,6 +255,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `.maestro/flows/memories/create-media-memory.yaml` | Pick photo → save → Timeline → detail → full-screen viewer → close |
 | `.maestro/flows/memories/create-video-memory.yaml` | Happy path: pick video → save → open detail → video plays |
 | `.maestro/flows/memories/share-gallery-media.android.yaml` | Android gallery share sheet → Momora composer opens with attachment |
+| `.maestro/flows/memories/prefill-date-from-photo.yaml` | Native-picker smoke test: seed gallery with a known-EXIF JPEG fixture → attach → assert date + "From photo" hint (locale-agnostic year substring) → override date → hint clears → save succeeds. Native-only; not deterministic across emulators/OS versions, so `src/screen-tests/new-memory.integration.test.tsx` remains the CI regression — run this flow manually on iOS and Android development builds before release. |
 
 ### Edge Function tests (Deno)
 
@@ -240,6 +271,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 npm test -- --testPathPattern=media
 maestro test .maestro/flows/memories/create-media-memory.yaml
 maestro test .maestro/flows/memories/create-video-memory.yaml
+maestro test .maestro/flows/memories/prefill-date-from-photo.yaml
 deno test supabase/functions/get-upload-url/
 ```
 
@@ -260,6 +292,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
+| 2026-07-12 | New-memory composer only: library photo attachments now pre-fill the memory date from the earliest valid EXIF capture date, shown as an overridable "From photo" suggestion (`src/utils/media-capture-date.ts`, `src/hooks/use-suggested-memory-date.ts`); edit-memory composer unaffected |
 | 2026-07-12 | Added full-screen photo/video viewing from memory detail, including mixed-carousel paging from the tapped item |
 | 2026-07-12 | Bounded video buffers, removed adjacent player preloading, and added signed-image URL expiry recovery |
 | 2026-07-12 | Hardened camera/library permission and native picker presentation lifecycle |

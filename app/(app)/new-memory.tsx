@@ -28,9 +28,9 @@ import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemories } from '@/hooks/useMemories';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
+import { useSuggestedMemoryDate } from '@/hooks/use-suggested-memory-date';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { canEditFamilyContent } from '@/utils/roles';
-import { todayIsoDate } from '@/utils/dates';
 import {
   deriveMemoryType,
   validateMemoryContent,
@@ -72,8 +72,10 @@ export default function NewMemoryScreen() {
     }
   }, [role]);
   const [content, setContent] = useState('');
-  const [memoryDate, setMemoryDate] = useState(todayIsoDate());
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
+  const { memoryDate, setMemoryDate, dateSource } = useSuggestedMemoryDate({
+    attachments: attachedMedia,
+  });
   const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
   const [illustrationEnabled, setIllustrationEnabled] = useState(true);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
@@ -228,11 +230,25 @@ export default function NewMemoryScreen() {
         {/* Date pill */}
         <View style={styles.datePillWrap}>
           <DatePickerField
+            accessibilityHint={dateSource === 'media' ? 'Suggested from photo date' : undefined}
             onChange={setMemoryDate}
             placeholder="Today"
             testID="new-memory-date"
             value={memoryDate}
           />
+          {dateSource === 'media' ? (
+            // The accessibility announcement lives on the DatePickerField's
+            // accessibilityHint above; this visible label is hidden from the
+            // accessibility tree so screen readers don't announce it twice.
+            <Text
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              style={styles.dateSourceHint}
+              testID="new-memory-date-source"
+            >
+              From photo
+            </Text>
+          ) : null}
         </View>
 
         {/* Text area — grows to fill space when no media attached */}
@@ -307,6 +323,7 @@ export default function NewMemoryScreen() {
         <MemoryMediaPicker
           compact
           disabled={isSaving || attachedMedia.length >= 10}
+          includeCaptureDate
           onError={setErrorMessage}
           onSelect={appendMedia}
           remainingSlots={10 - attachedMedia.length}
@@ -398,8 +415,16 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   datePillWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     marginTop: 14,
     marginBottom: 4,
+  },
+  dateSourceHint: {
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    color: colors.ink3,
   },
   textarea: {
     flex: 1,

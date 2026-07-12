@@ -1034,6 +1034,26 @@ persists.
 
 Note: the client generates `memoryId` upfront so the R2 object key is known before the DB insert, mirroring the family-member photo flow (§5.3).
 
+**Client-only capture-date prefill (create screen only):** when the picker
+requests EXIF (`includeCaptureDate`, new-memory composer only — the edit
+composer never sets it), `src/utils/media-capture-date.ts` reads only
+`DateTimeOriginal` → `DateTimeDigitized` → `DateTime` from each library
+photo's EXIF object, strictly validates the Gregorian calendar date, and
+derives a `YYYY-MM-DD` scalar. `src/hooks/use-suggested-memory-date.ts`
+applies the earliest such date across currently attached photos as the
+memory date, with a visible "From photo" hint; manually changing the date
+overrides the suggestion for the rest of that session. No API/schema change:
+the EXIF object surfaced to JS is never retained on the attachment, logged,
+or added to any request payload or persisted record — only the derived
+`YYYY-MM-DD` scalar enters React state, and it is never distinguishable from
+a manually-typed date once saved (`memories.memory_date` stores the same
+column either way). This does **not** mean the uploaded file binary is
+metadata-free: Android's compression path (`quality: 0.85`) copies the
+source file's EXIF (including GPS) into the exported JPEG, which is then
+uploaded as-is — pre-existing behavior, unrelated to this feature. See
+[docs/features/media-memories.md](./features/media-memories.md) for the
+full behavior, fail-open rules, and Phase 2 (location) extension path.
+
 ### 5.6 Family sharing: invite → redeem → approve
 
 ```
