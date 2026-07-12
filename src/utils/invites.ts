@@ -78,6 +78,16 @@ export function formatInviteExpiry(expiresAt: string, now: Date = new Date()): s
   return `Expires in ${remainingDays}d`;
 }
 
+/**
+ * True when a `pending` invite is still within its 7-day window (expiry is
+ * derived from `expires_at`, not swept -- see `formatInviteExpiry` above and
+ * the invite-lifecycle notes in docs/features/family-sharing.md). Used to
+ * decide whether Settings' "Pending invites" row has anything left to show.
+ */
+export function isPendingInviteActive(expiresAt: string, now: Date = new Date()): boolean {
+  return new Date(expiresAt).getTime() > now.getTime();
+}
+
 export interface RedeemedInviteStatusRow {
   invite_id: string;
   status: string;

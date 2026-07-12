@@ -80,6 +80,7 @@ export default function AppLayout() {
         name="family/[id]/edit"
         options={{ presentation: 'modal' }}
       />
+      <Stack.Screen name="sharing/members" />
       <Stack.Screen
         name="sharing/invite"
         options={{ presentation: 'modal' }}

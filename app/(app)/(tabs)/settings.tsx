@@ -20,98 +20,35 @@ import { useAuth } from '@/hooks/use-auth';
 import { familyMembershipsQueryKey, useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
-import { MemberChangedElsewhereError, useMemberManagement } from '@/hooks/useMemberManagement';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import {
   sharingApprovalsRoute,
   sharingInviteRoute,
+  sharingMembersRoute,
   sharingPendingInvitesRoute,
   sharingRedeemRoute,
 } from '@/lib/routes';
 import { getDeviceTimezone } from '@/services/auth';
-import { leaveFamily, updateFamilyName, type FamilyMemberProfile } from '@/services/family';
-import { canEditFamilyContent, canManageMember, isOwnerRole, roleLabel } from '@/utils/roles';
+import { leaveFamily, updateFamilyName } from '@/services/family';
+import { isPendingInviteActive } from '@/utils/invites';
+import { canEditFamilyContent, isOwnerRole, roleLabel } from '@/utils/roles';
 import { AuthField, AuthInput } from '@/components/auth-screen';
-import { MemberActionSheet } from '@/components/member-action-sheet';
 import { SelectField } from '@/components/select-field';
-
-function SettingsBlock({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <View>
-      <Text style={styles.blockTitle}>{title}</Text>
-      <View style={styles.block}>
-        {children}
-      </View>
-    </View>
-  );
-}
-
-function SettingsRow({
-  label,
-  caption,
-  value,
-  chevron,
-  right,
-  first,
-  onPress,
-  testID,
-  accessibilityLabel,
-}: {
-  label: string;
-  caption?: string;
-  value?: string;
-  chevron?: boolean;
-  right?: React.ReactNode;
-  first?: boolean;
-  onPress?: () => void;
-  testID?: string;
-  accessibilityLabel?: string;
-}) {
-  const content = (
-    <>
-      <View style={styles.rowContent}>
-        <Text style={styles.rowLabel}>{label}</Text>
-        {caption && <Text style={styles.rowCaption}>{caption}</Text>}
-      </View>
-      {value && <Text style={styles.rowValue}>{value}</Text>}
-      {right}
-      {chevron && <Text style={styles.chevron}>›</Text>}
-    </>
-  );
-
-  if (onPress) {
-    return (
-      <Pressable
-        accessibilityLabel={accessibilityLabel}
-        accessibilityRole="button"
-        onPress={onPress}
-        style={({ pressed }) => [styles.row, !first && styles.rowBorder, pressed && styles.rowPressed]}
-        testID={testID}
-      >
-        {content}
-      </Pressable>
-    );
-  }
-
-  return (
-    <View style={[styles.row, !first && styles.rowBorder]} testID={testID}>
-      {content}
-    </View>
-  );
-}
+import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 
 function FamilySection() {
   const { user } = useAuth();
   const { family, familyId, role, memberships, setActiveFamily, refetchMemberships } = useFamily();
   const { profiles } = useFamilyMemberProfiles(familyId);
-  const { changeRole, removeMember: removeMemberMutation } = useMemberManagement(familyId);
   const queryClient = useQueryClient();
   const canEditName = canEditFamilyContent(role);
   const isOwner = isOwnerRole(role);
-  // Approvals badge: the invites query is manager+-only under RLS, so it is
-  // gated on role rather than fired (and denied) for viewers.
-  const { redeemedInvites } = useFamilyInvites(familyId, { enabled: canEditName });
+  // Pending/approvals rows: the invites query is manager+-only under RLS, so
+  // it is gated on role rather than fired (and denied) for viewers.
+  const { pendingInvites, redeemedInvites, isLoading: isInvitesLoading } = useFamilyInvites(familyId, {
+    enabled: canEditName,
+  });
 
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(family?.name ?? '');
@@ -119,7 +56,6 @@ function FamilySection() {
   const [nameError, setNameError] = useState('');
   const [isLeaving, setIsLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState('');
-  const [manageTarget, setManageTarget] = useState<FamilyMemberProfile | null>(null);
 
   useEffect(() => {
     if (!isEditingName) {
@@ -186,49 +122,6 @@ function FamilySection() {
     );
   };
 
-  const applyRoleChange = (profile: FamilyMemberProfile, nextRole: 'manager' | 'viewer') => {
-    setManageTarget(null);
-    void (async () => {
-      try {
-        await changeRole({ userId: profile.user_id, role: nextRole });
-      } catch (error) {
-        if (error instanceof MemberChangedElsewhereError) {
-          Alert.alert('List refreshed', error.message);
-          return;
-        }
-        Alert.alert('Could not update role', `Could not change ${profile.name}'s role. Please try again.`);
-      }
-    })();
-  };
-
-  const handleRequestRemove = (profile: FamilyMemberProfile) => {
-    setManageTarget(null);
-    Alert.alert(
-      'Remove from family',
-      `${profile.name} will no longer be able to see the family journal. Memories and photos they added will stay.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              try {
-                await removeMemberMutation(profile.user_id);
-              } catch (error) {
-                if (error instanceof MemberChangedElsewhereError) {
-                  Alert.alert('List refreshed', error.message);
-                  return;
-                }
-                Alert.alert('Could not remove member', `Could not remove ${profile.name}. Please try again.`);
-              }
-            })();
-          },
-        },
-      ],
-    );
-  };
-
   const handlePickFamily = async (nextFamilyId: string) => {
     if (nextFamilyId === familyId) {
       return;
@@ -239,6 +132,12 @@ function FamilySection() {
       Alert.alert('Could not switch families', 'Please try again.');
     }
   };
+
+  const activeMemberCount = profiles.filter((profile) => profile.is_active_member).length;
+  // "Expired" pending invites (status stays 'pending' until read/redemption
+  // time -- see docs/features/family-sharing.md's invite-lifecycle section)
+  // shouldn't keep this row alive once there's nothing left to act on.
+  const hasActivePendingInvite = pendingInvites.some((invite) => isPendingInviteActive(invite.expires_at));
 
   return (
     <SettingsBlock title="Family">
@@ -297,45 +196,42 @@ function FamilySection() {
         />
       )}
 
-      {profiles.map((profile) => {
-        const actionable = canManageMember(role, user?.id, profile);
-        return (
-          <SettingsRow
-            accessibilityLabel={
-              actionable ? `Manage ${profile.name}, ${roleLabel(profile.role).toLowerCase()}` : undefined
-            }
-            chevron={actionable}
-            key={profile.user_id}
-            label={profile.name}
-            onPress={actionable ? () => setManageTarget(profile) : undefined}
-            testID={`member-row-${profile.user_id}`}
-            value={profile.is_active_member ? roleLabel(profile.role) : 'Former member'}
-          />
-        );
-      })}
+      <SettingsRow
+        chevron
+        label="Family members"
+        onPress={() => router.push(sharingMembersRoute)}
+        testID="settings-family-members"
+        value={String(activeMemberCount)}
+      />
 
       {canEditName && (
-        <>
-          <SettingsRow
-            chevron
-            label="Invite a family member"
-            onPress={() => router.push(sharingInviteRoute)}
-            testID="settings-invite-family-member"
-          />
-          <SettingsRow
-            chevron
-            label="Pending invites"
-            onPress={() => router.push(sharingPendingInvitesRoute)}
-            testID="settings-pending-invites"
-          />
-          <SettingsRow
-            chevron
-            label="Approvals"
-            onPress={() => router.push(sharingApprovalsRoute)}
-            testID="settings-approvals"
-            value={redeemedInvites.length > 0 ? String(redeemedInvites.length) : undefined}
-          />
-        </>
+        <SettingsRow
+          chevron
+          label="Invite a family member"
+          onPress={() => router.push(sharingInviteRoute)}
+          testID="settings-invite-family-member"
+        />
+      )}
+
+      {/* While invite data is loading, simply don't render these -- no
+          flicker placeholder for a count that's about to settle. */}
+      {canEditName && !isInvitesLoading && hasActivePendingInvite && (
+        <SettingsRow
+          chevron
+          label="Pending invites"
+          onPress={() => router.push(sharingPendingInvitesRoute)}
+          testID="settings-pending-invites"
+        />
+      )}
+
+      {canEditName && !isInvitesLoading && redeemedInvites.length > 0 && (
+        <SettingsRow
+          chevron
+          label="Approvals"
+          onPress={() => router.push(sharingApprovalsRoute)}
+          testID="settings-approvals"
+          value={String(redeemedInvites.length)}
+        />
       )}
 
       <SettingsRow
@@ -378,16 +274,6 @@ function FamilySection() {
       )}
 
       {leaveError ? <Text style={styles.familyNameError}>{leaveError}</Text> : null}
-
-      <MemberActionSheet
-        memberName={manageTarget?.name ?? ''}
-        memberRole={manageTarget?.role === 'manager' ? 'manager' : 'viewer'}
-        onClose={() => setManageTarget(null)}
-        onDemote={() => manageTarget && applyRoleChange(manageTarget, 'viewer')}
-        onPromote={() => manageTarget && applyRoleChange(manageTarget, 'manager')}
-        onRemove={() => manageTarget && handleRequestRemove(manageTarget)}
-        visible={Boolean(manageTarget)}
-      />
     </SettingsBlock>
   );
 }

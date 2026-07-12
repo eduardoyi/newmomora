@@ -13,10 +13,11 @@ import { useUserProfile } from '@/hooks/useUserProfile';
 import {
   sharingApprovalsRoute,
   sharingInviteRoute,
+  sharingMembersRoute,
   sharingPendingInvitesRoute,
   sharingRedeemRoute,
 } from '@/lib/routes';
-import { leaveFamily, removeMember, updateFamilyName, updateMemberRole } from '@/services/family';
+import { leaveFamily, updateFamilyName } from '@/services/family';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -50,8 +51,6 @@ jest.mock('@/hooks/useUserProfile', () => ({
 jest.mock('@/services/family', () => ({
   leaveFamily: jest.fn(),
   updateFamilyName: jest.fn(),
-  updateMemberRole: jest.fn(),
-  removeMember: jest.fn(),
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
@@ -63,8 +62,9 @@ const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.MockedFunc
 const mockedUseUserProfile = useUserProfile as jest.MockedFunction<typeof useUserProfile>;
 const mockedLeaveFamily = leaveFamily as jest.MockedFunction<typeof leaveFamily>;
 const mockedUpdateFamilyName = updateFamilyName as jest.MockedFunction<typeof updateFamilyName>;
-const mockedUpdateMemberRole = updateMemberRole as jest.MockedFunction<typeof updateMemberRole>;
-const mockedRemoveMember = removeMember as jest.MockedFunction<typeof removeMember>;
+
+const FUTURE_EXPIRY = '2030-01-01T00:00:00Z';
+const PAST_EXPIRY = '2020-01-01T00:00:00Z';
 
 function renderScreen() {
   const queryClient = new QueryClient({
@@ -273,6 +273,59 @@ describe('Settings Family section', () => {
     alertSpy.mockRestore();
   });
 
+  it('badges the Family members row with the active-member count and routes to the members screen', () => {
+    const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseFamilyMemberProfiles.mockReturnValue({
+      profiles: [
+        {
+          user_id: 'user-1',
+          name: 'Rosa',
+          role: 'owner',
+          is_active_member: true,
+          created_at: '2026-05-28T00:00:00Z',
+        },
+        {
+          user_id: 'user-2',
+          name: 'Dana',
+          role: 'manager',
+          is_active_member: true,
+          created_at: '2026-05-28T00:00:00Z',
+        },
+        {
+          user_id: 'user-3',
+          name: 'Former',
+          role: null,
+          is_active_member: false,
+          created_at: '2026-05-28T00:00:00Z',
+        },
+      ],
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    const { getByTestId, getByText, queryByTestId } = renderScreen();
+
+    // Only the two active members count, the former member does not.
+    expect(getByTestId('settings-family-members')).toBeTruthy();
+    expect(getByText('2')).toBeTruthy();
+    // The member list itself no longer renders inline.
+    expect(queryByTestId('member-row-user-1')).toBeNull();
+
+    fireEvent.press(getByTestId('settings-family-members'));
+    expect(router.push).toHaveBeenCalledWith(sharingMembersRoute);
+  });
+
   it('shows manager sharing entry points and routes to each sharing screen', () => {
     const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
     mockedUseFamily.mockReturnValue({
@@ -285,6 +338,17 @@ describe('Settings Family section', () => {
       refetchMemberships: jest.fn(),
       justLostAccess: false,
     });
+    mockedUseFamilyInvites.mockReturnValue({
+      invites: [],
+      pendingInvites: [{ id: 'invite-1', status: 'pending', expires_at: FUTURE_EXPIRY }],
+      redeemedInvites: [{ id: 'invite-2', status: 'redeemed' }],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+      revokeInvite: jest.fn(),
+      isRevoking: false,
+    } as never);
 
     const { getByTestId } = renderScreen();
 
@@ -301,7 +365,7 @@ describe('Settings Family section', () => {
     expect(router.push).toHaveBeenCalledWith(sharingRedeemRoute);
   });
 
-  it('hides manager-only sharing rows from viewers but keeps Join a family', () => {
+  it('hides manager-only sharing rows from viewers but keeps Join a family and Family members', () => {
     mockedUseFamily.mockReturnValue({
       family: { id: 'family-1', name: "Rosa's family" },
       familyId: 'family-1',
@@ -319,6 +383,107 @@ describe('Settings Family section', () => {
     expect(queryByTestId('settings-pending-invites')).toBeNull();
     expect(queryByTestId('settings-approvals')).toBeNull();
     expect(queryByTestId('settings-join-family')).toBeTruthy();
+    expect(queryByTestId('settings-family-members')).toBeTruthy();
+    // A viewer role never fires the invites query -- RLS would deny it anyway.
+    expect(mockedUseFamilyInvites).toHaveBeenCalledWith('family-1', { enabled: false });
+  });
+
+  it('only shows Pending invites when there is at least one non-expired pending invite', () => {
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    // No invites at all -- hidden.
+    const { queryByTestId, rerender } = renderScreen();
+    expect(queryByTestId('settings-pending-invites')).toBeNull();
+
+    // Only an expired pending invite -- still hidden.
+    mockedUseFamilyInvites.mockReturnValue({
+      invites: [],
+      pendingInvites: [{ id: 'invite-1', status: 'pending', expires_at: PAST_EXPIRY }],
+      redeemedInvites: [],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+      revokeInvite: jest.fn(),
+      isRevoking: false,
+    } as never);
+    rerender(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <QueryClientProvider client={new QueryClient()}>
+          <SettingsScreen />
+        </QueryClientProvider>
+      </SafeAreaProvider>,
+    );
+    expect(queryByTestId('settings-pending-invites')).toBeNull();
+
+    // A non-expired pending invite -- shown.
+    mockedUseFamilyInvites.mockReturnValue({
+      invites: [],
+      pendingInvites: [{ id: 'invite-2', status: 'pending', expires_at: FUTURE_EXPIRY }],
+      redeemedInvites: [],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+      revokeInvite: jest.fn(),
+      isRevoking: false,
+    } as never);
+    rerender(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <QueryClientProvider client={new QueryClient()}>
+          <SettingsScreen />
+        </QueryClientProvider>
+      </SafeAreaProvider>,
+    );
+    expect(queryByTestId('settings-pending-invites')).toBeTruthy();
+  });
+
+  it('does not flicker Pending invites/Approvals placeholders while invite data is loading', () => {
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseFamilyInvites.mockReturnValue({
+      invites: [],
+      pendingInvites: [],
+      redeemedInvites: [],
+      isLoading: true,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+      revokeInvite: jest.fn(),
+      isRevoking: false,
+    } as never);
+
+    const { queryByTestId } = renderScreen();
+
+    expect(queryByTestId('settings-pending-invites')).toBeNull();
+    expect(queryByTestId('settings-approvals')).toBeNull();
   });
 
   it('badges the approvals row with the redeemed-invite count', () => {
@@ -363,265 +528,5 @@ describe('Settings Family section', () => {
 
     const { queryByTestId } = renderScreen();
     expect(queryByTestId('settings-family-picker')).toBeNull();
-  });
-});
-
-describe('Settings Family section member management', () => {
-  const ownerProfile = {
-    user_id: 'user-1',
-    name: 'Rosa',
-    role: 'owner',
-    is_active_member: true,
-    created_at: '2026-05-28T00:00:00Z',
-  };
-  const managerProfile = {
-    user_id: 'user-2',
-    name: 'Dana',
-    role: 'manager',
-    is_active_member: true,
-    created_at: '2026-05-28T00:00:00Z',
-  };
-  const viewerProfile = {
-    user_id: 'user-3',
-    name: 'Ana',
-    role: 'viewer',
-    is_active_member: true,
-    created_at: '2026-05-28T00:00:00Z',
-  };
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-
-    mockedUseAuth.mockReturnValue({
-      session: { user: { id: 'user-1' } } as never,
-      user: { id: 'user-1', email: 'rosa@example.com' } as never,
-      isLoading: false,
-      requestSignInOtp: jest.fn(),
-      requestSignUpOtp: jest.fn(),
-      verifyOtp: jest.fn(),
-      signInWithPassword: jest.fn(),
-      signOut: jest.fn(),
-    });
-
-    mockedUseUserProfile.mockReturnValue({
-      profile: { name: 'Rosa', enable_daily_reminder: false } as never,
-      isLoading: false,
-      isError: false,
-      error: null,
-      updateProfile: jest.fn().mockResolvedValue(undefined),
-      isUpdating: false,
-      deleteAccount: jest.fn(),
-      isDeletingAccount: false,
-      cancelAccountDeletion: jest.fn(),
-      isCancelingDeletion: false,
-    } as never);
-
-    mockedUseFamilyInvites.mockReturnValue({
-      invites: [],
-      pendingInvites: [],
-      redeemedInvites: [],
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: jest.fn(),
-      revokeInvite: jest.fn(),
-      isRevoking: false,
-    } as never);
-  });
-
-  function setFamily(role: string, userId = 'user-1') {
-    mockedUseAuth.mockReturnValue({
-      session: { user: { id: userId } } as never,
-      user: { id: userId, email: 'test@example.com' } as never,
-      isLoading: false,
-      requestSignInOtp: jest.fn(),
-      requestSignUpOtp: jest.fn(),
-      verifyOtp: jest.fn(),
-      signInWithPassword: jest.fn(),
-      signOut: jest.fn(),
-    });
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role,
-      memberships: [{ id: 'm1', familyId: 'family-1', role, name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-  }
-
-  it('lets the owner manage manager/viewer rows but not the owner row or their own', () => {
-    setFamily('owner', 'user-1');
-    mockedUseFamilyMemberProfiles.mockReturnValue({
-      profiles: [ownerProfile, managerProfile, viewerProfile],
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-
-    const { getByTestId, queryByTestId } = renderScreen();
-
-    // Own row (the owner) is inert -- tapping it does nothing.
-    fireEvent.press(getByTestId('member-row-user-1'));
-    expect(queryByTestId('member-action-remove')).toBeNull();
-
-    // Manager row is actionable -- offers "Make viewer".
-    fireEvent.press(getByTestId('member-row-user-2'));
-    expect(getByTestId('member-action-demote')).toBeTruthy();
-    fireEvent.press(getByTestId('member-action-cancel'));
-
-    // Viewer row is actionable -- offers "Make manager".
-    fireEvent.press(getByTestId('member-row-user-3'));
-    expect(getByTestId('member-action-promote')).toBeTruthy();
-  });
-
-  it('lets a manager manage other non-owner rows but not the owner or their own row', () => {
-    setFamily('manager', 'user-2');
-    mockedUseFamilyMemberProfiles.mockReturnValue({
-      profiles: [ownerProfile, managerProfile, viewerProfile],
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-
-    const { getByTestId, queryByTestId } = renderScreen();
-
-    fireEvent.press(getByTestId('member-row-user-1'));
-    expect(queryByTestId('member-action-remove')).toBeNull();
-
-    fireEvent.press(getByTestId('member-row-user-2'));
-    expect(queryByTestId('member-action-remove')).toBeNull();
-
-    fireEvent.press(getByTestId('member-row-user-3'));
-    expect(getByTestId('member-action-promote')).toBeTruthy();
-  });
-
-  it('never offers member actions to a viewer', () => {
-    setFamily('viewer', 'user-3');
-    mockedUseFamilyMemberProfiles.mockReturnValue({
-      profiles: [ownerProfile, managerProfile, viewerProfile],
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-
-    const { getByTestId, queryByTestId } = renderScreen();
-
-    fireEvent.press(getByTestId('member-row-user-1'));
-    fireEvent.press(getByTestId('member-row-user-2'));
-    fireEvent.press(getByTestId('member-row-user-3'));
-    expect(queryByTestId('member-action-promote')).toBeNull();
-    expect(queryByTestId('member-action-demote')).toBeNull();
-    expect(queryByTestId('member-action-remove')).toBeNull();
-  });
-
-  it('promotes a viewer with a single tap', async () => {
-    setFamily('manager', 'user-2');
-    mockedUseFamilyMemberProfiles.mockReturnValue({
-      profiles: [ownerProfile, managerProfile, viewerProfile],
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    mockedUpdateMemberRole.mockResolvedValue({ data: [{ id: 'membership-3', role: 'manager' }], error: null });
-
-    const { getByTestId } = renderScreen();
-
-    fireEvent.press(getByTestId('member-row-user-3'));
-    fireEvent.press(getByTestId('member-action-promote'));
-
-    await waitFor(() => {
-      expect(mockedUpdateMemberRole).toHaveBeenCalledWith('family-1', 'user-3', 'manager');
-    });
-  });
-
-  it('demotes a manager with a single tap', async () => {
-    setFamily('owner', 'user-1');
-    mockedUseFamilyMemberProfiles.mockReturnValue({
-      profiles: [ownerProfile, managerProfile, viewerProfile],
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    mockedUpdateMemberRole.mockResolvedValue({ data: [{ id: 'membership-2', role: 'viewer' }], error: null });
-
-    const { getByTestId } = renderScreen();
-
-    fireEvent.press(getByTestId('member-row-user-2'));
-    fireEvent.press(getByTestId('member-action-demote'));
-
-    await waitFor(() => {
-      expect(mockedUpdateMemberRole).toHaveBeenCalledWith('family-1', 'user-2', 'viewer');
-    });
-  });
-
-  it('only removes a member after confirming the destructive alert', async () => {
-    setFamily('owner', 'user-1');
-    mockedUseFamilyMemberProfiles.mockReturnValue({
-      profiles: [ownerProfile, managerProfile, viewerProfile],
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    mockedRemoveMember.mockResolvedValue({ data: [{ id: 'membership-3' }], error: null });
-
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((title, message, buttons) => {
-      expect(title).toBe('Remove from family');
-      expect(message).toContain('Ana');
-      expect(message).toContain('will no longer be able to see the family journal');
-      const cancelButton = buttons?.find((button) => button.text === 'Cancel');
-      cancelButton?.onPress?.();
-    });
-
-    const { getByTestId } = renderScreen();
-
-    fireEvent.press(getByTestId('member-row-user-3'));
-    fireEvent.press(getByTestId('member-action-remove'));
-
-    expect(alertSpy).toHaveBeenCalled();
-    expect(mockedRemoveMember).not.toHaveBeenCalled();
-
-    alertSpy.mockImplementation((_title, _message, buttons) => {
-      const removeButton = buttons?.find((button) => button.text === 'Remove');
-      removeButton?.onPress?.();
-    });
-
-    fireEvent.press(getByTestId('member-row-user-3'));
-    fireEvent.press(getByTestId('member-action-remove'));
-
-    await waitFor(() => {
-      expect(mockedRemoveMember).toHaveBeenCalledWith('family-1', 'user-3');
-    });
-
-    alertSpy.mockRestore();
-  });
-
-  it('refreshes the list with a non-scary message when the member was already changed elsewhere', async () => {
-    setFamily('owner', 'user-1');
-    mockedUseFamilyMemberProfiles.mockReturnValue({
-      profiles: [ownerProfile, managerProfile, viewerProfile],
-      isLoading: false,
-      isError: false,
-      error: null,
-    });
-    mockedUpdateMemberRole.mockResolvedValue({ data: [], error: null });
-
-    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-
-    const { getByTestId } = renderScreen();
-
-    fireEvent.press(getByTestId('member-row-user-3'));
-    fireEvent.press(getByTestId('member-action-promote'));
-
-    await waitFor(() => {
-      expect(alertSpy).toHaveBeenCalledWith(
-        'List refreshed',
-        'Looks like something changed — the list has been refreshed.',
-      );
-    });
-
-    alertSpy.mockRestore();
   });
 });

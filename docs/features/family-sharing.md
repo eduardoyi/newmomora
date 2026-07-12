@@ -44,14 +44,18 @@ to family-membership checks. There is no "personal, unshared" mode anymore
 - **Attribution:** memory detail shows "Added by {name}" (falls back to "a
   former member" if the creator's account was hard-deleted). Not shown on
   timeline cards — a plan deviation, see [Outcome](../plans/family-sharing.md#16-outcome).
-- **Family section (Settings):** family name (owner/manager can rename),
-  member list with roles -- owner/manager can tap any other non-owner
-  member's row to promote/demote or remove them (see
-  [Member management](#member-management) below); the owner's own row and
-  the signed-in user's own row are always inert, invite/pending-invites/
-  approvals links (owner/manager only), "Join a family" (anyone), a family
-  switcher when the user has more than one membership, and "Leave family"
-  (non-owners only).
+- **Family section (Settings):** family name (owner/manager can rename), a
+  "Family members" row showing the active-member count and pushing to the
+  **Family members** screen (`app/(app)/sharing/members.tsx`, any role —
+  see [Member management](#member-management) below for the list itself and
+  the promote/demote/remove affordance), "Invite a family member"
+  (owner/manager only), "Pending invites" (owner/manager only, and only
+  rendered when at least one non-expired pending invite exists), "Approvals"
+  (owner/manager only, and only rendered when at least one redeemed invite
+  is awaiting a decision — keeps its count badge), "Join a family" (anyone),
+  a family switcher when the user has more than one membership, and "Leave
+  family" (non-owners only). The conditional rows simply don't render while
+  invite data is loading, rather than showing a placeholder.
 - **Universal link:** `https://usemomora.com/invite?code=sunny-tiger-lake`
   opens the app, stashes the code, and routes straight to the redeem screen
   (prefilled) or through signup first if signed out.
@@ -104,10 +108,23 @@ Notes:
 ## Member management
 
 Owner/manager can promote, demote, and remove members directly from the
-Settings member list (`FamilySection` in `app/(app)/(tabs)/settings.tsx`) —
-the RLS backing this (manager+ may `update`/`delete` a non-owner's
-`family_memberships` row, never to/from `owner`) predates this UI; this is
-just the client surface for it.
+**Family members** list (`app/(app)/sharing/members.tsx`) — the RLS backing
+this (manager+ may `update`/`delete` a non-owner's `family_memberships` row,
+never to/from `owner`) predates this UI; this is just the client surface for
+it.
+
+The list used to render inline inside Settings' `FamilySection`, but with up
+to 50 members per family that grew Settings unboundedly, so it moved to its
+own screen. Settings → Family now only has a constant-size **"Family
+members"** row (`settings-family-members`) showing the active-member count
+and pushing to `sharing/members`; that screen carries the actual list, the
+tap-to-manage affordance, and (owner/manager only) an "Invite a family
+member" row at the top. `members.tsx` is visible to every role — viewers get
+the same read-only list, just without the invite row and with every row
+inert (`canManageMember` already excludes them). The row/block chrome
+(`SettingsBlock`/`SettingsRow`) was extracted to
+`src/components/settings-row.tsx` so Settings and the members screen share
+the exact same look instead of duplicating it.
 
 - **Affordance:** each member row is tappable (chevron) when the signed-in
   user's role passes `canManageMember` (`src/utils/roles.ts`) for that row —
@@ -584,7 +601,8 @@ the app-side change ships.
 | `src/hooks/use-auth.integration.test.tsx` | OTP request/verify flow, dev password sign-in |
 | `src/hooks/useFamilyMembers.integration.test.tsx` | Family-scoped queries |
 | `src/hooks/useMemberManagement.test.tsx` | Optimistic role-change/removal apply + rollback on failure, `MemberChangedElsewhereError` on a zero-row result |
-| `src/screen-tests/settings.family-section.test.tsx` | Family section rendering by role, invite/approval links, leave/switch family, member-management affordance matrix (owner/manager/viewer × own/owner/other rows), promote/demote/remove wiring, destructive-confirm gating, zero-row refresh copy |
+| `src/screen-tests/settings.family-section.test.tsx` | Family section rendering by role, "Family members" row count + navigation, leave/switch family, conditional Pending invites/Approvals rows (non-expired-only, hidden while loading, count badge) |
+| `src/screen-tests/sharing.members.test.tsx` | Family members screen: invite affordance by role, member-management affordance matrix (owner/manager/viewer × own/owner/other rows), promote/demote/remove wiring, destructive-confirm gating, zero-row refresh copy |
 | `src/screen-tests/no-family.test.tsx` | Create-family / redeem entry points, `pendingInviteCode` guard precedence |
 | `src/screen-tests/sharing.redeem.test.tsx` | Redeem screen prefill, definitive-vs-transient error handling |
 
@@ -625,3 +643,4 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 |------|--------|
 | 2026-07-11 | Family sharing shipped: OTP auth, tenancy schema + RLS rewrite, storage re-authorization, client role gating, invite/redeem/approve flow, notifications. See `docs/plans/family-sharing.md` Outcome section for what deviated from the original plan. |
 | 2026-07-12 | Member management UI: owner/manager can promote/demote/remove non-owner members directly from the Settings member list (`MemberActionSheet`, `useMemberManagement`, `updateMemberRole`/`removeMember`) — the underlying RLS already allowed this, only the client surface was missing. See [Member management](#member-management). |
+| 2026-07-12 | Family management IA restructure: the member list moved off Settings onto its own **Family members** screen (`app/(app)/sharing/members.tsx`) so Settings stays constant-size for families up to the 50-member cap; Settings now shows a "Family members" row with the active-member count, and "Pending invites"/"Approvals" only render when there's at least one non-expired/redeemed invite to act on. See [Member management](#member-management). |
