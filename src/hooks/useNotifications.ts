@@ -56,38 +56,70 @@ export function useNotificationsRegistration(enabled: boolean) {
   return { requestRegistration };
 }
 
+function warnRegistrationFailure(step: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`Push notification ${step} failed: ${message}`);
+}
+
+// Lazy require keeps expo-notifications out of app startup (it's only needed
+// once a notification setting is enabled). A require rather than a dynamic
+// import() so Jest can resolve it through its module registry.
+function loadNotifications(): typeof import('expo-notifications') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('expo-notifications');
+}
+
+// Never throws: the mount-time effect fires this as a fire-and-forget `void`
+// call, so any rejection would surface as an unhandled rejection (dev
+// red-box). E.g. getExpoPushTokenAsync throws on Android when the binary
+// predates google-services.json ("Default FirebaseApp is not initialized").
 async function registerForPushNotifications(
   updateProfile: ReturnType<typeof useUserProfile>['updateProfile'],
 ): Promise<PushRegistrationResult> {
-  const Notifications = await import('expo-notifications');
+  let canAskAgain = true;
 
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
+  try {
+    const Notifications = loadNotifications();
 
-  const permissions = await Notifications.getPermissionsAsync();
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
 
-  let finalStatus = permissions.status;
-  let canAskAgain = permissions.canAskAgain;
+    const permissions = await Notifications.getPermissionsAsync();
 
-  if (finalStatus !== 'granted') {
-    const requested = await Notifications.requestPermissionsAsync();
-    finalStatus = requested.status;
-    canAskAgain = requested.canAskAgain;
-  }
+    let finalStatus = permissions.status;
+    canAskAgain = permissions.canAskAgain;
 
-  if (finalStatus !== 'granted') {
+    if (finalStatus !== 'granted') {
+      const requested = await Notifications.requestPermissionsAsync();
+      finalStatus = requested.status;
+      canAskAgain = requested.canAskAgain;
+    }
+
+    if (finalStatus !== 'granted') {
+      return { granted: false, canAskAgain };
+    }
+
+    // Permission is granted from here on -- report granted: true even if the
+    // token fetch/save fails (e.g. missing Firebase config), so the settings
+    // screen doesn't show the misleading "notifications are off" alert.
+    try {
+      const token = await Notifications.getExpoPushTokenAsync();
+      await updateProfile({ expoPushToken: token.data });
+    } catch (error) {
+      warnRegistrationFailure('token registration', error);
+    }
+
+    return { granted: true, canAskAgain };
+  } catch (error) {
+    warnRegistrationFailure('permission check', error);
     return { granted: false, canAskAgain };
   }
-
-  const token = await Notifications.getExpoPushTokenAsync();
-  await updateProfile({ expoPushToken: token.data });
-  return { granted: true, canAskAgain };
 }
 
 /**
@@ -127,24 +159,14 @@ export function useNotificationResponseRouting(): void {
       return;
     }
 
-    let subscription: { remove: () => void } | undefined;
-    let cancelled = false;
+    const Notifications = loadNotifications();
 
-    void (async () => {
-      const Notifications = await import('expo-notifications');
-
-      if (cancelled) {
-        return;
-      }
-
-      subscription = Notifications.addNotificationResponseReceivedListener((response) => {
-        routeFromPushData(response.notification.request.content.data);
-      });
-    })();
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      routeFromPushData(response.notification.request.content.data);
+    });
 
     return () => {
-      cancelled = true;
-      subscription?.remove();
+      subscription.remove();
     };
   }, []);
 }
