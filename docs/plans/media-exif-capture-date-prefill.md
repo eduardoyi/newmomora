@@ -104,27 +104,37 @@ persistence are required.
   keys below and immediately discards the rest. It does not request
   `ACCESS_MEDIA_LOCATION` and does not use location data.
 
-## Known pre-existing behavior (out of scope, do not claim otherwise)
+## Known pre-existing behavior (addressed 2026-07-12, was out of scope for Phase 1)
 
 On Android, `quality: 0.85` routes picks through `CompressionImageExporter`,
 whose `exportAsync` calls `copyExifData(...)` — copying essentially all EXIF
 tags (GPS refs/timestamps, `DateTime*`, Make/Model, MakerNote) from the source
-into the output file. That file is then uploaded verbatim (images bypass
+into the output file. That file was then uploaded verbatim (images bypass
 client compression in `src/utils/video-compression.ts`, and
-`uploadMemoryMediaAssets` in `src/services/memory-posting.ts` uploads the file
-as-is). **Uploaded Android JPEG binaries therefore already contain embedded
-EXIF today, with or without this feature.** iOS is coincidentally clean: the
-`quality < 1` slow path re-encodes via `UIImage` and drops metadata.
+`uploadMemoryMediaAssets` in `src/services/memory-posting.ts` uploaded the file
+as-is). **Uploaded Android JPEG binaries therefore contained embedded EXIF at
+the time this plan was written, with or without this feature.** iOS was
+coincidentally clean: the `quality < 1` slow path re-encodes via `UIImage` and
+drops metadata.
 
-Consequences for this plan:
+Consequences for this plan (historical, at time of writing):
 
 - The metadata-hygiene guarantee is scoped to the EXIF object surfaced to JS
   and to this feature's additions (no new metadata fields in state, logs,
   request payloads, or records). It does NOT claim uploaded file binaries are
   metadata-free.
 - Documentation updates must not assert pipeline-wide metadata cleanliness.
-- Follow-up (separate from Phase 1, worth a ticket): strip EXIF/GPS from image
-  binaries at upload time. Relevant to Phase 2's privacy design regardless.
+- ~~Follow-up (separate from Phase 1, worth a ticket): strip EXIF/GPS from
+  image binaries at upload time. Relevant to Phase 2's privacy design
+  regardless.~~ **Done (2026-07-12):** `uploadMemoryMediaAssets` now re-encodes
+  every image asset via `expo-image-manipulator`
+  (`src/utils/strip-image-metadata.ts`) immediately before upload, stripping
+  EXIF/GPS on both platforms, fail-closed on re-encode failure. This covers
+  create, edit, and incoming-share attachments (all funnel through the same
+  function). Videos remain out of scope — container-level metadata in
+  uploaded MP4/MOV files is not stripped. See
+  [docs/features/media-memories.md](../features/media-memories.md) and
+  `docs/TECH_SPEC.md` §5.5 for the current guarantee.
 
 ## Implementation
 

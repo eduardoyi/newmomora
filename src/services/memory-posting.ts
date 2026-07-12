@@ -3,6 +3,7 @@ import { deleteStorageObject, uploadMediaObject } from '@/services/media';
 import { createMediaMemory, type MemoryWithTags } from '@/services/memories';
 import { getMediaExtensionFromContentType, isVideoContentType } from '@/utils/media-validation';
 import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
+import { stripImageMetadataForUpload } from '@/utils/strip-image-metadata';
 import { compressVideoForUpload } from '@/utils/video-compression';
 
 const MEDIA_UPLOAD_CONCURRENCY = 3;
@@ -134,10 +135,17 @@ export async function uploadMemoryMediaAssets(params: {
     // Videos are transcoded to ~720p H.264 MP4 on-device before upload
     // (best-effort; falls back to the original file), so the content type
     // and extension may differ from the picked asset.
-    const upload = await compressVideoForUpload({
+    const compressed = await compressVideoForUpload({
       fileUri: asset.fileUri,
       contentType: asset.contentType,
     });
+
+    // Images are re-encoded to strip EXIF/GPS/device metadata before
+    // upload (privacy control -- see strip-image-metadata.ts); videos pass
+    // through untouched. HEIC/HEIF inputs come out as JPEG, which is why
+    // extension/contentType below are derived from the *stripped* result,
+    // not the picked asset.
+    const upload = await stripImageMetadataForUpload(compressed);
 
     const extension = getMediaExtensionFromContentType(upload.contentType);
     if (!extension) {

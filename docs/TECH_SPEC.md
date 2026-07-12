@@ -1047,12 +1047,26 @@ the EXIF object surfaced to JS is never retained on the attachment, logged,
 or added to any request payload or persisted record — only the derived
 `YYYY-MM-DD` scalar enters React state, and it is never distinguishable from
 a manually-typed date once saved (`memories.memory_date` stores the same
-column either way). This does **not** mean the uploaded file binary is
-metadata-free: Android's compression path (`quality: 0.85`) copies the
-source file's EXIF (including GPS) into the exported JPEG, which is then
-uploaded as-is — pre-existing behavior, unrelated to this feature. See
+column either way).
+
+**Upload-time EXIF/GPS stripping (image binaries):** every image asset
+uploaded through `uploadMemoryMediaAssets`
+(`src/services/memory-posting.ts`) — new-memory create, edit-memory
+replace/append, and incoming-share attachments alike, since they all funnel
+through this one function — is re-encoded via `expo-image-manipulator`
+(`src/utils/strip-image-metadata.ts`) immediately before the PUT, discarding
+all EXIF (GPS, timestamps, Make/Model, MakerNote) regardless of platform.
+JPEG/PNG/WEBP inputs keep their format; HEIC/HEIF inputs come out as JPEG
+(the manipulator cannot write HEIC), so the uploaded `contentType` and R2
+key extension are always derived from the *stripped* output, never the
+picked asset. This step is fail-closed: a re-encode failure rejects the
+upload rather than falling back to the unstripped original — the
+pending-uploads queue already surfaces per-asset failures as a manual
+Retry/Discard, so this cannot strand the queue. **Videos are out of scope**
+— container-level metadata in uploaded MP4/MOV files is not stripped. See
 [docs/features/media-memories.md](./features/media-memories.md) for the
-full behavior, fail-open rules, and Phase 2 (location) extension path.
+full behavior, fail-open EXIF-prefill rules, and Phase 2 (location)
+extension path.
 
 ### 5.6 Family sharing: invite → redeem → approve
 

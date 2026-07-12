@@ -1,3 +1,5 @@
+import * as ImageManipulator from 'expo-image-manipulator';
+
 import { createMediaMemory } from '@/services/memories';
 import { deleteStorageObject, uploadMediaObject } from '@/services/media';
 import { postMediaMemory, uploadMemoryMediaAssets } from '@/services/memory-posting';
@@ -18,6 +20,9 @@ jest.mock('@/services/ai', () => ({
 const mockedCreateMediaMemory = createMediaMemory as jest.MockedFunction<typeof createMediaMemory>;
 const mockedUploadMediaObject = uploadMediaObject as jest.MockedFunction<typeof uploadMediaObject>;
 const mockedDeleteStorageObject = deleteStorageObject as jest.MockedFunction<typeof deleteStorageObject>;
+const mockedManipulateAsync = ImageManipulator.manipulateAsync as jest.MockedFunction<
+  typeof ImageManipulator.manipulateAsync
+>;
 
 const baseInput = {
   memoryId: 'memory-1',
@@ -80,6 +85,78 @@ describe('uploadMemoryMediaAssets', () => {
     expect(uploadedKeys).toHaveLength(0);
     expect(onAssetUploaded).toHaveBeenCalledTimes(1);
     expect(assets[0]?.objectKey).toBe('existing/key.jpg');
+  });
+
+  it('strips EXIF from new image uploads by re-encoding them before the PUT', async () => {
+    const uploadedKeys: string[] = [];
+
+    await uploadMemoryMediaAssets({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-1',
+      assets: [{ fileUri: 'file:///photo.jpg', contentType: 'image/jpeg' }],
+      uploadedKeys,
+    });
+
+    expect(mockedManipulateAsync).toHaveBeenCalledWith('file:///photo.jpg', [], {
+      compress: expect.any(Number),
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    // The uploaded file is the manipulator's re-encoded output, not the
+    // original picked URI.
+    expect(mockedUploadMediaObject.mock.calls[0]?.[1]).toBe('stripped:file:///photo.jpg');
+  });
+
+  it('keeps content type and object key extension consistent with the re-encoded HEIC output', async () => {
+    const uploadedKeys: string[] = [];
+
+    const assets = await uploadMemoryMediaAssets({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-1',
+      assets: [{ fileUri: 'file:///photo.heic', contentType: 'image/heic' }],
+      uploadedKeys,
+    });
+
+    // HEIC re-encodes to JPEG (expo-image-manipulator cannot write HEIC),
+    // so the storage key extension and returned contentType must reflect
+    // the actual re-encoded bytes, not the originally picked format.
+    expect(mockedUploadMediaObject.mock.calls[0]?.[0]).toMatch(/\.jpg$/);
+    expect(mockedUploadMediaObject.mock.calls[0]?.[2]).toBe('image/jpeg');
+    expect(assets[0]?.contentType).toBe('image/jpeg');
+    expect(uploadedKeys[0]).toMatch(/\.jpg$/);
+  });
+
+  it('passes video uploads through without invoking the image metadata strip', async () => {
+    const uploadedKeys: string[] = [];
+
+    await uploadMemoryMediaAssets({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-1',
+      assets: [{ fileUri: 'file:///clip.mp4', contentType: 'video/mp4' }],
+      uploadedKeys,
+    });
+
+    expect(mockedManipulateAsync).not.toHaveBeenCalled();
+  });
+
+  it('fails closed and rolls back nothing new when EXIF stripping fails (no partial upload)', async () => {
+    mockedManipulateAsync.mockRejectedValueOnce(new Error('manipulator unavailable'));
+    const uploadedKeys: string[] = [];
+
+    await expect(
+      uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///photo.jpg', contentType: 'image/jpeg' }],
+        uploadedKeys,
+      }),
+    ).rejects.toThrow('manipulator unavailable');
+
+    expect(mockedUploadMediaObject).not.toHaveBeenCalled();
+    expect(uploadedKeys).toHaveLength(0);
   });
 });
 
