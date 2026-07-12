@@ -8,6 +8,7 @@ import {
   createFamilyMemberWithPhoto,
   deleteFamilyMember,
   fetchFamilyMembers,
+  markPortraitGenerationFailed,
   updateFamilyMemberWithPhoto,
   type CreateFamilyMemberWithPhotoInput,
   type FamilyMember,
@@ -20,6 +21,21 @@ export function useFamilyMembers() {
   const queryClient = useQueryClient();
   const previousPortraitStatusRef = useRef<Map<string, string>>(new Map());
   const familyMembersQueryKey = buildFamilyMembersQueryKey(familyId);
+
+  const startPortraitGeneration = (memberId: string) => {
+    void (async () => {
+      try {
+        const { error } = await generatePortraitIllustration(memberId);
+        if (error) {
+          await markPortraitGenerationFailed(memberId);
+        }
+      } catch {
+        await markPortraitGenerationFailed(memberId);
+      } finally {
+        queryClient.invalidateQueries({ queryKey: familyMembersQueryKey });
+      }
+    })();
+  };
 
   const query = useQuery({
     queryKey: familyMembersQueryKey,
@@ -69,9 +85,7 @@ export function useFamilyMembers() {
     onSuccess: (member) => {
       queryClient.invalidateQueries({ queryKey: familyMembersQueryKey });
       if (member?.id) {
-        void generatePortraitIllustration(member.id).finally(() => {
-          queryClient.invalidateQueries({ queryKey: familyMembersQueryKey });
-        });
+        startPortraitGeneration(member.id);
       }
     },
   });
@@ -116,9 +130,7 @@ export function useFamilyMembers() {
       const member = data as FamilyMember;
 
       if (input.photoUri && input.regeneratePortrait && member?.id) {
-        void generatePortraitIllustration(member.id).finally(() => {
-          queryClient.invalidateQueries({ queryKey: familyMembersQueryKey });
-        });
+        startPortraitGeneration(member.id);
       }
 
       return member;

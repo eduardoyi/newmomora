@@ -110,6 +110,27 @@ export async function deleteFamilyMember(
   return { error: null };
 }
 
+/**
+ * Recover a portrait job when the Edge Function times out after setting the
+ * row to an in-progress state. The status predicates avoid overwriting a
+ * portrait that completed while the client was handling the timeout.
+ */
+export async function markPortraitGenerationFailed(
+  memberId: string,
+): Promise<{ error: ServiceError | null }> {
+  const { error } = await supabase
+    .from('family_members')
+    .update({ illustrated_profile_status: 'failed' })
+    .eq('id', memberId)
+    .in('illustrated_profile_status', ['pending', 'generating']);
+
+  if (error) {
+    return { error: mapSupabaseError(error) };
+  }
+
+  return { error: null };
+}
+
 export interface UpdateFamilyMemberWithPhotoInput {
   memberId: string;
   userId: string;

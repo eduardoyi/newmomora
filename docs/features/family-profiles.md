@@ -3,7 +3,7 @@
 Create and manage family members with profile photos stored in Cloudflare R2. Onboarding nudges users to add a child first before journaling.
 
 **Status:** `done`
-**Last updated:** 2026-05-29
+**Last updated:** 2026-07-12
 **PRD reference:** [PRD §6.2 Family Profiles](../PRD.md)
 
 ## Overview
@@ -19,6 +19,7 @@ Family profiles power memory tagging and AI character portraits. Each member has
 - **Timeline onboarding:** if no family members, CTA to add one before journaling
 - **Portrait status:** while `pending` or `generating`, the profile photo shows a sparkle loading overlay (same pattern as memory illustrations) with copy such as “Portrait pending” / “Generating portrait…”. When `ready`, the AI character portrait is shown.
 - **Portrait cache busting:** R2 portrait keys are stable (`portrait.webp`). Client presigned URLs and `expo-image` cache use `family_members.updated_at` so regenerated portraits appear without restarting the app.
+- **Timeout recovery:** if the portrait Edge Function returns a gateway timeout after moving the row to `generating`, the client conditionally changes an in-progress status to `failed`. This prevents indefinite polling and exposes the existing retry affordance. A concurrently completed `ready` portrait is never overwritten.
 
 ## Architecture
 
@@ -138,7 +139,7 @@ Picker options intentionally set `exif: false` and `base64: false`; child profil
 | File | Scenarios |
 |------|-----------|
 | `src/services/family-members.integration.test.ts` | Fetch, create+upload, rollback on failure |
-| `src/hooks/useFamilyMembers.integration.test.tsx` | Query load, create mutation |
+| `src/hooks/useFamilyMembers.integration.test.tsx` | Query load, create/update mutations, portrait timeout recovery |
 
 ### E2E (Maestro)
 
@@ -180,6 +181,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
+| 2026-07-12 | Recover timed-out portrait generation so manager-initiated replacement photos do not remain stuck in `generating` |
 | 2026-05-29 | Added camera capture source for family profile photos with Android pending-result recovery |
 | 2026-05-25 | E2E photo upload flows (fixture + system picker) |
 | 2026-05-24 | Initial family profiles + R2 upload/read Edge Functions |

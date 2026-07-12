@@ -8,6 +8,7 @@ import { useFamily } from '@/hooks/use-family';
 import {
   fetchFamilyMembers,
   createFamilyMemberWithPhoto,
+  markPortraitGenerationFailed,
   updateFamilyMemberWithPhoto,
 } from '@/services/family-members';
 import { generatePortraitIllustration } from '@/services/ai';
@@ -25,6 +26,7 @@ jest.mock('@/services/family-members', () => ({
   createFamilyMemberWithPhoto: jest.fn(),
   updateFamilyMemberWithPhoto: jest.fn(),
   deleteFamilyMember: jest.fn(),
+  markPortraitGenerationFailed: jest.fn().mockResolvedValue({ error: null }),
 }));
 
 jest.mock('@/services/ai', () => ({
@@ -42,6 +44,9 @@ const mockedUpdateFamilyMemberWithPhoto = updateFamilyMemberWithPhoto as jest.Mo
 >;
 const mockedGeneratePortraitIllustration = generatePortraitIllustration as jest.MockedFunction<
   typeof generatePortraitIllustration
+>;
+const mockedMarkPortraitGenerationFailed = markPortraitGenerationFailed as jest.MockedFunction<
+  typeof markPortraitGenerationFailed
 >;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
@@ -186,5 +191,31 @@ describe('useFamilyMembers integration', () => {
     });
 
     expect(mockedGeneratePortraitIllustration).toHaveBeenCalledWith('member-1');
+  });
+
+  it('marks a regenerated portrait failed when generation times out', async () => {
+    mockedFetchFamilyMembers.mockResolvedValue({ data: [], error: null });
+    mockedUpdateFamilyMemberWithPhoto.mockResolvedValue({
+      data: { id: 'member-1', name: 'Maya' } as never,
+      error: null,
+    });
+    mockedGeneratePortraitIllustration.mockResolvedValueOnce({
+      error: { message: 'Illustration generation timed out', code: 'generation_timeout' },
+    });
+
+    const { result } = renderHook(() => useFamilyMembers(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await result.current.updateMember({
+      memberId: 'member-1',
+      photoUri: 'file:///replacement.jpg',
+      photoContentType: 'image/jpeg',
+      regeneratePortrait: true,
+    });
+
+    await waitFor(() => {
+      expect(mockedMarkPortraitGenerationFailed).toHaveBeenCalledWith('member-1');
+    });
   });
 });
