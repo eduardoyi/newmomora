@@ -45,9 +45,13 @@ to family-membership checks. There is no "personal, unshared" mode anymore
   former member" if the creator's account was hard-deleted). Not shown on
   timeline cards — a plan deviation, see [Outcome](../plans/family-sharing.md#16-outcome).
 - **Family section (Settings):** family name (owner/manager can rename),
-  member list with roles, invite/pending-invites/approvals links
-  (owner/manager only), "Join a family" (anyone), a family switcher when the
-  user has more than one membership, and "Leave family" (non-owners only).
+  member list with roles -- owner/manager can tap any other non-owner
+  member's row to promote/demote or remove them (see
+  [Member management](#member-management) below); the owner's own row and
+  the signed-in user's own row are always inert, invite/pending-invites/
+  approvals links (owner/manager only), "Join a family" (anyone), a family
+  switcher when the user has more than one membership, and "Leave family"
+  (non-owners only).
 - **Universal link:** `https://usemomora.com/invite?code=sunny-tiger-lake`
   opens the app, stashes the code, and routes straight to the redeem screen
   (prefilled) or through signup first if signed out.
@@ -96,6 +100,54 @@ Notes:
   `isViewerRole`. Every screen-level gate in the client goes through these
   — do not hand-roll a `role === 'owner' || role === 'manager'` check
   elsewhere.
+
+## Member management
+
+Owner/manager can promote, demote, and remove members directly from the
+Settings member list (`FamilySection` in `app/(app)/(tabs)/settings.tsx`) —
+the RLS backing this (manager+ may `update`/`delete` a non-owner's
+`family_memberships` row, never to/from `owner`) predates this UI; this is
+just the client surface for it.
+
+- **Affordance:** each member row is tappable (chevron) when the signed-in
+  user's role passes `canManageMember` (`src/utils/roles.ts`) for that row —
+  owner/manager acting on any other **non-owner** member. The owner's own
+  row and the signed-in user's own row are always inert (no chevron, no
+  `onPress`) — there's no promote-to-owner and no self-service here; leaving
+  is the separate "Leave family" flow.
+- **Action sheet:** tapping an actionable row opens `MemberActionSheet`
+  (`src/components/member-action-sheet.tsx`) — an in-house `Modal` bottom
+  sheet (same shape as `FamilyRosterSheet`), not `ActionSheetIOS`/`Alert`,
+  chosen so every option carries a stable `testID`
+  (`member-action-promote`/`demote`/`remove`/`cancel`) for Maestro. It shows
+  the member's name + current role, a persistent explanation ("Managers can
+  add memories, edit anything, and invite family. Viewers can only browse."),
+  then "Make manager"/"Make viewer" and "Remove from family".
+- **Role change:** confirm-free — one tap applies immediately (the inline
+  explanation in the sheet is what makes the tap informed, not a second
+  confirm step). Applied optimistically to the `get_family_member_profiles`
+  cache via `useMemberManagement` (`src/hooks/useMemberManagement.ts`), then
+  reconciled/rolled back against the server response.
+- **Removal:** routes to a separate destructive `Alert.alert` confirmation
+  ("Remove from family" / "Remove", destructive style) naming the member and
+  stating that they lose access immediately but their content stays.
+- **Service layer:** `updateMemberRole(familyId, userId, role)` and
+  `removeMember(familyId, userId)` (`src/services/family.ts`) run direct
+  `.update()`/`.delete()` on `family_memberships` filtered by
+  `family_id`+`user_id`, with `.select()` on the result — RLS enforces who
+  may act; the `.select()` lets the caller detect a **zero-row** result
+  (the row was already changed/removed by someone else since the caller
+  last saw it).
+- **Zero-row edge case:** `useMemberManagement` throws
+  `MemberChangedElsewhereError` when the mutation's `.select()` comes back
+  empty; the mutation's `onSettled` always invalidates
+  `family-member-profiles`/`family-memberships` regardless of outcome, and
+  the UI shows a non-scary "Looks like something changed — the list has
+  been refreshed." instead of a generic error.
+- **Cache invalidation:** both mutations invalidate
+  `familyMemberProfilesQueryKey(familyId)` and `familyMembershipsQueryKey`
+  on settle — no full-screen refetch flicker, just the member list updating
+  in place.
 
 ## Tenancy model
 
@@ -516,11 +568,13 @@ the app-side change ships.
 | File | Covers |
 |---|---|
 | `src/utils/invites.test.ts` | Code normalize/format/shape validation, share-message builder, expiry formatting, waiting-outcome state machine |
-| `src/utils/roles.test.ts` | `canEditFamilyContent`/`isOwnerRole`/`isViewerRole` gating helpers |
+| `src/utils/roles.test.ts` | `canEditFamilyContent`/`isOwnerRole`/`isViewerRole` gating helpers, `roleLabel`, `canManageMember` (member-management affordance rules) |
 | `src/utils/pending-invite-code.test.ts` | AsyncStorage get/set/clear for the pending invite code |
 | `src/services/auth.test.ts` | OTP error mapping (`isUserNotFoundOtpError`), device timezone |
+| `src/services/family.test.ts` | `updateMemberRole`/`removeMember` — correct `family_id`+`user_id` scoping, zero-row (already changed elsewhere) vs. error results |
 | `src/hooks/useRedeemedInviteStatus.test.ts` | Waiting-screen poll interval / stop-on-terminal logic |
 | `src/hooks/useFamilyMemberProfiles.test.ts` | Attribution name resolution incl. former-member fallback |
+| `src/components/member-action-sheet.test.tsx` | Promote/demote option swaps by current role, testID wiring for each action |
 
 ### Integration tests
 
@@ -529,7 +583,8 @@ the app-side change ships.
 | `src/hooks/use-family.integration.test.tsx` | `FamilyProvider` membership resolution, stale `active_family_id` fallback + correction, `justLostAccess` derivation |
 | `src/hooks/use-auth.integration.test.tsx` | OTP request/verify flow, dev password sign-in |
 | `src/hooks/useFamilyMembers.integration.test.tsx` | Family-scoped queries |
-| `src/screen-tests/settings.family-section.test.tsx` | Family section rendering by role, invite/approval links, leave/switch family |
+| `src/hooks/useMemberManagement.test.tsx` | Optimistic role-change/removal apply + rollback on failure, `MemberChangedElsewhereError` on a zero-row result |
+| `src/screen-tests/settings.family-section.test.tsx` | Family section rendering by role, invite/approval links, leave/switch family, member-management affordance matrix (owner/manager/viewer × own/owner/other rows), promote/demote/remove wiring, destructive-confirm gating, zero-row refresh copy |
 | `src/screen-tests/no-family.test.tsx` | Create-family / redeem entry points, `pendingInviteCode` guard precedence |
 | `src/screen-tests/sharing.redeem.test.tsx` | Redeem screen prefill, definitive-vs-transient error handling |
 
@@ -554,7 +609,7 @@ the app-side change ships.
 ### Run this feature's tests
 
 ```bash
-npm test -- --testPathPattern="invites|roles|pending-invite-code|use-family|no-family|sharing"
+npm test -- --testPathPattern="invites|roles|pending-invite-code|use-family|no-family|sharing|family|member-action-sheet"
 npm run test:edge -- redeem-family-invite resolve-family-invite notify-family-activity
 maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... \
   .maestro/flows/sharing/01-owner-create-invite.yaml \
@@ -569,3 +624,4 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 | Date | Change |
 |------|--------|
 | 2026-07-11 | Family sharing shipped: OTP auth, tenancy schema + RLS rewrite, storage re-authorization, client role gating, invite/redeem/approve flow, notifications. See `docs/plans/family-sharing.md` Outcome section for what deviated from the original plan. |
+| 2026-07-12 | Member management UI: owner/manager can promote/demote/remove non-owner members directly from the Settings member list (`MemberActionSheet`, `useMemberManagement`, `updateMemberRole`/`removeMember`) — the underlying RLS already allowed this, only the client surface was missing. See [Member management](#member-management). |

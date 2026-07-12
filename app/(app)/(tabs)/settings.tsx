@@ -20,6 +20,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { familyMembershipsQueryKey, useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
+import { MemberChangedElsewhereError, useMemberManagement } from '@/hooks/useMemberManagement';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import {
@@ -29,9 +30,10 @@ import {
   sharingRedeemRoute,
 } from '@/lib/routes';
 import { getDeviceTimezone } from '@/services/auth';
-import { leaveFamily, updateFamilyName } from '@/services/family';
-import { canEditFamilyContent, isOwnerRole } from '@/utils/roles';
+import { leaveFamily, updateFamilyName, type FamilyMemberProfile } from '@/services/family';
+import { canEditFamilyContent, canManageMember, isOwnerRole, roleLabel } from '@/utils/roles';
 import { AuthField, AuthInput } from '@/components/auth-screen';
+import { MemberActionSheet } from '@/components/member-action-sheet';
 import { SelectField } from '@/components/select-field';
 
 function SettingsBlock({ title, children }: { title: string; children: React.ReactNode }) {
@@ -54,6 +56,7 @@ function SettingsRow({
   first,
   onPress,
   testID,
+  accessibilityLabel,
 }: {
   label: string;
   caption?: string;
@@ -63,6 +66,7 @@ function SettingsRow({
   first?: boolean;
   onPress?: () => void;
   testID?: string;
+  accessibilityLabel?: string;
 }) {
   const content = (
     <>
@@ -79,6 +83,7 @@ function SettingsRow({
   if (onPress) {
     return (
       <Pressable
+        accessibilityLabel={accessibilityLabel}
         accessibilityRole="button"
         onPress={onPress}
         style={({ pressed }) => [styles.row, !first && styles.rowBorder, pressed && styles.rowPressed]}
@@ -96,17 +101,11 @@ function SettingsRow({
   );
 }
 
-function roleLabel(role: string | null): string {
-  if (role === 'owner') return 'Owner';
-  if (role === 'manager') return 'Manager';
-  if (role === 'viewer') return 'Viewer';
-  return 'Former member';
-}
-
 function FamilySection() {
   const { user } = useAuth();
   const { family, familyId, role, memberships, setActiveFamily, refetchMemberships } = useFamily();
   const { profiles } = useFamilyMemberProfiles(familyId);
+  const { changeRole, removeMember: removeMemberMutation } = useMemberManagement(familyId);
   const queryClient = useQueryClient();
   const canEditName = canEditFamilyContent(role);
   const isOwner = isOwnerRole(role);
@@ -120,6 +119,7 @@ function FamilySection() {
   const [nameError, setNameError] = useState('');
   const [isLeaving, setIsLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState('');
+  const [manageTarget, setManageTarget] = useState<FamilyMemberProfile | null>(null);
 
   useEffect(() => {
     if (!isEditingName) {
@@ -178,6 +178,49 @@ function FamilySection() {
                 setLeaveError(error instanceof Error ? error.message : 'Could not leave family');
               } finally {
                 setIsLeaving(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
+
+  const applyRoleChange = (profile: FamilyMemberProfile, nextRole: 'manager' | 'viewer') => {
+    setManageTarget(null);
+    void (async () => {
+      try {
+        await changeRole({ userId: profile.user_id, role: nextRole });
+      } catch (error) {
+        if (error instanceof MemberChangedElsewhereError) {
+          Alert.alert('List refreshed', error.message);
+          return;
+        }
+        Alert.alert('Could not update role', `Could not change ${profile.name}'s role. Please try again.`);
+      }
+    })();
+  };
+
+  const handleRequestRemove = (profile: FamilyMemberProfile) => {
+    setManageTarget(null);
+    Alert.alert(
+      'Remove from family',
+      `${profile.name} will no longer be able to see the family journal. Memories and photos they added will stay.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await removeMemberMutation(profile.user_id);
+              } catch (error) {
+                if (error instanceof MemberChangedElsewhereError) {
+                  Alert.alert('List refreshed', error.message);
+                  return;
+                }
+                Alert.alert('Could not remove member', `Could not remove ${profile.name}. Please try again.`);
               }
             })();
           },
@@ -254,13 +297,22 @@ function FamilySection() {
         />
       )}
 
-      {profiles.map((profile) => (
-        <SettingsRow
-          key={profile.user_id}
-          label={profile.name}
-          value={profile.is_active_member ? roleLabel(profile.role) : 'Former member'}
-        />
-      ))}
+      {profiles.map((profile) => {
+        const actionable = canManageMember(role, user?.id, profile);
+        return (
+          <SettingsRow
+            accessibilityLabel={
+              actionable ? `Manage ${profile.name}, ${roleLabel(profile.role).toLowerCase()}` : undefined
+            }
+            chevron={actionable}
+            key={profile.user_id}
+            label={profile.name}
+            onPress={actionable ? () => setManageTarget(profile) : undefined}
+            testID={`member-row-${profile.user_id}`}
+            value={profile.is_active_member ? roleLabel(profile.role) : 'Former member'}
+          />
+        );
+      })}
 
       {canEditName && (
         <>
@@ -326,6 +378,16 @@ function FamilySection() {
       )}
 
       {leaveError ? <Text style={styles.familyNameError}>{leaveError}</Text> : null}
+
+      <MemberActionSheet
+        memberName={manageTarget?.name ?? ''}
+        memberRole={manageTarget?.role === 'manager' ? 'manager' : 'viewer'}
+        onClose={() => setManageTarget(null)}
+        onDemote={() => manageTarget && applyRoleChange(manageTarget, 'viewer')}
+        onPromote={() => manageTarget && applyRoleChange(manageTarget, 'manager')}
+        onRemove={() => manageTarget && handleRequestRemove(manageTarget)}
+        visible={Boolean(manageTarget)}
+      />
     </SettingsBlock>
   );
 }

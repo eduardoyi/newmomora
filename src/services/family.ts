@@ -113,3 +113,62 @@ export async function leaveFamily(familyId: string, userId: string): Promise<{
 
   return { error: null };
 }
+
+/** Roles a manager+ may move a non-owner member to/from -- never 'owner' (RLS rejects it anyway). */
+export type MemberManagedRole = 'manager' | 'viewer';
+
+/**
+ * Promotes/demotes a non-owner member. RLS (`family_memberships` update
+ * policy) enforces manager+-only and never-to/from-owner; this just surfaces
+ * the outcome. `.select()` after the update lets the caller detect a
+ * zero-row result -- the membership was already changed or removed by
+ * someone else since the caller last saw it.
+ */
+export async function updateMemberRole(
+  familyId: string,
+  userId: string,
+  role: MemberManagedRole,
+): Promise<{
+  data: { id: string; role: string }[] | null;
+  error: ServiceError | null;
+}> {
+  const { data, error } = await supabase
+    .from('family_memberships')
+    .update({ role })
+    .eq('family_id', familyId)
+    .eq('user_id', userId)
+    .select('id, role');
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  return { data: data ?? [], error: null };
+}
+
+/**
+ * Removes a non-owner member from the family. RLS enforces manager+-only and
+ * never-the-owner; their content (`memories.user_id` / `family_members.user_id`)
+ * survives via `on delete set null`. `.select()` after the delete lets the
+ * caller detect a zero-row result -- see `updateMemberRole`.
+ */
+export async function removeMember(
+  familyId: string,
+  userId: string,
+): Promise<{
+  data: { id: string }[] | null;
+  error: ServiceError | null;
+}> {
+  const { data, error } = await supabase
+    .from('family_memberships')
+    .delete()
+    .eq('family_id', familyId)
+    .eq('user_id', userId)
+    .select('id');
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  return { data: data ?? [], error: null };
+}
