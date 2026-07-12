@@ -37,9 +37,26 @@ appId: com.memora.app
 - assertNotVisible:
     id: new-memory-fab
 
+# Calendar applies the same role gate; viewers can browse it but cannot open
+# the new-memory flow from its FAB.
+- tapOn:
+    text: "Calendar"
+- assertNotVisible:
+    id: new-memory-fab
+
+# Settings hides controls that only make sense for journal contributors.
+- tapOn:
+    text: "Settings"
+- assertNotVisible:
+    id: settings-daily-reminder-toggle
+- assertNotVisible:
+    id: settings-family-members
+
 # Open the first memory and confirm no edit affordances
 # (app/(app)/memory/[id]/index.tsx only renders onEdit/onDelete when
 # canEditFamilyContent(role) is true).
+- tapOn:
+    text: "Timeline"
 - tapOn:
     id: "memory-card-.*"
 - assertNotVisible:

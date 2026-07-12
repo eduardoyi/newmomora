@@ -218,6 +218,25 @@ describe('Settings notifications toggles', () => {
     );
   });
 
+  it('hides the daily journal reminder from viewers but keeps new-memory alerts', () => {
+    mockProfile({ enable_daily_reminder: true });
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'viewer',
+      memberships: [{ id: 'membership-1', familyId: 'family-1', role: 'viewer', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    } as never);
+
+    const { queryByTestId, getByTestId } = renderScreen();
+
+    expect(queryByTestId('settings-daily-reminder-toggle')).toBeNull();
+    expect(getByTestId('settings-new-memory-alerts-toggle')).toBeTruthy();
+  });
+
   it('shows a confirmation before scheduling account deletion', () => {
     mockProfile();
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());

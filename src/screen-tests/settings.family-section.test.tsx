@@ -365,7 +365,7 @@ describe('Settings Family section', () => {
     expect(router.push).toHaveBeenCalledWith(sharingRedeemRoute);
   });
 
-  it('hides manager-only sharing rows from viewers but keeps Join a family and Family members', () => {
+  it('hides viewer-restricted family rows but keeps Join a family', () => {
     mockedUseFamily.mockReturnValue({
       family: { id: 'family-1', name: "Rosa's family" },
       familyId: 'family-1',
@@ -383,7 +383,7 @@ describe('Settings Family section', () => {
     expect(queryByTestId('settings-pending-invites')).toBeNull();
     expect(queryByTestId('settings-approvals')).toBeNull();
     expect(queryByTestId('settings-join-family')).toBeTruthy();
-    expect(queryByTestId('settings-family-members')).toBeTruthy();
+    expect(queryByTestId('settings-family-members')).toBeNull();
     // A viewer role never fires the invites query -- RLS would deny it anyway.
     expect(mockedUseFamilyInvites).toHaveBeenCalledWith('family-1', { enabled: false });
   });

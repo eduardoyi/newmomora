@@ -32,7 +32,7 @@ import {
 import { getDeviceTimezone } from '@/services/auth';
 import { leaveFamily, updateFamilyName } from '@/services/family';
 import { isPendingInviteActive } from '@/utils/invites';
-import { canEditFamilyContent, isOwnerRole, roleLabel } from '@/utils/roles';
+import { canEditFamilyContent, isOwnerRole, isViewerRole, roleLabel } from '@/utils/roles';
 import { AuthField, AuthInput } from '@/components/auth-screen';
 import { SelectField } from '@/components/select-field';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
@@ -43,6 +43,7 @@ function FamilySection() {
   const { profiles } = useFamilyMemberProfiles(familyId);
   const queryClient = useQueryClient();
   const canEditName = canEditFamilyContent(role);
+  const isViewer = isViewerRole(role);
   const isOwner = isOwnerRole(role);
   // Pending/approvals rows: the invites query is manager+-only under RLS, so
   // it is gated on role rather than fired (and denied) for viewers.
@@ -196,13 +197,15 @@ function FamilySection() {
         />
       )}
 
-      <SettingsRow
-        chevron
-        label="Family members"
-        onPress={() => router.push(sharingMembersRoute)}
-        testID="settings-family-members"
-        value={String(activeMemberCount)}
-      />
+      {!isViewer && (
+        <SettingsRow
+          chevron
+          label="Family members"
+          onPress={() => router.push(sharingMembersRoute)}
+          testID="settings-family-members"
+          value={String(activeMemberCount)}
+        />
+      )}
 
       {canEditName && (
         <SettingsRow
@@ -280,6 +283,8 @@ function FamilySection() {
 
 export default function SettingsScreen() {
   const { user, signOut } = useAuth();
+  const { role } = useFamily();
+  const isViewer = isViewerRole(role);
   const {
     profile,
     updateProfile,
@@ -366,20 +371,22 @@ export default function SettingsScreen() {
   
           <View style={styles.sections}>
             <SettingsBlock title="Notifications">
-              <SettingsRow
-                first
-                label="Remind me to journal"
-                caption="Get a gentle nudge to capture a moment."
-                right={
-                  <Switch
-                    onValueChange={handleToggleReminders}
-                    testID="settings-daily-reminder-toggle"
-                    value={remindersEnabled}
-                    trackColor={{ false: colors.border, true: colors.primary }}
-                  />
-                }
-              />
-              {remindersEnabled && (
+              {!isViewer && (
+                <SettingsRow
+                  first
+                  label="Remind me to journal"
+                  caption="Get a gentle nudge to capture a moment."
+                  right={
+                    <Switch
+                      onValueChange={handleToggleReminders}
+                      testID="settings-daily-reminder-toggle"
+                      value={remindersEnabled}
+                      trackColor={{ false: colors.border, true: colors.primary }}
+                    />
+                  }
+                />
+              )}
+              {!isViewer && remindersEnabled && (
                 <SettingsRow
                   label="Reminder time"
                   value={(profile?.notification_time ?? '20:00:00').slice(0, 5)}

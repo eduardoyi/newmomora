@@ -46,9 +46,9 @@ to family-membership checks. There is no "personal, unshared" mode anymore
   timeline cards — a plan deviation, see [Outcome](../plans/family-sharing.md#16-outcome).
 - **Family section (Settings):** family name (owner/manager can rename), a
   "Family members" row showing the active-member count and pushing to the
-  **Family members** screen (`app/(app)/sharing/members.tsx`, any role —
-  see [Member management](#member-management) below for the list itself and
-  the promote/demote/remove affordance), "Invite a family member"
+  **Family members** screen (`app/(app)/sharing/members.tsx`, owner/manager
+  only — see [Member management](#member-management) below for the list
+  itself and the promote/demote/remove affordance), "Invite a family member"
   (owner/manager only), "Pending invites" (owner/manager only, and only
   rendered when at least one non-expired pending invite exists), "Approvals"
   (owner/manager only, and only rendered when at least one redeemed invite
@@ -119,9 +119,9 @@ own screen. Settings → Family now only has a constant-size **"Family
 members"** row (`settings-family-members`) showing the active-member count
 and pushing to `sharing/members`; that screen carries the actual list, the
 tap-to-manage affordance, and (owner/manager only) an "Invite a family
-member" row at the top. `members.tsx` is visible to every role — viewers get
-the same read-only list, just without the invite row and with every row
-inert (`canManageMember` already excludes them). The row/block chrome
+member" row at the top. `members.tsx` remains a direct read-only route for
+every role, but its Settings entry point is hidden from viewers. The
+row/block chrome
 (`SettingsBlock`/`SettingsRow`) was extracted to
 `src/components/settings-row.tsx` so Settings and the members screen share
 the exact same look instead of duplicating it.
@@ -601,7 +601,8 @@ the app-side change ships.
 | `src/hooks/use-auth.integration.test.tsx` | OTP request/verify flow, dev password sign-in |
 | `src/hooks/useFamilyMembers.integration.test.tsx` | Family-scoped queries |
 | `src/hooks/useMemberManagement.test.tsx` | Optimistic role-change/removal apply + rollback on failure, `MemberChangedElsewhereError` on a zero-row result |
-| `src/screen-tests/settings.family-section.test.tsx` | Family section rendering by role, "Family members" row count + navigation, leave/switch family, conditional Pending invites/Approvals rows (non-expired-only, hidden while loading, count badge) |
+| `src/screen-tests/settings.family-section.test.tsx` | Family section rendering by role, owner/manager-only "Family members" row count + navigation, leave/switch family, conditional Pending invites/Approvals rows (non-expired-only, hidden while loading, count badge) |
+| `src/screen-tests/calendar.role-gating.test.tsx` | Calendar create-FAB role gate (viewer hidden, manager visible) |
 | `src/screen-tests/sharing.members.test.tsx` | Family members screen: invite affordance by role, member-management affordance matrix (owner/manager/viewer × own/owner/other rows), promote/demote/remove wiring, destructive-confirm gating, zero-row refresh copy |
 | `src/screen-tests/no-family.test.tsx` | Create-family / redeem entry points, `pendingInviteCode` guard precedence |
 | `src/screen-tests/sharing.redeem.test.tsx` | Redeem screen prefill, definitive-vs-transient error handling |
@@ -612,7 +613,7 @@ the app-side change ships.
 |---|---|
 | `.maestro/flows/auth/login.yaml`, `sign-in.yaml` | OTP dev-path login (reused by every other flow's login step) |
 | `.maestro/flows/sharing/01-owner-create-invite.yaml` → `04-second-account-sees-timeline.yaml` | Full two-account invite → redeem → approve loop (run together — see `.maestro/flows/sharing/README.md`). **Not run in this change** — authored against current testIDs only. |
-| `.maestro/flows/sharing/viewer-readonly.yaml` | Viewer sees timeline but no create FAB / no edit affordances. **Not run in this change.** |
+| `.maestro/flows/sharing/viewer-readonly.yaml` | Viewer sees timeline/calendar but no create FAB, and Settings hides daily reminders and the Family members entry. **Not run in this change.** |
 
 ### Edge Function tests (Deno)
 
@@ -644,3 +645,4 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 | 2026-07-11 | Family sharing shipped: OTP auth, tenancy schema + RLS rewrite, storage re-authorization, client role gating, invite/redeem/approve flow, notifications. See `docs/plans/family-sharing.md` Outcome section for what deviated from the original plan. |
 | 2026-07-12 | Member management UI: owner/manager can promote/demote/remove non-owner members directly from the Settings member list (`MemberActionSheet`, `useMemberManagement`, `updateMemberRole`/`removeMember`) — the underlying RLS already allowed this, only the client surface was missing. See [Member management](#member-management). |
 | 2026-07-12 | Family management IA restructure: the member list moved off Settings onto its own **Family members** screen (`app/(app)/sharing/members.tsx`) so Settings stays constant-size for families up to the 50-member cap; Settings now shows a "Family members" row with the active-member count, and "Pending invites"/"Approvals" only render when there's at least one non-expired/redeemed invite to act on. See [Member management](#member-management). |
+| 2026-07-12 | Viewer Settings and calendar are further trimmed: viewers cannot see the calendar create FAB, daily journal reminder, or the Settings entry for Family members. They retain read-only timeline/calendar/family-roster access. |

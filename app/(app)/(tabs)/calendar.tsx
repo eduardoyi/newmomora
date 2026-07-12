@@ -18,10 +18,12 @@ import { MemoryFab } from '@/components/memory-fab';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
 import { useCalendarMemoriesInRange, useOldestMemoryDate } from '@/hooks/useCalendarMemories';
+import { useFamily } from '@/hooks/use-family';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
+import { canEditFamilyContent } from '@/utils/roles';
 import {
   buildCalendarWeeks,
   getCalendarFetchRange,
@@ -175,6 +177,8 @@ function RibbonDay({
 }
 
 export default function CalendarScreen() {
+  const { role } = useFamily();
+  const canEdit = canEditFamilyContent(role);
   const referenceDateRef = useRef(new Date());
   const [visibleWeekRange, setVisibleWeekRange] = useState(INITIAL_VISIBLE_WEEK_RANGE);
   const {
@@ -289,7 +293,7 @@ export default function CalendarScreen() {
         windowSize={7}
       />
 
-      <MemoryFab onPress={() => router.push(newMemoryRoute)} />
+      {canEdit && <MemoryFab onPress={() => router.push(newMemoryRoute)} />}
     </View>
   );
 }
