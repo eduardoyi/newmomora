@@ -48,6 +48,13 @@ jest.mock('@/hooks/useUserProfile', () => ({
   useUserProfile: jest.fn(),
 }));
 
+// This screen's notification registration flow (permissions, expo-notifications)
+// is covered by useNotifications.test.ts and settings.notifications.test.tsx --
+// stub it out here since this file only exercises the Family section.
+jest.mock('@/hooks/useNotifications', () => ({
+  useNotificationsRegistration: jest.fn(() => ({ requestRegistration: jest.fn() })),
+}));
+
 jest.mock('@/services/family', () => ({
   leaveFamily: jest.fn(),
   updateFamilyName: jest.fn(),

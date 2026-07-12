@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -34,8 +35,28 @@ import { leaveFamily, updateFamilyName } from '@/services/family';
 import { isPendingInviteActive } from '@/utils/invites';
 import { canEditFamilyContent, isOwnerRole, isViewerRole, roleLabel } from '@/utils/roles';
 import { AuthField, AuthInput } from '@/components/auth-screen';
-import { SelectField } from '@/components/select-field';
+import { SelectField, type SelectOption } from '@/components/select-field';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
+
+const DEFAULT_REMINDER_TIME = '20:00:00';
+
+// Backend cron only honors the hour (see parseNotificationHour in
+// schedule-daily-reminders), so the picker is hour-granularity only.
+function formatReminderHourLabel(hour: number): string {
+  const period = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 === 0 ? 12 : hour % 12;
+  return `${displayHour}:00 ${period}`;
+}
+
+const REMINDER_TIME_OPTIONS: SelectOption[] = Array.from({ length: 24 }, (_, hour) => ({
+  value: `${String(hour).padStart(2, '0')}:00:00`,
+  label: formatReminderHourLabel(hour),
+}));
+
+function normalizeReminderTime(notificationTime: string | null | undefined): string {
+  const hour = (notificationTime ?? DEFAULT_REMINDER_TIME).slice(0, 2);
+  return `${hour}:00:00`;
+}
 
 function FamilySection() {
   const { user } = useAuth();
@@ -297,18 +318,51 @@ export default function SettingsScreen() {
 
   const remindersEnabled = profile?.enable_daily_reminder ?? false;
   const newMemoryAlertsEnabled = profile?.notify_new_memories ?? true;
-  useNotificationsRegistration(remindersEnabled || newMemoryAlertsEnabled);
+  const { requestRegistration } = useNotificationsRegistration(
+    remindersEnabled || newMemoryAlertsEnabled,
+  );
+
+  const promptOpenSystemSettings = () => {
+    Alert.alert(
+      'Notifications are off',
+      'Momora needs permission to send notifications. Enable them for Momora in your device settings.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Open settings', onPress: () => void Linking.openSettings() },
+      ],
+    );
+  };
+
+  // Toggling ON should prompt for permission right away (rather than
+  // waiting on the mount-time effect, which only fires once and won't
+  // re-prompt after a toggle flip) and surface a way to recover from a
+  // permanent denial. Toggling OFF just updates the profile.
+  const registerIfTurningOn = async (value: boolean) => {
+    if (!value) {
+      return;
+    }
+    const result = await requestRegistration();
+    if (result && !result.granted && !result.canAskAgain) {
+      promptOpenSystemSettings();
+    }
+  };
 
   const handleToggleReminders = async (value: boolean) => {
     await updateProfile({
       enableDailyReminder: value,
-      timezone: profile?.timezone ?? getDeviceTimezone(),
-      notificationTime: profile?.notification_time ?? '20:00:00',
+      timezone: getDeviceTimezone(),
+      notificationTime: profile?.notification_time ?? DEFAULT_REMINDER_TIME,
     });
+    await registerIfTurningOn(value);
   };
 
   const handleToggleNewMemoryAlerts = async (value: boolean) => {
     await updateProfile({ notifyNewMemories: value });
+    await registerIfTurningOn(value);
+  };
+
+  const handleReminderTimeChange = async (value: string) => {
+    await updateProfile({ notificationTime: value });
   };
 
   const handleDeleteAccount = () => {
@@ -387,11 +441,17 @@ export default function SettingsScreen() {
                 />
               )}
               {!isViewer && remindersEnabled && (
-                <SettingsRow
-                  label="Reminder time"
-                  value={(profile?.notification_time ?? '20:00:00').slice(0, 5)}
-                  chevron
-                />
+                <View style={[styles.row, styles.rowBorder]}>
+                  <View style={styles.rowContent}>
+                    <Text style={styles.rowLabel}>Reminder time</Text>
+                  </View>
+                  <SelectField
+                    onChange={(value) => void handleReminderTimeChange(value)}
+                    options={REMINDER_TIME_OPTIONS}
+                    testID="settings-reminder-time"
+                    value={normalizeReminderTime(profile?.notification_time)}
+                  />
+                </View>
               )}
               <SettingsRow
                 label="New memory alerts"

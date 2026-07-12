@@ -1,19 +1,34 @@
-import { NativeModules, Platform } from 'react-native';
+import { Platform } from 'react-native';
+import { requireOptionalNativeModule } from 'expo-modules-core';
 import { router } from 'expo-router';
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { sharingApprovalsRoute, timelineRoute } from '@/lib/routes';
 
+/**
+ * expo-notifications registers its native module through expo-modules-core's
+ * module registry (`global.expo.modules`), not React Native's `NativeModules`
+ * -- so detection has to go through `requireOptionalNativeModule`, which
+ * returns `null` instead of throwing when the module isn't installed (e.g.
+ * Expo Go, or a dev client built before this module was added).
+ */
 export function isNotificationsAvailable(): boolean {
   if (Platform.OS === 'web') {
     return false;
   }
 
-  return Boolean(
-    NativeModules.ExpoPushTokenManager ||
-      (NativeModules as Record<string, unknown>).ExpoNotifications,
-  );
+  try {
+    return Boolean(requireOptionalNativeModule('ExpoPushTokenManager'));
+  } catch {
+    return false;
+  }
+}
+
+/** Result of a registration attempt, so callers can react to a denial (see settings.tsx). */
+export interface PushRegistrationResult {
+  granted: boolean;
+  canAskAgain: boolean;
 }
 
 export function useNotificationsRegistration(enabled: boolean) {
@@ -26,11 +41,24 @@ export function useNotificationsRegistration(enabled: boolean) {
 
     void registerForPushNotifications(updateProfile);
   }, [enabled, updateProfile]);
+
+  // Explicit registration for callers that need to react to the outcome
+  // (e.g. a toggle switching ON should prompt for settings on denial --
+  // the mount-time effect above stays silent on purpose).
+  const requestRegistration = useCallback(async (): Promise<PushRegistrationResult | null> => {
+    if (!isNotificationsAvailable()) {
+      return null;
+    }
+
+    return registerForPushNotifications(updateProfile);
+  }, [updateProfile]);
+
+  return { requestRegistration };
 }
 
 async function registerForPushNotifications(
   updateProfile: ReturnType<typeof useUserProfile>['updateProfile'],
-): Promise<void> {
+): Promise<PushRegistrationResult> {
   const Notifications = await import('expo-notifications');
 
   Notifications.setNotificationHandler({
@@ -45,18 +73,21 @@ async function registerForPushNotifications(
   const permissions = await Notifications.getPermissionsAsync();
 
   let finalStatus = permissions.status;
+  let canAskAgain = permissions.canAskAgain;
 
   if (finalStatus !== 'granted') {
     const requested = await Notifications.requestPermissionsAsync();
     finalStatus = requested.status;
+    canAskAgain = requested.canAskAgain;
   }
 
   if (finalStatus !== 'granted') {
-    return;
+    return { granted: false, canAskAgain };
   }
 
   const token = await Notifications.getExpoPushTokenAsync();
   await updateProfile({ expoPushToken: token.data });
+  return { granted: true, canAskAgain };
 }
 
 /**
