@@ -75,7 +75,17 @@ describe('MemoryMediaCarousel', () => {
     expect(onPress).not.toHaveBeenCalled();
   });
 
-  it('adopts the first asset natural aspect ratio, clamped, once it loads', () => {
+  it('adopts a single asset exact natural aspect ratio once it loads', () => {
+    const { getByTestId } = render(<MemoryMediaCarousel assets={[assets[0]]} />);
+
+    fireEvent(getByTestId('memory-media-image-asset-1'), 'load', {
+      nativeEvent: { source: { width: 1080, height: 1920 } },
+    });
+
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
+  });
+
+  it('adopts the first asset natural aspect ratio, clamped for a carousel', () => {
     const { getByTestId } = render(<MemoryMediaCarousel assets={assets} />);
 
     // Defaults to 4:3 until dimensions are known.
@@ -87,7 +97,8 @@ describe('MemoryMediaCarousel', () => {
     });
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 3 / 4 });
 
-    // An extreme 9:16 asset is clamped to the 3:4 minimum.
+    // An extreme 9:16 first asset is clamped to the 3:4 minimum when other
+    // assets share the same carousel frame.
     fireEvent(getByTestId('memory-media-image-asset-1'), 'load', {
       nativeEvent: { source: { width: 1080, height: 1920 } },
     });

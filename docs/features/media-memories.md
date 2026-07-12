@@ -20,6 +20,7 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
 - Caption text is optional for `media` memories; the save button is enabled as soon as media is attached.
 - **Deferred posting (Instagram-style):** tapping Save closes the composer immediately. Compression + upload continue in a background queue; the Timeline and Calendar show a pending card ("Posting memory… — Uploading n of m") above the feed until the memory lands. Failures flip the card to Retry/Discard. The queue is in-memory only — force-quitting mid-upload loses the pending post (persistence is backlog).
 - On the Timeline and detail screen, `media` memories render an Instagram-style carousel with subtle dots and a small pagination counter when more than one asset exists.
+- Single-asset memories use the asset's exact natural aspect ratio, including tall portrait videos; multi-asset carousels clamp the first asset's ratio to `3:4`-`16:9` so every page shares a practical, stable frame.
 - **Photo** memories: after save, async emotion analysis may replace the Photo badge with an emotion chip (same labels as text memories). Failures do not block save.
 - **Video** memories: no emotion chip in MVP (Photo/Video badge only).
 - On the memory detail screen, photos display full-width via presigned URL; videos play inline via `expo-video`.
@@ -233,6 +234,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
+| 2026-07-12 | Single-asset media now uses its exact natural aspect ratio; multi-asset carousels retain the `3:4`-`16:9` clamp |
 | 2026-07-12 | Deferred posting: Save closes the composer instantly; a pending-uploads queue (`use-pending-memory-uploads`) posts in the background with progress cards on Timeline/Calendar and Retry/Discard on failure |
 | 2026-05-26 | Photo media: async `analyze-emotion` vision; video emotion backlog |
 | 2026-05-25 | Initial planned spec — `media` memory type (photo + video), emergent UX, phased implementation |

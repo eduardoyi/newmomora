@@ -169,11 +169,16 @@ export function MemoryMediaCarousel({
   const { data: urls = {} } = useMediaUrls(keys, cacheVersion);
   const showPaging = assets.length > 1;
 
-  // The container tracks the first asset's natural aspect ratio (clamped) so
-  // media renders uncropped; other pages letterbox via `contain` if they have
-  // a different shape. Falls back to 4:3 until dimensions are known.
+  // A single asset can use its exact natural ratio. Multi-asset carousels keep
+  // the ratio clamped so an extreme first item does not make every page take
+  // over the feed; differently shaped pages letterbox via `contain`.
+  // Falls back to 4:3 until dimensions are known.
   const firstRatio = assets.length > 0 ? naturalRatios[assets[0].object_key] : undefined;
-  const containerRatio = firstRatio ? clampMediaAspectRatio(firstRatio) : DEFAULT_MEDIA_ASPECT_RATIO;
+  const containerRatio = firstRatio
+    ? assets.length === 1
+      ? firstRatio
+      : clampMediaAspectRatio(firstRatio)
+    : DEFAULT_MEDIA_ASPECT_RATIO;
 
   const handleNaturalRatio = (objectKey: string, ratio: number) => {
     setNaturalRatios((prev) => (prev[objectKey] === ratio ? prev : { ...prev, [objectKey]: ratio }));
