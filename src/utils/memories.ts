@@ -1,3 +1,5 @@
+import { substituteLinkLabels, type LinkPreviewMap } from '@/utils/links';
+
 export const MAX_MEMORY_TAGS = 4;
 
 /** Edge image generation can exceed function limits; recover after this window. */
@@ -200,8 +202,13 @@ export function getIllustrationStatusLabel(status: IllustrationStatus): string {
   }
 }
 
-export function formatMemoryExcerpt(content: string | null | undefined, maxLength = 140): string {
-  const trimmed = (content ?? '').trim();
+export function formatMemoryExcerpt(
+  content: string | null | undefined,
+  maxLength = 140,
+  linkPreviews?: LinkPreviewMap | null,
+): string {
+  const substituted = linkPreviews !== undefined ? substituteLinkLabels(content, linkPreviews) : (content ?? '');
+  const trimmed = substituted.trim();
   if (!trimmed) {
     return '';
   }

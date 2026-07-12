@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { FullScreenMediaViewer, type FullScreenMediaItem } from '@/components/full-screen-media-viewer';
+import { MemoryContentText } from '@/components/memory-content-text';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { colors, fonts, getEmotionColors, getEmotionGradient, radius, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
@@ -29,6 +30,7 @@ import { editMemoryRoute } from '@/lib/routes';
 import { aspectRatioFromDimensions, clampMediaAspectRatio } from '@/utils/media-aspect';
 import { canEditFamilyContent } from '@/utils/roles';
 import { formatTaggedMemberAge } from '@/utils/family-members';
+import { toLinkPreviewMap } from '@/utils/links';
 import {
   formatDisplayDate,
   getIllustrationStatusLabel,
@@ -286,7 +288,11 @@ function MemoryDetailFramed({
           <View style={styles.framedCardBody}>
             <MemoryMetaRow date={memory.memory_date} attributionName={attributionName} emotion={memory.emotion} />
             {memory.content ? (
-              <Text style={styles.detailText}>{memory.content}</Text>
+              <MemoryContentText
+                content={memory.content}
+                linkPreviews={toLinkPreviewMap(memory.link_previews)}
+                style={styles.detailText}
+              />
             ) : null}
             <View style={styles.memberRow}>
               {memory.taggedMembers.map((m) => (
@@ -354,7 +360,11 @@ function MemoryDetailEditorial({
         <View style={styles.editorialCard}>
           <MemoryMetaRow date={memory.memory_date} attributionName={attributionName} emotion={memory.emotion} />
           <Text style={[styles.editorialQuote, { color: emo ? emo.ink : colors.ink3 }]}>“</Text>
-          <Text style={styles.editorialText}>{memory.content}</Text>
+          <MemoryContentText
+            content={memory.content}
+            linkPreviews={toLinkPreviewMap(memory.link_previews)}
+            style={styles.editorialText}
+          />
           {memory.taggedMembers.length > 0 && (
             <View style={[styles.memberRow, styles.editorialMemberRow]}>
               {memory.taggedMembers.map((m) => (

@@ -3,6 +3,7 @@ import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
+import { stripUrls } from '../_shared/link-preview.ts';
 import { chatJson, editImageWithReferences } from '../_shared/openai.ts';
 import {
   prepareIllustrationReferences,
@@ -49,7 +50,18 @@ interface ReadyFamilyMember {
 
 const EMPTY_MEMBER_ID = '00000000-0000-4000-8000-000000000000';
 
-export async function handleGenerateIllustration(req: Request): Promise<Response> {
+export interface GenerateIllustrationDependencies {
+  getObjectBytes: typeof getObjectBytes;
+}
+
+const DEFAULT_DEPENDENCIES: GenerateIllustrationDependencies = {
+  getObjectBytes,
+};
+
+export async function handleGenerateIllustration(
+  req: Request,
+  dependencies: GenerateIllustrationDependencies = DEFAULT_DEPENDENCIES,
+): Promise<Response> {
   const corsResponse = handleCors(req);
   if (corsResponse) {
     return corsResponse;
@@ -157,7 +169,9 @@ export async function handleGenerateIllustration(req: Request): Promise<Response
       return errorResponse('Failed to load family members', 500, 'internal_error');
     }
 
-    memberIds = resolveMemberIdsForIllustration(memberIds, memory.content, nameRows ?? []);
+    // URLs can't match member names, but strip for consistency with every
+    // other content->prompt call site (docs/plans/inline-links.md §8).
+    memberIds = resolveMemberIdsForIllustration(memberIds, stripUrls(memory.content), nameRows ?? []);
   }
 
   const { data: members, error: membersError } = await supabase
@@ -186,6 +200,22 @@ export async function handleGenerateIllustration(req: Request): Promise<Response
     return errorResponse('No ready character portraits for tagged members', 400, 'NO_PORTRAITS');
   }
 
+  // A URL-only memory passes the raw-content check at the top of the
+  // handler but would produce an empty scene description once URLs are
+  // stripped for the prompt -- never let that reach the safety rewrite or
+  // the image API (docs/plans/inline-links.md §8).
+  const strippedContent = stripUrls(memory.content);
+
+  if (!strippedContent.trim()) {
+    await supabase.from('memories').update({ illustration_status: 'failed' }).eq('id', memoryId);
+
+    return errorResponse(
+      'Illustration requires descriptive text, not just a link',
+      400,
+      'EMPTY_CONTENT',
+    );
+  }
+
   const { data: family } = await supabase
     .from('families')
     .select('illustration_style')
@@ -212,14 +242,14 @@ export async function handleGenerateIllustration(req: Request): Promise<Response
   try {
     const safety = await chatJson<{ safeDescription?: string }>(
       buildSafetySystemPrompt(),
-      memory.content,
+      strippedContent,
     );
 
-    const safeDescription = safety.safeDescription?.trim() || memory.content.slice(0, 280);
+    const safeDescription = safety.safeDescription?.trim() || strippedContent.slice(0, 280);
     const { characterReferences, referenceImages } = await prepareIllustrationReferences(
       readyMembers,
       memory.memory_date,
-      getObjectBytes,
+      dependencies.getObjectBytes,
     );
 
     if (referenceImages.length === 0) {
@@ -279,5 +309,5 @@ export async function handleGenerateIllustration(req: Request): Promise<Response
 }
 
 if (import.meta.main) {
-  Deno.serve(handleGenerateIllustration);
+  Deno.serve((request) => handleGenerateIllustration(request));
 }

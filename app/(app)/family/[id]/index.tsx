@@ -23,6 +23,7 @@ import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { editFamilyMemberRoute, memoryDetailRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
+import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
 import { canEditFamilyContent } from '@/utils/roles';
 import { formatDisplayDate } from '@/utils/memories';
 
@@ -230,7 +231,9 @@ export default function ViewFamilyMemberScreen() {
                     <View style={styles.memoryRowContent}>
                       <Text style={styles.memoryDate}>{formatDisplayDate(m.memory_date)}</Text>
                       {m.content ? (
-                        <Text style={styles.memoryText} numberOfLines={2}>{m.content}</Text>
+                        <Text style={styles.memoryText} numberOfLines={2}>
+                          {substituteLinkLabels(m.content, toLinkPreviewMap(m.link_previews))}
+                        </Text>
                       ) : (
                         <Text style={styles.memoryNoCaption}>
                           {m.memory_type === 'media' && m.mediaAssets.length > 1

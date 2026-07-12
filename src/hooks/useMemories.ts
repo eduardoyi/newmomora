@@ -10,6 +10,7 @@ import {
   memoryDetailQueryKey,
 } from '@/hooks/queryKeys';
 import { canEditFamilyContent } from '@/utils/roles';
+import { fetchLinkPreviews } from '@/services/ai';
 import {
   createMemory,
   deleteMemory,
@@ -30,6 +31,7 @@ import {
   uploadMemoryMediaAssets,
   type MemoryMediaMutationAsset,
 } from '@/services/memory-posting';
+import { extractUrls } from '@/utils/links';
 import {
   needsIllustrationRecovery,
   type MemoryType,
@@ -54,6 +56,18 @@ function invalidateMemoryQueries(queryClient: ReturnType<typeof useQueryClient>)
 
 function isMemoriesListQueryKey(queryKey: readonly unknown[]): boolean {
   return queryKey[0] === memoriesQueryKeyBase && queryKey[2] !== 'detail';
+}
+
+// Inline links (docs/plans/inline-links.md §7): fire-and-forget, same slot
+// as notifyFamilyActivityFireAndForget -- never awaited on the save path,
+// and a failure just leaves links rendered with their domain fallback.
+function fireLinkPreviewFetch(
+  queryClient: ReturnType<typeof useQueryClient>,
+  memoryId: string,
+): void {
+  void fetchLinkPreviews(memoryId)
+    .then(() => invalidateMemoryQueries(queryClient))
+    .catch(() => {});
 }
 
 function setMemoryIllustrationPendingInCache(
@@ -239,9 +253,13 @@ export function useMemories(searchQuery = '') {
 
       return data as MemoryWithTags;
     },
-    onSuccess: (memory) => {
+    onSuccess: (memory, variables) => {
       invalidateMemoryQueries(queryClient);
       notifyFamilyActivityFireAndForget(memory.id);
+
+      if (variables.content && extractUrls(variables.content).length > 0) {
+        fireLinkPreviewFetch(queryClient, memory.id);
+      }
     },
   });
 
@@ -307,8 +325,17 @@ export function useMemories(searchQuery = '') {
 
       return memory;
     },
-    onSuccess: () => {
+    onSuccess: (memory, variables) => {
       invalidateMemoryQueries(queryClient);
+
+      // Fire whenever content was part of the update -- not only when the
+      // new content contains a URL. An edit that removes the last URL must
+      // still invoke the function so its prune step clears stale
+      // link_previews entries; the no-URL invocation is cheap (prunes to
+      // {}, fetches nothing).
+      if (variables.content !== undefined) {
+        fireLinkPreviewFetch(queryClient, memory.id);
+      }
     },
   });
 

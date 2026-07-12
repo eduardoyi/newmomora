@@ -10,7 +10,7 @@ Memory journal for parents. Capture moments in text or voice; AI generates consi
 
 - **Capture first:** Memory text must save even if AI fails.
 - **Child-first onboarding:** Nudge adding a child first; one family member required before journaling.
-- **Plain text memories** — no rich text in MVP.
+- **Plain text memories** — no rich text in MVP. Pasted URLs are a display-level exception: rendered (non-editing) views show a fetched-title inline link (`(Title)`, falling back to the domain); storage (`memories.content`) and the editor both stay plain text. See [docs/features/inline-links.md](docs/features/inline-links.md).
 - **Max 4 tagged family members** per memory (enforce in UI + backend).
 - **Voice:** Tap start/stop, 2-minute max; audio never persisted.
 - **Privacy:** Private storage, RLS everywhere, signed URLs for images, no public sharing in MVP.

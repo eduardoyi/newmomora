@@ -8,6 +8,7 @@ import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import type { MemoryWithTags } from '@/services/memories';
+import { toLinkPreviewMap } from '@/utils/links';
 import {
   formatDisplayDate,
   formatMemoryExcerpt,
@@ -170,7 +171,9 @@ function MediaVisual({
 
 // ── Spread card (text_illustration + media) ───────────────────────────────────
 function SpreadCard({ memory, onPress, isVideoActive = false }: MemoryCardProps) {
-  const excerpt = memory.content ? formatMemoryExcerpt(memory.content) : null;
+  const excerpt = memory.content
+    ? formatMemoryExcerpt(memory.content, 140, toLinkPreviewMap(memory.link_previews))
+    : null;
 
   if (memory.memory_type === 'media') {
     return (
@@ -217,7 +220,9 @@ function SpreadCard({ memory, onPress, isVideoActive = false }: MemoryCardProps)
 // ── Quote card (text_only) ────────────────────────────────────────────────────
 function QuoteCard({ memory, onPress }: MemoryCardProps) {
   const emo = getEmotionColors(memory.emotion);
-  const excerpt = memory.content ? formatMemoryExcerpt(memory.content, 120) : '';
+  const excerpt = memory.content
+    ? formatMemoryExcerpt(memory.content, 120, toLinkPreviewMap(memory.link_previews))
+    : '';
 
   return (
     <Pressable

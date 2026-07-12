@@ -2,6 +2,7 @@ import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole } from '../_shared/family-access.ts';
+import { stripUrls } from '../_shared/link-preview.ts';
 import {
   isAllowedImageMediaContentType,
   isVideoMediaContentType,
@@ -62,9 +63,12 @@ function markAnalysisRun(memoryId: string): void {
 export async function analyzeTextIllustrationEmotion(
   content: string,
 ): Promise<{ emotion: string; colorPalette: string }> {
+  // URLs are stripped before every prompt call site (docs/plans/inline-links.md
+  // §8): they pollute the emotion prompt and fetched titles are untrusted
+  // third-party content that must never reach the model.
   const result = await chatJson<{ emotion?: string; colorPalette?: string }>(
     buildEmotionSystemPrompt(),
-    content,
+    stripUrls(content),
   );
 
   const normalized = normalizeEmotionLabel(result.emotion, EMOTION_PALETTES);
@@ -92,7 +96,7 @@ export async function analyzeMediaPhotoEmotion(input: {
 
   const result = await chatJsonWithVision<{ emotion?: string; colorPalette?: string }>(
     buildMediaEmotionSystemPrompt(),
-    buildEmotionVisionUserPrompt(input.content),
+    buildEmotionVisionUserPrompt(input.content ? stripUrls(input.content) : input.content),
     prepared,
   );
 
@@ -266,7 +270,10 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
     markAnalysisRun(memoryId);
 
     if (row.memory_type === 'text_illustration' || row.memory_type === 'text_only') {
-      if (!row.content?.trim()) {
+      // A URL-only memory passes the raw-content check but would produce an
+      // empty prompt after stripUrls -- test against the stripped content
+      // so it takes the same skip path as truly-empty content.
+      if (!row.content || !stripUrls(row.content).trim()) {
         return errorResponse(
           'Text content is required for text-based memories',
           400,

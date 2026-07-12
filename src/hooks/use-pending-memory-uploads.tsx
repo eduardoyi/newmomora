@@ -12,6 +12,7 @@ import {
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { calendarMemoriesQueryKeyBase, memoriesQueryKeyBase } from '@/hooks/queryKeys';
+import { fetchLinkPreviews } from '@/services/ai';
 import { runMediaPhotoEmotionAnalysis } from '@/services/memories';
 import {
   hasImageMediaAsset,
@@ -19,6 +20,7 @@ import {
   postMediaMemory,
   type PostMediaMemoryInput,
 } from '@/services/memory-posting';
+import { extractUrls } from '@/utils/links';
 
 export type PendingMemoryUploadStatus = 'posting' | 'failed';
 
@@ -102,6 +104,18 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
           });
         }
         notifyFamilyActivityFireAndForget(memory.id);
+
+        // Inline links (docs/plans/inline-links.md §7): media memories are
+        // created outside the useMemories mutations, so the caption's URL
+        // trigger lives here instead. Reuses this block's invalidation.
+        if (input.content && extractUrls(input.content).length > 0) {
+          void fetchLinkPreviews(memory.id)
+            .catch(() => {})
+            .finally(() => {
+              void queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase] });
+              void queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+            });
+        }
 
         // Refetch before removing the card so the posted memory replaces it
         // without a gap where neither is visible.

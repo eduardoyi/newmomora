@@ -23,6 +23,7 @@ import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
+import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
   buildCalendarWeeks,
@@ -147,7 +148,9 @@ function RibbonDay({
           <MemoryStamp memory={day.memory} />
           <View style={styles.ribbonText}>
             {day.memory.content ? (
-              <Text style={styles.ribbonCaption} numberOfLines={1}>{day.memory.content}</Text>
+              <Text style={styles.ribbonCaption} numberOfLines={1}>
+                {substituteLinkLabels(day.memory.content, toLinkPreviewMap(day.memory.link_previews))}
+              </Text>
             ) : (
               <View style={styles.ribbonMediaLabel}>
                 <Text style={styles.ribbonMediaText}>

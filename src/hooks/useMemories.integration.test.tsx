@@ -11,7 +11,7 @@ import {
   runMediaPhotoEmotionAnalysis,
   updateMemory,
 } from '@/services/memories';
-import { notifyFamilyActivity } from '@/services/ai';
+import { fetchLinkPreviews, notifyFamilyActivity } from '@/services/ai';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -41,6 +41,7 @@ jest.mock('@/services/media', () => ({
 
 jest.mock('@/services/ai', () => ({
   notifyFamilyActivity: jest.fn(),
+  fetchLinkPreviews: jest.fn(),
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
@@ -54,6 +55,7 @@ const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.
 const mockedNotifyFamilyActivity = notifyFamilyActivity as jest.MockedFunction<
   typeof notifyFamilyActivity
 >;
+const mockedFetchLinkPreviews = fetchLinkPreviews as jest.MockedFunction<typeof fetchLinkPreviews>;
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -96,6 +98,7 @@ describe('useMemories integration', () => {
 
     mockedFetchMemories.mockResolvedValue({ data: [], error: null });
     mockedNotifyFamilyActivity.mockResolvedValue({ data: { sent: true }, error: null });
+    mockedFetchLinkPreviews.mockResolvedValue({ data: { linkPreviews: {} }, error: null });
   });
 
   // Media memory creation moved to the pending-uploads queue -- see
@@ -242,6 +245,136 @@ describe('useMemories integration', () => {
       });
 
       warnSpy.mockRestore();
+    });
+  });
+
+  describe('fetch-link-previews fire-and-forget (plan §7)', () => {
+    it('triggers fetchLinkPreviews after creating a memory whose content contains a URL', async () => {
+      mockedCreateMemory.mockResolvedValue({
+        data: { id: 'memory-link-1', memory_type: 'text_only', taggedMembers: [] },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await result.current.createMemory({
+        content: 'Look at this https://example.com',
+        memoryDate: '2026-05-26',
+        taggedMemberIds: [],
+      });
+
+      await waitFor(() => {
+        expect(mockedFetchLinkPreviews).toHaveBeenCalledWith('memory-link-1');
+      });
+    });
+
+    it('does not trigger fetchLinkPreviews after creating a memory with no URL in content', async () => {
+      mockedCreateMemory.mockResolvedValue({
+        data: { id: 'memory-nolink-1', memory_type: 'text_only', taggedMembers: [] },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await result.current.createMemory({
+        content: 'No links in this one',
+        memoryDate: '2026-05-26',
+        taggedMemberIds: [],
+      });
+
+      expect(mockedFetchLinkPreviews).not.toHaveBeenCalled();
+    });
+
+    it('triggers fetchLinkPreviews after updating content, even when the edit removes the last URL', async () => {
+      mockedUpdateMemory.mockResolvedValue({
+        data: {
+          id: 'memory-link-2',
+          memory_type: 'text_only',
+          taggedMembers: [],
+          mediaAssets: [],
+        },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      // No URL in the new content -- the prune step must still run so a
+      // stale link_previews entry from before the edit gets cleared.
+      await result.current.updateMemory({
+        memoryId: 'memory-link-2',
+        content: 'No more links here',
+      });
+
+      await waitFor(() => {
+        expect(mockedFetchLinkPreviews).toHaveBeenCalledWith('memory-link-2');
+      });
+    });
+
+    it('does not trigger fetchLinkPreviews for an update that does not touch content', async () => {
+      mockedUpdateMemory.mockResolvedValue({
+        data: {
+          id: 'memory-link-3',
+          memory_type: 'text_only',
+          taggedMembers: [],
+          mediaAssets: [],
+        },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await result.current.updateMemory({
+        memoryId: 'memory-link-3',
+        memoryDate: '2026-05-27',
+      });
+
+      expect(mockedFetchLinkPreviews).not.toHaveBeenCalled();
+    });
+
+    it('still resolves the create mutation when fetchLinkPreviews rejects', async () => {
+      mockedCreateMemory.mockResolvedValue({
+        data: { id: 'memory-link-4', memory_type: 'text_only', taggedMembers: [] },
+        error: null,
+      });
+      mockedFetchLinkPreviews.mockRejectedValue(new Error('network down'));
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await expect(
+        result.current.createMemory({
+          content: 'Still saved https://example.com',
+          memoryDate: '2026-05-26',
+          taggedMemberIds: [],
+        }),
+      ).resolves.toMatchObject({ id: 'memory-link-4' });
+    });
+
+    it('still resolves the update mutation when fetchLinkPreviews rejects', async () => {
+      mockedUpdateMemory.mockResolvedValue({
+        data: {
+          id: 'memory-link-5',
+          memory_type: 'text_only',
+          taggedMembers: [],
+          mediaAssets: [],
+        },
+        error: null,
+      });
+      mockedFetchLinkPreviews.mockRejectedValue(new Error('network down'));
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await expect(
+        result.current.updateMemory({
+          memoryId: 'memory-link-5',
+          content: 'Edited https://example.com',
+        }),
+      ).resolves.toMatchObject({ id: 'memory-link-5' });
     });
   });
 });

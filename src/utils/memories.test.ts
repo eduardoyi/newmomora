@@ -41,6 +41,40 @@ describe('memories utils', () => {
     expect(formatVideoDurationLabel(45_000)).toBe('0:45');
   });
 
+  it('formatMemoryExcerpt leaves raw URLs untouched when linkPreviews is omitted', () => {
+    expect(formatMemoryExcerpt('Check out https://example.com today')).toBe(
+      'Check out https://example.com today',
+    );
+  });
+
+  it('formatMemoryExcerpt substitutes fetched titles before truncating', () => {
+    const previews = {
+      'https://example.com': { title: 'Example Site', fetchedAt: '2026-07-01T00:00:00Z' },
+    };
+    expect(formatMemoryExcerpt('Check out https://example.com today', 140, previews)).toBe(
+      'Check out (Example Site) today',
+    );
+  });
+
+  it('formatMemoryExcerpt falls back to the domain label when no title is fetched yet', () => {
+    expect(formatMemoryExcerpt('See https://www.example.com/page', 140, {})).toBe(
+      'See (example.com)',
+    );
+  });
+
+  it('formatMemoryExcerpt truncates after substitution, not before', () => {
+    const longUrl = `https://example.com/${'x'.repeat(150)}`;
+    const previews = { [longUrl]: { title: null, fetchedAt: '2026-07-01T00:00:00Z' } };
+    const rawContent = `Look at this: ${longUrl}`;
+    expect(rawContent.length).toBeGreaterThan(140); // would need truncation on its own
+
+    const result = formatMemoryExcerpt(rawContent, 140, previews);
+    // The substituted "(example.com)" label is short -- truncation should
+    // act on the substituted string, not the raw (much longer) content.
+    expect(result).toBe('Look at this: (example.com)');
+    expect(result.endsWith('…')).toBe(false);
+  });
+
   it('groups memories by date descending', () => {
     const grouped = groupMemoriesByDate([
       { memory_date: '2026-05-20' },

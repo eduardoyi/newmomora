@@ -35,6 +35,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Family profiles | [family-profiles.md](./family-profiles.md) | done |
 | Memories & illustrations | [memories.md](./memories.md) | done |
 | Media memories (photo & video) | [media-memories.md](./media-memories.md) | done |
+| Inline links in memory text | [inline-links.md](./inline-links.md) | done |
 | Voice journaling | [voice-journaling.md](./voice-journaling.md) | done |
 
 ## Template

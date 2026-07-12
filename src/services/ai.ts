@@ -73,6 +73,22 @@ export async function analyzeMemoryEmotion(
   return invokeEdgeFunction('analyze-emotion', { memoryId });
 }
 
+export interface FetchLinkPreviewsResponse {
+  linkPreviews: Record<string, { title: string | null; fetchedAt: string }>;
+}
+
+/**
+ * Fire-and-forget from the caller's perspective (docs/plans/inline-links.md
+ * §7): fetches/prunes link-preview titles for URLs in a memory's content
+ * and writes them server-side. Never awaited on the save path -- a failure
+ * just leaves links rendered with their domain fallback.
+ */
+export async function fetchLinkPreviews(
+  memoryId: string,
+): Promise<{ data: FetchLinkPreviewsResponse | null; error: ServiceError | null }> {
+  return invokeEdgeFunction('fetch-link-previews', { memoryId });
+}
+
 export async function generateMemoryIllustration(
   memoryId: string,
   colorPalette?: string,

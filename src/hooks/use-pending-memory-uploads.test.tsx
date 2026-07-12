@@ -8,6 +8,7 @@ import {
   PendingMemoryUploadsProvider,
   usePendingMemoryUploads,
 } from '@/hooks/use-pending-memory-uploads';
+import { fetchLinkPreviews } from '@/services/ai';
 import { runMediaPhotoEmotionAnalysis } from '@/services/memories';
 import { notifyFamilyActivityFireAndForget, postMediaMemory } from '@/services/memory-posting';
 
@@ -17,6 +18,10 @@ jest.mock('@/hooks/use-auth', () => ({
 
 jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
+}));
+
+jest.mock('@/services/ai', () => ({
+  fetchLinkPreviews: jest.fn(),
 }));
 
 jest.mock('@/services/memories', () => ({
@@ -39,6 +44,7 @@ const mockedNotify = notifyFamilyActivityFireAndForget as jest.MockedFunction<
 const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.MockedFunction<
   typeof runMediaPhotoEmotionAnalysis
 >;
+const mockedFetchLinkPreviews = fetchLinkPreviews as jest.MockedFunction<typeof fetchLinkPreviews>;
 
 const photoInput = {
   memoryId: 'memory-1',
@@ -88,6 +94,8 @@ describe('usePendingMemoryUploads', () => {
       refetchMemberships: jest.fn(),
       justLostAccess: false,
     });
+
+    mockedFetchLinkPreviews.mockResolvedValue({ data: { linkPreviews: {} }, error: null });
   });
 
   it('tracks a pending upload and removes it once posting succeeds', async () => {
@@ -285,6 +293,67 @@ describe('usePendingMemoryUploads', () => {
 
     await waitFor(() => {
       expect(result.current.uploads).toHaveLength(0);
+    });
+  });
+
+  describe('fetch-link-previews fire-and-forget (plan §7)', () => {
+    it('triggers fetchLinkPreviews when the media caption contains a URL', async () => {
+      mockedPostMediaMemory.mockResolvedValue({ id: 'memory-1' } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue({ ...photoInput, content: 'Look at https://example.com' });
+      });
+
+      await waitFor(() => {
+        expect(mockedFetchLinkPreviews).toHaveBeenCalledWith('memory-1');
+      });
+    });
+
+    it('does not trigger fetchLinkPreviews when the caption has no URL', async () => {
+      mockedPostMediaMemory.mockResolvedValue({ id: 'memory-1' } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue({ ...photoInput, content: 'No links in this caption' });
+      });
+
+      await waitFor(() => {
+        expect(mockedNotify).toHaveBeenCalledWith('memory-1');
+      });
+      expect(mockedFetchLinkPreviews).not.toHaveBeenCalled();
+    });
+
+    it('does not trigger fetchLinkPreviews when there is no caption at all', async () => {
+      mockedPostMediaMemory.mockResolvedValue({ id: 'memory-1' } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+
+      await waitFor(() => {
+        expect(mockedNotify).toHaveBeenCalledWith('memory-1');
+      });
+      expect(mockedFetchLinkPreviews).not.toHaveBeenCalled();
+    });
+
+    it('still completes the upload (removes the pending card) when fetchLinkPreviews rejects', async () => {
+      mockedPostMediaMemory.mockResolvedValue({ id: 'memory-1' } as never);
+      mockedFetchLinkPreviews.mockRejectedValue(new Error('network down'));
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue({ ...photoInput, content: 'Look at https://example.com' });
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads).toHaveLength(0);
+      });
     });
   });
 

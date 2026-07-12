@@ -283,6 +283,7 @@ export type Database = {
           illustration_key: string | null
           illustration_prompt: string | null
           illustration_status: string
+          link_previews: Json
           media_content_type: string | null
           media_key: string | null
           memory_date: string
@@ -299,6 +300,7 @@ export type Database = {
           illustration_key?: string | null
           illustration_prompt?: string | null
           illustration_status?: string
+          link_previews?: Json
           media_content_type?: string | null
           media_key?: string | null
           memory_date?: string
@@ -315,6 +317,7 @@ export type Database = {
           illustration_key?: string | null
           illustration_prompt?: string | null
           illustration_status?: string
+          link_previews?: Json
           media_content_type?: string | null
           media_key?: string | null
           memory_date?: string

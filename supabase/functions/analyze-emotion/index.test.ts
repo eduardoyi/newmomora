@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert@1';
+import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import {
   analyzeTextIllustrationEmotion,
   handleAnalyzeEmotion,
@@ -53,6 +53,54 @@ Deno.test('analyzeTextIllustrationEmotion uses mocked OpenAI when OPENAI_API_KEY
     const result = await analyzeTextIllustrationEmotion('Quiet afternoon at the park.');
     assertEquals(result.emotion, 'calm');
     assertEquals(result.colorPalette, 'sage green, pale blue');
+  } finally {
+    globalThis.fetch = originalFetch;
+
+    if (originalKey) {
+      Deno.env.set('OPENAI_API_KEY', originalKey);
+    } else {
+      Deno.env.delete('OPENAI_API_KEY');
+    }
+  }
+});
+
+// Inline links (docs/plans/inline-links.md §8): URLs must never reach the
+// emotion prompt -- they pollute classification and fetched titles are
+// untrusted third-party content (prompt-injection surface).
+Deno.test('analyzeTextIllustrationEmotion strips URLs from the prompt sent to OpenAI', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+
+  Deno.env.set('OPENAI_API_KEY', 'test-key');
+
+  let capturedUserContent = '';
+
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse((init as RequestInit).body as string);
+    capturedUserContent = body.messages[1].content;
+
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({ emotion: 'joy', colorPalette: 'warm gold' }),
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  };
+
+  try {
+    await analyzeTextIllustrationEmotion(
+      'Check out https://example.com/party-pics for more of the birthday party!',
+    );
+
+    assertEquals(capturedUserContent.includes('https://'), false);
+    assertStringIncludes(capturedUserContent, 'Check out');
+    assertStringIncludes(capturedUserContent, 'birthday party');
   } finally {
     globalThis.fetch = originalFetch;
 

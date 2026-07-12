@@ -1,0 +1,39 @@
+appId: com.memora.app
+---
+# Inline links (docs/features/inline-links.md). Best-effort / network-
+# dependent: link-preview title fetching happens fire-and-forget after save,
+# against the real internet (example.com), so this tolerates either outcome
+# -- a fetched title ("Example Domain") or the domain fallback
+# ("(example.com)") if the fetch hasn't completed yet or failed.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: new-memory-content
+    timeout: 10000
+- tapOn:
+    id: new-memory-content
+- eraseText
+- inputText: "Check out https://example.com"
+- tapOn: "New memory"
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    notVisible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
+- tapOn:
+    id: "memory-card-.*"
+- extendedWaitUntil:
+    visible:
+      id: memory-detail-back
+    timeout: 15000
+- assertVisible:
+    text: "Example Domain|\\(example\\.com\\)"

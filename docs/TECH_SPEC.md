@@ -157,6 +157,7 @@ create table public.memories (
   illustration_prompt text,
   media_key text,                            -- R2 object key for user-uploaded photo or video
   media_content_type text,                   -- MIME type e.g. image/jpeg, video/mp4
+  link_previews jsonb not null default '{}'::jsonb,  -- { [url]: { title: string|null, fetchedAt } } -- see fetch-link-previews (§4.13)
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -362,6 +363,7 @@ create trigger on_auth_user_created
 - `memories.memory_type`: drives whether AI pipeline fires and whether `media_key` is expected
 - `memories.media_key`: required (non-null) when `memory_type = 'media'`; must be null for other types — enforced in Edge Function / client layer
 - `memories.illustration_status`: set to `'pending'` only for `text_illustration` memories on insert; `'none'` for all other types
+- `memories.link_previews`: `jsonb`, defaults to `{}`; written only by `fetch-link-previews` (service-role client); malformed/absent entries are treated as no preview client-side (see [inline-links.md](./features/inline-links.md))
 - `family_members.profile_picture_key`: required before portrait generation
 - `family_memberships`: exactly one `role = 'owner'` row per `family_id` (partial unique index); max 50 rows per `family_id` (trigger); `user_id`/`family_id` immutable once inserted (a manager can only ever change `role`, and never to/from `'owner'`)
 - `family_invites.role`: `'manager'` or `'viewer'` only — invites can never carry the owner role
@@ -919,6 +921,57 @@ or, when debounced (another push for this `(family, actor)` fired within the las
 **Auth:** JWT; caller must be both the memory's creator (`memory.user_id`) **and** owner/manager of its family.
 
 **Errors:** `validation_error`, `not_found` (404), `forbidden` (403), `internal_error` (500)
+
+---
+
+### 4.13 `fetch-link-previews`
+
+Fetches page titles for URLs pasted into a memory's `content` and writes
+`memories.link_previews`. See [docs/features/inline-links.md](./features/inline-links.md)
+for the full data flow, SSRF rules, and client rendering.
+
+**Triggers:** `useMemories` create/update mutations (fire-and-forget, only
+when content contains a URL on create / whenever content was part of the
+update); the media upload queue (`use-pending-memory-uploads.tsx`) when the
+caption contains a URL.
+
+**Authorization:** mirrors `analyze-emotion` — memory looked up by id alone,
+caller must be a **member (any role, including viewer)** of its family; the
+write runs on the **service-role client** so a viewer-triggered fetch still
+persists.
+
+**Request**
+
+```json
+{ "memoryId": "uuid" }
+```
+
+**Logic**
+
+1. Fetch memory (`id, family_id, content, link_previews`); assert caller is a family member
+2. Extract URLs from `content` (shared regex, both client and Edge Function), deduplicate in first-seen order, then cap at the first 5 unique URLs
+3. Diff against stored `link_previews`: fetch URLs that are new or previously `title: null`; keep existing non-null entries; prune entries whose URL no longer appears in `content` (handles edits, including edits that remove every URL)
+4. Fetch each title in parallel (`Promise.allSettled`) through the two-layer SSRF guard (hostname rules + DNS resolution, re-checked on every redirect hop, max 3 hops)
+5. Conditionally update `link_previews` only where both the memory id and `content` still match the snapshot from step 1; this single atomic update prevents a concurrent content edit from receiving stale previews (content-based write guard, not `updated_at` — see the feature doc for why)
+
+**Response**
+
+```json
+{
+  "linkPreviews": {
+    "https://www.youtube.com/watch?v=44Cgkd3WtU8": {
+      "title": "Alexisonfire - We Are The End - YouTube",
+      "fetchedAt": "2026-07-12T00:00:00Z"
+    }
+  }
+}
+```
+
+`title: null` = fetch attempted and failed; the client renders the domain as a fallback label and the function re-attempts on the next invocation.
+
+**Errors:** `unauthorized` (401), `forbidden` (403), `MEMORY_NOT_FOUND` (404), `method_not_allowed` (405), `rate_limited` (429, 5s per-memory cooldown)
+
+**Privacy:** Fetched titles are third-party page content and are **never** fed to OpenAI prompts (see §8 of the plan / feature doc). Production logs: memory id and status only, never URLs or titles.
 
 ---
 
