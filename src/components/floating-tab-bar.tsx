@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import type { BottomTabBarProps } from 'expo-router/build/react-navigation/bottom-tabs/types';
 import { SymbolView } from 'expo-symbols';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -13,6 +13,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, fonts } from '@/constants/theme';
+import { getTabTransitionKey, getTabTransitionStartProgress } from '@/utils/tab-transition';
 
 type TabMeta = {
   label: string;
@@ -55,11 +56,13 @@ function AnimatedTabItem({
   onPress: () => void;
 }) {
   const meta = TAB_META[route.name];
-  const progress = useSharedValue(isActive ? 1 : 0);
+  // A newly selected tab expands from 0, while the previously selected tab
+  // collapses from 1. The item key below makes this value fresh per transition.
+  const progress = useSharedValue(getTabTransitionStartProgress(isActive));
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     progress.value = withTiming(isActive ? 1 : 0, TIMING);
-  }, [isActive]);
+  }, [isActive, progress]);
 
   const pillStyle = useAnimatedStyle(() => ({
     paddingHorizontal: interpolate(progress.value, [0, 1], [8, 14]),
@@ -132,7 +135,12 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
 
             return (
               <AnimatedTabItem
-                key={route.key}
+                // Recreate the two transitioning items when the selected route changes.
+                // A shared value belongs to its mounted view; retaining it after a native
+                // tab transition can leave its last animated frame on screen. Starting a
+                // fresh item from the opposite state keeps the expand/collapse animation
+                // while ensuring it always has a deterministic end state.
+                key={getTabTransitionKey(route.key, isActive)}
                 route={route}
                 isActive={isActive}
                 onPress={onPress}
