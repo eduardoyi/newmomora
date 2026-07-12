@@ -24,6 +24,7 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
   - `text_only`: excerpt + emotion chip; no image area.
   - `media`: photo/video carousel + optional caption; media with at least one photo may show emotion chip after async analysis.
 - Memory detail shows full content, media or illustration, tagged members, date, emotion (if any), edit/delete. The detail background carries a soft top-down gradient tinted by the emotion (`getEmotionGradient` in `src/constants/theme.ts`), falling back to a neutral surface→bg fade when no emotion is set.
+- Tapping a ready memory illustration opens the private image in the shared full-screen media viewer; closing returns to the detail card.
 - Illustrated memory detail header includes a regenerate control (left of edit) to manually rerun the illustration pipeline; confirms before replacing a ready image. Regeneration calls `generate-illustration` with `forceRegenerate: true` so an already-`ready` memory is not short-circuited.
 - Failed illustration shows retry option; no retry concept for media memories.
 - Calendar renders virtualized week rows back to the user's oldest memory. It fetches only the visible date window plus a small buffer; tap opens the first memory for that day.

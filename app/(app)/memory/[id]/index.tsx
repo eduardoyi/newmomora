@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
+import { FullScreenMediaViewer, type FullScreenMediaItem } from '@/components/full-screen-media-viewer';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { colors, fonts, getEmotionColors, getEmotionGradient, radius, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
@@ -198,6 +199,16 @@ function MemoryDetailFramed({
   // Illustrations are generated square (1024×1024); measure on load so any
   // legacy or future sizes still render uncropped.
   const [illustrationRatio, setIllustrationRatio] = useState(1);
+  const [fullScreenIndex, setFullScreenIndex] = useState<number | null>(null);
+  const fullScreenItems: FullScreenMediaItem[] = isMedia
+    ? memory.mediaAssets.map((asset) => ({
+        id: asset.id,
+        contentType: asset.content_type,
+        objectKey: asset.object_key,
+      }))
+    : illustrationUrl
+      ? [{ id: memory.id, contentType: 'image/webp', uri: illustrationUrl }]
+      : [];
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -227,9 +238,10 @@ function MemoryDetailFramed({
                 <MemoryMediaCarousel
                   assets={memory.mediaAssets}
                   cacheVersion={memory.updated_at}
+                  isActive={fullScreenIndex === null}
                   mutedVideos={false}
+                  onPress={setFullScreenIndex}
                   style={styles.framedMedia}
-                  videoTapToToggle
                 />
               ) : (
                 <View style={[styles.framedImage, styles.placeholderFrame]}>
@@ -248,17 +260,25 @@ function MemoryDetailFramed({
                 />
               </View>
             ) : (
-              <Image
-                contentFit="cover"
-                onLoad={(event) => {
-                  const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
-                  if (ratio) {
-                    setIllustrationRatio(clampMediaAspectRatio(ratio));
-                  }
-                }}
-                source={{ uri: illustrationUrl }}
-                style={[styles.framedImage, { aspectRatio: illustrationRatio }]}
-              />
+              <Pressable
+                accessibilityLabel="View illustration full screen"
+                accessibilityRole="button"
+                onPress={() => setFullScreenIndex(0)}
+                style={({ pressed }) => pressed && styles.mediaPressed}
+                testID="memory-detail-illustration"
+              >
+                <Image
+                  contentFit="cover"
+                  onLoad={(event) => {
+                    const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
+                    if (ratio) {
+                      setIllustrationRatio(clampMediaAspectRatio(ratio));
+                    }
+                  }}
+                  source={{ uri: illustrationUrl }}
+                  style={[styles.framedImage, { aspectRatio: illustrationRatio }]}
+                />
+              </Pressable>
             )}
           </View>
 
@@ -288,6 +308,15 @@ function MemoryDetailFramed({
           </View>
         </View>
       </ScrollView>
+      {fullScreenIndex !== null && fullScreenItems.length > 0 ? (
+        <FullScreenMediaViewer
+          accessibilityLabel={isMedia ? 'Full-screen memory media' : 'Full-screen memory illustration'}
+          cacheVersion={memory.updated_at}
+          initialIndex={fullScreenIndex}
+          items={fullScreenItems}
+          onClose={() => setFullScreenIndex(null)}
+        />
+      ) : null}
     </View>
   );
 }
@@ -619,6 +648,9 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
     overflow: 'hidden',
+  },
+  mediaPressed: {
+    opacity: 0.92,
   },
   placeholderFrame: {
     alignItems: 'center',

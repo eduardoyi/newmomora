@@ -26,7 +26,8 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
 - Single-asset memories use the asset's exact natural aspect ratio, including tall portrait videos; multi-asset carousels clamp the first asset's ratio to `3:4`-`16:9` so every page shares a practical, stable frame.
 - **Photo** memories: after save, async emotion analysis may replace the Photo badge with an emotion chip (same labels as text memories). Failures do not block save.
 - **Video** memories: no emotion chip in MVP (Photo/Video badge only).
-- On the memory detail screen, photos display full-width via presigned URL; videos play inline via `expo-video`, loop with sound, hide native controls, and toggle play/pause when tapped.
+- On the memory detail screen, photos display full-width via presigned URL; videos play inline via `expo-video`, loop with sound, and hide native controls.
+- Tapping any photo or video on the memory detail screen opens it in a warm, dark full-screen viewer. Multi-asset memories open at the tapped carousel position and preserve horizontal swipe paging, the page counter, and dots. Full-screen videos loop with sound and toggle play/pause when tapped; closing returns to the same detail screen.
 - Editing a `media` memory allows adding, removing, and reordering assets, but at least one asset must remain.
 - Deleting a `media` memory deletes all R2 media objects before or alongside the DB row deletion.
 
@@ -120,6 +121,7 @@ Mobile upload flow uses `upload-media` so the device only talks to Supabase; `ge
 | Components | `src/components/memory-card.tsx` | Conditional render: photo thumbnail vs video thumbnail vs illustration |
 | Components | `src/components/memory-media-picker.tsx` | New — wraps `expo-image-picker`; validates size/duration; emits `{ uri, contentType, duration? }` |
 | Components | `src/components/memory-media-preview.tsx` | New — inline form preview with remove button |
+| Components | `src/components/full-screen-media-viewer.tsx` | Shared full-screen image/video viewer; resolves private R2 keys, pages mixed carousels, and controls active video playback |
 | Native entry | `app/+native-intent.ts`, `app.json` | Registers Momora for image/video shares and routes incoming share intents to the composer |
 | Hook | `src/hooks/use-incoming-memory-share.ts` | Resolves native payloads, reads video duration, validates limits, and hands attachments to the composer |
 
@@ -205,12 +207,13 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/hooks/useMemories.integration.test.tsx` | Photo create/update triggers emotion analysis; video skips |
 | `src/hooks/use-incoming-memory-share.integration.test.tsx` | Native resolved payload → validated composer attachment → intent cleared |
 | `src/utils/media-emotion-polling.test.ts` | Poll window for photo media without emotion |
+| `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, close action |
 
 ### E2E (Maestro)
 
 | Flow | Scenario |
 |------|----------|
-| `.maestro/flows/memories/create-media-memory.yaml` | Happy path: pick photo → optional caption → save → verify Timeline card shows thumbnail |
+| `.maestro/flows/memories/create-media-memory.yaml` | Pick photo → save → Timeline → detail → full-screen viewer → close |
 | `.maestro/flows/memories/create-video-memory.yaml` | Happy path: pick video → save → open detail → video plays |
 | `.maestro/flows/memories/share-gallery-media.android.yaml` | Android gallery share sheet → Momora composer opens with attachment |
 
@@ -248,7 +251,8 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
-| 2026-07-12 | Detail videos now loop with hidden native controls; tapping toggles play/pause |
+| 2026-07-12 | Added full-screen photo/video viewing from memory detail, including mixed-carousel paging from the tapped item |
+| 2026-07-12 | Detail videos now loop with hidden native controls |
 | 2026-07-12 | Single-asset media now uses its exact natural aspect ratio; multi-asset carousels retain the `3:4`-`16:9` clamp |
 | 2026-07-12 | Deferred posting: Save closes the composer instantly; a pending-uploads queue (`use-pending-memory-uploads`) posts in the background with progress cards on Timeline/Calendar and Retry/Discard on failure |
 | 2026-07-12 | Added iOS/Android gallery share target; incoming photos/videos now open pre-attached in the memory composer |

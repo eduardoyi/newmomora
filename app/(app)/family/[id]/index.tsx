@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
 import { CastCard } from '@/components/cast-card';
+import { FullScreenMediaViewer } from '@/components/full-screen-media-viewer';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemories } from '@/hooks/useMemories';
@@ -103,8 +104,13 @@ export default function ViewFamilyMemberScreen() {
   const { members, isLoading, deleteMember, isDeleting } = useFamilyMembers();
   const { memories } = useMemories();
   const [deleteError, setDeleteError] = useState('');
+  const [isPortraitFullScreen, setIsPortraitFullScreen] = useState(false);
 
   const member = members.find((m) => m.id === id);
+  const portraitKey = member?.illustrated_profile_status === 'ready'
+    ? member.illustrated_profile_key
+    : null;
+  const { url: portraitUrl } = useMediaUrl(portraitKey, member?.updated_at);
 
   const memberMemories = memories.filter((m) =>
     m.taggedMembers.some((tm) => tm.id === id),
@@ -201,7 +207,10 @@ export default function ViewFamilyMemberScreen() {
         </SafeAreaView>
 
         <View style={styles.content}>
-          <CastCard member={member} />
+          <CastCard
+            member={member}
+            onPortraitPress={portraitUrl ? () => setIsPortraitFullScreen(true) : undefined}
+          />
 
           {deleteError ? <Text style={styles.deleteErrorText}>{deleteError}</Text> : null}
 
@@ -254,6 +263,18 @@ export default function ViewFamilyMemberScreen() {
           )}
         </View>
       </ScrollView>
+      {isPortraitFullScreen && portraitUrl ? (
+        <FullScreenMediaViewer
+          accessibilityLabel={`Full-screen portrait of ${member.name}`}
+          cacheVersion={member.updated_at}
+          items={[{
+            id: member.id,
+            contentType: 'image/webp',
+            uri: portraitUrl,
+          }]}
+          onClose={() => setIsPortraitFullScreen(false)}
+        />
+      ) : null}
     </View>
   );
 }

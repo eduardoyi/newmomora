@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { FamilyProfilePortraitPhoto } from '@/components/family-profile-portrait-photo';
 import { colors, emotionColors, fonts, radius, type EmotionName } from '@/constants/theme';
@@ -13,14 +13,22 @@ export function memberTint(member: FamilyMember): EmotionName {
 
 interface CastCardProps {
   member: FamilyMember;
+  onPortraitPress?: () => void;
 }
 
-export function CastCard({ member }: CastCardProps) {
+export function CastCard({ member, onPortraitPress }: CastCardProps) {
   const emo = emotionColors[memberTint(member)];
   const age = member.date_of_birth ? formatAgeFromDob(member.date_of_birth) : null;
   return (
     <View style={styles.castCard}>
-      <View style={styles.castPortraitSlot}>
+      <Pressable
+        accessibilityLabel={onPortraitPress ? `View ${member.name}'s portrait full screen` : undefined}
+        accessibilityRole={onPortraitPress ? 'button' : undefined}
+        disabled={!onPortraitPress}
+        onPress={onPortraitPress}
+        style={({ pressed }) => [styles.castPortraitSlot, pressed && styles.portraitPressed]}
+        testID="family-member-portrait"
+      >
         <FamilyProfilePortraitPhoto
           accessibilityLabel={`${member.name} portrait`}
           backgroundColor={emo.soft}
@@ -29,7 +37,7 @@ export function CastCard({ member }: CastCardProps) {
           member={member}
           width={120}
         />
-      </View>
+      </Pressable>
 
       <View style={styles.castInfo}>
         <Text style={styles.castName}>{member.name}</Text>
@@ -57,6 +65,9 @@ const styles = StyleSheet.create({
     height: 120,
     overflow: 'hidden',
     width: 120,
+  },
+  portraitPressed: {
+    opacity: 0.88,
   },
   castInfo: {
     flex: 1,

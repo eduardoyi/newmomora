@@ -83,6 +83,24 @@ describe('MemoryMediaCarousel', () => {
     expect(onPress).not.toHaveBeenCalled();
   });
 
+  it('opens the currently visible carousel item', () => {
+    const onPress = jest.fn();
+    const { getByTestId } = render(
+      <MemoryMediaCarousel assets={assets} onPress={onPress} />,
+    );
+
+    const carousel = getByTestId('memory-media-carousel');
+    fireEvent(carousel, 'layout', { nativeEvent: { layout: { width: 320 } } });
+    const scrollView = getByTestId('memory-media-carousel-scroll');
+    fireEvent(scrollView, 'momentumScrollEnd', {
+      nativeEvent: { contentOffset: { x: 320, y: 0 } },
+    });
+    fireEvent(scrollView, 'touchStart', { nativeEvent: { pageX: 20, pageY: 30 } });
+    fireEvent(scrollView, 'touchEnd', { nativeEvent: { pageX: 20, pageY: 30 } });
+
+    expect(onPress).toHaveBeenCalledWith(1);
+  });
+
   it('adopts a single asset exact natural aspect ratio once it loads', () => {
     const { getByTestId } = render(<MemoryMediaCarousel assets={[assets[0]]} />);
 

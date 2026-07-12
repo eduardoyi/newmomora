@@ -1,0 +1,25 @@
+appId: com.memora.app
+---
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: tab-family
+- extendedWaitUntil:
+    visible:
+      id: "family-cast-card-.*"
+    timeout: 15000
+- tapOn:
+    id: "family-cast-card-.*"
+- extendedWaitUntil:
+    visible:
+      id: family-member-portrait
+    timeout: 15000
+- tapOn:
+    id: family-member-portrait
+- extendedWaitUntil:
+    visible:
+      id: full-screen-media-viewer
+    timeout: 10000
+- tapOn:
+    id: full-screen-media-close
+- assertNotVisible:
+    id: full-screen-media-viewer

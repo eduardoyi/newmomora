@@ -19,6 +19,7 @@ Family profiles power memory tagging and AI character portraits. Each member has
 - **Timeline onboarding:** if no family members, CTA to add one before journaling
 - **Portrait status:** while `pending` or `generating`, the profile photo shows a sparkle loading overlay (same pattern as memory illustrations) with copy such as “Portrait pending” / “Generating portrait…”. When `ready`, the AI character portrait is shown.
 - **Portrait cache busting:** R2 portrait keys are stable (`portrait.webp`). Client presigned URLs and `expo-image` cache use `family_members.updated_at` so regenerated portraits appear without restarting the app.
+- **Full-screen portrait:** tapping a ready illustrated portrait on the family-member detail page opens it in the same warm, dark full-screen viewer used by memory media. The original profile photo is not substituted when an illustrated portrait is unavailable.
 - **Timeout recovery:** if the portrait Edge Function returns a gateway timeout after moving the row to `generating`, the client conditionally changes an in-progress status to `failed`. This prevents indefinite polling and exposes the existing retry affordance. A concurrently completed `ready` portrait is never overwritten.
 
 ## Architecture
@@ -64,9 +65,11 @@ Bucket name comes from Edge Function secret `R2_BUCKET` — not from the client.
 
 ## Client integration
 
+`src/components/full-screen-media-viewer.tsx` is shared with memories for ready portrait viewing.
+
 | Layer | Files |
 |-------|-------|
-| Routes | `app/(app)/(tabs)/family.tsx`, `app/(app)/add-family-member.tsx` |
+| Routes | `app/(app)/(tabs)/family.tsx`, `app/(app)/family/[id]/index.tsx`, `app/(app)/add-family-member.tsx` |
 | Hooks | `src/hooks/useFamilyMembers.ts`, `src/hooks/useMediaUrls.ts` |
 | Services | `src/services/family-members.ts`, `src/services/media.ts` |
 | Components | `src/components/family-member-card.tsx`, `src/components/family-empty-state.tsx` |
@@ -133,6 +136,7 @@ Picker options intentionally set `exif: false` and `base64: false`; child profil
 | `src/utils/storage-keys.test.ts` | Key builder |
 | `src/utils/e2e-fixtures.test.ts` | E2E profile fixture loader |
 | `src/services/media.test.ts` | Presigned upload (native FileSystem path) |
+| `src/components/cast-card.test.tsx` | Family-member detail portrait tap affordance |
 
 ### Integration tests
 
@@ -140,6 +144,7 @@ Picker options intentionally set `exif: false` and `base64: false`; child profil
 |------|-----------|
 | `src/services/family-members.integration.test.ts` | Fetch, create+upload, rollback on failure |
 | `src/hooks/useFamilyMembers.integration.test.tsx` | Query load, create/update mutations, portrait timeout recovery |
+| `src/components/full-screen-media-viewer.integration.test.tsx` | Direct portrait URI rendering and close affordance |
 
 ### E2E (Maestro)
 
@@ -148,6 +153,7 @@ Picker options intentionally set `exif: false` and `base64: false`; child profil
 | `.maestro/flows/onboarding/add-family-member.yaml` | Opens add-member screen (smoke) |
 | `.maestro/flows/onboarding/add-family-member-with-fixture.yaml` | **CI default** — bundled E2E photo → save → upload |
 | `.maestro/flows/onboarding/add-family-member-with-picker.yaml` | Real system photo picker via `addMedia` |
+| `.maestro/flows/onboarding/view-family-portrait-full-screen.yaml` | Ready portrait → full-screen viewer → close back to member detail |
 
 Dev builds expose **Use E2E test photo** (`testID: add-family-member-photo-fixture`) on the add-member screen. It is compiled out of production (`__DEV__` only) and loads `assets/e2e/profile-fixture.jpg` to a local file URI for real R2 upload.
 
@@ -181,6 +187,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
+| 2026-07-12 | Ready character portraits open full screen from family-member detail |
 | 2026-07-12 | Recover timed-out portrait generation so manager-initiated replacement photos do not remain stuck in `generating` |
 | 2026-05-29 | Added camera capture source for family profile photos with Android pending-result recovery |
 | 2026-05-25 | E2E photo upload flows (fixture + system picker) |

@@ -33,7 +33,7 @@ interface MemoryMediaCarouselProps {
   isActive?: boolean;
   videoTapToToggle?: boolean;
   mutedVideos?: boolean;
-  onPress?: () => void;
+  onPress?: (activeIndex: number) => void;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -260,7 +260,7 @@ export function MemoryMediaCarousel({
     tapStartRef.current = null;
 
     if (!hasMovedRef.current && dx <= 8 && dy <= 8 && elapsed < 600) {
-      onPress();
+      onPress(activeIndex);
     }
   };
 

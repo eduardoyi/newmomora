@@ -36,3 +36,19 @@ appId: com.memora.app
       id: pending-memory-uploads-banner
     timeout: 60000
 - assertNotVisible: "Couldn't post memory"
+- tapOn:
+    id: memory-media-carousel-scroll
+- extendedWaitUntil:
+    visible:
+      id: memory-detail-back
+    timeout: 15000
+- tapOn:
+    id: memory-media-carousel-scroll
+- extendedWaitUntil:
+    visible:
+      id: full-screen-media-viewer
+    timeout: 10000
+- tapOn:
+    id: full-screen-media-close
+- assertNotVisible:
+    id: full-screen-media-viewer
