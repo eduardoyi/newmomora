@@ -789,6 +789,18 @@ Sends a push notification to a single user.
 
 Cron function run hourly.
 
+**Trigger:** pg_cron job `invoke-schedule-daily-reminders` (migration
+`20260713170000_schedule_daily_reminders_cron.sql`) POSTs to the function via
+pg_net at minute 0 of every hour. The function only sends within the first 5
+minutes of a user's target hour, so the schedule must stay at `0 * * * *`. The
+job reads two Vault secrets at run time — `project_url` (the project's
+`https://<ref>.supabase.co` base) and `cron_secret` (same value as the
+`CRON_SECRET` function secret) — which must be created once per environment;
+failed runs are visible in `cron.job_run_details`. Note `send-daily-reminder`
+is invoked **in-process** (imported handler), so successful reminder sends
+appear only under this function's invocations, never under
+`send-daily-reminder`'s.
+
 **Logic**
 
 1. Fetch users where `enable_daily_reminder = true` and `expo_push_token` is not null and `deleted_at` is null
@@ -1142,6 +1154,13 @@ per family, not per user). No style picker UI.
 | `BENTO_PUBLISHABLE_KEY` | Bento publishable key — HTTP Basic auth username |
 | `BENTO_SECRET_KEY` | Bento secret key — HTTP Basic auth password |
 | `BENTO_FROM_EMAIL` | Sender address; must be pre-registered as an author on the Bento site |
+
+### Database Vault secrets (read by pg_cron jobs)
+
+| Secret | Description |
+|--------|-------------|
+| `project_url` | Project base URL (`https://<ref>.supabase.co`) — used to build Edge Function URLs |
+| `cron_secret` | Same value as the `CRON_SECRET` function secret — sent as `x-cron-secret` |
 
 ---
 
