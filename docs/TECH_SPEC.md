@@ -854,6 +854,15 @@ Initiates account deletion (soft delete).
 
 Cron function run daily.
 
+**Trigger:** pg_cron job `invoke-hard-delete-expired-accounts` (migration
+`20260713180000_schedule_hard_delete_cron.sql`) POSTs to the function via
+pg_net daily at 03:00 UTC. The function sweeps every user with
+`scheduled_hard_delete_at <= now()`, so the exact run time doesn't matter. The
+job reads the same two Vault secrets as §4.6's at run time — `project_url`
+(the project's `https://<ref>.supabase.co` base) and `cron_secret` (same value
+as the `CRON_SECRET` function secret) — which must be created once per
+environment; failed runs are visible in `cron.job_run_details`.
+
 **Logic**
 
 1. Find users where `scheduled_hard_delete_at <= now()`
