@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, type RenderResult } from '@testing-library/react-native';
 
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
@@ -33,6 +33,12 @@ const mockedUseVideoThumbnailResult = useVideoThumbnailResult as jest.MockedFunc
   typeof useVideoThumbnailResult
 >;
 const mockRefetchMediaUrls = jest.fn();
+
+function measureCarousel(getByTestId: RenderResult['getByTestId']) {
+  fireEvent(getByTestId('memory-media-carousel'), 'layout', {
+    nativeEvent: { layout: { width: 320 } },
+  });
+}
 
 const assets = [
   {
@@ -100,8 +106,7 @@ describe('MemoryMediaCarousel', () => {
       <MemoryMediaCarousel assets={assets} onPress={onPress} />,
     );
 
-    const carousel = getByTestId('memory-media-carousel');
-    fireEvent(carousel, 'layout', { nativeEvent: { layout: { width: 320 } } });
+    measureCarousel(getByTestId);
     const scrollView = getByTestId('memory-media-carousel-scroll');
     fireEvent(scrollView, 'momentumScrollEnd', {
       nativeEvent: { contentOffset: { x: 320, y: 0 } },
@@ -112,8 +117,22 @@ describe('MemoryMediaCarousel', () => {
     expect(onPress).toHaveBeenCalledWith(1);
   });
 
+  it('waits for a measured width before mounting media', () => {
+    const { getByTestId, queryByTestId } = render(
+      <MemoryMediaCarousel assets={[assets[0]]} stableLayout />,
+    );
+
+    expect(queryByTestId('memory-media-image-asset-1')).toBeNull();
+
+    measureCarousel(getByTestId);
+
+    expect(getByTestId('memory-media-image-asset-1')).toBeTruthy();
+  });
+
   it('adopts a single asset exact natural aspect ratio once it loads', () => {
     const { getByTestId } = render(<MemoryMediaCarousel assets={[assets[0]]} />);
+
+    measureCarousel(getByTestId);
 
     fireEvent(getByTestId('memory-media-image-asset-1'), 'load', {
       nativeEvent: { source: { width: 1080, height: 1920 } },
@@ -141,6 +160,8 @@ describe('MemoryMediaCarousel', () => {
     };
     const { getByTestId } = render(<MemoryMediaCarousel assets={[videoAsset]} />);
 
+    measureCarousel(getByTestId);
+
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
   });
 
@@ -164,6 +185,8 @@ describe('MemoryMediaCarousel', () => {
     const { getByTestId } = render(
       <MemoryMediaCarousel assets={[videoAsset]} stableLayout />,
     );
+
+    measureCarousel(getByTestId);
 
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 4 / 3 });
   });
@@ -193,6 +216,8 @@ describe('MemoryMediaCarousel', () => {
     const { getByTestId } = render(
       <MemoryMediaCarousel assets={[firstAsset, assets[1]]} stableLayout />,
     );
+
+    measureCarousel(getByTestId);
 
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
 
@@ -227,11 +252,40 @@ describe('MemoryMediaCarousel', () => {
       <MemoryMediaCarousel assets={[videoAsset]} isActive={false} stableLayout />,
     );
 
+    measureCarousel(getByTestId);
+
     expect(queryByTestId('memory-media-video')).toBeNull();
     expect(getByTestId('memory-media-video-thumbnail-asset-video').props.source).toEqual([{
       uri: 'file:///video-frame.jpg',
       cacheKey: 'user/memory/media/video-1.mp4::thumbnail',
     }]);
+  });
+
+  it('does not mount a native player in a timeline card', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+    mockedUseVideoThumbnailResult.mockReturnValue({
+      uri: 'file:///video-frame.jpg',
+      width: 1280,
+      height: 720,
+    });
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+    const { getByTestId, queryByTestId } = render(
+      <MemoryMediaCarousel assets={[videoAsset]} playVideos={false} stableLayout />,
+    );
+
+    measureCarousel(getByTestId);
+
+    expect(queryByTestId('memory-media-video')).toBeNull();
+    expect(getByTestId('memory-media-video-thumbnail-asset-video')).toBeTruthy();
   });
 
   it('keeps the thumbnail over an active player until its first frame renders', () => {
@@ -255,6 +309,8 @@ describe('MemoryMediaCarousel', () => {
       <MemoryMediaCarousel assets={[videoAsset]} stableLayout />,
     );
 
+    measureCarousel(getByTestId);
+
     expect(getByTestId('memory-media-video-thumbnail-asset-video')).toBeTruthy();
     fireEvent(getByTestId('memory-media-video'), 'firstFrameRender');
     expect(queryByTestId('memory-media-video-thumbnail-asset-video')).toBeNull();
@@ -262,6 +318,8 @@ describe('MemoryMediaCarousel', () => {
 
   it('uses the first asset exact ratio for every carousel page', () => {
     const { getByTestId } = render(<MemoryMediaCarousel assets={assets} />);
+
+    measureCarousel(getByTestId);
 
     // Defaults to 4:3 until dimensions are known.
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 4 / 3 });
@@ -289,7 +347,7 @@ describe('MemoryMediaCarousel', () => {
       refetch: mockRefetchMediaUrls,
     } as ReturnType<typeof useMediaUrls>);
 
-    const { queryByTestId } = render(
+    const { getByTestId, queryByTestId } = render(
       <MemoryMediaCarousel
         assets={[
           assets[0],
@@ -302,6 +360,8 @@ describe('MemoryMediaCarousel', () => {
         ]}
       />,
     );
+
+    measureCarousel(getByTestId);
 
     expect(queryByTestId('memory-media-video')).toBeNull();
   });
@@ -315,7 +375,7 @@ describe('MemoryMediaCarousel', () => {
       refetch: mockRefetchMediaUrls,
     } as ReturnType<typeof useMediaUrls>);
 
-    const { queryByTestId } = render(
+    const { getByTestId, queryByTestId } = render(
       <MemoryMediaCarousel
         assets={[
           assets[0],
@@ -329,6 +389,8 @@ describe('MemoryMediaCarousel', () => {
         isActive={false}
       />,
     );
+
+    measureCarousel(getByTestId);
 
     expect(queryByTestId('memory-media-video')).toBeNull();
   });
@@ -348,6 +410,8 @@ describe('MemoryMediaCarousel', () => {
     const { getByTestId } = render(
       <MemoryMediaCarousel assets={[videoAsset]} mutedVideos={false} videoTapToToggle />,
     );
+
+    measureCarousel(getByTestId);
 
     expect(mockVideoPlayer.loop).toBe(true);
     expect(mockVideoPlayer.muted).toBe(false);
@@ -369,6 +433,8 @@ describe('MemoryMediaCarousel', () => {
     const { getByTestId } = render(
       <MemoryMediaCarousel assets={[assets[0]]} cacheVersion="version-1" />,
     );
+
+    measureCarousel(getByTestId);
 
     const image = getByTestId('memory-media-image-asset-1');
     expect(image.props.source).toEqual([{

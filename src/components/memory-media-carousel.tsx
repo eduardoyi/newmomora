@@ -31,6 +31,7 @@ interface MemoryMediaCarouselProps {
   assets: MemoryMediaAsset[];
   cacheVersion?: string | null;
   isActive?: boolean;
+  playVideos?: boolean;
   stableLayout?: boolean;
   videoTapToToggle?: boolean;
   mutedVideos?: boolean;
@@ -128,6 +129,7 @@ function MediaPage({
   videoTapToToggle,
   onNaturalRatio,
   onUrlError,
+  playVideos,
   url,
   shouldLoadVideoThumbnail,
   shouldMeasureNaturalRatio,
@@ -139,6 +141,7 @@ function MediaPage({
   videoTapToToggle: boolean;
   onNaturalRatio: (objectKey: string, ratio: number) => void;
   onUrlError: () => void;
+  playVideos: boolean;
   url?: string;
   shouldLoadVideoThumbnail: boolean;
   shouldMeasureNaturalRatio: boolean;
@@ -183,9 +186,11 @@ function MediaPage({
   }
 
   if (isVideo) {
+    const shouldRenderPlayer = isActive && playVideos;
+
     return (
       <View style={styles.page}>
-        {isActive ? (
+        {shouldRenderPlayer ? (
           <VideoAsset
             hasPreferredNaturalRatio={!shouldMeasureNaturalRatio || videoThumbnail !== null}
             isActive={isActive}
@@ -196,7 +201,7 @@ function MediaPage({
             url={url}
           />
         ) : null}
-        {videoThumbnail && (!isActive || !hasRenderedFirstFrame) ? (
+        {videoThumbnail && (!shouldRenderPlayer || !hasRenderedFirstFrame) ? (
           <Image
             contentFit="contain"
             pointerEvents="none"
@@ -205,7 +210,7 @@ function MediaPage({
             testID={`memory-media-video-thumbnail-${asset.id}`}
           />
         ) : null}
-        {!isActive ? (
+        {!shouldRenderPlayer ? (
           <View pointerEvents="none" style={styles.videoInactive}>
             <SymbolView
               name={{ ios: 'play.fill', android: 'play_arrow' }}
@@ -243,6 +248,7 @@ export function MemoryMediaCarousel({
   assets,
   cacheVersion,
   isActive = true,
+  playVideos = true,
   stableLayout = false,
   mutedVideos = true,
   onPress,
@@ -349,22 +355,25 @@ export function MemoryMediaCarousel({
       >
         {assets.map((asset, index) => (
           <View key={asset.id} style={[styles.pageWrap, { width: width || 1 }]}>
-            <MediaPage
-              asset={asset}
-              cacheKey={`${asset.object_key}:${cacheVersion ?? ''}`}
-              isActive={isActive && index === activeIndex}
-              mutedVideos={mutedVideos}
-              onNaturalRatio={handleNaturalRatio}
-              onUrlError={() => void refetchMediaUrls()}
-              url={urls[asset.object_key]}
-              videoTapToToggle={videoTapToToggle}
-              shouldLoadVideoThumbnail={
-                index === 0 || (isActive && index === activeIndex)
-              }
-              shouldMeasureNaturalRatio={
-                index === 0 && firstAsset?.aspect_ratio == null
-              }
-            />
+            {width > 0 ? (
+              <MediaPage
+                asset={asset}
+                cacheKey={`${asset.object_key}:${cacheVersion ?? ''}`}
+                isActive={isActive && index === activeIndex}
+                mutedVideos={mutedVideos}
+                onNaturalRatio={handleNaturalRatio}
+                onUrlError={() => void refetchMediaUrls()}
+                playVideos={playVideos}
+                url={urls[asset.object_key]}
+                videoTapToToggle={videoTapToToggle}
+                shouldLoadVideoThumbnail={
+                  index === 0 || (isActive && index === activeIndex)
+                }
+                shouldMeasureNaturalRatio={
+                  index === 0 && firstAsset?.aspect_ratio == null
+                }
+              />
+            ) : null}
           </View>
         ))}
       </ScrollView>
