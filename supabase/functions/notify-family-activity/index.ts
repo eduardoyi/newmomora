@@ -173,7 +173,7 @@ async function sendActivityPushes(
     const results = await Promise.allSettled(
       eligible.map((profile) =>
         sendExpoPushNotification(profile.expo_push_token as string, familyName, body, {
-          route: 'timeline',
+          route: 'memory',
           familyId: memory.family_id,
           memoryId: memory.id,
         }),

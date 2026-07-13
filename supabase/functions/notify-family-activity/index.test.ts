@@ -299,7 +299,7 @@ Deno.test('a manager creator sends pushes to eligible members and excludes the a
     assertEquals(call.title, "Rosa's family");
     assertStringIncludes(call.body, 'Rosa');
     assertStringIncludes(call.body, 'added a new memory');
-    assertEquals(call.data, { route: 'timeline', familyId: FAMILY_ID, memoryId: MEMORY_ID });
+    assertEquals(call.data, { route: 'memory', familyId: FAMILY_ID, memoryId: MEMORY_ID });
   }
 
   // Activity log row written for the debounce window.

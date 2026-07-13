@@ -6,15 +6,20 @@
 
 /**
  * Deep-link routing conventions carried in the push `data` payload (plan
- * §10, deliverable 6). The client's notification-response listener
- * (`src/hooks/useNotifications.ts`) switches on `route`:
- * - 'timeline': open the family timeline (optionally scoped to `memoryId`)
+ * §10, deliverable 6). Must stay in sync with `PushRouteData` in
+ * `src/hooks/useNotifications.ts` -- the two can't share a type import
+ * across the Deno/RN boundary. The client's notification-response listener
+ * switches on `route`:
+ * - 'timeline': open the family timeline
  * - 'approvals': open the pending-approvals screen
- * `familyId`/`memoryId` are informational -- the client doesn't currently
- * filter on them, but carrying them keeps the payload forward-compatible.
+ * - 'new-memory': open the create-memory screen (send-daily-reminder)
+ * - 'memory': open the memory detail screen for `memoryId`
+ *   (notify-family-activity's new-memory push)
+ * `familyId` is required for 'memory' so the client can reconcile the
+ * recipient's active family before navigating; it's otherwise informational.
  */
 export interface PushRouteData {
-  route: 'timeline' | 'approvals';
+  route: 'timeline' | 'approvals' | 'new-memory' | 'memory';
   familyId?: string;
   memoryId?: string;
 }

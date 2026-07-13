@@ -775,7 +775,10 @@ Sends a push notification to a single user.
 1. Fetch user profile: `expo_push_token`, `enable_daily_reminder`
 2. Skip if disabled or no token
 3. Select random reminder message from pool
-4. Send via Expo Push API
+4. Send via Expo Push API with `data: { route: 'new-memory' }` so tapping it
+   deep-links straight to the create-memory screen (see
+   [docs/features/family-sharing.md](./features/family-sharing.md#notifications-matrix)
+   for the full push `route` contract)
 
 **Response**
 
@@ -911,7 +914,7 @@ Approves or rejects a redeemed invite. Caller must be owner/manager of **that in
 
 ### 4.12 `notify-family-activity`
 
-Fire-and-forget push after a successful memory create. Only ever announces the caller's own new memory.
+Fire-and-forget push after a successful memory create. Only ever announces the caller's own new memory. Push `data` payload is `{ route: 'memory', familyId, memoryId }` so tapping it deep-links to that memory's detail screen (see [docs/features/family-sharing.md](./features/family-sharing.md#notifications-matrix) for the full push `route` contract and the cross-family reconciliation the client does before navigating).
 
 **Request**
 

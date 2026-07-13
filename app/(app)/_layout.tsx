@@ -12,8 +12,12 @@ export default function AppLayout() {
   const { familyId, isLoading: isFamilyLoading } = useFamily();
   // Deep-link routing for tapped push notifications (plan §10) -- lives at
   // the app root so it's active for the whole authenticated session
-  // regardless of which screen is focused.
-  useNotificationResponseRouting();
+  // regardless of which screen is focused. `ready` gates the cold-start
+  // (getLastNotificationResponseAsync) check until this layout is about to
+  // render its actual Stack below -- while auth/family are still loading it
+  // renders only a spinner, so navigating any earlier would target routes
+  // that aren't mounted yet.
+  useNotificationResponseRouting(!isAuthLoading && Boolean(session) && !isFamilyLoading);
   const segments = useSegments();
   // expo-router's typed useSegments() return type is a union of per-depth
   // literal tuples, which collapses .includes()'s element type to `never`

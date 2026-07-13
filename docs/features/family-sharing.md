@@ -379,13 +379,42 @@ for the full table; summary:
 | Invite redeemed | The inviter (`invited_by`) | Expo push | None (one redemption = one push) |
 | Invite approved | The redeemer | Expo push **and** Bento transactional email ("You're in!") | None |
 | Owner soft-deletes their account | Every other member of each family they own | Expo push (best-effort, from `delete-user-account`) | None |
+| Daily reminder (unrelated to family sharing, `send-daily-reminder`) | The reminder's own user | Expo push | Hourly cron window, once/day |
 
 All pushes are **best-effort** — a push/email failure never fails the
 triggering request (the underlying state change is already committed by the
 time the notification is attempted). Push `data` payload carries a `route`
-(`'timeline'` or `'approvals'`) plus `familyId`/informational `memoryId` for
-deep-linking (`_shared/expo-push.ts`); the client's notification-response
-listener (`src/hooks/useNotifications.ts`) switches on `route`.
+plus `familyId`/`memoryId` for deep-linking (`_shared/expo-push.ts`); the
+client's notification-response listener (`src/hooks/useNotifications.ts`)
+switches on `route`:
+
+| `route` | Sent by | Client behavior |
+|---|---|---|
+| `'timeline'` | `resolve-family-invite` (invite approved), `delete-user-account` (owner deleted) | Opens the family timeline |
+| `'approvals'` | `redeem-family-invite` (invite redeemed) | Opens the pending-approvals screen |
+| `'new-memory'` | `send-daily-reminder` | Opens the create-memory screen |
+| `'memory'` | `notify-family-activity` (new memory) | Opens the memory detail screen for `memoryId` |
+
+**Cross-family reconciliation for `'memory'`:** a recipient can belong to
+more than one family, and the memory detail screen assumes its data (role
+gating for edit/retry, attribution-name lookups) matches the **active**
+family, not just "some family the recipient is a member of." `memories`
+select RLS (`is_family_member(family_id)`) would happily return a memory
+from a non-active family, so the client doesn't rely on that: before
+navigating, `routeFromPushData` switches the recipient's active family to
+the push's `familyId` (via `useFamily().setActiveFamily`) whenever it
+differs from the current active family and the recipient is still a member
+of it (checked against `useFamily().memberships` — if they aren't, e.g.
+removed after the push was queued, it falls back to the timeline instead of
+switching to a family they've lost access to). A failed switch (network
+error) still opens the memory detail screen rather than stranding the user
+mid-navigation; only the family-switch side effect is best-effort, not the
+navigation. `useNotificationResponseRouting` (mounted in `app/(app)/_layout.tsx`)
+also drains `Notifications.getLastNotificationResponseAsync()` once auth/family
+loading has resolved, so a cold launch from a notification tap (not just a
+tap while already running) routes correctly too; a module-level
+last-handled-response-identifier guard stops that from double-navigating on
+a remount.
 
 ## `pendingInviteCode` lifecycle
 

@@ -7,10 +7,17 @@ import { Platform } from 'react-native';
 import {
   isNotificationsAvailable,
   routeFromPushData,
+  useNotificationResponseRouting,
   useNotificationsRegistration,
 } from '@/hooks/useNotifications';
+import { useFamily } from '@/hooks/use-family';
 import { useUserProfile } from '@/hooks/useUserProfile';
-import { sharingApprovalsRoute, timelineRoute } from '@/lib/routes';
+import {
+  memoryDetailRoute,
+  newMemoryRoute,
+  sharingApprovalsRoute,
+  timelineRoute,
+} from '@/lib/routes';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -28,13 +35,32 @@ jest.mock('@/hooks/useUserProfile', () => ({
   useUserProfile: jest.fn(),
 }));
 
+jest.mock('@/hooks/use-family', () => ({
+  useFamily: jest.fn(),
+}));
+
 jest.mock('expo-notifications', () => ({
   setNotificationHandler: jest.fn(),
   getPermissionsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
   getExpoPushTokenAsync: jest.fn(),
   addNotificationResponseReceivedListener: jest.fn(),
+  getLastNotificationResponseAsync: jest.fn(),
 }));
+
+/** Flushes pending microtasks (promise chains inside routeFromPushData/the hook). */
+async function flushPromises(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// File-level, in addition to any per-describe beforeEach/afterEach: several
+// describe blocks below don't touch requireOptionalNativeModule at all, so
+// without this a call count left over from whichever describe happened to
+// run last before them would leak in and make their assertions order
+// dependent (see isNotificationsAvailable's "not.toHaveBeenCalled" check).
+afterEach(() => {
+  jest.clearAllMocks();
+});
 
 // isNotificationsAvailable() is exercised directly below with a controlled
 // mock, rather than relying on jest-expo's automocking of native modules.
@@ -99,6 +125,175 @@ describe('routeFromPushData (plan §10 push deep links)', () => {
     routeFromPushData({});
 
     expect(mockedPush).not.toHaveBeenCalled();
+  });
+
+  it('routes to the create-memory screen for the daily-reminder push', () => {
+    routeFromPushData({ route: 'new-memory' });
+
+    expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute);
+  });
+
+  it('routes to the memory detail screen for a new-memory-activity push', () => {
+    routeFromPushData({ route: 'memory', memoryId: 'memory-1', familyId: 'family-1' });
+
+    expect(mockedPush).toHaveBeenCalledWith(memoryDetailRoute('memory-1'));
+  });
+
+  it('falls back to the timeline for a memory push with no memoryId', () => {
+    routeFromPushData({ route: 'memory', familyId: 'family-1' });
+
+    expect(mockedPush).toHaveBeenCalledWith(timelineRoute);
+  });
+});
+
+describe('routeFromPushData - memory route family-context handling', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('opens memory detail directly when the push family already matches the active family', () => {
+    const setActiveFamily = jest.fn();
+
+    routeFromPushData(
+      { route: 'memory', memoryId: 'memory-1', familyId: 'family-1' },
+      { activeFamilyId: 'family-1', setActiveFamily },
+    );
+
+    expect(setActiveFamily).not.toHaveBeenCalled();
+    expect(mockedPush).toHaveBeenCalledWith(memoryDetailRoute('memory-1'));
+  });
+
+  it('switches the active family before opening a memory from a non-active family the recipient still belongs to', async () => {
+    const setActiveFamily = jest.fn().mockResolvedValue(undefined);
+
+    routeFromPushData(
+      { route: 'memory', memoryId: 'memory-1', familyId: 'family-2' },
+      { activeFamilyId: 'family-1', memberFamilyIds: ['family-1', 'family-2'], setActiveFamily },
+    );
+
+    await flushPromises();
+
+    expect(setActiveFamily).toHaveBeenCalledWith('family-2');
+    expect(mockedPush).toHaveBeenCalledWith(memoryDetailRoute('memory-1'));
+  });
+
+  it('falls back to the timeline instead of switching when the recipient no longer belongs to the push family', () => {
+    const setActiveFamily = jest.fn();
+
+    routeFromPushData(
+      { route: 'memory', memoryId: 'memory-1', familyId: 'family-2' },
+      { activeFamilyId: 'family-1', memberFamilyIds: ['family-1'], setActiveFamily },
+    );
+
+    expect(setActiveFamily).not.toHaveBeenCalled();
+    expect(mockedPush).toHaveBeenCalledWith(timelineRoute);
+  });
+
+  it('still opens memory detail if switching the active family fails', async () => {
+    const setActiveFamily = jest.fn().mockRejectedValue(new Error('network down'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(jest.fn());
+
+    routeFromPushData(
+      { route: 'memory', memoryId: 'memory-1', familyId: 'family-2' },
+      { activeFamilyId: 'family-1', memberFamilyIds: ['family-1', 'family-2'], setActiveFamily },
+    );
+
+    await flushPromises();
+
+    expect(mockedPush).toHaveBeenCalledWith(memoryDetailRoute('memory-1'));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to switch active family'),
+      'network down',
+    );
+
+    warnSpy.mockRestore();
+  });
+});
+
+describe('useNotificationResponseRouting cold start + dedupe', () => {
+  const originalOS = Platform.OS;
+  const mockedAddListener = Notifications.addNotificationResponseReceivedListener as jest.MockedFunction<
+    typeof Notifications.addNotificationResponseReceivedListener
+  >;
+  const mockedGetLastResponse = Notifications.getLastNotificationResponseAsync as jest.MockedFunction<
+    typeof Notifications.getLastNotificationResponseAsync
+  >;
+  const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
+
+  function fakeResponse(identifier: string, data: unknown): Notifications.NotificationResponse {
+    return {
+      notification: {
+        date: Date.now(),
+        request: { identifier, content: { data } as never, trigger: null as never },
+      },
+      actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    Platform.OS = 'ios';
+    (requireOptionalNativeModule as jest.MockedFunction<typeof requireOptionalNativeModule>).mockReturnValue(
+      {},
+    );
+    mockedAddListener.mockReturnValue({ remove: jest.fn() } as never);
+    mockedGetLastResponse.mockResolvedValue(null);
+    mockedUseFamily.mockReturnValue({
+      family: null,
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'membership-1', familyId: 'family-1', role: 'owner', name: 'Us' }],
+      isLoading: false,
+      setActiveFamily: jest.fn().mockResolvedValue(undefined),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    } as never);
+  });
+
+  afterEach(() => {
+    Platform.OS = originalOS;
+  });
+
+  it('routes from the cold-start last notification response once ready', async () => {
+    mockedGetLastResponse.mockResolvedValue(fakeResponse('cold-start-1', { route: 'new-memory' }));
+
+    renderHook(() => useNotificationResponseRouting(true));
+    await flushPromises();
+
+    expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute);
+  });
+
+  it('does not act on the cold-start response until ready flips true', async () => {
+    mockedGetLastResponse.mockResolvedValue(fakeResponse('cold-start-2', { route: 'new-memory' }));
+
+    const { rerender } = renderHook(({ ready }) => useNotificationResponseRouting(ready), {
+      initialProps: { ready: false },
+    });
+    await flushPromises();
+
+    expect(mockedPush).not.toHaveBeenCalled();
+
+    rerender({ ready: true });
+    await flushPromises();
+
+    expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute);
+  });
+
+  it('handling the same response identifier twice (e.g. a remount) only navigates once', async () => {
+    mockedGetLastResponse.mockResolvedValue(fakeResponse('cold-start-3', { route: 'new-memory' }));
+
+    const first = renderHook(() => useNotificationResponseRouting(true));
+    await flushPromises();
+    expect(mockedPush).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+
+    // Simulate the (app) layout remounting while the native side still
+    // reports the same last response (it isn't cleared automatically).
+    renderHook(() => useNotificationResponseRouting(true));
+    await flushPromises();
+
+    expect(mockedPush).toHaveBeenCalledTimes(1);
   });
 });
 
