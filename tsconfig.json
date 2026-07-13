@@ -18,6 +18,7 @@
     "**/*.integration.test.ts",
     "**/*.integration.test.tsx",
     "jest.setup.ts",
-    "supabase/functions/**"
+    "supabase/functions/**",
+    "supabase/scripts/**"
   ]
 }

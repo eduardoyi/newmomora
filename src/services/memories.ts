@@ -27,6 +27,7 @@ export interface MemoryMediaAsset {
   object_key: string;
   content_type: string;
   duration_ms: number | null;
+  aspect_ratio: number | null;
   position: number;
   created_at: string;
   updated_at: string;
@@ -138,6 +139,7 @@ function buildLegacyMediaAssets(memory: Memory): MemoryMediaAsset[] {
       object_key: memory.media_key,
       content_type: memory.media_content_type,
       duration_ms: null,
+      aspect_ratio: null,
       position: 0,
       created_at: memory.created_at,
       updated_at: memory.updated_at,
@@ -209,6 +211,7 @@ function mediaAssetsToRpcPayload(assets: MemoryMediaAssetInput[]) {
     objectKey: asset.objectKey,
     contentType: asset.contentType,
     durationMs: asset.durationMs ?? null,
+    aspectRatio: asset.aspectRatio ?? null,
   }));
 }
 

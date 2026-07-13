@@ -7,27 +7,81 @@ export interface VideoThumbnailResult {
   height: number;
 }
 
-export function useVideoThumbnailResult(videoUrl: string | null | undefined) {
-  const [thumbnail, setThumbnail] = useState<VideoThumbnailResult | null>(null);
+const thumbnailCache = new Map<string, VideoThumbnailResult>();
+const pendingThumbnails = new Map<string, Promise<VideoThumbnailResult | null>>();
+const MAX_CACHED_VIDEO_THUMBNAILS = 100;
+
+function cacheThumbnail(cacheKey: string, result: VideoThumbnailResult) {
+  if (!thumbnailCache.has(cacheKey) && thumbnailCache.size >= MAX_CACHED_VIDEO_THUMBNAILS) {
+    const oldestKey = thumbnailCache.keys().next().value;
+    if (oldestKey) {
+      thumbnailCache.delete(oldestKey);
+    }
+  }
+  thumbnailCache.set(cacheKey, result);
+}
+
+async function generateThumbnail(
+  videoUrl: string,
+  cacheKey: string,
+): Promise<VideoThumbnailResult | null> {
+  const cached = thumbnailCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const pending = pendingThumbnails.get(cacheKey);
+  if (pending) {
+    return pending;
+  }
+
+  const request = VideoThumbnails.getThumbnailAsync(videoUrl, { time: 0 })
+    .then((result) => {
+      cacheThumbnail(cacheKey, result);
+      return result;
+    })
+    .catch(() => null)
+    .finally(() => {
+      pendingThumbnails.delete(cacheKey);
+    });
+
+  pendingThumbnails.set(cacheKey, request);
+  return request;
+}
+
+export function clearVideoThumbnailCache() {
+  thumbnailCache.clear();
+  pendingThumbnails.clear();
+}
+
+export function useVideoThumbnailResult(
+  videoUrl: string | null | undefined,
+  cacheKey = videoUrl,
+) {
+  const [thumbnail, setThumbnail] = useState<VideoThumbnailResult | null>(() =>
+    cacheKey ? thumbnailCache.get(cacheKey) ?? null : null,
+  );
 
   useEffect(() => {
-    setThumbnail(null);
-    if (!videoUrl) return;
+    const cached = cacheKey ? thumbnailCache.get(cacheKey) ?? null : null;
+    setThumbnail(cached);
+    if (!videoUrl || !cacheKey || cached) return;
     let cancelled = false;
     void (async () => {
-      try {
-        const result = await VideoThumbnails.getThumbnailAsync(videoUrl, { time: 0 });
-        if (!cancelled) setThumbnail(result);
-      } catch {
-        // Callers provide their own fallback when a thumbnail cannot be read.
+      const result = await generateThumbnail(videoUrl, cacheKey);
+      if (!cancelled && result) {
+        setThumbnail(result);
       }
     })();
     return () => { cancelled = true; };
-  }, [videoUrl]);
+  }, [cacheKey, videoUrl]);
 
   return thumbnail;
 }
 
-export function useVideoThumbnail(videoUrl: string | null | undefined) {
-  return useVideoThumbnailResult(videoUrl)?.uri ?? null;
+export function useVideoThumbnail(
+  videoUrl: string | null | undefined,
+  cacheKey = videoUrl,
+) {
+  return useVideoThumbnailResult(videoUrl, cacheKey)?.uri ?? null;
 }

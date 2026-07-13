@@ -98,6 +98,7 @@ export default function EditMemoryScreen() {
           objectKey: asset.object_key,
           contentType: asset.content_type,
           durationMs: asset.duration_ms ?? undefined,
+          aspectRatio: asset.aspect_ratio ?? undefined,
           sizeBytes: 1,
         })),
       );
@@ -194,6 +195,7 @@ export default function EditMemoryScreen() {
               mediaAssetId: attachment.id,
               contentType: attachment.contentType,
               durationMs: attachment.durationMs,
+              aspectRatio: attachment.aspectRatio,
             }))
           : undefined,
       });

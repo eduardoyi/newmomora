@@ -236,6 +236,7 @@ create table public.memory_media (
   object_key text not null,
   content_type text not null,
   duration_ms integer,
+  aspect_ratio double precision check (aspect_ratio is null or aspect_ratio between 0.1 and 10),
   position integer not null check (position >= 0 and position < 10),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -1024,13 +1025,20 @@ persists.
 2. Client validates each asset: image ≤ 20 MB; video duration ≤ 60 seconds (read metadata before upload)
 3. Client generates memoryId (UUID)
 4. Client generates one mediaAssetId per asset
-5. Request presigned PUT URLs via get-upload-url (objectKey: {uid}/memories/{memoryId}/media/{mediaAssetId}.{ext}, contentType)
-6. Upload files directly to R2; delete uploaded keys on later failure
-7. INSERT memories (id: memoryId) with memory_type='media', cover media_key/media_content_type from position 0, illustration_status='none', optional content (caption)
-8. Call `replace_memory_media_assets` RPC with the final ordered asset list
-9. No illustration pipeline invoked; photo emotion analysis uses the first ordered image asset
-10. Display media via get-media-url presigned GET; timeline/detail use carousel UI
+5. For videos, compress first and extract a transformed frame to derive the display `aspectRatio` (rotation metadata applied); images use their re-encoded output dimensions
+6. Request presigned PUT URLs via get-upload-url (objectKey: {uid}/memories/{memoryId}/media/{mediaAssetId}.{ext}, contentType)
+7. Upload files directly to R2; delete uploaded keys on later failure
+8. INSERT memories (id: memoryId) with memory_type='media', cover media_key/media_content_type from position 0, illustration_status='none', optional content (caption)
+9. Call `replace_memory_media_assets` RPC with the final ordered asset list, including `aspectRatio`
+10. No illustration pipeline invoked; photo emotion analysis uses the first ordered image asset
+11. Display media via get-media-url presigned GET; timeline rows use persisted `aspect_ratio` before media loads, while detail uses the same natural ratio
 ```
+
+`replace_memory_media_assets` receives each ordered asset as
+`{ objectKey, contentType, durationMs, aspectRatio }`. `aspectRatio` is nullable
+for legacy clients/rows and must be between `0.1` and `10` when present. When an
+older client edits an existing asset without the field, the RPC preserves the
+row's current ratio instead of clearing it.
 
 Note: the client generates `memoryId` upfront so the R2 object key is known before the DB insert, mirroring the family-member photo flow (§5.3).
 

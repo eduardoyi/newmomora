@@ -12,6 +12,7 @@ import {
   needsIllustrationRecovery,
   validateMemoryContent,
   validateMemoryDate,
+  validateMemoryMediaAssets,
   validateTaggedMembers,
 } from '@/utils/memories';
 
@@ -31,6 +32,19 @@ describe('memories utils', () => {
   it('enforces max tag count', () => {
     expect(validateTaggedMembers(['a', 'b', 'c', 'd', 'e'])).toMatch(/up to 4/);
     expect(validateTaggedMembers(['a', 'b'])).toBeNull();
+  });
+
+  it('rejects invalid persisted media aspect ratios', () => {
+    expect(validateMemoryMediaAssets([{
+      objectKey: 'video.mp4',
+      contentType: 'video/mp4',
+      aspectRatio: 9 / 16,
+    }])).toBeNull();
+    expect(validateMemoryMediaAssets([{
+      objectKey: 'video.mp4',
+      contentType: 'video/mp4',
+      aspectRatio: Number.NaN,
+    }])).toMatch(/aspect ratio/i);
   });
 
   it('formats excerpts and dates', () => {

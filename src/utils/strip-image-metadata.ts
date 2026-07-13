@@ -1,5 +1,6 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 
+import { aspectRatioFromDimensions } from '@/utils/media-aspect';
 import { isVideoContentType } from '@/utils/media-validation';
 import type { UploadableMedia } from '@/utils/video-compression';
 
@@ -64,9 +65,11 @@ export async function stripImageMetadataForUpload(
     compress: MEMORY_IMAGE_STRIP_QUALITY,
     format,
   });
+  const aspectRatio = aspectRatioFromDimensions(result.width, result.height) ?? media.aspectRatio;
 
   return {
     fileUri: result.uri,
     contentType: CONTENT_TYPE_BY_OUTPUT_FORMAT[format],
+    ...(aspectRatio ? { aspectRatio } : {}),
   };
 }

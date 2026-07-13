@@ -2,8 +2,16 @@ import { supabase } from '@/lib/supabase';
 import type { Database } from '@/types/database';
 
 export type Family = Database['public']['Tables']['families']['Row'];
-export type FamilyMemberProfile =
+type GeneratedFamilyMemberProfile =
   Database['public']['Functions']['get_family_member_profiles']['Returns'][number];
+
+// The RPC deliberately includes former creators whose membership role is
+// null. Supabase's generated function metadata does not consistently retain
+// output-column nullability across CLI/PostgREST versions, so keep the actual
+// contract explicit at the service boundary.
+export interface FamilyMemberProfile extends Omit<GeneratedFamilyMemberProfile, 'role'> {
+  role: GeneratedFamilyMemberProfile['role'] | null;
+}
 
 export interface ServiceError {
   message: string;

@@ -157,6 +157,7 @@ function MediaVisual({
         cacheVersion={memory.updated_at}
         isActive={isActive}
         onPress={onPress}
+        stableLayout
         style={styles.mediaVisual}
       />
     );

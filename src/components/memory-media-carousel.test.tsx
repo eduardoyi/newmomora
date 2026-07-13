@@ -144,6 +144,104 @@ describe('MemoryMediaCarousel', () => {
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
   });
 
+  it('keeps timeline video height stable when its thumbnail dimensions arrive', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+    mockedUseVideoThumbnailResult.mockReturnValue({
+      uri: 'file:///portrait-frame.jpg',
+      width: 1080,
+      height: 1920,
+    });
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+    const { getByTestId } = render(
+      <MemoryMediaCarousel assets={[videoAsset]} stableLayout />,
+    );
+
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 4 / 3 });
+  });
+
+  it('uses a persisted video ratio immediately in a stable timeline row', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+      aspect_ratio: 9 / 16,
+    };
+    const { getByTestId } = render(
+      <MemoryMediaCarousel assets={[videoAsset]} stableLayout />,
+    );
+
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
+  });
+
+  it('shows a first-frame thumbnail while a timeline video is inactive', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+    mockedUseVideoThumbnailResult.mockReturnValue({
+      uri: 'file:///video-frame.jpg',
+      width: 1280,
+      height: 720,
+    });
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+    const { getByTestId, queryByTestId } = render(
+      <MemoryMediaCarousel assets={[videoAsset]} isActive={false} stableLayout />,
+    );
+
+    expect(queryByTestId('memory-media-video')).toBeNull();
+    expect(getByTestId('memory-media-video-thumbnail-asset-video').props.source).toEqual([{
+      uri: 'file:///video-frame.jpg',
+      cacheKey: 'user/memory/media/video-1.mp4::thumbnail',
+    }]);
+  });
+
+  it('keeps the thumbnail over an active player until its first frame renders', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+    mockedUseVideoThumbnailResult.mockReturnValue({
+      uri: 'file:///video-frame.jpg',
+      width: 1280,
+      height: 720,
+    });
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+    const { getByTestId, queryByTestId } = render(
+      <MemoryMediaCarousel assets={[videoAsset]} stableLayout />,
+    );
+
+    expect(getByTestId('memory-media-video-thumbnail-asset-video')).toBeTruthy();
+    fireEvent(getByTestId('memory-media-video'), 'firstFrameRender');
+    expect(queryByTestId('memory-media-video-thumbnail-asset-video')).toBeNull();
+  });
+
   it('adopts the first asset natural aspect ratio, clamped for a carousel', () => {
     const { getByTestId } = render(<MemoryMediaCarousel assets={assets} />);
 

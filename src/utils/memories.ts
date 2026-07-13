@@ -22,6 +22,7 @@ export interface MemoryMediaAssetInput {
   objectKey: string;
   contentType: string;
   durationMs?: number | null;
+  aspectRatio?: number | null;
 }
 
 export interface CreateMemoryInput {
@@ -125,6 +126,16 @@ export function validateMemoryMediaAssets(assets: MemoryMediaAssetInput[]): stri
   const keys = new Set(assets.map((asset) => asset.objectKey));
   if (keys.size !== assets.length) {
     return 'Duplicate media attachments are not allowed';
+  }
+
+  if (
+    assets.some(
+      (asset) =>
+        asset.aspectRatio != null &&
+        (!Number.isFinite(asset.aspectRatio) || asset.aspectRatio < 0.1 || asset.aspectRatio > 10),
+    )
+  ) {
+    return 'Media aspect ratio is invalid';
   }
 
   return null;

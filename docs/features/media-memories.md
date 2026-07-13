@@ -44,7 +44,8 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
 - Caption text is optional for `media` memories; the save button is enabled as soon as media is attached.
 - **Deferred posting (Instagram-style):** tapping Save closes the composer immediately. Compression + upload continue in a background queue; the Timeline and Calendar show a pending card ("Posting memory… — Uploading n of m") above the feed until the memory lands. Failures flip the card to Retry/Discard. The queue is in-memory only — force-quitting mid-upload loses the pending post (persistence is backlog).
 - On the Timeline and detail screen, `media` memories render an Instagram-style carousel with subtle dots and a small pagination counter when more than one asset exists.
-- Single-asset memories use the asset's exact natural aspect ratio, including tall portrait videos; video orientation is measured from a transformed first-frame thumbnail because encoded track dimensions can precede phone rotation metadata. Multi-asset carousels clamp the first asset's ratio to `3:4`-`16:9` so every page shares a practical, stable frame.
+- Media assets persist their natural display `aspect_ratio` before the memory row appears. Videos derive it from a transformed frame after compression because encoded track dimensions can precede phone rotation metadata; images use their re-encoded output dimensions. Timeline cards therefore start at their final height with no async resize and no fixed-ratio gutters. Multi-asset carousels still clamp the first asset's ratio to `3:4`-`16:9` so every page shares a practical frame.
+- Timeline videos show a cached first-frame thumbnail whenever playback is inactive and keep that thumbnail over the player until its first frame renders, avoiding the gray-player flash at the visibility threshold.
 - **Photo** memories: after save, async emotion analysis may replace the Photo badge with an emotion chip (same labels as text memories). Failures do not block save.
 - **Video** memories: no emotion chip in MVP (Photo/Video badge only).
 - On the memory detail screen, photos display full-width via presigned URL; videos play inline via `expo-video`, loop with sound, and hide native controls.
@@ -79,6 +80,7 @@ Key points:
 - **Video compression:** new video uploads are transcoded on-device to H.264 MP4 capped at 1280px (`src/utils/video-compression.ts`, `react-native-compressor`) during save, so a picked `.mov` is stored as `.mp4`. Compression is best-effort — any failure (and web) falls back to uploading the original file, so both `video/mp4` and `video/quicktime` remain accepted upload types. Requires a dev-client rebuild (native module).
 - **Image EXIF/GPS stripping:** every new image upload is re-encoded via `expo-image-manipulator` (`src/utils/strip-image-metadata.ts`) immediately before the PUT, in the same `uploadMemoryMediaAssets` step that runs video compression — so create, edit, and incoming-share attachments are all covered. The re-encode drops all EXIF (GPS, timestamps, device Make/Model/MakerNote) on both platforms. JPEG/PNG/WEBP keep their format at quality 0.92 (a deliberately *higher* quality than the picker's 0.85 export, to avoid visible double-compression loss); HEIC/HEIF re-encodes to JPEG since the manipulator cannot write HEIC, so the uploaded `contentType` and object-key extension always reflect the stripped output. This step is fail-closed (a re-encode failure rejects the upload instead of falling back to the unstripped original) — see Constraints & gotchas. **Videos are not covered**: their container-level metadata is uploaded as-is.
 - **Playback:** only the visible video page mounts an `expo-video` player. Each player targets an 8-second forward buffer with a 16 MiB byte cap and enables disk caching (`useCaching: true`), preventing legacy high-bitrate videos and adjacent pages from exhausting Android's Java heap.
+- **Stable media layout:** `memory_media.aspect_ratio` is written with the ordered asset metadata. New videos are measured from an `expo-video-thumbnails` frame after compression, so phone rotation is reflected; image ratios come from the EXIF-stripped output dimensions. Existing videos are backfilled once with `supabase/scripts/backfill-media-aspect-ratios.ts` using `ffprobe` rotation metadata. Timeline rows use only the persisted ratio (or a stable 4:3 legacy fallback), while detail may still measure a null legacy row at runtime.
 - **Signed URL recovery:** app foregrounding is wired to TanStack Query focus state. Private images use stable object-key/version cache keys and refetch their presigned URL after an image load error, so expired one-hour URLs recover without repeatedly downloading unchanged bytes.
 - `memory_media` stores the canonical ordered asset list; `memories.media_key` and `media_content_type` cache the cover asset for compatibility.
 - **Photo/mixed** memories: `analyze-emotion` runs asynchronously after save/edit; it uses the first ordered image asset + optional caption. Does **not** run `generate-illustration`.
@@ -96,6 +98,7 @@ Key points:
 | `memories.media_content_type` | `text` | Cover/cache MIME type for position 0 |
 | `memory_media.object_key` | `text` | Canonical R2 object key for each ordered media asset |
 | `memory_media.content_type` | `text` | MIME type e.g. `image/jpeg`, `video/mp4` |
+| `memory_media.aspect_ratio` | `double precision` (nullable) | Natural display width ÷ height; persisted before timeline render; constrained to `0.1`-`10` |
 | `memory_media.position` | `integer` | 0-based order, max 9 |
 | `memories.illustration_key` | `text` (null) | Always null for `media` type |
 | `memories.illustration_status` | `text` (`none`) | Always `none` for `media` type |
@@ -143,6 +146,8 @@ Mobile upload flow uses `upload-media` so the device only talks to Supabase; `ge
 | Hooks | `src/hooks/use-suggested-memory-date.ts` | New — single-reducer `{ memoryDate, dateSource }` state machine; derives the earliest EXIF capture date across attached photos, restores the session baseline when none remain, and locks in a user override for the rest of the composer session |
 | Services | `src/services/memory-posting.ts` | `postMediaMemory` pipeline: compress (video) → strip EXIF (image) → upload (3-way concurrency, per-asset progress) → insert, rollback on failure; shared `uploadMemoryMediaAssets` also backs the edit flow and incoming-share attachments |
 | Utils | `src/utils/strip-image-metadata.ts` | New — `stripImageMetadataForUpload` re-encodes image assets via `expo-image-manipulator` to strip EXIF/GPS before upload; videos pass through; fail-closed on re-encode error |
+| Utils | `src/utils/video-aspect-ratio.ts` | Extracts a rotation-corrected local video frame and returns its display aspect ratio before upload |
+| Script | `supabase/scripts/backfill-media-aspect-ratios.ts` | Dry-run/apply utility for existing video rows; reads private R2 objects, accounts for rotation with `ffprobe`, and updates only null ratios |
 | Services | `src/services/memories.ts` | `createMediaMemory`, `runMediaPhotoEmotionAnalysis` |
 | Components | `src/components/pending-memory-uploads-banner.tsx`, `pending-memory-upload-card.tsx` | Pending/failed post cards above the Timeline & Calendar feeds |
 | Components | `src/components/memory-card.tsx` | Conditional render: photo thumbnail vs video thumbnail vs illustration |
@@ -241,6 +246,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/hooks/use-pending-memory-uploads.test.tsx` | Queue lifecycle — posting → removed on success, failed → retry/discard, photo emotion kick, video skip, family notify |
 | `src/utils/media-capture-date.test.ts` | `extractCaptureDateIso` key priority/fallback, flat-shape-only parsing, colon-format parsing without `Date()` coercion, NUL/whitespace trimming, Gregorian validation (zero fields, invalid month/day, leap years, year floor), deterministic `today`/`today+1` boundary; `deriveSuggestedMemoryDate` earliest-valid-date selection |
 | `src/utils/strip-image-metadata.test.ts` | `stripImageMetadataForUpload` — JPEG/PNG/WEBP keep format, HEIC/HEIF convert to JPEG, videos pass through untouched (no `manipulateAsync` call), re-encode failure rejects (fail-closed) |
+| `src/utils/video-aspect-ratio.test.ts` | Rotation-corrected video-frame ratio extraction and graceful thumbnail failure |
 | `src/hooks/use-suggested-memory-date.test.tsx` | Session-baseline capture, media/default suggestion application, earliest-across-batches, remove-restores-baseline, reorder-is-a-no-op, manual override survives append/remove/reorder/replace, midnight-crossing baseline stability, render-to-render state consistency |
 
 ### Integration tests
@@ -253,8 +259,8 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/components/incoming-share-router.integration.test.tsx` | Cold-start persisted payload fallback, root-route race avoidance, viewer role gate, foreground recheck |
 | `src/utils/media-emotion-polling.test.ts` | Poll window for photo media without emotion |
 | `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, close action |
-| `src/components/memory-media-carousel.test.tsx` | Active-page-only video mounting, bounded video buffers, stable image cache keys, signed-URL retry |
-| `src/hooks/useVideoThumbnail.test.ts` | Rotation-aware thumbnail dimensions used for inline video aspect-ratio measurement |
+| `src/components/memory-media-carousel.test.tsx` | Active-page-only video mounting, bounded video buffers, stable timeline video layout, inactive/first-frame thumbnail coverage, signed-URL retry |
+| `src/hooks/useVideoThumbnail.test.ts` | Rotation-aware thumbnail dimensions and remount-safe video thumbnail caching |
 | `src/components/app-providers.test.tsx` | AppState-to-TanStack-Query focus synchronization for foreground refetches |
 | `src/components/memory-media-picker.test.tsx` | Native launch failure feedback and concurrent-launch guard; `includeCaptureDate` → `exif` option wiring; image EXIF → `capturedAtIso`-only attachment (no raw EXIF/GPS/device fields); video EXIF ignored; absent/malformed EXIF still emits a valid attachment |
 | `src/screen-tests/new-memory.integration.test.tsx` | Full screen wiring (deliberately under `src/`, not `app/` — see file header): EXIF-dated photo updates the date pill and shows the "From photo" hint; manual date override survives further attach/remove; an incoming-share replacement without metadata follows default/override rules; Save passes only the final `memoryDate` to the posting queue with no EXIF/capture metadata in the payload |
@@ -303,6 +309,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
+| 2026-07-13 | Persisted natural media aspect ratios (including rotation-corrected post-compression video ratios), added a legacy-video backfill, and made timeline rows consume the stored value immediately; cached first-frame thumbnails prevent gray flashes around playback activation |
 | 2026-07-12 | Fixed rotated portrait videos reporting landscape track dimensions and leaving side gutters in timeline/detail cards |
 | 2026-07-12 | Uploaded image binaries (create, edit, and incoming-share) are now re-encoded via `expo-image-manipulator` to strip EXIF/GPS/device metadata before upload, on both Android and iOS (`src/utils/strip-image-metadata.ts`, wired into `uploadMemoryMediaAssets` in `src/services/memory-posting.ts`); fail-closed on re-encode failure. Videos remain out of scope. Closes the gap noted in `docs/plans/media-exif-capture-date-prefill.md` |
 | 2026-07-12 | New-memory composer only: library photo attachments now pre-fill the memory date from the earliest valid EXIF capture date, shown as an overridable "From photo" suggestion (`src/utils/media-capture-date.ts`, `src/hooks/use-suggested-memory-date.ts`); edit-memory composer unaffected |

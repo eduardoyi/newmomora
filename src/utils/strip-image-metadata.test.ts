@@ -41,6 +41,7 @@ describe('stripImageMetadataForUpload', () => {
     expect(result).toEqual({
       fileUri: 'stripped:file:///photo.jpg',
       contentType: 'image/jpeg',
+      aspectRatio: 1,
     });
   });
 

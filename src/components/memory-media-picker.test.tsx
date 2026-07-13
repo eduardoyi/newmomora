@@ -183,6 +183,7 @@ describe('MemoryMediaPicker', () => {
       const [[attachments]] = onSelect.mock.calls;
       expect(attachments).toHaveLength(1);
       expect(attachments[0].capturedAtIso).toBe('2024-06-01');
+      expect(attachments[0].aspectRatio).toBe(1);
       expect(attachments[0]).not.toHaveProperty('exif');
       expect(attachments[0]).not.toHaveProperty('GPSLatitude');
       expect(attachments[0]).not.toHaveProperty('GPSLongitude');

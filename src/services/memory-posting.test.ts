@@ -3,6 +3,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { createMediaMemory } from '@/services/memories';
 import { deleteStorageObject, uploadMediaObject } from '@/services/media';
 import { postMediaMemory, uploadMemoryMediaAssets } from '@/services/memory-posting';
+import { getVideoAspectRatio } from '@/utils/video-aspect-ratio';
 
 jest.mock('@/services/memories', () => ({
   createMediaMemory: jest.fn(),
@@ -17,17 +18,29 @@ jest.mock('@/services/ai', () => ({
   notifyFamilyActivity: jest.fn(),
 }));
 
+jest.mock('@/utils/video-aspect-ratio', () => ({
+  getVideoAspectRatio: jest.fn(async () => null),
+}));
+
 const mockedCreateMediaMemory = createMediaMemory as jest.MockedFunction<typeof createMediaMemory>;
 const mockedUploadMediaObject = uploadMediaObject as jest.MockedFunction<typeof uploadMediaObject>;
 const mockedDeleteStorageObject = deleteStorageObject as jest.MockedFunction<typeof deleteStorageObject>;
 const mockedManipulateAsync = ImageManipulator.manipulateAsync as jest.MockedFunction<
   typeof ImageManipulator.manipulateAsync
 >;
+const mockedGetVideoAspectRatio = getVideoAspectRatio as jest.MockedFunction<
+  typeof getVideoAspectRatio
+>;
 
 const baseInput = {
   memoryId: 'memory-1',
   mediaAssets: [
-    { mediaAssetId: 'asset-photo-1', fileUri: 'file:///photo.jpg', contentType: 'image/jpeg' },
+    {
+      mediaAssetId: 'asset-photo-1',
+      fileUri: 'file:///photo.jpg',
+      contentType: 'image/jpeg',
+      aspectRatio: 4 / 3,
+    },
   ],
   memoryDate: '2026-07-12',
   taggedMemberIds: [],
@@ -141,6 +154,22 @@ describe('uploadMemoryMediaAssets', () => {
     expect(mockedManipulateAsync).not.toHaveBeenCalled();
   });
 
+  it('persists a transformed video-frame aspect ratio with the uploaded asset', async () => {
+    mockedGetVideoAspectRatio.mockResolvedValueOnce(9 / 16);
+    const uploadedKeys: string[] = [];
+
+    const [asset] = await uploadMemoryMediaAssets({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-1',
+      assets: [{ fileUri: 'file:///portrait.mp4', contentType: 'video/mp4' }],
+      uploadedKeys,
+    });
+
+    expect(mockedGetVideoAspectRatio).toHaveBeenCalledWith('file:///portrait.mp4');
+    expect(asset.aspectRatio).toBe(9 / 16);
+  });
+
   it('fails closed and rolls back nothing new when EXIF stripping fails (no partial upload)', async () => {
     mockedManipulateAsync.mockRejectedValueOnce(new Error('manipulator unavailable'));
     const uploadedKeys: string[] = [];
@@ -188,6 +217,7 @@ describe('postMediaMemory', () => {
         userId: 'user-1',
         familyId: 'family-1',
         memoryId: 'memory-1',
+        mediaAssets: [expect.objectContaining({ aspectRatio: 4 / 3 })],
       }),
     );
   });

@@ -176,6 +176,7 @@ export default function NewMemoryScreen() {
             mediaAssetId: attachment.id,
             contentType: attachment.contentType,
             durationMs: attachment.durationMs,
+            aspectRatio: attachment.aspectRatio,
           })),
           content: content.trim() || undefined,
           memoryDate: memoryDate.trim(),

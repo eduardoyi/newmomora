@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 
 import { colors } from '@/constants/theme';
+import { aspectRatioFromDimensions } from '@/utils/media-aspect';
 import { extractCaptureDateIso } from '@/utils/media-capture-date';
 import {
   getMediaExtensionFromContentType,
@@ -29,6 +30,7 @@ export interface MediaAttachment {
   uri: string;
   contentType: string;
   durationMs?: number;
+  aspectRatio?: number;
   sizeBytes: number;
   objectKey?: string;
   /** Derived `YYYY-MM-DD` EXIF capture date for library photos, when
@@ -219,6 +221,7 @@ export function MemoryMediaPicker({
           uri: asset.uri,
           contentType,
           durationMs: durationMs ?? undefined,
+          aspectRatio: aspectRatioFromDimensions(asset.width, asset.height) ?? undefined,
           sizeBytes: sizeBytes as number,
           capturedAtIso,
         });
@@ -289,6 +292,7 @@ export function MemoryMediaPicker({
         id: createAttachmentId(),
         uri: asset.uri,
         contentType,
+        aspectRatio: aspectRatioFromDimensions(asset.width, asset.height) ?? undefined,
         sizeBytes: sizeBytes as number,
       }]);
     }, 'Could not open the camera. Please try again.');

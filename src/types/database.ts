@@ -7,6 +7,11 @@ export type Json =
   | Json[]
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.5"
+  }
   graphql_public: {
     Tables: {
       [_ in never]: never
@@ -367,6 +372,7 @@ export type Database = {
       }
       memory_media: {
         Row: {
+          aspect_ratio: number | null
           content_type: string
           created_at: string
           duration_ms: number | null
@@ -377,6 +383,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          aspect_ratio?: number | null
           content_type: string
           created_at?: string
           duration_ms?: number | null
@@ -387,6 +394,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          aspect_ratio?: number | null
           content_type?: string
           created_at?: string
           duration_ms?: number | null
@@ -478,6 +486,12 @@ export type Database = {
           owner_id: string
           updated_at: string
         }
+        SetofOptions: {
+          from: "*"
+          to: "families"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       create_family_invite: {
         Args: { fam: string; invite_role: string }
@@ -496,6 +510,12 @@ export type Database = {
           status: string
           updated_at: string
         }
+        SetofOptions: {
+          from: "*"
+          to: "family_invites"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       get_family_member_profiles: {
         Args: { fam: string }
@@ -503,19 +523,19 @@ export type Database = {
           created_at: string
           is_active_member: boolean
           name: string
-          role: string | null
+          role: string
           user_id: string
         }[]
       }
       get_invite_redeemer: {
         Args: { invite_id: string }
         Returns: {
-          email: string | null
+          email: string
           name: string
         }[]
       }
       get_my_redeemed_invite_status: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: {
           family_name: string
           family_unavailable: boolean
@@ -527,10 +547,7 @@ export type Database = {
         Args: { fam: string; roles: string[] }
         Returns: boolean
       }
-      is_family_member: {
-        Args: { fam: string }
-        Returns: boolean
-      }
+      is_family_member: { Args: { fam: string }; Returns: boolean }
       replace_memory_media_assets: {
         Args: { assets: Json; target_memory_id: string }
         Returns: undefined

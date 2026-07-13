@@ -12,6 +12,7 @@ export const VIDEO_UPLOAD_MAX_DIMENSION = 1280;
 export interface UploadableMedia {
   fileUri: string;
   contentType: string;
+  aspectRatio?: number;
 }
 
 /**
@@ -37,7 +38,7 @@ export async function compressVideoForUpload(
       return media;
     }
 
-    return { fileUri: compressedUri, contentType: 'video/mp4' };
+    return { ...media, fileUri: compressedUri, contentType: 'video/mp4' };
   } catch {
     return media;
   }

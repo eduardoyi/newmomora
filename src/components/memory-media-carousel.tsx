@@ -32,6 +32,7 @@ interface MemoryMediaCarouselProps {
   assets: MemoryMediaAsset[];
   cacheVersion?: string | null;
   isActive?: boolean;
+  stableLayout?: boolean;
   videoTapToToggle?: boolean;
   mutedVideos?: boolean;
   onPress?: (activeIndex: number) => void;
@@ -43,6 +44,7 @@ function VideoAsset({
   isActive,
   isMuted,
   tapToToggle,
+  onFirstFrameRender,
   onNaturalRatio,
   url,
 }: {
@@ -50,6 +52,7 @@ function VideoAsset({
   isActive: boolean;
   isMuted: boolean;
   tapToToggle: boolean;
+  onFirstFrameRender: () => void;
   onNaturalRatio: (ratio: number) => void;
   url: string;
 }) {
@@ -88,6 +91,7 @@ function VideoAsset({
     <VideoView
       contentFit="contain"
       nativeControls={false}
+      onFirstFrameRender={onFirstFrameRender}
       player={player}
       style={StyleSheet.absoluteFill}
       testID="memory-media-video"
@@ -126,6 +130,7 @@ function MediaPage({
   onNaturalRatio,
   onUrlError,
   url,
+  shouldLoadVideoThumbnail,
   shouldMeasureNaturalRatio,
 }: {
   asset: MemoryMediaAsset;
@@ -136,15 +141,18 @@ function MediaPage({
   onNaturalRatio: (objectKey: string, ratio: number) => void;
   onUrlError: () => void;
   url?: string;
+  shouldLoadVideoThumbnail: boolean;
   shouldMeasureNaturalRatio: boolean;
 }) {
   const isVideo = isVideoContentType(asset.content_type);
+  const [hasRenderedFirstFrame, setHasRenderedFirstFrame] = useState(false);
   // Track metadata can report the encoded dimensions before phone rotation
   // metadata is applied (for example 1920x1080 for a portrait 1080x1920
   // clip). A generated frame has the display transform applied, so it is the
   // authoritative aspect ratio for the asset that controls the container.
   const videoThumbnail = useVideoThumbnailResult(
-    isVideo && shouldMeasureNaturalRatio ? url : null,
+    isVideo && shouldLoadVideoThumbnail ? url : null,
+    cacheKey,
   );
   const reportNaturalRatio = useCallback(
     (ratio: number) => onNaturalRatio(asset.object_key, ratio),
@@ -160,6 +168,12 @@ function MediaPage({
       reportNaturalRatio(ratio);
     }
   }, [reportNaturalRatio, videoThumbnail]);
+
+  useEffect(() => {
+    if (!isActive) {
+      setHasRenderedFirstFrame(false);
+    }
+  }, [isActive]);
 
   if (!url) {
     return (
@@ -177,9 +191,19 @@ function MediaPage({
             hasPreferredNaturalRatio={videoThumbnail !== null}
             isActive={isActive}
             isMuted={mutedVideos}
+            onFirstFrameRender={() => setHasRenderedFirstFrame(true)}
             onNaturalRatio={reportNaturalRatio}
             tapToToggle={videoTapToToggle}
             url={url}
+          />
+        ) : null}
+        {videoThumbnail && (!isActive || !hasRenderedFirstFrame) ? (
+          <Image
+            contentFit="contain"
+            pointerEvents="none"
+            source={{ uri: videoThumbnail.uri, cacheKey: `${cacheKey}:thumbnail` }}
+            style={StyleSheet.absoluteFill}
+            testID={`memory-media-video-thumbnail-${asset.id}`}
           />
         ) : null}
         {!isActive ? (
@@ -217,6 +241,7 @@ export function MemoryMediaCarousel({
   assets,
   cacheVersion,
   isActive = true,
+  stableLayout = false,
   mutedVideos = true,
   onPress,
   style,
@@ -231,11 +256,14 @@ export function MemoryMediaCarousel({
   const { data: urls = {}, refetch: refetchMediaUrls } = useMediaUrls(keys, cacheVersion);
   const showPaging = assets.length > 1;
 
-  // A single asset can use its exact natural ratio. Multi-asset carousels keep
-  // the ratio clamped so an extreme first item does not make every page take
-  // over the feed; differently shaped pages letterbox via `contain`.
-  // Falls back to 4:3 until dimensions are known.
-  const firstRatio = assets.length > 0 ? naturalRatios[assets[0].object_key] : undefined;
+  // Stable list rows use the persisted ratio from their first render. Detail
+  // views can still adopt a runtime-measured ratio for a legacy null row.
+  // Multi-asset carousels clamp the first ratio so an extreme item does not
+  // make every page take over the feed; differently shaped pages letterbox.
+  const firstAsset = assets[0];
+  const firstRatio = firstAsset?.aspect_ratio ?? (
+    firstAsset && !stableLayout ? naturalRatios[firstAsset.object_key] : undefined
+  );
   const containerRatio = firstRatio
     ? assets.length === 1
       ? firstRatio
@@ -332,7 +360,12 @@ export function MemoryMediaCarousel({
               onUrlError={() => void refetchMediaUrls()}
               url={urls[asset.object_key]}
               videoTapToToggle={videoTapToToggle}
-              shouldMeasureNaturalRatio={index === 0}
+              shouldLoadVideoThumbnail={
+                index === 0 || (isActive && index === activeIndex)
+              }
+              shouldMeasureNaturalRatio={
+                index === 0 && firstAsset?.aspect_ratio == null
+              }
             />
           </View>
         ))}

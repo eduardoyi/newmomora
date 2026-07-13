@@ -4,6 +4,7 @@ import { createMediaMemory, type MemoryWithTags } from '@/services/memories';
 import { getMediaExtensionFromContentType, isVideoContentType } from '@/utils/media-validation';
 import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
 import { stripImageMetadataForUpload } from '@/utils/strip-image-metadata';
+import { getVideoAspectRatio } from '@/utils/video-aspect-ratio';
 import { compressVideoForUpload } from '@/utils/video-compression';
 
 const MEDIA_UPLOAD_CONCURRENCY = 3;
@@ -16,12 +17,14 @@ export interface MemoryMediaMutationAsset {
   mediaAssetId?: string;
   contentType: string;
   durationMs?: number | null;
+  aspectRatio?: number | null;
 }
 
 export interface UploadedMemoryMediaAsset {
   objectKey: string;
   contentType: string;
   durationMs: number | null;
+  aspectRatio: number | null;
 }
 
 export interface PostMediaMemoryInput {
@@ -125,6 +128,7 @@ export async function uploadMemoryMediaAssets(params: {
         objectKey: asset.objectKey,
         contentType: asset.contentType,
         durationMs: asset.durationMs ?? null,
+        aspectRatio: asset.aspectRatio ?? null,
       };
     }
 
@@ -152,6 +156,10 @@ export async function uploadMemoryMediaAssets(params: {
       throw new Error('Unsupported file type');
     }
 
+    const aspectRatio = isVideoContentType(upload.contentType)
+      ? await getVideoAspectRatio(upload.fileUri) ?? asset.aspectRatio ?? null
+      : upload.aspectRatio ?? asset.aspectRatio ?? null;
+
     const mediaAssetId = getStorageMediaAssetId(asset.mediaAssetId);
     const mediaKey = buildMemoryMediaAssetKey(userId, memoryId, mediaAssetId, extension);
     const { error: uploadError } = await uploadMediaObject(
@@ -172,6 +180,7 @@ export async function uploadMemoryMediaAssets(params: {
       objectKey: mediaKey,
       contentType: upload.contentType,
       durationMs: asset.durationMs ?? null,
+      aspectRatio,
     };
   };
 

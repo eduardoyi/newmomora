@@ -259,6 +259,7 @@ describe('memories service integration', () => {
         objectKey: 'user-1/memories/memory-photo-2/media.jpg',
         contentType: 'image/jpeg',
         durationMs: null,
+        aspectRatio: null,
       }],
     });
     expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
