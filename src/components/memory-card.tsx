@@ -157,7 +157,6 @@ function MediaVisual({
         cacheVersion={memory.updated_at}
         isActive={isActive}
         onPress={onPress}
-        playVideos={false}
         stableLayout
         style={styles.mediaVisual}
       />
