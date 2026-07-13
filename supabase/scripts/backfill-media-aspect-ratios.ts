@@ -1,5 +1,5 @@
 /**
- * Backfill persisted aspect ratios for existing video memory assets.
+ * Backfill persisted aspect ratios for existing image and video memory assets.
  *
  * Dry run:
  * deno run --allow-all --env-file=.env.local --env-file=supabase/.env.local \
@@ -23,6 +23,22 @@ interface FfprobeStream {
 interface FfprobeResult {
   streams?: FfprobeStream[];
 }
+
+interface MediaAssetRow {
+  id: string;
+  memory_id: string;
+  object_key: string;
+  content_type: string;
+}
+
+interface MemoryFamilyRow {
+  id: string;
+  family_id: string;
+}
+
+const DATABASE_PAGE_SIZE = 500;
+const IN_QUERY_BATCH_SIZE = 50;
+const PROBE_CONCURRENCY = 8;
 
 function requireEnv(name: string): string {
   const value = Deno.env.get(name);
@@ -48,7 +64,7 @@ function getDisplayAspectRatio(stream: FfprobeStream): number | null {
   return normalizedRotation === 90 ? height / width : width / height;
 }
 
-async function probeVideo(url: string): Promise<number | null> {
+async function probeMedia(url: string): Promise<number | null> {
   const command = new Deno.Command('ffprobe', {
     args: [
       '-v',
@@ -84,33 +100,52 @@ const admin = createClient(supabaseUrl, serviceRoleKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-const { data: assets, error: selectError } = await admin
-  .from('memory_media')
-  .select('id, memory_id, object_key')
-  .like('content_type', 'video/%')
-  .is('aspect_ratio', null)
-  .order('created_at', { ascending: true });
+const assets: MediaAssetRow[] = [];
+for (let offset = 0; ; offset += DATABASE_PAGE_SIZE) {
+  const { data, error } = await admin
+    .from('memory_media')
+    .select('id, memory_id, object_key, content_type')
+    .is('aspect_ratio', null)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+    .range(offset, offset + DATABASE_PAGE_SIZE - 1);
 
-if (selectError) {
-  throw new Error(`Could not load video media rows: ${selectError.message}`);
+  if (error) {
+    throw new Error(`Could not load media rows: ${error.message}`);
+  }
+
+  assets.push(...data);
+  if (data.length < DATABASE_PAGE_SIZE) {
+    break;
+  }
 }
 
 if (assets.length === 0) {
-  console.log('No video aspect ratios need backfilling');
+  console.log('No media aspect ratios need backfilling');
   Deno.exit(0);
 }
 
 const memoryIds = [...new Set(assets.map((asset) => asset.memory_id))];
-const [{ data: memories, error: memoriesError }, { data: profiles, error: profilesError }] =
-  await Promise.all([
-    admin.from('memories').select('id, family_id').in('id', memoryIds),
-    admin.from('user_profiles').select('active_family_id').not('active_family_id', 'is', null),
-  ]);
+const memories: MemoryFamilyRow[] = [];
+for (let offset = 0; offset < memoryIds.length; offset += IN_QUERY_BATCH_SIZE) {
+  const { data, error } = await admin
+    .from('memories')
+    .select('id, family_id')
+    .in('id', memoryIds.slice(offset, offset + IN_QUERY_BATCH_SIZE));
 
-if (memoriesError || profilesError) {
-  throw new Error(
-    `Could not resolve active families: ${memoriesError?.message ?? profilesError?.message}`,
-  );
+  if (error) {
+    throw new Error(`Could not resolve media families: ${error.message}`);
+  }
+  memories.push(...data);
+}
+
+const { data: profiles, error: profilesError } = await admin
+  .from('user_profiles')
+  .select('active_family_id')
+  .not('active_family_id', 'is', null);
+
+if (profilesError) {
+  throw new Error(`Could not resolve active families: ${profilesError.message}`);
 }
 
 const familyIdByMemoryId = new Map(memories.map((memory) => [memory.id, memory.family_id]));
@@ -134,11 +169,11 @@ for (const asset of candidateAssets) {
 
 const memoryCount = new Set(candidateAssets.map((asset) => asset.memory_id)).size;
 console.log(
-  `Found ${candidateAssets.length} candidate video row(s) across ${memoryCount} memory/memories and ` +
+  `Found ${candidateAssets.length} candidate media row(s) across ${memoryCount} memory/memories and ` +
     `${assetsByObjectKey.size} unique R2 object(s)`,
 );
 console.log(
-  `${activeFamilyAssets.length} of ${assets.length} total null-ratio video row(s) belong to ` +
+  `${activeFamilyAssets.length} of ${assets.length} total null-ratio media row(s) belong to ` +
     'a currently active family',
 );
 
@@ -146,22 +181,25 @@ if (shouldSummarizeOnly) {
   Deno.exit(0);
 }
 
-console.log(`${shouldApply ? 'Applying' : 'Dry-running'} video aspect-ratio backfill`);
+console.log(`${shouldApply ? 'Applying' : 'Dry-running'} media aspect-ratio backfill`);
 
 let updatedCount = 0;
 let failedCount = 0;
 
-for (const [objectKey, matchingAssets] of assetsByObjectKey) {
+async function processObject(
+  objectKey: string,
+  matchingAssets: MediaAssetRow[],
+): Promise<void> {
   const representative = matchingAssets[0];
   try {
     const urls = await createPresignedGetUrls([objectKey], 300);
     const url = urls[objectKey];
-    const aspectRatio = url ? await probeVideo(url) : null;
+    const aspectRatio = url ? await probeMedia(url) : null;
 
     if (!aspectRatio || aspectRatio < 0.1 || aspectRatio > 10) {
       failedCount += matchingAssets.length;
       console.error(`Media ${representative.id}: could not determine a valid aspect ratio`);
-      continue;
+      return;
     }
 
     if (shouldApply) {
@@ -189,6 +227,23 @@ for (const [objectKey, matchingAssets] of assetsByObjectKey) {
     );
   }
 }
+
+const objectEntries = [...assetsByObjectKey.entries()];
+let nextObjectIndex = 0;
+async function runWorker(): Promise<void> {
+  while (nextObjectIndex < objectEntries.length) {
+    const entry = objectEntries[nextObjectIndex];
+    nextObjectIndex += 1;
+    await processObject(...entry);
+  }
+}
+
+await Promise.all(
+  Array.from(
+    { length: Math.min(PROBE_CONCURRENCY, objectEntries.length) },
+    () => runWorker(),
+  ),
+);
 
 console.log(`Finished: ${updatedCount} measured, ${failedCount} failed`);
 

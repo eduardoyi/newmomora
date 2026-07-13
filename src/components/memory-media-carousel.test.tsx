@@ -188,6 +188,24 @@ describe('MemoryMediaCarousel', () => {
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
   });
 
+  it('keeps a persisted first-image ratio stable when timeline images load', () => {
+    const firstAsset = { ...assets[0], aspect_ratio: 9 / 16 };
+    const { getByTestId } = render(
+      <MemoryMediaCarousel assets={[firstAsset, assets[1]]} stableLayout />,
+    );
+
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
+
+    fireEvent(getByTestId('memory-media-image-asset-1'), 'load', {
+      nativeEvent: { source: { width: 1600, height: 900 } },
+    });
+    fireEvent(getByTestId('memory-media-image-asset-2'), 'load', {
+      nativeEvent: { source: { width: 1200, height: 1200 } },
+    });
+
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
+  });
+
   it('shows a first-frame thumbnail while a timeline video is inactive', () => {
     mockedUseMediaUrls.mockReturnValue({
       data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
@@ -242,30 +260,24 @@ describe('MemoryMediaCarousel', () => {
     expect(queryByTestId('memory-media-video-thumbnail-asset-video')).toBeNull();
   });
 
-  it('adopts the first asset natural aspect ratio, clamped for a carousel', () => {
+  it('uses the first asset exact ratio for every carousel page', () => {
     const { getByTestId } = render(<MemoryMediaCarousel assets={assets} />);
 
     // Defaults to 4:3 until dimensions are known.
     expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 4 / 3 });
 
-    // A portrait 3:4 photo resizes the container to match (no crop).
-    fireEvent(getByTestId('memory-media-image-asset-1'), 'load', {
-      nativeEvent: { source: { width: 1200, height: 1600 } },
-    });
-    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 3 / 4 });
-
-    // An extreme 9:16 first asset is clamped to the 3:4 minimum when other
-    // assets share the same carousel frame.
+    // Even an extreme first asset remains authoritative for the shared frame.
     fireEvent(getByTestId('memory-media-image-asset-1'), 'load', {
       nativeEvent: { source: { width: 1080, height: 1920 } },
     });
-    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 3 / 4 });
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
 
-    // The second asset's dimensions do not drive the container.
+    // The second asset fits inside the first asset's frame and cannot resize it.
+    expect(getByTestId('memory-media-image-asset-2').props.contentFit).toBe('contain');
     fireEvent(getByTestId('memory-media-image-asset-2'), 'load', {
       nativeEvent: { source: { width: 1600, height: 900 } },
     });
-    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 3 / 4 });
+    expect(getByTestId('memory-media-carousel')).toHaveStyle({ aspectRatio: 9 / 16 });
   });
 
   it('does not mount a video player on the page adjacent to the active one', () => {

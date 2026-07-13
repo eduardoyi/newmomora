@@ -24,7 +24,6 @@ import type { MemoryMediaAsset } from '@/services/memories';
 import {
   DEFAULT_MEDIA_ASPECT_RATIO,
   aspectRatioFromDimensions,
-  clampMediaAspectRatio,
 } from '@/utils/media-aspect';
 import { isVideoContentType } from '@/utils/media-validation';
 
@@ -160,14 +159,14 @@ function MediaPage({
   );
 
   useEffect(() => {
-    if (!videoThumbnail) {
+    if (!shouldMeasureNaturalRatio || !videoThumbnail) {
       return;
     }
     const ratio = aspectRatioFromDimensions(videoThumbnail.width, videoThumbnail.height);
     if (ratio) {
       reportNaturalRatio(ratio);
     }
-  }, [reportNaturalRatio, videoThumbnail]);
+  }, [reportNaturalRatio, shouldMeasureNaturalRatio, videoThumbnail]);
 
   useEffect(() => {
     if (!isActive) {
@@ -188,7 +187,7 @@ function MediaPage({
       <View style={styles.page}>
         {isActive ? (
           <VideoAsset
-            hasPreferredNaturalRatio={videoThumbnail !== null}
+            hasPreferredNaturalRatio={!shouldMeasureNaturalRatio || videoThumbnail !== null}
             isActive={isActive}
             isMuted={mutedVideos}
             onFirstFrameRender={() => setHasRenderedFirstFrame(true)}
@@ -225,6 +224,9 @@ function MediaPage({
       contentFit="contain"
       onError={onUrlError}
       onLoad={(event) => {
+        if (!shouldMeasureNaturalRatio) {
+          return;
+        }
         const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
         if (ratio) {
           reportNaturalRatio(ratio);
@@ -258,17 +260,13 @@ export function MemoryMediaCarousel({
 
   // Stable list rows use the persisted ratio from their first render. Detail
   // views can still adopt a runtime-measured ratio for a legacy null row.
-  // Multi-asset carousels clamp the first ratio so an extreme item does not
-  // make every page take over the feed; differently shaped pages letterbox.
+  // Every carousel page keeps the first asset's exact ratio. Later assets use
+  // contain inside that fixed frame, so swiping never changes row geometry.
   const firstAsset = assets[0];
   const firstRatio = firstAsset?.aspect_ratio ?? (
     firstAsset && !stableLayout ? naturalRatios[firstAsset.object_key] : undefined
   );
-  const containerRatio = firstRatio
-    ? assets.length === 1
-      ? firstRatio
-      : clampMediaAspectRatio(firstRatio)
-    : DEFAULT_MEDIA_ASPECT_RATIO;
+  const containerRatio = firstRatio ?? DEFAULT_MEDIA_ASPECT_RATIO;
 
   const handleNaturalRatio = useCallback((objectKey: string, ratio: number) => {
     setNaturalRatios((prev) => (prev[objectKey] === ratio ? prev : { ...prev, [objectKey]: ratio }));

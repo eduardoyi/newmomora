@@ -1031,7 +1031,7 @@ persists.
 8. INSERT memories (id: memoryId) with memory_type='media', cover media_key/media_content_type from position 0, illustration_status='none', optional content (caption)
 9. Call `replace_memory_media_assets` RPC with the final ordered asset list, including `aspectRatio`
 10. No illustration pipeline invoked; photo emotion analysis uses the first ordered image asset
-11. Display media via get-media-url presigned GET; timeline rows use persisted `aspect_ratio` before media loads, while detail uses the same natural ratio
+11. Display media via get-media-url presigned GET; timeline rows use the persisted first asset's `aspect_ratio` before media loads, and later carousel assets use `contain` inside that fixed frame
 ```
 
 `replace_memory_media_assets` receives each ordered asset as
