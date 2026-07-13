@@ -26,7 +26,7 @@ import { colors, fonts, spacing } from '@/constants/theme';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
-import { useMemories, useMemory } from '@/hooks/useMemories';
+import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
 import { canEditFamilyContent } from '@/utils/roles';
 
@@ -43,7 +43,7 @@ export default function EditMemoryScreen() {
   const { role } = useFamily();
   const { data: memory, isLoading } = useMemory(id);
   const { members } = useFamilyMembers();
-  const { updateMemory, isUpdating } = useMemories();
+  const { updateMemory, isUpdating } = useMemoryMutations();
 
   // Guard on mount: viewers reaching this route via a deep link or stale
   // navigation state get bounced back rather than seeing an edit form whose

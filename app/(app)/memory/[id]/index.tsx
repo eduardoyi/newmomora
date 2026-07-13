@@ -23,7 +23,7 @@ import { colors, fonts, getEmotionColors, getEmotionGradient, radius, spacing } 
 import type { FamilyMember } from '@/services/family-members';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMemberProfiles, resolveAttributionName } from '@/hooks/useFamilyMemberProfiles';
-import { useMemory, useMemories } from '@/hooks/useMemories';
+import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { navigateBack } from '@/lib/navigation';
 import { editMemoryRoute } from '@/lib/routes';
@@ -393,7 +393,7 @@ export default function MemoryDetailScreen() {
     isDeleting,
     isRetrying,
     isRegenerating,
-  } = useMemories();
+  } = useMemoryMutations();
   const isLeavingRef = useRef(false);
   const { url: illustrationUrl } = useMediaUrl(
     memory?.illustration_key,

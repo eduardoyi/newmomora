@@ -67,6 +67,37 @@ function isMemoriesListQueryKey(queryKey: readonly unknown[]): boolean {
   return queryKey[0] === memoriesQueryKeyBase && queryKey[2] !== 'detail';
 }
 
+// The timeline list cache already holds the full MemoryWithTags (tags + media)
+// for every memory it rendered, so the detail screen can paint from it
+// immediately while the fresh fetch runs in the background. Scoped to the
+// active family so another family's cache never leaks into the detail view.
+function findMemoryInListCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  familyId: string | null | undefined,
+  memoryId: string | undefined,
+): MemoryWithTags | undefined {
+  if (!memoryId) {
+    return undefined;
+  }
+
+  const listEntries = queryClient.getQueriesData<MemoryWithTags[]>({
+    predicate: (query) =>
+      isMemoriesListQueryKey(query.queryKey) && query.queryKey[1] === familyId,
+  });
+
+  for (const [, memories] of listEntries) {
+    const memory = Array.isArray(memories)
+      ? memories.find((candidate) => candidate.id === memoryId)
+      : undefined;
+
+    if (memory) {
+      return memory;
+    }
+  }
+
+  return undefined;
+}
+
 // Inline links (docs/plans/inline-links.md §7): fire-and-forget, same slot
 // as notifyFamilyActivityFireAndForget -- never awaited on the save path,
 // and a failure just leaves links rendered with their domain fallback.
@@ -121,122 +152,13 @@ function toError(error: unknown, fallbackMessage: string): Error {
   return new Error(fallbackMessage);
 }
 
-export function useMemories(searchQuery = '') {
+// Memory mutations without the timeline list query. Screens that only mutate
+// (detail, edit, new-memory) mount this instead of useMemories so opening
+// them doesn't subscribe to -- and refetch -- the whole timeline.
+export function useMemoryMutations() {
   const { user } = useAuth();
-  const { familyId, role } = useFamily();
+  const { familyId } = useFamily();
   const queryClient = useQueryClient();
-  const recoveringIllustrationsRef = useRef(new Set<string>());
-  const recoveringEmotionsRef = useRef(new Set<string>());
-  const canRecoverIllustrations = canEditFamilyContent(role);
-
-  const query = useQuery({
-    queryKey: [...memoriesQueryKey(familyId), searchQuery],
-    queryFn: async () => {
-      const { data, error } = searchQuery.trim()
-        ? await searchMemories(searchQuery)
-        : await fetchMemories();
-
-      if (error) {
-        throw toError(error, 'Could not load memories');
-      }
-
-      return data ?? [];
-    },
-    enabled: Boolean(user),
-    refetchInterval: (queryState) => {
-      const memories = queryState.state.data ?? [];
-      const hasGenerating = memories.some(
-        (memory) =>
-          memory.illustration_status === 'pending' || memory.illustration_status === 'generating',
-      );
-      if (hasGenerating) {
-        return 3000;
-      }
-
-      return memoriesNeedEmotionPolling(memories) ? 5000 : false;
-    },
-  });
-
-  // Viewers' writes are RLS-rejected (memories: update requires manager+),
-  // so a viewer running this would have its illustration_status UPDATE and
-  // generate-illustration call rejected every time -- a permanent retry
-  // loop (plan §7's analyze-emotion row explains the same failure shape).
-  useEffect(() => {
-    if (!canRecoverIllustrations) {
-      return;
-    }
-
-    const memories = query.data ?? [];
-
-    for (const memory of memories) {
-      if (!needsIllustrationRecovery(memory)) {
-        continue;
-      }
-
-      if (recoveringIllustrationsRef.current.has(memory.id)) {
-        continue;
-      }
-
-      recoveringIllustrationsRef.current.add(memory.id);
-
-      void retryMemoryIllustration(memory.id)
-        .catch((error) => {
-          console.warn(
-            'Failed to recover stale illustration',
-            memory.id,
-            error instanceof Error ? error.message : 'unknown',
-          );
-        })
-        .finally(() => {
-          recoveringIllustrationsRef.current.delete(memory.id);
-          invalidateMemoryQueries(queryClient);
-        });
-    }
-  }, [query.data, queryClient, canRecoverIllustrations]);
-
-  // Backfill emotion tags for memories that were never analyzed or whose
-  // analysis previously failed (e.g. older text_only entries). One attempt per
-  // memory per session; the edge function's cooldown guards against races with
-  // the create-time triggers.
-  useEffect(() => {
-    const memories = query.data ?? [];
-
-    for (const memory of memories) {
-      if (!isEmotionAnalyzable(memory)) {
-        continue;
-      }
-
-      if (
-        memory.memory_type === 'text_illustration' &&
-        (memory.illustration_status === 'pending' || memory.illustration_status === 'generating')
-      ) {
-        continue;
-      }
-
-      if (recoveringEmotionsRef.current.has(memory.id)) {
-        continue;
-      }
-
-      recoveringEmotionsRef.current.add(memory.id);
-
-      const analyze =
-        memory.memory_type === 'media'
-          ? runMediaPhotoEmotionAnalysis
-          : runTextOnlyEmotionAnalysis;
-
-      void analyze(memory.id)
-        .catch((error) => {
-          console.warn(
-            'Failed to backfill emotion',
-            memory.id,
-            error instanceof Error ? error.message : 'unknown',
-          );
-        })
-        .finally(() => {
-          invalidateMemoryQueries(queryClient);
-        });
-    }
-  }, [query.data, queryClient]);
 
   const createMutation = useMutation({
     mutationFn: async (input: CreateMemoryMutationInput) => {
@@ -402,12 +324,6 @@ export function useMemories(searchQuery = '') {
   });
 
   return {
-    memories: query.data ?? [],
-    isLoading: query.isLoading,
-    isRefetching: query.isRefetching,
-    isError: query.isError,
-    error: query.error,
-    refetch: query.refetch,
     createMemory: createMutation.mutateAsync,
     isCreating: createMutation.isPending,
     updateMemory: updateMutation.mutateAsync,
@@ -418,6 +334,136 @@ export function useMemories(searchQuery = '') {
     isRetrying: retryMutation.isPending,
     regenerateIllustration: regenerateMutation.mutateAsync,
     isRegenerating: regenerateMutation.isPending,
+  };
+}
+
+export function useMemories(searchQuery = '') {
+  const { user } = useAuth();
+  const { familyId, role } = useFamily();
+  const queryClient = useQueryClient();
+  const recoveringIllustrationsRef = useRef(new Set<string>());
+  const recoveringEmotionsRef = useRef(new Set<string>());
+  const canRecoverIllustrations = canEditFamilyContent(role);
+
+  const query = useQuery({
+    queryKey: [...memoriesQueryKey(familyId), searchQuery],
+    queryFn: async () => {
+      const { data, error } = searchQuery.trim()
+        ? await searchMemories(searchQuery)
+        : await fetchMemories();
+
+      if (error) {
+        throw toError(error, 'Could not load memories');
+      }
+
+      return data ?? [];
+    },
+    enabled: Boolean(user),
+    refetchInterval: (queryState) => {
+      const memories = queryState.state.data ?? [];
+      const hasGenerating = memories.some(
+        (memory) =>
+          memory.illustration_status === 'pending' || memory.illustration_status === 'generating',
+      );
+      if (hasGenerating) {
+        return 3000;
+      }
+
+      return memoriesNeedEmotionPolling(memories) ? 5000 : false;
+    },
+  });
+
+  // Viewers' writes are RLS-rejected (memories: update requires manager+),
+  // so a viewer running this would have its illustration_status UPDATE and
+  // generate-illustration call rejected every time -- a permanent retry
+  // loop (plan §7's analyze-emotion row explains the same failure shape).
+  useEffect(() => {
+    if (!canRecoverIllustrations) {
+      return;
+    }
+
+    const memories = query.data ?? [];
+
+    for (const memory of memories) {
+      if (!needsIllustrationRecovery(memory)) {
+        continue;
+      }
+
+      if (recoveringIllustrationsRef.current.has(memory.id)) {
+        continue;
+      }
+
+      recoveringIllustrationsRef.current.add(memory.id);
+
+      void retryMemoryIllustration(memory.id)
+        .catch((error) => {
+          console.warn(
+            'Failed to recover stale illustration',
+            memory.id,
+            error instanceof Error ? error.message : 'unknown',
+          );
+        })
+        .finally(() => {
+          recoveringIllustrationsRef.current.delete(memory.id);
+          invalidateMemoryQueries(queryClient);
+        });
+    }
+  }, [query.data, queryClient, canRecoverIllustrations]);
+
+  // Backfill emotion tags for memories that were never analyzed or whose
+  // analysis previously failed (e.g. older text_only entries). One attempt per
+  // memory per session; the edge function's cooldown guards against races with
+  // the create-time triggers.
+  useEffect(() => {
+    const memories = query.data ?? [];
+
+    for (const memory of memories) {
+      if (!isEmotionAnalyzable(memory)) {
+        continue;
+      }
+
+      if (
+        memory.memory_type === 'text_illustration' &&
+        (memory.illustration_status === 'pending' || memory.illustration_status === 'generating')
+      ) {
+        continue;
+      }
+
+      if (recoveringEmotionsRef.current.has(memory.id)) {
+        continue;
+      }
+
+      recoveringEmotionsRef.current.add(memory.id);
+
+      const analyze =
+        memory.memory_type === 'media'
+          ? runMediaPhotoEmotionAnalysis
+          : runTextOnlyEmotionAnalysis;
+
+      void analyze(memory.id)
+        .catch((error) => {
+          console.warn(
+            'Failed to backfill emotion',
+            memory.id,
+            error instanceof Error ? error.message : 'unknown',
+          );
+        })
+        .finally(() => {
+          invalidateMemoryQueries(queryClient);
+        });
+    }
+  }, [query.data, queryClient]);
+
+  const mutations = useMemoryMutations();
+
+  return {
+    memories: query.data ?? [],
+    isLoading: query.isLoading,
+    isRefetching: query.isRefetching,
+    isError: query.isError,
+    error: query.error,
+    refetch: query.refetch,
+    ...mutations,
   };
 }
 
@@ -445,6 +491,7 @@ export function useMemory(memoryId: string | undefined) {
       return data;
     },
     enabled: Boolean(user && memoryId),
+    placeholderData: () => findMemoryInListCache(queryClient, familyId, memoryId),
     refetchInterval: (queryState) => {
       const memory = queryState.state.data;
       if (!memory) {

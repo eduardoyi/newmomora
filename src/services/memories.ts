@@ -70,20 +70,22 @@ async function fetchTagsForMemories(memoryIds: string[]): Promise<Map<string, Fa
     return new Map();
   }
 
-  const rows = [];
+  const batchResults = await Promise.all(
+    chunkMemoryIds(memoryIds).map(async (memoryIdBatch) => {
+      const { data, error } = await supabase
+        .from('memory_family_members')
+        .select('memory_id, family_members(*)')
+        .in('memory_id', memoryIdBatch);
 
-  for (const memoryIdBatch of chunkMemoryIds(memoryIds)) {
-    const { data, error } = await supabase
-      .from('memory_family_members')
-      .select('memory_id, family_members(*)')
-      .in('memory_id', memoryIdBatch);
+      if (error) {
+        throw mapSupabaseError(error);
+      }
 
-    if (error) {
-      throw mapSupabaseError(error);
-    }
+      return data ?? [];
+    }),
+  );
 
-    rows.push(...(data ?? []));
-  }
+  const rows = batchResults.flat();
 
   const tagMap = new Map<string, FamilyMember[]>();
 
@@ -179,21 +181,23 @@ async function fetchMediaForMemories(memoryIds: string[]): Promise<Map<string, M
     return new Map();
   }
 
-  const rows: MemoryMediaAsset[] = [];
+  const batchResults = await Promise.all(
+    chunkMemoryIds(memoryIds).map(async (memoryIdBatch) => {
+      const { data, error } = await (supabase as any)
+        .from('memory_media')
+        .select('*')
+        .in('memory_id', memoryIdBatch)
+        .order('position', { ascending: true });
 
-  for (const memoryIdBatch of chunkMemoryIds(memoryIds)) {
-    const { data, error } = await (supabase as any)
-      .from('memory_media')
-      .select('*')
-      .in('memory_id', memoryIdBatch)
-      .order('position', { ascending: true });
+      if (error) {
+        throw mapSupabaseError(error);
+      }
 
-    if (error) {
-      throw mapSupabaseError(error);
-    }
+      return (data ?? []) as MemoryMediaAsset[];
+    }),
+  );
 
-    rows.push(...((data ?? []) as MemoryMediaAsset[]));
-  }
+  const rows: MemoryMediaAsset[] = batchResults.flat();
 
   const mediaMap = new Map<string, MemoryMediaAsset[]>();
 
@@ -252,8 +256,10 @@ export async function fetchMemories(): Promise<{
 
   const memories = data ?? [];
   const memoryIds = memories.map((memory) => memory.id);
-  const tagMap = await fetchTagsForMemories(memoryIds);
-  const mediaMap = await fetchMediaForMemories(memoryIds);
+  const [tagMap, mediaMap] = await Promise.all([
+    fetchTagsForMemories(memoryIds),
+    fetchMediaForMemories(memoryIds),
+  ]);
 
   return { data: attachMediaAssets(attachTags(memories, tagMap), mediaMap), error: null };
 }
@@ -336,8 +342,10 @@ export async function fetchMemoryById(memoryId: string): Promise<{
     return { data: null, error: null };
   }
 
-  const tagMap = await fetchTagsForMemories([memoryId]);
-  const mediaMap = await fetchMediaForMemories([memoryId]);
+  const [tagMap, mediaMap] = await Promise.all([
+    fetchTagsForMemories([memoryId]),
+    fetchMediaForMemories([memoryId]),
+  ]);
   return { data: attachMediaAssets(attachTags([data], tagMap), mediaMap)[0], error: null };
 }
 
@@ -363,8 +371,10 @@ export async function searchMemories(query: string): Promise<{
 
   const memories = data ?? [];
   const memoryIds = memories.map((memory) => memory.id);
-  const tagMap = await fetchTagsForMemories(memoryIds);
-  const mediaMap = await fetchMediaForMemories(memoryIds);
+  const [tagMap, mediaMap] = await Promise.all([
+    fetchTagsForMemories(memoryIds),
+    fetchMediaForMemories(memoryIds),
+  ]);
   return { data: attachMediaAssets(attachTags(memories, tagMap), mediaMap), error: null };
 }
 

@@ -15,7 +15,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
-import { useMemories } from '@/hooks/useMemories';
+import { useMemoryMutations } from '@/hooks/useMemories';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { navigateBack } from '@/lib/navigation';
@@ -77,7 +77,7 @@ jest.mock('@/hooks/useFamilyMembers', () => ({
 }));
 
 jest.mock('@/hooks/useMemories', () => ({
-  useMemories: jest.fn(),
+  useMemoryMutations: jest.fn(),
 }));
 
 jest.mock('@/hooks/useUserProfile', () => ({
@@ -102,7 +102,7 @@ const mockedDateTimePickerAndroid = DateTimePickerAndroid as jest.Mocked<
 >;
 const mockedUseFamily = useFamily as jest.Mock;
 const mockedUseFamilyMembers = useFamilyMembers as jest.Mock;
-const mockedUseMemories = useMemories as jest.Mock;
+const mockedUseMemoryMutations = useMemoryMutations as jest.Mock;
 const mockedUseUserProfile = useUserProfile as jest.Mock;
 const mockedUsePendingMemoryUploads = usePendingMemoryUploads as jest.Mock;
 const mockedUseIncomingMemoryShare = useIncomingMemoryShare as jest.Mock;
@@ -193,7 +193,7 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
       justLostAccess: false,
     });
     mockedUseFamilyMembers.mockReturnValue({ members: [] });
-    mockedUseMemories.mockReturnValue({ createMemory, isCreating: false });
+    mockedUseMemoryMutations.mockReturnValue({ createMemory, isCreating: false });
     mockedUseUserProfile.mockReturnValue({ updateProfile });
     mockedUsePendingMemoryUploads.mockReturnValue({ enqueue, retry: jest.fn(), discard: jest.fn(), uploads: [] });
     mockedUseIncomingMemoryShare.mockReturnValue(false);

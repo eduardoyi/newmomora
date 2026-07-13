@@ -4,6 +4,7 @@ import {
   deleteMemory,
   fetchMemories,
   fetchMemoriesInDateRange,
+  fetchMemoryById,
   fetchOldestMemoryDate,
   regenerateMemoryIllustration,
   retryMemoryIllustration,
@@ -468,6 +469,74 @@ describe('memories service integration', () => {
     expect(error).toBeNull();
     expect(data?.[0]?.taggedMembers).toHaveLength(1);
     expect(data?.[0]?.taggedMembers[0]?.name).toBe('Emma');
+  });
+
+  it('fetchMemoryById enriches a single memory with tags and media', async () => {
+    const memoriesBuilder = createQueryBuilder({
+      data: {
+        id: 'memory-1',
+        user_id: 'user-1',
+        content: 'Hello',
+        memory_date: '2026-05-24',
+        memory_type: 'media',
+        emotion: null,
+        illustration_key: null,
+        illustration_status: 'none',
+        illustration_prompt: null,
+        media_key: 'user-1/memories/memory-1/media.jpg',
+        media_content_type: 'image/jpeg',
+        created_at: '2026-05-24T00:00:00Z',
+        updated_at: '2026-05-24T00:00:00Z',
+      },
+      error: null,
+    });
+    const tagsBuilder = createQueryBuilder({
+      data: [
+        {
+          memory_id: 'memory-1',
+          family_members: { id: 'member-1', name: 'Emma' },
+        },
+      ],
+      error: null,
+    });
+    const mediaBuilder = createQueryBuilder({
+      data: [
+        {
+          id: 'asset-1',
+          memory_id: 'memory-1',
+          object_key: 'user-1/memories/memory-1/media.jpg',
+          content_type: 'image/jpeg',
+          duration_ms: null,
+          position: 0,
+          created_at: '2026-05-24T00:00:00Z',
+          updated_at: '2026-05-24T00:00:00Z',
+        },
+      ],
+      error: null,
+    });
+
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        return memoriesBuilder;
+      }
+
+      if (table === 'memory_family_members') {
+        return tagsBuilder;
+      }
+
+      if (table === 'memory_media') {
+        return mediaBuilder;
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const { data, error } = await fetchMemoryById('memory-1');
+
+    expect(error).toBeNull();
+    expect(data?.id).toBe('memory-1');
+    expect(data?.taggedMembers[0]?.name).toBe('Emma');
+    expect(data?.mediaAssets[0]?.object_key).toBe('user-1/memories/memory-1/media.jpg');
   });
 
   it('fetchMemories batches tag and media enrichment for large timelines', async () => {

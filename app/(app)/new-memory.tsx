@@ -25,7 +25,7 @@ import { colors, fonts, spacing } from '@/constants/theme';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
-import { useMemories } from '@/hooks/useMemories';
+import { useMemoryMutations } from '@/hooks/useMemories';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
 import { useSuggestedMemoryDate } from '@/hooks/use-suggested-memory-date';
@@ -59,7 +59,7 @@ const TYPE_CONFIGS = {
 export default function NewMemoryScreen() {
   const { role } = useFamily();
   const { members } = useFamilyMembers();
-  const { createMemory, isCreating } = useMemories();
+  const { createMemory, isCreating } = useMemoryMutations();
   const { enqueue: enqueuePendingMemoryUpload } = usePendingMemoryUploads();
   const { updateProfile } = useUserProfile();
 

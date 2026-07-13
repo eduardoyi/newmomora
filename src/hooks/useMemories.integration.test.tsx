@@ -2,14 +2,17 @@ import { renderHook, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
-import { useMemories } from '@/hooks/useMemories';
+import { useMemories, useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { memoriesQueryKey } from '@/hooks/queryKeys';
 import {
   createMemory,
   fetchMemories,
+  fetchMemoryById,
   runMediaPhotoEmotionAnalysis,
   updateMemory,
+  type MemoryWithTags,
 } from '@/services/memories';
 import { fetchLinkPreviews, notifyFamilyActivity } from '@/services/ai';
 
@@ -56,18 +59,25 @@ const mockedNotifyFamilyActivity = notifyFamilyActivity as jest.MockedFunction<
   typeof notifyFamilyActivity
 >;
 const mockedFetchLinkPreviews = fetchLinkPreviews as jest.MockedFunction<typeof fetchLinkPreviews>;
+const mockedFetchMemoryById = fetchMemoryById as jest.MockedFunction<typeof fetchMemoryById>;
 
-function createWrapper() {
-  const queryClient = new QueryClient({
+function createQueryClient() {
+  return new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
+}
 
+function createWrapperWithClient(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   };
+}
+
+function createWrapper() {
+  return createWrapperWithClient(createQueryClient());
 }
 
 describe('useMemories integration', () => {
@@ -375,6 +385,96 @@ describe('useMemories integration', () => {
           content: 'Edited https://example.com',
         }),
       ).resolves.toMatchObject({ id: 'memory-link-5' });
+    });
+  });
+
+  describe('useMemory detail seeding from the timeline cache', () => {
+    function buildCachedMemory(overrides: Partial<MemoryWithTags> = {}): MemoryWithTags {
+      return {
+        id: 'memory-cached-1',
+        user_id: 'user-1',
+        family_id: 'family-1',
+        content: 'Cached memory',
+        memory_date: '2026-05-24',
+        memory_type: 'text_only',
+        emotion: 'joy',
+        illustration_key: null,
+        illustration_status: 'none',
+        illustration_prompt: null,
+        media_key: null,
+        media_content_type: null,
+        created_at: '2026-05-24T00:00:00Z',
+        updated_at: '2026-05-24T00:00:00Z',
+        taggedMembers: [],
+        mediaAssets: [],
+        ...overrides,
+      } as MemoryWithTags;
+    }
+
+    it('shows the cached timeline memory immediately while the detail fetch is in flight', () => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData([...memoriesQueryKey('family-1'), ''], [buildCachedMemory()]);
+      mockedFetchMemoryById.mockReturnValue(new Promise(() => {}));
+
+      const { result } = renderHook(() => useMemory('memory-cached-1'), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      expect(result.current.data?.id).toBe('memory-cached-1');
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.isPlaceholderData).toBe(true);
+    });
+
+    it('replaces the cached copy with fresh data once the detail fetch resolves', async () => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData(
+        [...memoriesQueryKey('family-1'), ''],
+        [buildCachedMemory({ content: 'Cached copy' })],
+      );
+      mockedFetchMemoryById.mockResolvedValue({
+        data: buildCachedMemory({ content: 'Fresh copy' }),
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemory('memory-cached-1'), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      expect(result.current.data?.content).toBe('Cached copy');
+
+      await waitFor(() => {
+        expect(result.current.data?.content).toBe('Fresh copy');
+      });
+      expect(result.current.isPlaceholderData).toBe(false);
+    });
+
+    it("does not seed the detail view from another family's cache", () => {
+      const queryClient = createQueryClient();
+      queryClient.setQueryData([...memoriesQueryKey('family-2'), ''], [buildCachedMemory()]);
+      mockedFetchMemoryById.mockReturnValue(new Promise(() => {}));
+
+      const { result } = renderHook(() => useMemory('memory-cached-1'), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      expect(result.current.data).toBeUndefined();
+      expect(result.current.isLoading).toBe(true);
+    });
+  });
+
+  describe('useMemoryMutations', () => {
+    it('does not subscribe to or fetch the timeline list', async () => {
+      const { result } = renderHook(() => useMemoryMutations(), { wrapper: createWrapper() });
+
+      expect(result.current.createMemory).toBeDefined();
+      expect(result.current.deleteMemory).toBeDefined();
+
+      // Give any stray query subscriptions a tick to fire before asserting.
+      await waitFor(() => {
+        expect(result.current.isCreating).toBe(false);
+      });
+
+      expect(mockedFetchMemories).not.toHaveBeenCalled();
     });
   });
 });
