@@ -19,6 +19,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { AppProviders } from '@/components/app-providers';
+import { IncomingShareRouter } from '@/components/incoming-share-router';
 
 export { ErrorBoundary } from 'expo-router';
 
@@ -64,6 +65,7 @@ export default function RootLayout() {
           <Stack.Screen name="(auth)" />
           <Stack.Screen name="(app)" />
         </Stack>
+        <IncomingShareRouter />
       </AppProviders>
     </GestureHandlerRootView>
   );

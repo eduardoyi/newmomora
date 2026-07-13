@@ -7,6 +7,7 @@ tags:
 - runFlow: ../auth/login.yaml
 - addMedia:
     - ../../assets/profile-fixture.jpg
+- stopApp
 - launchApp:
     appId: com.google.android.apps.photos
 - tapOn:

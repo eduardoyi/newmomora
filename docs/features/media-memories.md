@@ -151,6 +151,7 @@ Mobile upload flow uses `upload-media` so the device only talks to Supabase; `ge
 | Components | `src/components/memory-media-preview.tsx` | New — inline form preview with remove button |
 | Components | `src/components/full-screen-media-viewer.tsx` | Shared full-screen image/video viewer; resolves private R2 keys, pages mixed carousels, and controls active video playback |
 | Native entry | `app/+native-intent.ts`, `app.json` | Registers Momora for image/video shares and routes incoming share intents to the composer |
+| Root routing | `src/components/incoming-share-router.tsx`, `app/_layout.tsx` | Cold-start fallback: after auth/family routing settles, detects a persisted native payload and opens the composer if the initial deep link was lost |
 | Hook | `src/hooks/use-incoming-memory-share.ts` | Resolves native payloads, reads video duration, validates limits, and hands attachments to the composer |
 
 ### How to invoke from another feature
@@ -196,6 +197,11 @@ To create a `media` memory programmatically:
 - Incoming shares use Expo's experimental receive-sharing API. On iOS, Expo's
   share extension opens the main Momora target; this should be smoke-tested on
   each supported iOS release before shipping.
+- **Cold-start routing has two paths:** `app/+native-intent.ts` handles the
+  native `momora://expo-sharing` URL directly. If that initial URL is lost
+  while Expo Router boots, `IncomingShareRouter` waits for `/` to settle into
+  an authenticated family route, checks the still-persisted payload, and then
+  opens the composer. It never clears payloads; only the composer does that.
 - **Illustration pipeline** — `generate-illustration` is not used for `media`. Photo emotion uses `analyze-emotion` only; `illustration_status` stays `'none'`.
 - **Privacy** — user-uploaded photos (and optional captions) are sent to OpenAI for emotion classification, same trust boundary as portrait generation.
 - **Capture-date prefill is create-only and fail-open** — `includeCaptureDate`/EXIF is requested only by `app/(app)/new-memory.tsx`; the edit composer, incoming-share attachments, camera captures, and web picks never carry a capture date, so they never move the date on their own. Missing, stripped, or implausible EXIF (wrong types, impossible calendar dates, dates further than one day in the future) is always a silent no-op — never an error that blocks attaching or saving. Only the derived `YYYY-MM-DD` scalar ever enters React state, an attachment, a log line, or a request/queue payload; the raw EXIF object (which can include GPS/device fields) is discarded immediately after extraction at the picker boundary.
@@ -244,6 +250,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/services/memories.integration.test.ts` | `media` memory create (mock R2 upload + mock Supabase insert), edit (replace media), delete (R2 + DB) |
 | `src/hooks/useMemories.integration.test.tsx` | Photo create/update triggers emotion analysis; video skips |
 | `src/hooks/use-incoming-memory-share.integration.test.tsx` | Native resolved payload → validated composer attachment → intent cleared |
+| `src/components/incoming-share-router.integration.test.tsx` | Cold-start persisted payload fallback, root-route race avoidance, viewer role gate, foreground recheck |
 | `src/utils/media-emotion-polling.test.ts` | Poll window for photo media without emotion |
 | `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, close action |
 | `src/components/memory-media-carousel.test.tsx` | Active-page-only video mounting, bounded video buffers, stable image cache keys, signed-URL retry |
@@ -258,7 +265,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 |------|----------|
 | `.maestro/flows/memories/create-media-memory.yaml` | Pick photo → save → Timeline → detail → full-screen viewer → close |
 | `.maestro/flows/memories/create-video-memory.yaml` | Happy path: pick video → save → open detail → video plays |
-| `.maestro/flows/memories/share-gallery-media.android.yaml` | Android gallery share sheet → Momora composer opens with attachment |
+| `.maestro/flows/memories/share-gallery-media.android.yaml` | Stop Momora, then Android gallery share sheet → cold-launched composer opens with attachment |
 | `.maestro/flows/memories/prefill-date-from-photo.yaml` | Native-picker smoke test: seed gallery with a known-EXIF JPEG fixture → attach → assert date + "From photo" hint (locale-agnostic year substring) → override date → hint clears → save succeeds. Native-only; not deterministic across emulators/OS versions, so `src/screen-tests/new-memory.integration.test.tsx` remains the CI regression — run this flow manually on iOS and Android development builds before release. |
 
 ### Edge Function tests (Deno)
@@ -306,5 +313,6 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 | 2026-07-12 | Single-asset media now uses its exact natural aspect ratio; multi-asset carousels retain the `3:4`-`16:9` clamp |
 | 2026-07-12 | Deferred posting: Save closes the composer instantly; a pending-uploads queue (`use-pending-memory-uploads`) posts in the background with progress cards on Timeline/Calendar and Retry/Discard on failure |
 | 2026-07-12 | Added iOS/Android gallery share target; incoming photos/videos now open pre-attached in the memory composer |
+| 2026-07-13 | Added a root persisted-payload fallback so cold launches still reach the composer when Expo Router misses the initial share URL |
 | 2026-05-26 | Photo media: async `analyze-emotion` vision; video emotion backlog |
 | 2026-05-25 | Initial planned spec — `media` memory type (photo + video), emergent UX, phased implementation |
