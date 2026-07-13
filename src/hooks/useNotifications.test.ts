@@ -364,11 +364,15 @@ describe('useNotificationsRegistration requestRegistration', () => {
   it('saves the expo push token on the happy path', async () => {
     const { requestRegistration } = renderRegistration();
 
-    await expect(requestRegistration()).resolves.toEqual({ granted: true, canAskAgain: true });
+    await expect(requestRegistration()).resolves.toEqual({
+      granted: true,
+      canAskAgain: true,
+      isRegistered: true,
+    });
     expect(updateProfile).toHaveBeenCalledWith({ expoPushToken: 'ExponentPushToken[abc]' });
   });
 
-  it('still reports granted when the token fetch throws (e.g. missing Firebase config), warning instead of rejecting', async () => {
+  it('reports an unregistered result when the token fetch throws (e.g. missing Firebase config)', async () => {
     mockedGetExpoPushToken.mockRejectedValue(
       new Error('Default FirebaseApp is not initialized in this process com.momora.app'),
     );
@@ -376,7 +380,11 @@ describe('useNotificationsRegistration requestRegistration', () => {
 
     const { requestRegistration } = renderRegistration();
 
-    await expect(requestRegistration()).resolves.toEqual({ granted: true, canAskAgain: true });
+    await expect(requestRegistration()).resolves.toEqual({
+      granted: true,
+      canAskAgain: true,
+      isRegistered: false,
+    });
     expect(updateProfile).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Default FirebaseApp is not initialized'),
@@ -385,13 +393,17 @@ describe('useNotificationsRegistration requestRegistration', () => {
     warnSpy.mockRestore();
   });
 
-  it('reports granted when saving the token to the profile fails', async () => {
+  it('reports an unregistered result when saving the token to the profile fails', async () => {
     updateProfile.mockRejectedValueOnce(new Error('network down'));
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(jest.fn());
 
     const { requestRegistration } = renderRegistration();
 
-    await expect(requestRegistration()).resolves.toEqual({ granted: true, canAskAgain: true });
+    await expect(requestRegistration()).resolves.toEqual({
+      granted: true,
+      canAskAgain: true,
+      isRegistered: false,
+    });
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('network down'));
 
     warnSpy.mockRestore();
@@ -403,7 +415,11 @@ describe('useNotificationsRegistration requestRegistration', () => {
 
     const { requestRegistration } = renderRegistration();
 
-    await expect(requestRegistration()).resolves.toEqual({ granted: false, canAskAgain: true });
+    await expect(requestRegistration()).resolves.toEqual({
+      granted: false,
+      canAskAgain: true,
+      isRegistered: false,
+    });
     expect(updateProfile).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('permissions unavailable'));
 
@@ -416,7 +432,11 @@ describe('useNotificationsRegistration requestRegistration', () => {
 
     const { requestRegistration } = renderRegistration();
 
-    await expect(requestRegistration()).resolves.toEqual({ granted: false, canAskAgain: false });
+    await expect(requestRegistration()).resolves.toEqual({
+      granted: false,
+      canAskAgain: false,
+      isRegistered: false,
+    });
     expect(mockedGetExpoPushToken).not.toHaveBeenCalled();
     expect(updateProfile).not.toHaveBeenCalled();
   });

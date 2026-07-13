@@ -39,6 +39,12 @@ import { SelectField, type SelectOption } from '@/components/select-field';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 
 const DEFAULT_REMINDER_TIME = '20:00:00';
+const FAQ_URL = 'https://usemomora.com/faq/';
+const PRIVACY_POLICY_URL = 'https://usemomora.com/privacy-policy/';
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
 
 // Backend cron only honors the hour (see parseNotificationHour in
 // schedule-daily-reminders), so the picker is hour-granularity only.
@@ -333,36 +339,118 @@ export default function SettingsScreen() {
     );
   };
 
-  // Toggling ON should prompt for permission right away (rather than
-  // waiting on the mount-time effect, which only fires once and won't
-  // re-prompt after a toggle flip) and surface a way to recover from a
-  // permanent denial. Toggling OFF just updates the profile.
-  const registerIfTurningOn = async (value: boolean) => {
-    if (!value) {
-      return;
-    }
+  const showMutationError = (title: string, error: unknown, fallback: string) => {
+    Alert.alert(title, getErrorMessage(error, fallback));
+  };
+
+  // Do not save an enabled preference until the device has granted permission
+  // and its Expo token has been stored. Otherwise the UI says alerts are on
+  // while the server has no way to deliver them.
+  const ensureNotificationsAreRegistered = async (): Promise<boolean> => {
     const result = await requestRegistration();
-    if (result && !result.granted && !result.canAskAgain) {
-      promptOpenSystemSettings();
+
+    if (!result) {
+      Alert.alert(
+        'Notifications unavailable',
+        'Notifications are not available in this build. Update Momora and try again.',
+      );
+      return false;
+    }
+
+    if (!result.granted) {
+      if (!result.canAskAgain) {
+        promptOpenSystemSettings();
+      } else {
+        Alert.alert('Notifications are off', 'Allow notifications when prompted, then try again.');
+      }
+      return false;
+    }
+
+    if (!result.isRegistered) {
+      Alert.alert(
+        'Could not enable notifications',
+        'Your device could not be registered for notifications. Please try again.',
+      );
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleDisplayNameChange = async (name: string) => {
+    try {
+      await updateProfile({ name });
+    } catch (error) {
+      showMutationError('Could not update display name', error, 'Please try again.');
     }
   };
 
   const handleToggleReminders = async (value: boolean) => {
-    await updateProfile({
-      enableDailyReminder: value,
-      timezone: getDeviceTimezone(),
-      notificationTime: profile?.notification_time ?? DEFAULT_REMINDER_TIME,
-    });
-    await registerIfTurningOn(value);
+    if (value && !(await ensureNotificationsAreRegistered())) {
+      return;
+    }
+
+    try {
+      await updateProfile({
+        enableDailyReminder: value,
+        timezone: getDeviceTimezone(),
+        notificationTime: profile?.notification_time ?? DEFAULT_REMINDER_TIME,
+      });
+    } catch (error) {
+      showMutationError('Could not update reminders', error, 'Please try again.');
+    }
   };
 
   const handleToggleNewMemoryAlerts = async (value: boolean) => {
-    await updateProfile({ notifyNewMemories: value });
-    await registerIfTurningOn(value);
+    if (value && !(await ensureNotificationsAreRegistered())) {
+      return;
+    }
+
+    try {
+      await updateProfile({ notifyNewMemories: value });
+    } catch (error) {
+      showMutationError('Could not update new memory alerts', error, 'Please try again.');
+    }
   };
 
   const handleReminderTimeChange = async (value: string) => {
-    await updateProfile({ notificationTime: value });
+    try {
+      await updateProfile({ notificationTime: value });
+    } catch (error) {
+      showMutationError('Could not update reminder time', error, 'Please try again.');
+    }
+  };
+
+  const handleCancelAccountDeletion = async () => {
+    try {
+      await cancelAccountDeletion();
+    } catch (error) {
+      showMutationError('Could not cancel account deletion', error, 'Please try again.');
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } catch (error) {
+      showMutationError('Could not sign out', error, 'Please try again.');
+    }
+  };
+
+  const openExternalUrl = async (url: string) => {
+    try {
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Could not open link', 'Please try again.');
+    }
+  };
+
+  const scheduleAccountDeletion = async () => {
+    try {
+      await deleteAccount();
+    } catch (error) {
+      showMutationError('Could not schedule account deletion', error, 'Please try again.');
+    }
   };
 
   const handleDeleteAccount = () => {
@@ -374,7 +462,7 @@ export default function SettingsScreen() {
         {
           text: 'Schedule deletion',
           style: 'destructive',
-          onPress: () => void deleteAccount(),
+          onPress: () => void scheduleAccountDeletion(),
         },
       ],
     );
@@ -405,9 +493,6 @@ export default function SettingsScreen() {
               <Text style={styles.identityName}>{profile?.name ?? 'You'}</Text>
               <Text style={styles.identityEmail}>{user?.email ?? ''}</Text>
             </View>
-            <Pressable style={styles.identityEdit}>
-              <Text style={styles.identityEditIcon}>✎</Text>
-            </Pressable>
           </View>
   
           {/* Display name */}
@@ -415,7 +500,7 @@ export default function SettingsScreen() {
             <AuthField label="Display name">
               <AuthInput
                 autoCapitalize="words"
-                onChangeText={(name) => void updateProfile({ name })}
+                onChangeText={(name) => void handleDisplayNameChange(name)}
                 placeholder="Your name"
                 testID="settings-display-name"
                 value={profile?.name ?? ''}
@@ -469,15 +554,20 @@ export default function SettingsScreen() {
   
             <FamilySection />
   
-            <SettingsBlock title="Privacy">
-              <SettingsRow first label="Private storage" caption="Your moments live in your account only." />
-              <SettingsRow label="Export data" chevron />
-            </SettingsBlock>
-  
             <SettingsBlock title="Help">
-              <SettingsRow first label="How illustrations work" chevron />
-              <SettingsRow label="Send feedback" chevron />
-              <SettingsRow label="Privacy policy" chevron />
+              <SettingsRow
+                first
+                chevron
+                label="FAQ"
+                onPress={() => void openExternalUrl(FAQ_URL)}
+                testID="settings-faq"
+              />
+              <SettingsRow
+                chevron
+                label="Privacy policy"
+                onPress={() => void openExternalUrl(PRIVACY_POLICY_URL)}
+                testID="settings-privacy-policy"
+              />
             </SettingsBlock>
   
             {/* Account deletion banner */}
@@ -488,7 +578,7 @@ export default function SettingsScreen() {
                   Hard delete on {profile.scheduled_hard_delete_at?.slice(0, 10) ?? 'soon'}.
                 </Text>
                 <Pressable
-                  onPress={() => void cancelAccountDeletion()}
+                  onPress={() => void handleCancelAccountDeletion()}
                   disabled={isCancelingDeletion}
                   style={styles.cancelDeletionBtn}
                   testID="settings-cancel-deletion"
@@ -503,7 +593,7 @@ export default function SettingsScreen() {
             {/* Actions */}
             <View style={styles.actions}>
               <Pressable
-                onPress={() => signOut()}
+                onPress={() => void handleSignOut()}
                 style={({ pressed }) => [styles.signOutBtn, pressed && { opacity: 0.8 }]}
                 testID="settings-sign-out-button"
               >
@@ -594,20 +684,6 @@ const styles = StyleSheet.create({
     fontFamily: 'SpaceMono',
     fontSize: 12.5,
     color: colors.ink3,
-  },
-  identityEdit: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  identityEditIcon: {
-    fontSize: 15,
-    color: colors.ink2,
   },
   section: {
     marginHorizontal: spacing.md,

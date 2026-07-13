@@ -31,6 +31,8 @@ export function isNotificationsAvailable(): boolean {
 export interface PushRegistrationResult {
   granted: boolean;
   canAskAgain: boolean;
+  /** True only after the device token was successfully stored on the profile. */
+  isRegistered: boolean;
 }
 
 export function useNotificationsRegistration(enabled: boolean) {
@@ -104,23 +106,23 @@ async function registerForPushNotifications(
     }
 
     if (finalStatus !== 'granted') {
-      return { granted: false, canAskAgain };
+      return { granted: false, canAskAgain, isRegistered: false };
     }
 
-    // Permission is granted from here on -- report granted: true even if the
-    // token fetch/save fails (e.g. missing Firebase config), so the settings
-    // screen doesn't show the misleading "notifications are off" alert.
+    // Permission alone is not enough to receive a push. The caller needs to
+    // know whether the token reached the profile before it enables a notification
+    // preference that the backend could never deliver.
     try {
       const token = await Notifications.getExpoPushTokenAsync();
       await updateProfile({ expoPushToken: token.data });
+      return { granted: true, canAskAgain, isRegistered: true };
     } catch (error) {
       warnRegistrationFailure('token registration', error);
+      return { granted: true, canAskAgain, isRegistered: false };
     }
-
-    return { granted: true, canAskAgain };
   } catch (error) {
     warnRegistrationFailure('permission check', error);
-    return { granted: false, canAskAgain };
+    return { granted: false, canAskAgain, isRegistered: false };
   }
 }
 

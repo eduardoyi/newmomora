@@ -93,14 +93,18 @@ function renderScreen() {
 describe('Settings notifications toggles', () => {
   const updateProfile = jest.fn().mockResolvedValue(undefined);
   const deleteAccount = jest.fn().mockResolvedValue(undefined);
-  const requestRegistration = jest.fn().mockResolvedValue({ granted: true, canAskAgain: true });
+  const signOut = jest.fn().mockResolvedValue(undefined);
+  const requestRegistration = jest
+    .fn()
+    .mockResolvedValue({ granted: true, canAskAgain: true, isRegistered: true });
 
   beforeEach(() => {
     jest.clearAllMocks();
     updateProfile.mockClear();
     deleteAccount.mockClear();
+    signOut.mockClear();
     requestRegistration.mockClear();
-    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true });
+    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true, isRegistered: true });
 
     mockedUseNotificationsRegistration.mockReturnValue({ requestRegistration });
 
@@ -112,7 +116,7 @@ describe('Settings notifications toggles', () => {
       requestSignUpOtp: jest.fn(),
       verifyOtp: jest.fn(),
       signInWithPassword: jest.fn(),
-      signOut: jest.fn(),
+      signOut,
     });
 
     mockedUseFamily.mockReturnValue({
@@ -311,7 +315,7 @@ describe('Settings notifications toggles', () => {
 
   it('shows an alert linking to system settings when notifications are permanently denied', async () => {
     mockProfile({ enable_daily_reminder: false });
-    requestRegistration.mockResolvedValue({ granted: false, canAskAgain: false });
+    requestRegistration.mockResolvedValue({ granted: false, canAskAgain: false, isRegistered: false });
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
     const openSettingsSpy = jest.spyOn(Linking, 'openSettings').mockImplementation(jest.fn());
 
@@ -338,9 +342,56 @@ describe('Settings notifications toggles', () => {
     openSettingsSpy.mockRestore();
   });
 
+  it('does not enable reminders when notification permission is declined', async () => {
+    mockProfile({ enable_daily_reminder: false });
+    requestRegistration.mockResolvedValue({ granted: false, canAskAgain: true, isRegistered: false });
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
+
+    const { getByTestId } = renderScreen();
+    fireEvent(getByTestId('settings-daily-reminder-toggle'), 'valueChange', true);
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('Notifications are off', expect.any(String));
+    });
+    expect(updateProfile).not.toHaveBeenCalled();
+
+    alertSpy.mockRestore();
+  });
+
+  it('does not enable alerts when the device token cannot be registered', async () => {
+    mockProfile({ notify_new_memories: false });
+    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true, isRegistered: false });
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
+
+    const { getByTestId } = renderScreen();
+    fireEvent(getByTestId('settings-new-memory-alerts-toggle'), 'valueChange', true);
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('Could not enable notifications', expect.any(String));
+    });
+    expect(updateProfile).not.toHaveBeenCalled();
+
+    alertSpy.mockRestore();
+  });
+
+  it('shows a failure alert when a reminder preference cannot be saved', async () => {
+    mockProfile({ enable_daily_reminder: true });
+    updateProfile.mockRejectedValueOnce(new Error('network down'));
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
+
+    const { getByTestId } = renderScreen();
+    fireEvent(getByTestId('settings-daily-reminder-toggle'), 'valueChange', false);
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('Could not update reminders', 'network down');
+    });
+
+    alertSpy.mockRestore();
+  });
+
   it('does not show the settings alert when permission is granted', async () => {
     mockProfile({ enable_daily_reminder: false });
-    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true });
+    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true, isRegistered: true });
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
 
     const { getByTestId } = renderScreen();
@@ -380,6 +431,25 @@ describe('Settings notifications toggles', () => {
     });
   });
 
+  it('opens the FAQ and privacy policy in the default browser', async () => {
+    mockProfile();
+    const openUrlSpy = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+
+    const { getByTestId, queryByText } = renderScreen();
+    fireEvent.press(getByTestId('settings-faq'));
+    fireEvent.press(getByTestId('settings-privacy-policy'));
+
+    await waitFor(() => {
+      expect(openUrlSpy).toHaveBeenCalledWith('https://usemomora.com/faq/');
+      expect(openUrlSpy).toHaveBeenCalledWith('https://usemomora.com/privacy-policy/');
+    });
+    expect(queryByText('Send feedback')).toBeNull();
+    expect(queryByText('Export data')).toBeNull();
+    expect(queryByText('How illustrations work')).toBeNull();
+
+    openUrlSpy.mockRestore();
+  });
+
   it('shows a confirmation before scheduling account deletion', () => {
     mockProfile();
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
@@ -410,6 +480,21 @@ describe('Settings notifications toggles', () => {
     fireEvent.press(getByTestId('settings-delete-account'));
 
     expect(deleteAccount).toHaveBeenCalledTimes(1);
+
+    alertSpy.mockRestore();
+  });
+
+  it('shows a failure alert when signing out fails', async () => {
+    mockProfile();
+    signOut.mockRejectedValueOnce(new Error('session unavailable'));
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
+
+    const { getByTestId } = renderScreen();
+    fireEvent.press(getByTestId('settings-sign-out-button'));
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('Could not sign out', 'session unavailable');
+    });
 
     alertSpy.mockRestore();
   });

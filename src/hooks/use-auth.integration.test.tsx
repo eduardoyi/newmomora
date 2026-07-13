@@ -197,4 +197,20 @@ describe('useAuth', () => {
       password: 'password123',
     });
   });
+
+  it('throws when Supabase cannot sign out', async () => {
+    mockedSupabase.auth.signOut.mockResolvedValue({
+      error: { message: 'session unavailable' },
+    } as never);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await expect(result.current.signOut()).rejects.toEqual(
+      expect.objectContaining({ message: 'session unavailable' }),
+    );
+  });
 });
