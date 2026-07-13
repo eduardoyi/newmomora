@@ -3,6 +3,7 @@
 export const EMOTION_PALETTES: Record<string, string> = {
   // Warm / positive
   joy:         'warm golden yellows, soft peach, light sky blue accents',
+  funny:       'bright tangerine, warm coral, sunny pops of turquoise',
   tender:      'soft rose, cream, gentle lavender',
   calm:        'sage green, pale blue, warm sand',
   wonder:      'lilac, dawn pink, soft cyan',
@@ -21,6 +22,7 @@ export const EMOTION_PALETTES: Record<string, string> = {
 export const EMOTION_EXPRESSIONS: Record<string, string> = {
   // Warm / positive
   joy:         'bright genuine smiles, wide eyes, open joyful body language',
+  funny:       'big laughs and giggles, wide comic grins, crinkled eyes, playful exaggerated expressions',
   tender:      'soft warm smiles, gentle affectionate expressions, relaxed calm posture',
   calm:        'peaceful contented faces, soft easy smiles or neutral relaxed expressions',
   wonder:      'wide curious eyes, mouths slightly open in amazement, awe-struck expressions',
@@ -37,7 +39,6 @@ export const EMOTION_EXPRESSIONS: Record<string, string> = {
 // Labels written by earlier classifier vocabularies that still exist on old
 // memory rows; map them into the current emotion set.
 const EMOTION_ALIASES: Record<string, string> = {
-  funny: 'mischief',
   joyful: 'joy',
 };
 
@@ -55,7 +56,7 @@ const IMAGE_STYLE_NEGATIVES =
   'Do not make the image photorealistic, 3D, CGI, or Pixar-like.';
 
 /** Emotions where comedic exaggeration is tonally appropriate. */
-export const COMEDIC_ELIGIBLE_EMOTIONS = new Set(['joy', 'mischief', 'pride']);
+export const COMEDIC_ELIGIBLE_EMOTIONS = new Set(['joy', 'funny', 'mischief', 'pride']);
 
 const PORTRAIT_STYLE_BLOCK = [
   'The output should look like one of the characters from the provided style reference sheet.',

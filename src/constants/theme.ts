@@ -36,6 +36,7 @@ export const colors = {
 export const emotionColors = {
   // Warm / positive
   joy:         { c: '#F5A623', soft: '#FFE7B0', ink: '#8a5b13' },
+  funny:       { c: '#F07E3A', soft: '#FCDCC0', ink: '#8a4416' },
   calm:        { c: '#6BB58A', soft: '#D6EDDE', ink: '#3f6a4c' },
   wonder:      { c: '#4F8FCC', soft: '#CFE1F4', ink: '#3a5b7a' },
   tender:      { c: '#EC7FA1', soft: '#FBD6E1', ink: '#9c4f68' },

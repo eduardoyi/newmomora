@@ -7,6 +7,8 @@ import {
   buildMediaEmotionSystemPrompt,
   buildPortraitPrompt,
   buildSafetySystemPrompt,
+  EMOTION_EXPRESSIONS,
+  EMOTION_PALETTES,
   normalizeEmotion,
 } from './prompts.ts';
 import {
@@ -233,7 +235,7 @@ Deno.test('buildIllustrationPrompt includes comedic exaggeration only for whitel
 });
 
 Deno.test('normalizeEmotion maps legacy classifier labels into the current vocabulary', () => {
-  assertEquals(normalizeEmotion('funny'), 'mischief');
+  assertEquals(normalizeEmotion('funny'), 'funny');
   assertEquals(normalizeEmotion('joyful'), 'joy');
   assertEquals(normalizeEmotion(' Worry '), 'worry');
   assertEquals(normalizeEmotion('unknown-label'), 'unknown-label');
@@ -241,22 +243,29 @@ Deno.test('normalizeEmotion maps legacy classifier labels into the current vocab
   assertEquals(normalizeEmotion('  '), null);
 });
 
-Deno.test('buildIllustrationPrompt treats legacy funny label as mischief for comedic gating', () => {
+Deno.test('buildIllustrationPrompt uses funny as a first-class emotion for comedic gating', () => {
   const prompt = buildIllustrationPrompt({
     safeSceneDescription: 'Two kids grimace at their oatmeal bowls.',
     characterReferences: [
       { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
     ],
-    colorPalette: 'playful violet, soft purple, whimsical lilac pops',
+    colorPalette: 'bright tangerine, warm coral, sunny pops of turquoise',
     memoryDate: '2026-05-27',
     styleDescription: DEFAULT_STYLE_DESCRIPTION,
     emotion: 'funny',
     expressionStyle: 'comedic',
   });
 
-  assertEquals(prompt.includes('mischief.'), true);
-  assertEquals(prompt.includes('sly grins'), true);
+  assertEquals(prompt.includes('funny.'), true);
+  assertEquals(prompt.includes('big laughs and giggles'), true);
   assertEquals(prompt.includes('Playful exaggerated storybook expressions are welcome'), true);
+});
+
+Deno.test('EMOTION_PALETTES and EMOTION_EXPRESSIONS share the same key set', () => {
+  const paletteKeys = Object.keys(EMOTION_PALETTES).sort();
+  const expressionKeys = Object.keys(EMOTION_EXPRESSIONS).sort();
+
+  assertEquals(paletteKeys, expressionKeys);
 });
 
 Deno.test('buildSafetySystemPrompt forbids inventing cheerfulness the memory does not describe', () => {
