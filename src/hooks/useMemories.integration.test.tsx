@@ -10,7 +10,9 @@ import {
   createMemory,
   fetchMemories,
   fetchMemoryById,
+  retryMemoryIllustration,
   runMediaPhotoEmotionAnalysis,
+  runTextOnlyEmotionAnalysis,
   updateMemory,
   type MemoryWithTags,
 } from '@/services/memories';
@@ -60,6 +62,12 @@ const mockedNotifyFamilyActivity = notifyFamilyActivity as jest.MockedFunction<
 >;
 const mockedFetchLinkPreviews = fetchLinkPreviews as jest.MockedFunction<typeof fetchLinkPreviews>;
 const mockedFetchMemoryById = fetchMemoryById as jest.MockedFunction<typeof fetchMemoryById>;
+const mockedRetryMemoryIllustration = retryMemoryIllustration as jest.MockedFunction<
+  typeof retryMemoryIllustration
+>;
+const mockedRunTextOnlyEmotionAnalysis = runTextOnlyEmotionAnalysis as jest.MockedFunction<
+  typeof runTextOnlyEmotionAnalysis
+>;
 
 function createQueryClient() {
   return new QueryClient({
@@ -448,6 +456,36 @@ describe('useMemories integration', () => {
       expect(result.current.isPlaceholderData).toBe(false);
     });
 
+    it('does not fire illustration recovery off stale placeholder data', async () => {
+      const queryClient = createQueryClient();
+      // Cached list copy looks like a stale 'generating' run; the server has
+      // since marked it 'failed'. Recovery must wait for the fresh fetch --
+      // firing off the placeholder would relaunch the pipeline for a failed
+      // illustration behind the manual retry gate.
+      const staleCached = buildCachedMemory({
+        id: 'memory-stale-detail',
+        memory_type: 'text_illustration',
+        illustration_status: 'generating',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+      queryClient.setQueryData([...memoriesQueryKey('family-1'), ''], [staleCached]);
+      mockedFetchMemoryById.mockResolvedValue({
+        data: { ...staleCached, illustration_status: 'failed' } as never,
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemory('memory-stale-detail'), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      expect(result.current.isPlaceholderData).toBe(true);
+
+      await waitFor(() => {
+        expect(result.current.isPlaceholderData).toBe(false);
+      });
+      expect(mockedRetryMemoryIllustration).not.toHaveBeenCalled();
+    });
+
     it("does not seed the detail view from another family's cache", () => {
       const queryClient = createQueryClient();
       queryClient.setQueryData([...memoriesQueryKey('family-2'), ''], [buildCachedMemory()]);
@@ -459,6 +497,64 @@ describe('useMemories integration', () => {
 
       expect(result.current.data).toBeUndefined();
       expect(result.current.isLoading).toBe(true);
+    });
+  });
+
+  describe('backfill flows patch caches instead of invalidating everything', () => {
+    it('backfills a missing emotion by patching the cache, without refetching the timeline', async () => {
+      const migrated = {
+        id: 'memory-backfill-1',
+        family_id: 'family-1',
+        memory_type: 'text_only',
+        content: 'Old migrated memory',
+        emotion: null,
+        illustration_status: 'none',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        taggedMembers: [],
+        mediaAssets: [],
+      };
+      mockedFetchMemories.mockResolvedValue({ data: [migrated as never], error: null });
+      mockedRunTextOnlyEmotionAnalysis.mockResolvedValue('joy');
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.memories[0]?.emotion).toBe('joy');
+      });
+      expect(mockedRunTextOnlyEmotionAnalysis).toHaveBeenCalledTimes(1);
+      expect(mockedFetchMemories).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers a stale illustration by patching its status, without refetching the timeline', async () => {
+      const stale = {
+        id: 'memory-stale-1',
+        family_id: 'family-1',
+        memory_type: 'text_illustration',
+        content: 'Stale generation',
+        emotion: 'joy',
+        illustration_status: 'generating',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        taggedMembers: [],
+        mediaAssets: [],
+      };
+      mockedFetchMemories.mockResolvedValue({ data: [stale as never], error: null });
+      mockedRetryMemoryIllustration.mockResolvedValue({ error: null });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.memories[0]?.illustration_status).toBe('pending');
+      });
+      expect(mockedRetryMemoryIllustration).toHaveBeenCalledWith('memory-stale-1');
+      expect(mockedRetryMemoryIllustration).toHaveBeenCalledTimes(1);
+      expect(mockedFetchMemories).toHaveBeenCalledTimes(1);
+      // The patched row must read as freshly pending, not stale-pending --
+      // otherwise the recovery effect would loop on it.
+      expect(
+        new Date(result.current.memories[0]?.updated_at ?? 0).getTime(),
+      ).toBeGreaterThan(Date.now() - 60_000);
     });
   });
 

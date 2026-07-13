@@ -41,7 +41,11 @@ const TYPE_CONFIGS = {
 export default function EditMemoryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { role } = useFamily();
-  const { data: memory, isLoading } = useMemory(id);
+  // isPlaceholderData: useMemory seeds from the timeline list cache for an
+  // instant detail paint, but the edit form must only initialize from
+  // server-fresh data -- initializing from a stale cached copy and saving
+  // would silently overwrite edits made on another device.
+  const { data: memory, isLoading, isPlaceholderData } = useMemory(id);
   const { members } = useFamilyMembers();
   const { updateMemory, isUpdating } = useMemoryMutations();
 
@@ -88,7 +92,7 @@ export default function EditMemoryScreen() {
     });
 
   useEffect(() => {
-    if (memory && !isInitialized) {
+    if (memory && !isPlaceholderData && !isInitialized) {
       setContent(memory.content ?? '');
       setMemoryDate(memory.memory_date);
       setAttachedMedia(
@@ -105,7 +109,7 @@ export default function EditMemoryScreen() {
       initializeTags(memory.taggedMembers.map((m) => m.id));
       setIsInitialized(true);
     }
-  }, [memory, mediaUrls, mediaUrl, isInitialized, initializeTags]);
+  }, [memory, isPlaceholderData, mediaUrls, mediaUrl, isInitialized, initializeTags]);
 
   useEffect(() => {
     if (!isInitialized) {
@@ -205,7 +209,7 @@ export default function EditMemoryScreen() {
     }
   };
 
-  if (isLoading || !isInitialized) {
+  if (isLoading || isPlaceholderData || !isInitialized) {
     return (
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
         <View style={styles.centered}>

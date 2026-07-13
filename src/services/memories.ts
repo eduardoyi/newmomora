@@ -502,12 +502,17 @@ export async function runMemoryIllustrationPipeline(
   }
 }
 
-export async function runMediaPhotoEmotionAnalysis(memoryId: string): Promise<void> {
-  await analyzeEmotionWithRetry(memoryId);
+// Both analysis runners resolve with the detected emotion (null when analysis
+// failed) so callers can patch the affected memory in cache directly instead
+// of invalidating and refetching entire memory lists.
+export async function runMediaPhotoEmotionAnalysis(memoryId: string): Promise<string | null> {
+  const { data } = await analyzeEmotionWithRetry(memoryId);
+  return data?.emotion ?? null;
 }
 
-export async function runTextOnlyEmotionAnalysis(memoryId: string): Promise<void> {
-  await analyzeEmotionWithRetry(memoryId);
+export async function runTextOnlyEmotionAnalysis(memoryId: string): Promise<string | null> {
+  const { data } = await analyzeEmotionWithRetry(memoryId);
+  return data?.emotion ?? null;
 }
 
 export async function createMemory(input: CreateMemoryInput): Promise<{

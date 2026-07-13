@@ -110,22 +110,54 @@ function fireLinkPreviewFetch(
     .catch(() => {});
 }
 
-function setMemoryIllustrationPendingInCache(
+function patchMemoryInCaches(
   queryClient: ReturnType<typeof useQueryClient>,
   familyId: string | null | undefined,
   memoryId: string,
+  patch: Partial<MemoryWithTags>,
 ): void {
   const patchMemory = (memory: MemoryWithTags): MemoryWithTags =>
-    memory.id === memoryId ? { ...memory, illustration_status: 'pending' } : memory;
+    memory.id === memoryId ? { ...memory, ...patch } : memory;
 
   queryClient.setQueriesData<MemoryWithTags[]>({
     predicate: (query) => isMemoriesListQueryKey(query.queryKey),
+  }, (current) => (Array.isArray(current) ? current.map(patchMemory) : current));
+
+  // Calendar range caches hold the same memory rows; the base key also
+  // matches the 'oldest-date' entry (a string), which the Array.isArray
+  // guard leaves untouched.
+  queryClient.setQueriesData<MemoryWithTags[]>({
+    queryKey: [calendarMemoriesQueryKeyBase],
   }, (current) => (Array.isArray(current) ? current.map(patchMemory) : current));
 
   queryClient.setQueryData<MemoryWithTags | null>(
     memoryDetailQueryKey(familyId, memoryId),
     (current) => (current ? patchMemory(current) : current),
   );
+}
+
+function setMemoryIllustrationPendingInCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  familyId: string | null | undefined,
+  memoryId: string,
+): void {
+  // Bump updated_at alongside the status (mirroring the server-side trigger)
+  // so needsIllustrationRecovery sees a fresh 'pending' -- without it the
+  // recovery effect would treat the patched row as stale-pending and retry
+  // in a loop.
+  patchMemoryInCaches(queryClient, familyId, memoryId, {
+    illustration_status: 'pending',
+    updated_at: new Date().toISOString(),
+  });
+}
+
+function setMemoryEmotionInCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  familyId: string | null | undefined,
+  memoryId: string,
+  emotion: string,
+): void {
+  patchMemoryInCaches(queryClient, familyId, memoryId, { emotion });
 }
 
 export interface CreateMemoryMutationInput {
@@ -250,9 +282,13 @@ export function useMemoryMutations() {
       );
 
       if ((captionChanged || mediaChanged) && isPhotoMedia) {
-        void runMediaPhotoEmotionAnalysis(memory.id).finally(() => {
-          invalidateMemoryQueries(queryClient);
-        });
+        void runMediaPhotoEmotionAnalysis(memory.id)
+          .then((emotion) => {
+            if (emotion) {
+              setMemoryEmotionInCache(queryClient, familyId, memory.id, emotion);
+            }
+          })
+          .catch(() => {});
       }
 
       return memory;
@@ -395,7 +431,19 @@ export function useMemories(searchQuery = '') {
 
       recoveringIllustrationsRef.current.add(memory.id);
 
+      // Patch just this memory to 'pending' instead of invalidating every
+      // memory query -- the list's 3s illustration polling picks up the real
+      // status from there. With hundreds of memories, per-recovery full
+      // invalidations used to trigger repeated whole-timeline refetches.
       void retryMemoryIllustration(memory.id)
+        .then(({ error }) => {
+          if (error) {
+            console.warn('Failed to recover stale illustration', memory.id, error.message);
+            return;
+          }
+
+          setMemoryIllustrationPendingInCache(queryClient, familyId, memory.id);
+        })
         .catch((error) => {
           console.warn(
             'Failed to recover stale illustration',
@@ -405,10 +453,9 @@ export function useMemories(searchQuery = '') {
         })
         .finally(() => {
           recoveringIllustrationsRef.current.delete(memory.id);
-          invalidateMemoryQueries(queryClient);
         });
     }
-  }, [query.data, queryClient, canRecoverIllustrations]);
+  }, [query.data, queryClient, familyId, canRecoverIllustrations]);
 
   // Backfill emotion tags for memories that were never analyzed or whose
   // analysis previously failed (e.g. older text_only entries). One attempt per
@@ -440,19 +487,25 @@ export function useMemories(searchQuery = '') {
           ? runMediaPhotoEmotionAnalysis
           : runTextOnlyEmotionAnalysis;
 
+      // Patch the resolved emotion straight into the caches rather than
+      // invalidating every memory query per analyzed memory -- with a large
+      // backfill (e.g. freshly migrated libraries) those invalidations
+      // caused a full-timeline refetch per memory.
       void analyze(memory.id)
+        .then((emotion) => {
+          if (emotion) {
+            setMemoryEmotionInCache(queryClient, familyId, memory.id, emotion);
+          }
+        })
         .catch((error) => {
           console.warn(
             'Failed to backfill emotion',
             memory.id,
             error instanceof Error ? error.message : 'unknown',
           );
-        })
-        .finally(() => {
-          invalidateMemoryQueries(queryClient);
         });
     }
-  }, [query.data, queryClient]);
+  }, [query.data, queryClient, familyId]);
 
   const mutations = useMemoryMutations();
 
@@ -510,6 +563,15 @@ export function useMemory(memoryId: string | undefined) {
   });
 
   useEffect(() => {
+    // Never act on the list-cache placeholder: its illustration_status can be
+    // minutes stale (e.g. cache says 'generating' when the server already
+    // marked it 'failed'), and firing recovery off it would relaunch the
+    // OpenAI pipeline behind the manual retry gate. Recovery re-evaluates
+    // once the real fetch resolves.
+    if (query.isPlaceholderData) {
+      return;
+    }
+
     const memory = query.data;
 
     if (
@@ -523,7 +585,18 @@ export function useMemory(memoryId: string | undefined) {
 
     recoveringIllustrationRef.current = true;
 
+    // Patch just this memory to 'pending' (with a fresh updated_at) instead
+    // of invalidating every memory query; the detail query's own 3s
+    // illustration polling takes over from there.
     void retryMemoryIllustration(memory.id)
+      .then(({ error }) => {
+        if (error) {
+          console.warn('Failed to recover stale illustration', memory.id, error.message);
+          return;
+        }
+
+        setMemoryIllustrationPendingInCache(queryClient, familyId, memory.id);
+      })
       .catch((error) => {
         console.warn(
           'Failed to recover stale illustration',
@@ -533,11 +606,18 @@ export function useMemory(memoryId: string | undefined) {
       })
       .finally(() => {
         recoveringIllustrationRef.current = false;
-        invalidateMemoryQueries(queryClient);
       });
-  }, [query.data, queryClient, canRecoverIllustrations]);
+  }, [query.data, query.isPlaceholderData, queryClient, familyId, canRecoverIllustrations]);
 
   useEffect(() => {
+    // Ignore the placeholder entirely: recording its (possibly stale)
+    // 'pending'/'generating' status would make the fresh fetch's 'ready'
+    // look like a live transition and trigger a redundant refetch plus
+    // app-wide media-url and calendar invalidations on plain navigation.
+    if (query.isPlaceholderData) {
+      return;
+    }
+
     const memory = query.data;
     const previousStatus = previousIllustrationStatusRef.current;
     previousIllustrationStatusRef.current = memory?.illustration_status ?? null;
@@ -553,7 +633,7 @@ export function useMemory(memoryId: string | undefined) {
     void query.refetch();
     queryClient.invalidateQueries({ queryKey: ['media-urls'] });
     queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
-  }, [query.data, query.refetch, queryClient]);
+  }, [query.data, query.isPlaceholderData, query.refetch, queryClient]);
 
   return query;
 }
