@@ -364,6 +364,19 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Cron-triggered functions authenticate with the x-cron-secret header
+# (validateCronSecret) instead of a user JWT -- the platform's JWT check
+# must be off or pg_net requests die at the gateway with
+# UNAUTHORIZED_NO_AUTH_HEADER before the function ever runs (TECH_SPEC §4).
+[functions.schedule-daily-reminders]
+verify_jwt = false
+
+[functions.send-daily-reminder]
+verify_jwt = false
+
+[functions.hard-delete-expired-accounts]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
