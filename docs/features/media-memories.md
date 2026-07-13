@@ -45,7 +45,7 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
 - **Deferred posting (Instagram-style):** tapping Save closes the composer immediately. Compression + upload continue in a background queue; the Timeline and Calendar show a pending card ("Posting memory… — Uploading n of m") above the feed until the memory lands. Failures flip the card to Retry/Discard. The queue is in-memory only — force-quitting mid-upload loses the pending post (persistence is backlog).
 - On the Timeline and detail screen, `media` memories render an Instagram-style carousel with subtle dots and a small pagination counter when more than one asset exists.
 - Media assets persist their natural display `aspect_ratio` before the memory row appears. Videos derive it from a transformed frame after compression because encoded track dimensions can precede phone rotation metadata; images use their re-encoded output dimensions. Timeline cards therefore start at their final height with no async resize and no fixed-ratio gutters. Multi-asset carousels preserve the first asset's exact ratio for the shared frame; every later asset uses `contain` inside it.
-- Timeline videos show a cached first-frame thumbnail and open in the detail viewer for playback. This avoids mounting native players in virtualized feed rows; detail playback keeps its thumbnail over the player until the first frame renders, avoiding a gray-player flash.
+- Timeline videos autoplay only while their card is visible, show a cached first-frame thumbnail whenever playback is inactive, and keep that thumbnail over the player until its first frame renders, avoiding a gray-player flash. Timeline players defer release until the frame after their virtualized row unmounts so Android does not recycle a surface with a released player.
 - **Photo** memories: after save, async emotion analysis may replace the Photo badge with an emotion chip (same labels as text memories). Failures do not block save.
 - **Video** memories: no emotion chip in MVP (Photo/Video badge only).
 - On the memory detail screen, photos display full-width via presigned URL; videos play inline via `expo-video`, loop with sound, and hide native controls.
@@ -309,7 +309,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
-| 2026-07-13 | Timeline video cards now use their cached first frame and defer playback to detail/full-screen, avoiding Android native-player release races while virtualized rows scroll off-screen. |
+| 2026-07-13 | Timeline video players now release one frame after their virtualized row unmounts, preventing Android native-player release races while preserving autoplay. |
 | 2026-07-13 | Backfilled legacy image aspect ratios and made multi-asset carousels preserve the first asset's exact ratio while later items fit inside the fixed frame |
 | 2026-07-13 | Persisted natural media aspect ratios (including rotation-corrected post-compression video ratios), added a legacy-video backfill, and made timeline rows consume the stored value immediately; cached first-frame thumbnails prevent gray flashes around playback activation |
 | 2026-07-12 | Fixed rotated portrait videos reporting landscape track dimensions and leaving side gutters in timeline/detail cards |

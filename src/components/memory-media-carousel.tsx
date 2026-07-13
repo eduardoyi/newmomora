@@ -1,7 +1,6 @@
-import { useEventListener } from 'expo';
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { createVideoPlayer, type VideoPlayer, VideoView } from 'expo-video';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -31,12 +30,42 @@ interface MemoryMediaCarouselProps {
   assets: MemoryMediaAsset[];
   cacheVersion?: string | null;
   isActive?: boolean;
-  playVideos?: boolean;
   stableLayout?: boolean;
   videoTapToToggle?: boolean;
   mutedVideos?: boolean;
   onPress?: (activeIndex: number) => void;
   style?: StyleProp<ViewStyle>;
+}
+
+function useDeferredReleaseVideoPlayer(url: string, isMuted: boolean): VideoPlayer | null {
+  const [player, setPlayer] = useState<VideoPlayer | null>(null);
+
+  useEffect(() => {
+    const nextPlayer = createVideoPlayer({ uri: url, useCaching: true });
+    nextPlayer.bufferOptions = {
+      preferredForwardBufferDuration: 8,
+      maxBufferBytes: 16 * 1024 * 1024,
+    };
+    nextPlayer.loop = true;
+    nextPlayer.muted = isMuted;
+    setPlayer(nextPlayer);
+
+    return () => {
+      nextPlayer.pause();
+      // FlatList can detach/recycle the native surface a frame after React
+      // unmounts its row. Releasing immediately lets that recycled surface be
+      // assigned a dead shared object on Android.
+      requestAnimationFrame(() => nextPlayer.release());
+    };
+  }, [url]);
+
+  useEffect(() => {
+    if (player) {
+      player.muted = isMuted;
+    }
+  }, [isMuted, player]);
+
+  return player;
 }
 
 function VideoAsset({
@@ -56,36 +85,39 @@ function VideoAsset({
   onNaturalRatio: (ratio: number) => void;
   url: string;
 }) {
-  // useCaching keeps downloaded bytes on disk, so replays (timeline card →
-  // detail screen, revisits) don't re-stream from R2 while the presigned URL
-  // is still cached by useMediaUrls.
-  const player = useVideoPlayer({ uri: url, useCaching: true }, (p) => {
-    p.bufferOptions = {
-      preferredForwardBufferDuration: 8,
-      maxBufferBytes: 16 * 1024 * 1024,
-    };
-    p.loop = true;
-    p.muted = isMuted;
-  });
-
-  useEventListener(player, 'sourceLoad', ({ availableVideoTracks }) => {
-    if (hasPreferredNaturalRatio) {
-      return;
-    }
-    const size = availableVideoTracks[0]?.size;
-    const ratio = aspectRatioFromDimensions(size?.width, size?.height);
-    if (ratio) {
-      onNaturalRatio(ratio);
-    }
-  });
+  const player = useDeferredReleaseVideoPlayer(url, isMuted);
 
   useEffect(() => {
+    if (!player || hasPreferredNaturalRatio) {
+      return;
+    }
+
+    const subscription = player.addListener('sourceLoad', ({ availableVideoTracks }) => {
+      const size = availableVideoTracks[0]?.size;
+      const ratio = aspectRatioFromDimensions(size?.width, size?.height);
+      if (ratio) {
+        onNaturalRatio(ratio);
+      }
+    });
+
+    return () => subscription.remove();
+  }, [hasPreferredNaturalRatio, onNaturalRatio, player]);
+
+  useEffect(() => {
+    if (!player) {
+      return;
+    }
+
     if (isActive) {
       player.play();
     } else {
       player.pause();
     }
   }, [isActive, player]);
+
+  if (!player) {
+    return null;
+  }
 
   const video = (
     <VideoView
@@ -129,7 +161,6 @@ function MediaPage({
   videoTapToToggle,
   onNaturalRatio,
   onUrlError,
-  playVideos,
   url,
   shouldLoadVideoThumbnail,
   shouldMeasureNaturalRatio,
@@ -141,7 +172,6 @@ function MediaPage({
   videoTapToToggle: boolean;
   onNaturalRatio: (objectKey: string, ratio: number) => void;
   onUrlError: () => void;
-  playVideos: boolean;
   url?: string;
   shouldLoadVideoThumbnail: boolean;
   shouldMeasureNaturalRatio: boolean;
@@ -186,11 +216,9 @@ function MediaPage({
   }
 
   if (isVideo) {
-    const shouldRenderPlayer = isActive && playVideos;
-
     return (
       <View style={styles.page}>
-        {shouldRenderPlayer ? (
+        {isActive ? (
           <VideoAsset
             hasPreferredNaturalRatio={!shouldMeasureNaturalRatio || videoThumbnail !== null}
             isActive={isActive}
@@ -201,7 +229,7 @@ function MediaPage({
             url={url}
           />
         ) : null}
-        {videoThumbnail && (!shouldRenderPlayer || !hasRenderedFirstFrame) ? (
+        {videoThumbnail && (!isActive || !hasRenderedFirstFrame) ? (
           <Image
             contentFit="contain"
             pointerEvents="none"
@@ -210,7 +238,7 @@ function MediaPage({
             testID={`memory-media-video-thumbnail-${asset.id}`}
           />
         ) : null}
-        {!shouldRenderPlayer ? (
+        {!isActive ? (
           <View pointerEvents="none" style={styles.videoInactive}>
             <SymbolView
               name={{ ios: 'play.fill', android: 'play_arrow' }}
@@ -248,7 +276,6 @@ export function MemoryMediaCarousel({
   assets,
   cacheVersion,
   isActive = true,
-  playVideos = true,
   stableLayout = false,
   mutedVideos = true,
   onPress,
@@ -363,7 +390,6 @@ export function MemoryMediaCarousel({
                 mutedVideos={mutedVideos}
                 onNaturalRatio={handleNaturalRatio}
                 onUrlError={() => void refetchMediaUrls()}
-                playVideos={playVideos}
                 url={urls[asset.object_key]}
                 videoTapToToggle={videoTapToToggle}
                 shouldLoadVideoThumbnail={

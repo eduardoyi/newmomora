@@ -10,6 +10,7 @@ const mockVideoPlayer = {
   pause: jest.fn(),
   play: jest.fn(),
   playing: true,
+  release: jest.fn(),
 };
 
 jest.mock('@/hooks/useMediaUrls', () => ({
@@ -21,8 +22,7 @@ jest.mock('@/hooks/useVideoThumbnail', () => ({
 }));
 
 jest.mock('expo-video', () => ({
-  useVideoPlayer: jest.fn((_source, setup) => {
-    setup?.(mockVideoPlayer);
+  createVideoPlayer: jest.fn(() => {
     return mockVideoPlayer;
   }),
   VideoView: 'VideoView',
@@ -261,7 +261,7 @@ describe('MemoryMediaCarousel', () => {
     }]);
   });
 
-  it('does not mount a native player in a timeline card', () => {
+  it('autoplays the active video in a timeline card', () => {
     mockedUseMediaUrls.mockReturnValue({
       data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
       refetch: mockRefetchMediaUrls,
@@ -278,14 +278,50 @@ describe('MemoryMediaCarousel', () => {
       object_key: 'user/memory/media/video-1.mp4',
       content_type: 'video/mp4',
     };
-    const { getByTestId, queryByTestId } = render(
-      <MemoryMediaCarousel assets={[videoAsset]} playVideos={false} stableLayout />,
+    const { getByTestId } = render(
+      <MemoryMediaCarousel assets={[videoAsset]} stableLayout />,
     );
 
     measureCarousel(getByTestId);
 
-    expect(queryByTestId('memory-media-video')).toBeNull();
-    expect(getByTestId('memory-media-video-thumbnail-asset-video')).toBeTruthy();
+    expect(getByTestId('memory-media-video')).toBeTruthy();
+    expect(mockVideoPlayer.play).toHaveBeenCalled();
+  });
+
+  it('releases a timeline player after its native view unmounts', () => {
+    let releaseFrame: FrameRequestCallback | undefined;
+    const requestAnimationFrameSpy = jest
+      .spyOn(global, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        releaseFrame = callback;
+        return 1;
+      });
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+
+    try {
+      const { getByTestId, unmount } = render(<MemoryMediaCarousel assets={[videoAsset]} />);
+      measureCarousel(getByTestId);
+      unmount();
+
+      expect(mockVideoPlayer.release).not.toHaveBeenCalled();
+      expect(releaseFrame).toBeDefined();
+
+      releaseFrame?.(0);
+
+      expect(mockVideoPlayer.release).toHaveBeenCalledTimes(1);
+    } finally {
+      requestAnimationFrameSpy.mockRestore();
+    }
   });
 
   it('keeps the thumbnail over an active player until its first frame renders', () => {
