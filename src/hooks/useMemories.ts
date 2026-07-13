@@ -395,6 +395,11 @@ export function useMemories(searchQuery = '') {
       return data ?? [];
     },
     enabled: Boolean(user),
+    // Every mutation already invalidates this query (invalidateMemoryQueries)
+    // and per-memory illustration/emotion updates patch the cache directly,
+    // so a short default staleTime just causes wasted full-timeline refetches
+    // (up to ~700 memories) on ordinary remounts, e.g. opening a member page.
+    staleTime: 5 * 60 * 1000,
     refetchInterval: (queryState) => {
       const memories = queryState.state.data ?? [];
       const hasGenerating = memories.some(

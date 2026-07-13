@@ -109,7 +109,40 @@ export async function getUploadUrl(
   return { data, error: null };
 }
 
-export async function getMediaUrls(
+// ── getMediaUrls request coalescing ─────────────────────────────────────────
+// The family/timeline screens can mount dozens of MemoryThumb rows at once,
+// each calling useMediaUrl -> getMediaUrls with its own key. Without
+// coalescing, that's one 'get-media-url' Edge Function invocation per row.
+// This batches every getMediaUrls call made within BATCH_WINDOW_MS into as
+// few Edge Function invocations as possible: keys are deduped across callers
+// and chunked at MAX_BATCH_KEYS (mirrors the server's MAX_KEYS), and each
+// caller gets back the merged result for whichever chunk(s) its keys landed
+// in -- same { data, error } shape a direct call would have returned.
+const MAX_BATCH_KEYS = 50;
+const BATCH_WINDOW_MS = 25;
+
+type GetMediaUrlsResult = { data: GetMediaUrlResponse | null; error: ServiceError | null };
+
+interface PendingMediaUrlCaller {
+  keys: string[];
+  resolve: (result: GetMediaUrlsResult) => void;
+}
+
+let pendingKeys: Set<string> | null = null;
+let pendingCallers: PendingMediaUrlCaller[] = [];
+let batchTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Test-only: clears in-flight batcher state between test cases. */
+export function resetMediaUrlBatcherForTests(): void {
+  if (batchTimer) {
+    clearTimeout(batchTimer);
+  }
+  pendingKeys = null;
+  pendingCallers = [];
+  batchTimer = null;
+}
+
+async function invokeMediaUrlChunk(
   keys: string[],
 ): Promise<{ data: GetMediaUrlResponse | null; error: ServiceError | null }> {
   const { data, error } = await supabase.functions.invoke<GetMediaUrlResponse>('get-media-url', {
@@ -125,6 +158,102 @@ export async function getMediaUrls(
   }
 
   return { data, error: null };
+}
+
+async function flushMediaUrlBatch(): Promise<void> {
+  const keys = pendingKeys ? Array.from(pendingKeys) : [];
+  const callers = pendingCallers;
+  pendingKeys = null;
+  pendingCallers = [];
+  batchTimer = null;
+
+  if (keys.length === 0 || callers.length === 0) {
+    return;
+  }
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < keys.length; i += MAX_BATCH_KEYS) {
+    chunks.push(keys.slice(i, i + MAX_BATCH_KEYS));
+  }
+
+  const chunkIndexByKey = new Map<string, number>();
+  chunks.forEach((chunk, index) => {
+    chunk.forEach((key) => chunkIndexByKey.set(key, index));
+  });
+
+  // invokeMediaUrlChunk normally resolves with { data, error } rather than
+  // throwing, but an unexpected exception (network abort, serialization bug)
+  // must still settle every pending caller -- otherwise their promises never
+  // resolve and the 'media-urls' queries hang in fetching with no error or
+  // retry. Before batching, such a throw propagated to the caller.
+  let chunkResults: GetMediaUrlsResult[];
+  try {
+    chunkResults = await Promise.all(chunks.map((chunk) => invokeMediaUrlChunk(chunk)));
+  } catch (error) {
+    const serviceError: ServiceError = {
+      message: error instanceof Error ? error.message : 'Failed to load media URLs',
+    };
+    for (const caller of callers) {
+      caller.resolve({ data: null, error: serviceError });
+    }
+    return;
+  }
+
+  for (const caller of callers) {
+    const relevantChunkIndexes = new Set(
+      caller.keys
+        .map((key) => chunkIndexByKey.get(key))
+        .filter((index): index is number => index !== undefined),
+    );
+
+    let firstError: ServiceError | null = null;
+    let expiresIn: number | undefined;
+    const mergedUrls: Record<string, string> = {};
+
+    for (const chunkIndex of relevantChunkIndexes) {
+      const result = chunkResults[chunkIndex];
+      if (result.error || !result.data) {
+        firstError = firstError ?? result.error ?? { message: 'Media URLs were not returned' };
+        continue;
+      }
+
+      Object.assign(mergedUrls, result.data.urls);
+      expiresIn = result.data.expiresIn;
+    }
+
+    if (firstError) {
+      caller.resolve({ data: null, error: firstError });
+    } else {
+      caller.resolve({ data: { urls: mergedUrls, expiresIn: expiresIn ?? 0 }, error: null });
+    }
+  }
+}
+
+export async function getMediaUrls(
+  keys: string[],
+): Promise<{ data: GetMediaUrlResponse | null; error: ServiceError | null }> {
+  // Preserve the un-batched, un-deduped behavior for the empty-keys edge
+  // case -- there's nothing to coalesce, and the Edge Function's own
+  // validation error ("keys must be a non-empty array") should still surface.
+  if (keys.length === 0) {
+    return invokeMediaUrlChunk(keys);
+  }
+
+  return new Promise<GetMediaUrlsResult>((resolve) => {
+    if (!pendingKeys) {
+      pendingKeys = new Set();
+    }
+    for (const key of keys) {
+      pendingKeys.add(key);
+    }
+    pendingCallers.push({ keys, resolve });
+
+    if (!batchTimer) {
+      batchTimer = setTimeout(() => {
+        void flushMediaUrlBatch();
+      }, BATCH_WINDOW_MS);
+    }
+  });
 }
 
 export async function uploadMediaObject(
