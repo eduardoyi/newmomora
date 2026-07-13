@@ -89,6 +89,7 @@
         {
           "ios": {
             "enabled": true,
+            "appGroupId": "group.com.memora.app.shared",
             "activationRule": {
               "supportsAttachmentsWithMaxCount": 10,
               "supportsImageWithMaxCount": 10,
