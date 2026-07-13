@@ -134,6 +134,7 @@ flowchart TD
 
 1. Browse timeline or calendar tile → open memory detail
 2. Search or filter by date range, family member, or emotion
+3. Like a memory or open its comments to respond with the household
 
 ---
 
@@ -418,6 +419,30 @@ sequenceDiagram
 
 ---
 
+### 6.8 Likes & Comments
+
+**User stories**
+
+- As any household member, including a viewer, I can like and comment on a memory so I can respond without changing the journal entry.
+- As a memory creator, I can receive an optional engagement notification and open the relevant memory directly.
+
+**Acceptance criteria**
+
+- Timeline and memory detail show outline heart and comment actions; tapping the heart fills it with a lightweight animation and haptic feedback.
+- Non-zero like/comment counts appear beside their icons; zero counts stay hidden and counts are not tappable liker lists.
+- Comment from Timeline opens memory detail and its bottom drawer. Comment from detail opens the same drawer in place.
+- The drawer lists comments oldest-to-newest with household account name and compact relative timestamp, and keeps its plain-text composer visible above the keyboard.
+- Comments are 1–1000 trimmed characters. There are no replies, mentions, attachments, or edits.
+- Comment authors can delete their own comments; household owners/managers can delete any comment. Viewers may like, comment, and delete only their own comments.
+- Like/comment mutations update optimistically for the actor. Other devices refresh on screen focus, drawer open, or pull-to-refresh; no Realtime subscription is required.
+- A single Settings toggle, **Likes & comments**, controls engagement pushes and defaults on. Only the memory creator is notified, never for their own action.
+- Notification copy contains no memory, comment, or child content. Tapping it opens the memory detail screen.
+- Removing a member preserves their existing engagement attribution; hard account deletion removes that account's likes and comments.
+
+**Deferred:** Liker lists, comment editing, threads/replies, mentions, attachments, reaction types, Realtime engagement updates
+
+---
+
 ## 7. Explicit MVP Out-of-Scope
 
 The following are **post-MVP**. They must not block or expand MVP scope:
@@ -560,7 +585,7 @@ See [TECH_SPEC.md](./TECH_SPEC.md) for database schema, Edge Function contracts,
 | Onboarding — First memory | Guided first journal entry |
 | Timeline | Primary memory feed |
 | Calendar | Monthly memory grid |
-| Memory detail | Full memory view |
+| Memory detail | Full memory view with like action and comments drawer |
 | New memory (modal) | Create memory (text + voice) |
 | Edit memory (modal) | Edit existing memory |
 | Family list | Manage family profiles |
@@ -578,6 +603,8 @@ erDiagram
     user_profiles ||--o{ memories : owns
     memories ||--o{ memory_family_members : tags
     family_members ||--o{ memory_family_members : tagged_in
+    memories ||--o{ memory_likes : receives
+    memories ||--o{ memory_comments : receives
 
     user_profiles {
         uuid id PK
@@ -585,6 +612,7 @@ erDiagram
         text timezone
         text illustration_style
         boolean enable_daily_reminder
+        boolean notify_engagement
         time notification_time
         timestamptz deleted_at
         timestamptz scheduled_hard_delete_at
@@ -618,6 +646,20 @@ erDiagram
     memory_family_members {
         uuid memory_id FK
         uuid family_member_id FK
+    }
+
+    memory_likes {
+        uuid memory_id FK
+        uuid user_id FK
+        timestamptz created_at
+    }
+
+    memory_comments {
+        uuid id PK
+        uuid memory_id FK
+        uuid user_id FK
+        text content
+        timestamptz created_at
     }
 ```
 

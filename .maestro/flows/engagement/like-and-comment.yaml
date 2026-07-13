@@ -1,0 +1,20 @@
+appId: com.memora.app
+---
+- runFlow: ../memories/create-memory.yaml
+- tapOn:
+    id: "memory-like-.*"
+- assertVisible: "Unlike memory"
+- tapOn:
+    id: "memory-comments-.*"
+- extendedWaitUntil:
+    visible:
+      id: comments-drawer
+    timeout: 10000
+- tapOn:
+    id: comment-input
+- inputText: "I love this moment."
+- tapOn:
+    id: comment-submit
+- extendedWaitUntil:
+    visible: "I love this moment."
+    timeout: 10000

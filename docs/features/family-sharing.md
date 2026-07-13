@@ -1,7 +1,7 @@
 # Feature: Family sharing
 
 **Status:** `done`
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-13
 **PRD reference:** —  (post-MVP capability; see `docs/plans/family-sharing.md` for the decision record and rationale)
 
 ## Overview
@@ -37,10 +37,10 @@ to family-membership checks. There is no "personal, unshared" mode anymore
 - **Approve (owner/manager):** Settings → Approvals shows every redeemed
   invite awaiting a decision, with the redeemer's **name + email** so the
   approver can verify it's really them → Approve or Reject.
-- **Role gating:** viewers get a read-only timeline/calendar/family roster —
-  no create FAB, no edit/delete on memories or children, no invite/approval
-  screens (bounced back if they navigate there directly), a trimmed Settings
-  (no name-edit affordance).
+- **Role gating:** viewers cannot create/edit/delete memories or children and
+  cannot invite/approve members. They can browse the timeline/calendar/family
+  roster and may like or comment on memories. Restricted screens still bounce
+  direct navigation, and Settings remains trimmed (no name-edit affordance).
 - **Attribution:** memory detail shows "Added by {name}" (falls back to "a
   former member" if the creator's account was hard-deleted). Not shown on
   timeline cards — a plan deviation, see [Outcome](../plans/family-sharing.md#16-outcome).
@@ -74,6 +74,9 @@ to family-membership checks. There is no "personal, unshared" mode anymore
 | Capability | Owner | Manager | Viewer |
 |---|---|---|---|
 | View timeline / calendar / family roster | ✓ | ✓ | ✓ |
+| Like memories / add comments | ✓ | ✓ | ✓ |
+| Delete own comment | ✓ | ✓ | ✓ |
+| Delete another member's comment | ✓ | ✓ | ✗ |
 | Create/edit/delete memories (any creator) | ✓ | ✓ | ✗ |
 | Add/edit/delete children (`family_members`) | ✓ | ✓ | ✗ |
 | Tag children on memories | ✓ | ✓ | ✗ |
@@ -138,7 +141,8 @@ the exact same look instead of duplicating it.
   chosen so every option carries a stable `testID`
   (`member-action-promote`/`demote`/`remove`/`cancel`) for Maestro. It shows
   the member's name + current role, a persistent explanation ("Managers can
-  add memories, edit anything, and invite family. Viewers can only browse."),
+  add memories, edit anything, and invite family. Viewers can browse, like,
+  and comment."),
   then "Make manager"/"Make viewer" and "Remove from family".
 - **Role change:** confirm-free — one tap applies immediately (the inline
   explanation in the sheet is what makes the tap informed, not a second
@@ -376,6 +380,7 @@ for the full table; summary:
 | Trigger | Recipient(s) | Channel | Debounce |
 |---|---|---|---|
 | New memory created | Every other member with `notify_new_memories=true` + push token | Expo push | 15 min per `(family, actor)` — `family_activity_log` |
+| Memory liked/commented | Memory creator only, when `notify_engagement=true`; never the actor | Expo push | Like: 24h per `(memory, actor)`; comment: one attempt per comment id |
 | Invite redeemed | The inviter (`invited_by`) | Expo push | None (one redemption = one push) |
 | Invite approved | The redeemer | Expo push **and** Bento transactional email ("You're in!") | None |
 | Owner soft-deletes their account | Every other member of each family they own | Expo push (best-effort, from `delete-user-account`) | None |
@@ -393,7 +398,7 @@ switches on `route`:
 | `'timeline'` | `resolve-family-invite` (invite approved), `delete-user-account` (owner deleted) | Opens the family timeline |
 | `'approvals'` | `redeem-family-invite` (invite redeemed) | Opens the pending-approvals screen |
 | `'new-memory'` | `send-daily-reminder` | Opens the create-memory screen |
-| `'memory'` | `notify-family-activity` (new memory) | Opens the memory detail screen for `memoryId` |
+| `'memory'` | `notify-family-activity` (new memory), `notify-memory-engagement` (like/comment) | Opens the memory detail screen for `memoryId` |
 
 **Cross-family reconciliation for `'memory'`:** a recipient can belong to
 more than one family, and the memory detail screen assumes its data (role
@@ -492,6 +497,13 @@ the app-side change ships.
    convention (log the attempt/debounce row *before* sending), and keep the
    send itself best-effort (`try/catch`, log-only on failure, never throw
    past a state change that's already committed).
+
+Likes/comments are the intentional exception to viewer read-only content:
+their RLS permits every active family role to create its own engagement row.
+Comment authors can delete their own row, while only an owner/manager of that
+specific family can moderate someone else's. Removed members' comments remain
+attributed through `get_family_member_profiles`; hard account deletion cascades
+their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 
 ## Extension guide
 
@@ -604,7 +616,8 @@ the app-side change ships.
   feature builds tenancy on top of)
 - Depended on by: [Family profiles](./family-profiles.md) (children roster
   is now family-scoped), [Memories & illustrations](./memories.md),
-  [Media memories](./media-memories.md), [Voice journaling](./voice-journaling.md)
+  [Media memories](./media-memories.md), [Voice journaling](./voice-journaling.md),
+  [Likes & comments](./likes-and-comments.md)
   (all now family-scoped — see the "Family sharing" note in each doc)
 
 ## Testing
@@ -651,6 +664,7 @@ the app-side change ships.
 | `supabase/functions/redeem-family-invite/index.test.ts` | Happy path, expired, revoked, reused, rate-limited (user + IP), already-member, family soft-deleted |
 | `supabase/functions/resolve-family-invite/index.test.ts` | Approve/reject, non-manager rejection, duplicate-membership idempotency, 50-cap `family_full`, missing redeemer, Bento email success/skip/failure |
 | `supabase/functions/notify-family-activity/index.test.ts` | Debounce window, non-creator rejection, viewer/non-manager rejection, recipient filtering on `notify_new_memories` |
+| `supabase/functions/notify-memory-engagement/index.test.ts` | Viewer participation, creator-only/no-self delivery, preference filtering, verified engagement ownership, debounce |
 | `supabase/functions/get-upload-url/index.test.ts`, `get-media-url/index.test.ts`, `delete-storage-object/index.test.ts` | Family-role-based authorization (member vs. manager+ vs. non-member) |
 | `supabase/functions/generate-illustration/index.test.ts`, `generate-portrait-illustration/index.test.ts`, `analyze-emotion/index.test.ts` | Family-scoped authorization, cross-member portrait resolution, viewer-triggered analysis (service-role write) |
 
@@ -675,3 +689,4 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 | 2026-07-12 | Member management UI: owner/manager can promote/demote/remove non-owner members directly from the Settings member list (`MemberActionSheet`, `useMemberManagement`, `updateMemberRole`/`removeMember`) — the underlying RLS already allowed this, only the client surface was missing. See [Member management](#member-management). |
 | 2026-07-12 | Family management IA restructure: the member list moved off Settings onto its own **Family members** screen (`app/(app)/sharing/members.tsx`) so Settings stays constant-size for families up to the 50-member cap; Settings now shows a "Family members" row with the active-member count, and "Pending invites"/"Approvals" only render when there's at least one non-expired/redeemed invite to act on. See [Member management](#member-management). |
 | 2026-07-12 | Viewer Settings and calendar are further trimmed: viewers cannot see the calendar create FAB, daily journal reminder, or the Settings entry for Family members. They retain read-only timeline/calendar/family-roster access. |
+| 2026-07-13 | Likes/comments add a deliberate viewer-write exception: all active roles may engage, authors may delete their own comments, manager+ may moderate, and engagement notifications deep-link to memory detail. |

@@ -36,6 +36,9 @@ export interface MemoryMediaAsset {
 export interface MemoryWithTags extends Memory {
   taggedMembers: FamilyMember[];
   mediaAssets: MemoryMediaAsset[];
+  likeCount: number;
+  commentCount: number;
+  likedByMe: boolean;
 }
 
 export interface ServiceError {
@@ -108,6 +111,9 @@ function attachTags(memories: Memory[], tagMap: Map<string, FamilyMember[]>): Me
     ...memory,
     taggedMembers: tagMap.get(memory.id) ?? [],
     mediaAssets: [],
+    likeCount: 0,
+    commentCount: 0,
+    likedByMe: false,
   }));
 }
 
@@ -116,7 +122,60 @@ function attachCalendarPreviewTags(memories: Memory[]): MemoryWithTags[] {
     ...memory,
     taggedMembers: [],
     mediaAssets: [],
+    likeCount: 0,
+    commentCount: 0,
+    likedByMe: false,
   }));
+}
+
+interface MemoryEngagementRow {
+  memory_id: string;
+  like_count: number | string;
+  comment_count: number | string;
+  liked_by_me: boolean;
+}
+
+async function fetchEngagementForMemories(
+  memoryIds: string[],
+): Promise<Map<string, Omit<MemoryEngagementRow, 'memory_id'>>> {
+  if (memoryIds.length === 0) {
+    return new Map();
+  }
+
+  const batchResults = await Promise.all(
+    chunkMemoryIds(memoryIds).map(async (memoryIdBatch) => {
+      const { data, error } = await supabase.rpc('get_memory_engagement', {
+        memory_ids: memoryIdBatch,
+      });
+
+      if (error) {
+        throw mapSupabaseError(error);
+      }
+
+      return (data ?? []) as MemoryEngagementRow[];
+    }),
+  );
+
+  return new Map(
+    batchResults
+      .flat()
+      .map(({ memory_id, ...engagement }) => [memory_id, engagement]),
+  );
+}
+
+function attachEngagement(
+  memories: MemoryWithTags[],
+  engagementMap: Map<string, Omit<MemoryEngagementRow, 'memory_id'>>,
+): MemoryWithTags[] {
+  return memories.map((memory) => {
+    const engagement = engagementMap.get(memory.id);
+    return {
+      ...memory,
+      likeCount: Number(engagement?.like_count ?? 0),
+      commentCount: Number(engagement?.comment_count ?? 0),
+      likedByMe: engagement?.liked_by_me ?? false,
+    };
+  });
 }
 
 function attachMediaAssets(
@@ -256,12 +315,19 @@ export async function fetchMemories(): Promise<{
 
   const memories = data ?? [];
   const memoryIds = memories.map((memory) => memory.id);
-  const [tagMap, mediaMap] = await Promise.all([
+  const [tagMap, mediaMap, engagementMap] = await Promise.all([
     fetchTagsForMemories(memoryIds),
     fetchMediaForMemories(memoryIds),
+    fetchEngagementForMemories(memoryIds),
   ]);
 
-  return { data: attachMediaAssets(attachTags(memories, tagMap), mediaMap), error: null };
+  return {
+    data: attachEngagement(
+      attachMediaAssets(attachTags(memories, tagMap), mediaMap),
+      engagementMap,
+    ),
+    error: null,
+  };
 }
 
 export async function fetchOldestMemoryDate(): Promise<{
@@ -342,11 +408,18 @@ export async function fetchMemoryById(memoryId: string): Promise<{
     return { data: null, error: null };
   }
 
-  const [tagMap, mediaMap] = await Promise.all([
+  const [tagMap, mediaMap, engagementMap] = await Promise.all([
     fetchTagsForMemories([memoryId]),
     fetchMediaForMemories([memoryId]),
+    fetchEngagementForMemories([memoryId]),
   ]);
-  return { data: attachMediaAssets(attachTags([data], tagMap), mediaMap)[0], error: null };
+  return {
+    data: attachEngagement(
+      attachMediaAssets(attachTags([data], tagMap), mediaMap),
+      engagementMap,
+    )[0],
+    error: null,
+  };
 }
 
 export async function searchMemories(query: string): Promise<{
@@ -371,11 +444,18 @@ export async function searchMemories(query: string): Promise<{
 
   const memories = data ?? [];
   const memoryIds = memories.map((memory) => memory.id);
-  const [tagMap, mediaMap] = await Promise.all([
+  const [tagMap, mediaMap, engagementMap] = await Promise.all([
     fetchTagsForMemories(memoryIds),
     fetchMediaForMemories(memoryIds),
+    fetchEngagementForMemories(memoryIds),
   ]);
-  return { data: attachMediaAssets(attachTags(memories, tagMap), mediaMap), error: null };
+  return {
+    data: attachEngagement(
+      attachMediaAssets(attachTags(memories, tagMap), mediaMap),
+      engagementMap,
+    ),
+    error: null,
+  };
 }
 
 async function replaceMemoryTags(memoryId: string, taggedMemberIds: string[]): Promise<ServiceError | null> {

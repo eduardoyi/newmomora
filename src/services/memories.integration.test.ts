@@ -463,12 +463,24 @@ describe('memories service integration', () => {
 
       throw new Error(`Unexpected table ${table}`);
     });
+    (supabase.rpc as jest.Mock).mockResolvedValueOnce({
+      data: [
+        {
+          memory_id: 'memory-1',
+          like_count: 4,
+          comment_count: 2,
+          liked_by_me: true,
+        },
+      ],
+      error: null,
+    });
 
     const { data, error } = await fetchMemories();
 
     expect(error).toBeNull();
     expect(data?.[0]?.taggedMembers).toHaveLength(1);
     expect(data?.[0]?.taggedMembers[0]?.name).toBe('Emma');
+    expect(data?.[0]).toMatchObject({ likeCount: 4, commentCount: 2, likedByMe: true });
   });
 
   it('fetchMemoryById enriches a single memory with tags and media', async () => {
@@ -591,6 +603,11 @@ describe('memories service integration', () => {
       memoryRows.slice(200).map((memory) => memory.id),
     ]);
     expect(mediaBuilders.map((builder) => builder.in.mock.calls[0]?.[1])).toEqual([
+      memoryRows.slice(0, 100).map((memory) => memory.id),
+      memoryRows.slice(100, 200).map((memory) => memory.id),
+      memoryRows.slice(200).map((memory) => memory.id),
+    ]);
+    expect((supabase.rpc as jest.Mock).mock.calls.map((call) => call[1]?.memory_ids)).toEqual([
       memoryRows.slice(0, 100).map((memory) => memory.id),
       memoryRows.slice(100, 200).map((memory) => memory.id),
       memoryRows.slice(200).map((memory) => memory.id),

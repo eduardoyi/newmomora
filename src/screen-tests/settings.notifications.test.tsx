@@ -157,6 +157,7 @@ describe('Settings notifications toggles', () => {
         enable_daily_reminder: false,
         notification_time: null,
         notify_new_memories: true,
+        notify_engagement: true,
         ...overrides,
       } as never,
       isLoading: false,
@@ -228,6 +229,34 @@ describe('Settings notifications toggles', () => {
     await waitFor(() => {
       expect(updateProfile).toHaveBeenCalledWith({ notifyNewMemories: true });
     });
+  });
+
+  it('reflects and updates the likes and comments notification preference', async () => {
+    mockProfile({ notify_engagement: false });
+
+    const { getByTestId } = renderScreen();
+    expect(getByTestId('settings-engagement-alerts-toggle').props.value).toBe(false);
+
+    fireEvent(getByTestId('settings-engagement-alerts-toggle'), 'valueChange', true);
+
+    await waitFor(() => {
+      expect(updateProfile).toHaveBeenCalledWith({ notifyEngagement: true });
+    });
+  });
+
+  it('does not enable engagement alerts when push registration fails', async () => {
+    mockProfile({ notify_engagement: false });
+    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true, isRegistered: false });
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
+
+    const { getByTestId } = renderScreen();
+    fireEvent(getByTestId('settings-engagement-alerts-toggle'), 'valueChange', true);
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('Could not enable notifications', expect.any(String));
+    });
+    expect(updateProfile).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
   });
 
   it('does not touch the daily-reminder fields when toggling new memory alerts', async () => {

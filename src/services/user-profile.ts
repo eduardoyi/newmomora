@@ -19,6 +19,8 @@ export interface UpdateUserProfileInput {
   activeFamilyId?: string;
   /** "New memory alerts" Settings toggle (plan §10). */
   notifyNewMemories?: boolean;
+  /** Likes/comments push preference; recipient-side and global across families. */
+  notifyEngagement?: boolean;
 }
 
 function mapSupabaseError(error: { message: string; code?: string }): ServiceError {
@@ -72,6 +74,9 @@ export async function updateUserProfile(
       ...(input.activeFamilyId !== undefined ? { active_family_id: input.activeFamilyId } : {}),
       ...(input.notifyNewMemories !== undefined
         ? { notify_new_memories: input.notifyNewMemories }
+        : {}),
+      ...(input.notifyEngagement !== undefined
+        ? { notify_engagement: input.notifyEngagement }
         : {}),
     })
     .eq('id', user.id)

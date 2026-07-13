@@ -5,7 +5,7 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { roleLabel } from '@/utils/roles';
 
 const ROLE_EXPLANATION =
-  'Managers can add memories, edit anything, and invite family. Viewers can only browse.';
+  'Managers can add memories, edit anything, and invite family. Viewers can browse, like, and comment.';
 
 export interface MemberActionSheetProps {
   visible: boolean;

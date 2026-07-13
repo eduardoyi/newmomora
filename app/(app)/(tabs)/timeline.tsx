@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -22,7 +22,12 @@ import { useFamily } from '@/hooks/use-family';
 import { useMemories } from '@/hooks/useMemories';
 import type { MemoryWithTags } from '@/services/memories';
 import { useOnboardingStatus } from '@/hooks/useFamilyMembers';
-import { addFamilyMemberRoute, memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
+import {
+  addFamilyMemberRoute,
+  memoryDetailCommentsRoute,
+  memoryDetailRoute,
+  newMemoryRoute,
+} from '@/lib/routes';
 import { canEditFamilyContent } from '@/utils/roles';
 import { isVideoContentType } from '@/utils/media-validation';
 
@@ -90,6 +95,12 @@ export default function TimelineScreen() {
   const [searchQuery] = useState('');
   const { memories, isLoading, isRefetching, isError, refetch } = useMemories(searchQuery);
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refetch();
+    }, [refetch]),
+  );
 
   const viewabilityConfig = useRef<ViewabilityConfig>({
     viewAreaCoveragePercentThreshold: 60,
@@ -201,6 +212,7 @@ export default function TimelineScreen() {
                 key={item.id}
                 memory={item}
                 onPress={() => router.push(memoryDetailRoute(item.id))}
+                onOpenComments={() => router.push(memoryDetailCommentsRoute(item.id))}
                 isVideoActive={item.id === activeVideoId}
               />
             </View>

@@ -324,8 +324,9 @@ export default function SettingsScreen() {
 
   const remindersEnabled = profile?.enable_daily_reminder ?? false;
   const newMemoryAlertsEnabled = profile?.notify_new_memories ?? true;
+  const engagementAlertsEnabled = profile?.notify_engagement ?? true;
   const { requestRegistration } = useNotificationsRegistration(
-    remindersEnabled || newMemoryAlertsEnabled,
+    remindersEnabled || newMemoryAlertsEnabled || engagementAlertsEnabled,
   );
 
   const promptOpenSystemSettings = () => {
@@ -410,6 +411,18 @@ export default function SettingsScreen() {
       await updateProfile({ notifyNewMemories: value });
     } catch (error) {
       showMutationError('Could not update new memory alerts', error, 'Please try again.');
+    }
+  };
+
+  const handleToggleEngagementAlerts = async (value: boolean) => {
+    if (value && !(await ensureNotificationsAreRegistered())) {
+      return;
+    }
+
+    try {
+      await updateProfile({ notifyEngagement: value });
+    } catch (error) {
+      showMutationError('Could not update likes and comments alerts', error, 'Please try again.');
     }
   };
 
@@ -546,6 +559,18 @@ export default function SettingsScreen() {
                     onValueChange={handleToggleNewMemoryAlerts}
                     testID="settings-new-memory-alerts-toggle"
                     value={newMemoryAlertsEnabled}
+                    trackColor={{ false: colors.border, true: colors.primary }}
+                  />
+                }
+              />
+              <SettingsRow
+                label="Likes & comments"
+                caption="Get notified when someone engages with a memory you added."
+                right={
+                  <Switch
+                    onValueChange={handleToggleEngagementAlerts}
+                    testID="settings-engagement-alerts-toggle"
+                    value={engagementAlertsEnabled}
                     trackColor={{ false: colors.border, true: colors.primary }}
                   />
                 }

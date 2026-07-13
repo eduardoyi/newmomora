@@ -33,7 +33,7 @@ describe('MemberActionSheet', () => {
     expect(getByText('Ana')).toBeTruthy();
     expect(getByText('Viewer')).toBeTruthy();
     expect(
-      getByText('Managers can add memories, edit anything, and invite family. Viewers can only browse.'),
+      getByText('Managers can add memories, edit anything, and invite family. Viewers can browse, like, and comment.'),
     ).toBeTruthy();
     expect(getByTestId('member-action-promote')).toBeTruthy();
     expect(queryByTestId('member-action-demote')).toBeNull();

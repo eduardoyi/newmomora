@@ -119,6 +119,7 @@ create table public.user_profiles (
   scheduled_hard_delete_at timestamptz,
   active_family_id uuid references public.families on delete set null,  -- which family the client shows
   notify_new_memories boolean not null default true,                    -- new-memory push opt-out
+  notify_engagement boolean not null default true,                      -- like/comment push opt-out
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -216,11 +217,11 @@ create table public.invite_redemption_attempts (
   attempted_at timestamptz not null default now()
 );
 
--- New-memory push debounce log. Service-role/definer-only.
+-- Family activity / engagement push debounce log. Service-role/definer-only.
 create table public.family_activity_log (
   family_id uuid not null references public.families on delete cascade,
   actor_id uuid not null,
-  kind text not null,                        -- 'new_memory'
+  kind text not null,                        -- 'new_memory' or engagement_<kind>:<entity-id>
   created_at timestamptz not null default now()
 );
 
@@ -243,6 +244,22 @@ create table public.memory_media (
   unique (memory_id, position),
   unique (memory_id, object_key)
 );
+
+-- Engagement. Viewer participation is intentional; see §2.3 RLS.
+create table public.memory_likes (
+  memory_id uuid not null references public.memories on delete cascade,
+  user_id uuid not null references auth.users on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (memory_id, user_id)
+);
+
+create table public.memory_comments (
+  id uuid primary key default gen_random_uuid(),
+  memory_id uuid not null references public.memories on delete cascade,
+  user_id uuid not null references auth.users on delete cascade,
+  content text not null check (char_length(trim(content)) between 1 and 1000),
+  created_at timestamptz not null default now()
+);
 ```
 
 ### 2.2 Indexes
@@ -262,6 +279,9 @@ create index idx_invite_redemption_attempts_user_id on public.invite_redemption_
 create index idx_invite_redemption_attempts_ip on public.invite_redemption_attempts (ip, attempted_at);
 create index idx_family_activity_log_family_actor_kind
   on public.family_activity_log (family_id, actor_id, kind, created_at desc);
+create index idx_memory_likes_user_id on public.memory_likes (user_id);
+create index idx_memory_comments_memory_created_at on public.memory_comments (memory_id, created_at desc);
+create index idx_memory_comments_user_id on public.memory_comments (user_id);
 ```
 
 `idx_memories_user_id` and the old `idx_memories_memory_date (user_id,
@@ -291,6 +311,8 @@ alter table public.family_members enable row level security;
 alter table public.memories enable row level security;
 alter table public.memory_family_members enable row level security;
 alter table public.memory_media enable row level security;
+alter table public.memory_likes enable row level security;
+alter table public.memory_comments enable row level security;
 alter table public.families enable row level security;
 alter table public.family_memberships enable row level security;
 alter table public.family_invites enable row level security;
@@ -312,7 +334,31 @@ create policy "Users can insert own profile"
 
 -- families / family_memberships / family_invites: see feature doc roles
 -- table for the exact select/insert/update/delete matrix per role.
+
+-- Engagement (all checks resolve memory.family_id):
+-- memory_likes select/insert/delete = own row + active family membership;
+-- aggregate counts/liked_by_me come from get_memory_engagement(uuid[]).
+-- memory_comments select/insert = active family member (insert must be own);
+-- delete = own while active, or owner/manager of that specific family.
+-- There is no comment UPDATE policy: comments are immutable.
 ```
+
+Engagement RPCs (migration `20260713200000_memory_engagement.sql`):
+
+```sql
+get_memory_engagement(memory_ids uuid[])
+  returns table (memory_id uuid, like_count bigint,
+                 comment_count bigint, liked_by_me boolean)
+
+set_memory_like(target_memory_id uuid, should_like boolean)
+  returns table (liked boolean, changed boolean, like_count bigint)
+```
+
+Both are `security definer`, execute only for `authenticated`, and perform
+their own family-membership check. The batch aggregate returns only authorized
+memories and never exposes liker identities. `set_memory_like` is an atomic,
+idempotent set operation; `changed` is true only when a row was inserted or
+deleted, allowing notification delivery to ignore stale/repeated writes.
 
 ### 2.4 Triggers
 
@@ -1000,6 +1046,57 @@ persists.
 
 ---
 
+### 4.14 `notify-memory-engagement`
+
+Fire-and-forget push after a successful like or comment. The endpoint accepts
+viewer callers, but verifies they are an active member of the memory's family
+and that the referenced engagement row belongs to the caller. The sole possible
+recipient is the memory creator, if still an active family member with
+`notify_engagement=true` and a push token. Self-actions never notify.
+
+**Request**
+
+```json
+{ "memoryId": "uuid", "kind": "like" }
+```
+
+or:
+
+```json
+{ "memoryId": "uuid", "kind": "comment", "engagementId": "comment-uuid" }
+```
+
+**Response**
+
+```json
+{ "sent": true }
+```
+
+or a non-error skip:
+
+```json
+{ "sent": false, "reason": "self|disabled|debounced|no_recipient" }
+```
+
+**Delivery:** Generic body (`{actor name} liked/commented on a memory`) with no
+memory, comment, or child content. Push data is
+`{ route: 'memory', familyId, memoryId }`, so a tap uses the existing
+cross-family reconciliation and opens memory detail.
+
+**Debounce:** Like attempts are logged before send and suppressed for 24 hours
+per `(family, actor, memory)`; unlike never calls the endpoint. Comments use the
+comment id in the log key, preventing retry duplicates without suppressing a
+different comment. Push failure is best-effort and never undoes engagement.
+
+**Auth:** JWT; any active family role, with a verified caller-owned like/comment.
+
+**Errors:** `validation_error` (400), `unauthorized` (401), `forbidden` (403),
+`not_found` (404), `method_not_allowed` (405), `internal_error` (500)
+
+See [docs/features/likes-and-comments.md](./features/likes-and-comments.md).
+
+---
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)
@@ -1117,6 +1214,21 @@ the family — never awaited, never blocks the save. See
 [docs/features/family-sharing.md](./features/family-sharing.md) for the
 full lifecycle, RPC list, and Edge Function call order.
 
+### 5.7 Like and comment on a memory
+
+```
+1. Timeline/detail query batches get_memory_engagement(memoryIds) for counts + liked_by_me
+2. Like: optimistically patch family-scoped list/detail caches → set_memory_like RPC
+3. Reconcile to exact returned state; if liked && changed, fire-and-forget notify-memory-engagement
+4. Comment: open detail drawer → fetch memory_comments oldest-first
+5. Add/delete: optimistically patch drawer + comment count → PostgREST write under RLS
+6. After a successful add, fire-and-forget notify-memory-engagement with the comment id
+7. Other devices refresh on timeline focus/pull or comments-drawer open; no Realtime subscription
+```
+
+See [docs/features/likes-and-comments.md](./features/likes-and-comments.md)
+for UI, moderation, notification, and removed-member semantics.
+
 ---
 
 ## 6. Style Token Resolution
@@ -1209,6 +1321,7 @@ Momora2/
 │       ├── redeem-family-invite/
 │       ├── resolve-family-invite/
 │       ├── notify-family-activity/
+│       ├── notify-memory-engagement/
 │       └── _shared/               # family-access.ts, storage-keys.ts, bento.ts, expo-push.ts, ...
 ├── docs/
 │   ├── PRD.md
@@ -1249,6 +1362,8 @@ All AI operations are **async** — client shows status and allows navigation aw
 - [ ] Family-scoped RLS goes through `is_family_member`/`has_family_role`, never a hand-rolled join
 - [ ] Role/family checks are bound to one specific `family_id`, never "has this role somewhere"
 - [ ] Invite codes are rate-limited (user + IP) and never logged in plaintext
+- [ ] Engagement RLS permits active viewers only for their own likes/comments; moderation is family-scoped
+- [ ] Push/log payloads never contain memory or comment content
 
 ---
 

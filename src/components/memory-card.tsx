@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
+import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
@@ -22,6 +23,7 @@ import { isVideoContentType } from '@/utils/media-validation';
 interface MemoryCardProps {
   memory: MemoryWithTags;
   onPress: () => void;
+  onOpenComments: () => void;
   isVideoActive?: boolean;
 }
 
@@ -171,7 +173,7 @@ function MediaVisual({
 }
 
 // ── Spread card (text_illustration + media) ───────────────────────────────────
-function SpreadCard({ memory, onPress, isVideoActive = false }: MemoryCardProps) {
+function SpreadCard({ memory, onPress, onOpenComments, isVideoActive = false }: MemoryCardProps) {
   const excerpt = memory.content
     ? formatMemoryExcerpt(memory.content, 140, toLinkPreviewMap(memory.link_previews))
     : null;
@@ -183,6 +185,9 @@ function SpreadCard({ memory, onPress, isVideoActive = false }: MemoryCardProps)
         testID={`memory-card-${memory.id}`}
       >
         <MediaVisual memory={memory} isActive={isVideoActive} onPress={onPress} />
+        <View style={styles.engagementWrap}>
+          <MemoryEngagementBar memory={memory} onOpenComments={onOpenComments} iconSize={23} />
+        </View>
         <Pressable
           accessibilityRole="button"
           onPress={onPress}
@@ -201,51 +206,70 @@ function SpreadCard({ memory, onPress, isVideoActive = false }: MemoryCardProps)
   }
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
-      testID={`memory-card-${memory.id}`}
-    >
-      <IllustrationVisual memory={memory} />
-      {excerpt ? (
-        <View style={styles.captionWrap}>
-          <Text style={styles.caption} numberOfLines={3}>{excerpt}</Text>
-        </View>
-      ) : null}
-      <CardFooter memory={memory} />
-    </Pressable>
+    <View style={styles.card} testID={`memory-card-${memory.id}`}>
+      <Pressable accessibilityRole="button" onPress={onPress}>
+        <IllustrationVisual memory={memory} />
+      </Pressable>
+      <View style={styles.engagementWrap}>
+        <MemoryEngagementBar memory={memory} onOpenComments={onOpenComments} iconSize={23} />
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => pressed && styles.cardPressed}
+      >
+        {excerpt ? (
+          <View style={styles.captionWrap}>
+            <Text style={styles.caption} numberOfLines={3}>{excerpt}</Text>
+          </View>
+        ) : null}
+        <CardFooter memory={memory} />
+      </Pressable>
+    </View>
   );
 }
 
 // ── Quote card (text_only) ────────────────────────────────────────────────────
-function QuoteCard({ memory, onPress }: MemoryCardProps) {
+function QuoteCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
   const emo = getEmotionColors(memory.emotion);
   const excerpt = memory.content
     ? formatMemoryExcerpt(memory.content, 120, toLinkPreviewMap(memory.link_previews))
     : '';
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
-      testID={`memory-card-${memory.id}`}
-    >
+    <View style={styles.card} testID={`memory-card-${memory.id}`}>
       {emo && <View style={[styles.quoteAccent, { backgroundColor: emo.soft }]} />}
-      <View style={styles.quoteBody}>
-        <Text style={styles.quoteText} numberOfLines={4}>{excerpt}</Text>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => pressed && styles.cardPressed}
+      >
+        <View style={styles.quoteBody}>
+          <Text style={styles.quoteText} numberOfLines={4}>{excerpt}</Text>
+        </View>
+      </Pressable>
+      <View style={styles.engagementWrapQuote}>
+        <MemoryEngagementBar memory={memory} onOpenComments={onOpenComments} iconSize={23} />
       </View>
-      <CardFooter memory={memory} />
-    </Pressable>
+      <Pressable accessibilityRole="button" onPress={onPress}>
+        <CardFooter memory={memory} />
+      </Pressable>
+    </View>
   );
 }
 
-export function MemoryCard({ memory, onPress, isVideoActive }: MemoryCardProps) {
+export function MemoryCard({ memory, onPress, onOpenComments, isVideoActive }: MemoryCardProps) {
   if (memory.memory_type === 'text_only') {
-    return <QuoteCard memory={memory} onPress={onPress} />;
+    return <QuoteCard memory={memory} onPress={onPress} onOpenComments={onOpenComments} />;
   }
-  return <SpreadCard memory={memory} onPress={onPress} isVideoActive={isVideoActive} />;
+  return (
+    <SpreadCard
+      memory={memory}
+      onPress={onPress}
+      onOpenComments={onOpenComments}
+      isVideoActive={isVideoActive}
+    />
+  );
 }
 
 const styles = StyleSheet.create({
@@ -261,6 +285,14 @@ const styles = StyleSheet.create({
   },
   contentPressArea: {
     width: '100%',
+  },
+  engagementWrap: {
+    paddingHorizontal: spacing.md,
+    paddingTop: 8,
+  },
+  engagementWrapQuote: {
+    paddingHorizontal: 18,
+    paddingTop: 4,
   },
   // Spread card
   cardImage: {

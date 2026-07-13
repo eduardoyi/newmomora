@@ -24,6 +24,13 @@ export function memoryDetailRoute(memoryId: string): Href {
   return `/(app)/memory/${memoryId}` as Href;
 }
 
+export function memoryDetailCommentsRoute(memoryId: string): Href {
+  return {
+    pathname: '/(app)/memory/[id]',
+    params: { id: memoryId, comments: '1' },
+  } as Href;
+}
+
 export function editMemoryRoute(memoryId: string): Href {
   return `/(app)/memory/${memoryId}/edit` as Href;
 }

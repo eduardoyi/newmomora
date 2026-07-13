@@ -19,3 +19,12 @@ jest.mock('expo-image-manipulator', () => ({
   manipulateAsync: jest.fn(async (uri: string) => ({ uri: `stripped:${uri}`, width: 0, height: 0 })),
   SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
 }));
+
+// lucide-react-native publishes ESM-only icon entrypoints. Icons are visual
+// decoration in Jest; interaction/accessibility assertions live on their
+// surrounding Pressables.
+jest.mock('lucide-react-native', () => ({
+  Heart: () => null,
+  MessageCircle: () => null,
+  Send: () => null,
+}));

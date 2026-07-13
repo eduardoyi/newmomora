@@ -17,7 +17,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { FullScreenMediaViewer, type FullScreenMediaItem } from '@/components/full-screen-media-viewer';
+import { MemoryCommentsDrawer } from '@/components/memory-comments-drawer';
 import { MemoryContentText } from '@/components/memory-content-text';
+import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { colors, fonts, getEmotionColors, getEmotionGradient, radius, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
@@ -181,6 +183,7 @@ function MemoryDetailFramed({
   regenerateIllustrationDisabled,
   isRetrying,
   onRetry,
+  onOpenComments,
 }: {
   memory: NonNullable<ReturnType<typeof useMemory>['data']>;
   illustrationUrl: string | null | undefined;
@@ -195,6 +198,7 @@ function MemoryDetailFramed({
   regenerateIllustrationDisabled: boolean;
   isRetrying: boolean;
   onRetry: () => void;
+  onOpenComments: () => void;
 }) {
   const isMedia = memory.memory_type === 'media';
   const showIllustrationGenerating = isIllustrationInProgress(memory.illustration_status);
@@ -286,6 +290,11 @@ function MemoryDetailFramed({
 
           {/* Content inside card */}
           <View style={styles.framedCardBody}>
+            <MemoryEngagementBar
+              memory={memory}
+              onOpenComments={onOpenComments}
+              iconSize={24}
+            />
             <MemoryMetaRow date={memory.memory_date} attributionName={attributionName} emotion={memory.emotion} />
             {memory.content ? (
               <MemoryContentText
@@ -335,6 +344,7 @@ function MemoryDetailEditorial({
   onEdit,
   onDelete,
   isDeleting,
+  onOpenComments,
 }: {
   memory: NonNullable<ReturnType<typeof useMemory>['data']>;
   attributionName: string;
@@ -342,6 +352,7 @@ function MemoryDetailEditorial({
   onEdit?: () => void;
   onDelete?: () => void;
   isDeleting: boolean;
+  onOpenComments: () => void;
 }) {
   const emo = getEmotionColors(memory.emotion);
 
@@ -365,6 +376,13 @@ function MemoryDetailEditorial({
             linkPreviews={toLinkPreviewMap(memory.link_previews)}
             style={styles.editorialText}
           />
+          <View style={styles.editorialEngagement}>
+            <MemoryEngagementBar
+              memory={memory}
+              onOpenComments={onOpenComments}
+              iconSize={24}
+            />
+          </View>
           {memory.taggedMembers.length > 0 && (
             <View style={[styles.memberRow, styles.editorialMemberRow]}>
               {memory.taggedMembers.map((m) => (
@@ -380,8 +398,9 @@ function MemoryDetailEditorial({
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function MemoryDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, comments } = useLocalSearchParams<{ id: string; comments?: string }>();
   const { data: memory, isLoading, isError } = useMemory(id);
+  const [commentsOpen, setCommentsOpen] = useState(comments === '1');
   const { familyId, role } = useFamily();
   const canEdit = canEditFamilyContent(role);
   const { profiles: memberProfiles } = useFamilyMemberProfiles(familyId);
@@ -494,35 +513,51 @@ export default function MemoryDetailScreen() {
 
   if (memory.memory_type === 'text_only') {
     return (
-      <MemoryDetailEditorial
-        memory={memory}
-        attributionName={attributionName}
-        isDeleting={isDeleting}
-        onBack={leaveMemoryDetail}
-        onEdit={canEdit ? () => router.push(editMemoryRoute(id)) : undefined}
-        onDelete={canEdit ? handleDelete : undefined}
-      />
+      <>
+        <MemoryDetailEditorial
+          memory={memory}
+          attributionName={attributionName}
+          isDeleting={isDeleting}
+          onBack={leaveMemoryDetail}
+          onEdit={canEdit ? () => router.push(editMemoryRoute(id)) : undefined}
+          onDelete={canEdit ? handleDelete : undefined}
+          onOpenComments={() => setCommentsOpen(true)}
+        />
+        <MemoryCommentsDrawer
+          memory={memory}
+          onClose={() => setCommentsOpen(false)}
+          visible={commentsOpen}
+        />
+      </>
     );
   }
 
   return (
-    <MemoryDetailFramed
-      memory={memory}
-      illustrationUrl={illustrationUrl}
-      attributionName={attributionName}
-      canEdit={canEdit}
-      onBack={leaveMemoryDetail}
-      onRegenerateIllustration={
-        canEdit && memory.memory_type === 'text_illustration' ? handleRegenerateIllustration : undefined
-      }
-      onEdit={canEdit ? () => router.push(editMemoryRoute(id)) : undefined}
-      onDelete={canEdit ? handleDelete : undefined}
-      isDeleting={isDeleting}
-      isRegeneratingIllustration={isRegenerating}
-      regenerateIllustrationDisabled={regenerateIllustrationDisabled}
-      isRetrying={isRetrying}
-      onRetry={handleRetry}
-    />
+    <>
+      <MemoryDetailFramed
+        memory={memory}
+        illustrationUrl={illustrationUrl}
+        attributionName={attributionName}
+        canEdit={canEdit}
+        onBack={leaveMemoryDetail}
+        onRegenerateIllustration={
+          canEdit && memory.memory_type === 'text_illustration' ? handleRegenerateIllustration : undefined
+        }
+        onEdit={canEdit ? () => router.push(editMemoryRoute(id)) : undefined}
+        onDelete={canEdit ? handleDelete : undefined}
+        isDeleting={isDeleting}
+        isRegeneratingIllustration={isRegenerating}
+        regenerateIllustrationDisabled={regenerateIllustrationDisabled}
+        isRetrying={isRetrying}
+        onRetry={handleRetry}
+        onOpenComments={() => setCommentsOpen(true)}
+      />
+      <MemoryCommentsDrawer
+        memory={memory}
+        onClose={() => setCommentsOpen(false)}
+        visible={commentsOpen}
+      />
+    </>
   );
 }
 
@@ -760,6 +795,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     lineHeight: 22 * 1.55,
     color: colors.ink,
+  },
+  editorialEngagement: {
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    marginTop: 4,
+    paddingTop: 14,
   },
   editorialMemberRow: {
     paddingTop: 16,
