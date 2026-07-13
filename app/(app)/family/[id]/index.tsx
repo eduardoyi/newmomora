@@ -5,8 +5,8 @@ import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -98,6 +98,12 @@ function MemoryThumb({ memory }: { memory: MemoryWithTags }) {
   );
 }
 
+// Module-level so FlatList sees a stable component type -- an inline arrow
+// would remount every separator on each screen re-render.
+function MemoryRowSeparator() {
+  return <View style={styles.memoryRowSeparator} />;
+}
+
 export default function ViewFamilyMemberScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { role } = useFamily();
@@ -157,115 +163,123 @@ export default function ViewFamilyMemberScreen() {
     );
   }
 
-  return (
-    <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* ── Header ── */}
-        <SafeAreaView edges={['top']}>
-          <View style={styles.header}>
-            <Pressable onPress={() => router.back()} style={styles.iconBtn} testID="view-member-back">
-              <SymbolView
-                name={{ ios: 'chevron.left', android: 'chevron_left' }}
-                size={17}
-                tintColor={colors.ink2}
-                fallback={<Text style={styles.iconBtnText}>‹</Text>}
-              />
-            </Pressable>
-            {canEdit && (
-              <View style={styles.headerRight}>
-                <Pressable
-                  onPress={() => router.push(editFamilyMemberRoute(member.id))}
-                  style={styles.iconBtn}
-                  testID="view-member-edit"
-                >
+  const listHeader = (
+    <>
+      {/* ── Header ── */}
+      <SafeAreaView edges={['top']}>
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()} style={styles.iconBtn} testID="view-member-back">
+            <SymbolView
+              name={{ ios: 'chevron.left', android: 'chevron_left' }}
+              size={17}
+              tintColor={colors.ink2}
+              fallback={<Text style={styles.iconBtnText}>‹</Text>}
+            />
+          </Pressable>
+          {canEdit && (
+            <View style={styles.headerRight}>
+              <Pressable
+                onPress={() => router.push(editFamilyMemberRoute(member.id))}
+                style={styles.iconBtn}
+                testID="view-member-edit"
+              >
+                <SymbolView
+                  name={{ ios: 'pencil', android: 'edit' }}
+                  size={16}
+                  tintColor={colors.ink2}
+                  fallback={<Text style={styles.iconBtnText}>✎</Text>}
+                />
+              </Pressable>
+              <Pressable
+                onPress={handleDelete}
+                disabled={isDeleting}
+                style={styles.iconBtn}
+                testID="view-member-delete"
+              >
+                {isDeleting ? (
+                  <ActivityIndicator size="small" color={colors.error} />
+                ) : (
                   <SymbolView
-                    name={{ ios: 'pencil', android: 'edit' }}
+                    name={{ ios: 'trash', android: 'delete' }}
                     size={16}
-                    tintColor={colors.ink2}
-                    fallback={<Text style={styles.iconBtnText}>✎</Text>}
+                    tintColor={colors.error}
+                    fallback={<Text style={{ fontSize: 15, color: colors.error }}>🗑</Text>}
                   />
-                </Pressable>
-                <Pressable
-                  onPress={handleDelete}
-                  disabled={isDeleting}
-                  style={styles.iconBtn}
-                  testID="view-member-delete"
-                >
-                  {isDeleting ? (
-                    <ActivityIndicator size="small" color={colors.error} />
-                  ) : (
-                    <SymbolView
-                      name={{ ios: 'trash', android: 'delete' }}
-                      size={16}
-                      tintColor={colors.error}
-                      fallback={<Text style={{ fontSize: 15, color: colors.error }}>🗑</Text>}
-                    />
-                  )}
-                </Pressable>
-              </View>
-            )}
-          </View>
-        </SafeAreaView>
-
-        <View style={styles.content}>
-          <CastCard
-            member={member}
-            onPortraitPress={portraitUrl ? () => setIsPortraitFullScreen(true) : undefined}
-          />
-
-          {deleteError ? <Text style={styles.deleteErrorText}>{deleteError}</Text> : null}
-
-          {/* ── Memories with this person ── */}
-          {memberMemories.length > 0 && (
-            <View style={styles.memoriesSection}>
-              <Text style={styles.memoriesEyebrow}>Memories with {member.name}</Text>
-              <View style={styles.memoriesList}>
-                {memberMemories.map((m) => (
-                  <Pressable
-                    key={m.id}
-                    onPress={() => router.push(memoryDetailRoute(m.id))}
-                    style={({ pressed }) => [styles.memoryRow, pressed && styles.memoryRowPressed]}
-                    testID={`member-memory-${m.id}`}
-                  >
-                    <MemoryThumb memory={m} />
-                    <View style={styles.memoryRowContent}>
-                      <Text style={styles.memoryDate}>{formatDisplayDate(m.memory_date)}</Text>
-                      {m.content ? (
-                        <Text style={styles.memoryText} numberOfLines={2}>
-                          {substituteLinkLabels(m.content, toLinkPreviewMap(m.link_previews))}
-                        </Text>
-                      ) : (
-                        <Text style={styles.memoryNoCaption}>
-                          {m.memory_type === 'media' && m.mediaAssets.length > 1
-                            ? 'Media'
-                            : m.memory_type === 'media' && m.media_content_type?.startsWith('video/')
-                              ? 'Video'
-                              : 'Photo'}
-                        </Text>
-                      )}
-                      {(() => {
-                        const emo = getEmotionColors(m.emotion);
-                        return emo && m.emotion ? (
-                          <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
-                            <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
-                            <Text style={[styles.emotionLabel, { color: emo.ink }]}>{m.emotion}</Text>
-                          </View>
-                        ) : null;
-                      })()}
-                    </View>
-                    <SymbolView
-                      name={{ ios: 'chevron.right', android: 'chevron_right' }}
-                      size={14}
-                      tintColor={colors.ink3}
-                      fallback={<Text style={styles.chevronText}>›</Text>}
-                    />
-                  </Pressable>
-                ))}
-              </View>
+                )}
+              </Pressable>
             </View>
           )}
         </View>
-      </ScrollView>
+      </SafeAreaView>
+
+      <View style={styles.content}>
+        <CastCard
+          member={member}
+          onPortraitPress={portraitUrl ? () => setIsPortraitFullScreen(true) : undefined}
+        />
+
+        {deleteError ? <Text style={styles.deleteErrorText}>{deleteError}</Text> : null}
+
+        {/* ── Memories with this person ── */}
+        {memberMemories.length > 0 ? (
+          <Text style={styles.memoriesEyebrow}>Memories with {member.name}</Text>
+        ) : null}
+      </View>
+    </>
+  );
+
+  return (
+    <View style={styles.container}>
+      <FlatList
+        contentContainerStyle={styles.scrollContent}
+        data={memberMemories}
+        keyExtractor={(m) => m.id}
+        ListHeaderComponent={listHeader}
+        initialNumToRender={10}
+        ItemSeparatorComponent={MemoryRowSeparator}
+        renderItem={({ item: m }) => (
+          <View style={styles.memoryRowWrap}>
+            <Pressable
+              onPress={() => router.push(memoryDetailRoute(m.id))}
+              style={({ pressed }) => [styles.memoryRow, pressed && styles.memoryRowPressed]}
+              testID={`member-memory-${m.id}`}
+            >
+              <MemoryThumb memory={m} />
+              <View style={styles.memoryRowContent}>
+                <Text style={styles.memoryDate}>{formatDisplayDate(m.memory_date)}</Text>
+                {m.content ? (
+                  <Text style={styles.memoryText} numberOfLines={2}>
+                    {substituteLinkLabels(m.content, toLinkPreviewMap(m.link_previews))}
+                  </Text>
+                ) : (
+                  <Text style={styles.memoryNoCaption}>
+                    {m.memory_type === 'media' && m.mediaAssets.length > 1
+                      ? 'Media'
+                      : m.memory_type === 'media' && m.media_content_type?.startsWith('video/')
+                        ? 'Video'
+                        : 'Photo'}
+                  </Text>
+                )}
+                {(() => {
+                  const emo = getEmotionColors(m.emotion);
+                  return emo && m.emotion ? (
+                    <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
+                      <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
+                      <Text style={[styles.emotionLabel, { color: emo.ink }]}>{m.emotion}</Text>
+                    </View>
+                  ) : null;
+                })()}
+              </View>
+              <SymbolView
+                name={{ ios: 'chevron.right', android: 'chevron_right' }}
+                size={14}
+                tintColor={colors.ink3}
+                fallback={<Text style={styles.chevronText}>›</Text>}
+              />
+            </Pressable>
+          </View>
+        )}
+      />
       {isPortraitFullScreen && portraitUrl ? (
         <FullScreenMediaViewer
           accessibilityLabel={`Full-screen portrait of ${member.name}`}
@@ -346,18 +360,19 @@ const styles = StyleSheet.create({
   },
 
   // Memories section
-  memoriesSection: {
-    gap: 12,
-  },
   memoriesEyebrow: {
     fontFamily: fonts.sansBold,
     fontSize: 10,
     letterSpacing: 0.14 * 10,
     textTransform: 'uppercase',
     color: colors.ink3,
+    marginBottom: 12,
   },
-  memoriesList: {
-    gap: 10,
+  memoryRowWrap: {
+    paddingHorizontal: spacing.md,
+  },
+  memoryRowSeparator: {
+    height: 10,
   },
   memoryRow: {
     backgroundColor: colors.white,
