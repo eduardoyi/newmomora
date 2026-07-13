@@ -16,8 +16,46 @@ export const EMOTION_PALETTES: Record<string, string> = {
   sad:         'gentle indigo, soft blue-grey, dusky periwinkle',
 };
 
+// Keep keys in sync with EMOTION_PALETTES — concrete facial/body expression
+// guidance so the image model stops defaulting every character to a smile.
+export const EMOTION_EXPRESSIONS: Record<string, string> = {
+  // Warm / positive
+  joy:         'bright genuine smiles, wide eyes, open joyful body language',
+  tender:      'soft warm smiles, gentle affectionate expressions, relaxed calm posture',
+  calm:        'peaceful contented faces, soft easy smiles or neutral relaxed expressions',
+  wonder:      'wide curious eyes, mouths slightly open in amazement, awe-struck expressions',
+  mischief:    'sly grins, raised eyebrows, playful glinting eyes',
+  pride:       'beaming confident smiles, chin up, proud open posture',
+  // Wistful / mixed
+  bittersweet: 'small wistful half-smiles, soft eyes that mix warmth and longing, gentle nostalgia — not full grins',
+  // Harder moments
+  worry:       'no cheerful smiles; the unwell or troubled child looks tired, flushed, or uncomfortable; caregivers show gentle concern and comfort; no smiling faces on objects or props',
+  weary:       'no smiles; heavy-lidded tired eyes, slumped relaxed shoulders, soft exhausted expressions; no smiling faces on objects or props',
+  sad:         'no smiles; downturned mouths, glassy or downcast eyes, comforting gentle body language; no smiling faces on objects or props',
+};
+
+// Labels written by earlier classifier vocabularies that still exist on old
+// memory rows; map them into the current emotion set.
+const EMOTION_ALIASES: Record<string, string> = {
+  funny: 'mischief',
+  joyful: 'joy',
+};
+
+export function normalizeEmotion(emotion?: string | null): string | null {
+  const trimmed = emotion?.trim().toLowerCase();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  return EMOTION_ALIASES[trimmed] ?? trimmed;
+}
+
 const IMAGE_STYLE_NEGATIVES =
   'Do not make the image photorealistic, 3D, CGI, or Pixar-like.';
+
+/** Emotions where comedic exaggeration is tonally appropriate. */
+export const COMEDIC_ELIGIBLE_EMOTIONS = new Set(['joy', 'mischief', 'pride']);
 
 const PORTRAIT_STYLE_BLOCK = [
   'The output should look like one of the characters from the provided style reference sheet.',
@@ -180,34 +218,91 @@ function buildTaggedHumansConstraint(referenceCount: number): string {
   ].join(' ');
 }
 
+function buildSceneSection(safeSceneDescription: string): string {
+  return [
+    'Create a storybook scene illustration for a parenting memory journal.',
+    `Scene: ${safeSceneDescription}`,
+  ].join('\n');
+}
+
+function buildCharactersSection(characterReferences: IllustrationCharacterReferenceInput[]): string {
+  const referenceLines = characterReferences.map(
+    (reference) => `Reference image ${reference.referenceIndex}: ${reference.description}`,
+  );
+  const taggedHumansConstraint = buildTaggedHumansConstraint(characterReferences.length);
+
+  return [
+    'Characters:',
+    'Character reference images:',
+    referenceLines.join('\n'),
+    taggedHumansConstraint,
+    'Match each tagged human character in the scene to their corresponding portrait reference.',
+    'PRESERVE from each portrait reference: hairstyle, hair color, skin tone, face shape, approximate age, and a few distinctive features.',
+    'ADAPT to the scene: pose, clothing, lighting, and facial expression. The smile in each portrait reference is an identity sample only, not the required expression — expressions follow the Emotional tone section below.',
+    'Favor stylization over realism: draw each tagged human as a stylized storybook figure consistent with their portrait reference, simplifying facial structure and interpreting rather than replicating literally.',
+  ].join('\n');
+}
+
+function buildEmotionalToneSection(emotion?: string | null, expressionStyle?: string): string {
+  const normalizedEmotion = normalizeEmotion(emotion);
+  const expressionGuidance = normalizedEmotion ? EMOTION_EXPRESSIONS[normalizedEmotion] : undefined;
+  const lines = ['Emotional tone:'];
+
+  if (normalizedEmotion && expressionGuidance) {
+    lines.push(`${normalizedEmotion}. ${expressionGuidance}.`);
+  } else {
+    lines.push('Expressions should match the mood of the scene.');
+  }
+
+  lines.push('Expressions must match the emotional tone of the memory, not default to smiling.');
+
+  if (
+    expressionStyle === 'comedic' &&
+    normalizedEmotion &&
+    COMEDIC_ELIGIBLE_EMOTIONS.has(normalizedEmotion)
+  ) {
+    lines.push(
+      'Playful exaggerated storybook expressions are welcome: dramatic pouts, scrunched noses, wide comic grimaces, theatrical dismay — in the tradition of humorous children\'s picture books.',
+    );
+  }
+
+  return lines.join('\n');
+}
+
+function buildStyleSection(styleDescription: string, colorPalette: string, memoryDate: string): string {
+  return [
+    `Illustration style: ${styleDescription}`,
+    `Color palette: ${colorPalette}`,
+    `Memory date context: ${memoryDate}. Use this only for mood, season, clothing, or setting cues when relevant; do not include written dates or text in the image.`,
+  ].join('\n');
+}
+
+function buildConstraintsSection(): string {
+  return [
+    'Constraints:',
+    'Do not render realistic painted likenesses or watercolorized photo-style faces.',
+    'Do not draw animals, objects, or costumes suggested by character names or nicknames — depict each character only as a human figure per their portrait reference.',
+    'No text, no logos, no captions, no speech bubbles, no watermark.',
+    IMAGE_STYLE_NEGATIVES,
+  ].join('\n');
+}
+
 export function buildIllustrationPrompt(input: {
   safeSceneDescription: string;
   characterReferences: IllustrationCharacterReferenceInput[];
   colorPalette: string;
   memoryDate: string;
   styleDescription: string;
+  emotion?: string | null;
+  expressionStyle?: string;
 }): string {
-  const referenceLines = input.characterReferences.map(
-    (reference) => `Reference image ${reference.referenceIndex}: ${reference.description}`,
-  );
-  const taggedHumansConstraint = buildTaggedHumansConstraint(input.characterReferences.length);
-
   return [
-    'Create a storybook scene illustration for a parenting memory journal.',
-    `Illustration style: ${input.styleDescription}`,
-    `Scene: ${input.safeSceneDescription}`,
-    'Character reference images:',
-    referenceLines.join(' '),
-    taggedHumansConstraint,
-    'Match each tagged human character in the scene to their corresponding portrait reference.',
-    'Draw each tagged human as a stylized storybook figure consistent with their portrait reference. Keep recognizable identity cues such as hairstyle, hair color, skin tone, approximate age, and a few distinctive features, but simplify facial structure and interpret rather than replicate literally.',
-    'Favor stylization over realism. Adapt pose, clothing, expression, and lighting naturally to fit the scene while staying visually consistent with the portrait references.',
-    'Do not render realistic painted likenesses or watercolorized photo-style faces.',
-    `Color palette: ${input.colorPalette}`,
-    `Memory date context: ${input.memoryDate}. Use this only for mood, season, clothing, or setting cues when relevant; do not include written dates or text in the image.`,
-    'No text, no logos, no captions, no speech bubbles, no watermark.',
-    IMAGE_STYLE_NEGATIVES,
-  ].join(' ');
+    buildSceneSection(input.safeSceneDescription),
+    buildCharactersSection(input.characterReferences),
+    buildEmotionalToneSection(input.emotion, input.expressionStyle),
+    buildStyleSection(input.styleDescription, input.colorPalette, input.memoryDate),
+    buildConstraintsSection(),
+  ].join('\n');
 }
 
 export function buildEmotionSystemPrompt(): string {
@@ -249,12 +344,39 @@ export function buildEmotionVisionUserPrompt(caption?: string | null): string {
   return 'Classify the dominant emotion for this parenting memory using the attached photo only.';
 }
 
-export function buildSafetySystemPrompt(): string {
+export interface SafetyPromptMember {
+  name: string;
+  nicknames?: string[] | null;
+}
+
+function formatNicknameMappingLine(members: Array<SafetyPromptMember>): string | null {
+  const mappings = members
+    .map((member) => {
+      const nicknames = (member.nicknames ?? []).filter((nickname) => nickname.trim().length > 0);
+      return nicknames.length > 0 ? `${nicknames.join('/')} → ${member.name}` : null;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+
+  return mappings.length > 0 ? `Nickname mapping: ${mappings.join(', ')}.` : null;
+}
+
+export function buildSafetySystemPrompt(members: Array<SafetyPromptMember> = []): string {
+  const nicknameMappingLine = formatNicknameMappingLine(members);
+
   return [
     'Rewrite parenting journal content into a child-safe illustrated scene description.',
     'Remove unsafe, violent, sexual, or disturbing details while preserving emotional truth.',
-    'Keep it concise (1-3 sentences). No names of real brands. JSON only: {"safeDescription":"..."}',
-  ].join(' ');
+    'Preserve the memory\'s actual emotional tone: if the child is sick, upset, or struggling, keep that in the scene — do not invent smiles, cheerfulness, or comforting details the memory does not describe.',
+    'Keep it concise (1-3 sentences). No names of real brands.',
+    nicknameMappingLine,
+    nicknameMappingLine
+      ? 'Replace every nickname or alias mention in the safeDescription with that family member\'s canonical name from the mapping above.'
+      : null,
+    'Never treat a nickname or pet name as a literal visual element — a nickname like "cheeky monkey" or "tiger" must never introduce an animal, object, or costume into the scene description.',
+    'Also judge whether the memory is genuinely funny or mischievous (a dramatic toddler meltdown, a kid theatrically refusing food, a silly mishap) versus a warm/tender moment or anything harder or more neutral.',
+    'expressionStyle must be exactly one of: "comedic" (genuinely funny or mischievous moments only), "tender" (warm, gentle, heartfelt moments), or "neutral" (everything else, including hard or difficult moments).',
+    'JSON only: {"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}',
+  ].filter((line): line is string => Boolean(line)).join(' ');
 }
 
 export function buildVoiceCleanupSystemPrompt(): string {

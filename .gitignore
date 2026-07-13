@@ -77,3 +77,6 @@ yarn-error.log*
 *.orig
 supabase/functions/deno.lock
 supabase/scripts/eval-output/
+
+# Claude Code local settings
+.claude/settings.local.json

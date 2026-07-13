@@ -14,16 +14,6 @@ export interface IllustrationFamilyMember {
   profile_picture_key: string | null;
 }
 
-function formatMemoryNicknameAliases(nicknames?: string[] | null): string | null {
-  const displayNicknames = (nicknames ?? []).filter((nickname) => nickname.trim().length > 0);
-
-  if (displayNicknames.length === 0) {
-    return null;
-  }
-
-  return `May appear in the memory as: ${displayNicknames.join(', ')}.`;
-}
-
 export interface IllustrationReferenceBundle {
   characterReferences: Array<{ referenceIndex: number; description: string }>;
   referenceImages: ReferenceImageInput[];
@@ -49,16 +39,10 @@ export function buildMemberIllustrationDescription(
     : 'young child';
   const gender = member.gender ? `, ${member.gender}` : '';
   const base = `${member.name} (${age}${gender})`;
-  const nicknameAliases = formatMemoryNicknameAliases(member.nicknames);
   const normalized = normalizeAdditionalInfo(member.additional_info);
-  const aliasPart = nicknameAliases ? ` ${nicknameAliases}` : '';
-  const guidancePart = normalized
-    ? aliasPart
-      ? ` Additional guidance: ${normalized}`
-      : `. Additional guidance: ${normalized}`
-    : '';
+  const guidancePart = normalized ? `. Additional guidance: ${normalized}` : '';
 
-  return `${base}${aliasPart}${guidancePart}`;
+  return `${base}${guidancePart}`;
 }
 
 function sanitizeReferenceFilename(name: string, referenceIndex: number, extension: string): string {

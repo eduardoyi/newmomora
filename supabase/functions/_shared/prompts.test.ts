@@ -6,6 +6,8 @@ import {
   buildLegacyStyleTransferPortraitPrompt,
   buildMediaEmotionSystemPrompt,
   buildPortraitPrompt,
+  buildSafetySystemPrompt,
+  normalizeEmotion,
 } from './prompts.ts';
 import {
   DEFAULT_ILLUSTRATION_STYLE_TOKEN,
@@ -129,6 +131,153 @@ Deno.test('buildIllustrationPrompt limits a single tagged human in the scene', (
   assertEquals(prompt.includes('matching reference image 1'), true);
   assertEquals(prompt.includes('classmates'), true);
   assertEquals(prompt.includes('animals'), true);
+});
+
+Deno.test('buildIllustrationPrompt preserve/adapt split keeps identity cues but frees expression', () => {
+  const prompt = buildIllustrationPrompt({
+    safeSceneDescription: 'A child naps on the couch after a long day at the park.',
+    characterReferences: [
+      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+    ],
+    colorPalette: 'soft warm greys, dusty taupe, muted oatmeal',
+    memoryDate: '2026-05-28',
+    styleDescription: DEFAULT_STYLE_DESCRIPTION,
+  });
+
+  assertEquals(prompt.includes('PRESERVE from each portrait reference'), true);
+  assertEquals(prompt.includes('hairstyle, hair color, skin tone, face shape, approximate age'), true);
+  assertEquals(prompt.includes('ADAPT to the scene'), true);
+  assertEquals(
+    prompt.includes('The smile in each portrait reference is an identity sample only, not the required expression'),
+    true,
+  );
+});
+
+Deno.test('buildIllustrationPrompt emits no-smile guidance for worry', () => {
+  const prompt = buildIllustrationPrompt({
+    safeSceneDescription: 'A child feels unwell with a fever on the couch.',
+    characterReferences: [
+      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+    ],
+    colorPalette: 'soft slate blue, muted grey, pale overcast light',
+    memoryDate: '2026-05-28',
+    styleDescription: DEFAULT_STYLE_DESCRIPTION,
+    emotion: 'worry',
+  });
+
+  assertEquals(prompt.includes('Emotional tone:'), true);
+  assertEquals(prompt.includes('worry.'), true);
+  assertEquals(prompt.includes('no cheerful smiles'), true);
+  assertEquals(
+    prompt.includes('Expressions must match the emotional tone of the memory, not default to smiling.'),
+    true,
+  );
+});
+
+Deno.test('buildIllustrationPrompt falls back to generic mood guidance when emotion is missing', () => {
+  const prompt = buildIllustrationPrompt({
+    safeSceneDescription: 'A quiet afternoon at home.',
+    characterReferences: [
+      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+    ],
+    colorPalette: 'sage green, pale blue, warm sand',
+    memoryDate: '2026-05-28',
+    styleDescription: DEFAULT_STYLE_DESCRIPTION,
+  });
+
+  assertEquals(prompt.includes('Expressions should match the mood of the scene.'), true);
+});
+
+Deno.test('buildIllustrationPrompt includes comedic exaggeration only for whitelisted emotion + comedic style', () => {
+  const comedicPrompt = buildIllustrationPrompt({
+    safeSceneDescription: 'A toddler dramatically refuses to eat broccoli.',
+    characterReferences: [
+      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+    ],
+    colorPalette: 'playful violet, soft purple, whimsical lilac pops',
+    memoryDate: '2026-05-28',
+    styleDescription: DEFAULT_STYLE_DESCRIPTION,
+    emotion: 'mischief',
+    expressionStyle: 'comedic',
+  });
+
+  assertEquals(comedicPrompt.includes('Playful exaggerated storybook expressions are welcome'), true);
+
+  const worryComedicPrompt = buildIllustrationPrompt({
+    safeSceneDescription: 'A child feels unwell with a fever on the couch.',
+    characterReferences: [
+      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+    ],
+    colorPalette: 'soft slate blue, muted grey, pale overcast light',
+    memoryDate: '2026-05-28',
+    styleDescription: DEFAULT_STYLE_DESCRIPTION,
+    emotion: 'worry',
+    expressionStyle: 'comedic',
+  });
+
+  assertEquals(worryComedicPrompt.includes('Playful exaggerated storybook expressions are welcome'), false);
+
+  const joyNeutralPrompt = buildIllustrationPrompt({
+    safeSceneDescription: 'A birthday party in the backyard.',
+    characterReferences: [
+      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+    ],
+    colorPalette: 'warm golden yellows, soft peach, light sky blue accents',
+    memoryDate: '2026-05-28',
+    styleDescription: DEFAULT_STYLE_DESCRIPTION,
+    emotion: 'joy',
+    expressionStyle: 'neutral',
+  });
+
+  assertEquals(joyNeutralPrompt.includes('Playful exaggerated storybook expressions are welcome'), false);
+});
+
+Deno.test('normalizeEmotion maps legacy classifier labels into the current vocabulary', () => {
+  assertEquals(normalizeEmotion('funny'), 'mischief');
+  assertEquals(normalizeEmotion('joyful'), 'joy');
+  assertEquals(normalizeEmotion(' Worry '), 'worry');
+  assertEquals(normalizeEmotion('unknown-label'), 'unknown-label');
+  assertEquals(normalizeEmotion(null), null);
+  assertEquals(normalizeEmotion('  '), null);
+});
+
+Deno.test('buildIllustrationPrompt treats legacy funny label as mischief for comedic gating', () => {
+  const prompt = buildIllustrationPrompt({
+    safeSceneDescription: 'Two kids grimace at their oatmeal bowls.',
+    characterReferences: [
+      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+    ],
+    colorPalette: 'playful violet, soft purple, whimsical lilac pops',
+    memoryDate: '2026-05-27',
+    styleDescription: DEFAULT_STYLE_DESCRIPTION,
+    emotion: 'funny',
+    expressionStyle: 'comedic',
+  });
+
+  assertEquals(prompt.includes('mischief.'), true);
+  assertEquals(prompt.includes('sly grins'), true);
+  assertEquals(prompt.includes('Playful exaggerated storybook expressions are welcome'), true);
+});
+
+Deno.test('buildSafetySystemPrompt forbids inventing cheerfulness the memory does not describe', () => {
+  const prompt = buildSafetySystemPrompt([]);
+
+  assertEquals(prompt.includes('do not invent smiles, cheerfulness, or comforting details'), true);
+});
+
+Deno.test('buildSafetySystemPrompt includes nickname-to-name mapping instructions when members provided', () => {
+  const withMembers = buildSafetySystemPrompt([
+    { name: 'Mara', nicknames: ['cheeky monkey'] },
+    { name: 'Enzo', nicknames: null },
+  ]);
+
+  assertEquals(withMembers.includes('Nickname mapping: cheeky monkey → Mara.'), true);
+  assertEquals(withMembers.includes('canonical name'), true);
+  assertEquals(withMembers.includes('never introduce an animal'), true);
+  assertEquals(withMembers.includes('expressionStyle'), true);
+
+  const withoutMembers = buildSafetySystemPrompt([]);
+  assertEquals(withoutMembers.includes('Nickname mapping:'), false);
 });
 
 Deno.test('getIllustrationStyle falls back to default token', () => {

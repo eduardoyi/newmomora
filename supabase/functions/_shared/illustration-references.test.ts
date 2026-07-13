@@ -54,7 +54,7 @@ Deno.test('buildMemberIllustrationDescription omits additional guidance when abs
   assertEquals(description, 'Enzo (3 years and 7 months old, Male)');
 });
 
-Deno.test('buildMemberIllustrationDescription includes a single nickname alias', () => {
+Deno.test('buildMemberIllustrationDescription never leaks a nickname alias into the description', () => {
   const description = buildMemberIllustrationDescription(
     {
       id: 'mara-id',
@@ -69,13 +69,12 @@ Deno.test('buildMemberIllustrationDescription includes a single nickname alias',
     '2026-05-26',
   );
 
-  assertEquals(
-    description,
-    'Mara (1 year and 6 months old, Female) May appear in the memory as: Marita.',
-  );
+  assertEquals(description, 'Mara (1 year and 6 months old, Female)');
+  assertEquals(description.includes('May appear in the memory as:'), false);
+  assertEquals(description.includes('Marita'), false);
 });
 
-Deno.test('buildMemberIllustrationDescription includes multiple nickname aliases', () => {
+Deno.test('buildMemberIllustrationDescription never leaks multiple nickname aliases into the description', () => {
   const description = buildMemberIllustrationDescription(
     {
       id: 'mara-id',
@@ -90,10 +89,9 @@ Deno.test('buildMemberIllustrationDescription includes multiple nickname aliases
     '2026-05-26',
   );
 
-  assertEquals(
-    description.includes('May appear in the memory as: Marita, Mimi.'),
-    true,
-  );
+  assertEquals(description.includes('May appear in the memory as:'), false);
+  assertEquals(description.includes('Marita'), false);
+  assertEquals(description.includes('Mimi'), false);
 });
 
 Deno.test('buildMemberIllustrationDescription omits nickname aliases when absent', () => {
@@ -132,7 +130,7 @@ Deno.test('buildMemberIllustrationDescription filters empty nickname strings', (
   assertEquals(description.includes('May appear in the memory as:'), false);
 });
 
-Deno.test('buildMemberIllustrationDescription includes nickname aliases before additional guidance', () => {
+Deno.test('buildMemberIllustrationDescription includes additional guidance without leaking nickname aliases', () => {
   const description = buildMemberIllustrationDescription(
     {
       id: 'mara-id',
@@ -149,8 +147,10 @@ Deno.test('buildMemberIllustrationDescription includes nickname aliases before a
 
   assertEquals(
     description,
-    'Mara (1 year and 6 months old, Female) May appear in the memory as: Marita. Additional guidance: She has curly hair.',
+    'Mara (1 year and 6 months old, Female). Additional guidance: She has curly hair.',
   );
+  assertEquals(description.includes('May appear in the memory as:'), false);
+  assertEquals(description.includes('Marita'), false);
 });
 
 Deno.test('prepareIllustrationReferences loads one image per member in tag order', async () => {

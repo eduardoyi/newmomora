@@ -17,6 +17,7 @@ const TINY_IMAGE_BYTES = Uint8Array.from(
 
 interface MockNetworkResult {
   openAiChatPrompts: string[];
+  openAiChatSystemPrompts: string[];
   openAiImagePrompts: string[];
   portraitLoads: number;
 }
@@ -37,6 +38,7 @@ async function withMockedIllustrationNetwork(
   );
   const result: MockNetworkResult = {
     openAiChatPrompts: [],
+    openAiChatSystemPrompts: [],
     openAiImagePrompts: [],
     portraitLoads: 0,
   };
@@ -106,7 +108,7 @@ async function withMockedIllustrationNetwork(
           {
             id: MEMBER_ID,
             name: 'Avery',
-            nicknames: [],
+            nicknames: ['cheeky monkey'],
             date_of_birth: '2020-01-01',
             gender: null,
             additional_info: null,
@@ -123,11 +125,15 @@ async function withMockedIllustrationNetwork(
     if (url.href === 'https://api.openai.com/v1/chat/completions') {
       const body = await request.json();
       result.openAiChatPrompts.push(body.messages[1].content);
+      result.openAiChatSystemPrompts.push(body.messages[0].content);
       return jsonResponse({
         choices: [
           {
             message: {
-              content: JSON.stringify({ safeDescription: body.messages[1].content }),
+              content: JSON.stringify({
+                safeDescription: body.messages[1].content,
+                expressionStyle: 'neutral',
+              }),
             },
           },
         ],
@@ -223,6 +229,35 @@ Deno.test('generate-illustration strips URLs from safety and image prompts', asy
         network.openAiImagePrompts.every((prompt) => prompt.includes('A joyful picnic')),
         true,
       );
+    },
+  );
+});
+
+Deno.test('generate-illustration never leaks a family member nickname into the image prompt', async () => {
+  await withMockedIllustrationNetwork(
+    'A joyful afternoon building a blanket fort in the living room.',
+    async (network) => {
+      const response = await handleGenerateIllustration(authenticatedRequest(), {
+        getObjectBytes: async () => {
+          network.portraitLoads += 1;
+          return TINY_IMAGE_BYTES;
+        },
+      });
+      await response.json();
+
+      // Mocked image edit call always fails after capturing its prompt (see
+      // withMockedIllustrationNetwork); the assertion is on what was sent.
+      assertEquals(network.openAiImagePrompts.length > 0, true);
+      assertEquals(
+        network.openAiImagePrompts.every((prompt) => !prompt.toLowerCase().includes('monkey')),
+        true,
+      );
+      assertEquals(network.openAiChatSystemPrompts.length, 1);
+      assertStringIncludes(
+        network.openAiChatSystemPrompts[0],
+        'Nickname mapping: cheeky monkey → Avery.',
+      );
+      assertStringIncludes(network.openAiChatSystemPrompts[0], 'canonical name');
     },
   );
 });

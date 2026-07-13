@@ -690,10 +690,10 @@ Set `forceRegenerate: true` when the client manually regenerates an illustration
 
 1. Fetch memory by id; assert caller owner/manager of its family
 2. Set `illustration_status = 'generating'`
-3. Fetch memory content + tagged family members (max 4) scoped to the memory's `family_id`
-4. **Safety pre-check:** `gpt-4o-mini` rewrites unsafe content → child-safe scene description
+3. Fetch memory content + tagged family members (max 4), and **all** family member id/name/nickname rows (not just tagged), scoped to the memory's `family_id`
+4. **Safety pre-check:** `gpt-4o-mini` rewrites unsafe content → child-safe scene description, given a nickname→canonical-name mapping built from every family member so nicknames never leak into the image prompt (see `buildSafetySystemPrompt`). Returns `{"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}`; `expressionStyle` is validated server-side and defaults to `neutral`
 5. Fetch ready character portraits from R2 (`momora-character-portraits`)
-6. Build prompt: safe content, labeled character reference map, style description from `families.illustration_style`, color palette, age at memory date
+6. Build prompt (`buildIllustrationPrompt`): scene-first, newline-separated sections — Scene, Characters (reference map + preserve/adapt split), Emotional tone (`memory.emotion` mapped to `EMOTION_EXPRESSIONS`, plus comedic exaggeration when `expressionStyle === 'comedic'` and the emotion is in `COMEDIC_ELIGIBLE_EMOTIONS`), Style/palette/date, Constraints
 7. Call OpenAI image edit API with all ready portrait references (up to 4; `input_fidelity=high` only on `gpt-image-1` fallback when multiple)
 8. On moderation failure: rewrite + retry once
 9. Upload to R2 `momora-memory-illustrations`

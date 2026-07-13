@@ -13,6 +13,8 @@ import {
   buildIllustrationPrompt,
   buildSafetySystemPrompt,
   EMOTION_PALETTES,
+  normalizeEmotion,
+  type SafetyPromptMember,
 } from '../_shared/prompts.ts';
 import {
   DEFAULT_ILLUSTRATION_STYLE_TOKEN,
@@ -49,6 +51,8 @@ interface ReadyFamilyMember {
 }
 
 const EMPTY_MEMBER_ID = '00000000-0000-4000-8000-000000000000';
+const ALLOWED_EXPRESSION_STYLES = new Set(['comedic', 'tender', 'neutral']);
+type ExpressionStyle = 'comedic' | 'tender' | 'neutral';
 
 export interface GenerateIllustrationDependencies {
   getObjectBytes: typeof getObjectBytes;
@@ -156,23 +160,29 @@ export async function handleGenerateIllustration(
     return errorResponse('Failed to load memory tags', 500, 'internal_error');
   }
 
-  let memberIds = (tagRows ?? []).map((row) => row.family_member_id);
+  const taggedMemberIds = (tagRows ?? []).map((row) => row.family_member_id);
 
-  if (memberIds.length === 0) {
-    const { data: nameRows, error: nameRowsError } = await supabase
-      .from('family_members')
-      .select('id, name, nicknames')
-      .eq('family_id', memory.family_id);
+  // Always load name/nickname rows for the whole family: used both for the
+  // no-tag fallback member match below and for the safety-rewrite nickname
+  // mapping, so any nickname mentioned in the text gets resolved even for
+  // members that aren't tagged on this memory.
+  const { data: nameRows, error: nameRowsError } = await supabase
+    .from('family_members')
+    .select('id, name, nicknames')
+    .eq('family_id', memory.family_id);
 
-    if (nameRowsError) {
-      console.error('generate-illustration name lookup failed', nameRowsError.message);
-      return errorResponse('Failed to load family members', 500, 'internal_error');
-    }
-
-    // URLs can't match member names, but strip for consistency with every
-    // other content->prompt call site (docs/plans/inline-links.md §8).
-    memberIds = resolveMemberIdsForIllustration(memberIds, stripUrls(memory.content), nameRows ?? []);
+  if (nameRowsError) {
+    console.error('generate-illustration name lookup failed', nameRowsError.message);
+    return errorResponse('Failed to load family members', 500, 'internal_error');
   }
+
+  // URLs can't match member names, but strip for consistency with every
+  // other content->prompt call site (docs/plans/inline-links.md §8).
+  const memberIds = resolveMemberIdsForIllustration(
+    taggedMemberIds,
+    stripUrls(memory.content),
+    nameRows ?? [],
+  );
 
   const { data: members, error: membersError } = await supabase
     .from('family_members')
@@ -227,9 +237,10 @@ export async function handleGenerateIllustration(
   );
 
   const illustrationKey = buildMemoryIllustrationKey(user.id, memoryId);
+  const normalizedEmotion = normalizeEmotion(memory.emotion);
   const resolvedPalette =
     colorPalette ??
-    (memory.emotion ? EMOTION_PALETTES[memory.emotion] : undefined) ??
+    (normalizedEmotion ? EMOTION_PALETTES[normalizedEmotion] : undefined) ??
     EMOTION_PALETTES.tender;
 
   await supabase
@@ -240,12 +251,16 @@ export async function handleGenerateIllustration(
   let generationSucceeded = false;
 
   try {
-    const safety = await chatJson<{ safeDescription?: string }>(
-      buildSafetySystemPrompt(),
+    const safetyMembers: SafetyPromptMember[] = nameRows ?? [];
+    const safety = await chatJson<{ safeDescription?: string; expressionStyle?: string }>(
+      buildSafetySystemPrompt(safetyMembers),
       strippedContent,
     );
 
     const safeDescription = safety.safeDescription?.trim() || strippedContent.slice(0, 280);
+    const expressionStyle: ExpressionStyle = ALLOWED_EXPRESSION_STYLES.has(safety.expressionStyle ?? '')
+      ? (safety.expressionStyle as ExpressionStyle)
+      : 'neutral';
     const { characterReferences, referenceImages } = await prepareIllustrationReferences(
       readyMembers,
       memory.memory_date,
@@ -260,6 +275,8 @@ export async function handleGenerateIllustration(
       safeSceneDescription: safeDescription,
       characterReferences,
       colorPalette: resolvedPalette,
+      emotion: memory.emotion,
+      expressionStyle,
       memoryDate: memory.memory_date,
       styleDescription,
     });
