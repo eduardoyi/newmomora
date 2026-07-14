@@ -460,17 +460,21 @@ describe('Settings notifications toggles', () => {
     });
   });
 
-  it('opens the FAQ and privacy policy in the default browser', async () => {
+  it('opens the FAQ, legal pages, and support email', async () => {
     mockProfile();
     const openUrlSpy = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
 
     const { getByTestId, queryByText } = renderScreen();
     fireEvent.press(getByTestId('settings-faq'));
     fireEvent.press(getByTestId('settings-privacy-policy'));
+    fireEvent.press(getByTestId('settings-terms-of-service'));
+    fireEvent.press(getByTestId('settings-contact-support'));
 
     await waitFor(() => {
       expect(openUrlSpy).toHaveBeenCalledWith('https://usemomora.com/faq/');
       expect(openUrlSpy).toHaveBeenCalledWith('https://usemomora.com/privacy-policy/');
+      expect(openUrlSpy).toHaveBeenCalledWith('https://usemomora.com/terms-of-service/');
+      expect(openUrlSpy).toHaveBeenCalledWith('mailto:hello@usemomora.com');
     });
     expect(queryByText('Send feedback')).toBeNull();
     expect(queryByText('Export data')).toBeNull();
@@ -479,8 +483,18 @@ describe('Settings notifications toggles', () => {
     openUrlSpy.mockRestore();
   });
 
-  it('shows a confirmation before scheduling account deletion', () => {
+  it('warns an owner that their family journals are hidden immediately and deleted with the account', () => {
     mockProfile();
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
 
     const { getByTestId } = renderScreen();
@@ -489,11 +503,37 @@ describe('Settings notifications toggles', () => {
     expect(deleteAccount).not.toHaveBeenCalled();
     expect(alertSpy).toHaveBeenCalledWith(
       'Schedule account deletion?',
-      'Your account and family journal will be permanently deleted in 15 days. You can cancel at any time before then.',
+      'Every family journal you own will be hidden immediately. Your account and those journals will be permanently deleted in 15 days unless you cancel before then.',
       expect.arrayContaining([
         expect.objectContaining({ text: 'Cancel', style: 'cancel' }),
         expect.objectContaining({ text: 'Schedule deletion', style: 'destructive' }),
       ]),
+    );
+
+    alertSpy.mockRestore();
+  });
+
+  it('explains that a non-owner\'s shared family content may remain without attribution', () => {
+    mockProfile();
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'viewer',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'viewer', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(jest.fn());
+
+    const { getByTestId } = renderScreen();
+    fireEvent.press(getByTestId('settings-delete-account'));
+
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Schedule account deletion?',
+      "Your account will be permanently deleted in 15 days. Content you added to another person's family journal may remain without your account attribution. You can cancel before deletion.",
+      expect.any(Array),
     );
 
     alertSpy.mockRestore();

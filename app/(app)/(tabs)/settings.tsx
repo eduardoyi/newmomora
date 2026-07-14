@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -41,6 +42,9 @@ import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 const DEFAULT_REMINDER_TIME = '20:00:00';
 const FAQ_URL = 'https://usemomora.com/faq/';
 const PRIVACY_POLICY_URL = 'https://usemomora.com/privacy-policy/';
+const TERMS_OF_SERVICE_URL = 'https://usemomora.com/terms-of-service/';
+const SUPPORT_EMAIL_URL = 'mailto:hello@usemomora.com';
+const APP_VERSION = Constants.expoConfig?.version ?? '1.1.0';
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -467,9 +471,13 @@ export default function SettingsScreen() {
   };
 
   const handleDeleteAccount = () => {
+    const deletionMessage = isOwnerRole(role)
+      ? 'Every family journal you own will be hidden immediately. Your account and those journals will be permanently deleted in 15 days unless you cancel before then.'
+      : 'Your account will be permanently deleted in 15 days. Content you added to another person\'s family journal may remain without your account attribution. You can cancel before deletion.';
+
     Alert.alert(
       'Schedule account deletion?',
-      'Your account and family journal will be permanently deleted in 15 days. You can cancel at any time before then.',
+      deletionMessage,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -593,6 +601,18 @@ export default function SettingsScreen() {
                 onPress={() => void openExternalUrl(PRIVACY_POLICY_URL)}
                 testID="settings-privacy-policy"
               />
+              <SettingsRow
+                chevron
+                label="Terms of service"
+                onPress={() => void openExternalUrl(TERMS_OF_SERVICE_URL)}
+                testID="settings-terms-of-service"
+              />
+              <SettingsRow
+                chevron
+                label="Contact support"
+                onPress={() => void openExternalUrl(SUPPORT_EMAIL_URL)}
+                testID="settings-contact-support"
+              />
             </SettingsBlock>
   
             {/* Account deletion banner */}
@@ -600,7 +620,14 @@ export default function SettingsScreen() {
               <View style={styles.deletionBanner}>
                 <Text style={styles.deletionTitle}>Account scheduled for deletion</Text>
                 <Text style={styles.deletionBody}>
-                  Hard delete on {profile.scheduled_hard_delete_at?.slice(0, 10) ?? 'soon'}.
+                  Permanent deletion is scheduled for{' '}
+                  {profile.scheduled_hard_delete_at
+                    ? new Date(profile.scheduled_hard_delete_at).toLocaleDateString(undefined, {
+                        day: 'numeric',
+                        month: 'long',
+                        year: 'numeric',
+                      })
+                    : 'soon'}.
                 </Text>
                 <Pressable
                   onPress={() => void handleCancelAccountDeletion()}
@@ -638,7 +665,7 @@ export default function SettingsScreen() {
               )}
             </View>
   
-            <Text style={styles.version}>Momora · v1.0</Text>
+            <Text style={styles.version}>Momora · v{APP_VERSION}</Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
