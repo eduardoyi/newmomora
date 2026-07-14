@@ -1,8 +1,12 @@
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Alert } from 'react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Alert, Keyboard, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { MemoryCommentsDrawer } from './memory-comments-drawer';
+import {
+  getCommentsDrawerBottomPadding,
+  getCommentsKeyboardAvoidingBehavior,
+  MemoryCommentsDrawer,
+} from './memory-comments-drawer';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useMemoryEngagement } from '@/hooks/useMemoryEngagement';
@@ -104,5 +108,38 @@ describe('MemoryCommentsDrawer', () => {
 
     fireEvent(getByTestId('comment-comment-1'), 'longPress');
     expect(deleteComment).toHaveBeenCalledWith(ownComment);
+  });
+
+  it('uses one keyboard-resize strategy and sizes the sheet to the visible viewport', () => {
+    const { getByTestId } = renderDrawer();
+    const sheetStyle = StyleSheet.flatten(getByTestId('comments-drawer').props.style);
+
+    expect(getCommentsKeyboardAvoidingBehavior('ios')).toBe('padding');
+    expect(getCommentsKeyboardAvoidingBehavior('android')).toBeUndefined();
+    expect(sheetStyle.flex).toBe(1);
+    expect(sheetStyle.maxHeight).toBe('80%');
+    expect(sheetStyle.height).toBeUndefined();
+  });
+
+  it('removes the safe-area spacer while the keyboard is visible', () => {
+    const keyboardListeners: Record<string, () => void> = {};
+    const addListenerSpy = jest.spyOn(Keyboard, 'addListener').mockImplementation(
+      (event, listener) => {
+        keyboardListeners[event] = listener as () => void;
+        return { remove: jest.fn() } as never;
+      },
+    );
+    const { getByTestId } = renderDrawer();
+
+    expect(getCommentsDrawerBottomPadding(34, false)).toBe(34);
+    expect(StyleSheet.flatten(getByTestId('comments-drawer').props.style).paddingBottom).toBe(34);
+
+    act(() => keyboardListeners.keyboardDidShow());
+    expect(StyleSheet.flatten(getByTestId('comments-drawer').props.style).paddingBottom).toBe(0);
+
+    act(() => keyboardListeners.keyboardDidHide());
+    expect(StyleSheet.flatten(getByTestId('comments-drawer').props.style).paddingBottom).toBe(34);
+
+    addListenerSpy.mockRestore();
   });
 });

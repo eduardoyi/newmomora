@@ -23,7 +23,9 @@ Every active role, including viewer, may participate.
 - Comments render oldest-to-newest with the household account name, avatar
   initial, and compact timestamp (`now`, minutes, hours, days, then date).
 - The fixed plain-text composer stays above the keyboard on iOS and Android.
-  Empty/error/loading states remain inside the drawer.
+  The drawer sizes itself against the currently visible viewport, keeps its
+  header/dismiss area on-screen, and applies bottom safe-area padding only
+  while the keyboard is closed. Empty/error/loading states remain inside it.
 - Comments cannot be edited. Long-press allows the author to delete their own;
   owner/manager can moderate any comment in that specific family.
 - Like/add/delete mutations are optimistic and roll back on failure. Timeline
@@ -136,6 +138,10 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 - Push failures are non-fatal because engagement has already committed.
 - Native haptics require a development-client/native rebuild after dependency
   installation; Expo Go is not supported by this SDK setup.
+- On Android, let the modal window's native `adjustResize` behavior handle the
+  keyboard. Combining that resize with `KeyboardAvoidingView` height changes or
+  JS pixel heights derived from `useWindowDimensions` causes double shrinking,
+  top overflow, and a delayed jump when the keyboard closes.
 
 ## Dependencies
 
@@ -191,4 +197,5 @@ maestro test .maestro/flows/engagement/like-and-comment.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-07-14 | Fixed keyboard spacing, visible-viewport overflow, first-comment visibility, and Android drawer reposition flicker |
 | 2026-07-13 | Initial likes, comments, moderation, optimistic UI, notification preference/delivery, and tests |

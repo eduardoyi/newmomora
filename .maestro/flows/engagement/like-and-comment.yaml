@@ -12,6 +12,7 @@ appId: com.memora.app
     timeout: 10000
 - tapOn:
     id: comment-input
+- assertVisible: "Comments"
 - inputText: "I love this moment."
 - tapOn:
     id: comment-submit

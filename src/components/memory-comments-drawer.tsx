@@ -1,9 +1,10 @@
 import { Send } from 'lucide-react-native';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -11,7 +12,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -33,8 +33,18 @@ interface MemoryCommentsDrawerProps {
   onClose: () => void;
 }
 
+export function getCommentsKeyboardAvoidingBehavior(platform: string) {
+  return platform === 'ios' ? ('padding' as const) : undefined;
+}
+
+export function getCommentsDrawerBottomPadding(
+  bottomInset: number,
+  isKeyboardVisible: boolean,
+) {
+  return isKeyboardVisible ? 0 : Math.max(bottomInset, spacing.md);
+}
+
 export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryCommentsDrawerProps) {
-  const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { familyId, role } = useFamily();
@@ -42,11 +52,28 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
   const { profiles } = useFamilyMemberProfiles(familyId);
   const engagement = useMemoryEngagement(memory, { commentsEnabled: visible });
   const [text, setText] = useState('');
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const listRef = useRef<FlatList<MemoryComment>>(null);
   const canModerate = canEditFamilyContent(role);
   const currentName = profile?.name ?? 'You';
 
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+      setIsKeyboardVisible(true);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      setIsKeyboardVisible(false);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
   const handleClose = () => {
+    Keyboard.dismiss();
+    setIsKeyboardVisible(false);
     setText('');
     onClose();
   };
@@ -95,7 +122,7 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
       visible={visible}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={getCommentsKeyboardAvoidingBehavior(Platform.OS)}
         style={styles.root}
         testID="comments-keyboard-avoiding-view"
       >
@@ -110,7 +137,12 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
           accessibilityViewIsModal
           style={[
             styles.sheet,
-            { height: height * 0.8, paddingBottom: Math.max(insets.bottom, spacing.md) },
+            {
+              paddingBottom: getCommentsDrawerBottomPadding(
+                insets.bottom,
+                isKeyboardVisible,
+              ),
+            },
           ]}
           testID="comments-drawer"
         >
@@ -144,6 +176,7 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
               keyboardShouldPersistTaps="handled"
               onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
               ref={listRef}
+              style={styles.list}
               renderItem={({ item }) => {
                 const name = authorName(item);
                 const mine = item.user_id === user?.id;
@@ -233,6 +266,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
+    flex: 1,
+    maxHeight: '80%',
     overflow: 'hidden',
   },
   handle: {
@@ -257,6 +292,7 @@ const styles = StyleSheet.create({
   centered: { alignItems: 'center', flex: 1, gap: spacing.sm, justifyContent: 'center' },
   errorText: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 14 },
   retryText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 14 },
+  list: { flex: 1 },
   listContent: { gap: 20, paddingBottom: 10, paddingHorizontal: 20, paddingTop: 18 },
   emptyListContent: { flexGrow: 1 },
   emptyState: { alignItems: 'center', flex: 1, justifyContent: 'center' },
