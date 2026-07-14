@@ -16,7 +16,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
@@ -132,91 +132,93 @@ export function FullScreenMediaViewer({
       transparent
       visible
     >
-      <StatusBar style="light" />
-      <View
-        accessibilityLabel={accessibilityLabel}
-        accessibilityViewIsModal
-        style={styles.container}
-        testID="full-screen-media-viewer"
-      >
-        <ScrollView
-          contentOffset={{ x: safeInitialIndex * width, y: 0 }}
-          horizontal
-          onMomentumScrollEnd={handleScrollEnd}
-          onScrollEndDrag={handleScrollEnd}
-          pagingEnabled
-          ref={scrollRef}
-          scrollEnabled={items.length > 1}
-          showsHorizontalScrollIndicator={false}
-          testID="full-screen-media-scroll"
+      <SafeAreaProvider testID="full-screen-media-safe-area-provider">
+        <StatusBar style="light" />
+        <View
+          accessibilityLabel={accessibilityLabel}
+          accessibilityViewIsModal
+          style={styles.container}
+          testID="full-screen-media-viewer"
         >
-          {items.map((item, index) => {
-            const uri = item.uri ?? (item.objectKey ? urls[item.objectKey] : undefined);
-            return (
-              <View key={item.id} style={[styles.pageWrap, { width }]}>
-                {!uri ? (
-                  <ActivityIndicator color={colors.white} size="large" />
-                ) : isVideoContentType(item.contentType) ? (
-                  index === activeIndex ? (
-                    <FullScreenVideo isActive={index === activeIndex} uri={uri} />
+          <ScrollView
+            contentOffset={{ x: safeInitialIndex * width, y: 0 }}
+            horizontal
+            onMomentumScrollEnd={handleScrollEnd}
+            onScrollEndDrag={handleScrollEnd}
+            pagingEnabled
+            ref={scrollRef}
+            scrollEnabled={items.length > 1}
+            showsHorizontalScrollIndicator={false}
+            testID="full-screen-media-scroll"
+          >
+            {items.map((item, index) => {
+              const uri = item.uri ?? (item.objectKey ? urls[item.objectKey] : undefined);
+              return (
+                <View key={item.id} style={[styles.pageWrap, { width }]}>
+                  {!uri ? (
+                    <ActivityIndicator color={colors.white} size="large" />
+                  ) : isVideoContentType(item.contentType) ? (
+                    index === activeIndex ? (
+                      <FullScreenVideo isActive={index === activeIndex} uri={uri} />
+                    ) : (
+                      <View style={styles.mediaPage} />
+                    )
                   ) : (
-                    <View style={styles.mediaPage} />
-                  )
-                ) : (
-                  <Image
-                    accessibilityLabel={`Media ${index + 1} of ${items.length}`}
-                    contentFit="contain"
-                    onError={item.objectKey ? () => void refetchMediaUrls() : undefined}
-                    source={{
-                      uri,
-                      cacheKey: `${item.objectKey ?? item.uri ?? item.id}:${cacheVersion ?? ''}`,
-                    }}
-                    style={styles.mediaPage}
-                    testID={`full-screen-media-image-${item.id}`}
-                  />
-                )}
-              </View>
-            );
-          })}
-        </ScrollView>
+                    <Image
+                      accessibilityLabel={`Media ${index + 1} of ${items.length}`}
+                      contentFit="contain"
+                      onError={item.objectKey ? () => void refetchMediaUrls() : undefined}
+                      source={{
+                        uri,
+                        cacheKey: `${item.objectKey ?? item.uri ?? item.id}:${cacheVersion ?? ''}`,
+                      }}
+                      style={styles.mediaPage}
+                      testID={`full-screen-media-image-${item.id}`}
+                    />
+                  )}
+                </View>
+              );
+            })}
+          </ScrollView>
 
-        <SafeAreaView edges={['top', 'bottom']} pointerEvents="box-none" style={styles.chrome}>
-          <View style={styles.topBar} pointerEvents="box-none">
-            <View style={styles.topSpacer} />
-            {items.length > 1 ? (
-              <View style={styles.counter} testID="full-screen-media-counter">
-                <Text style={styles.counterText}>{activeIndex + 1} / {items.length}</Text>
-              </View>
-            ) : <View style={styles.topSpacer} />}
-            <Pressable
-              accessibilityLabel="Close full-screen media"
-              accessibilityRole="button"
-              hitSlop={8}
-              onPress={onClose}
-              style={({ pressed }) => [styles.closeButton, pressed && styles.buttonPressed]}
-              testID="full-screen-media-close"
-            >
-              <SymbolView
-                name={{ ios: 'xmark', android: 'close' }}
-                size={18}
-                tintColor={colors.white}
-                fallback={<Text style={styles.closeFallback}>×</Text>}
-              />
-            </Pressable>
-          </View>
-
-          {items.length > 1 ? (
-            <View style={styles.dots}>
-              {items.map((item, index) => (
-                <View
-                  key={item.id}
-                  style={[styles.dot, index === activeIndex && styles.dotActive]}
+          <SafeAreaView edges={['top', 'bottom']} pointerEvents="box-none" style={styles.chrome}>
+            <View style={styles.topBar} pointerEvents="box-none">
+              <View style={styles.topSpacer} />
+              {items.length > 1 ? (
+                <View style={styles.counter} testID="full-screen-media-counter">
+                  <Text style={styles.counterText}>{activeIndex + 1} / {items.length}</Text>
+                </View>
+              ) : <View style={styles.topSpacer} />}
+              <Pressable
+                accessibilityLabel="Close full-screen media"
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={onClose}
+                style={({ pressed }) => [styles.closeButton, pressed && styles.buttonPressed]}
+                testID="full-screen-media-close"
+              >
+                <SymbolView
+                  name={{ ios: 'xmark', android: 'close' }}
+                  size={18}
+                  tintColor={colors.white}
+                  fallback={<Text style={styles.closeFallback}>×</Text>}
                 />
-              ))}
+              </Pressable>
             </View>
-          ) : null}
-        </SafeAreaView>
-      </View>
+
+            {items.length > 1 ? (
+              <View style={styles.dots}>
+                {items.map((item, index) => (
+                  <View
+                    key={item.id}
+                    style={[styles.dot, index === activeIndex && styles.dotActive]}
+                  />
+                ))}
+              </View>
+            ) : null}
+          </SafeAreaView>
+        </View>
+      </SafeAreaProvider>
     </Modal>
   );
 }

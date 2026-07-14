@@ -49,7 +49,7 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
 - **Photo** memories: after save, async emotion analysis may replace the Photo badge with an emotion chip (same labels as text memories). Failures do not block save.
 - **Video** memories: no emotion chip in MVP (Photo/Video badge only).
 - On the memory detail screen, photos display full-width via presigned URL; videos play inline via `expo-video`, loop with sound, and hide native controls.
-- Tapping any photo or video on the memory detail screen opens it in a warm, dark full-screen viewer. Multi-asset memories open at the tapped carousel position and preserve horizontal swipe paging, the page counter, and dots. Full-screen videos loop with sound and toggle play/pause when tapped; closing returns to the same detail screen.
+- Tapping any photo or video on the memory detail screen opens it in a warm, dark full-screen viewer. Multi-asset memories open at the tapped carousel position and preserve horizontal swipe paging, the page counter, and dots. Full-screen videos loop with sound and toggle play/pause when tapped; closing returns to the same detail screen. Viewer controls stay inside the native safe area, including iOS full-screen modal status bars and sensor housings.
 - Editing a `media` memory allows adding, removing, and reordering assets, but at least one asset must remain.
 - Deleting a `media` memory deletes all R2 media objects before or alongside the DB row deletion.
 
@@ -258,7 +258,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/hooks/use-incoming-memory-share.integration.test.tsx` | Native resolved payload → validated composer attachment → intent cleared |
 | `src/components/incoming-share-router.integration.test.tsx` | Cold-start persisted payload fallback, root-route race avoidance, viewer role gate, foreground recheck |
 | `src/utils/media-emotion-polling.test.ts` | Poll window for photo media without emotion |
-| `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, close action |
+| `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, modal-local safe-area containment, close action |
 | `src/components/memory-media-carousel.test.tsx` | Active-page-only video mounting, bounded video buffers, stable timeline video layout, inactive/first-frame thumbnail coverage, signed-URL retry |
 | `src/hooks/useVideoThumbnail.test.ts` | Rotation-aware thumbnail dimensions and remount-safe video thumbnail caching |
 | `src/components/app-providers.test.tsx` | AppState-to-TanStack-Query focus synchronization for foreground refetches |
@@ -309,6 +309,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
+| 2026-07-14 | Made the full-screen viewer establish its own safe-area provider so the iOS close control stays below the status bar and remains tappable. |
 | 2026-07-13 | Timeline video players now release one frame after their virtualized row unmounts, preventing Android native-player release races while preserving autoplay. |
 | 2026-07-13 | Backfilled legacy image aspect ratios and made multi-asset carousels preserve the first asset's exact ratio while later items fit inside the fixed frame |
 | 2026-07-13 | Persisted natural media aspect ratios (including rotation-corrected post-compression video ratios), added a legacy-video backfill, and made timeline rows consume the stored value immediately; cached first-frame thumbnails prevent gray flashes around playback activation |

@@ -1,4 +1,6 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, within } from '@testing-library/react-native';
+import type { ReactElement } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { FullScreenMediaViewer } from '@/components/full-screen-media-viewer';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
@@ -25,6 +27,18 @@ jest.mock('expo-video', () => ({
 
 const mockedUseMediaUrls = useMediaUrls as jest.MockedFunction<typeof useMediaUrls>;
 const mockRefetchMediaUrls = jest.fn();
+const safeAreaMetrics = {
+  frame: { height: 844, width: 390, x: 0, y: 0 },
+  insets: { bottom: 34, left: 0, right: 0, top: 47 },
+};
+
+function renderWithSafeArea(view: ReactElement) {
+  return render(
+    <SafeAreaProvider initialMetrics={safeAreaMetrics}>
+      {view}
+    </SafeAreaProvider>,
+  );
+}
 
 describe('FullScreenMediaViewer integration', () => {
   beforeEach(() => {
@@ -41,7 +55,7 @@ describe('FullScreenMediaViewer integration', () => {
 
   it('resolves private media, starts at the tapped item, pages, and closes', () => {
     const onClose = jest.fn();
-    const { getByTestId, getByText } = render(
+    const { getByTestId, getByText } = renderWithSafeArea(
       <FullScreenMediaViewer
         initialIndex={1}
         items={[
@@ -70,6 +84,10 @@ describe('FullScreenMediaViewer integration', () => {
       preferredForwardBufferDuration: 8,
       maxBufferBytes: 16 * 1024 * 1024,
     });
+    expect(
+      within(getByTestId('full-screen-media-safe-area-provider'))
+        .getByTestId('full-screen-media-close'),
+    ).toBeTruthy();
 
     fireEvent(getByTestId('full-screen-media-scroll'), 'momentumScrollEnd', {
       nativeEvent: { contentOffset: { x: 0, y: 0 } },
@@ -81,7 +99,7 @@ describe('FullScreenMediaViewer integration', () => {
   });
 
   it('shows a direct illustration URI without a page counter', () => {
-    const { getByTestId, queryByTestId } = render(
+    const { getByTestId, queryByTestId } = renderWithSafeArea(
       <FullScreenMediaViewer
         items={[{
           id: 'illustration',
@@ -97,7 +115,7 @@ describe('FullScreenMediaViewer integration', () => {
   });
 
   it('uses an object-key cache identity and refreshes a failed signed image URL', () => {
-    const { getByTestId } = render(
+    const { getByTestId } = renderWithSafeArea(
       <FullScreenMediaViewer
         cacheVersion="version-1"
         items={[{
