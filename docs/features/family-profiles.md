@@ -16,6 +16,7 @@ Family profiles power memory tagging and AI character portraits. Each member has
 - **Member ordering:** everywhere `useFamilyMembers()` renders members (family tab, memory tag chips in new/edit memory), the list is ordered by how often each member is tagged in memories (most-tagged first, ties by `created_at`). `fetchFamilyMembers` embeds a `memory_family_members(count)` aggregate and sorts client-side; memory create/update/delete invalidates the `family-members` query so the order stays fresh.
 - **Add member modal:** name, DOB (YYYY-MM-DD), optional gender/notes, required photo from camera or library
 - **Edit member:** changing the profile photo prompts to regenerate the AI portrait or save without regenerating (keeps the existing character portrait until the user chooses to regenerate)
+- **Keyboard-safe forms:** add/edit forms scroll the focused field above the keyboard. Android uses the keyboard event's absolute top coordinate so system navigation-bar insets do not leave nicknames or notes obscured.
 - **Profile photo source chooser:** tapping the photo circle shows **Take photo** and **Choose from library**. iOS uses a native action sheet; Android uses a standard alert chooser.
 - **Timeline onboarding:** if no family members, CTA to add one before journaling
 - **Portrait status:** while `pending` or `generating`, the profile photo shows a sparkle loading overlay (same pattern as memory illustrations) with copy such as “Portrait pending” / “Generating portrait…”. When `ready`, the AI character portrait is shown.
@@ -144,6 +145,7 @@ Picker options intentionally set `exif: false` and `base64: false`; child profil
 | `src/utils/e2e-fixtures.test.ts` | E2E profile fixture loader |
 | `src/services/media.test.ts` | Presigned upload (native FileSystem path) |
 | `src/components/cast-card.test.tsx` | Family-member detail portrait tap affordance |
+| `src/components/keyboard-aware-form-screen.test.ts` | Android keyboard-top coordinate handling with system navigation bars |
 
 ### Integration tests
 
@@ -194,6 +196,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
+| 2026-07-14 | Keep lower add/edit profile fields visible above the Android keyboard |
 | 2026-07-12 | Members ordered by memory tag frequency (family tab + memory tag chips) |
 | 2026-07-12 | Ready character portraits open full screen from family-member detail |
 | 2026-07-12 | Hardened photo permission and picker presentation lifecycle |

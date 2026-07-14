@@ -17,6 +17,7 @@ import {
   View,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  type KeyboardMetrics,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -39,6 +40,18 @@ interface KeyboardAwareFormScreenProps {
   contentContainerStyle?: StyleProp<ViewStyle>;
 }
 
+export function getKeyboardTop(
+  metrics: KeyboardMetrics,
+  platform: typeof Platform.OS,
+  screenHeight: number,
+) {
+  if (platform === 'android' && metrics.screenY > 0) {
+    return metrics.screenY;
+  }
+
+  return screenHeight - metrics.height;
+}
+
 export function KeyboardAwareFormScreen({
   children,
   contentContainerStyle,
@@ -46,6 +59,7 @@ export function KeyboardAwareFormScreen({
   const scrollRef = useRef<ScrollView>(null);
   const scrollYRef = useRef(0);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [keyboardTop, setKeyboardTop] = useState(0);
   const pendingInputRef = useRef<RefObject<View | null> | null>(null);
 
   useEffect(() => {
@@ -54,9 +68,13 @@ export function KeyboardAwareFormScreen({
 
     const showSubscription = Keyboard.addListener(showEvent, (event) => {
       setKeyboardHeight(event.endCoordinates.height);
+      setKeyboardTop(
+        getKeyboardTop(event.endCoordinates, Platform.OS, Dimensions.get('screen').height),
+      );
     });
     const hideSubscription = Keyboard.addListener(hideEvent, () => {
       setKeyboardHeight(0);
+      setKeyboardTop(0);
       pendingInputRef.current = null;
     });
 
@@ -67,21 +85,17 @@ export function KeyboardAwareFormScreen({
   }, []);
 
   const performScroll = useCallback(
-    (inputRef: RefObject<View | null>, activeKeyboardHeight: number) => {
+    (inputRef: RefObject<View | null>, activeKeyboardTop: number) => {
       const input = inputRef.current;
       const scrollView = scrollRef.current;
 
-      if (!input || !scrollView || activeKeyboardHeight === 0) {
+      if (!input || !scrollView || activeKeyboardTop === 0) {
         return;
       }
 
       const measure = () => input.measureInWindow((_inputX, inputPageY, _inputWidth, inputHeight) => {
-        // Use screen.height — measureInWindow returns absolute screen coordinates, and
-        // window.height can shrink on Android (adjustResize) making keyboardTop wrong.
-        const screenHeight = Dimensions.get('screen').height;
-        const keyboardTop = screenHeight - activeKeyboardHeight;
         const inputBottom = inputPageY + inputHeight;
-        const targetBottom = keyboardTop - spacing.lg;
+        const targetBottom = activeKeyboardTop - spacing.lg;
 
         if (inputBottom <= targetBottom) {
           return;
@@ -105,23 +119,23 @@ export function KeyboardAwareFormScreen({
 
   const scrollInputIntoView = useCallback(
     (inputRef: RefObject<View | null>) => {
-      if (keyboardHeight > 0) {
-        performScroll(inputRef, keyboardHeight);
+      if (keyboardTop > 0) {
+        performScroll(inputRef, keyboardTop);
         return;
       }
 
       pendingInputRef.current = inputRef;
     },
-    [keyboardHeight, performScroll],
+    [keyboardTop, performScroll],
   );
 
   useEffect(() => {
-    if (keyboardHeight > 0 && pendingInputRef.current) {
+    if (keyboardTop > 0 && pendingInputRef.current) {
       // Keep pendingInputRef set — Android fires keyboardDidShow multiple times
       // as it animates in. Cleared in keyboardDidHide.
-      performScroll(pendingInputRef.current, keyboardHeight);
+      performScroll(pendingInputRef.current, keyboardTop);
     }
-  }, [keyboardHeight, performScroll]);
+  }, [keyboardTop, performScroll]);
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     scrollYRef.current = event.nativeEvent.contentOffset.y;

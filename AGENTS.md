@@ -103,6 +103,7 @@ Verify commands exist before running. Do not invent scripts.
 - Use `Pressable`, not deprecated Touchables.
 - Safe areas via `react-native-safe-area-context` — no hardcoded notch padding.
 - **Keyboard avoidance is required** for every screen, modal, bottom sheet, or drawer with `TextInput`/search fields. Use `KeyboardAvoidingView`, keyboard-aware scroll/content insets, or the existing local pattern so focused inputs and action buttons stay visible above the keyboard on iOS and Android.
+- On Android, verify lower-page and multiline inputs actually auto-scroll above the IME; `adjustResize` or extra bottom padding alone is not proof that the focused field remains visible. Keyboard regressions require a focused unit/integration test.
 - Lists: virtualize timeline/calendar (`FlashList` or `FlatList` with stable keys).
 - Images: `expo-image` with explicit dimensions; signed URLs for private buckets.
 - Never `{count && <Text>}` when count can be `0` — use ternary or `count > 0`.
