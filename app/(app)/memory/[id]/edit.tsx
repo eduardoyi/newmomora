@@ -38,6 +38,8 @@ const TYPE_CONFIGS = {
   media_mixed:       { label: 'Media',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
 } as const;
 
+const EMPTY_MEDIA_URLS: Record<string, string> = {};
+
 export default function EditMemoryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { role } = useFamily();
@@ -69,7 +71,8 @@ export default function EditMemoryScreen() {
     () => memory?.mediaAssets.map((asset) => asset.object_key) ?? [],
     [memory?.mediaAssets],
   );
-  const { data: mediaUrls = {} } = useMediaUrls(mediaKeys, memory?.updated_at);
+  const { data: mediaUrlData } = useMediaUrls(mediaKeys, memory?.updated_at);
+  const mediaUrls = mediaUrlData ?? EMPTY_MEDIA_URLS;
 
   const [content, setContent] = useState('');
   const [memoryDate, setMemoryDate] = useState('');
@@ -116,16 +119,24 @@ export default function EditMemoryScreen() {
       return;
     }
 
-    setAttachedMedia((current) =>
-      current.map((attachment) => {
+    setAttachedMedia((current) => {
+      let hasUrlChange = false;
+      const next = current.map((attachment) => {
         if (!attachment.objectKey) {
           return attachment;
         }
 
         const nextUrl = mediaUrls[attachment.objectKey];
-        return nextUrl ? { ...attachment, uri: nextUrl } : attachment;
-      }),
-    );
+        if (!nextUrl || nextUrl === attachment.uri) {
+          return attachment;
+        }
+
+        hasUrlChange = true;
+        return { ...attachment, uri: nextUrl };
+      });
+
+      return hasUrlChange ? next : current;
+    });
   }, [isInitialized, mediaUrls]);
 
   const typeKey =

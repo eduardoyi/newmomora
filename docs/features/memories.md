@@ -139,6 +139,6 @@ role/tenancy model and the RLS rewrite.
 | Layer | File |
 |-------|------|
 | Unit | `src/utils/memories.test.ts`, `src/utils/calendar.test.ts`, `src/utils/member-mentions.test.ts`, `src/utils/auto-memory-tags.test.ts`, `src/utils/profile-photo.test.ts` |
-| Integration | `src/services/memories.integration.test.ts` (including large-timeline relation/engagement batching), `src/services/engagement.integration.test.ts`, `src/hooks/useMemoryEngagement.integration.test.tsx`, `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/useAutoMemoryTags.integration.test.tsx` |
+| Integration | `src/services/memories.integration.test.ts` (including large-timeline relation/engagement batching), `src/services/engagement.integration.test.ts`, `src/hooks/useMemoryEngagement.integration.test.tsx`, `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/useAutoMemoryTags.integration.test.tsx`, `src/screen-tests/edit-memory.integration.test.tsx` |
 | E2E | `.maestro/flows/memories/create-memory.yaml`, `.maestro/flows/memories/auto-tag.yaml`, `.maestro/flows/engagement/like-and-comment.yaml` |
 | Deno | `supabase/functions/analyze-emotion/index.test.ts`, `generate-illustration/index.test.ts`, `notify-memory-engagement/index.test.ts`, `_shared/member-mentions.test.ts`, `_shared/illustration-references.test.ts`, `_shared/image-bytes.test.ts` |
