@@ -51,6 +51,7 @@ interface ReadyFamilyMember {
 }
 
 const EMPTY_MEMBER_ID = '00000000-0000-4000-8000-000000000000';
+const MAX_ILLUSTRATION_MEMBERS = 6;
 const ALLOWED_EXPRESSION_STYLES = new Set(['comedic', 'tender', 'neutral']);
 type ExpressionStyle = 'comedic' | 'tender' | 'neutral';
 
@@ -162,6 +163,14 @@ export async function handleGenerateIllustration(
 
   const taggedMemberIds = (tagRows ?? []).map((row) => row.family_member_id);
 
+  if (taggedMemberIds.length > MAX_ILLUSTRATION_MEMBERS) {
+    return errorResponse(
+      `AI illustrations support up to ${MAX_ILLUSTRATION_MEMBERS} family members`,
+      400,
+      'ILLUSTRATION_MEMBER_LIMIT',
+    );
+  }
+
   // Always load name/nickname rows for the whole family: used both for the
   // no-tag fallback member match below and for the safety-rewrite nickname
   // mapping, so any nickname mentioned in the text gets resolved even for
@@ -182,6 +191,7 @@ export async function handleGenerateIllustration(
     taggedMemberIds,
     stripUrls(memory.content),
     nameRows ?? [],
+    MAX_ILLUSTRATION_MEMBERS,
   );
 
   const { data: members, error: membersError } = await supabase

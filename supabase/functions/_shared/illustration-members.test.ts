@@ -34,3 +34,21 @@ Deno.test('resolveMemberIdsForIllustration ignores substring false positives', (
 
   assertEquals(ids, []);
 });
+
+Deno.test('resolveMemberIdsForIllustration caps no-tag fallback participants', () => {
+  const candidates = Array.from({ length: 7 }, (_, index) => ({
+    id: `member-${index}`,
+    name: `Person ${index}`,
+    nicknames: [],
+  }));
+
+  assertEquals(
+    resolveMemberIdsForIllustration(
+      [],
+      candidates.map((member) => member.name).join(' and '),
+      candidates,
+      6,
+    ),
+    candidates.slice(0, 6).map((member) => member.id),
+  );
+});

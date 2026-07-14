@@ -234,6 +234,7 @@ export function useMemoryMutations() {
       memoryDate?: string;
       taggedMemberIds?: string[];
       mediaAssets?: MemoryMediaMutationAsset[];
+      memoryType?: MemoryType;
     }) => {
       if (!user) {
         throw new Error('You must be signed in to update a memory');
@@ -262,6 +263,7 @@ export function useMemoryMutations() {
           memoryDate: input.memoryDate,
           taggedMemberIds: input.taggedMemberIds,
           mediaAssets,
+          memoryType: input.memoryType,
         });
 
         if (result.error) {

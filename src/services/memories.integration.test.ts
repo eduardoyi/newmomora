@@ -10,6 +10,7 @@ import {
   retryMemoryIllustration,
   runMemoryIllustrationPipeline,
   runMediaPhotoEmotionAnalysis,
+  updateMemory,
 } from '@/services/memories';
 
 import { supabase } from '@/lib/supabase';
@@ -79,6 +80,20 @@ describe('memories service integration', () => {
 
     expect(result.error?.code).toBe('validation_error');
     expect(result.data).toBeNull();
+  });
+
+  it('rejects more than six tags only when creating an illustrated memory', async () => {
+    const result = await createMemory({
+      userId: 'user-1',
+      familyId: 'family-1',
+      content: 'The whole family gathered.',
+      memoryDate: '2026-07-14',
+      taggedMemberIds: Array.from({ length: 7 }, (_, index) => `member-${index}`),
+      memoryType: 'text_illustration',
+    });
+
+    expect(result.error?.code).toBe('illustration_member_limit');
+    expect(supabase.from).not.toHaveBeenCalled();
   });
 
   it('creates text_only memories without starting the illustration pipeline', async () => {
@@ -410,6 +425,168 @@ describe('memories service integration', () => {
     const result = await retryMemoryIllustration('memory-4');
 
     expect(result.error?.code).toBe('invalid_memory_type');
+  });
+
+  it('switches an illustrated memory to text-only without clearing its illustration', async () => {
+    const existingBuilder = createQueryBuilder({
+      data: {
+        content: 'An illustrated memory',
+        memory_type: 'text_illustration',
+        illustration_key: 'user-1/memories/memory-hide/illustration.webp',
+        illustration_status: 'ready',
+      },
+      error: null,
+    });
+    const disableBuilder = createQueryBuilder({ data: null, error: null });
+    const detailBuilder = createQueryBuilder({
+      data: {
+        id: 'memory-hide',
+        content: 'An illustrated memory',
+        memory_date: '2026-07-14',
+        memory_type: 'text_only',
+        illustration_key: 'user-1/memories/memory-hide/illustration.webp',
+        illustration_status: 'ready',
+        media_key: null,
+        media_content_type: null,
+        created_at: '2026-07-14T00:00:00Z',
+        updated_at: '2026-07-14T00:00:00Z',
+      },
+      error: null,
+    });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+    const mediaBuilder = createQueryBuilder({ data: [], error: null });
+
+    let memoriesCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return [existingBuilder, disableBuilder, detailBuilder][memoriesCall - 1];
+      }
+      if (table === 'memory_family_members') return tagsBuilder;
+      if (table === 'memory_media') return mediaBuilder;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await updateMemory('memory-hide', {
+      memoryType: 'text_only',
+    });
+
+    expect(result.error).toBeNull();
+    expect(disableBuilder.update).toHaveBeenCalledWith({
+      memory_type: 'text_only',
+    });
+    expect(disableBuilder.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        illustration_key: expect.anything(),
+        illustration_status: expect.anything(),
+      }),
+    );
+    expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
+    expect(generateMemoryIllustration).not.toHaveBeenCalled();
+  });
+
+  it('starts generation when a text-only memory is switched to illustrated', async () => {
+    const existingBuilder = createQueryBuilder({
+      data: {
+        content: 'A plain memory',
+        memory_type: 'text_only',
+        illustration_key: null,
+        illustration_status: 'none',
+      },
+      error: null,
+    });
+    const enableBuilder = createQueryBuilder({ data: null, error: null });
+    const detailMemory = {
+      id: 'memory-enable-ai',
+      content: 'A plain memory',
+      memory_date: '2026-07-14',
+      memory_type: 'text_illustration',
+      illustration_key: null,
+      illustration_status: 'pending',
+      media_key: null,
+      media_content_type: null,
+      created_at: '2026-07-14T00:00:00Z',
+      updated_at: '2026-07-14T00:00:00Z',
+    };
+    const detailBuilder = createQueryBuilder({ data: detailMemory, error: null });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+    const mediaBuilder = createQueryBuilder({ data: [], error: null });
+
+    let memoriesCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return [existingBuilder, enableBuilder, detailBuilder][memoriesCall - 1];
+      }
+      if (table === 'memory_family_members') return tagsBuilder;
+      if (table === 'memory_media') return mediaBuilder;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await updateMemory('memory-enable-ai', {
+      memoryType: 'text_illustration',
+      taggedMemberIds: ['one', 'two', 'three', 'four', 'five', 'six'],
+    });
+
+    expect(result.error).toBeNull();
+    expect(enableBuilder.update).toHaveBeenCalledWith({
+      memory_type: 'text_illustration',
+      illustration_status: 'pending',
+    });
+    expect(analyzeMemoryEmotion).toHaveBeenCalledWith('memory-enable-ai');
+  });
+
+  it('reveals a retained illustration without generating a replacement', async () => {
+    const existingBuilder = createQueryBuilder({
+      data: {
+        content: 'A hidden illustrated memory',
+        memory_type: 'text_only',
+        illustration_key: 'user-1/memories/memory-retained/illustration.webp',
+        illustration_status: 'ready',
+      },
+      error: null,
+    });
+    const enableBuilder = createQueryBuilder({ data: null, error: null });
+    const detailBuilder = createQueryBuilder({
+      data: {
+        id: 'memory-retained',
+        content: 'A hidden illustrated memory',
+        memory_date: '2026-07-14',
+        memory_type: 'text_illustration',
+        illustration_key: 'user-1/memories/memory-retained/illustration.webp',
+        illustration_status: 'ready',
+        media_key: null,
+        media_content_type: null,
+        created_at: '2026-07-14T00:00:00Z',
+        updated_at: '2026-07-14T00:00:00Z',
+      },
+      error: null,
+    });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+    const mediaBuilder = createQueryBuilder({ data: [], error: null });
+
+    let memoriesCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return [existingBuilder, enableBuilder, detailBuilder][memoriesCall - 1];
+      }
+      if (table === 'memory_family_members') return tagsBuilder;
+      if (table === 'memory_media') return mediaBuilder;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await updateMemory('memory-retained', {
+      memoryType: 'text_illustration',
+      taggedMemberIds: [],
+    });
+
+    expect(result.error).toBeNull();
+    expect(enableBuilder.update).toHaveBeenCalledWith({
+      memory_type: 'text_illustration',
+    });
+    expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
+    expect(generateMemoryIllustration).not.toHaveBeenCalled();
   });
 
   it('fetchMemories returns tagged members', async () => {

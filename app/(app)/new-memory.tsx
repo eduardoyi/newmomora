@@ -33,6 +33,7 @@ import { useUserProfile } from '@/hooks/useUserProfile';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
   deriveMemoryType,
+  MAX_ILLUSTRATION_MEMBERS,
   validateMemoryContent,
   validateMemoryDate,
 } from '@/utils/memories';
@@ -93,7 +94,30 @@ export default function NewMemoryScreen() {
     onPrepared: handleIncomingSharePrepared,
   });
 
-  const memoryType = deriveMemoryType({ hasAttachedMedia: attachedMedia.length > 0, illustrationEnabled });
+  const tagMembers = useMemo(
+    () => members.map((m) => ({ id: m.id, name: m.name, nicknames: m.nicknames })),
+    [members],
+  );
+
+  const handleSelectedMemberIdsChange = useCallback((memberIds: string[]) => {
+    if (memberIds.length > MAX_ILLUSTRATION_MEMBERS) {
+      setIllustrationEnabled(false);
+    }
+  }, []);
+
+  const { selectedMemberIds, applyForContent, toggleMember, applyVoiceResult } = useAutoMemoryTags({
+    members: tagMembers,
+    enabled: true,
+    onSelectedMemberIdsChange: handleSelectedMemberIdsChange,
+  });
+
+  const isIllustrationOverLimit = selectedMemberIds.length > MAX_ILLUSTRATION_MEMBERS;
+  const isIllustrationEnabled = illustrationEnabled && !isIllustrationOverLimit;
+
+  const memoryType = deriveMemoryType({
+    hasAttachedMedia: attachedMedia.length > 0,
+    illustrationEnabled: isIllustrationEnabled,
+  });
 
   const typeKey =
     attachedMedia.length > 1 ? 'media_mixed' :
@@ -105,16 +129,6 @@ export default function NewMemoryScreen() {
   const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
   const isSaving = isCreating || isPostingMedia;
   const canSave = memoryType === 'media' ? attachedMedia.length > 0 : content.trim().length > 0;
-
-  const tagMembers = useMemo(
-    () => members.map((m) => ({ id: m.id, name: m.name, nicknames: m.nicknames })),
-    [members],
-  );
-
-  const { selectedMemberIds, applyForContent, toggleMember, applyVoiceResult } = useAutoMemoryTags({
-    members: tagMembers,
-    enabled: true,
-  });
 
   const voiceMembers = useMemo(
     () => members.map((m) => ({ id: m.id, name: m.name, nicknames: m.nicknames ?? [], is_user_profile: m.is_user_profile })),
@@ -334,17 +348,22 @@ export default function NewMemoryScreen() {
         {attachedMedia.length === 0 && (
           <View style={styles.toggleRow}>
             <View style={styles.toggleCopy}>
-              <Text style={[styles.toggleLabel, !illustrationEnabled && styles.toggleLabelOff]}>
+              <Text style={[styles.toggleLabel, !isIllustrationEnabled && styles.toggleLabelOff]}>
                 AI illustration
               </Text>
               <Text style={styles.toggleHint}>
-                {illustrationEnabled ? 'On — runs after save' : 'Off — text only'}
+                {isIllustrationOverLimit
+                  ? `Up to ${MAX_ILLUSTRATION_MEMBERS} people per illustration`
+                  : illustrationEnabled
+                    ? 'On — runs after save'
+                    : 'Off — text only'}
               </Text>
             </View>
             <Switch
               accessibilityLabel="Generate AI illustration"
+              disabled={isIllustrationOverLimit}
               onValueChange={setIllustrationEnabled}
-              value={illustrationEnabled}
+              value={isIllustrationEnabled}
               trackColor={{ false: colors.border, true: colors.primary }}
               testID="new-memory-ai-toggle"
             />

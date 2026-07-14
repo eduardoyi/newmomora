@@ -14,6 +14,7 @@ import {
   validateMemoryContent,
   validateMemoryDate,
   validateMemoryMediaAssets,
+  validateIllustrationMemberLimit,
   validateTaggedMembers,
   isIllustrationGenerationStale,
 } from '@/utils/memories';
@@ -616,6 +617,16 @@ export async function createMemory(input: CreateMemoryInput): Promise<{
     return { data: null, error: { message: tagError, code: 'validation_error' } };
   }
 
+  if (memoryType === 'text_illustration') {
+    const illustrationMemberError = validateIllustrationMemberLimit(input.taggedMemberIds);
+    if (illustrationMemberError) {
+      return {
+        data: null,
+        error: { message: illustrationMemberError, code: 'illustration_member_limit' },
+      };
+    }
+  }
+
   const illustrationStatus = memoryType === 'text_illustration' ? 'pending' : 'none';
 
   const { data: memory, error } = await supabase
@@ -723,7 +734,7 @@ export async function updateMemory(
 ): Promise<{ data: MemoryWithTags | null; error: ServiceError | null }> {
   const { data: existingMemory, error: existingError } = await supabase
     .from('memories')
-    .select('memory_type')
+    .select('content, memory_type, illustration_key, illustration_status')
     .eq('id', memoryId)
     .maybeSingle();
 
@@ -735,10 +746,27 @@ export async function updateMemory(
     return { data: null, error: { message: 'Memory not found', code: 'not_found' } };
   }
 
-  const memoryType = existingMemory.memory_type as MemoryType;
+  const existingMemoryType = existingMemory.memory_type as MemoryType;
+  const memoryType = input.memoryType ?? existingMemoryType;
 
-  if (input.content !== undefined) {
-    const contentError = validateMemoryContent(input.content, memoryType);
+  if (
+    (existingMemoryType === 'media' && memoryType !== 'media') ||
+    (existingMemoryType !== 'media' && memoryType === 'media')
+  ) {
+    return {
+      data: null,
+      error: {
+        message: 'Media memories cannot be converted to or from text memories',
+        code: 'invalid_memory_type',
+      },
+    };
+  }
+
+  if (input.content !== undefined || memoryType !== existingMemoryType) {
+    const contentError = validateMemoryContent(
+      input.content ?? existingMemory.content,
+      memoryType,
+    );
     if (contentError) {
       return { data: null, error: { message: contentError, code: 'validation_error' } };
     }
@@ -755,6 +783,16 @@ export async function updateMemory(
     const tagError = validateTaggedMembers(input.taggedMemberIds);
     if (tagError) {
       return { data: null, error: { message: tagError, code: 'validation_error' } };
+    }
+
+    if (memoryType === 'text_illustration') {
+      const illustrationMemberError = validateIllustrationMemberLimit(input.taggedMemberIds);
+      if (illustrationMemberError) {
+        return {
+          data: null,
+          error: { message: illustrationMemberError, code: 'illustration_member_limit' },
+        };
+      }
     }
   }
 
@@ -788,6 +826,24 @@ export async function updateMemory(
     updates.memory_date = input.memoryDate;
   }
 
+  const isDisablingIllustration =
+    existingMemoryType === 'text_illustration' && memoryType === 'text_only';
+  const isEnablingIllustration =
+    existingMemoryType === 'text_only' && memoryType === 'text_illustration';
+  const hasRetainedIllustration = Boolean(existingMemory.illustration_key);
+  const isIllustrationInProgress = ['pending', 'generating'].includes(
+    existingMemory.illustration_status,
+  );
+  const shouldStartIllustration =
+    isEnablingIllustration && !hasRetainedIllustration && !isIllustrationInProgress;
+
+  // Switch to text-only before replacing tags so the DB permits an unlimited
+  // tag set. Illustration columns are deliberately retained and merely hidden
+  // by memory_type, allowing the user to reveal the same image later.
+  if (isDisablingIllustration) {
+    updates.memory_type = 'text_only';
+  }
+
   if (Object.keys(updates).length > 0) {
     const { error } = await supabase.from('memories').update(updates).eq('id', memoryId);
 
@@ -800,6 +856,27 @@ export async function updateMemory(
     const tagsError = await replaceMemoryTags(memoryId, input.taggedMemberIds);
     if (tagsError) {
       return { data: null, error: tagsError };
+    }
+  }
+
+  // Replace tags while the row is still text-only, then enable illustration.
+  // This keeps the conditional DB limit valid throughout the update.
+  if (isEnablingIllustration) {
+    const illustrationUpdates: Partial<Memory> = {
+      memory_type: 'text_illustration',
+    };
+
+    if (shouldStartIllustration) {
+      illustrationUpdates.illustration_status = 'pending';
+    }
+
+    const { error } = await supabase
+      .from('memories')
+      .update(illustrationUpdates)
+      .eq('id', memoryId);
+
+    if (error) {
+      return { data: null, error: mapSupabaseError(error) };
     }
   }
 
@@ -816,7 +893,13 @@ export async function updateMemory(
     await deleteStorageKeys(removedKeys);
   }
 
-  return fetchMemoryById(memoryId);
+  const result = await fetchMemoryById(memoryId);
+
+  if (!result.error && shouldStartIllustration) {
+    void runMemoryIllustrationPipeline(memoryId);
+  }
+
+  return result;
 }
 
 export async function deleteMemory(memoryId: string): Promise<{ error: ServiceError | null }> {

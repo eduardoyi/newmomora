@@ -13,6 +13,7 @@ import {
   validateMemoryContent,
   validateMemoryDate,
   validateMemoryMediaAssets,
+  validateIllustrationMemberLimit,
   validateTaggedMembers,
 } from '@/utils/memories';
 
@@ -29,9 +30,16 @@ describe('memories utils', () => {
     expect(validateMemoryDate('05/24/2026')).toMatch(/YYYY-MM-DD/);
   });
 
-  it('enforces max tag count', () => {
-    expect(validateTaggedMembers(['a', 'b', 'c', 'd', 'e'])).toMatch(/up to 4/);
-    expect(validateTaggedMembers(['a', 'b'])).toBeNull();
+  it('allows unlimited unique tags and rejects duplicates', () => {
+    expect(validateTaggedMembers(Array.from({ length: 20 }, (_, index) => `member-${index}`))).toBeNull();
+    expect(validateTaggedMembers(['a', 'a'])).toMatch(/duplicate/i);
+  });
+
+  it('limits illustration participants to six', () => {
+    expect(validateIllustrationMemberLimit(['a', 'b', 'c', 'd', 'e', 'f'])).toBeNull();
+    expect(validateIllustrationMemberLimit(['a', 'b', 'c', 'd', 'e', 'f', 'g'])).toMatch(
+      /up to 6/i,
+    );
   });
 
   it('rejects invalid persisted media aspect ratios', () => {

@@ -1,6 +1,6 @@
 import { substituteLinkLabels, type LinkPreviewMap } from '@/utils/links';
 
-export const MAX_MEMORY_TAGS = 4;
+export const MAX_ILLUSTRATION_MEMBERS = 6;
 
 /** Edge image generation can exceed function limits; recover after this window. */
 /** Slightly above Supabase Edge ~150s limit so stuck jobs recover quickly. */
@@ -49,6 +49,7 @@ export interface UpdateMemoryInput {
   memoryDate?: string;
   taggedMemberIds?: string[];
   mediaAssets?: MemoryMediaAssetInput[];
+  memoryType?: MemoryType;
 }
 
 export function validateMemoryContent(
@@ -102,13 +103,17 @@ export function validateMemoryDate(memoryDate: string): string | null {
 }
 
 export function validateTaggedMembers(memberIds: string[]): string | null {
-  if (memberIds.length > MAX_MEMORY_TAGS) {
-    return `You can tag up to ${MAX_MEMORY_TAGS} family members`;
-  }
-
   const uniqueIds = new Set(memberIds);
   if (uniqueIds.size !== memberIds.length) {
     return 'Duplicate family member tags are not allowed';
+  }
+
+  return null;
+}
+
+export function validateIllustrationMemberLimit(memberIds: string[]): string | null {
+  if (memberIds.length > MAX_ILLUSTRATION_MEMBERS) {
+    return `AI illustrations support up to ${MAX_ILLUSTRATION_MEMBERS} family members`;
   }
 
   return null;

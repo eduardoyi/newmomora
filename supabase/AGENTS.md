@@ -57,4 +57,4 @@ Never commit `supabase/.env.local`, service role keys, or R2 credentials.
 - JWT on user-facing functions; `CRON_SECRET` on schedulers
 - OpenAI key from `Deno.env.get('OPENAI_API_KEY')` only
 - Never log memory content, transcripts, or audio
-- Validate inputs server-side (tag limit, voice duration)
+- Validate inputs server-side (max 6 tags for illustrated memories, voice duration)

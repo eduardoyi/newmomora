@@ -11,7 +11,7 @@ Memory journal for parents. Capture moments in text or voice; AI generates consi
 - **Capture first:** Memory text must save even if AI fails.
 - **Child-first onboarding:** Nudge adding a child first; one family member required before journaling.
 - **Plain text memories** — no rich text in MVP. Pasted URLs are a display-level exception: rendered (non-editing) views show a fetched-title inline link (`(Title)`, falling back to the domain); storage (`memories.content`) and the editor both stay plain text. See [docs/features/inline-links.md](docs/features/inline-links.md).
-- **Max 4 tagged family members** per memory (enforce in UI + backend).
+- **Memory tags are unlimited** for text-only and media memories. AI-illustrated memories support **max 6 tagged family members** (enforce in UI + backend).
 - **Voice:** Tap start/stop, 2-minute max; audio never persisted.
 - **Privacy:** Private storage, RLS everywhere, signed URLs for images, no public sharing in MVP.
 - **Account deletion:** 15-day grace period before hard delete.
@@ -151,7 +151,7 @@ Momora handles family and child data. Treat security as a feature, not an aftert
 - **Storage:** Private buckets only for user content. Path prefix `{userId}/...` (the uploader's own uid — read/delete authorization is family-membership-based, not prefix-based; see the feature doc). Display via signed URLs (short TTL).
 - **Client:** Anon key + RLS only. Never import or ship the service role key.
 - **Edge Functions:** Validate JWT on user-facing endpoints. Cron/scheduler endpoints require `CRON_SECRET` header.
-- **Input:** Validate and sanitize on server; enforce max 4 memory tags, 2-min voice limit server-side.
+- **Input:** Validate and sanitize on server; enforce max 6 tags for illustrated memories and the 2-min voice limit server-side.
 - **Logging:** Never log memory content, transcripts, audio, or child PII in production. Log ids and status codes only.
 - **Voice:** Process audio in memory; discard after transcription — do not write to storage.
 - **Dependencies:** Prefer well-maintained Expo/Supabase packages; review new native deps for data collection.

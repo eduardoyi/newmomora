@@ -1,0 +1,42 @@
+appId: com.memora.app
+---
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible:
+      id: new-memory-content
+    timeout: 15000
+- tapOn:
+    id: new-memory-content
+- eraseText
+- inputText: "A quiet text-only afternoon together."
+- tapOn: "New memory"
+- tapOn:
+    id: new-memory-ai-toggle
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
+- tapOn:
+    id: "memory-card-.*"
+- extendedWaitUntil:
+    visible:
+      id: memory-detail-edit
+    timeout: 15000
+- tapOn:
+    id: memory-detail-edit
+- extendedWaitUntil:
+    visible:
+      id: edit-memory-ai-toggle
+    timeout: 15000
+- tapOn:
+    id: edit-memory-ai-toggle
+- tapOn:
+    id: edit-memory-save-btn
+- extendedWaitUntil:
+    visible:
+      id: memory-detail-regenerate-illustration
+    timeout: 15000

@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -28,6 +28,7 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
+import { MAX_ILLUSTRATION_MEMBERS } from '@/utils/memories';
 import { canEditFamilyContent } from '@/utils/roles';
 
 const TYPE_CONFIGS = {
@@ -80,6 +81,7 @@ export default function EditMemoryScreen() {
   const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasEditedContent, setHasEditedContent] = useState(false);
+  const [illustrationEnabled, setIllustrationEnabled] = useState(false);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -88,10 +90,17 @@ export default function EditMemoryScreen() {
     [members],
   );
 
+  const handleSelectedMemberIdsChange = useCallback((memberIds: string[]) => {
+    if (memberIds.length > MAX_ILLUSTRATION_MEMBERS) {
+      setIllustrationEnabled(false);
+    }
+  }, []);
+
   const { selectedMemberIds, initializeTags, applyForContent, toggleMember, applyVoiceResult } =
     useAutoMemoryTags({
       members: tagMembers,
       enabled: hasEditedContent,
+      onSelectedMemberIdsChange: handleSelectedMemberIdsChange,
     });
 
   useEffect(() => {
@@ -110,6 +119,7 @@ export default function EditMemoryScreen() {
         })),
       );
       initializeTags(memory.taggedMembers.map((m) => m.id));
+      setIllustrationEnabled(memory.memory_type === 'text_illustration');
       setIsInitialized(true);
     }
   }, [memory, isPlaceholderData, mediaUrls, mediaUrl, isInitialized, initializeTags]);
@@ -139,6 +149,18 @@ export default function EditMemoryScreen() {
     });
   }, [isInitialized, mediaUrls]);
 
+  const isMedia = memory?.memory_type === 'media';
+  const isIllustrationOverLimit = selectedMemberIds.length > MAX_ILLUSTRATION_MEMBERS;
+  const isIllustrationEnabled = illustrationEnabled && !isIllustrationOverLimit;
+  const hasRetainedIllustration = Boolean(memory?.illustration_key);
+  const isIllustrationJobInProgress = ['pending', 'generating'].includes(
+    memory?.illustration_status ?? '',
+  );
+  const hasIllustrationHistory = Boolean(
+    memory?.illustration_key ||
+      (memory?.illustration_status && memory.illustration_status !== 'none'),
+  );
+
   const typeKey =
     memory?.memory_type === 'media' && attachedMedia.length > 1
       ? 'media_mixed'
@@ -146,13 +168,14 @@ export default function EditMemoryScreen() {
       ? 'media_video'
       : memory?.memory_type === 'media'
       ? 'media_photo'
-      : memory?.memory_type === 'text_illustration'
+      : isIllustrationEnabled
       ? 'text_illustration'
       : 'text_only';
   const typeCfg = TYPE_CONFIGS[typeKey];
 
-  const isMedia = memory?.memory_type === 'media';
-  const hasAttachment = isMedia || memory?.memory_type === 'text_illustration';
+  const hasAttachment =
+    isMedia ||
+    (isIllustrationEnabled && (hasRetainedIllustration || isIllustrationJobInProgress));
   const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
   const canSave = isMedia ? attachedMedia.length > 0 : content.trim().length > 0;
 
@@ -203,6 +226,11 @@ export default function EditMemoryScreen() {
         content: content.trim() || undefined,
         memoryDate: memoryDate.trim(),
         taggedMemberIds: selectedMemberIds,
+        memoryType: isMedia
+          ? 'media'
+          : isIllustrationEnabled
+            ? 'text_illustration'
+            : 'text_only',
         mediaAssets: isMedia
           ? attachedMedia.map((attachment) => ({
               objectKey: attachment.objectKey,
@@ -292,7 +320,7 @@ export default function EditMemoryScreen() {
         )}
 
         {/* Illustration (read-only) */}
-        {memory.memory_type === 'text_illustration' && (
+        {isIllustrationEnabled && (hasRetainedIllustration || isIllustrationJobInProgress) && (
           <View style={styles.mediaWrap}>
             {illustrationUrl ? (
               <Image
@@ -326,6 +354,9 @@ export default function EditMemoryScreen() {
         {/* Tag picker */}
         <MemoryTagPicker
           members={members}
+          maxSelected={isIllustrationEnabled && hasIllustrationHistory
+            ? MAX_ILLUSTRATION_MEMBERS
+            : undefined}
           onToggleMember={toggleMember}
           selectedMemberIds={selectedMemberIds}
         />
@@ -376,21 +407,31 @@ export default function EditMemoryScreen() {
           </View>
         )}
 
-        {/* AI toggle (read-only in edit mode) */}
+        {/* AI illustration toggle */}
         {!isMedia && (
           <View style={styles.toggleRow}>
             <View style={styles.toggleCopy}>
-              <Text style={[styles.toggleLabel, memory.memory_type !== 'text_illustration' && styles.toggleLabelOff]}>
+              <Text style={[styles.toggleLabel, !isIllustrationEnabled && styles.toggleLabelOff]}>
                 AI illustration
               </Text>
               <Text style={styles.toggleHint}>
-                {memory.memory_type === 'text_illustration' ? 'On' : 'Off'}
+                {isIllustrationOverLimit
+                  ? `Up to ${MAX_ILLUSTRATION_MEMBERS} people per illustration`
+                  : isIllustrationEnabled
+                    ? hasRetainedIllustration
+                      ? 'On — existing illustration'
+                      : isIllustrationJobInProgress
+                        ? 'On — generating'
+                        : 'On — runs after save'
+                    : 'Off — text only'}
               </Text>
             </View>
             <Switch
-              accessibilityLabel="AI illustration status"
-              disabled
-              value={memory.memory_type === 'text_illustration'}
+              accessibilityLabel="Generate AI illustration"
+              disabled={isIllustrationOverLimit}
+              onValueChange={setIllustrationEnabled}
+              testID="edit-memory-ai-toggle"
+              value={isIllustrationEnabled}
               trackColor={{ false: colors.border, true: colors.primary }}
             />
           </View>

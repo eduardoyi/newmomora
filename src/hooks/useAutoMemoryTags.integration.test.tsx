@@ -18,6 +18,30 @@ describe('useAutoMemoryTags integration', () => {
     expect(result.current.selectedMemberIds).toEqual(['mara-id']);
   });
 
+  it('reports the full selection when auto-tagging crosses the illustration limit', () => {
+    const manyMembers = Array.from({ length: 7 }, (_, index) => ({
+      id: `member-${index}`,
+      name: `Person ${index}`,
+    }));
+    const onSelectedMemberIdsChange = jest.fn();
+    const { result } = renderHook(() => useAutoMemoryTags({
+      members: manyMembers,
+      enabled: true,
+      onSelectedMemberIdsChange,
+    }));
+
+    act(() => {
+      result.current.applyForContent(manyMembers.map((member) => member.name).join(' and '));
+    });
+
+    expect(result.current.selectedMemberIds).toEqual(
+      manyMembers.map((member) => member.id),
+    );
+    expect(onSelectedMemberIdsChange).toHaveBeenLastCalledWith(
+      manyMembers.map((member) => member.id),
+    );
+  });
+
   it('does not auto-add when disabled', () => {
     const { result } = renderHook(() => useAutoMemoryTags({ members, enabled: false }));
 
@@ -64,6 +88,20 @@ describe('useAutoMemoryTags integration', () => {
 
     expect(result.current.selectedMemberIds).toEqual(['enzo-id']);
     expect(result.current.suppressedMemberIds).toEqual([]);
+  });
+
+  it('applyVoiceResult keeps every unique mentioned member', () => {
+    const { result } = renderHook(() => useAutoMemoryTags({ members, enabled: true }));
+    const mentionedMemberIds = Array.from({ length: 8 }, (_, index) => `member-${index}`);
+
+    act(() => {
+      result.current.applyVoiceResult({
+        cleanedText: 'The whole family gathered together',
+        mentionedMemberIds: [...mentionedMemberIds, mentionedMemberIds[0]],
+      });
+    });
+
+    expect(result.current.selectedMemberIds).toEqual(mentionedMemberIds);
   });
 
   it('auto-adds after enabled flips on for edit-style flow', () => {

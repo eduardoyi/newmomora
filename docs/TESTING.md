@@ -78,16 +78,16 @@ Prefer **colocated** tests. Use `.integration.test.ts(x)` suffix for integration
 
 ```tsx
 // Pure function — no mocks
-describe('validateMemoryTags', () => {
-  it('rejects more than 4 tags', () => {
-    expect(validateMemoryTags(fiveIds)).toEqual({ ok: false, code: 'MAX_TAGS' });
+describe('validateIllustrationMemberLimit', () => {
+  it('rejects more than 6 tags for an illustration', () => {
+    expect(validateIllustrationMemberLimit(sevenIds)).toMatch(/up to 6/);
   });
 });
 ```
 
 ### What to unit test (Momora-specific)
 
-- Tag limit (max 4), memory date validation, age-from-DOB formatting
+- Illustrated-memory limit (max 6), unlimited text-only/media tags, memory date validation, age-from-DOB formatting
 - Voice recording duration cap (2 min)
 - Illustration/portrait status label helpers
 - Error code mapping from Edge Function JSON
@@ -134,7 +134,7 @@ import { supabase } from '@/lib/supabase';
 
 jest.mock('@/lib/supabase');
 
-it('creates memory and tags up to 4 members', async () => {
+it('creates an illustrated memory with up to 6 members', async () => {
   mockInsertMemory.mockResolvedValue({ data: { id: 'mem-1' }, error: null });
   await createMemory({ content: 'Hello', memberIds: ['a', 'b'] });
   expect(mockInsertMemory).toHaveBeenCalledWith(/* ... */);
@@ -176,8 +176,8 @@ Deno.test('rejects unauthenticated request', async () => {
   assertEquals(res.status, 401);
 });
 
-Deno.test('rejects more than 4 tagged members', async () => {
-  const res = await handler(validRequestWithFiveTags);
+Deno.test('rejects more than 6 tagged members for illustration', async () => {
+  const res = await handler(validRequestWithSevenTags);
   assertEquals(res.status, 400);
 });
 ```

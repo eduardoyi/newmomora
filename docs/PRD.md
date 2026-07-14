@@ -125,7 +125,7 @@ flowchart TD
    - Tap **mic** → speak → review transcribed text, or
    - Tap **attach icon** → pick photo or video from camera roll
 3. Tag family members (auto-suggested from voice when applicable)
-4. For text entries: AI illustration toggle is on by default; turn off for text-only note
+4. For text entries: AI illustration toggle is on by default; turn off for text-only note. Tagging more than 6 family members automatically turns it off until the count returns to 6 or fewer.
 5. For media entries: AI toggle is hidden; save directly
 6. Save → async illustration generation fires only for `text_illustration` type
 7. Optional: daily push reminder at user-configured local time
@@ -233,13 +233,14 @@ Memories support three formats, derived from what the user provides — no upfro
 
 - Memory date defaults to today; backdating allowed. When creating a `media` memory from library photos, the date pre-fills to the earliest valid EXIF capture date across the attached photos, shown as a visible, user-overridable suggestion (labeled "From photo"); it falls back to today when no attached photo has usable capture-date metadata. Manually changing the date always wins for the rest of that composer session. Camera captures, videos, web picks, and incoming shared media never change the date on their own. See [docs/features/media-memories.md](./features/media-memories.md).
 - Text content required for `text_illustration` and `text_only`; optional caption for `media` type
-- Optional: tagged family members (multi-select, **max 4 per memory**)
+- Optional: tagged family members (multi-select, no global maximum). AI-illustrated memories support at most **6 tagged members**; text-only and media memories may tag the full family roster.
 - **Plain text only** — line breaks for paragraphs; no bold, italic, or rich text
 - Photo attachment: JPEG, HEIC, PNG, or WEBP; ≤ 20 MB
 - Video attachment: MP4 or MOV; ≤ 60 seconds duration; client validates duration before upload
 - Up to **10 media assets per memory**; photos and videos can be mixed and reordered
 - Explicit Save required (autosave draft optional enhancement)
 - Edit and delete with confirmation dialog
+- Edit allows switching between AI-illustrated and text-only. Turning AI off hides but retains any existing illustration; turning it back on restores the retained image, or generates one after save when none exists. AI remains unavailable above 6 tags.
 - For `text_illustration` type: memory text persists even if illustration generation fails
 - Voice input available as alternate input method (see §6.7); transcribed text remains editable before save
 
@@ -312,7 +313,7 @@ Triggered after memory save.
 - Emotion influences palette/mood in the generation prompt
 - User sees loading/progress state; can navigate away while generating
 - Failed generation shows friendly error with manual retry option
-- Max **4 tagged members** per memory enforced in UI and backend
+- Max **6 tagged members** for an AI-illustrated memory, enforced in UI and backend. Text-only and media memories have no tag-count cap.
 
 **Implementation note:** Exact `gpt-image-2` API surface (edit vs. generate, reference image limits) to be confirmed during build.
 
@@ -563,7 +564,7 @@ See [TECH_SPEC.md](./TECH_SPEC.md) for database schema, Edge Function contracts,
 | Decision | Resolution |
 |----------|------------|
 | Memory text format | **Plain text only** — line breaks for paragraphs; no rich text in MVP |
-| Max tagged members per memory | **4** |
+| Tagged members per memory | **Unlimited** for text-only/media; **max 6** when AI illustration is enabled |
 | Onboarding first profile | **One family member required** (any member); **nudge to add a child first**; parent profile optional at signup |
 | Illustration style | **Single global style** for MVP; stored as **style token** (`illustration_style: 'default'`) to support multiple styles post-MVP |
 | Account deletion | **15-day grace period** before hard delete |

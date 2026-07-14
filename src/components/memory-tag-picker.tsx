@@ -6,7 +6,6 @@ import { FamilyRosterSheet } from '@/components/family-roster-sheet';
 import { colors, fonts, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
 import { calculateInlineTagCount, formatMoreTagLabel } from '@/utils/memory-tag-layout';
-import { MAX_MEMORY_TAGS } from '@/utils/memories';
 
 const CHIP_GAP = spacing.sm;
 const CHIP_HEIGHT = 36;
@@ -15,6 +14,7 @@ const FALLBACK_INLINE_CHIP_LIMIT = 3;
 interface MemoryTagPickerProps {
   members: FamilyMember[];
   selectedMemberIds: string[];
+  maxSelected?: number;
   onToggleMember: (memberId: string) => void;
 }
 
@@ -52,6 +52,7 @@ function MemberChip({ member, isSelected, isDisabled, onPress, testID }: MemberC
 export function MemoryTagPicker({
   members,
   selectedMemberIds,
+  maxSelected,
   onToggleMember,
 }: MemoryTagPickerProps) {
   const [isRosterOpen, setIsRosterOpen] = useState(false);
@@ -59,7 +60,7 @@ export function MemoryTagPicker({
   const [moreChipWidth, setMoreChipWidth] = useState(0);
   const [chipWidths, setChipWidths] = useState<Record<string, number>>({});
 
-  const atLimit = selectedMemberIds.length >= MAX_MEMORY_TAGS;
+  const atLimit = maxSelected !== undefined && selectedMemberIds.length >= maxSelected;
   const measuredChipWidths = useMemo(
     () => members.map((member) => chipWidths[member.id]),
     [chipWidths, members],
@@ -120,7 +121,7 @@ export function MemoryTagPicker({
         WHO’S IN IT
         {selectedMemberIds.length > 0 ? (
           <Text style={styles.labelCount} testID="memory-tag-count">
-            {' '}· {selectedMemberIds.length}/{MAX_MEMORY_TAGS}
+            {' '}· {selectedMemberIds.length}{maxSelected !== undefined ? `/${maxSelected}` : ''}
           </Text>
         ) : null}
       </Text>
@@ -205,6 +206,7 @@ export function MemoryTagPicker({
 
       <FamilyRosterSheet
         members={members}
+        maxSelected={maxSelected}
         onClose={() => setIsRosterOpen(false)}
         onToggleMember={onToggleMember}
         selectedMemberIds={selectedMemberIds}

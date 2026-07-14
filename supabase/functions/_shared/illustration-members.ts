@@ -7,10 +7,13 @@ export function resolveMemberIdsForIllustration(
   taggedMemberIds: string[],
   content: string,
   candidates: FamilyMemberNameRow[],
+  maxMemberCount?: number,
 ): string[] {
-  if (taggedMemberIds.length > 0) {
-    return taggedMemberIds;
-  }
+  const resolvedMemberIds = taggedMemberIds.length > 0
+    ? taggedMemberIds
+    : matchMemberIdsMentionedInText(content, candidates);
 
-  return matchMemberIdsMentionedInText(content, candidates);
+  return maxMemberCount === undefined
+    ? resolvedMemberIds
+    : resolvedMemberIds.slice(0, maxMemberCount);
 }

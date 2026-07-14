@@ -1,5 +1,4 @@
 import { matchMemberIdsMentionedInText, type MemberWithNames } from '@/utils/member-mentions';
-import { MAX_MEMORY_TAGS } from '@/utils/memories';
 
 export function memberIdArraysEqual(left: string[], right: string[]): boolean {
   if (left.length !== right.length) {
@@ -28,14 +27,7 @@ export function applyAutoMemoryTags(input: ApplyAutoMemoryTagsInput): string[] {
   }
 
   const toAddOrdered = members.map((member) => member.id).filter((id) => toAdd.includes(id));
-  const merged = [...selectedMemberIds];
-
-  for (const id of toAddOrdered) {
-    if (merged.length >= MAX_MEMORY_TAGS) {
-      break;
-    }
-    merged.push(id);
-  }
+  const merged = [...selectedMemberIds, ...toAddOrdered];
 
   return memberIdArraysEqual(merged, selectedMemberIds) ? selectedMemberIds : merged;
 }
@@ -56,7 +48,7 @@ export function toggleMemoryTag(input: ToggleMemoryTagInput): ToggleMemoryTagRes
   const { memberId, selectedMemberIds, suppressedMemberIds, selecting } = input;
 
   if (selecting) {
-    if (selectedMemberIds.includes(memberId) || selectedMemberIds.length >= MAX_MEMORY_TAGS) {
+    if (selectedMemberIds.includes(memberId)) {
       return { selectedMemberIds, suppressedMemberIds };
     }
 

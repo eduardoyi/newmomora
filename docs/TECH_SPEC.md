@@ -405,11 +405,11 @@ create trigger on_auth_user_created
 
 ### 2.5 Constraints
 
-- `memory_family_members`: enforce max 4 tags per memory via trigger or Edge Function validation
+- `memory_family_members`: no global tag cap. The DB trigger permits unlimited tags for `text_only`/`media`, caps `text_illustration` at 6, and rejects switching a text-only row with more than 6 existing tags back to illustrated.
 - `memories.content`: non-empty after trim for `text_illustration` and `text_only` types; nullable for `media` type — enforced in Edge Function / client layer
 - `memories.memory_type`: drives whether AI pipeline fires and whether `media_key` is expected
 - `memories.media_key`: required (non-null) when `memory_type = 'media'`; must be null for other types — enforced in Edge Function / client layer
-- `memories.illustration_status`: set to `'pending'` only for `text_illustration` memories on insert; `'none'` for all other types
+- `memories.illustration_status`: on insert, set to `'pending'` for `text_illustration` and `'none'` for other types. Editing an illustrated memory to `text_only` deliberately retains its illustration key/prompt/status so toggling AI back on can reveal the existing asset without regeneration; rendering and generation eligibility branch on `memory_type`.
 - `memories.link_previews`: `jsonb`, defaults to `{}`; written only by `fetch-link-previews` (service-role client); malformed/absent entries are treated as no preview client-side (see [inline-links.md](./features/inline-links.md))
 - `family_members.profile_picture_key`: required before portrait generation
 - `family_memberships`: exactly one `role = 'owner'` row per `family_id` (partial unique index); max 50 rows per `family_id` (trigger); `user_id`/`family_id` immutable once inserted (a manager can only ever change `role`, and never to/from `'owner'`)
@@ -736,11 +736,11 @@ Set `forceRegenerate: true` when the client manually regenerates an illustration
 
 1. Fetch memory by id; assert caller owner/manager of its family
 2. Set `illustration_status = 'generating'`
-3. Fetch memory content + tagged family members (max 4), and **all** family member id/name/nickname rows (not just tagged), scoped to the memory's `family_id`
+3. Fetch memory content + tagged family members (max 6 for this memory type), and **all** family member id/name/nickname rows (not just tagged), scoped to the memory's `family_id`; reject more than 6 explicit tags with `ILLUSTRATION_MEMBER_LIMIT`, and cap the zero-tag name-inference fallback to its first 6 matches
 4. **Safety pre-check:** `gpt-4o-mini` rewrites unsafe content → child-safe scene description, given a nickname→canonical-name mapping built from every family member so nicknames never leak into the image prompt (see `buildSafetySystemPrompt`). Returns `{"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}`; `expressionStyle` is validated server-side and defaults to `neutral`
 5. Fetch ready character portraits from R2 (`momora-character-portraits`)
 6. Build prompt (`buildIllustrationPrompt`): scene-first, newline-separated sections — Scene, Characters (reference map + preserve/adapt split), Emotional tone (`memory.emotion` mapped to `EMOTION_EXPRESSIONS`, plus comedic exaggeration when `expressionStyle === 'comedic'` and the emotion is in `COMEDIC_ELIGIBLE_EMOTIONS`), Style/palette/date, Constraints
-7. Call OpenAI image edit API with all ready portrait references (up to 4; `input_fidelity=high` only on `gpt-image-1` fallback when multiple)
+7. Call OpenAI image edit API with all ready portrait references (up to 6; `input_fidelity=high` only on `gpt-image-1` fallback when multiple)
 8. On moderation failure: rewrite + retry once
 9. Upload to R2 `momora-memory-illustrations`
 10. Update `illustration_key`, `illustration_prompt`, status `ready` (or `failed`)
@@ -1102,13 +1102,22 @@ See [docs/features/likes-and-comments.md](./features/likes-and-comments.md).
 ### 5.1 Create Memory (text)
 
 ```
-1. Client validates: content non-empty, ≤4 tagged members
+1. Client validates: content non-empty and unique tags; AI illustration remains available only with ≤6 tagged members
 2. INSERT memories + memory_family_members
 3. Invoke analyze-emotion(memoryId)
 4. Invoke generate-illustration(memoryId, colorPalette)
 5. Poll or subscribe to illustration_status until ready | failed
 6. Display illustration via get-media-url presigned GET
 ```
+
+Create/edit composers allow unlimited unique tags while AI is off. Crossing 6
+tags automatically turns AI off; returning to 6 or fewer only re-enables the
+switch and does not turn it back on. On edit, switching an illustrated memory
+to `text_only` hides but retains its illustration columns/R2 object. Switching
+back to `text_illustration` reveals a retained key without regeneration; when
+no key exists and no job is already pending/generating, save sets `pending`
+and starts the normal pipeline. The service replaces tags before enabling AI,
+while the DB validates both tag insertion and the `memory_type` transition.
 
 ### 5.2 Create Memory (voice)
 
@@ -1358,7 +1367,7 @@ All AI operations are **async** — client shows status and allows navigation aw
 - [ ] Account deletion grace period enforced
 - [ ] Voice audio not persisted after transcription
 - [ ] Input validation on all Edge Function payloads
-- [ ] Max 4 family member tags enforced server-side
+- [ ] Illustrated-memory max of 6 family member tags enforced server-side; text-only/media tags remain unlimited
 - [ ] Family-scoped RLS goes through `is_family_member`/`has_family_role`, never a hand-rolled join
 - [ ] Role/family checks are bound to one specific `family_id`, never "has this role somewhere"
 - [ ] Invite codes are rate-limited (user + IP) and never logged in plaintext

@@ -6,11 +6,11 @@ import {
   toggleMemoryTag,
 } from '@/utils/auto-memory-tags';
 import type { MemberWithNames } from '@/utils/member-mentions';
-import { MAX_MEMORY_TAGS } from '@/utils/memories';
 
 export interface UseAutoMemoryTagsOptions {
   members: MemberWithNames[];
   enabled: boolean;
+  onSelectedMemberIdsChange?: (memberIds: string[]) => void;
 }
 
 export interface VoiceTagResult {
@@ -18,7 +18,11 @@ export interface VoiceTagResult {
   mentionedMemberIds: string[];
 }
 
-export function useAutoMemoryTags({ members, enabled }: UseAutoMemoryTagsOptions) {
+export function useAutoMemoryTags({
+  members,
+  enabled,
+  onSelectedMemberIdsChange,
+}: UseAutoMemoryTagsOptions) {
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [suppressedMemberIds, setSuppressedMemberIds] = useState<string[]>([]);
 
@@ -31,7 +35,8 @@ export function useAutoMemoryTags({ members, enabled }: UseAutoMemoryTagsOptions
   const initializeTags = useCallback((memberIds: string[]) => {
     setSelectedMemberIds(memberIds);
     setSuppressedMemberIds([]);
-  }, []);
+    onSelectedMemberIdsChange?.(memberIds);
+  }, [onSelectedMemberIdsChange]);
 
   const applyForContent = useCallback(
     (content: string) => {
@@ -47,10 +52,15 @@ export function useAutoMemoryTags({ members, enabled }: UseAutoMemoryTagsOptions
           suppressedMemberIds: suppressedRef.current,
         });
 
-        return memberIdArraysEqual(current, next) ? current : next;
+        if (memberIdArraysEqual(current, next)) {
+          return current;
+        }
+
+        onSelectedMemberIdsChange?.(next);
+        return next;
       });
     },
-    [enabled],
+    [enabled, onSelectedMemberIdsChange],
   );
 
   const toggleMember = useCallback((memberId: string) => {
@@ -69,16 +79,21 @@ export function useAutoMemoryTags({ members, enabled }: UseAutoMemoryTagsOptions
           : result.suppressedMemberIds,
       );
 
-      return memberIdArraysEqual(currentSelected, result.selectedMemberIds)
-        ? currentSelected
-        : result.selectedMemberIds;
+      if (memberIdArraysEqual(currentSelected, result.selectedMemberIds)) {
+        return currentSelected;
+      }
+
+      onSelectedMemberIdsChange?.(result.selectedMemberIds);
+      return result.selectedMemberIds;
     });
-  }, []);
+  }, [onSelectedMemberIdsChange]);
 
   const applyVoiceResult = useCallback(({ mentionedMemberIds }: VoiceTagResult) => {
+    const nextMemberIds = [...new Set(mentionedMemberIds)];
     setSuppressedMemberIds([]);
-    setSelectedMemberIds(mentionedMemberIds.slice(0, MAX_MEMORY_TAGS));
-  }, []);
+    setSelectedMemberIds(nextMemberIds);
+    onSelectedMemberIdsChange?.(nextMemberIds);
+  }, [onSelectedMemberIdsChange]);
 
   return {
     selectedMemberIds,

@@ -63,6 +63,33 @@ describe('FamilyRosterSheet', () => {
     expect(getByText('Leo')).toBeTruthy();
     expect(queryByText('Son')).toBeNull();
     expect(getByTestId('roster-member-mara-id').props.accessibilityState.selected).toBe(true);
+    expect(getByTestId('roster-member-enzo-id').props.accessibilityState.disabled).toBe(false);
+    expect(getByText('1 tagged')).toBeTruthy();
     expect(getByTestId('roster-keyboard-avoiding-view')).toBeTruthy();
+  });
+
+  it('disables unselected rows when an illustrated-memory cap is reached', () => {
+    const members = [createMember('enzo-id', 'Enzo'), createMember('mara-id', 'Mara')];
+
+    const { getByTestId, getByText } = render(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <FamilyRosterSheet
+          maxSelected={1}
+          members={members}
+          onClose={jest.fn()}
+          onToggleMember={jest.fn()}
+          selectedMemberIds={['mara-id']}
+          visible
+        />
+      </SafeAreaProvider>,
+    );
+
+    expect(getByTestId('roster-member-enzo-id').props.accessibilityState.disabled).toBe(true);
+    expect(getByText('1 of 1')).toBeTruthy();
   });
 });

@@ -39,7 +39,7 @@ When building a new feature, follow this sequence:
 ## Checklist: new memory-related work
 
 - [ ] Text saves to DB before AI invocation
-- [ ] Max 4 tags enforced (UI + backend)
+- [ ] Unlimited tags for text-only/media; max 6 tags for AI illustrations (UI + backend)
 - [ ] Illustration status displayed (`pending|generating|ready|failed`)
 - [ ] Retry on failed illustration
 - [ ] Plain text only (no rich text editor)

@@ -94,7 +94,7 @@ Picker options intentionally set `exif: false` and `base64: false`; child profil
 ### How to invoke from another feature
 
 1. Use `useFamilyMembers()` for the member list.
-2. Tag memories with member ids (max 4) — future memory feature.
+2. Tag memories with member ids (unlimited for text-only/media; max 6 for AI illustrations).
 3. Resolve private images with `useMediaUrl(key)` or `getMediaUrls([...keys])`.
 4. On create, portrait generation runs automatically after photo upload. On edit, pass `regeneratePortrait: true` to `updateMember` only when the user confirms regeneration.
 

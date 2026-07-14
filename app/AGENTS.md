@@ -26,7 +26,7 @@ app/
 | Portrait wait | Show progress; don't allow dismiss during onboarding first portrait |
 | Voice | Mic toggles record; 2-min auto-stop; processing spinner |
 | Illustration | Status badge on cards; detail view retry button on `failed` |
-| Tags | Multi-select, max 4, show member avatars |
+| Tags | Multi-select with no global cap; AI illustrations support max 6 tagged members |
 | Keyboard | Any screen/modal/drawer with `TextInput` must keep the focused input and primary actions visible above the keyboard on iOS and Android |
 
 ## Testing

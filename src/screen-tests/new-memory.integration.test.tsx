@@ -7,7 +7,7 @@
 // crashing release bundles. See
 // docs/plans/media-exif-capture-date-prefill.md for the full rationale.
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
-import { act, fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -35,6 +35,10 @@ jest.mock('@/lib/supabase', () => ({
     auth: { getSession: jest.fn() },
     functions: { invoke: jest.fn() },
   },
+}));
+
+jest.mock('@/components/family-member-avatar', () => ({
+  FamilyMemberAvatar: () => null,
 }));
 
 // VoiceSpeakItModal (rendered for real) transitively imports expo-audio at
@@ -330,5 +334,56 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
       expect(asset).not.toHaveProperty('exif');
     }
     expect(navigateBack).toHaveBeenCalled();
+  });
+
+  it('auto-switches to text-only when more than six members are selected', async () => {
+    const memberNames = ['Alice', 'Bruno', 'Clara', 'Diego', 'Elena', 'Felix', 'Grace'];
+    const members = memberNames.map((name, index) => ({
+      additional_info: null,
+      created_at: '2026-07-14T00:00:00.000Z',
+      date_of_birth: null,
+      family_id: 'family-1',
+      gender: null,
+      id: `member-${index}`,
+      illustrated_profile_key: null,
+      illustrated_profile_status: 'ready',
+      is_user_profile: false,
+      name,
+      nicknames: [],
+      profile_picture_key: null,
+      updated_at: '2026-07-14T00:00:00.000Z',
+      user_id: 'user-1',
+    }));
+    mockedUseFamilyMembers.mockReturnValue({ members });
+
+    const screen = renderScreen();
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'The whole family gathered.');
+    for (const member of members.slice(0, 3)) {
+      fireEvent.press(screen.getByTestId(`memory-tag-${member.id}`));
+    }
+    fireEvent.press(screen.getByTestId('memory-tag-more'));
+    for (const member of members.slice(3)) {
+      fireEvent.press(screen.getByTestId(`roster-member-${member.id}`));
+    }
+
+    expect(screen.getByTestId('memory-tag-count').props.children).toEqual([' ', '· ', 7, '']);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('new-memory-ai-toggle').props.enabled).toBe(false);
+      expect(screen.getByText('Up to 6 people per illustration')).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('roster-done-btn'));
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(createMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryType: 'text_only',
+        taggedMemberIds: members.map((member) => member.id),
+      }),
+    );
   });
 });

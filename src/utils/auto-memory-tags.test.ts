@@ -46,7 +46,7 @@ describe('auto-memory-tags', () => {
     expect(next).toEqual(['mara-id']);
   });
 
-  it('caps at MAX_MEMORY_TAGS', () => {
+  it('auto-adds every mentioned member', () => {
     const next = applyAutoMemoryTags({
       content: 'Enzo Mara Leo Mia Ava',
       members,
@@ -54,8 +54,7 @@ describe('auto-memory-tags', () => {
       suppressedMemberIds: [],
     });
 
-    expect(next).toHaveLength(4);
-    expect(next).toEqual(['enzo-id', 'mara-id', 'leo-id', 'mia-id']);
+    expect(next).toEqual(['enzo-id', 'mara-id', 'leo-id', 'mia-id', 'ava-id']);
   });
 
   it('returns same reference when unchanged', () => {
@@ -94,7 +93,7 @@ describe('auto-memory-tags', () => {
     expect(result.suppressedMemberIds).toEqual(['mara-id']);
   });
 
-  it('toggle on clears suppression and adds when under cap', () => {
+  it('toggle on clears suppression and adds the member', () => {
     const result = toggleMemoryTag({
       memberId: 'mara-id',
       selectedMemberIds: ['enzo-id'],
@@ -106,7 +105,7 @@ describe('auto-memory-tags', () => {
     expect(result.suppressedMemberIds).toEqual([]);
   });
 
-  it('toggle on at cap is a no-op', () => {
+  it('toggle on has no global tag cap', () => {
     const selected = ['enzo-id', 'mara-id', 'leo-id', 'mia-id'];
     const result = toggleMemoryTag({
       memberId: 'ava-id',
@@ -115,7 +114,7 @@ describe('auto-memory-tags', () => {
       selecting: true,
     });
 
-    expect(result.selectedMemberIds).toBe(selected);
+    expect(result.selectedMemberIds).toEqual([...selected, 'ava-id']);
     expect(result.suppressedMemberIds).toEqual([]);
   });
 

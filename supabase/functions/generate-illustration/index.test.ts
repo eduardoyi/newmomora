@@ -31,6 +31,7 @@ const TEST_ENV = {
 async function withMockedIllustrationNetwork(
   content: string,
   run: (result: MockNetworkResult) => Promise<void>,
+  taggedMemberIds: string[] = [MEMBER_ID],
 ): Promise<void> {
   const originalFetch = globalThis.fetch;
   const originalEnv = new Map(
@@ -100,7 +101,7 @@ async function withMockedIllustrationNetwork(
       }
 
       if (table === 'memory_family_members') {
-        return jsonResponse([{ family_member_id: MEMBER_ID }]);
+        return jsonResponse(taggedMemberIds.map((family_member_id) => ({ family_member_id })));
       }
 
       if (table === 'family_members') {
@@ -197,6 +198,27 @@ Deno.test('generate-illustration rejects unauthenticated requests', async () => 
   );
 
   assertEquals(response.status, 401);
+});
+
+Deno.test('generate-illustration rejects more than six tagged members', async () => {
+  const taggedMemberIds = Array.from(
+    { length: 7 },
+    (_, index) => `${index + 1}0000000-0000-4000-8000-000000000000`,
+  );
+
+  await withMockedIllustrationNetwork(
+    'Everyone gathered for a family picnic.',
+    async (network) => {
+      const response = await handleGenerateIllustration(authenticatedRequest());
+      const body = await response.json();
+
+      assertEquals(response.status, 400);
+      assertEquals(body.code, 'ILLUSTRATION_MEMBER_LIMIT');
+      assertEquals(network.openAiChatPrompts.length, 0);
+      assertEquals(network.openAiImagePrompts.length, 0);
+    },
+    taggedMemberIds,
+  );
 });
 
 Deno.test('generate-illustration strips URLs from safety and image prompts', async () => {

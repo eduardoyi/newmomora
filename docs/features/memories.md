@@ -14,7 +14,10 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
 
 - FAB on Timeline opens **New memory** modal.
 - Form always shows: text field, media attach icon (toolbar), date picker, family member tag picker.
-- **Auto-tag while typing** (new + edit compose): matching legal names or nicknames in the text (case-insensitive, whole-word boundaries) auto-selects chips up to 4. Manual untag suppresses re-add for that session. Tags are never auto-removed when text changes. Edit screen only auto-tags after the user edits text or uses voice (not on initial load).
+- **Auto-tag while typing** (new + edit compose): matching legal names or nicknames in the text (case-insensitive, whole-word boundaries) auto-selects every matching family member. Manual untag suppresses re-add for that session. Tags are never auto-removed when text changes. Edit screen only auto-tags after the user edits text or uses voice (not on initial load).
+- **Tag count vs. illustration count:** text-only and media memories may tag any number of family members. AI illustrations support at most 6 tagged members. In create, auto-tag, and voice flows, crossing 6 turns AI off and disables its switch with the short helper “Up to 6 people per illustration.” Returning to 6 or fewer re-enables the switch but leaves it off until the user turns it on.
+- **Editable AI mode:** the edit composer allows switching between `text_illustration` and `text_only`. Switching AI off hides the illustration immediately and saves the row as text-only without clearing `illustration_key`, `illustration_prompt`, or `illustration_status`. Switching it back on reveals a retained illustration without regeneration. If no retained illustration exists, saving with AI on sets the status to `pending` and starts generation. Pending/generating work is never duplicated, and switching it off does not cancel the background job.
+- An existing illustrated memory caps manual tag selection at 6 while AI remains on, matching the illustration input limit. Turning AI off removes that cap; AI cannot be turned back on until the tag count returns to 6 or fewer.
 - **Emergent type logic:**
   - Attach one or more photos/videos → `media` type; AI toggle is hidden.
   - No media, AI toggle off → `text_only`.
@@ -71,11 +74,11 @@ For `media` type: the client generates a `memoryId` UUID upfront, presigns a PUT
 | `memories.memory_type` | `text_illustration` \| `text_only` \| `media` — drives AI pipeline and UI rendering |
 | `memories.content` | Required (non-empty) for `text_illustration` and `text_only`; optional caption for `media` |
 | `memories.illustration_key` | R2 object key — set only for `text_illustration` |
-| `memories.illustration_status` | `none` \| `pending` \| `generating` \| `ready` \| `failed`; `none` for non-illustration types |
+| `memories.illustration_status` | `none` \| `pending` \| `generating` \| `ready` \| `failed`; newly created non-illustration rows use `none`, while a text-only row may retain the status of a hidden illustration |
 | `memories.media_key` | Cover/cache R2 object key for the first media asset |
 | `memories.media_content_type` | Cover/cache MIME type for the first media asset |
 | `memory_media` | Canonical ordered 1-10 photo/video assets for `media` memories |
-| `memory_family_members` | Up to 4 tags per memory (trigger enforced) |
+| `memory_family_members` | Unlimited for `text_only`/`media`; max 6 for `text_illustration` (conditional triggers enforced) |
 
 ## API & Edge Functions
 
@@ -105,6 +108,7 @@ See TECH_SPEC §4.0, §4.2–4.3 for contracts.
 3. Always save text/row before invoking AI; never block save on illustration failure.
 4. New memory type → add value to `memory_type` check constraint, update `createMemory` service, update timeline card renderer, update `hard-delete-expired-accounts` if it introduces new storage keys.
 5. For media type details (upload flow, validation, video playback) see [media-memories.md](./media-memories.md).
+6. Treat `memory_type` as illustration visibility/eligibility, not proof that no illustration object exists. A `text_only` row may intentionally retain a hidden `illustration_key` so users can restore it later.
 
 ## Family sharing
 
@@ -118,14 +122,15 @@ role/tenancy model and the RLS rewrite.
 
 ## Constraints & gotchas
 
-- Max **4 tags** (UI + DB trigger).
+- No global tag maximum. `text_illustration` is capped at **6 tags** by client validation, a conditional junction-table trigger, a memory-type transition trigger, and `generate-illustration`; `text_only` and `media` are unlimited.
+- Turning AI off preserves all illustration columns and the R2 object. Timeline/detail rendering must continue to branch on `memory_type`, so retained keys on `text_only` rows remain hidden. Account deletion still collects retained keys normally.
 - Illustration requires tagged members with **ready** portraits (`NO_PORTRAITS` error otherwise).
 - `generate-illustration` passes **all** ready tagged portraits to OpenAI and labels each as `Reference image N: {description}` where description includes name, age, gender, and optional additional guidance. **Nicknames are never included in the image prompt** — a nickname like "cheeky monkey" was previously injected verbatim and could get drawn as a literal monkey. Instead, the safety-rewrite step (`buildSafetySystemPrompt` in `_shared/prompts.ts`) receives a nickname→canonical-name mapping for every family member (not just tagged ones, so mentions of any family member resolve) and is instructed to substitute nicknames with the member's real name in `safeDescription`, plus never treat a nickname as a literal visual element. `buildIllustrationPrompt` also carries a belt-and-suspenders constraint against drawing animals/objects/costumes implied by names or nicknames. The prompt instructs the model to draw **only those tagged humans** (no extra children or adults), while still allowing non-human scene elements (e.g. farm animals) from the memory text.
 - The safety rewrite returns `{"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}` (validated server-side, defaulting to `neutral`). `expressionStyle: "comedic"` only unlocks playful exaggerated expressions (see below) when the memory's `emotion` is also in `COMEDIC_ELIGIBLE_EMOTIONS` (`joy`, `funny`, `mischief`, `pride`).
 - `buildIllustrationPrompt` is scene-first, newline-separated sections (Scene → Characters → Emotional tone → Style/palette/date → Constraints) rather than one long paragraph. The Characters section PRESERVEs identity cues from each portrait reference (hairstyle, hair color, skin tone, face shape, approximate age, distinctive features) but ADAPTs pose/clothing/lighting/expression — the portrait's smile is explicitly called out as an identity sample only, not the required expression. The Emotional tone section maps `memory.emotion` to concrete expression guidance via `EMOTION_EXPRESSIONS` in `_shared/prompts.ts` (same keys as `EMOTION_PALETTES`) so illustrations stop defaulting every character to a smile — `worry`/`weary`/`sad` explicitly forbid smiles. When `expressionStyle === 'comedic'` and the emotion is whitelisted, an extra line invites playful exaggerated storybook expressions. `funny` is a first-class emotion (its own palette/expression entries); only the legacy label `joyful` is still mapped by `normalizeEmotion` (to `joy`) before palette/expression lookup; run `npm run eval:illustration -- --list-emotions` to audit labels in the DB.
-- **Auto-tag suppression vs illustration:** suppression is compose-session only. If a memory is saved with **zero** tags but the text still mentions names, `generate-illustration` may still infer members from text when no tags exist (existing fallback). Auto-tag reduces zero-tag saves with mentions.
+- **Auto-tag suppression vs illustration:** suppression is compose-session only. If a memory is saved with **zero** tags but the text still mentions names, `generate-illustration` may still infer members from text when no tags exist (existing fallback). That fallback is capped to the first 6 matched family members so it cannot bypass the portrait-input limit. Auto-tag reduces zero-tag saves with mentions.
 - Reference images are capped to **1024px** max edge server-side before the OpenAI edit call.
-- `illustration_status = 'pending'` must only be set for `text_illustration` rows; all other types use `'none'`.
+- New illustration work sets `illustration_status = 'pending'` only after the row is switched to `text_illustration`. A `text_only` row may retain a prior `pending`/`generating`/`ready`/`failed` status while its illustration is hidden; do not normalize retained state to `none`.
 - Poll every 5s while `illustration_status` is `pending`/`generating`.
 - Calendar range loading uses `fetchOldestMemoryDate` for scroll extent and `fetchMemoriesInDateRange` for buffered visible rows, so do not reintroduce full-list loading for the calendar.
 - Full-history Timeline enrichment must keep batching relation lookups; a
@@ -139,7 +144,7 @@ role/tenancy model and the RLS rewrite.
 
 | Layer | File |
 |-------|------|
-| Unit | `src/components/memory-card.test.tsx`, `src/utils/memories.test.ts`, `src/utils/calendar.test.ts`, `src/utils/member-mentions.test.ts`, `src/utils/auto-memory-tags.test.ts`, `src/utils/profile-photo.test.ts` |
-| Integration | `src/services/memories.integration.test.ts` (including large-timeline relation/engagement batching), `src/services/engagement.integration.test.ts`, `src/hooks/useMemoryEngagement.integration.test.tsx`, `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/useAutoMemoryTags.integration.test.tsx`, `src/screen-tests/edit-memory.integration.test.tsx`, `src/screen-tests/memory-detail.integration.test.tsx` |
-| E2E | `.maestro/flows/memories/create-memory.yaml`, `.maestro/flows/memories/auto-tag.yaml`, `.maestro/flows/engagement/like-and-comment.yaml` |
+| Unit | `src/components/memory-card.test.tsx`, `src/components/memory-tag-picker.test.tsx`, `src/components/family-roster-sheet.test.tsx`, `src/utils/memories.test.ts`, `src/utils/calendar.test.ts`, `src/utils/member-mentions.test.ts`, `src/utils/auto-memory-tags.test.ts`, `src/utils/profile-photo.test.ts` |
+| Integration | `src/services/memories.integration.test.ts` (including mode switching, retained illustrations, and large-timeline relation/engagement batching), `src/services/engagement.integration.test.ts`, `src/hooks/useMemoryEngagement.integration.test.tsx`, `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/useAutoMemoryTags.integration.test.tsx`, `src/screen-tests/new-memory.integration.test.tsx`, `src/screen-tests/edit-memory.integration.test.tsx`, `src/screen-tests/memory-detail.integration.test.tsx` |
+| E2E | `.maestro/flows/memories/create-memory.yaml`, `.maestro/flows/memories/auto-tag.yaml`, `.maestro/flows/memories/toggle-ai-on-edit.yaml`, `.maestro/flows/engagement/like-and-comment.yaml` |
 | Deno | `supabase/functions/analyze-emotion/index.test.ts`, `generate-illustration/index.test.ts`, `notify-memory-engagement/index.test.ts`, `_shared/member-mentions.test.ts`, `_shared/illustration-references.test.ts`, `_shared/image-bytes.test.ts` |

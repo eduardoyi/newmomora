@@ -16,7 +16,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
-import { MAX_MEMORY_TAGS } from '@/utils/memories';
 
 interface RosterRowProps {
   member: FamilyMember;
@@ -92,6 +91,7 @@ export interface FamilyRosterSheetProps {
   visible: boolean;
   members: FamilyMember[];
   selectedMemberIds: string[];
+  maxSelected?: number;
   onToggleMember: (memberId: string) => void;
   onClose: () => void;
 }
@@ -100,6 +100,7 @@ export function FamilyRosterSheet({
   visible,
   members,
   selectedMemberIds,
+  maxSelected,
   onToggleMember,
   onClose,
 }: FamilyRosterSheetProps) {
@@ -107,7 +108,7 @@ export function FamilyRosterSheet({
   const { height: windowHeight } = useWindowDimensions();
   const [searchQuery, setSearchQuery] = useState('');
 
-  const atLimit = selectedMemberIds.length >= MAX_MEMORY_TAGS;
+  const atLimit = maxSelected !== undefined && selectedMemberIds.length >= maxSelected;
   const taggedCount = selectedMemberIds.length;
   const listMaxHeight = Math.max(
     160,
@@ -156,7 +157,7 @@ export function FamilyRosterSheet({
           <View style={styles.header}>
             <Text style={styles.headerTitle}>Who’s in it</Text>
             <Text style={styles.headerCount}>
-              {taggedCount} of {MAX_MEMORY_TAGS}
+              {maxSelected !== undefined ? `${taggedCount} of ${maxSelected}` : `${taggedCount} tagged`}
             </Text>
           </View>
 
