@@ -27,6 +27,8 @@ interface MemoryCardProps {
   isVideoActive?: boolean;
 }
 
+const MAX_TIMELINE_MEMBER_AVATARS = 6;
+
 // ── Emotion chip ──────────────────────────────────────────────────────────────
 function EmotionChip({ emotion }: { emotion: string }) {
   const emo = getEmotionColors(emotion);
@@ -41,16 +43,29 @@ function EmotionChip({ emotion }: { emotion: string }) {
 
 // ── Member avatar cluster ──────────────────────────────────────────────────────
 function AvatarCluster({ members }: { members: MemoryWithTags['taggedMembers'] }) {
+  const visibleMembers = members.slice(0, MAX_TIMELINE_MEMBER_AVATARS);
+  const hiddenMemberCount = members.length - visibleMembers.length;
+
   return (
     <View style={styles.avatarCluster}>
-      {members.slice(0, 3).map((m, i) => (
+      {visibleMembers.map((m, i) => (
         <FamilyMemberAvatar
           key={m.id}
           member={m}
           size={22}
           style={[styles.avatarCircle, { marginLeft: i === 0 ? 0 : -7 }]}
+          testID={`memory-card-member-${m.id}`}
         />
       ))}
+      {hiddenMemberCount > 0 ? (
+        <View
+          accessibilityLabel={`${hiddenMemberCount} more tagged members`}
+          style={[styles.avatarCircle, styles.avatarOverflow, { marginLeft: -7 }]}
+          testID="memory-card-member-overflow"
+        >
+          <Text style={styles.avatarOverflowText}>+{hiddenMemberCount}</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -381,6 +396,19 @@ const styles = StyleSheet.create({
   avatarCircle: {
     borderWidth: 1.5,
     borderColor: colors.white,
+  },
+  avatarOverflow: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 11,
+    height: 22,
+    justifyContent: 'center',
+    width: 22,
+  },
+  avatarOverflowText: {
+    color: colors.ink3,
+    fontFamily: fonts.sansBold,
+    fontSize: 8,
   },
   emotionChip: {
     flexDirection: 'row',
