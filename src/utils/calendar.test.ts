@@ -19,6 +19,37 @@ describe('calendar utilities', () => {
     expect(weeks.at(-1)?.startIso).toBe('2026-04-20');
   });
 
+  it('labels each week with its absolute date range', () => {
+    const weeks = buildCalendarWeeks({
+      referenceDate,
+      oldestMemoryDate: '2026-04-20',
+      minimumWeeks: 4,
+    });
+
+    expect(weeks[0]?.rangeLabel).toBe('Jun 8–10');
+    expect(weeks[2]?.rangeLabel).toBe('May 25–31');
+    expect(weeks[6]?.rangeLabel).toBe('Apr 27 – May 3');
+  });
+
+  it('marks a month break on the first week whose newest day enters an older month', () => {
+    const weeks = buildCalendarWeeks({
+      referenceDate,
+      oldestMemoryDate: '2026-04-20',
+      minimumWeeks: 4,
+    });
+
+    expect(weeks.map((week) => week.monthBreak)).toEqual([
+      null,
+      null,
+      'May 2026',
+      null,
+      null,
+      null,
+      null,
+      'April 2026',
+    ]);
+  });
+
   it('keeps a short fallback range when there are no memories yet', () => {
     const weeks = buildCalendarWeeks({
       referenceDate,

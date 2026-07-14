@@ -10,6 +10,8 @@ export interface CalendarDay {
 export interface CalendarWeek {
   index: number;
   label: string;
+  rangeLabel: string;
+  monthBreak: string | null;
   startIso: string;
   endIso: string;
   days: CalendarDay[];
@@ -68,6 +70,29 @@ function getWeekLabel(index: number): string {
   return `${index} weeks ago`;
 }
 
+function formatMonthYear(date: Date): string {
+  return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function getWeekRangeLabel(startDate: Date, endDate: Date): string {
+  const startMonth = startDate.toLocaleDateString('en-US', { month: 'short' });
+  const endMonth = endDate.toLocaleDateString('en-US', { month: 'short' });
+
+  if (startDate.getMonth() !== endDate.getMonth() || startDate.getFullYear() !== endDate.getFullYear()) {
+    return `${startMonth} ${startDate.getDate()} – ${endMonth} ${endDate.getDate()}`;
+  }
+
+  if (startDate.getDate() === endDate.getDate()) {
+    return `${startMonth} ${startDate.getDate()}`;
+  }
+
+  return `${startMonth} ${startDate.getDate()}–${endDate.getDate()}`;
+}
+
+function isSameMonth(a: Date, b: Date): boolean {
+  return a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
+}
+
 export function buildCalendarWeeks({
   referenceDate = new Date(),
   oldestMemoryDate,
@@ -98,9 +123,19 @@ export function buildCalendarWeeks({
       });
     }
 
+    // A week belongs to the month of its newest day; a break marks the first
+    // week whose newest day falls in an older month than the week above it.
+    const previousWeekEnd = index === 0
+      ? null
+      : index === 1
+        ? referenceDate
+        : addDays(addDays(currentWeekStart, -(index - 1) * 7), 6);
+
     return {
       index,
       label: getWeekLabel(index),
+      rangeLabel: getWeekRangeLabel(startDate, endDate),
+      monthBreak: previousWeekEnd && !isSameMonth(previousWeekEnd, endDate) ? formatMonthYear(endDate) : null,
       startIso: toIsoDate(startDate),
       endIso: toIsoDate(endDate),
       days,

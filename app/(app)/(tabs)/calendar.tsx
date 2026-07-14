@@ -264,7 +264,17 @@ export default function CalendarScreen() {
 
   const renderWeek = useCallback(({ item: week }: ListRenderItemInfo<CalendarWeek>) => (
     <View style={styles.week}>
-      <Text style={styles.weekLabel}>{week.label}</Text>
+      {week.monthBreak && (
+        <View style={styles.monthBreak}>
+          <View style={styles.monthBreakLine} />
+          <Text style={styles.monthBreakText}>{week.monthBreak}</Text>
+          <View style={styles.monthBreakLine} />
+        </View>
+      )}
+      <View style={styles.weekLabelRow}>
+        <Text style={styles.weekLabel}>{week.label}</Text>
+        <Text style={styles.weekRange}>{week.rangeLabel}</Text>
+      </View>
       <View style={styles.weekDays}>
         {week.days.map((day) => (
           <RibbonDay
@@ -337,14 +347,46 @@ const styles = StyleSheet.create({
   week: {
     marginBottom: 28,
   },
+  monthBreak: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: spacing.lg,
+    marginTop: 6,
+    marginBottom: 26,
+  },
+  monthBreakLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.borderStrong,
+  },
+  monthBreakText: {
+    fontFamily: fonts.displayItalic,
+    fontSize: 22,
+    lineHeight: 28,
+    color: colors.ink2,
+  },
+  weekLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    marginBottom: 12,
+  },
   weekLabel: {
     fontFamily: fonts.sansBold,
     fontSize: 10,
     letterSpacing: 0.14 * 10,
     textTransform: 'uppercase',
     color: colors.ink3,
-    paddingHorizontal: spacing.lg,
-    marginBottom: 12,
+  },
+  weekRange: {
+    fontFamily: fonts.sansBold,
+    fontSize: 10,
+    letterSpacing: 0.08 * 10,
+    textTransform: 'uppercase',
+    color: colors.ink3,
+    opacity: 0.75,
   },
   weekDays: {
     paddingHorizontal: spacing.md,
