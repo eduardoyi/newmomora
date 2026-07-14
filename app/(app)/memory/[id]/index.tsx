@@ -141,8 +141,8 @@ function MemberPill({ member }: { member: FamilyMember }) {
   );
 }
 
-// ── Shared meta row (date · attribution + emotion chip) ──────────────────────
-function MemoryMetaRow({
+// ── Shared low-priority metadata footer ──────────────────────────────────────
+function MemoryMetaFooter({
   date,
   attributionName,
   emotion,
@@ -153,17 +153,19 @@ function MemoryMetaRow({
 }) {
   const emo = getEmotionColors(emotion);
   return (
-    <View style={styles.metaRow}>
-      <Text numberOfLines={1} style={styles.metaLeft}>
+    <View style={styles.metaFooter} testID="memory-detail-section-metadata">
+      <View style={styles.metaFooterTop}>
         <Text style={styles.detailDate}>{formatDisplayDate(date)}</Text>
-        <Text style={styles.attributionText}>  ·  Added by {attributionName}</Text>
+        {emo && emotion ? (
+          <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
+            <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
+            <Text style={[styles.emotionLabel, { color: emo.ink }]}>{emotion}</Text>
+          </View>
+        ) : null}
+      </View>
+      <Text style={styles.attributionText} testID="memory-detail-attribution">
+        Added by {attributionName}
       </Text>
-      {emo && emotion ? (
-        <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
-          <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
-          <Text style={[styles.emotionLabel, { color: emo.ink }]}>{emotion}</Text>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -290,24 +292,28 @@ function MemoryDetailFramed({
 
           {/* Content inside card */}
           <View style={styles.framedCardBody}>
-            <MemoryEngagementBar
-              memory={memory}
-              onOpenComments={onOpenComments}
-              iconSize={24}
-            />
-            <MemoryMetaRow date={memory.memory_date} attributionName={attributionName} emotion={memory.emotion} />
+            <View testID="memory-detail-section-engagement">
+              <MemoryEngagementBar
+                memory={memory}
+                onOpenComments={onOpenComments}
+                iconSize={24}
+              />
+            </View>
             {memory.content ? (
               <MemoryContentText
                 content={memory.content}
                 linkPreviews={toLinkPreviewMap(memory.link_previews)}
                 style={styles.detailText}
+                testID="memory-detail-section-content"
               />
             ) : null}
-            <View style={styles.memberRow}>
-              {memory.taggedMembers.map((m) => (
-                <MemberPill key={m.id} member={m} />
-              ))}
-            </View>
+            {memory.taggedMembers.length > 0 && (
+              <View style={styles.memberRow} testID="memory-detail-section-members">
+                {memory.taggedMembers.map((m) => (
+                  <MemberPill key={m.id} member={m} />
+                ))}
+              </View>
+            )}
             {canEdit &&
               memory.memory_type === 'text_illustration' &&
               (memory.illustration_status === 'failed' || needsIllustrationRecovery(memory)) && (
@@ -320,6 +326,11 @@ function MemoryDetailFramed({
                 <Text style={styles.retryBtnText}>{isRetrying ? 'Retrying…' : 'Retry illustration'}</Text>
               </Pressable>
             )}
+            <MemoryMetaFooter
+              date={memory.memory_date}
+              attributionName={attributionName}
+              emotion={memory.emotion}
+            />
           </View>
         </View>
       </ScrollView>
@@ -369,27 +380,32 @@ function MemoryDetailEditorial({
       </SafeAreaView>
       <ScrollView contentContainerStyle={styles.detailScrollContent}>
         <View style={styles.editorialCard}>
-          <MemoryMetaRow date={memory.memory_date} attributionName={attributionName} emotion={memory.emotion} />
           <Text style={[styles.editorialQuote, { color: emo ? emo.ink : colors.ink3 }]}>“</Text>
           <MemoryContentText
             content={memory.content}
             linkPreviews={toLinkPreviewMap(memory.link_previews)}
             style={styles.editorialText}
+            testID="memory-detail-section-content"
           />
-          <View style={styles.editorialEngagement}>
+          {memory.taggedMembers.length > 0 && (
+            <View style={styles.memberRow} testID="memory-detail-section-members">
+              {memory.taggedMembers.map((m) => (
+                <MemberPill key={m.id} member={m} />
+              ))}
+            </View>
+          )}
+          <View style={styles.detailUtilities} testID="memory-detail-section-engagement">
             <MemoryEngagementBar
               memory={memory}
               onOpenComments={onOpenComments}
               iconSize={24}
             />
           </View>
-          {memory.taggedMembers.length > 0 && (
-            <View style={[styles.memberRow, styles.editorialMemberRow]}>
-              {memory.taggedMembers.map((m) => (
-                <MemberPill key={m.id} member={m} />
-              ))}
-            </View>
-          )}
+          <MemoryMetaFooter
+            date={memory.memory_date}
+            attributionName={attributionName}
+            emotion={memory.emotion}
+          />
         </View>
       </ScrollView>
     </View>
@@ -616,20 +632,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingVertical: 4,
-    paddingLeft: 8,
-    paddingRight: 10,
-    borderRadius: 999,
+    paddingVertical: 3,
+    paddingLeft: 7,
+    paddingRight: 9,
+    borderRadius: radius.pill,
   },
   emotionDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 5,
+    height: 5,
+    borderRadius: radius.pill,
   },
   emotionLabel: {
     fontFamily: fonts.sansBold,
-    fontSize: 12,
-    letterSpacing: 0.02 * 12,
+    fontSize: 10.5,
+    letterSpacing: 0.02 * 10.5,
   },
 
   emotionGradient: {
@@ -640,15 +656,21 @@ const styles = StyleSheet.create({
     height: '60%',
   },
 
-  // ── Shared meta row ──
-  metaRow: {
+  // ── Shared low-priority footer ──
+  metaFooter: {
+    gap: spacing.xs,
+  },
+  metaFooterTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: spacing.sm,
   },
-  metaLeft: {
-    flexShrink: 1,
+  detailUtilities: {
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    marginTop: 2,
+    paddingTop: 10,
   },
 
   // ── Shared scroll content ──
@@ -714,14 +736,14 @@ const styles = StyleSheet.create({
   },
   detailDate: {
     fontFamily: fonts.sansBold,
-    fontSize: 11,
-    letterSpacing: 0.14 * 11,
+    fontSize: 10,
+    letterSpacing: 0.14 * 10,
     textTransform: 'uppercase',
     color: colors.ink3,
   },
   attributionText: {
     fontFamily: fonts.sans,
-    fontSize: 12,
+    fontSize: 10.5,
     color: colors.ink3,
   },
   detailText: {
@@ -742,7 +764,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 999,
+    borderRadius: radius.pill,
     paddingRight: 10,
     paddingLeft: 4,
     paddingVertical: 4,
@@ -795,17 +817,5 @@ const styles = StyleSheet.create({
     fontSize: 22,
     lineHeight: 22 * 1.55,
     color: colors.ink,
-  },
-  editorialEngagement: {
-    borderTopColor: colors.border,
-    borderTopWidth: 1,
-    marginTop: 4,
-    paddingTop: 14,
-  },
-  editorialMemberRow: {
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    marginTop: 6,
   },
 });

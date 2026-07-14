@@ -1,7 +1,7 @@
 # Feature: Memories & illustrations
 
 **Status:** `done`
-**Last updated:** 2026-07-13
+**Last updated:** 2026-07-14
 **PRD reference:** §6.3 Memories, §6.4 Illustrations
 
 ## Overview
@@ -23,7 +23,7 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
   - `text_illustration`: excerpt + emotion chip + illustration thumbnail (with status indicator).
   - `text_only`: excerpt + emotion chip; no image area.
   - `media`: photo/video carousel + optional caption; media with at least one photo may show emotion chip after async analysis.
-- Memory detail shows full content, media or illustration, tagged members, date, emotion (if any), edit/delete. The detail background carries a soft top-down gradient tinted by the emotion (`getEmotionGradient` in `src/constants/theme.ts`), falling back to a neutral surface→bg fade when no emotion is set.
+- Illustrated and media memory details follow the Timeline card order: visual, engagement, story, then tagged members. Text-only details prioritize the story and tagged members before engagement. Every variant ends with date and emotion in a compact footer, with creator attribution on its own lowest-priority line. The detail background carries a soft top-down gradient tinted by the emotion (`getEmotionGradient` in `src/constants/theme.ts`), falling back to a neutral surface→bg fade when no emotion is set.
 - Timeline cards and memory detail expose like/comment actions with passive non-zero counts. Timeline comment taps open detail with the comments drawer already visible; see [likes-and-comments.md](./likes-and-comments.md).
 - Tapping a ready memory illustration opens the private image in the shared full-screen media viewer; closing returns to the detail card.
 - Illustrated memory detail header includes a regenerate control (left of edit) to manually rerun the illustration pipeline; confirms before replacing a ready image. Regeneration calls `generate-illustration` with `forceRegenerate: true` so an already-`ready` memory is not short-circuited.
@@ -139,6 +139,6 @@ role/tenancy model and the RLS rewrite.
 | Layer | File |
 |-------|------|
 | Unit | `src/utils/memories.test.ts`, `src/utils/calendar.test.ts`, `src/utils/member-mentions.test.ts`, `src/utils/auto-memory-tags.test.ts`, `src/utils/profile-photo.test.ts` |
-| Integration | `src/services/memories.integration.test.ts` (including large-timeline relation/engagement batching), `src/services/engagement.integration.test.ts`, `src/hooks/useMemoryEngagement.integration.test.tsx`, `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/useAutoMemoryTags.integration.test.tsx`, `src/screen-tests/edit-memory.integration.test.tsx` |
+| Integration | `src/services/memories.integration.test.ts` (including large-timeline relation/engagement batching), `src/services/engagement.integration.test.ts`, `src/hooks/useMemoryEngagement.integration.test.tsx`, `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/useAutoMemoryTags.integration.test.tsx`, `src/screen-tests/edit-memory.integration.test.tsx`, `src/screen-tests/memory-detail.integration.test.tsx` |
 | E2E | `.maestro/flows/memories/create-memory.yaml`, `.maestro/flows/memories/auto-tag.yaml`, `.maestro/flows/engagement/like-and-comment.yaml` |
 | Deno | `supabase/functions/analyze-emotion/index.test.ts`, `generate-illustration/index.test.ts`, `notify-memory-engagement/index.test.ts`, `_shared/member-mentions.test.ts`, `_shared/illustration-references.test.ts`, `_shared/image-bytes.test.ts` |
