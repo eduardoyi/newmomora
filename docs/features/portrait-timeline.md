@@ -112,6 +112,8 @@ Portrait-version queries are family-batched, then grouped by member. Memory list
 
 Run `supabase/scripts/migrate-legacy-portrait-versions.ts` without flags first. The audit reads the actual object bytes despite misleading legacy extensions, trusts only EXIF original/digitized capture dates within DOB/today bounds, and reports uncertain records as `legacy_unknown` for manual review. `--apply` normalizes source photos to metadata-free JPEG, copies legacy portraits to immutable keys, verifies copied objects, then inserts deterministic/idempotent version rows. It does not delete the stable legacy objects.
 
+The migration runner requires `ffmpeg` on `PATH` as a fallback for older WebP/HEIC/AVIF uploads that ImageScript cannot decode directly.
+
 Cutover order is operationally significant:
 
 1. Ship the schema/Edge release, which creates the version table and deliberately rejects legacy portrait writes/deletes.

@@ -11,7 +11,7 @@
  *   supabase/scripts/migrate-legacy-portrait-versions.ts --apply
  */
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { parse as parseExif } from 'npm:exifr@7.1.3';
+import exifr from 'npm:exifr@7.1.3';
 
 import {
   getObjectBytes,
@@ -106,7 +106,7 @@ async function recoverReferenceDate(
 ): Promise<string | null> {
   let exif: ExifResult | undefined;
   try {
-    exif = await parseExif(bytes, {
+    exif = await exifr.parse(bytes, {
       pick: ['DateTimeOriginal', 'DateTimeDigitized'],
     }) as ExifResult | undefined;
   } catch {
@@ -123,8 +123,54 @@ async function recoverReferenceDate(
 
 async function normalizePhotoToJpeg(bytes: Uint8Array): Promise<Uint8Array> {
   const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
-  const image = await Image.decode(bytes);
-  return await image.encodeJPEG(88);
+  try {
+    const image = await Image.decode(bytes);
+    return await image.encodeJPEG(88);
+  } catch (imageScriptError) {
+    // Older profile uploads may contain real WebP/HEIC/AVIF bytes behind the
+    // historical `.webp` key. ImageScript cannot decode all of those formats,
+    // so use the local ffmpeg binary as an operational migration fallback.
+    const tempDirectory = await Deno.makeTempDir({ prefix: 'momora-portrait-migration-' });
+    const inputPath = `${tempDirectory}/source-image`;
+    const outputPath = `${tempDirectory}/normalized.jpg`;
+    try {
+      await Deno.writeFile(inputPath, bytes);
+      const result = await new Deno.Command('ffmpeg', {
+        args: [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-i',
+          inputPath,
+          '-frames:v',
+          '1',
+          '-map_metadata',
+          '-1',
+          '-q:v',
+          '2',
+          outputPath,
+        ],
+        stdout: 'null',
+        stderr: 'piped',
+      }).output();
+      if (!result.success) {
+        const detail = new TextDecoder().decode(result.stderr).trim();
+        throw new Error(detail || `ffmpeg exited with code ${result.code}`);
+      }
+      return await Deno.readFile(outputPath);
+    } catch (ffmpegError) {
+      const primaryMessage = imageScriptError instanceof Error
+        ? imageScriptError.message
+        : 'unsupported image type';
+      const fallbackMessage = ffmpegError instanceof Error
+        ? ffmpegError.message
+        : 'ffmpeg conversion failed';
+      throw new Error(`${primaryMessage}; ffmpeg fallback failed: ${fallbackMessage}`);
+    } finally {
+      await Deno.remove(tempDirectory, { recursive: true }).catch(() => undefined);
+    }
+  }
 }
 
 function keyOwner(objectKey: string): string | null {
