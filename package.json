@@ -12,10 +12,11 @@
     "lint": "expo lint",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:edge": "deno test --allow-env --allow-net --allow-read=supabase/functions supabase/functions/",
+    "test:edge": "deno test --allow-env --allow-net --allow-ffi --allow-read=supabase/functions,supabase/scripts,src/utils --node-modules-dir=none supabase/functions/ supabase/scripts/",
     "eval:portrait": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-portrait.ts",
     "eval:illustration": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-illustration.ts",
     "regenerate:illustrations": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/regenerate-illustrations.ts",
+    "backfill:previews": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-media-previews.ts",
     "test:e2e:family-fixture": "maestro test .maestro/flows/onboarding/add-family-member-with-fixture.yaml",
     "test:e2e:family-picker": "maestro test .maestro/flows/onboarding/add-family-member-with-picker.yaml"
   },

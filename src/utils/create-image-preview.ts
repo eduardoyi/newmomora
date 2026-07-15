@@ -6,11 +6,22 @@ import * as ImageManipulator from 'expo-image-manipulator';
  * `VIDEO_UPLOAD_MAX_DIMENSION` (video-compression.ts) even though both
  * currently use 1280 -- they cap different pipelines for different reasons
  * and are allowed to diverge independently.
+ *
+ * CROSS-REFERENCE: supabase/scripts/backfill-media-previews.ts mirrors this
+ * exact value (`PREVIEW_MAX_DIMENSION`) for the server-side backfill of
+ * previews on pre-existing photos. If this constant ever changes, change it
+ * there too (see the comment on that file's constant).
  */
 export const MEMORY_IMAGE_PREVIEW_MAX_DIMENSION = 1280;
 
-/** Preview compression quality -- lower than the EXIF-strip pass (0.92) since
- * this variant is only ever used at small list-view sizes. */
+/**
+ * Preview compression quality -- lower than the EXIF-strip pass (0.92) since
+ * this variant is only ever used at small list-view sizes.
+ *
+ * CROSS-REFERENCE: supabase/scripts/backfill-media-previews.ts mirrors this
+ * as `PREVIEW_JPEG_QUALITY = 80` (sharp's 1-100 scale vs. this 0-1 scale --
+ * 0.8 here == quality 80 there). Keep both in sync.
+ */
 export const MEMORY_IMAGE_PREVIEW_QUALITY = 0.8;
 
 export interface ImagePreviewResult {

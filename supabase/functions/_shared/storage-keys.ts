@@ -12,7 +12,11 @@ const MEMORY_MEDIA_CONTENT_TYPES = new Set([
 ]);
 
 const MEMORY_MEDIA_EXTENSION_PATTERN = /^([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
-const MEMORY_MEDIA_ASSET_EXTENSION_PATTERN =
+// Exported (not just module-private) because supabase/scripts/backfill-media-previews.ts
+// reuses this exact pattern to parse original asset keys into
+// {memoryId, assetId, ext} and to validate derived preview keys -- see the
+// cross-reference comment on deriveMediaPreviewKey there. Keep in sync.
+export const MEMORY_MEDIA_ASSET_EXTENSION_PATTERN =
   /^([^/]+)\/media\/([A-Za-z0-9_-]{1,128})\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
 
 export function buildFamilyPhotoKey(userId: string, familyMemberId: string): string {
