@@ -17,6 +17,7 @@ import {
   familyMembersQueryKeyBase,
   memoriesQueryKeyBase,
 } from '@/hooks/queryKeys';
+import { useMemoriesRealtime } from '@/hooks/useMemoriesRealtime';
 import { fetchMyFamilyMemberships } from '@/services/family';
 
 export interface FamilyMembershipSummary {
@@ -104,6 +105,14 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
 
     return match ?? memberships[0];
   }, [memberships, activeFamilyId]);
+
+  // Workstream D2 (docs/plans/performance-optimizations.md): mounted once
+  // here (family-provider level, so it's active for the whole authenticated
+  // session the same way useNotificationResponseRouting is mounted at the
+  // (app) layout level) rather than per-screen -- FamilyProvider already
+  // computes the resolved active familyId reactively, so a family switch
+  // naturally resubscribes the channel via this hook's own effect deps.
+  useMemoriesRealtime(resolvedMembership?.familyId ?? null);
 
   // Stale/removed active_family_id: fall back to the first membership and
   // persist the correction so future loads don't need to re-derive it.

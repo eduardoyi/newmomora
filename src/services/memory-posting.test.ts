@@ -143,7 +143,7 @@ describe('uploadMemoryMediaAssets', () => {
   it('passes video uploads through without invoking the image metadata strip', async () => {
     const uploadedKeys: string[] = [];
 
-    await uploadMemoryMediaAssets({
+    const [asset] = await uploadMemoryMediaAssets({
       userId: 'user-1',
       familyId: 'family-1',
       memoryId: 'memory-1',
@@ -152,6 +152,126 @@ describe('uploadMemoryMediaAssets', () => {
     });
 
     expect(mockedManipulateAsync).not.toHaveBeenCalled();
+    // Videos never get a preview (C3: "Videos: skip -- they already have
+    // compression + thumbnails").
+    expect(asset.previewObjectKey).toBeNull();
+    expect(mockedUploadMediaObject).toHaveBeenCalledTimes(1);
+  });
+
+  describe('image preview generation (Workstream C3/C4)', () => {
+    const PREVIEW_ASSET_ID = '11111111-1111-4111-8111-111111111111';
+
+    it('generates and uploads a preview for a large image, recording previewObjectKey', async () => {
+      mockedManipulateAsync
+        .mockResolvedValueOnce({ uri: 'stripped:file:///large.jpg', width: 4000, height: 3000 })
+        .mockResolvedValueOnce({ uri: 'preview:file:///large.jpg', width: 1280, height: 960 });
+      mockedUploadMediaObject
+        .mockResolvedValueOnce({ data: { objectKey: 'key', success: true }, error: null })
+        .mockResolvedValueOnce({ data: { objectKey: 'key', success: true }, error: null });
+
+      const uploadedKeys: string[] = [];
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [
+          { fileUri: 'file:///large.jpg', contentType: 'image/jpeg', mediaAssetId: PREVIEW_ASSET_ID },
+        ],
+        uploadedKeys,
+      });
+
+      const expectedPreviewKey = `user-1/memories/memory-1/media/${PREVIEW_ASSET_ID}-preview.jpg`;
+
+      expect(mockedUploadMediaObject).toHaveBeenCalledTimes(2);
+      expect(mockedUploadMediaObject.mock.calls[1]?.[0]).toBe(expectedPreviewKey);
+      expect(mockedUploadMediaObject.mock.calls[1]?.[1]).toBe('preview:file:///large.jpg');
+      expect(mockedUploadMediaObject.mock.calls[1]?.[2]).toBe('image/jpeg');
+      expect(asset.previewObjectKey).toBe(expectedPreviewKey);
+      expect(uploadedKeys).toContain(expectedPreviewKey);
+    });
+
+    it('no-upscale guard: does not generate or upload a preview for an already-small image', async () => {
+      mockedManipulateAsync.mockResolvedValueOnce({
+        uri: 'stripped:file:///small.jpg',
+        width: 800,
+        height: 600,
+      });
+
+      const uploadedKeys: string[] = [];
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///small.jpg', contentType: 'image/jpeg' }],
+        uploadedKeys,
+      });
+
+      expect(asset.previewObjectKey).toBeNull();
+      expect(mockedUploadMediaObject).toHaveBeenCalledTimes(1);
+      expect(uploadedKeys).toHaveLength(1);
+    });
+
+    it('fails open when preview generation fails: original upload still succeeds with previewObjectKey null', async () => {
+      mockedManipulateAsync
+        .mockResolvedValueOnce({ uri: 'stripped:file:///large.jpg', width: 4000, height: 3000 })
+        .mockRejectedValueOnce(new Error('preview manipulator unavailable'));
+
+      const uploadedKeys: string[] = [];
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///large.jpg', contentType: 'image/jpeg' }],
+        uploadedKeys,
+      });
+
+      expect(asset.previewObjectKey).toBeNull();
+      expect(mockedUploadMediaObject).toHaveBeenCalledTimes(1);
+      expect(uploadedKeys).toHaveLength(1);
+    });
+
+    it('fails open when the preview upload fails: falls back to previewObjectKey null', async () => {
+      mockedManipulateAsync
+        .mockResolvedValueOnce({ uri: 'stripped:file:///large.jpg', width: 4000, height: 3000 })
+        .mockResolvedValueOnce({ uri: 'preview:file:///large.jpg', width: 1280, height: 960 });
+      mockedUploadMediaObject
+        .mockResolvedValueOnce({ data: { objectKey: 'key', success: true }, error: null })
+        .mockResolvedValueOnce({ data: null, error: { message: 'preview upload failed' } });
+
+      const uploadedKeys: string[] = [];
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///large.jpg', contentType: 'image/jpeg' }],
+        uploadedKeys,
+      });
+
+      expect(asset.previewObjectKey).toBeNull();
+      // Only the original is retained for rollback bookkeeping -- the
+      // failed preview upload was never pushed.
+      expect(uploadedKeys).toHaveLength(1);
+    });
+
+    it('passes through an existing previewObjectKey for already-uploaded assets without re-uploading', async () => {
+      const uploadedKeys: string[] = [];
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [
+          {
+            objectKey: 'existing/key.jpg',
+            contentType: 'image/jpeg',
+            previewObjectKey: 'existing/key-preview.jpg',
+          },
+        ],
+        uploadedKeys,
+      });
+
+      expect(asset.previewObjectKey).toBe('existing/key-preview.jpg');
+      expect(mockedUploadMediaObject).not.toHaveBeenCalled();
+    });
   });
 
   it('persists a transformed video-frame aspect ratio with the uploaded asset', async () => {

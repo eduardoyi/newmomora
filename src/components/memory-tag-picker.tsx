@@ -1,5 +1,12 @@
 import { useCallback, useMemo, useState } from 'react';
-import { type LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Keyboard,
+  type LayoutChangeEvent,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { FamilyRosterSheet } from '@/components/family-roster-sheet';
@@ -115,6 +122,11 @@ export function MemoryTagPicker({
     });
   }, []);
 
+  const handleOpenRoster = useCallback(() => {
+    Keyboard.dismiss();
+    setIsRosterOpen(true);
+  }, []);
+
   return (
     <View style={styles.container}>
       <Text style={styles.label}>
@@ -153,7 +165,7 @@ export function MemoryTagPicker({
                   } hidden`
                 : 'Show more family members'
             }
-            onPress={() => setIsRosterOpen(true)}
+            onPress={handleOpenRoster}
             style={({ pressed }) => [
               styles.moreChip,
               hasHiddenSelectedMembers && styles.moreChipSelected,

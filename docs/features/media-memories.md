@@ -45,6 +45,7 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
 - Media memories may tag any number of family members; the six-person limit applies only when AI illustration is enabled on a text memory.
 - **Deferred posting (Instagram-style):** tapping Save closes the composer immediately. Compression + upload continue in a background queue; the Timeline and Calendar show a pending card ("Posting memory… — Uploading n of m") above the feed until the memory lands. Failures flip the card to Retry/Discard. The queue is in-memory only — force-quitting mid-upload loses the pending post (persistence is backlog).
 - On the Timeline and detail screen, `media` memories render an Instagram-style carousel with subtle dots and a small pagination counter when more than one asset exists.
+- **List-view bandwidth (previews):** each new image asset (not video) gets a derived JPEG preview capped at 1280px on its longest edge, uploaded alongside the untouched original. Timeline cards, calendar day stamps, and the family member profile's memory thumbnails render the preview when one exists, falling back to the original otherwise (legacy rows from before this shipped, videos, an already-small source, or a failed preview generation/upload). The memory detail carousel and the full-screen viewer always render the original — previews are a list-density optimization, not the source of truth for close-up viewing. Originals are never resized or replaced; this is purely an additive, derived variant. See Data model and Constraints & gotchas below.
 - Media assets persist their natural display `aspect_ratio` before the memory row appears. Videos derive it from a transformed frame after compression because encoded track dimensions can precede phone rotation metadata; images use their re-encoded output dimensions. Timeline cards therefore start at their final height with no async resize and no fixed-ratio gutters. Multi-asset carousels preserve the first asset's exact ratio for the shared frame; every later asset uses `contain` inside it.
 - Timeline videos autoplay only while their card is visible, show a cached first-frame thumbnail whenever playback is inactive, and keep that thumbnail over the player until its first frame renders, avoiding a gray-player flash. Timeline players defer release until the frame after their virtualized row unmounts so Android does not recycle a surface with a released player.
 - **Photo** memories: after save, async emotion analysis may replace the Photo badge with an emotion chip (same labels as text memories). Failures do not block save.
@@ -82,7 +83,8 @@ Key points:
 - **Image EXIF/GPS stripping:** every new image upload is re-encoded via `expo-image-manipulator` (`src/utils/strip-image-metadata.ts`) immediately before the PUT, in the same `uploadMemoryMediaAssets` step that runs video compression — so create, edit, and incoming-share attachments are all covered. The re-encode drops all EXIF (GPS, timestamps, device Make/Model/MakerNote) on both platforms. JPEG/PNG/WEBP keep their format at quality 0.92 (a deliberately *higher* quality than the picker's 0.85 export, to avoid visible double-compression loss); HEIC/HEIF re-encodes to JPEG since the manipulator cannot write HEIC, so the uploaded `contentType` and object-key extension always reflect the stripped output. This step is fail-closed (a re-encode failure rejects the upload instead of falling back to the unstripped original) — see Constraints & gotchas. **Videos are not covered**: their container-level metadata is uploaded as-is.
 - **Playback:** only the visible video page mounts an `expo-video` player. Each player targets an 8-second forward buffer with a 16 MiB byte cap and enables disk caching (`useCaching: true`), preventing legacy high-bitrate videos and adjacent pages from exhausting Android's Java heap.
 - **Stable media layout:** `memory_media.aspect_ratio` is written with the ordered asset metadata. New videos are measured from an `expo-video-thumbnails` frame after compression, so phone rotation is reflected; image ratios come from the EXIF-stripped output dimensions. Existing images and videos are backfilled once with `supabase/scripts/backfill-media-aspect-ratios.ts` using `ffprobe` dimensions and rotation metadata. Timeline rows use only the persisted first asset ratio (or a stable 4:3 legacy fallback), while detail may still measure a null legacy row at runtime.
-- **Signed URL recovery:** app foregrounding is wired to TanStack Query focus state. Private images use stable object-key/version cache keys and refetch their presigned URL after an image load error, so expired one-hour URLs recover without repeatedly downloading unchanged bytes.
+- **Signed URL recovery:** app foregrounding is wired to TanStack Query focus state. Private images use stable object-key/version cache keys and refetch their presigned URL after an image load error, so expired one-hour URLs recover without repeatedly downloading unchanged bytes. `useMediaUrls`' `gcTime` (55min) is kept above its `staleTime` (50min) and below the R2 signed-URL's 60min expiry, so a briefly-unmounted card (e.g. scrolled off-screen) doesn't get evicted from cache before its URL would even need refreshing.
+- **List-view preview variants (bandwidth):** after EXIF stripping, each new image asset also gets a derived JPEG preview — longest edge capped at 1280px, quality 0.8 — generated via `createImagePreviewForUpload` (`src/utils/create-image-preview.ts`), reusing the width/height `stripImageMetadataForUpload` already computes (no extra dimension-probe call). If the source is already at or under 1280px (no-upscale guard), no preview is generated. The preview uploads to `{uid}/memories/{memoryId}/media/{mediaAssetId}-preview.jpg` — same directory as the original, `-preview` suffix on the asset id (a `previews/` path prefix isn't viable: the asset-id pattern forbids `/`) — and its key is recorded on `memory_media.preview_object_key` via `replace_memory_media_assets`, which applies the identical ownership/pattern check it already applies to `object_key`. Preview generation/upload is **fail-open**: any failure falls back to `preview_object_key = null` and never fails the memory post; the original renders instead. Videos are skipped (they already have compression + thumbnails). Timeline `MemoryCard` media, calendar `MemoryStamp`, and the family member profile's `MemoryThumb` resolve `preview_object_key ?? object_key` (`src/utils/media-preview.ts`); the memory detail carousel and full-screen viewer always resolve `object_key` directly. No backfill for existing rows in this pass — the fallback covers them; see Backlog.
 - `memory_media` stores the canonical ordered asset list; `memories.media_key` and `media_content_type` cache the cover asset for compatibility.
 - **Photo/mixed** memories: `analyze-emotion` runs asynchronously after save/edit; it uses the first ordered image asset + optional caption. Does **not** run `generate-illustration`.
 - **All-video** memories: no `analyze-emotion` call in MVP.
@@ -97,9 +99,10 @@ Key points:
 | `memories.content` | `text` (nullable) | Optional caption |
 | `memories.media_key` | `text` | Cover/cache R2 key for position 0 |
 | `memories.media_content_type` | `text` | Cover/cache MIME type for position 0 |
-| `memory_media.object_key` | `text` | Canonical R2 object key for each ordered media asset |
+| `memory_media.object_key` | `text` | Canonical R2 object key for each ordered media asset (untouched original — never resized) |
 | `memory_media.content_type` | `text` | MIME type e.g. `image/jpeg`, `video/mp4` |
 | `memory_media.aspect_ratio` | `double precision` (nullable) | Natural display width ÷ height; persisted before timeline render; constrained to `0.1`-`10` |
+| `memory_media.preview_object_key` | `text` (nullable) | Derived JPEG preview key (longest edge ≤ 1280px), images only; `null` for videos, legacy rows, the no-upscale guard, or a failed preview upload — list surfaces fall back to `object_key` |
 | `memory_media.position` | `integer` | 0-based order, max 9 |
 | `memories.illustration_key` | `text` (null) | Always null for `media` type |
 | `memories.illustration_status` | `text` (`none`) | Always `none` for `media` type |
@@ -108,11 +111,13 @@ Key points:
 
 Legacy single-media objects remain accepted at `{userId}/memories/{memoryId}/media.{ext}`.
 
+**Preview key pattern:** `{userId}/memories/{memoryId}/media/{mediaAssetId}-preview.jpg` — same directory as the original, `-preview` suffix on the asset id. Always `.jpg` regardless of the original's format (the preview pipeline always outputs JPEG). Images only; never generated for video assets.
+
 The `{ext}` should reflect the actual format: `jpg`, `png`, `heic`, `webp`, `mp4`, `mov`. Using the content type to derive the extension is acceptable.
 
 **RLS:** covered by the family-scoped `memories`/`memory_media` policies (`is_family_member` for select, owner/manager for insert/update/delete) — see [family-sharing.md](./family-sharing.md). No `media`-specific policy needed.
 
-**Account deletion:** `hard-delete-expired-accounts` no longer does a blanket delete of everything under `{userId}/`. For an **owner**, it collects `memory_media.object_key` (plus other family R2 keys) across every creator in each family they own before deleting; for a **non-owner**, it deletes only objects under their own prefix that no surviving row still references (their created media can outlive their account). See [family-sharing.md](./family-sharing.md#constraints--gotchas) and TECH_SPEC §4.9.
+**Account deletion:** `hard-delete-expired-accounts` no longer does a blanket delete of everything under `{userId}/`. For an **owner**, it collects `memory_media.object_key`/`preview_object_key` (plus other family R2 keys) across every creator in each family they own before deleting; for a **non-owner**, it deletes only objects under their own prefix that no surviving row still references (their created media can outlive their account) — `preview_object_key` is checked as its own reference column, not folded into the `object_key` lookup, since a preview key never equals its asset's `object_key`. See [family-sharing.md](./family-sharing.md#constraints--gotchas) and TECH_SPEC §4.9.
 
 ## API & Edge Functions
 
@@ -132,7 +137,9 @@ objectKey: {uid}/memories/{memoryId}/media/{mediaAssetId}.{ext}
 contentType: image/jpeg | image/png | image/heic | image/webp | video/mp4 | video/quicktime
 ```
 
-The Edge Function rejects unknown content types and object keys that do not match an allowed pattern. See TECH_SPEC §4.0 for the full contract.
+The Edge Function rejects unknown content types and object keys that do not match an allowed pattern. The asset-id segment's char class (`[A-Za-z0-9_-]{1,128}`) permits hyphens, so a preview key (`{mediaAssetId}-preview.jpg`) matches this same pattern without any change to the allow-list. See TECH_SPEC §4.0 for the full contract.
+
+`_shared/family-access.ts#resolveReferencedStorageKeys` — used by `get-media-url` and `delete-storage-object` — admits a memory's `memory_media.preview_object_key` alongside `object_key`. Without this, presigning/deleting a preview key would 400 as "invalid object key."
 
 Mobile upload flow uses `upload-media` so the device only talks to Supabase; `get-upload-url` remains available for direct presigned uploads. Display still uses `get-media-url`. Photo emotion uses `analyze-emotion` (see TECH_SPEC §4.2).
 
@@ -146,7 +153,9 @@ Mobile upload flow uses `upload-media` so the device only talks to Supabase; `ge
 | Hooks | `src/hooks/use-pending-memory-uploads.tsx` | Deferred posting queue (provider in `AppProviders`); runs `postMediaMemory`, kicks emotion analysis + family notify, exposes retry/discard |
 | Hooks | `src/hooks/use-suggested-memory-date.ts` | New — single-reducer `{ memoryDate, dateSource }` state machine; derives the earliest EXIF capture date across attached photos, restores the session baseline when none remain, and locks in a user override for the rest of the composer session |
 | Services | `src/services/memory-posting.ts` | `postMediaMemory` pipeline: compress (video) → strip EXIF (image) → upload (3-way concurrency, per-asset progress) → insert, rollback on failure; shared `uploadMemoryMediaAssets` also backs the edit flow and incoming-share attachments |
-| Utils | `src/utils/strip-image-metadata.ts` | New — `stripImageMetadataForUpload` re-encodes image assets via `expo-image-manipulator` to strip EXIF/GPS before upload; videos pass through; fail-closed on re-encode error |
+| Utils | `src/utils/strip-image-metadata.ts` | `stripImageMetadataForUpload` re-encodes image assets via `expo-image-manipulator` to strip EXIF/GPS before upload; videos pass through; fail-closed on re-encode error; also surfaces the re-encoded `width`/`height` so `createImagePreviewForUpload` can reuse them without a second probe call |
+| Utils | `src/utils/create-image-preview.ts` | New — `createImagePreviewForUpload` generates a derived JPEG preview (longest edge ≤ 1280px, quality 0.8) from an already-stripped image; no-upscale guard returns `null` when the source is already small enough |
+| Utils | `src/utils/media-preview.ts` | New — `resolveMediaDisplayKey`/`resolvePreferredCoverKey`: prefer `preview_object_key`, fall back to `object_key`. Used by `MemoryMediaCarousel` (`preferPreview` prop, set by `MemoryCard`), calendar `MemoryStamp`, and family member `MemoryThumb`. Detail/full-screen surfaces never set `preferPreview` |
 | Utils | `src/utils/video-aspect-ratio.ts` | Extracts a rotation-corrected local video frame and returns its display aspect ratio before upload |
 | Script | `supabase/scripts/backfill-media-aspect-ratios.ts` | Dry-run/apply utility for existing image and video rows; reads private R2 objects, accounts for rotation with `ffprobe`, and updates only null ratios |
 | Services | `src/services/memories.ts` | `createMediaMemory`, `runMediaPhotoEmotionAnalysis` |
@@ -181,6 +190,7 @@ To create a `media` memory programmatically:
 **Do not change without updating this doc**
 
 - The R2 key pattern `{userId}/memories/{memoryId}/media/{mediaAssetId}.{ext}` — any change requires updating account deletion, presign validation, and all display paths.
+- The preview key pattern `{userId}/memories/{memoryId}/media/{mediaAssetId}-preview.jpg` — any storage-key lookup that touches `memory_media` (edge function `.select(...)` calls, account-deletion collection/orphan checks, client deletion paths) must handle `preview_object_key` alongside `object_key`; grep `from('memory_media')` across `supabase/functions/` and `object_key` across `src/services/memories.ts` before changing either.
 - The `memory_type` check constraint in the DB schema — adding/removing values requires a migration and updates to all conditional branches in the client.
 - The `get-upload-url` allowed patterns list — changing validation here affects both family photo and memory media uploads.
 
@@ -218,6 +228,11 @@ To create a `media` memory programmatically:
 - **HEIC emotion** — if Edge cannot decode HEIC for vision, emotion stays unset (`unsupported_image_format`); client-side JPEG conversion is backlog.
 - **Edit flow: removing media** — at least one asset must remain. Converting media memories to `text_only` is out of scope.
 - **HEIC format** — iOS default photo format. `expo-image` handles display, but if you need to transcode server-side (e.g. for thumbnails), note that Deno has limited HEIC support.
+- **Preview generation is fail-open, unlike EXIF stripping** — a failed preview (`manipulateAsync` error or a failed R2 upload) falls back to `preview_object_key = null` and the memory post still succeeds; the original renders. This is a deliberate, narrower contract than the strip step's fail-closed EXIF guarantee: a missing preview is a display fallback (list surfaces already know to fall back to the original), not a privacy or data-loss risk.
+- **No dimension re-probe** — `createImagePreviewForUpload` takes `width`/`height` from `stripImageMetadataForUpload`'s own re-encode result rather than calling `manipulateAsync` a second time just to measure. Any future change to the strip step's return shape must keep surfacing `width`/`height`, or the preview pipeline silently stops generating previews (falls through the "unknown dimensions" no-upscale guard).
+- **Preview key admission is a separate authorization surface from the upload allow-list** — `get-upload-url`'s pattern already accepts `{mediaAssetId}-preview.jpg` for free (hyphens are allowed in the asset-id segment), but *reading/deleting* a preview requires `_shared/family-access.ts#resolveReferencedStorageKeys` to admit `preview_object_key`, and account deletion (`hard-delete-expired-accounts`) requires both `collectFamilyStorageKeys` and `resolveReferencedKeys` to treat it as its own reference column. Missing any one of these makes the feature dead (`get-media-url` 400s) or leaks/destroys storage (an unreferenced-orphan check that doesn't know about previews will delete a live one).
+- **Existing rows are not backfilled** — `preview_object_key` is `null` for every `memory_media` row inserted before this shipped; the fallback-to-original path covers them permanently unless a backfill script is written (see Backlog).
+- **Edit flow does not yet thread `previewObjectKey` through the composer UI** — `MemoryMediaMutationAsset.previewObjectKey` exists for forward compatibility, but `app/(app)/memory/[id]/edit.tsx` doesn't populate it for pass-through (unchanged) assets. This is safe today because `replace_memory_media_assets` preserves an existing row's `preview_object_key` when the incoming value is null/omitted and `objectKey` matches an existing row (same precedent as `aspectRatio`) — but a future editor UI that explicitly needs to *clear* a preview would need a different signal than "omitted."
 
 ## Family sharing
 
@@ -243,24 +258,28 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/utils/native-permissions.test.ts` | Existing-grant checks, one-time request, permanent denial, native presentation settling |
 | `src/utils/prepare-shared-media.test.ts` | Incoming payload conversion, unsupported content, duration and 10-item limits |
 | `src/services/memories.test.ts` | `createMediaMemory` — success, upload failure, insert failure |
-| `src/services/memory-posting.test.ts` | Upload pipeline — UUID-based keys, per-asset progress, rollback on upload/insert failure; EXIF strip wired before the PUT, HEIC→JPEG contentType/extension consistency, videos skip the strip, strip failure fails closed with no partial upload |
+| `src/services/memory-posting.test.ts` | Upload pipeline — UUID-based keys, per-asset progress, rollback on upload/insert failure; EXIF strip wired before the PUT, HEIC→JPEG contentType/extension consistency, videos skip the strip, strip failure fails closed with no partial upload; **Workstream C3/C4** — preview generated/uploaded for a large image (`{mediaAssetId}-preview.jpg`), no-upscale guard skips upload for a small image, preview generation/upload failures fail open (`previewObjectKey: null`, memory post still succeeds), videos never get a preview, pass-through assets carry an existing `previewObjectKey` through unchanged |
 | `src/hooks/use-pending-memory-uploads.test.tsx` | Queue lifecycle — posting → removed on success, failed → retry/discard, photo emotion kick, video skip, family notify |
 | `src/utils/media-capture-date.test.ts` | `extractCaptureDateIso` key priority/fallback, flat-shape-only parsing, colon-format parsing without `Date()` coercion, NUL/whitespace trimming, Gregorian validation (zero fields, invalid month/day, leap years, year floor), deterministic `today`/`today+1` boundary; `deriveSuggestedMemoryDate` earliest-valid-date selection |
-| `src/utils/strip-image-metadata.test.ts` | `stripImageMetadataForUpload` — JPEG/PNG/WEBP keep format, HEIC/HEIF convert to JPEG, videos pass through untouched (no `manipulateAsync` call), re-encode failure rejects (fail-closed) |
+| `src/utils/strip-image-metadata.test.ts` | `stripImageMetadataForUpload` — JPEG/PNG/WEBP keep format, HEIC/HEIF convert to JPEG, videos pass through untouched (no `manipulateAsync` call), re-encode failure rejects (fail-closed), surfaces width/height for downstream preview reuse |
 | `src/utils/video-aspect-ratio.test.ts` | Rotation-corrected video-frame ratio extraction and graceful thumbnail failure |
 | `src/hooks/use-suggested-memory-date.test.tsx` | Session-baseline capture, media/default suggestion application, earliest-across-batches, remove-restores-baseline, reorder-is-a-no-op, manual override survives append/remove/reorder/replace, midnight-crossing baseline stability, render-to-render state consistency |
+| `src/utils/create-image-preview.test.ts` | New (Workstream C3) — `createImagePreviewForUpload`: landscape/portrait/square resize-axis selection, no-upscale guard (at-cap and under-cap), unknown-dimensions guard, manipulator failure propagates (caller applies fail-open) |
+| `src/utils/media-preview.test.ts` | New (Workstream C6) — `resolveMediaDisplayKey`/`resolvePreferredCoverKey`: preview preferred when present, original fallback (no preview, legacy shape, `preferPreview=false`), legacy `memories.media_key` fallback when no cover asset exists |
+| `src/hooks/useMediaUrls.test.ts` | `gcTime` (55min) set above `staleTime` (50min) and below the R2 signed-URL 60min expiry (Workstream C7) |
 
 ### Integration tests
 
 | File | Scenarios |
 |------|-----------|
-| `src/services/memories.integration.test.ts` | `media` memory create (mock R2 upload + mock Supabase insert), edit (replace media), delete (R2 + DB) |
+| `src/services/memories.integration.test.ts` | `media` memory create (mock R2 upload + mock Supabase insert), edit (replace media), delete (R2 + DB); **Workstream C5** — deletion of a memory, a failed create rollback, and a media asset removed on edit all clean up `preview_object_key` alongside `object_key`; `replace_memory_media_assets` RPC payload includes `previewObjectKey` |
 | `src/hooks/useMemories.integration.test.tsx` | Photo create/update triggers emotion analysis; video skips |
 | `src/hooks/use-incoming-memory-share.integration.test.tsx` | Native resolved payload → validated composer attachment → intent cleared |
 | `src/components/incoming-share-router.integration.test.tsx` | Cold-start persisted payload fallback, root-route race avoidance, viewer role gate, foreground recheck |
 | `src/utils/media-emotion-polling.test.ts` | Poll window for photo media without emotion |
 | `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, modal-local safe-area containment, close action |
-| `src/components/memory-media-carousel.test.tsx` | Active-page-only video mounting, bounded video buffers, stable timeline video layout, inactive/first-frame thumbnail coverage, signed-URL retry |
+| `src/components/memory-media-carousel.test.tsx` | Active-page-only video mounting, bounded video buffers, stable timeline video layout, inactive/first-frame thumbnail coverage, signed-URL retry; `preferPreview` (Workstream C6) — requests and renders the preview key when present, falls back to the original when absent or when `preferPreview` is false |
+| `src/components/memory-card.test.tsx` | Tagged-member avatar overflow, `React.memo` render-count probe; media memories pass `preferPreview` to `MemoryMediaCarousel` (Workstream C6) |
 | `src/hooks/useVideoThumbnail.test.ts` | Rotation-aware thumbnail dimensions and remount-safe video thumbnail caching |
 | `src/components/app-providers.test.tsx` | AppState-to-TanStack-Query focus synchronization for foreground refetches |
 | `src/components/memory-media-picker.test.tsx` | Native launch failure feedback and concurrent-launch guard; `includeCaptureDate` → `exif` option wiring; image EXIF → `capturedAtIso`-only attachment (no raw EXIF/GPS/device fields); video EXIF ignored; absent/malformed EXIF still emits a valid attachment |
@@ -282,6 +301,9 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `supabase/functions/get-upload-url/index.test.ts` | Accepts valid memory media path + content type; rejects invalid path pattern; rejects disallowed MIME type |
 | `supabase/functions/analyze-emotion/index.test.ts` | Media photo vision path, video rejection, stale-write |
 | `supabase/functions/_shared/media-emotion.test.ts` | MIME guards, emotion normalization |
+| `supabase/functions/_shared/family-access.test.ts` | Workstream C2 — `resolveReferencedStorageKeys` admits a referenced `preview_object_key` alongside `object_key`; does not admit a preview key the row doesn't have |
+| `supabase/functions/_shared/storage-keys.test.ts` | Workstream C4 — pins that `isAllowedUploadKey`/`isDeletableUserObjectKey` accept the `{mediaAssetId}-preview.jpg` shape |
+| `supabase/functions/hard-delete-expired-accounts/index.test.ts` | Workstream C2 (mandatory) — `collectFamilyStorageKeys` includes `preview_object_key`; `resolveReferencedKeys` does NOT collect a live preview object as an orphan |
 
 ### Run this feature's tests
 
@@ -305,11 +327,13 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 - Client HEIC → JPEG before upload (fewer `unsupported_image_format` cases)
 - Image moderation pre-check for user-uploaded photos
 - Per-user Edge rate limits (stronger than 5s per-memory cooldown)
+- Backfill script for `memory_media.preview_object_key` on rows created before Workstream C shipped (optional — the original-fallback path already covers them indefinitely)
 
 ## Changelog
 
 | Date | Change |
 |------|--------|
+| 2026-07-15 | Added derived, bandwidth-friendly JPEG preview variants for image media assets (`memory_media.preview_object_key`, longest edge ≤ 1280px, fail-open). Timeline `MemoryCard`, calendar `MemoryStamp`, and family member `MemoryThumb` now prefer the preview and fall back to the original; detail/full-screen surfaces are unchanged. `useMediaUrls` gcTime raised to 55min (was the react-query default 5min) so a briefly-unmounted card doesn't get evicted before its signed URL needs refreshing. |
 | 2026-07-14 | Made the full-screen viewer establish its own safe-area provider so the iOS close control stays below the status bar and remains tappable. |
 | 2026-07-13 | Timeline video players now release one frame after their virtualized row unmounts, preventing Android native-player release races while preserving autoplay. |
 | 2026-07-13 | Backfilled legacy image aspect ratios and made multi-asset carousels preserve the first asset's exact ratio while later items fit inside the fixed frame |

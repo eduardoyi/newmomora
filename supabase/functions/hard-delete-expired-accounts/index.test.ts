@@ -16,7 +16,7 @@ const OTHER_MEMBER_ID = '22222222-2222-4222-8222-222222222222';
 
 function fakeSupabaseForCollect(options: {
   memories: Array<{ id: string; media_key: string | null; illustration_key: string | null }>;
-  mediaAssets: Array<{ object_key: string }>;
+  mediaAssets: Array<{ object_key: string; preview_object_key?: string | null }>;
   members: Array<{ profile_picture_key: string | null; illustrated_profile_key: string | null }>;
   portraitVersions?: Array<{
     profile_picture_key: string;
@@ -126,6 +126,29 @@ Deno.test('collectFamilyStorageKeys de-duplicates keys referenced from multiple 
   assertEquals(keys, [sharedKey]);
 });
 
+Deno.test(
+  'collectFamilyStorageKeys includes preview_object_key alongside object_key (Workstream C2)',
+  async () => {
+    const supabase = fakeSupabaseForCollect({
+      memories: [{ id: 'memory-1', media_key: null, illustration_key: null }],
+      mediaAssets: [
+        {
+          object_key: `${OWNER_ID}/memories/memory-1/media/asset-1.jpg`,
+          preview_object_key: `${OWNER_ID}/memories/memory-1/media/asset-1-preview.jpg`,
+        },
+      ],
+      members: [],
+    });
+
+    const keys = await collectFamilyStorageKeys(supabase as never, FAMILY_ID);
+
+    assertEquals(keys.sort(), [
+      `${OWNER_ID}/memories/memory-1/media/asset-1-preview.jpg`,
+      `${OWNER_ID}/memories/memory-1/media/asset-1.jpg`,
+    ]);
+  },
+);
+
 Deno.test('collectFamilyStorageKeys fails closed when portrait enumeration fails', async () => {
   const supabase = fakeSupabaseForCollect({
     memories: [],
@@ -145,6 +168,7 @@ Deno.test('collectFamilyStorageKeys fails closed when portrait enumeration fails
 
 function fakeSupabaseForReferenced(referencedByTable: {
   memory_media?: string[];
+  memory_media_preview?: string[];
   media_key?: string[];
   illustration_key?: string[];
   profile_picture_key?: string[];
@@ -158,13 +182,21 @@ function fakeSupabaseForReferenced(referencedByTable: {
     from(table: string) {
       if (table === 'memory_media') {
         return {
-          select: () => ({
-            in: async (_col: string, keys: string[]) => ({
-              data: keys
-                .filter((key) => (referencedByTable.memory_media ?? []).includes(key))
-                .map((key) => ({ object_key: key })),
-              error: referencedByTable.errorTable === table ? { message: 'lookup failed' } : null,
-            }),
+          select: (col: string) => ({
+            in: async (_col: string, keys: string[]) => {
+              const isPreviewQuery = col === 'preview_object_key';
+              const field = isPreviewQuery ? 'preview_object_key' : 'object_key';
+              const fixtureField = isPreviewQuery ? 'memory_media_preview' : 'memory_media';
+              return {
+                data: keys
+                  .filter((key) => (referencedByTable[fixtureField] ?? []).includes(key))
+                  .map((key) => ({ [field]: key })),
+                error:
+                  referencedByTable.errorTable === `${table}.${field}`
+                    ? { message: 'lookup failed' }
+                    : null,
+              };
+            },
           }),
         };
       }
@@ -250,6 +282,35 @@ Deno.test(
     const referenced = await resolveReferencedKeys(supabase as never, [survivingKey, orphanedKey]);
 
     assertEquals(referenced.has(survivingKey), true);
+    assertEquals(referenced.has(orphanedKey), false);
+  },
+);
+
+Deno.test(
+  'resolveReferencedKeys: a live preview object is NOT collected as an orphan (Workstream C2, mandatory)',
+  async () => {
+    // A surviving memory_media row references both an original and its
+    // preview key. Before C2, resolveReferencedKeys only ever queried
+    // object_key -- a preview key would never equal any row's object_key,
+    // so it would look unreferenced and be deleted alongside genuine
+    // orphans on the very next non-owner account hard-delete.
+    const survivingOriginalKey = `${OTHER_MEMBER_ID}/memories/memory-5/media/asset-1.jpg`;
+    const survivingPreviewKey = `${OTHER_MEMBER_ID}/memories/memory-5/media/asset-1-preview.jpg`;
+    const orphanedKey = `${OTHER_MEMBER_ID}/memories/memory-6/media/asset-1.jpg`;
+
+    const supabase = fakeSupabaseForReferenced({
+      memory_media: [survivingOriginalKey],
+      memory_media_preview: [survivingPreviewKey],
+    });
+
+    const referenced = await resolveReferencedKeys(supabase as never, [
+      survivingOriginalKey,
+      survivingPreviewKey,
+      orphanedKey,
+    ]);
+
+    assertEquals(referenced.has(survivingOriginalKey), true);
+    assertEquals(referenced.has(survivingPreviewKey), true);
     assertEquals(referenced.has(orphanedKey), false);
   },
 );

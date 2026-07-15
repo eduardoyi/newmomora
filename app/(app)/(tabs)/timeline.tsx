@@ -1,8 +1,9 @@
-import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { router } from 'expo-router';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  type ListRenderItemInfo,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -35,6 +36,9 @@ function toLocalDateString(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// A8: computed from whatever pages useMemories has loaded so far, not the
+// whole library -- page 1 (40 rows) covers the current week in practice, so
+// this is an accepted tradeoff rather than a bug.
 function StreakDots({ memories }: { memories: MemoryWithTags[] }) {
   const today = new Date();
   const todayStr = toLocalDateString(today);
@@ -92,15 +96,24 @@ export default function TimelineScreen() {
   const { role } = useFamily();
   const canEdit = canEditFamilyContent(role);
   const { isLoading: isOnboardingLoading, needsFamilyMember } = useOnboardingStatus();
-  const [searchQuery] = useState('');
-  const { memories, isLoading, isRefetching, isError, refetch } = useMemories(searchQuery);
+  // refetch here trims to page 1 then refetches (Workstream A4) -- not a
+  // raw multi-page useInfiniteQuery.refetch(). The old useFocusEffect(refetch)
+  // is gone: it bypassed staleTime on every tab focus, and tab screens never
+  // unmount so it fired far more than intended. Freshness is now staleTime +
+  // mutation/poll cache patches + this pull-to-refresh + an app-foreground
+  // reconcile inside useMemories (see docs/features/memories.md). No search
+  // UI exists yet (useMemories no longer takes a search query -- see
+  // useMemoriesSearch in useMemories.ts).
+  const {
+    memories,
+    isLoading,
+    isRefetching,
+    isError,
+    refetch,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useMemories();
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
-
-  useFocusEffect(
-    useCallback(() => {
-      void refetch();
-    }, [refetch]),
-  );
 
   const viewabilityConfig = useRef<ViewabilityConfig>({
     viewAreaCoveragePercentThreshold: 60,
@@ -114,6 +127,58 @@ export default function TimelineScreen() {
     );
     setActiveVideoId(firstVideo ? (firstVideo.item as MemoryWithTags).id : null);
   }, []);
+
+  // B1: stable, id-based callbacks -- MemoryCard is memoized and the parent
+  // FlatList re-renders on every list-affecting state change (new page,
+  // active-video swap, refetch), so these must not be recreated per render
+  // or the memo comparison never bails out.
+  const handleCardPress = useCallback((memoryId: string) => {
+    router.push(memoryDetailRoute(memoryId));
+  }, []);
+  const handleOpenComments = useCallback((memoryId: string) => {
+    router.push(memoryDetailCommentsRoute(memoryId));
+  }, []);
+
+  // B3: stable renderItem/keyExtractor so FlatList doesn't treat every render
+  // as a brand-new render function, and a memoized header element so
+  // unrelated state changes (e.g. activeVideoId) don't recreate it.
+  const keyExtractor = useCallback((item: MemoryWithTags) => item.id, []);
+
+  const renderItem = useCallback(
+    ({ item }: ListRenderItemInfo<MemoryWithTags>) => (
+      <View style={styles.cardItem}>
+        <MemoryCard
+          memory={item}
+          onPress={handleCardPress}
+          onOpenComments={handleOpenComments}
+          isVideoActive={item.id === activeVideoId}
+        />
+      </View>
+    ),
+    [activeVideoId, handleCardPress, handleOpenComments],
+  );
+
+  const listHeader = useMemo(
+    () => (
+      <SafeAreaView>
+        <TimelineHeader memories={memories} />
+        <PendingMemoryUploadsBanner />
+      </SafeAreaView>
+    ),
+    [memories],
+  );
+
+  // fetchNextPage's signature (FetchNextPageOptions) doesn't match FlatList's
+  // onEndReached ({ distanceFromEnd }) -- wrap rather than pass directly.
+  const handleEndReached = useCallback(() => {
+    void fetchNextPage();
+  }, [fetchNextPage]);
+
+  const listFooter = isFetchingNextPage ? (
+    <View style={styles.listFooterLoading}>
+      <ActivityIndicator color={colors.primary} />
+    </View>
+  ) : null;
 
   if (isOnboardingLoading) {
     return (
@@ -194,30 +259,22 @@ export default function TimelineScreen() {
         <FlatList
           contentContainerStyle={styles.listContent}
           data={memories}
-          keyExtractor={(item) => item.id}
-          ListHeaderComponent={
-            <SafeAreaView>
-              <TimelineHeader memories={memories} />
-              <PendingMemoryUploadsBanner />
-            </SafeAreaView>
-          }
+          initialNumToRender={6}
+          keyExtractor={keyExtractor}
+          ListFooterComponent={listFooter}
+          ListHeaderComponent={listHeader}
+          maxToRenderPerBatch={6}
+          onEndReached={handleEndReached}
+          onEndReachedThreshold={0.5}
           onViewableItemsChanged={onViewableItemsChanged}
-          viewabilityConfig={viewabilityConfig}
           refreshControl={
             <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
           }
-          renderItem={({ item }) => (
-            <View style={styles.cardItem}>
-              <MemoryCard
-                key={item.id}
-                memory={item}
-                onPress={() => router.push(memoryDetailRoute(item.id))}
-                onOpenComments={() => router.push(memoryDetailCommentsRoute(item.id))}
-                isVideoActive={item.id === activeVideoId}
-              />
-            </View>
-          )}
+          removeClippedSubviews
+          renderItem={renderItem}
           testID="timeline-memory-list"
+          viewabilityConfig={viewabilityConfig}
+          windowSize={7}
         />
       )}
 
@@ -302,6 +359,9 @@ const styles = StyleSheet.create({
   },
   cardItem: {
     paddingHorizontal: spacing.md,
+  },
+  listFooterLoading: {
+    paddingVertical: spacing.lg,
   },
   // Onboarding empty
   onboardingWrap: {

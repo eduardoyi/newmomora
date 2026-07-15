@@ -465,6 +465,55 @@ describe('MemoryMediaCarousel', () => {
     expect(mockVideoPlayer.play).toHaveBeenCalled();
   });
 
+  describe('preferPreview (Workstream C6)', () => {
+    const assetWithPreview = {
+      ...assets[0],
+      preview_object_key: 'user/memory/media/photo-1-preview.jpg',
+    };
+
+    it('requests the preview key and renders the preview URL when preferPreview is true', () => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: { 'user/memory/media/photo-1-preview.jpg': 'https://example.com/photo-1-preview.jpg' },
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+
+      const { getByTestId } = render(
+        <MemoryMediaCarousel assets={[assetWithPreview]} preferPreview />,
+      );
+
+      measureCarousel(getByTestId);
+
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(
+        ['user/memory/media/photo-1-preview.jpg'],
+        undefined,
+      );
+      expect(getByTestId('memory-media-image-asset-1').props.source).toEqual([{
+        uri: 'https://example.com/photo-1-preview.jpg',
+        cacheKey: 'user/memory/media/photo-1-preview.jpg:',
+      }]);
+    });
+
+    it('falls back to the original when preferPreview is true but the asset has no preview', () => {
+      const { getByTestId } = render(<MemoryMediaCarousel assets={[assets[0]]} preferPreview />);
+
+      measureCarousel(getByTestId);
+
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(['user/memory/media/photo-1.jpg'], undefined);
+      expect(getByTestId('memory-media-image-asset-1').props.source).toEqual([{
+        uri: 'https://example.com/photo-1.jpg',
+        cacheKey: 'user/memory/media/photo-1.jpg:',
+      }]);
+    });
+
+    it('ignores the preview key when preferPreview is false (default -- detail/full-screen)', () => {
+      const { getByTestId } = render(<MemoryMediaCarousel assets={[assetWithPreview]} />);
+
+      measureCarousel(getByTestId);
+
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(['user/memory/media/photo-1.jpg'], undefined);
+    });
+  });
+
   it('uses a stable image cache key and refreshes an expired signed URL', () => {
     const { getByTestId } = render(
       <MemoryMediaCarousel assets={[assets[0]]} cacheVersion="version-1" />,

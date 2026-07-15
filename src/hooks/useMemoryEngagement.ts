@@ -2,11 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
-import {
-  memoriesQueryKeyBase,
-  memoryCommentsQueryKey,
-  memoryDetailQueryKey,
-} from '@/hooks/queryKeys';
+import { memoryCommentsQueryKey } from '@/hooks/queryKeys';
+import { patchMemoryInCaches, type MemoryPatch } from '@/hooks/memory-cache';
 import {
   createMemoryComment,
   deleteMemoryComment,
@@ -21,12 +18,6 @@ interface UseMemoryEngagementOptions {
   commentsEnabled?: boolean;
 }
 
-interface EngagementPatch {
-  likedByMe?: boolean;
-  likeCount?: number;
-  commentCount?: number;
-}
-
 function toError(error: unknown, fallback: string): Error {
   if (error instanceof Error) return error;
   if (error && typeof error === 'object' && 'message' in error) {
@@ -35,29 +26,19 @@ function toError(error: unknown, fallback: string): Error {
   return new Error(fallback);
 }
 
+// Was a standalone reimplementation of the list-key predicate + a raw
+// Array.isArray(current).map(...) patch (docs/plans/performance-optimizations.md
+// §A0) -- that silently no-ops now that list caches are InfiniteData
+// (Workstream A2/A3). Thin wrapper over the shared patchMemoryInCaches so
+// like/comment-count patches keep landing on InfiniteData timeline/member
+// caches as well as the detail query.
 function patchMemoryEngagement(
   queryClient: ReturnType<typeof useQueryClient>,
   familyId: string | null | undefined,
   memoryId: string,
-  patch: EngagementPatch | ((memory: MemoryWithTags) => EngagementPatch),
+  patch: MemoryPatch,
 ): void {
-  const applyPatch = (memory: MemoryWithTags): MemoryWithTags => {
-    if (memory.id !== memoryId) return memory;
-    const resolved = typeof patch === 'function' ? patch(memory) : patch;
-    return { ...memory, ...resolved };
-  };
-
-  queryClient.setQueriesData<MemoryWithTags[]>({
-    predicate: (query) =>
-      query.queryKey[0] === memoriesQueryKeyBase &&
-      query.queryKey[1] === familyId &&
-      query.queryKey[2] !== 'detail',
-  }, (current) => (Array.isArray(current) ? current.map(applyPatch) : current));
-
-  queryClient.setQueryData<MemoryWithTags | null>(
-    memoryDetailQueryKey(familyId, memoryId),
-    (current) => (current ? applyPatch(current) : current),
-  );
+  patchMemoryInCaches(queryClient, familyId, memoryId, patch);
 }
 
 export function useMemoryEngagement(

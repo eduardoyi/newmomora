@@ -5,7 +5,7 @@ import ViewFamilyMemberScreen from '../../app/(app)/family/[id]';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
-import { useMemories } from '@/hooks/useMemories';
+import { useMemberMemories } from '@/hooks/useMemories';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 
 jest.mock('expo-router', () => ({
@@ -15,7 +15,7 @@ jest.mock('expo-router', () => ({
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
 jest.mock('@/hooks/useMediaUrls', () => ({ useMediaUrl: jest.fn() }));
-jest.mock('@/hooks/useMemories', () => ({ useMemories: jest.fn() }));
+jest.mock('@/hooks/useMemories', () => ({ useMemberMemories: jest.fn() }));
 jest.mock('@/hooks/usePortraitVersions', () => ({ usePortraitVersions: jest.fn() }));
 jest.mock('@/hooks/useVideoThumbnail', () => ({ useVideoThumbnail: () => null }));
 jest.mock('@/components/full-screen-media-viewer', () => ({
@@ -31,7 +31,7 @@ jest.mock('@/components/full-screen-media-viewer', () => ({
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof useFamilyMembers>;
 const mockedUseMediaUrl = useMediaUrl as jest.MockedFunction<typeof useMediaUrl>;
-const mockedUseMemories = useMemories as jest.MockedFunction<typeof useMemories>;
+const mockedUseMemberMemories = useMemberMemories as jest.MockedFunction<typeof useMemberMemories>;
 const mockedUsePortraitVersions = usePortraitVersions as jest.MockedFunction<typeof usePortraitVersions>;
 const mockPush = router.push as jest.MockedFunction<typeof router.push>;
 
@@ -96,7 +96,16 @@ describe('family member portrait entry', () => {
     mockedUsePortraitVersions.mockReturnValue({
       versions: [currentVersion, failedVersion],
     } as ReturnType<typeof usePortraitVersions>);
-    mockedUseMemories.mockReturnValue({ memories: [] } as ReturnType<typeof useMemories>);
+    mockedUseMemberMemories.mockReturnValue({
+      memories: [],
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+      fetchNextPage: jest.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+    } as ReturnType<typeof useMemberMemories>);
     mockedUseMediaUrl.mockImplementation((key) => ({
       url: key ? `https://media.test/${key}` : null,
       isLoading: false,

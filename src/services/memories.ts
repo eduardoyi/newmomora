@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { emotionColors, type EmotionName } from '@/constants/theme';
 import type { Database } from '@/types/database';
 import {
   analyzeMemoryEmotion,
@@ -31,6 +32,9 @@ export interface MemoryMediaAsset {
   duration_ms: number | null;
   aspect_ratio: number | null;
   position: number;
+  /** Derived bandwidth-friendly preview key, or null (video, legacy row,
+   * no-upscale guard, or a failed preview upload -- see media-memories.md). */
+  preview_object_key: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -203,6 +207,7 @@ function buildLegacyMediaAssets(memory: Memory): MemoryMediaAsset[] {
       content_type: memory.media_content_type,
       duration_ms: null,
       aspect_ratio: null,
+      preview_object_key: null,
       position: 0,
       created_at: memory.created_at,
       updated_at: memory.updated_at,
@@ -226,14 +231,25 @@ async function deleteStorageKeys(keys: string[]) {
   }
 }
 
+/** Flattens each media asset's object_key + preview_object_key (when present)
+ * into one list -- every deletion path must clean up the derived preview
+ * alongside its original (Workstream C5). */
+function mediaAssetStorageKeys(
+  assets: Array<{ object_key: string; preview_object_key?: string | null }>,
+): string[] {
+  return assets.flatMap((asset) =>
+    [asset.object_key, asset.preview_object_key].filter(Boolean) as string[],
+  );
+}
+
 async function deleteMemoryStorageKeys(
   memory: Pick<Memory, 'media_key' | 'illustration_key'>,
-  mediaAssets: Pick<MemoryMediaAsset, 'object_key'>[] = [],
+  mediaAssets: Pick<MemoryMediaAsset, 'object_key' | 'preview_object_key'>[] = [],
 ) {
   await deleteStorageKeys([
     memory.media_key,
     memory.illustration_key,
-    ...mediaAssets.map((asset) => asset.object_key),
+    ...mediaAssetStorageKeys(mediaAssets),
   ].filter(Boolean) as string[]);
 }
 
@@ -277,7 +293,16 @@ function mediaAssetsToRpcPayload(assets: MemoryMediaAssetInput[]) {
     contentType: asset.contentType,
     durationMs: asset.durationMs ?? null,
     aspectRatio: asset.aspectRatio ?? null,
+    previewObjectKey: asset.previewObjectKey ?? null,
   }));
+}
+
+/** Same as mediaAssetStorageKeys but for the camelCase MemoryMediaAssetInput
+ * shape (create/update mutation input, before the RPC round-trip). */
+function mediaAssetInputStorageKeys(assets: MemoryMediaAssetInput[]): string[] {
+  return assets.flatMap((asset) =>
+    [asset.objectKey, asset.previewObjectKey].filter(Boolean) as string[],
+  );
 }
 
 async function replaceMemoryMediaAssets(
@@ -301,21 +326,37 @@ async function replaceMemoryMediaAssets(
   return null;
 }
 
-export async function fetchMemories(): Promise<{
-  data: MemoryWithTags[] | null;
-  error: ServiceError | null;
-}> {
-  const { data, error } = await supabase
-    .from('memories')
-    .select('*')
-    .order('memory_date', { ascending: false })
-    .order('created_at', { ascending: false });
+// Timeline keyset pagination (docs/plans/performance-optimizations.md
+// Workstream A1). Page size chosen to comfortably cover a couple of screens
+// of the timeline per fetch without re-introducing the full-library cost.
+export const MEMORIES_PAGE_SIZE = 40;
 
-  if (error) {
-    return { data: null, error: mapSupabaseError(error) };
-  }
+// Search results cap (Workstream E2) -- search has no pagination UI, so this
+// just bounds the worst case (a very common term across a large family
+// history) instead of enriching/rendering an unbounded result set.
+export const MEMORIES_SEARCH_LIMIT = 100;
 
-  const memories = data ?? [];
+export interface MemoriesPageCursor {
+  memoryDate: string;
+  createdAt: string;
+}
+
+export interface MemoriesPage {
+  memories: MemoryWithTags[];
+  nextCursor: MemoriesPageCursor | null;
+}
+
+// Matches the sort order (memory_date desc, created_at desc) and the
+// idx_memories_family_id_memory_date index: rows strictly before the cursor
+// date, or on the cursor date but strictly before the cursor's created_at.
+function buildKeysetOrFilter(cursor: MemoriesPageCursor): string {
+  return (
+    `memory_date.lt.${cursor.memoryDate},` +
+    `and(memory_date.eq.${cursor.memoryDate},created_at.lt.${cursor.createdAt})`
+  );
+}
+
+async function enrichMemories(memories: Memory[]): Promise<MemoryWithTags[]> {
   const memoryIds = memories.map((memory) => memory.id);
   const [tagMap, mediaMap, engagementMap] = await Promise.all([
     fetchTagsForMemories(memoryIds),
@@ -323,13 +364,118 @@ export async function fetchMemories(): Promise<{
     fetchEngagementForMemories(memoryIds),
   ]);
 
+  return attachEngagement(
+    attachMediaAssets(attachTags(memories, tagMap), mediaMap),
+    engagementMap,
+  );
+}
+
+function nextCursorFor(memories: Memory[], limit: number): MemoriesPageCursor | null {
+  const lastRow = memories[memories.length - 1];
+  if (!lastRow || memories.length < limit) {
+    return null;
+  }
+
+  return { memoryDate: lastRow.memory_date, createdAt: lastRow.created_at };
+}
+
+export async function fetchMemoriesPage(opts: {
+  cursor?: MemoriesPageCursor;
+  limit?: number;
+}): Promise<{ data: MemoriesPage | null; error: ServiceError | null }> {
+  const limit = opts.limit ?? MEMORIES_PAGE_SIZE;
+
+  let query = supabase
+    .from('memories')
+    .select('*')
+    .order('memory_date', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (opts.cursor) {
+    query = query.or(buildKeysetOrFilter(opts.cursor));
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  const memories = data ?? [];
+
   return {
-    data: attachEngagement(
-      attachMediaAssets(attachTags(memories, tagMap), mediaMap),
-      engagementMap,
-    ),
+    data: { memories: await enrichMemories(memories), nextCursor: nextCursorFor(memories, limit) },
     error: null,
   };
+}
+
+// Member-profile timeline (Workstream A6): same keyset shape as
+// fetchMemoriesPage, filtered to memories tagging a single family member via
+// an inner join on memory_family_members. The join column is stripped back
+// out before enrichment so the returned rows match the plain Memory shape.
+export async function fetchMemoriesPageForMember(
+  memberId: string,
+  opts: { cursor?: MemoriesPageCursor; limit?: number },
+): Promise<{ data: MemoriesPage | null; error: ServiceError | null }> {
+  const limit = opts.limit ?? MEMORIES_PAGE_SIZE;
+
+  let query = (supabase as any)
+    .from('memories')
+    .select('*, memory_family_members!inner(family_member_id)')
+    .eq('memory_family_members.family_member_id', memberId)
+    .order('memory_date', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (opts.cursor) {
+    query = query.or(buildKeysetOrFilter(opts.cursor));
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  const rows = (data ?? []) as (Memory & { memory_family_members: unknown })[];
+  const memories = rows.map(({ memory_family_members: _joinColumn, ...memory }) => memory);
+
+  return {
+    data: { memories: await enrichMemories(memories), nextCursor: nextCursorFor(memories, limit) },
+    error: null,
+  };
+}
+
+// Narrow polling target for generation status (Workstream A5): only the
+// columns useGenerationStatusPolling needs to detect and patch a change,
+// never the full row.
+export interface MemoryGenerationStatusRow {
+  id: string;
+  illustration_status: Memory['illustration_status'];
+  illustration_key: string | null;
+  emotion: string | null;
+  updated_at: string;
+}
+
+export async function fetchMemoryGenerationStatuses(memoryIds: string[]): Promise<{
+  data: MemoryGenerationStatusRow[] | null;
+  error: ServiceError | null;
+}> {
+  if (memoryIds.length === 0) {
+    return { data: [], error: null };
+  }
+
+  const { data, error } = await supabase
+    .from('memories')
+    .select('id, illustration_status, illustration_key, emotion, updated_at')
+    .in('id', memoryIds);
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  return { data: (data ?? []) as MemoryGenerationStatusRow[], error: null };
 }
 
 export async function fetchOldestMemoryDate(): Promise<{
@@ -424,6 +570,57 @@ export async function fetchMemoryById(memoryId: string): Promise<{
   };
 }
 
+// Emotion values are short enum-like labels (docs/plans/performance-optimizations.md
+// Workstream E3) -- reuses the same key set the UI already trusts as the
+// canonical emotion vocabulary (src/constants/theme.ts, kept in sync with
+// the classifier's EMOTION_PALETTES) rather than maintaining a second list
+// here.
+function matchKnownEmotionLabel(trimmed: string): EmotionName | null {
+  const lower = trimmed.toLowerCase();
+  return lower in emotionColors ? (lower as EmotionName) : null;
+}
+
+function dedupeById<T extends { id: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  const deduped: T[] = [];
+
+  for (const row of rows) {
+    if (seen.has(row.id)) {
+      continue;
+    }
+    seen.add(row.id);
+    deduped.push(row);
+  }
+
+  return deduped;
+}
+
+function compareMemoriesDesc(a: Memory, b: Memory): number {
+  if (a.memory_date !== b.memory_date) {
+    return a.memory_date > b.memory_date ? -1 : 1;
+  }
+  if (a.created_at !== b.created_at) {
+    return a.created_at > b.created_at ? -1 : 1;
+  }
+  return 0;
+}
+
+// Workstream E3: content search runs through Postgres FTS
+// (`idx_memories_content_search`, a GIN index over
+// `to_tsvector('english', content)` -- see
+// supabase/migrations/20260524201500_initial_schema.sql) instead of
+// `content.ilike '%term%'`, which could never use that index. `websearch`
+// parsing (`.textSearch(..., { type: 'websearch' })`) accepts free-form user
+// text the way a search engine would (quotes, `-exclude`, `or`) without
+// throwing on stray punctuation the way `to_tsquery` would.
+//
+// Emotion matching stays a *separate* query merged client-side rather than a
+// single `.or()` with a `wfts` filter: emotion is an exact short label, not
+// prose, so a second `.eq('emotion', ...)` is cheap and keeps this function
+// verifiable against the mocked query builder in
+// memories.integration.test.ts without depending on PostgREST's `.or()` +
+// `wfts` filter-string syntax actually being exercised against a live
+// database in this pass.
 export async function searchMemories(query: string): Promise<{
   data: MemoryWithTags[] | null;
   error: ServiceError | null;
@@ -431,20 +628,39 @@ export async function searchMemories(query: string): Promise<{
   const trimmed = query.trim();
 
   if (!trimmed) {
-    return fetchMemories();
+    return { data: [], error: null };
   }
 
-  const { data, error } = await supabase
-    .from('memories')
-    .select('*')
-    .or(`content.ilike.%${trimmed.replace(/[%_]/g, '')}%,emotion.ilike.%${trimmed.replace(/[%_]/g, '')}%`)
-    .order('memory_date', { ascending: false });
+  const emotionMatch = matchKnownEmotionLabel(trimmed);
 
-  if (error) {
-    return { data: null, error: mapSupabaseError(error) };
+  const [contentResult, emotionResult] = await Promise.all([
+    supabase
+      .from('memories')
+      .select('*')
+      .textSearch('content', trimmed, { type: 'websearch', config: 'english' })
+      .order('memory_date', { ascending: false })
+      .limit(MEMORIES_SEARCH_LIMIT),
+    emotionMatch
+      ? supabase
+          .from('memories')
+          .select('*')
+          .eq('emotion', emotionMatch)
+          .order('memory_date', { ascending: false })
+          .limit(MEMORIES_SEARCH_LIMIT)
+      : Promise.resolve({ data: [] as Memory[], error: null }),
+  ]);
+
+  if (contentResult.error) {
+    return { data: null, error: mapSupabaseError(contentResult.error) };
+  }
+  if (emotionResult.error) {
+    return { data: null, error: mapSupabaseError(emotionResult.error) };
   }
 
-  const memories = data ?? [];
+  const memories = dedupeById([...(contentResult.data ?? []), ...(emotionResult.data ?? [])])
+    .sort(compareMemoriesDesc)
+    .slice(0, MEMORIES_SEARCH_LIMIT);
+
   const memoryIds = memories.map((memory) => memory.id);
   const [tagMap, mediaMap, engagementMap] = await Promise.all([
     fetchTagsForMemories(memoryIds),
@@ -706,21 +922,21 @@ export async function createMediaMemory(input: CreateMediaMemoryInput): Promise<
     .single();
 
   if (error || !memory) {
-    await deleteStorageKeys(input.mediaAssets.map((asset) => asset.objectKey));
+    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
     return { data: null, error: mapSupabaseError(error ?? { message: 'Memory was not created' }) };
   }
 
   const mediaReplaceError = await replaceMemoryMediaAssets(memory.id, input.mediaAssets);
   if (mediaReplaceError) {
     await supabase.from('memories').delete().eq('id', memory.id);
-    await deleteStorageKeys(input.mediaAssets.map((asset) => asset.objectKey));
+    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
     return { data: null, error: mediaReplaceError };
   }
 
   const tagsError = await replaceMemoryTags(memory.id, input.taggedMemberIds);
   if (tagsError) {
     await supabase.from('memories').delete().eq('id', memory.id);
-    await deleteStorageKeys(input.mediaAssets.map((asset) => asset.objectKey));
+    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
     return { data: null, error: tagsError };
   }
 
@@ -888,10 +1104,8 @@ export async function updateMemory(
     }
 
     const nextKeys = new Set(input.mediaAssets.map((asset) => asset.objectKey));
-    const removedKeys = existingMediaAssets
-      .map((asset) => asset.object_key)
-      .filter((key) => !nextKeys.has(key));
-    await deleteStorageKeys(removedKeys);
+    const removedAssets = existingMediaAssets.filter((asset) => !nextKeys.has(asset.object_key));
+    await deleteStorageKeys(mediaAssetStorageKeys(removedAssets));
   }
 
   const result = await fetchMemoryById(memoryId);

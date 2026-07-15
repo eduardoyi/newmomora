@@ -18,13 +18,14 @@ import { CastCard } from '@/components/cast-card';
 import { FullScreenMediaViewer } from '@/components/full-screen-media-viewer';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
-import { useMemories } from '@/hooks/useMemories';
+import { useMemberMemories } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { editFamilyMemberRoute, memoryDetailRoute, portraitTimelineRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
+import { resolvePreferredCoverKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
 import { formatDisplayDate } from '@/utils/memories';
 
@@ -34,13 +35,16 @@ function MemoryThumb({ memory }: { memory: MemoryWithTags }) {
   const coverAsset = memory.mediaAssets[0];
   const isVideo = coverAsset ? coverAsset.content_type.startsWith('video/') : isMedia && memory.media_content_type?.startsWith('video/');
 
-  const mediaKey = isMedia ? (coverAsset?.object_key ?? memory.media_key ?? null) : null;
+  // Prefers the derived preview key (Workstream C6) for the photo case;
+  // videos never have one, so this call always resolves to object_key there.
+  const photoMediaKey = isMedia ? resolvePreferredCoverKey(coverAsset, memory.media_key) : null;
+  const videoMediaKey = isMedia ? (coverAsset?.object_key ?? memory.media_key ?? null) : null;
   const illustrationKey =
     memory.memory_type === 'text_illustration' ? (memory.illustration_key ?? null) : null;
 
   const { url: illustrationUrl } = useMediaUrl(illustrationKey, memory.updated_at);
-  const { url: mediaUrl } = useMediaUrl(isMedia && !isVideo ? mediaKey : null, memory.updated_at);
-  const { url: videoUrl } = useMediaUrl(isVideo ? mediaKey : null, memory.updated_at);
+  const { url: mediaUrl } = useMediaUrl(isMedia && !isVideo ? photoMediaKey : null, memory.updated_at);
+  const { url: videoUrl } = useMediaUrl(isVideo ? videoMediaKey : null, memory.updated_at);
   const videoThumbnail = useVideoThumbnail(videoUrl);
 
   const emo = getEmotionColors(memory.emotion);
@@ -111,7 +115,10 @@ export default function ViewFamilyMemberScreen() {
   const canEdit = canEditFamilyContent(role);
   const { members, isLoading, deleteMember, isDeleting } = useFamilyMembers();
   const { versions: portraitVersions } = usePortraitVersions(id);
-  const { memories } = useMemories();
+  // Server-filtered to this member (Workstream A6) instead of paging in and
+  // client-filtering the whole timeline.
+  const { memories: memberMemories, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useMemberMemories(id);
   const [deleteError, setDeleteError] = useState('');
   const [isPortraitFullScreen, setIsPortraitFullScreen] = useState(false);
 
@@ -120,10 +127,6 @@ export default function ViewFamilyMemberScreen() {
   const portraitCacheVersion = member?.avatarUpdatedAt ?? member?.updated_at;
   const { url: portraitUrl } = useMediaUrl(portraitKey, portraitCacheVersion);
   const portraitCount = portraitVersions.filter((version) => !version.deletion_token).length;
-
-  const memberMemories = memories.filter((m) =>
-    m.taggedMembers.some((tm) => tm.id === id),
-  );
 
   const handleDelete = () => {
     if (!member) return;
@@ -241,6 +244,17 @@ export default function ViewFamilyMemberScreen() {
         ListHeaderComponent={listHeader}
         initialNumToRender={10}
         ItemSeparatorComponent={MemoryRowSeparator}
+        onEndReached={() => {
+          if (hasNextPage && !isFetchingNextPage) {
+            void fetchNextPage();
+          }
+        }}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={
+          isFetchingNextPage ? (
+            <ActivityIndicator style={styles.footerSpinner} color={colors.primary} />
+          ) : null
+        }
         renderItem={({ item: m }) => (
           <View style={styles.memoryRowWrap}>
             <Pressable
@@ -318,6 +332,9 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingBottom: 60,
+  },
+  footerSpinner: {
+    paddingVertical: spacing.lg,
   },
 
   // Header

@@ -1,6 +1,10 @@
-import { render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
+import { useState } from 'react';
+import { Pressable } from 'react-native';
 
 import { MemoryCard } from '@/components/memory-card';
+import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
+import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import type { MemoryWithTags } from '@/services/memories';
 
 jest.mock('@/components/family-member-avatar', () => {
@@ -13,12 +17,16 @@ jest.mock('@/components/family-member-avatar', () => {
   };
 });
 
+// A jest.fn() child (rather than the usual `() => null`) doubles as the
+// render-count probe for the memoization test below: MemoryCard is the only
+// thing that renders it, so its call count mirrors MemoryCard's own render
+// count.
 jest.mock('@/components/memory-engagement-bar', () => ({
-  MemoryEngagementBar: () => null,
+  MemoryEngagementBar: jest.fn(() => null),
 }));
 
 jest.mock('@/components/memory-media-carousel', () => ({
-  MemoryMediaCarousel: () => null,
+  MemoryMediaCarousel: jest.fn(() => null),
 }));
 
 jest.mock('@/hooks/useMediaUrls', () => ({
@@ -65,6 +73,38 @@ const createMemory = (memberCount: number) => ({
   likedByMe: false,
 }) as MemoryWithTags;
 
+describe('MemoryCard media (Workstream C6)', () => {
+  it('requests the preview key by passing preferPreview to MemoryMediaCarousel', () => {
+    const mockedCarousel = MemoryMediaCarousel as jest.Mock;
+    mockedCarousel.mockClear();
+
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'media',
+      mediaAssets: [
+        {
+          id: 'asset-1',
+          memory_id: 'memory-1',
+          object_key: 'user-1/memories/memory-1/media/asset-1.jpg',
+          preview_object_key: 'user-1/memories/memory-1/media/asset-1-preview.jpg',
+          content_type: 'image/jpeg',
+          duration_ms: null,
+          aspect_ratio: null,
+          position: 0,
+          created_at: '2026-07-14T00:00:00.000Z',
+          updated_at: '2026-07-14T00:00:00.000Z',
+        },
+      ],
+    } as MemoryWithTags;
+
+    render(<MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />);
+
+    expect(mockedCarousel.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ preferPreview: true }),
+    );
+  });
+});
+
 describe('MemoryCard tagged member avatars', () => {
   it('shows all six tagged members without an overflow indicator', () => {
     const { getByTestId, queryByTestId } = render(
@@ -92,5 +132,38 @@ describe('MemoryCard tagged member avatars', () => {
     expect(queryByTestId('memory-card-member-member-7')).toBeNull();
     expect(getByTestId('memory-card-member-overflow')).toHaveTextContent('+2');
     expect(getByLabelText('2 more tagged members')).toBeTruthy();
+  });
+});
+
+describe('MemoryCard memoization (Workstream B1)', () => {
+  it('does not re-render when a parent re-renders on unrelated state', () => {
+    const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+    mockedEngagementBar.mockClear();
+
+    // Defined once and reused across renders (not recreated inside Harness)
+    // so the props MemoryCard receives stay referentially equal -- the
+    // condition React.memo needs to actually bail out.
+    const memory = createMemory(1);
+    const onPress = jest.fn();
+    const onOpenComments = jest.fn();
+
+    function Harness() {
+      const [, setTick] = useState(0);
+      return (
+        <>
+          <MemoryCard memory={memory} onOpenComments={onOpenComments} onPress={onPress} />
+          <Pressable onPress={() => setTick((t) => t + 1)} testID="bump-unrelated-state" />
+        </>
+      );
+    }
+
+    const { getByTestId } = render(<Harness />);
+    expect(mockedEngagementBar).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      fireEvent.press(getByTestId('bump-unrelated-state'));
+    });
+
+    expect(mockedEngagementBar).toHaveBeenCalledTimes(1);
   });
 });

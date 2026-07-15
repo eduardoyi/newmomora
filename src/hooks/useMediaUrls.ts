@@ -23,6 +23,12 @@ export function useMediaUrls(keys: string[], cacheVersion?: string | null) {
     enabled: normalizedKeys.length > 0,
     placeholderData: (previousData) => previousData,
     staleTime: 50 * 60 * 1000,
+    // gcTime > staleTime, both under the R2 signed-URL's 60min expiry
+    // (Workstream C7): keeps an already-fetched URL cached across brief
+    // unmounts (e.g. scrolling a card off-screen and back) instead of
+    // evicting it 5min after last use (the react-query default) and
+    // refetching sooner than necessary.
+    gcTime: 55 * 60 * 1000,
   });
 }
 

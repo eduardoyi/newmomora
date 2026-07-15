@@ -261,6 +261,11 @@ create table public.memory_media (
   duration_ms integer,
   aspect_ratio double precision check (aspect_ratio is null or aspect_ratio between 0.1 and 10),
   position integer not null check (position >= 0 and position < 10),
+  -- Derived bandwidth-friendly JPEG preview (longest edge <= 1280px),
+  -- generated client-side for images only; null for videos, legacy rows,
+  -- assets already at or under the cap (no-upscale guard), and failed
+  -- preview uploads (fail-open). See §5.5 and features/media-memories.md.
+  preview_object_key text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (memory_id, position),
@@ -288,7 +293,9 @@ create table public.memory_comments (
 
 ```sql
 create index idx_family_members_user_id on public.family_members (user_id);
-create index idx_memories_family_id_memory_date on public.memories (family_id, memory_date desc);
+-- Extended 2026-07-15 (timeline keyset pagination, see memories.md) to cover
+-- the created_at tie-break within a same-date group.
+create index idx_memories_family_id_memory_date on public.memories (family_id, memory_date desc, created_at desc);
 create index idx_memories_content_search on public.memories using gin (to_tsvector('english', content));
 create index idx_user_profiles_scheduled_delete on public.user_profiles (scheduled_hard_delete_at)
   where scheduled_hard_delete_at is not null;
@@ -309,6 +316,42 @@ create index idx_memory_comments_user_id on public.memory_comments (user_id);
 `idx_memories_user_id` and the old `idx_memories_memory_date (user_id,
 memory_date desc)` were **dropped** — timeline/calendar now filter by
 `family_id`, not `user_id`.
+
+### 2.2a Realtime publication
+
+`public.memories` is added to the `supabase_realtime` publication
+(`supabase/migrations/20260715150000_memories_realtime_publication.sql`):
+
+```sql
+alter publication supabase_realtime add table public.memories;
+```
+
+Default `REPLICA IDENTITY` (primary key only on the `old` row of an UPDATE
+payload) is sufficient — `useMemoriesRealtime`
+(`src/hooks/useMemoriesRealtime.ts`) only reads `payload.new` (always the
+full row) plus whatever it already has cached for the previous state, never
+`payload.old`'s non-key columns. `postgres_changes` authorizes rows against
+RLS using the client's JWT; `supabase-js`'s default client wiring (no
+`accessToken` override in `src/lib/supabase.ts`/`supabase.web.ts`) already
+calls `realtime.setAuth()` on `TOKEN_REFRESHED`/`SIGNED_IN`, so no extra
+wiring was needed for token refresh to keep the realtime socket authorized.
+
+No RLS policy changes were required — the existing family-membership
+policies on `memories` already gate `postgres_changes` the same way they
+gate a normal `select`.
+
+Prod verification (run against the database itself, not `config.toml`,
+which has no publication section):
+
+```sql
+select * from pg_publication_tables where pubname = 'supabase_realtime';
+```
+
+Confirm a `public.memories` row is present in both local and prod. See
+[docs/features/memories.md](./features/memories.md) for the client-side
+push/poll split this powers, and the A5 poll (`useGenerationStatusPolling`)
+that stays as the fallback whenever realtime is disconnected or the
+publication is missing in an environment.
 
 ### 2.3 Row Level Security
 
@@ -525,7 +568,7 @@ AI generation functions (`generate-portrait-illustration`, `generate-illustratio
 R2 keys keep the `{creatorUserId}/...` shape (see patterns below), but authorization no longer means "prefix = caller." It means "caller has the required role in the family that owns the entity the key belongs to," resolved through the DB with the service-role client:
 
 - **Uploads** (`get-upload-url`, `upload-media`): the key itself still must be written under the *caller's own* uid prefix (`assertUserOwnedKey`) — a memory row doesn't exist yet at upload time (client uploads assets before inserting the `memories` row), so per-entity authorization isn't possible yet. Instead the request carries an explicit `familyId`, and the caller must be **owner/manager** in that (non-deleted) family. Cross-family binding integrity is enforced later, at insert/RPC time, by `memories` RLS and `replace_memory_media_assets` key validation.
-- **Reads/deletes** (`get-media-url`, `delete-storage-object`): `_shared/storage-keys.ts#parseStorageKey` extracts `{ kind, ownerUserId, entityId, portraitVersionId? }` from the key shape. Legacy/member keys resolve through `family_members`; portrait-version keys must also match the exact referenced version row. `get-media-url` requires any family role. Rollback deletion of an unreferenced version source additionally requires its `{uid}` prefix to equal the caller; referenced version deletion uses `delete-portrait-version`.
+- **Reads/deletes** (`get-media-url`, `delete-storage-object`): `_shared/storage-keys.ts#parseStorageKey` extracts `{ kind, ownerUserId, entityId, portraitVersionId? }` from the key shape. Legacy/member keys resolve through `family_members`; portrait-version keys must also match the exact referenced version row. `get-media-url` requires any family role. Rollback deletion of an unreferenced version source additionally requires its `{uid}` prefix to equal the caller; referenced version deletion uses `delete-portrait-version`. `_shared/family-access.ts#resolveReferencedStorageKeys` admits a memory's `memory_media.preview_object_key` alongside `object_key` — without this, `get-media-url` 400s on every preview key (the feature is dead) and `delete-storage-object` refuses to delete them (a leak).
 - Shared helpers: `_shared/family-access.ts` (`getCallerFamilyRoles`, `resolveStorageKeyFamilyIds`) and `_shared/storage-keys.ts#parseStorageKey`.
 
 ### R2 credentials (Edge Functions only)
@@ -944,8 +987,8 @@ environment; failed runs are visible in `cron.job_run_details`.
 
 1. Find users where `scheduled_hard_delete_at <= now()`
 2. For each user, **(family-sharing Phase 3, reworked)**:
-   - **Owner case:** for every family they own, collect R2 keys across *all creators* in that family (`memory_media.object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key`) *before* deleting any rows, delete those R2 objects, then delete the `families` row (FK cascades remove `memories`/`family_members`/`family_memberships`/`family_invites` for free)
-   - **Non-owner case:** their created content in families they don't own must survive — no blanket delete of `memories`/`family_members` by `user_id` anymore. Enumerate objects under their own `{userId}/` prefix and delete only the ones no surviving row references (checked against `memory_media.object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key`)
+   - **Owner case:** for every family they own, collect R2 keys across *all creators* in that family (`memory_media.object_key`/`preview_object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key`) *before* deleting any rows, delete those R2 objects, then delete the `families` row (FK cascades remove `memories`/`family_members`/`family_memberships`/`family_invites` for free)
+   - **Non-owner case:** their created content in families they don't own must survive — no blanket delete of `memories`/`family_members` by `user_id` anymore. Enumerate objects under their own `{userId}/` prefix and delete only the ones no surviving row references (checked against `memory_media.object_key`/`preview_object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key`) — **preview keys must be checked as their own reference column**, not just `object_key`: a live preview under a surviving `memory_media` row would otherwise look unreferenced and be deleted as orphan garbage on the first non-owner account hard-delete
    - Delete the `user_profiles` row, then `auth.admin.deleteUser` — the FK `on delete set null` on `memories.user_id`/`family_members.user_id` fires here, nulling attribution on any surviving (non-owned-family) content
 
 **Auth:** Service role + cron secret header
@@ -1176,9 +1219,19 @@ while the DB validates both tag insertion and the `memory_type` transition.
 ```
 1. Collect object keys from query results
 2. Batch invoke get-media-url(keys)
-3. Pass presigned URLs to expo-image (TanStack Query cache ~50 min TTL)
+3. Pass presigned URLs to expo-image (TanStack Query cache ~50 min TTL, gcTime 55 min)
 4. Refresh presigned URLs before expiry on refetch
 ```
+
+**5.4a Preview-key preference (list surfaces only):** `MemoryCard` media,
+calendar `MemoryStamp`, and the family member profile's `MemoryThumb`
+resolve `memory_media.preview_object_key ?? object_key` for image assets —
+falling back to the original when no preview exists (legacy rows, videos,
+the no-upscale guard, or a failed preview upload). The memory detail
+carousel and the full-screen viewer always use the original `object_key` —
+previews are a list-density optimization, not the source of truth for
+close-up viewing. See
+[docs/features/media-memories.md](./features/media-memories.md).
 
 ### 5.5 Create Memory (media — 1-10 photos/videos)
 
@@ -1197,12 +1250,33 @@ while the DB validates both tag insertion and the `memory_type` transition.
 ```
 
 `replace_memory_media_assets` receives each ordered asset as
-`{ objectKey, contentType, durationMs, aspectRatio }`. `aspectRatio` is nullable
-for legacy clients/rows and must be between `0.1` and `10` when present. When an
-older client edits an existing asset without the field, the RPC preserves the
-row's current ratio instead of clearing it.
+`{ objectKey, contentType, durationMs, aspectRatio, previewObjectKey }`.
+`aspectRatio` is nullable for legacy clients/rows and must be between `0.1`
+and `10` when present. `previewObjectKey` is nullable and, when present, must
+match the identical `{caller_prefix}/media/[A-Za-z0-9_-]{1,128}.{ext}`
+ownership/pattern check applied to `objectKey` — a preview lives at the same
+asset path, only the filename differs (`{mediaAssetId}-preview.jpg`), so
+garbage or foreign preview keys are rejected the same way garbage or foreign
+object keys are. When an older client edits an existing asset without one or
+both of `aspectRatio`/`previewObjectKey`, the RPC preserves the row's current
+value (keyed by matching `objectKey`) instead of clearing it.
 
 Note: the client generates `memoryId` upfront so the R2 object key is known before the DB insert, mirroring the family-member photo flow (§5.3).
+
+**Preview image variants (bandwidth):** for each new image asset (not
+video), after EXIF stripping, the client generates a derived JPEG preview
+capped at 1280px on its longest edge (quality 0.8) via
+`createImagePreviewForUpload` (`src/utils/create-image-preview.ts`), reusing
+the width/height `stripImageMetadataForUpload` already computed — no extra
+dimension probe. If the source is already at or under 1280px (no-upscale
+guard), no preview is generated. The preview uploads to
+`{uid}/memories/{memoryId}/media/{mediaAssetId}-preview.jpg` (same directory
+as the original; matches `MEMORY_MEDIA_ASSET_EXTENSION_PATTERN`, which
+permits hyphens in the asset-id segment) and its key is recorded on
+`memory_media.preview_object_key`. Preview upload/generation failure is
+fail-open: the memory post still succeeds with `preview_object_key = null`,
+and list surfaces fall back to the original (§5.4a). Originals are never
+resized. See [docs/features/media-memories.md](./features/media-memories.md).
 
 **Client-only capture-date prefill (create screen only):** when the picker
 requests EXIF (`includeCaptureDate`, new-memory composer only — the edit

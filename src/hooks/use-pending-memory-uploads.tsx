@@ -12,8 +12,13 @@ import {
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { calendarMemoriesQueryKeyBase, memoriesQueryKeyBase } from '@/hooks/queryKeys';
+import {
+  patchMemoryInCaches,
+  prependMemoryToListCaches,
+  setMemoryEmotionInCache,
+} from '@/hooks/memory-cache';
 import { fetchLinkPreviews } from '@/services/ai';
-import { runMediaPhotoEmotionAnalysis } from '@/services/memories';
+import { runMediaPhotoEmotionAnalysis, type MemoryWithTags } from '@/services/memories';
 import {
   hasImageMediaAsset,
   notifyFamilyActivityFireAndForget,
@@ -97,33 +102,59 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
           },
         });
 
+        // postMediaMemory already returns the enriched row -- prepend it
+        // (sorted by memory_date desc, created_at desc) into whichever list
+        // caches it belongs to instead of relying on a refetch to surface
+        // it. The memoriesQueryKeyBase invalidations below are now
+        // refetchType: 'none' backstops (Workstream A4b): with list caches
+        // as InfiniteData, a refetching invalidation would re-run every
+        // loaded page's enrichment round-trips per media post -- the exact
+        // regression this rework prevents. Calendar stays a normal
+        // (refetching) invalidation -- it's array-shaped, windowed, cheap.
+        prependMemoryToListCaches(queryClient, activeFamilyId, memory);
+        // The card is already replaced by the prepended memory, so there's
+        // no gap to bridge by waiting on a refetch before removing it.
+        removeUpload(input.memoryId);
+
         if (hasImageMediaAsset(input.mediaAssets)) {
-          void runMediaPhotoEmotionAnalysis(memory.id).finally(() => {
-            void queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase] });
-            void queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
-          });
+          void runMediaPhotoEmotionAnalysis(memory.id)
+            .then((emotion) => {
+              if (emotion) {
+                setMemoryEmotionInCache(queryClient, activeFamilyId, memory.id, emotion);
+              }
+            })
+            .finally(() => {
+              queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase], refetchType: 'none' });
+              queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+            });
         }
         notifyFamilyActivityFireAndForget(memory.id);
 
         // Inline links (docs/plans/inline-links.md §7): media memories are
         // created outside the useMemories mutations, so the caption's URL
-        // trigger lives here instead. Reuses this block's invalidation.
+        // trigger lives here instead. fetch-link-previews returns the
+        // resolved map in its response -- patch it straight in rather than
+        // invalidating, or a posted URL would show its domain fallback
+        // until the next reconciling refresh (see fireLinkPreviewFetch in
+        // useMemories.ts for the same fix on the non-media create/update path).
         if (input.content && extractUrls(input.content).length > 0) {
           void fetchLinkPreviews(memory.id)
+            .then((result) => {
+              if (result.data) {
+                patchMemoryInCaches(queryClient, activeFamilyId, memory.id, {
+                  link_previews: result.data.linkPreviews as unknown as MemoryWithTags['link_previews'],
+                });
+              }
+            })
             .catch(() => {})
             .finally(() => {
-              void queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase] });
-              void queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+              queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase], refetchType: 'none' });
+              queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
             });
         }
 
-        // Refetch before removing the card so the posted memory replaces it
-        // without a gap where neither is visible.
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase] }),
-          queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] }),
-        ]);
-        removeUpload(input.memoryId);
+        queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase], refetchType: 'none' });
+        queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
       } catch (error) {
         patchUpload(input.memoryId, {
           status: 'failed',

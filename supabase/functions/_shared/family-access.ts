@@ -193,7 +193,10 @@ export async function resolveReferencedStorageKeys(
     const ids = [...memoryIds];
     const [{ data: memories }, { data: assets }] = await Promise.all([
       supabase.from('memories').select('id, media_key, illustration_key').in('id', ids),
-      supabase.from('memory_media').select('memory_id, object_key').in('memory_id', ids),
+      supabase
+        .from('memory_media')
+        .select('memory_id, object_key, preview_object_key')
+        .in('memory_id', ids),
     ]);
     for (const row of memories ?? []) {
       if (row.media_key) referenced.add(row.media_key);
@@ -201,6 +204,7 @@ export async function resolveReferencedStorageKeys(
     }
     for (const row of assets ?? []) {
       if (row.object_key) referenced.add(row.object_key);
+      if (row.preview_object_key) referenced.add(row.preview_object_key);
     }
   }
 

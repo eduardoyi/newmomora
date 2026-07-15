@@ -2,6 +2,7 @@ import { assertEquals } from 'jsr:@std/assert@1';
 import {
   getCallerFamilyRoles,
   isManagerRole,
+  resolveReferencedStorageKeys,
   resolveStorageKeyFamilyIds,
 } from './family-access.ts';
 import {
@@ -304,6 +305,106 @@ Deno.test('storage read authorization (get-media-url): any member role including
   const outsiderRoles = await getCallerFamilyRoles(outsiderSupabase as never, [FAMILY_A], OUTSIDER_ID);
   assertEquals(outsiderRoles.get(FAMILY_A), null);
 });
+
+// Workstream C2 (performance-optimizations plan): resolveReferencedStorageKeys
+// must admit preview_object_key, not just object_key -- otherwise
+// get-media-url 400s on every preview key (the feature is dead) and
+// delete-storage-object refuses to delete previews (a leak).
+function fakeSupabaseForReferencedStorageKeys(options: {
+  memories?: Array<{ id: string; media_key: string | null; illustration_key: string | null }>;
+  mediaAssets?: Array<{ memory_id: string; object_key: string; preview_object_key: string | null }>;
+}) {
+  return {
+    from(table: string) {
+      if (table === 'memories') {
+        return {
+          select: () => ({
+            in: async (_col: string, ids: string[]) => ({
+              data: (options.memories ?? []).filter((m) => ids.includes(m.id)),
+              error: null,
+            }),
+          }),
+        };
+      }
+
+      if (table === 'memory_media') {
+        return {
+          select: () => ({
+            in: async (_col: string, ids: string[]) => ({
+              data: (options.mediaAssets ?? []).filter((a) => ids.includes(a.memory_id)),
+              error: null,
+            }),
+          }),
+        };
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    },
+  };
+}
+
+Deno.test(
+  'resolveReferencedStorageKeys admits a referenced preview_object_key alongside object_key',
+  async () => {
+    const supabase = fakeSupabaseForReferencedStorageKeys({
+      memories: [{ id: MEMORY_ID, media_key: null, illustration_key: null }],
+      mediaAssets: [
+        {
+          memory_id: MEMORY_ID,
+          object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1.jpg`,
+          preview_object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1-preview.jpg`,
+        },
+      ],
+    });
+
+    const resolvedKeys = [
+      {
+        objectKey: `${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1.jpg`,
+        parsed: parseStorageKey(`${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1.jpg`),
+        familyId: FAMILY_A,
+      },
+    ];
+
+    const referenced = await resolveReferencedStorageKeys(supabase as never, resolvedKeys);
+
+    assertEquals(referenced.has(`${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1.jpg`), true);
+    assertEquals(
+      referenced.has(`${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1-preview.jpg`),
+      true,
+    );
+  },
+);
+
+Deno.test(
+  'resolveReferencedStorageKeys does not admit a preview key when the row has none',
+  async () => {
+    const supabase = fakeSupabaseForReferencedStorageKeys({
+      memories: [{ id: MEMORY_ID, media_key: null, illustration_key: null }],
+      mediaAssets: [
+        {
+          memory_id: MEMORY_ID,
+          object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1.jpg`,
+          preview_object_key: null,
+        },
+      ],
+    });
+
+    const resolvedKeys = [
+      {
+        objectKey: `${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1.jpg`,
+        parsed: parseStorageKey(`${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1.jpg`),
+        familyId: FAMILY_A,
+      },
+    ];
+
+    const referenced = await resolveReferencedStorageKeys(supabase as never, resolvedKeys);
+
+    assertEquals(
+      referenced.has(`${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1-preview.jpg`),
+      false,
+    );
+  },
+);
 
 Deno.test('resolveStorageKeyFamilyIds batches one query per entity type across many keys', async () => {
   let memoriesQueryCount = 0;

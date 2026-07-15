@@ -438,6 +438,7 @@ export type Database = {
           memory_id: string
           object_key: string
           position: number
+          preview_object_key: string | null
           updated_at: string
         }
         Insert: {
@@ -449,6 +450,7 @@ export type Database = {
           memory_id: string
           object_key: string
           position: number
+          preview_object_key?: string | null
           updated_at?: string
         }
         Update: {
@@ -460,6 +462,7 @@ export type Database = {
           memory_id?: string
           object_key?: string
           position?: number
+          preview_object_key?: string | null
           updated_at?: string
         }
         Relationships: [

@@ -45,4 +45,14 @@ describe('useMediaUrl', () => {
     const previousData = { 'user-1/portrait.webp': 'https://signed.example/old' };
     expect(placeholderData(previousData)).toBe(previousData);
   });
+
+  it('sets gcTime above staleTime and below the R2 signed-URL 60min expiry (Workstream C7)', () => {
+    useMediaUrl('user-1/portrait.webp', 'version-1');
+
+    const { staleTime, gcTime } = useQuery.mock.calls[0][0];
+    expect(staleTime).toBe(50 * 60 * 1000);
+    expect(gcTime).toBe(55 * 60 * 1000);
+    expect(gcTime).toBeGreaterThan(staleTime);
+    expect(gcTime).toBeLessThan(60 * 60 * 1000);
+  });
 });

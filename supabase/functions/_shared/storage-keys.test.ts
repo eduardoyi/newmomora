@@ -43,6 +43,24 @@ Deno.test('isAllowedUploadKey accepts versioned family photos and rejects mutabl
   );
 });
 
+// Workstream C4 (performance-optimizations plan): preview keys use a
+// `-preview` suffix on the asset id rather than a `previews/` path prefix,
+// because the asset-id char class (`[A-Za-z0-9_-]{1,128}`) forbids `/` --
+// pinning that the same pattern already accepts the exact preview key shape
+// `uploadMemoryMediaAssets` writes.
+Deno.test('isAllowedUploadKey and isDeletableUserObjectKey accept the {assetId}-preview.jpg shape', () => {
+  const previewKey = buildMemoryMediaAssetKey(
+    USER_ID,
+    MEMORY_ID,
+    `${MEMBER_ID}-preview`,
+    'jpg',
+  );
+
+  assertEquals(previewKey, `${USER_ID}/memories/${MEMORY_ID}/media/${MEMBER_ID}-preview.jpg`);
+  assertEquals(isAllowedUploadKey(previewKey, USER_ID), true);
+  assertEquals(isDeletableUserObjectKey(previewKey, USER_ID), true);
+});
+
 Deno.test('getAllowedContentTypes is pattern-specific', () => {
   const familyTypes = getAllowedContentTypes(
     buildPortraitVersionPhotoKey(USER_ID, MEMBER_ID, VERSION_ID),

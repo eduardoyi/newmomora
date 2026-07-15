@@ -1,5 +1,5 @@
 import { Image } from 'expo-image';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
@@ -22,8 +22,12 @@ import { isVideoContentType } from '@/utils/media-validation';
 
 interface MemoryCardProps {
   memory: MemoryWithTags;
-  onPress: () => void;
-  onOpenComments: () => void;
+  // Receive the memory id rather than a bound closure (Workstream B1) so
+  // parents can pass a single stable callback (e.g. useCallback wrapping
+  // router.push) instead of a fresh per-row closure -- required for
+  // React.memo below to actually skip re-renders on unrelated list re-renders.
+  onPress: (memoryId: string) => void;
+  onOpenComments: (memoryId: string) => void;
   isVideoActive?: boolean;
 }
 
@@ -174,6 +178,7 @@ function MediaVisual({
         cacheVersion={memory.updated_at}
         isActive={isActive}
         onPress={onPress}
+        preferPreview
         stableLayout
         style={styles.mediaVisual}
       />
@@ -192,6 +197,8 @@ function SpreadCard({ memory, onPress, onOpenComments, isVideoActive = false }: 
   const excerpt = memory.content
     ? formatMemoryExcerpt(memory.content, 140, toLinkPreviewMap(memory.link_previews))
     : null;
+  const handlePress = () => onPress(memory.id);
+  const handleOpenComments = () => onOpenComments(memory.id);
 
   if (memory.memory_type === 'media') {
     return (
@@ -199,13 +206,13 @@ function SpreadCard({ memory, onPress, onOpenComments, isVideoActive = false }: 
         style={styles.card}
         testID={`memory-card-${memory.id}`}
       >
-        <MediaVisual memory={memory} isActive={isVideoActive} onPress={onPress} />
+        <MediaVisual memory={memory} isActive={isVideoActive} onPress={handlePress} />
         <View style={styles.engagementWrap}>
-          <MemoryEngagementBar memory={memory} onOpenComments={onOpenComments} iconSize={23} />
+          <MemoryEngagementBar memory={memory} onOpenComments={handleOpenComments} iconSize={23} />
         </View>
         <Pressable
           accessibilityRole="button"
-          onPress={onPress}
+          onPress={handlePress}
           style={({ pressed }) => [styles.contentPressArea, pressed && styles.cardPressed]}
           testID={`memory-card-content-${memory.id}`}
         >
@@ -222,15 +229,15 @@ function SpreadCard({ memory, onPress, onOpenComments, isVideoActive = false }: 
 
   return (
     <View style={styles.card} testID={`memory-card-${memory.id}`}>
-      <Pressable accessibilityRole="button" onPress={onPress}>
+      <Pressable accessibilityRole="button" onPress={handlePress}>
         <IllustrationVisual memory={memory} />
       </Pressable>
       <View style={styles.engagementWrap}>
-        <MemoryEngagementBar memory={memory} onOpenComments={onOpenComments} iconSize={23} />
+        <MemoryEngagementBar memory={memory} onOpenComments={handleOpenComments} iconSize={23} />
       </View>
       <Pressable
         accessibilityRole="button"
-        onPress={onPress}
+        onPress={handlePress}
         style={({ pressed }) => pressed && styles.cardPressed}
       >
         {excerpt ? (
@@ -250,13 +257,15 @@ function QuoteCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
   const excerpt = memory.content
     ? formatMemoryExcerpt(memory.content, 120, toLinkPreviewMap(memory.link_previews))
     : '';
+  const handlePress = () => onPress(memory.id);
+  const handleOpenComments = () => onOpenComments(memory.id);
 
   return (
     <View style={styles.card} testID={`memory-card-${memory.id}`}>
       {emo && <View style={[styles.quoteAccent, { backgroundColor: emo.soft }]} />}
       <Pressable
         accessibilityRole="button"
-        onPress={onPress}
+        onPress={handlePress}
         style={({ pressed }) => pressed && styles.cardPressed}
       >
         <View style={styles.quoteBody}>
@@ -264,16 +273,28 @@ function QuoteCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
         </View>
       </Pressable>
       <View style={styles.engagementWrapQuote}>
-        <MemoryEngagementBar memory={memory} onOpenComments={onOpenComments} iconSize={23} />
+        <MemoryEngagementBar memory={memory} onOpenComments={handleOpenComments} iconSize={23} />
       </View>
-      <Pressable accessibilityRole="button" onPress={onPress}>
+      <Pressable accessibilityRole="button" onPress={handlePress}>
         <CardFooter memory={memory} />
       </Pressable>
     </View>
   );
 }
 
-export function MemoryCard({ memory, onPress, onOpenComments, isVideoActive }: MemoryCardProps) {
+// Memoized (Workstream B1): the timeline list can hold hundreds of loaded
+// rows across pages, and without this every unrelated re-render of the
+// parent FlatList (e.g. a single card's video-active flag toggling) would
+// re-render every other card too. Relies on the parent passing stable
+// `onPress`/`onOpenComments` callbacks (id-based, see MemoryCardProps) and a
+// stable `memory` object reference (cache patches only replace the changed
+// row, not the whole array) for the memo comparison to actually bail out.
+export const MemoryCard = memo(function MemoryCard({
+  memory,
+  onPress,
+  onOpenComments,
+  isVideoActive,
+}: MemoryCardProps) {
   if (memory.memory_type === 'text_only') {
     return <QuoteCard memory={memory} onPress={onPress} onOpenComments={onOpenComments} />;
   }
@@ -285,7 +306,7 @@ export function MemoryCard({ memory, onPress, onOpenComments, isVideoActive }: M
       isVideoActive={isVideoActive}
     />
   );
-}
+});
 
 const styles = StyleSheet.create({
   card: {

@@ -24,6 +24,7 @@ import {
   DEFAULT_MEDIA_ASPECT_RATIO,
   aspectRatioFromDimensions,
 } from '@/utils/media-aspect';
+import { resolveMediaDisplayKey } from '@/utils/media-preview';
 import { isVideoContentType } from '@/utils/media-validation';
 
 interface MemoryMediaCarouselProps {
@@ -35,6 +36,12 @@ interface MemoryMediaCarouselProps {
   mutedVideos?: boolean;
   onPress?: (activeIndex: number) => void;
   style?: StyleProp<ViewStyle>;
+  /**
+   * List-view surfaces (Workstream C6) request the derived preview key when
+   * present, falling back to the original. Detail/full-screen callers must
+   * leave this false (default) to always render the untouched original.
+   */
+  preferPreview?: boolean;
 }
 
 function useDeferredReleaseVideoPlayer(url: string, isMuted: boolean): VideoPlayer | null {
@@ -281,14 +288,18 @@ export function MemoryMediaCarousel({
   onPress,
   style,
   videoTapToToggle = false,
+  preferPreview = false,
 }: MemoryMediaCarouselProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [width, setWidth] = useState(0);
   const [naturalRatios, setNaturalRatios] = useState<Record<string, number>>({});
   const tapStartRef = useRef<{ x: number; y: number; timestamp: number } | null>(null);
   const hasMovedRef = useRef(false);
-  const keys = assets.map((asset) => asset.object_key);
-  const { data: urls = {}, refetch: refetchMediaUrls } = useMediaUrls(keys, cacheVersion);
+  // Videos never carry a preview_object_key (C3), so resolveMediaDisplayKey
+  // is a no-op for them regardless of preferPreview -- only image keys can
+  // actually change here.
+  const displayKeys = assets.map((asset) => resolveMediaDisplayKey(asset, preferPreview));
+  const { data: urls = {}, refetch: refetchMediaUrls } = useMediaUrls(displayKeys, cacheVersion);
   const showPaging = assets.length > 1;
 
   // Stable list rows use the persisted ratio from their first render. Detail
@@ -385,12 +396,12 @@ export function MemoryMediaCarousel({
             {width > 0 ? (
               <MediaPage
                 asset={asset}
-                cacheKey={`${asset.object_key}:${cacheVersion ?? ''}`}
+                cacheKey={`${displayKeys[index]}:${cacheVersion ?? ''}`}
                 isActive={isActive && index === activeIndex}
                 mutedVideos={mutedVideos}
                 onNaturalRatio={handleNaturalRatio}
                 onUrlError={() => void refetchMediaUrls()}
-                url={urls[asset.object_key]}
+                url={urls[displayKeys[index]]}
                 videoTapToToggle={videoTapToToggle}
                 shouldLoadVideoThumbnail={
                   index === 0 || (isActive && index === activeIndex)

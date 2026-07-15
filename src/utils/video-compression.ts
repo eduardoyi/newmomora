@@ -13,6 +13,15 @@ export interface UploadableMedia {
   fileUri: string;
   contentType: string;
   aspectRatio?: number;
+  /**
+   * Natural dimensions of the current `fileUri`, when known. Populated by
+   * `stripImageMetadataForUpload` from the re-encode it already performs
+   * (see `src/utils/strip-image-metadata.ts`) so downstream steps -- e.g.
+   * `createImagePreviewForUpload` -- can reuse them instead of an extra
+   * `manipulateAsync` probe call. Not set for videos.
+   */
+  width?: number;
+  height?: number;
 }
 
 /**

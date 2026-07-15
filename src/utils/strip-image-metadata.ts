@@ -71,5 +71,10 @@ export async function stripImageMetadataForUpload(
     fileUri: result.uri,
     contentType: CONTENT_TYPE_BY_OUTPUT_FORMAT[format],
     ...(aspectRatio ? { aspectRatio } : {}),
+    // Surfaced so createImagePreviewForUpload (Workstream C3) can reuse
+    // these dimensions for its no-upscale guard/resize target without a
+    // second manipulateAsync probe call.
+    width: result.width,
+    height: result.height,
   };
 }

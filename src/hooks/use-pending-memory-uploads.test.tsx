@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
@@ -8,8 +8,9 @@ import {
   PendingMemoryUploadsProvider,
   usePendingMemoryUploads,
 } from '@/hooks/use-pending-memory-uploads';
+import { memoriesQueryKey, memoriesQueryKeyBase, calendarMemoriesQueryKeyBase } from '@/hooks/queryKeys';
 import { fetchLinkPreviews } from '@/services/ai';
-import { runMediaPhotoEmotionAnalysis } from '@/services/memories';
+import { runMediaPhotoEmotionAnalysis, type MemoriesPage, type MemoryWithTags } from '@/services/memories';
 import { notifyFamilyActivityFireAndForget, postMediaMemory } from '@/services/memory-posting';
 
 jest.mock('@/hooks/use-auth', () => ({
@@ -55,11 +56,7 @@ const photoInput = {
   taggedMemberIds: [],
 };
 
-function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-
+function createWrapperWithClient(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -67,6 +64,12 @@ function createWrapper() {
       </QueryClientProvider>
     );
   };
+}
+
+function createWrapper() {
+  return createWrapperWithClient(
+    new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }),
+  );
 }
 
 describe('usePendingMemoryUploads', () => {
@@ -354,6 +357,88 @@ describe('usePendingMemoryUploads', () => {
       await waitFor(() => {
         expect(result.current.uploads).toHaveLength(0);
       });
+    });
+  });
+
+  // Workstream A4b: postMediaMemory's row is prepended into the cache
+  // directly instead of relying on a refetch to surface it, and the
+  // memoriesQueryKeyBase invalidations become refetchType: 'none' backstops
+  // (calendar keeps the default refetching invalidation).
+  describe('cache wiring (Workstream A4b)', () => {
+    function buildInfiniteMemoriesData(memories: MemoryWithTags[]): InfiniteData<MemoriesPage> {
+      return { pages: [{ memories, nextCursor: null }], pageParams: [null] };
+    }
+
+    it('prepends the posted memory into the timeline cache without waiting on a refetch', async () => {
+      const existing = {
+        id: 'existing-1',
+        memory_type: 'text_only',
+        memory_date: '2026-07-10',
+        created_at: '2026-07-10T00:00:00Z',
+        taggedMembers: [],
+        mediaAssets: [],
+      } as unknown as MemoryWithTags;
+      const posted = {
+        id: 'memory-1',
+        memory_type: 'media',
+        memory_date: '2026-07-12',
+        created_at: '2026-07-12T00:00:00Z',
+        taggedMembers: [],
+        mediaAssets: [{ content_type: 'image/jpeg' }],
+      } as unknown as MemoryWithTags;
+      mockedPostMediaMemory.mockResolvedValue(posted);
+
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      queryClient.setQueryData(memoriesQueryKey('family-1'), buildInfiniteMemoriesData([existing]));
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+
+      // The pending card is gone as soon as the memory is prepended into the
+      // cache -- there's no gap where neither is visible to wait out.
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+      const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey('family-1'));
+      expect(list?.pages[0]?.memories.map((m) => m.id)).toEqual(['memory-1', 'existing-1']);
+    });
+
+    it('invalidates the memories list with refetchType none, and calendar with the default type', async () => {
+      mockedPostMediaMemory.mockResolvedValue({
+        id: 'memory-1',
+        memory_type: 'media',
+        memory_date: '2026-07-12',
+        created_at: '2026-07-12T00:00:00Z',
+        taggedMembers: [],
+        mediaAssets: [{ content_type: 'image/jpeg' }],
+      } as unknown as MemoryWithTags);
+
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: [memoriesQueryKeyBase],
+        refetchType: 'none',
+      });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [calendarMemoriesQueryKeyBase] });
     });
   });
 

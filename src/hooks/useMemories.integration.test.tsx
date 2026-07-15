@@ -1,20 +1,24 @@
 import { renderHook, waitFor } from '@testing-library/react-native';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
-import { useMemories, useMemory, useMemoryMutations } from '@/hooks/useMemories';
+import { useMemberMemories, useMemories, useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
 import { memoriesQueryKey } from '@/hooks/queryKeys';
 import {
   createMemory,
-  fetchMemories,
+  deleteMemory,
+  fetchMemoriesPage,
+  fetchMemoriesPageForMember,
   fetchMemoryById,
+  fetchMemoryGenerationStatuses,
   retryMemoryIllustration,
   runMediaPhotoEmotionAnalysis,
   runTextOnlyEmotionAnalysis,
   updateMemory,
+  type MemoriesPage,
   type MemoryWithTags,
 } from '@/services/memories';
 import { fetchLinkPreviews, notifyFamilyActivity } from '@/services/ai';
@@ -35,13 +39,16 @@ jest.mock('@/services/memories', () => ({
   createMemory: jest.fn(),
   createMediaMemory: jest.fn(),
   deleteMemory: jest.fn(),
-  fetchMemories: jest.fn(),
+  fetchMemoriesPage: jest.fn(),
+  fetchMemoriesPageForMember: jest.fn(),
   fetchMemoryById: jest.fn(),
+  fetchMemoryGenerationStatuses: jest.fn(),
   retryMemoryIllustration: jest.fn(),
   runMediaPhotoEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
   runTextOnlyEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
   searchMemories: jest.fn(),
   updateMemory: jest.fn(),
+  MEMORIES_PAGE_SIZE: 40,
 }));
 
 jest.mock('@/services/media', () => ({
@@ -59,9 +66,16 @@ const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyPortraitVersions = useFamilyPortraitVersions as jest.MockedFunction<
   typeof useFamilyPortraitVersions
 >;
-const mockedFetchMemories = fetchMemories as jest.MockedFunction<typeof fetchMemories>;
+const mockedFetchMemoriesPage = fetchMemoriesPage as jest.MockedFunction<typeof fetchMemoriesPage>;
+const mockedFetchMemoriesPageForMember = fetchMemoriesPageForMember as jest.MockedFunction<
+  typeof fetchMemoriesPageForMember
+>;
+const mockedFetchMemoryGenerationStatuses = fetchMemoryGenerationStatuses as jest.MockedFunction<
+  typeof fetchMemoryGenerationStatuses
+>;
 const mockedCreateMemory = createMemory as jest.MockedFunction<typeof createMemory>;
 const mockedUpdateMemory = updateMemory as jest.MockedFunction<typeof updateMemory>;
+const mockedDeleteMemory = deleteMemory as jest.MockedFunction<typeof deleteMemory>;
 const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.MockedFunction<
   typeof runMediaPhotoEmotionAnalysis
 >;
@@ -96,6 +110,19 @@ function createWrapper() {
   return createWrapperWithClient(createQueryClient());
 }
 
+// useMemories is now backed by useInfiniteQuery (Workstream A2) --
+// fetchMemoriesPage resolves one MemoriesPage per call.
+function pageResult(
+  memories: MemoryWithTags[],
+  nextCursor: MemoriesPage['nextCursor'] = null,
+): { data: MemoriesPage; error: null } {
+  return { data: { memories, nextCursor }, error: null };
+}
+
+function buildInfiniteMemoriesData(memories: MemoryWithTags[]): InfiniteData<MemoriesPage> {
+  return { pages: [{ memories, nextCursor: null }], pageParams: [null] };
+}
+
 describe('useMemories integration', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -123,7 +150,9 @@ describe('useMemories integration', () => {
     });
     mockedUseFamilyPortraitVersions.mockReturnValue({ data: [], isLoading: false } as never);
 
-    mockedFetchMemories.mockResolvedValue({ data: [], error: null });
+    mockedFetchMemoriesPage.mockResolvedValue(pageResult([]));
+    mockedFetchMemoriesPageForMember.mockResolvedValue(pageResult([]));
+    mockedFetchMemoryGenerationStatuses.mockResolvedValue({ data: [], error: null });
     mockedNotifyFamilyActivity.mockResolvedValue({ data: { sent: true }, error: null });
     mockedFetchLinkPreviews.mockResolvedValue({ data: { linkPreviews: {} }, error: null });
   });
@@ -133,18 +162,19 @@ describe('useMemories integration', () => {
   // src/services/memory-posting.test.ts for its coverage.
 
   it('resolves tagged-member avatars against each memory date', async () => {
-    mockedFetchMemories.mockResolvedValue({
-      data: [{
-        id: 'memory-1',
-        memory_date: '2026-05-30',
-        memory_type: 'text_only',
-        emotion: 'joy',
-        illustration_status: 'none',
-        taggedMembers: [{ id: 'member-1', name: 'Maya', updated_at: 'member-time' }],
-        mediaAssets: [],
-      }] as never,
-      error: null,
-    });
+    mockedFetchMemoriesPage.mockResolvedValue(
+      pageResult([
+        {
+          id: 'memory-1',
+          memory_date: '2026-05-30',
+          memory_type: 'text_only',
+          emotion: 'joy',
+          illustration_status: 'none',
+          taggedMembers: [{ id: 'member-1', name: 'Maya', updated_at: 'member-time' }],
+          mediaAssets: [],
+        } as never,
+      ]),
+    );
     mockedUseFamilyPortraitVersions.mockReturnValue({
       data: [
         {
@@ -237,7 +267,7 @@ describe('useMemories integration', () => {
   describe('notify-family-activity fire-and-forget (plan §10)', () => {
     it('fires notify-family-activity after a successful text memory create, without blocking it', async () => {
       mockedCreateMemory.mockResolvedValue({
-        data: { id: 'memory-text-1', memory_type: 'text_only', taggedMembers: [] },
+        data: { id: 'memory-text-1', memory_type: 'text_only', memory_date: '2026-05-26', created_at: 'c1', taggedMembers: [] },
         error: null,
       });
 
@@ -257,7 +287,7 @@ describe('useMemories integration', () => {
 
     it('still resolves the create mutation even when notify-family-activity rejects', async () => {
       mockedCreateMemory.mockResolvedValue({
-        data: { id: 'memory-text-2', memory_type: 'text_only', taggedMembers: [] },
+        data: { id: 'memory-text-2', memory_type: 'text_only', memory_date: '2026-05-26', created_at: 'c1', taggedMembers: [] },
         error: null,
       });
       mockedNotifyFamilyActivity.mockRejectedValue(new Error('network down'));
@@ -289,7 +319,7 @@ describe('useMemories integration', () => {
 
     it('still resolves the create mutation even when notify-family-activity returns an error', async () => {
       mockedCreateMemory.mockResolvedValue({
-        data: { id: 'memory-text-3', memory_type: 'text_only', taggedMembers: [] },
+        data: { id: 'memory-text-3', memory_type: 'text_only', memory_date: '2026-05-26', created_at: 'c1', taggedMembers: [] },
         error: null,
       });
       mockedNotifyFamilyActivity.mockResolvedValue({
@@ -324,7 +354,7 @@ describe('useMemories integration', () => {
   describe('fetch-link-previews fire-and-forget (plan §7)', () => {
     it('triggers fetchLinkPreviews after creating a memory whose content contains a URL', async () => {
       mockedCreateMemory.mockResolvedValue({
-        data: { id: 'memory-link-1', memory_type: 'text_only', taggedMembers: [] },
+        data: { id: 'memory-link-1', memory_type: 'text_only', memory_date: '2026-05-26', created_at: 'c1', taggedMembers: [] },
         error: null,
       });
 
@@ -344,7 +374,7 @@ describe('useMemories integration', () => {
 
     it('does not trigger fetchLinkPreviews after creating a memory with no URL in content', async () => {
       mockedCreateMemory.mockResolvedValue({
-        data: { id: 'memory-nolink-1', memory_type: 'text_only', taggedMembers: [] },
+        data: { id: 'memory-nolink-1', memory_type: 'text_only', memory_date: '2026-05-26', created_at: 'c1', taggedMembers: [] },
         error: null,
       });
 
@@ -410,7 +440,7 @@ describe('useMemories integration', () => {
 
     it('still resolves the create mutation when fetchLinkPreviews rejects', async () => {
       mockedCreateMemory.mockResolvedValue({
-        data: { id: 'memory-link-4', memory_type: 'text_only', taggedMembers: [] },
+        data: { id: 'memory-link-4', memory_type: 'text_only', memory_date: '2026-05-26', created_at: 'c1', taggedMembers: [] },
         error: null,
       });
       mockedFetchLinkPreviews.mockRejectedValue(new Error('network down'));
@@ -449,6 +479,33 @@ describe('useMemories integration', () => {
         }),
       ).resolves.toMatchObject({ id: 'memory-link-5' });
     });
+
+    it('patches link_previews from the fetch-link-previews response instead of invalidating (Workstream A4b)', async () => {
+      mockedCreateMemory.mockResolvedValue({
+        data: { id: 'memory-link-6', memory_type: 'text_only', memory_date: '2026-05-26', created_at: 'c1', taggedMembers: [] },
+        error: null,
+      });
+      mockedFetchLinkPreviews.mockResolvedValue({
+        data: { linkPreviews: { 'https://example.com': { title: 'Example', fetchedAt: '2026-05-26T00:00:00Z' } } },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await result.current.createMemory({
+        content: 'Look at this https://example.com',
+        memoryDate: '2026-05-26',
+        taggedMemberIds: [],
+      });
+
+      await waitFor(() => {
+        const patched = result.current.memories.find((m) => m.id === 'memory-link-6');
+        expect(patched?.link_previews).toEqual({
+          'https://example.com': { title: 'Example', fetchedAt: '2026-05-26T00:00:00Z' },
+        });
+      });
+    });
   });
 
   describe('useMemory detail seeding from the timeline cache', () => {
@@ -476,7 +533,7 @@ describe('useMemories integration', () => {
 
     it('shows the cached timeline memory immediately while the detail fetch is in flight', () => {
       const queryClient = createQueryClient();
-      queryClient.setQueryData([...memoriesQueryKey('family-1'), ''], [buildCachedMemory()]);
+      queryClient.setQueryData(memoriesQueryKey('family-1'), buildInfiniteMemoriesData([buildCachedMemory()]));
       mockedFetchMemoryById.mockReturnValue(new Promise(() => {}));
 
       const { result } = renderHook(() => useMemory('memory-cached-1'), {
@@ -491,8 +548,8 @@ describe('useMemories integration', () => {
     it('replaces the cached copy with fresh data once the detail fetch resolves', async () => {
       const queryClient = createQueryClient();
       queryClient.setQueryData(
-        [...memoriesQueryKey('family-1'), ''],
-        [buildCachedMemory({ content: 'Cached copy' })],
+        memoriesQueryKey('family-1'),
+        buildInfiniteMemoriesData([buildCachedMemory({ content: 'Cached copy' })]),
       );
       mockedFetchMemoryById.mockResolvedValue({
         data: buildCachedMemory({ content: 'Fresh copy' }),
@@ -523,7 +580,7 @@ describe('useMemories integration', () => {
         illustration_status: 'generating',
         updated_at: '2026-01-01T00:00:00Z',
       });
-      queryClient.setQueryData([...memoriesQueryKey('family-1'), ''], [staleCached]);
+      queryClient.setQueryData(memoriesQueryKey('family-1'), buildInfiniteMemoriesData([staleCached]));
       mockedFetchMemoryById.mockResolvedValue({
         data: { ...staleCached, illustration_status: 'failed' } as never,
         error: null,
@@ -543,7 +600,7 @@ describe('useMemories integration', () => {
 
     it("does not seed the detail view from another family's cache", () => {
       const queryClient = createQueryClient();
-      queryClient.setQueryData([...memoriesQueryKey('family-2'), ''], [buildCachedMemory()]);
+      queryClient.setQueryData(memoriesQueryKey('family-2'), buildInfiniteMemoriesData([buildCachedMemory()]));
       mockedFetchMemoryById.mockReturnValue(new Promise(() => {}));
 
       const { result } = renderHook(() => useMemory('memory-cached-1'), {
@@ -569,7 +626,7 @@ describe('useMemories integration', () => {
         taggedMembers: [],
         mediaAssets: [],
       };
-      mockedFetchMemories.mockResolvedValue({ data: [migrated as never], error: null });
+      mockedFetchMemoriesPage.mockResolvedValue(pageResult([migrated as never]));
       mockedRunTextOnlyEmotionAnalysis.mockResolvedValue('joy');
 
       const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
@@ -578,7 +635,8 @@ describe('useMemories integration', () => {
         expect(result.current.memories[0]?.emotion).toBe('joy');
       });
       expect(mockedRunTextOnlyEmotionAnalysis).toHaveBeenCalledTimes(1);
-      expect(mockedFetchMemories).toHaveBeenCalledTimes(1);
+      // Patched in place -- page 1 was fetched exactly once, no refetch.
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
     });
 
     it('recovers a stale illustration by patching its status, without refetching the timeline', async () => {
@@ -594,7 +652,7 @@ describe('useMemories integration', () => {
         taggedMembers: [],
         mediaAssets: [],
       };
-      mockedFetchMemories.mockResolvedValue({ data: [stale as never], error: null });
+      mockedFetchMemoriesPage.mockResolvedValue(pageResult([stale as never]));
       mockedRetryMemoryIllustration.mockResolvedValue({ error: null });
 
       const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
@@ -604,12 +662,181 @@ describe('useMemories integration', () => {
       });
       expect(mockedRetryMemoryIllustration).toHaveBeenCalledWith('memory-stale-1');
       expect(mockedRetryMemoryIllustration).toHaveBeenCalledTimes(1);
-      expect(mockedFetchMemories).toHaveBeenCalledTimes(1);
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
       // The patched row must read as freshly pending, not stale-pending --
       // otherwise the recovery effect would loop on it.
       expect(
         new Date(result.current.memories[0]?.updated_at ?? 0).getTime(),
       ).toBeGreaterThan(Date.now() - 60_000);
+    });
+  });
+
+  // Workstream A4b: invalidateMemoryQueries now marks the memories list
+  // stale with refetchType: 'none' instead of refetching it -- mutations are
+  // responsible for patching in the data they already have. These assert
+  // both halves: the cache reflects the mutation's result, AND no page-2+ (or
+  // any extra) queryFn call happened to get it there.
+  describe('mutation cache patches do not refetch pages (Workstream A4b)', () => {
+    it('create prepends the new memory into the timeline cache without an extra page fetch', async () => {
+      mockedFetchMemoriesPage.mockResolvedValue(
+        pageResult([
+          {
+            id: 'existing-1',
+            memory_type: 'text_only',
+            memory_date: '2026-05-20',
+            created_at: '2026-05-20T00:00:00Z',
+            taggedMembers: [],
+            mediaAssets: [],
+          } as never,
+        ]),
+      );
+      mockedCreateMemory.mockResolvedValue({
+        data: {
+          id: 'memory-new',
+          memory_type: 'text_only',
+          memory_date: '2026-05-26',
+          created_at: '2026-05-26T00:00:00Z',
+          taggedMembers: [],
+          mediaAssets: [],
+        },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.memories).toHaveLength(1));
+
+      await result.current.createMemory({
+        content: 'New memory',
+        memoryDate: '2026-05-26',
+        taggedMemberIds: [],
+      });
+
+      await waitFor(() => {
+        expect(result.current.memories.map((m) => m.id)).toEqual(['memory-new', 'existing-1']);
+      });
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
+    });
+
+    it('update patches the returned row into the cache without an extra page fetch', async () => {
+      mockedFetchMemoriesPage.mockResolvedValue(
+        pageResult([
+          {
+            id: 'memory-1',
+            memory_type: 'text_only',
+            memory_date: '2026-05-20',
+            created_at: '2026-05-20T00:00:00Z',
+            content: 'Original',
+            taggedMembers: [],
+            mediaAssets: [],
+          } as never,
+        ]),
+      );
+      mockedUpdateMemory.mockResolvedValue({
+        data: {
+          id: 'memory-1',
+          memory_type: 'text_only',
+          memory_date: '2026-05-20',
+          created_at: '2026-05-20T00:00:00Z',
+          content: 'Edited',
+          taggedMembers: [],
+          mediaAssets: [],
+        },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.memories).toHaveLength(1));
+
+      await result.current.updateMemory({ memoryId: 'memory-1', content: 'Edited' });
+
+      await waitFor(() => {
+        expect(result.current.memories[0]?.content).toBe('Edited');
+      });
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
+    });
+
+    it('delete removes the memory from the cache without an extra page fetch', async () => {
+      mockedFetchMemoriesPage.mockResolvedValue(
+        pageResult([
+          {
+            id: 'memory-1',
+            memory_type: 'text_only',
+            memory_date: '2026-05-20',
+            created_at: '2026-05-20T00:00:00Z',
+            taggedMembers: [],
+            mediaAssets: [],
+          } as never,
+        ]),
+      );
+      mockedDeleteMemory.mockResolvedValue({ error: null });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.memories).toHaveLength(1));
+
+      await result.current.deleteMemory('memory-1');
+
+      await waitFor(() => expect(result.current.memories).toHaveLength(0));
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
+    });
+
+    it('retry patches illustration_status to pending without an extra page fetch', async () => {
+      mockedFetchMemoriesPage.mockResolvedValue(
+        pageResult([
+          {
+            id: 'memory-1',
+            memory_type: 'text_illustration',
+            memory_date: '2026-05-20',
+            created_at: '2026-05-20T00:00:00Z',
+            illustration_status: 'failed',
+            taggedMembers: [],
+            mediaAssets: [],
+          } as never,
+        ]),
+      );
+      mockedRetryMemoryIllustration.mockResolvedValue({ error: null });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.memories).toHaveLength(1));
+
+      await result.current.retryIllustration('memory-1');
+
+      await waitFor(() => {
+        expect(result.current.memories[0]?.illustration_status).toBe('pending');
+      });
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('useMemberMemories (Workstream A6)', () => {
+    it('fetches a member-filtered page and exposes the result', async () => {
+      mockedFetchMemoriesPageForMember.mockResolvedValue(
+        pageResult([
+          {
+            id: 'memory-1',
+            memory_type: 'text_only',
+            memory_date: '2026-05-20',
+            created_at: '2026-05-20T00:00:00Z',
+            taggedMembers: [{ id: 'member-1', name: 'Maya' }],
+            mediaAssets: [],
+          } as never,
+        ]),
+      );
+
+      const { result } = renderHook(() => useMemberMemories('member-1'), { wrapper: createWrapper() });
+
+      await waitFor(() => expect(result.current.memories).toHaveLength(1));
+      expect(mockedFetchMemoriesPageForMember).toHaveBeenCalledWith(
+        'member-1',
+        expect.objectContaining({ limit: 40 }),
+      );
+      // The unfiltered timeline fetch must never run for this hook.
+      expect(mockedFetchMemoriesPage).not.toHaveBeenCalled();
+    });
+
+    it('does not fetch when there is no memberId yet', () => {
+      renderHook(() => useMemberMemories(undefined), { wrapper: createWrapper() });
+
+      expect(mockedFetchMemoriesPageForMember).not.toHaveBeenCalled();
     });
   });
 
@@ -625,7 +852,7 @@ describe('useMemories integration', () => {
         expect(result.current.isCreating).toBe(false);
       });
 
-      expect(mockedFetchMemories).not.toHaveBeenCalled();
+      expect(mockedFetchMemoriesPage).not.toHaveBeenCalled();
     });
   });
 });

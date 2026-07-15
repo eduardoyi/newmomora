@@ -1,4 +1,5 @@
-import { render } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
+import { Keyboard } from 'react-native';
 
 import { MemoryTagPicker } from '@/components/memory-tag-picker';
 import type { FamilyMember } from '@/services/family-members';
@@ -36,6 +37,10 @@ const members = [
 ];
 
 describe('MemoryTagPicker', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it('allows unlimited selection when no illustration cap is supplied', () => {
     const screen = render(
       <MemoryTagPicker
@@ -65,5 +70,24 @@ describe('MemoryTagPicker', () => {
       true,
     );
     expect(screen.getByTestId('memory-tag-count').props.children.join('')).toContain('1/1');
+  });
+
+  it('dismisses the editor keyboard before opening the full family roster', () => {
+    const dismissSpy = jest.spyOn(Keyboard, 'dismiss').mockImplementation(() => {});
+    const screen = render(
+      <MemoryTagPicker
+        members={[
+          ...members,
+          createMember('member-3', 'Jordan'),
+          createMember('member-4', 'Taylor'),
+        ]}
+        onToggleMember={jest.fn()}
+        selectedMemberIds={[]}
+      />,
+    );
+
+    fireEvent.press(screen.getByTestId('memory-tag-more'));
+
+    expect(dismissSpy).toHaveBeenCalledTimes(1);
   });
 });

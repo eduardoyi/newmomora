@@ -1,6 +1,7 @@
 import { notifyFamilyActivity } from '@/services/ai';
 import { deleteStorageObject, uploadMediaObject } from '@/services/media';
 import { createMediaMemory, type MemoryWithTags } from '@/services/memories';
+import { createImagePreviewForUpload } from '@/utils/create-image-preview';
 import { getMediaExtensionFromContentType, isVideoContentType } from '@/utils/media-validation';
 import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
 import { stripImageMetadataForUpload } from '@/utils/strip-image-metadata';
@@ -18,6 +19,14 @@ export interface MemoryMediaMutationAsset {
   contentType: string;
   durationMs?: number | null;
   aspectRatio?: number | null;
+  /**
+   * Existing preview key for a pass-through (already-uploaded) asset. Not
+   * currently threaded through by any composer screen -- when omitted, the
+   * `replace_memory_media_assets` RPC preserves the row's existing preview
+   * key by matching `objectKey` (same precedent as `aspectRatio`; see
+   * supabase/migrations/20260715140000_memory_media_preview_key.sql).
+   */
+  previewObjectKey?: string | null;
 }
 
 export interface UploadedMemoryMediaAsset {
@@ -25,6 +34,13 @@ export interface UploadedMemoryMediaAsset {
   contentType: string;
   durationMs: number | null;
   aspectRatio: number | null;
+  /**
+   * Derived bandwidth-friendly preview key (images only, longest edge
+   * capped, see createImagePreviewForUpload), or `null` for videos, assets
+   * already at/under the cap (no-upscale guard), or a failed preview
+   * generation/upload (fail-open -- never fails the memory post).
+   */
+  previewObjectKey: string | null;
 }
 
 export interface PostMediaMemoryInput {
@@ -129,6 +145,7 @@ export async function uploadMemoryMediaAssets(params: {
         contentType: asset.contentType,
         durationMs: asset.durationMs ?? null,
         aspectRatio: asset.aspectRatio ?? null,
+        previewObjectKey: asset.previewObjectKey ?? null,
       };
     }
 
@@ -174,6 +191,24 @@ export async function uploadMemoryMediaAssets(params: {
     }
 
     uploadedKeys.push(mediaKey);
+
+    // Preview generation/upload (Workstream C3/C4): images only, fail-open.
+    // A failure here must never fail the memory post -- falls back to
+    // `previewObjectKey: null`, and list surfaces render the original (C6).
+    let previewObjectKey: string | null = null;
+    if (!isVideoContentType(upload.contentType)) {
+      previewObjectKey = await uploadImagePreviewForAsset({
+        userId,
+        familyId,
+        memoryId,
+        mediaAssetId,
+        fileUri: upload.fileUri,
+        width: upload.width,
+        height: upload.height,
+        uploadedKeys,
+      });
+    }
+
     onAssetUploaded?.();
 
     return {
@@ -181,10 +216,65 @@ export async function uploadMemoryMediaAssets(params: {
       contentType: upload.contentType,
       durationMs: asset.durationMs ?? null,
       aspectRatio,
+      previewObjectKey,
     };
   };
 
   return mapMediaUploads(assets, uploadAsset);
+}
+
+/**
+ * Generates and uploads a derived preview for one image asset
+ * (`{mediaAssetId}-preview.jpg`, same directory as the original -- verified
+ * against `MEMORY_MEDIA_ASSET_EXTENSION_PATTERN` in
+ * supabase/functions/_shared/storage-keys.ts, which permits hyphens in the
+ * asset-id segment). Fail-open: any failure (generation or upload) is
+ * swallowed and returns `null` rather than throwing, since a missing preview
+ * is a rendering fallback, not a data-loss risk. A successful preview upload
+ * is still pushed onto `uploadedKeys` so a later failure elsewhere in the
+ * post rolls it back like any other uploaded object.
+ */
+async function uploadImagePreviewForAsset(params: {
+  userId: string;
+  familyId: string;
+  memoryId: string;
+  mediaAssetId: string;
+  fileUri: string;
+  width?: number | null;
+  height?: number | null;
+  uploadedKeys: string[];
+}): Promise<string | null> {
+  const { userId, familyId, memoryId, mediaAssetId, fileUri, width, height, uploadedKeys } =
+    params;
+
+  try {
+    const preview = await createImagePreviewForUpload({ fileUri, width, height });
+    if (!preview) {
+      return null;
+    }
+
+    const previewKey = buildMemoryMediaAssetKey(userId, memoryId, `${mediaAssetId}-preview`, 'jpg');
+    const { error } = await uploadMediaObject(
+      previewKey,
+      preview.fileUri,
+      preview.contentType,
+      familyId,
+    );
+
+    if (error) {
+      console.warn('Preview upload failed; falling back to the original image', error.message);
+      return null;
+    }
+
+    uploadedKeys.push(previewKey);
+    return previewKey;
+  } catch (error) {
+    console.warn(
+      'Preview generation failed; falling back to the original image',
+      error instanceof Error ? error.message : 'unknown',
+    );
+    return null;
+  }
 }
 
 /**

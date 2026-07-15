@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
+import type { InfiniteData } from '@tanstack/react-query';
+
 import { useMemoryEngagement } from './useMemoryEngagement';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
@@ -13,7 +15,17 @@ import {
   notifyMemoryEngagementFireAndForget,
   setMemoryLike,
 } from '@/services/engagement';
-import type { MemoryWithTags } from '@/services/memories';
+import type { MemoriesPage, MemoryWithTags } from '@/services/memories';
+
+// useMemories' list cache is InfiniteData<MemoriesPage> (Workstream A2) --
+// seed the same shape here so patchMemoryInCaches' InfiniteData branch is
+// what's actually under test, matching production.
+function buildInfiniteMemoriesData(memories: MemoryWithTags[]): InfiniteData<MemoriesPage> {
+  return {
+    pages: [{ memories, nextCursor: null }],
+    pageParams: [null],
+  };
+}
 
 jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
@@ -78,7 +90,7 @@ describe('useMemoryEngagement integration', () => {
       error: null,
     });
     mockedDeleteComment.mockResolvedValue({ error: null });
-    queryClient.setQueryData(memoriesQueryKey('family-1'), [memory]);
+    queryClient.setQueryData(memoriesQueryKey('family-1'), buildInfiniteMemoriesData([memory]));
     queryClient.setQueryData(memoryDetailQueryKey('family-1', memory.id), memory);
   });
 
@@ -94,8 +106,8 @@ describe('useMemoryEngagement integration', () => {
     });
 
     await waitFor(() => {
-      const list = queryClient.getQueryData<MemoryWithTags[]>(memoriesQueryKey('family-1'));
-      expect(list?.[0]).toMatchObject({ likedByMe: true, likeCount: 3 });
+      const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey('family-1'));
+      expect(list?.pages[0]?.memories[0]).toMatchObject({ likedByMe: true, likeCount: 3 });
     });
     expect(queryClient.getQueryData(memoryDetailQueryKey('family-1', memory.id))).toMatchObject({
       likedByMe: true,
@@ -115,8 +127,8 @@ describe('useMemoryEngagement integration', () => {
       await result.current.addComment('Lovely');
     });
 
-    const list = queryClient.getQueryData<MemoryWithTags[]>(memoriesQueryKey('family-1'));
-    expect(list?.[0].commentCount).toBe(1);
+    const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey('family-1'));
+    expect(list?.pages[0]?.memories[0].commentCount).toBe(1);
     expect(result.current.comments).toEqual([
       expect.objectContaining({ id: 'comment-1', content: 'Lovely' }),
     ]);

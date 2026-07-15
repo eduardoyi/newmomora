@@ -2,13 +2,9 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { useGenerationStatusPolling } from '@/hooks/useGenerationStatusPolling';
 import { calendarMemoriesQueryKey } from '@/hooks/queryKeys';
-import {
-  fetchMemoriesInDateRange,
-  fetchOldestMemoryDate,
-  type MemoryWithTags,
-} from '@/services/memories';
-import { memoriesNeedEmotionPolling } from '@/utils/media-emotion-polling';
+import { fetchMemoriesInDateRange, fetchOldestMemoryDate } from '@/services/memories';
 
 export interface CalendarMemoryRange {
   startDate: string;
@@ -55,6 +51,12 @@ export function useCalendarMemoriesInRange(range: CalendarMemoryRange | null) {
   const { user } = useAuth();
   const { familyId } = useFamily();
 
+  // Shared status poll (Workstream A5) -- replaces this query's own
+  // refetchInterval. Mounting it here (as well as from useMemories) means
+  // the timeline and calendar tabs, which both stay mounted in the Tabs
+  // navigator, dedupe onto ONE poll loop instead of double-polling.
+  useGenerationStatusPolling();
+
   return useQuery({
     queryKey: [...calendarMemoriesQueryKey(familyId), 'range', range?.startDate, range?.endDate],
     queryFn: async () => {
@@ -72,18 +74,5 @@ export function useCalendarMemoriesInRange(range: CalendarMemoryRange | null) {
     },
     enabled: Boolean(user && familyId && range),
     placeholderData: keepPreviousData,
-    refetchInterval: (queryState) => {
-      const memories = (queryState.state.data ?? []) as MemoryWithTags[];
-      const hasGenerating = memories.some(
-        (memory) =>
-          memory.illustration_status === 'pending' || memory.illustration_status === 'generating',
-      );
-
-      if (hasGenerating) {
-        return 3000;
-      }
-
-      return memoriesNeedEmotionPolling(memories) ? 5000 : false;
-    },
   });
 }

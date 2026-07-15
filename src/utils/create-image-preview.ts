@@ -1,0 +1,62 @@
+import * as ImageManipulator from 'expo-image-manipulator';
+
+/**
+ * Longest-edge cap for the derived list-view preview (Workstream C3,
+ * performance-optimizations plan). Distinct from
+ * `VIDEO_UPLOAD_MAX_DIMENSION` (video-compression.ts) even though both
+ * currently use 1280 -- they cap different pipelines for different reasons
+ * and are allowed to diverge independently.
+ */
+export const MEMORY_IMAGE_PREVIEW_MAX_DIMENSION = 1280;
+
+/** Preview compression quality -- lower than the EXIF-strip pass (0.92) since
+ * this variant is only ever used at small list-view sizes. */
+export const MEMORY_IMAGE_PREVIEW_QUALITY = 0.8;
+
+export interface ImagePreviewResult {
+  fileUri: string;
+  contentType: 'image/jpeg';
+}
+
+/**
+ * Generates a bandwidth-friendly JPEG preview from an already EXIF-stripped
+ * image, resized so its LONGEST edge is <= MEMORY_IMAGE_PREVIEW_MAX_DIMENSION
+ * (width for landscape/square, height for portrait -- expo-image-manipulator
+ * auto-computes the other dimension). Reuses the width/height
+ * `stripImageMetadataForUpload` already computed -- do NOT call this with a
+ * fresh `manipulateAsync` dimension probe; the whole point is avoiding a
+ * second one.
+ *
+ * No-upscale guard: returns `null` when the source's longest edge is already
+ * at or under the cap, or when dimensions are unknown. Originals are never
+ * downscaled elsewhere in the app either (keepsake product) -- callers
+ * should fall back to the original object key when this returns `null`.
+ */
+export async function createImagePreviewForUpload(params: {
+  fileUri: string;
+  width: number | null | undefined;
+  height: number | null | undefined;
+}): Promise<ImagePreviewResult | null> {
+  const { fileUri, width, height } = params;
+
+  if (!width || !height || width <= 0 || height <= 0) {
+    return null;
+  }
+
+  const longestEdge = Math.max(width, height);
+  if (longestEdge <= MEMORY_IMAGE_PREVIEW_MAX_DIMENSION) {
+    return null;
+  }
+
+  const resize =
+    width >= height
+      ? { width: MEMORY_IMAGE_PREVIEW_MAX_DIMENSION }
+      : { height: MEMORY_IMAGE_PREVIEW_MAX_DIMENSION };
+
+  const result = await ImageManipulator.manipulateAsync(fileUri, [{ resize }], {
+    compress: MEMORY_IMAGE_PREVIEW_QUALITY,
+    format: ImageManipulator.SaveFormat.JPEG,
+  });
+
+  return { fileUri: result.uri, contentType: 'image/jpeg' };
+}

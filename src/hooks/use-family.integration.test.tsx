@@ -28,6 +28,15 @@ jest.mock('@/services/ai', () => ({
   deleteUserAccount: jest.fn(),
 }));
 
+// FamilyProvider also mounts useMemoriesRealtime (Workstream D2) directly,
+// which imports the real @/lib/supabase -> AsyncStorage chain the mock
+// above is guarding against -- mock it out too. This file exercises
+// FamilyProvider's membership-resolution logic, not realtime; the dedicated
+// coverage for useMemoriesRealtime lives in useMemoriesRealtime.test.tsx.
+jest.mock('@/hooks/useMemoriesRealtime', () => ({
+  useMemoriesRealtime: jest.fn(),
+}));
+
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedFetchMemberships = fetchMyFamilyMemberships as jest.MockedFunction<
   typeof fetchMyFamilyMemberships

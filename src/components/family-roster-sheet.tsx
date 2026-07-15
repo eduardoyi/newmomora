@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -8,7 +9,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -96,6 +96,22 @@ export interface FamilyRosterSheetProps {
   onClose: () => void;
 }
 
+export function getRosterKeyboardAvoidingBehavior(
+  platform: string,
+  isKeyboardVisible: boolean,
+) {
+  if (platform === 'ios') return 'padding' as const;
+  if (platform === 'android' && isKeyboardVisible) return 'height' as const;
+  return undefined;
+}
+
+export function getRosterBottomPadding(
+  bottomInset: number,
+  isKeyboardVisible: boolean,
+) {
+  return isKeyboardVisible ? spacing.md : Math.max(bottomInset, spacing.lg);
+}
+
 export function FamilyRosterSheet({
   visible,
   members,
@@ -105,15 +121,29 @@ export function FamilyRosterSheet({
   onClose,
 }: FamilyRosterSheetProps) {
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
   const [searchQuery, setSearchQuery] = useState('');
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
   const atLimit = maxSelected !== undefined && selectedMemberIds.length >= maxSelected;
   const taggedCount = selectedMemberIds.length;
-  const listMaxHeight = Math.max(
-    160,
-    windowHeight * 0.78 - Math.max(insets.bottom, spacing.lg) - 188,
-  );
+
+  useEffect(() => {
+    if (!visible) {
+      return;
+    }
+
+    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+      setIsKeyboardVisible(true);
+    });
+    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
+      setIsKeyboardVisible(false);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, [visible]);
 
   const filteredMembers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -125,6 +155,8 @@ export function FamilyRosterSheet({
   const hasNoResults = searchQuery.trim().length > 0 && filteredMembers.length === 0;
 
   const handleClose = () => {
+    Keyboard.dismiss();
+    setIsKeyboardVisible(false);
     setSearchQuery('');
     onClose();
   };
@@ -138,7 +170,7 @@ export function FamilyRosterSheet({
       visible={visible}
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={getRosterKeyboardAvoidingBehavior(Platform.OS, isKeyboardVisible)}
         keyboardVerticalOffset={0}
         style={styles.root}
         testID="roster-keyboard-avoiding-view"
@@ -149,7 +181,13 @@ export function FamilyRosterSheet({
           onPress={handleClose}
           style={styles.backdrop}
         />
-        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
+        <View
+          style={[
+            styles.sheet,
+            { paddingBottom: getRosterBottomPadding(insets.bottom, isKeyboardVisible) },
+          ]}
+          testID="roster-sheet"
+        >
           {/* Drag handle */}
           <View style={styles.handle} />
 
@@ -189,7 +227,8 @@ export function FamilyRosterSheet({
             contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
-            style={[styles.scroll, { maxHeight: listMaxHeight }]}
+            style={styles.scroll}
+            testID="roster-member-list"
           >
             {filteredMembers.length > 0 ? (
               <>
@@ -246,6 +285,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
     maxHeight: '78%',
+    overflow: 'hidden',
     paddingTop: spacing.sm,
   },
   handle: {
@@ -301,6 +341,8 @@ const styles = StyleSheet.create({
   },
   scroll: {
     flexGrow: 0,
+    flexShrink: 1,
+    minHeight: 0,
   },
   scrollContent: {
     paddingBottom: spacing.xs,

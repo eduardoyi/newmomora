@@ -23,6 +23,12 @@ export interface MemoryMediaAssetInput {
   contentType: string;
   durationMs?: number | null;
   aspectRatio?: number | null;
+  /**
+   * Derived preview key (Workstream C). Omitted/null is valid -- the
+   * `replace_memory_media_assets` RPC preserves an existing row's preview
+   * key when the incoming value is null and `objectKey` matches.
+   */
+  previewObjectKey?: string | null;
 }
 
 export interface CreateMemoryInput {

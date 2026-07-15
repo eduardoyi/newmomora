@@ -42,6 +42,8 @@ describe('stripImageMetadataForUpload', () => {
       fileUri: 'stripped:file:///photo.jpg',
       contentType: 'image/jpeg',
       aspectRatio: 1,
+      width: 100,
+      height: 100,
     });
   });
 
@@ -86,6 +88,22 @@ describe('stripImageMetadataForUpload', () => {
       expect(result.contentType).toBe('image/jpeg');
     },
   );
+
+  it('surfaces the re-encoded width/height so callers can reuse them without a second probe', async () => {
+    mockedManipulateAsync.mockResolvedValueOnce({
+      uri: 'stripped:file:///wide.jpg',
+      width: 1600,
+      height: 900,
+    });
+
+    const result = await stripImageMetadataForUpload({
+      fileUri: 'file:///wide.jpg',
+      contentType: 'image/jpeg',
+    });
+
+    expect(result.width).toBe(1600);
+    expect(result.height).toBe(900);
+  });
 
   it('fails closed: rejects instead of falling back to the original file when re-encoding fails', async () => {
     mockedManipulateAsync.mockRejectedValue(new Error('manipulator unavailable'));

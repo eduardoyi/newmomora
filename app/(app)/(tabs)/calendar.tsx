@@ -24,6 +24,7 @@ import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
+import { resolvePreferredCoverKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
   buildCalendarWeeks,
@@ -51,7 +52,9 @@ function MemoryStamp({ memory }: { memory: MemoryWithTags }) {
     memory.updated_at,
   );
   const { url: mediaUrl } = useMediaUrl(
-    isMedia && !isVideo ? (coverAsset?.object_key ?? memory.media_key ?? null) : null,
+    // Prefers the derived preview key (Workstream C6); falls back to the
+    // original when absent (legacy row, no-upscale guard, failed upload).
+    isMedia && !isVideo ? resolvePreferredCoverKey(coverAsset, memory.media_key) : null,
     memory.updated_at,
   );
   const { url: videoUrl } = useMediaUrl(

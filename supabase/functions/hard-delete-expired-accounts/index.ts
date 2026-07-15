@@ -40,7 +40,7 @@ export async function collectFamilyStorageKeys(
   if (memoryIds.length > 0) {
     const { data: mediaAssets, error: mediaAssetsError } = await supabase
       .from('memory_media')
-      .select('object_key')
+      .select('object_key, preview_object_key')
       .in('memory_id', memoryIds);
     if (mediaAssetsError) {
       throw new Error(`Memory media storage lookup failed: ${mediaAssetsError.message}`);
@@ -48,6 +48,7 @@ export async function collectFamilyStorageKeys(
 
     for (const asset of mediaAssets ?? []) {
       if (asset.object_key) keys.push(asset.object_key);
+      if (asset.preview_object_key) keys.push(asset.preview_object_key);
     }
   }
 
@@ -131,11 +132,15 @@ async function deleteOwnedFamilies(supabase: ServiceClient, ownerId: string): Pr
 /**
  * Given a set of candidate keys (typically everything under a `{userId}/`
  * prefix), returns the subset still referenced by a surviving row --
- * `memory_media.object_key`, `memories.media_key`/`illustration_key`, or
- * `family_members.profile_picture_key`/`illustrated_profile_key`. Five
- * simple `.in()` queries rather than a single `.or()` string, so key
- * values (which can contain `.`/`-`) never need PostgREST filter-syntax
- * escaping.
+ * `memory_media.object_key`/`preview_object_key`,
+ * `memories.media_key`/`illustration_key`, or
+ * `family_members.profile_picture_key`/`illustrated_profile_key`. Simple
+ * `.in()` queries rather than a single `.or()` string, so key values (which
+ * can contain `.`/`-`) never need PostgREST filter-syntax escaping.
+ * `preview_object_key` is checked as its own reference column (not folded
+ * into the `object_key` query) -- a preview key never equals its asset's
+ * `object_key`, so without this a live preview would look unreferenced and
+ * be deleted as orphan garbage.
  */
 export async function resolveReferencedKeys(
   supabase: ServiceClient,
@@ -149,6 +154,7 @@ export async function resolveReferencedKeys(
 
   const [
     mediaAssetRows,
+    mediaAssetPreviewRows,
     memoryMediaKeyRows,
     memoryIllustrationKeyRows,
     memberPhotoRows,
@@ -158,6 +164,7 @@ export async function resolveReferencedKeys(
     versionAttemptRows,
   ] = await Promise.all([
     supabase.from('memory_media').select('object_key').in('object_key', keys),
+    supabase.from('memory_media').select('preview_object_key').in('preview_object_key', keys),
     supabase.from('memories').select('media_key').in('media_key', keys),
     supabase.from('memories').select('illustration_key').in('illustration_key', keys),
     supabase.from('family_members').select('profile_picture_key').in('profile_picture_key', keys),
@@ -181,6 +188,7 @@ export async function resolveReferencedKeys(
 
   const lookupError = [
     mediaAssetRows,
+    mediaAssetPreviewRows,
     memoryMediaKeyRows,
     memoryIllustrationKeyRows,
     memberPhotoRows,
@@ -195,6 +203,9 @@ export async function resolveReferencedKeys(
 
   for (const row of mediaAssetRows.data ?? []) {
     if (row.object_key) referenced.add(row.object_key);
+  }
+  for (const row of mediaAssetPreviewRows.data ?? []) {
+    if (row.preview_object_key) referenced.add(row.preview_object_key);
   }
   for (const row of memoryMediaKeyRows.data ?? []) {
     if (row.media_key) referenced.add(row.media_key);
