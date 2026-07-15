@@ -1,7 +1,7 @@
 # Feature: Likes & comments
 
 **Status:** `done`
-**Last updated:** 2026-07-13
+**Last updated:** 2026-07-15
 **PRD reference:** §6.8 Likes & Comments
 
 ## Overview
@@ -138,10 +138,12 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 - Push failures are non-fatal because engagement has already committed.
 - Native haptics require a development-client/native rebuild after dependency
   installation; Expo Go is not supported by this SDK setup.
-- On Android, let the modal window's native `adjustResize` behavior handle the
-  keyboard. Combining that resize with `KeyboardAvoidingView` height changes or
-  JS pixel heights derived from `useWindowDimensions` causes double shrinking,
-  top overflow, and a delayed jump when the keyboard closes.
+- On Android, keep the sheet percentage-constrained and enable
+  `KeyboardAvoidingView`'s `height` behavior only while the keyboard is visible.
+  Disabling the behavior on `keyboardDidHide` prevents a stale reduced height
+  from leaving the drawer floating above the bottom of the screen. Do not
+  reintroduce a fixed pixel height from `useWindowDimensions`; that combination
+  causes top overflow and a delayed jump when the keyboard closes.
 
 ## Dependencies
 
@@ -197,5 +199,6 @@ maestro test .maestro/flows/engagement/like-and-comment.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-07-15 | Keep the comment composer above the Android keyboard and restore bottom docking after keyboard close |
 | 2026-07-14 | Fixed keyboard spacing, visible-viewport overflow, first-comment visibility, and Android drawer reposition flicker |
 | 2026-07-13 | Initial likes, comments, moderation, optimistic UI, notification preference/delivery, and tests |

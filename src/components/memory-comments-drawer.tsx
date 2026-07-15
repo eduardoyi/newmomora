@@ -33,8 +33,13 @@ interface MemoryCommentsDrawerProps {
   onClose: () => void;
 }
 
-export function getCommentsKeyboardAvoidingBehavior(platform: string) {
-  return platform === 'ios' ? ('padding' as const) : undefined;
+export function getCommentsKeyboardAvoidingBehavior(
+  platform: string,
+  isKeyboardVisible: boolean,
+) {
+  if (platform === 'ios') return 'padding' as const;
+  if (platform === 'android' && isKeyboardVisible) return 'height' as const;
+  return undefined;
 }
 
 export function getCommentsDrawerBottomPadding(
@@ -122,7 +127,7 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
       visible={visible}
     >
       <KeyboardAvoidingView
-        behavior={getCommentsKeyboardAvoidingBehavior(Platform.OS)}
+        behavior={getCommentsKeyboardAvoidingBehavior(Platform.OS, isKeyboardVisible)}
         style={styles.root}
         testID="comments-keyboard-avoiding-view"
       >

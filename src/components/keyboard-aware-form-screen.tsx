@@ -9,15 +9,11 @@ import {
   type RefObject,
 } from 'react';
 import {
-  Dimensions,
   Keyboard,
   Platform,
   ScrollView,
   StyleSheet,
   View,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
-  type KeyboardMetrics,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -40,16 +36,26 @@ interface KeyboardAwareFormScreenProps {
   contentContainerStyle?: StyleProp<ViewStyle>;
 }
 
-export function getKeyboardTop(
-  metrics: KeyboardMetrics,
+type ScrollToKeyboard = ScrollView['scrollResponderScrollNativeHandleToKeyboard'];
+
+interface KeyboardScrollable {
+  scrollResponderScrollNativeHandleToKeyboard: ScrollToKeyboard;
+}
+
+export function scrollInputAboveKeyboard(
+  scrollView: KeyboardScrollable,
+  input: Parameters<ScrollToKeyboard>[0],
   platform: typeof Platform.OS,
-  screenHeight: number,
 ) {
-  if (platform === 'android' && metrics.screenY > 0) {
-    return metrics.screenY;
+  const scroll = () => {
+    scrollView.scrollResponderScrollNativeHandleToKeyboard(input, spacing.xl, true);
+  };
+
+  if (platform === 'android') {
+    return setTimeout(scroll, 200);
   }
 
-  return screenHeight - metrics.height;
+  scroll();
 }
 
 export function KeyboardAwareFormScreen({
@@ -57,9 +63,7 @@ export function KeyboardAwareFormScreen({
   contentContainerStyle,
 }: KeyboardAwareFormScreenProps) {
   const scrollRef = useRef<ScrollView>(null);
-  const scrollYRef = useRef(0);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const [keyboardTop, setKeyboardTop] = useState(0);
   const pendingInputRef = useRef<RefObject<View | null> | null>(null);
 
   useEffect(() => {
@@ -68,13 +72,9 @@ export function KeyboardAwareFormScreen({
 
     const showSubscription = Keyboard.addListener(showEvent, (event) => {
       setKeyboardHeight(event.endCoordinates.height);
-      setKeyboardTop(
-        getKeyboardTop(event.endCoordinates, Platform.OS, Dimensions.get('screen').height),
-      );
     });
     const hideSubscription = Keyboard.addListener(hideEvent, () => {
       setKeyboardHeight(0);
-      setKeyboardTop(0);
       pendingInputRef.current = null;
     });
 
@@ -85,61 +85,38 @@ export function KeyboardAwareFormScreen({
   }, []);
 
   const performScroll = useCallback(
-    (inputRef: RefObject<View | null>, activeKeyboardTop: number) => {
+    (inputRef: RefObject<View | null>) => {
       const input = inputRef.current;
       const scrollView = scrollRef.current;
 
-      if (!input || !scrollView || activeKeyboardTop === 0) {
+      if (!input || !scrollView) {
         return;
       }
 
-      const measure = () => input.measureInWindow((_inputX, inputPageY, _inputWidth, inputHeight) => {
-        const inputBottom = inputPageY + inputHeight;
-        const targetBottom = activeKeyboardTop - spacing.lg;
-
-        if (inputBottom <= targetBottom) {
-          return;
-        }
-
-        const overlap = inputBottom - targetBottom + spacing.md;
-        scrollView.scrollTo({
-          y: scrollYRef.current + overlap,
-          animated: true,
-        });
-      });
-
-      if (Platform.OS === 'android') {
-        setTimeout(measure, 200);
-      } else {
-        measure();
-      }
+      scrollInputAboveKeyboard(scrollView, input, Platform.OS);
     },
     [],
   );
 
   const scrollInputIntoView = useCallback(
     (inputRef: RefObject<View | null>) => {
-      if (keyboardTop > 0) {
-        performScroll(inputRef, keyboardTop);
+      if (keyboardHeight > 0) {
+        performScroll(inputRef);
         return;
       }
 
       pendingInputRef.current = inputRef;
     },
-    [keyboardTop, performScroll],
+    [keyboardHeight, performScroll],
   );
 
   useEffect(() => {
-    if (keyboardTop > 0 && pendingInputRef.current) {
+    if (keyboardHeight > 0 && pendingInputRef.current) {
       // Keep pendingInputRef set — Android fires keyboardDidShow multiple times
       // as it animates in. Cleared in keyboardDidHide.
-      performScroll(pendingInputRef.current, keyboardTop);
+      performScroll(pendingInputRef.current);
     }
-  }, [keyboardTop, performScroll]);
-
-  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    scrollYRef.current = event.nativeEvent.contentOffset.y;
-  }, []);
+  }, [keyboardHeight, performScroll]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -154,8 +131,6 @@ export function KeyboardAwareFormScreen({
           ]}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
         >
           {children}
         </ScrollView>

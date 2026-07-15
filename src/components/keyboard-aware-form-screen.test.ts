@@ -1,20 +1,45 @@
-import type { KeyboardMetrics } from 'react-native';
+import { scrollInputAboveKeyboard } from '@/components/keyboard-aware-form-screen';
+import { spacing } from '@/constants/theme';
 
-import { getKeyboardTop } from '@/components/keyboard-aware-form-screen';
+describe('scrollInputAboveKeyboard', () => {
+  const input = {} as never;
 
-const metrics: KeyboardMetrics = {
-  height: 300,
-  screenX: 0,
-  screenY: 430,
-  width: 400,
-};
-
-describe('getKeyboardTop', () => {
-  it('uses the Android keyboard screen coordinate when system bars make height subtraction inaccurate', () => {
-    expect(getKeyboardTop(metrics, 'android', 800)).toBe(430);
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
-  it('keeps the existing height-based calculation on iOS', () => {
-    expect(getKeyboardTop(metrics, 'ios', 800)).toBe(500);
+  it('lets Android finish resizing before using the native focused-input scroll', () => {
+    jest.useFakeTimers();
+    const scrollResponderScrollNativeHandleToKeyboard = jest.fn();
+
+    scrollInputAboveKeyboard(
+      { scrollResponderScrollNativeHandleToKeyboard },
+      input,
+      'android',
+    );
+
+    expect(scrollResponderScrollNativeHandleToKeyboard).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(200);
+    expect(scrollResponderScrollNativeHandleToKeyboard).toHaveBeenCalledWith(
+      input,
+      spacing.xl,
+      true,
+    );
+  });
+
+  it('scrolls immediately on iOS', () => {
+    const scrollResponderScrollNativeHandleToKeyboard = jest.fn();
+
+    scrollInputAboveKeyboard(
+      { scrollResponderScrollNativeHandleToKeyboard },
+      input,
+      'ios',
+    );
+
+    expect(scrollResponderScrollNativeHandleToKeyboard).toHaveBeenCalledWith(
+      input,
+      spacing.xl,
+      true,
+    );
   });
 });

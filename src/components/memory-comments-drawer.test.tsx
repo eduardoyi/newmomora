@@ -110,18 +110,19 @@ describe('MemoryCommentsDrawer', () => {
     expect(deleteComment).toHaveBeenCalledWith(ownComment);
   });
 
-  it('uses one keyboard-resize strategy and sizes the sheet to the visible viewport', () => {
+  it('uses adaptive keyboard avoidance without a fixed sheet height', () => {
     const { getByTestId } = renderDrawer();
     const sheetStyle = StyleSheet.flatten(getByTestId('comments-drawer').props.style);
 
-    expect(getCommentsKeyboardAvoidingBehavior('ios')).toBe('padding');
-    expect(getCommentsKeyboardAvoidingBehavior('android')).toBeUndefined();
+    expect(getCommentsKeyboardAvoidingBehavior('ios', false)).toBe('padding');
+    expect(getCommentsKeyboardAvoidingBehavior('android', true)).toBe('height');
+    expect(getCommentsKeyboardAvoidingBehavior('android', false)).toBeUndefined();
     expect(sheetStyle.flex).toBe(1);
     expect(sheetStyle.maxHeight).toBe('80%');
     expect(sheetStyle.height).toBeUndefined();
   });
 
-  it('removes the safe-area spacer while the keyboard is visible', () => {
+  it('removes the safe-area spacer while typing and restores it after keyboard close', () => {
     const keyboardListeners: Record<string, () => void> = {};
     const addListenerSpy = jest.spyOn(Keyboard, 'addListener').mockImplementation(
       (event, listener) => {
