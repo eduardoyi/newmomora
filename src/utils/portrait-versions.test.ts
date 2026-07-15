@@ -1,5 +1,7 @@
 import {
   extractPortraitReferenceDateIso,
+  isPortraitGenerationStalled,
+  PORTRAIT_GENERATION_STALE_MS,
   resolveMemberPortraitFields,
   resolvePortraitVersion,
   validatePortraitReferenceDate,
@@ -31,6 +33,34 @@ function version(
     ...overrides,
   };
 }
+
+describe('portrait generation recovery', () => {
+  const nowMs = Date.parse('2026-07-15T22:30:00Z');
+  const staleStartedAt = new Date(nowMs - PORTRAIT_GENERATION_STALE_MS - 1).toISOString();
+
+  it('treats an abandoned claim as stalled once the server reclaim window passes', () => {
+    expect(isPortraitGenerationStalled(version('claimed', '2026-01-01', {
+      generation_token: 'attempt-1',
+      generation_started_at: staleStartedAt,
+    }), nowMs)).toBe(true);
+  });
+
+  it('treats a pending version that never acquired a claim as stalled', () => {
+    expect(isPortraitGenerationStalled(version('pending', '2026-01-01', {
+      illustrated_profile_key: null,
+      illustrated_profile_status: 'pending',
+      updated_at: staleStartedAt,
+    }), nowMs)).toBe(true);
+  });
+
+  it('keeps fresh work and completed unclaimed portraits out of recovery', () => {
+    expect(isPortraitGenerationStalled(version('fresh', '2026-01-01', {
+      generation_token: 'attempt-2',
+      generation_started_at: new Date(nowMs - 60_000).toISOString(),
+    }), nowMs)).toBe(false);
+    expect(isPortraitGenerationStalled(version('ready', '2026-01-01'), nowMs)).toBe(false);
+  });
+});
 
 describe('portrait version resolver', () => {
   it('selects the latest usable portrait on or before the memory date', () => {

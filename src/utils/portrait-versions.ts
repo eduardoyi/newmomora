@@ -12,6 +12,9 @@ export const PORTRAIT_DATE_SOURCES = [
 export type PortraitDateSource = (typeof PORTRAIT_DATE_SOURCES)[number];
 export type PortraitGenerationStatus = 'pending' | 'generating' | 'ready' | 'failed';
 
+/** Must stay aligned with claim_family_member_portrait_generation's reclaim window. */
+export const PORTRAIT_GENERATION_STALE_MS = 15 * 60 * 1000;
+
 export interface FamilyMemberPortraitVersion {
   id: string;
   family_id: string;
@@ -29,6 +32,26 @@ export interface FamilyMemberPortraitVersion {
   deletion_started_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export function isPortraitGenerationStalled(
+  version: Pick<
+    FamilyMemberPortraitVersion,
+    | 'illustrated_profile_status'
+    | 'generation_token'
+    | 'generation_started_at'
+    | 'updated_at'
+  >,
+  nowMs = Date.now(),
+): boolean {
+  const hasActiveClaim = Boolean(version.generation_token);
+  const isWaitingWithoutClaim =
+    !hasActiveClaim && version.illustrated_profile_status === 'pending';
+  if (!hasActiveClaim && !isWaitingWithoutClaim) return false;
+
+  const startedAt = version.generation_started_at ?? version.updated_at;
+  const startedAtMs = Date.parse(startedAt);
+  return Number.isFinite(startedAtMs) && nowMs - startedAtMs > PORTRAIT_GENERATION_STALE_MS;
 }
 
 interface DateTuple {

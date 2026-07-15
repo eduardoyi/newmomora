@@ -19,6 +19,7 @@ import {
 } from '@/utils/family-profile-photo-picker';
 import {
   getLocalTodayIso,
+  isPortraitGenerationStalled,
   resolvePortraitVersion,
 } from '@/utils/portrait-versions';
 import { canEditFamilyContent } from '@/utils/roles';
@@ -94,6 +95,7 @@ export default function PortraitTimelineScreen() {
     createdAt: version.created_at,
     updatedAt: version.updated_at,
     isGenerating: Boolean(version.generation_token) || portraitVersions.retryingVersionId === version.id || portraitVersions.regeneratingVersionId === version.id,
+    isGenerationStalled: isPortraitGenerationStalled(version),
     isDeleting: Boolean(version.deletion_token) || portraitVersions.deletingVersionId === version.id,
   }));
 

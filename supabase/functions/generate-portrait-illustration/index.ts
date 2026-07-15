@@ -29,18 +29,37 @@ export interface GeneratePortraitDependencies {
   getAuthenticatedUser: typeof getAuthenticatedUser;
   createServiceClient: typeof createServiceClient;
   getCallerFamilyRole: typeof getCallerFamilyRole;
+  getObjectBytes: typeof getObjectBytes;
+  capImageMaxEdge: typeof capImageMaxEdge;
+  loadStyleReferenceBytes: typeof loadStyleReferenceBytes;
+  editImageWithReferences: typeof editImageWithReferences;
+  generateImage: typeof generateImage;
+  putObjectBytes: typeof putObjectBytes;
+  deleteObject: typeof deleteObject;
+  generationTimeoutMs: number;
 }
+
+export const PORTRAIT_GENERATION_TIMEOUT_MS = 90_000;
 
 const DEFAULT_DEPENDENCIES: GeneratePortraitDependencies = {
   getAuthenticatedUser,
   createServiceClient,
   getCallerFamilyRole,
+  getObjectBytes,
+  capImageMaxEdge,
+  loadStyleReferenceBytes,
+  editImageWithReferences,
+  generateImage,
+  putObjectBytes,
+  deleteObject,
+  generationTimeoutMs: PORTRAIT_GENERATION_TIMEOUT_MS,
 };
 
 export async function handleGeneratePortraitIllustration(
   req: Request,
-  dependencies: GeneratePortraitDependencies = DEFAULT_DEPENDENCIES,
+  dependencyOverrides: Partial<GeneratePortraitDependencies> = {},
 ): Promise<Response> {
+  const dependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   const corsResponse = handleCors(req);
   if (corsResponse) {
     return corsResponse;
@@ -143,14 +162,19 @@ export async function handleGeneratePortraitIllustration(
   }
 
   if (version.generation_output_key && version.generation_output_key !== portraitKey) {
-    await deleteObject(version.generation_output_key).catch(() => undefined);
+    await dependencies.deleteObject(version.generation_output_key).catch(() => undefined);
   }
 
   let uploadedAttempt = false;
+  const generationController = new AbortController();
+  const generationTimeoutId = setTimeout(
+    () => generationController.abort('Portrait generation deadline exceeded'),
+    dependencies.generationTimeoutMs,
+  );
 
   try {
-    const photoBytes = await getObjectBytes(version.profile_picture_key);
-    const cappedPhoto = await capImageMaxEdge(
+    const photoBytes = await dependencies.getObjectBytes(version.profile_picture_key);
+    const cappedPhoto = await dependencies.capImageMaxEdge(
       photoBytes,
       MAX_PORTRAIT_REFERENCE_EDGE,
       'image/jpeg',
@@ -178,10 +202,10 @@ export async function handleGeneratePortraitIllustration(
       filename: string;
     }> = [];
 
-    const styleReference = await loadStyleReferenceBytes(style.token);
+    const styleReference = await dependencies.loadStyleReferenceBytes(style.token);
 
     if (styleReference) {
-      const cappedStyle = await capImageMaxEdge(
+      const cappedStyle = await dependencies.capImageMaxEdge(
         styleReference.bytes,
         MAX_PORTRAIT_REFERENCE_EDGE,
         styleReference.contentType,
@@ -204,12 +228,16 @@ export async function handleGeneratePortraitIllustration(
     let portraitBytes: Uint8Array;
 
     try {
-      portraitBytes = await editImageWithReferences(prompt, referenceImages);
+      portraitBytes = await dependencies.editImageWithReferences(prompt, referenceImages, {
+        signal: generationController.signal,
+      });
     } catch {
-      portraitBytes = await generateImage(prompt);
+      portraitBytes = await dependencies.generateImage(prompt, {
+        signal: generationController.signal,
+      });
     }
 
-    await putObjectBytes(portraitKey, portraitBytes, 'image/webp');
+    await dependencies.putObjectBytes(portraitKey, portraitBytes, 'image/webp');
     uploadedAttempt = true;
 
     const { error: finishError } = await supabase.rpc('finish_family_member_portrait_generation', {
@@ -230,13 +258,13 @@ export async function handleGeneratePortraitIllustration(
         committedVersion?.illustrated_profile_key !== portraitKey ||
         committedVersion.generation_token !== null
       ) {
-        await deleteObject(portraitKey).catch(() => undefined);
+        await dependencies.deleteObject(portraitKey).catch(() => undefined);
         return errorResponse('Portrait generation claim lost', 409, 'GENERATION_CLAIM_LOST');
       }
     }
 
     if (version.illustrated_profile_key && version.illustrated_profile_key !== portraitKey) {
-      await deleteObject(version.illustrated_profile_key).catch(() => undefined);
+      await dependencies.deleteObject(version.illustrated_profile_key).catch(() => undefined);
     }
 
     const response: GeneratePortraitResponse = {
@@ -256,10 +284,12 @@ export async function handleGeneratePortraitIllustration(
       attempt_token: attemptId,
     });
     if (uploadedAttempt) {
-      await deleteObject(portraitKey).catch(() => undefined);
+      await dependencies.deleteObject(portraitKey).catch(() => undefined);
     }
 
     return errorResponse('Portrait generation failed', 500, 'GENERATION_FAILED');
+  } finally {
+    clearTimeout(generationTimeoutId);
   }
 }
 

@@ -37,6 +37,7 @@ export interface PortraitTimelineVersion {
   createdAt: string;
   updatedAt: string;
   isGenerating?: boolean;
+  isGenerationStalled?: boolean;
   isDeleting?: boolean;
   deletionInterrupted?: boolean;
 }
@@ -132,6 +133,20 @@ function SourceChip({ source }: { source: PortraitDateSource }) {
 }
 
 function PortraitPlaceholder({ version }: { version: PortraitTimelineVersion }) {
+  if (version.isGenerationStalled) {
+    return (
+      <View style={[styles.visual, styles.failedVisual]} testID={`portrait-version-${version.id}-stalled`}>
+        <SymbolView
+          fallback={<Text style={styles.failedFallback}>!</Text>}
+          name={{ ios: 'exclamationmark.triangle', android: 'warning' }}
+          size={25}
+          tintColor={colors.error}
+        />
+        <Text style={styles.failedText}>Generation stalled</Text>
+      </View>
+    );
+  }
+
   const isWorking = version.status === 'pending' || version.status === 'generating';
   if (isWorking) {
     return (
@@ -183,7 +198,10 @@ function VersionCard({
   const age = formatPortraitAge(member.date_of_birth, version.referenceDate);
   const hasPortraitKey = Boolean(version.portraitKey);
   const hasUsablePortrait = Boolean(hasPortraitKey && portraitUri);
-  const isBusy = Boolean(version.isGenerating || version.isDeleting || version.status === 'generating');
+  const isBusy = Boolean(
+    !version.isGenerationStalled &&
+      (version.isGenerating || version.isDeleting || version.status === 'generating'),
+  );
 
   return (
     <View style={styles.card} testID={`portrait-version-${version.id}`}>
@@ -233,9 +251,11 @@ function VersionCard({
                 </View>
               ) : null}
               {version.isGenerating ? (
-                <View style={styles.updatingBadge}>
-                  <ActivityIndicator color={colors.white} size={10} />
-                  <Text style={styles.updatingText}>Updating</Text>
+                <View style={[styles.updatingBadge, version.isGenerationStalled && styles.stalledBadge]}>
+                  {version.isGenerationStalled ? null : <ActivityIndicator color={colors.white} size={10} />}
+                  <Text style={styles.updatingText}>
+                    {version.isGenerationStalled ? 'Update stalled' : 'Updating'}
+                  </Text>
                 </View>
               ) : null}
             </>
@@ -257,6 +277,11 @@ function VersionCard({
           <View style={styles.workingLabel}>
             <ActivityIndicator color={colors.ink3} size="small" />
             <Text style={styles.workingText}>Removing</Text>
+          </View>
+        ) : version.isGenerationStalled ? (
+          <View style={styles.workingLabel} testID={`portrait-version-${version.id}-needs-attention`}>
+            <View style={[styles.workingDot, styles.attentionDot]} />
+            <Text style={styles.workingText}>Needs attention</Text>
           </View>
         ) : isBusy ? (
           <View style={styles.workingLabel}>
@@ -287,7 +312,7 @@ function VersionCard({
         </View>
       ) : null}
 
-      {version.status === 'failed' && canEdit ? (
+      {(version.status === 'failed' || version.isGenerationStalled) && canEdit ? (
         <View style={styles.retryWrap}>
           <Pressable
             accessibilityRole="button"
@@ -819,6 +844,7 @@ const styles = StyleSheet.create({
   currentDot: { backgroundColor: colors.white, borderRadius: 3, height: 5, width: 5 },
   currentBadgeText: { color: colors.white, fontFamily: fonts.sansBold, fontSize: 10.5 },
   updatingBadge: { alignItems: 'center', backgroundColor: 'rgba(44,36,24,0.6)', borderRadius: radius.pill, flexDirection: 'row', gap: 5, left: 8, paddingHorizontal: 8, paddingVertical: 4, position: 'absolute', top: 8 },
+  stalledBadge: { backgroundColor: colors.error },
   updatingText: { color: colors.white, fontFamily: fonts.sansBold, fontSize: 10 },
   infoRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 10, padding: 14 },
   infoCopy: { flex: 1, minWidth: 0 },
@@ -832,6 +858,7 @@ const styles = StyleSheet.create({
   moreFallback: { color: colors.ink2, fontFamily: fonts.sansBold, fontSize: 11 },
   workingLabel: { alignItems: 'center', flexDirection: 'row', gap: 6, paddingTop: 9 },
   workingDot: { backgroundColor: '#F2B441', borderRadius: 3, height: 6, width: 6 },
+  attentionDot: { backgroundColor: colors.error },
   workingText: { color: colors.ink3, fontFamily: fonts.sansBold, fontSize: 11.5 },
   retryWrap: { paddingBottom: 14, paddingHorizontal: 14 },
   retryButton: { alignItems: 'center', backgroundColor: colors.primaryTint, borderColor: '#D63E7844', borderRadius: radius.md, borderWidth: 1, flexDirection: 'row', gap: 8, justifyContent: 'center', paddingVertical: 11 },

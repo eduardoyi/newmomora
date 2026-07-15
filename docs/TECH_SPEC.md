@@ -695,8 +695,11 @@ Generates or regenerates the character portrait for one immutable portrait versi
 5. Resolve style reference from R2 public assets (`momora-public-assets/_assets/styles/{token}.png`); fetch via `R2_PUBLIC_ASSETS_BASE_URL`
 6. Build prompt: age, gender, style description, identity/style reference instructions
 7. Call OpenAI image edit API with person photo + style reference (`gpt-image-2`, fallback `gpt-image-1`)
-8. Upload result under `/portrait/{attemptId}.webp`
-9. Publish only if the token still owns the claim. On regeneration failure, retain the previous ready output and status.
+8. Enforce one 90-second deadline across the primary/fallback image calls so the function still has time to persist a failed attempt before the Edge runtime shuts down
+9. Upload result under `/portrait/{attemptId}.webp`
+10. Publish only if the token still owns the claim. On regeneration failure, retain the previous ready output and status.
+
+The client polls active portrait versions. If a `pending` version or active generation claim is still unresolved after the claim's 15-minute server reclaim window, the client stops treating it as live work and shows a stalled failure state with **Try again**. Retry still goes through this endpoint; the client never clears or overwrites generation claims directly. A retry after the reclaim window atomically replaces the abandoned claim, and the endpoint removes its prior attempt object when known.
 
 **Response**
 
@@ -1210,7 +1213,7 @@ while the DB validates both tag insertion and the `memory_type` transition.
 3. Upload normalized JPEG directly to R2
 4. Call `create_family_member_portrait_version` with the exact key/date/source
 5. Invoke `generate-portrait-illustration(portraitVersionId)`
-6. Poll portrait-version status until ready or failed; onboarding itself is not portrait-ready gated
+6. Poll portrait-version status until ready, failed, or the 15-minute reclaim window identifies an abandoned attempt; stalled attempts expose manual retry
 7. Resolve today's portrait and display it through `get-media-url`
 ```
 

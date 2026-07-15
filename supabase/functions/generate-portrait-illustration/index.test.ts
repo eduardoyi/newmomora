@@ -88,3 +88,80 @@ Deno.test('generate-portrait-illustration rejects a mutable or mismatched source
   assertEquals(response.status, 400);
   assertEquals((await response.json()).code, 'validation_error');
 });
+
+Deno.test('generate-portrait-illustration fails the claimed attempt before its runtime deadline', async () => {
+  const sourceKey = `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/photo.jpg`;
+  const rpcCalls: string[] = [];
+  const rows: Record<string, Record<string, unknown>> = {
+    family_member_portrait_versions: {
+      id: VERSION_ID,
+      family_id: FAMILY_ID,
+      family_member_id: MEMBER_ID,
+      reference_date: '2025-01-01',
+      profile_picture_key: sourceKey,
+      illustrated_profile_key: null,
+      generation_output_key: null,
+    },
+    family_members: {
+      id: MEMBER_ID,
+      family_id: FAMILY_ID,
+      name: 'Lila',
+      date_of_birth: '2024-01-01',
+      gender: null,
+      additional_info: null,
+    },
+    families: { illustration_style: 'default' },
+  };
+  const client = {
+    from(table: string) {
+      const builder = {
+        select: () => builder,
+        eq: () => builder,
+        maybeSingle: async () => ({ data: rows[table], error: null }),
+      };
+      return builder;
+    },
+    rpc: async (name: string) => {
+      rpcCalls.push(name);
+      return { data: rows.family_member_portrait_versions, error: null };
+    },
+  };
+
+  const response = await handleGeneratePortraitIllustration(authenticatedRequest(), {
+    getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+    createServiceClient: () => client as never,
+    getCallerFamilyRole: async () => 'manager',
+    getObjectBytes: async () => new Uint8Array([1, 2, 3]),
+    capImageMaxEdge: async (bytes, _maxEdge, contentType) => ({
+      bytes,
+      contentType,
+      extension: 'jpg',
+    }),
+    loadStyleReferenceBytes: async () => null,
+    editImageWithReferences: async (_prompt, _references, options) => {
+      await new Promise<void>((_resolve, reject) => {
+        const rejectAsAborted = () => reject(new DOMException('Aborted', 'AbortError'));
+        if (options?.signal?.aborted) {
+          rejectAsAborted();
+          return;
+        }
+        options?.signal?.addEventListener('abort', rejectAsAborted, { once: true });
+      });
+      return new Uint8Array();
+    },
+    generateImage: async (_prompt, options) => {
+      assertEquals(options?.signal?.aborted, true);
+      throw new DOMException('Aborted', 'AbortError');
+    },
+    putObjectBytes: async () => undefined,
+    deleteObject: async () => undefined,
+    generationTimeoutMs: 1,
+  });
+
+  assertEquals(response.status, 500);
+  assertEquals((await response.json()).code, 'GENERATION_FAILED');
+  assertEquals(rpcCalls, [
+    'claim_family_member_portrait_generation',
+    'fail_family_member_portrait_generation',
+  ]);
+});

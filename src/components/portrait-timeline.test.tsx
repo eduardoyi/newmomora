@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import {
   PortraitTimeline,
@@ -68,6 +68,14 @@ const failed: PortraitTimelineVersion = {
   updatedAt: '2026-05-20T00:00:00Z',
 };
 
+const stalled: PortraitTimelineVersion = {
+  ...failed,
+  id: 'stalled-1',
+  status: 'generating',
+  isGenerating: true,
+  isGenerationStalled: true,
+};
+
 const baseProps = {
   member,
   versions: [failed, ready],
@@ -115,6 +123,21 @@ describe('PortraitTimeline', () => {
       ready.sourcePhotoKey,
       ready.portraitKey,
     ]);
+  });
+
+  it('turns an abandoned generation into a recoverable stalled state', async () => {
+    const { getByTestId, getByText } = render(
+      <PortraitTimeline {...baseProps} versions={[stalled, ready]} />,
+    );
+
+    expect(getByTestId('portrait-version-stalled-1-stalled')).toBeTruthy();
+    expect(getByTestId('portrait-version-stalled-1-needs-attention')).toBeTruthy();
+    expect(getByText('Generation stalled')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(getByTestId('portrait-version-stalled-1-retry'));
+    });
+    await waitFor(() => expect(baseProps.onRetry).toHaveBeenCalledWith('stalled-1'));
   });
 
   it('uses the date-and-age card as the only date picker trigger', () => {

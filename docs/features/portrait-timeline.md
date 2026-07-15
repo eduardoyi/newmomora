@@ -22,6 +22,7 @@ A family member can have many immutable source-photo/AI-portrait pairs over time
 - Library photos use trustworthy EXIF shutter/digitized dates when present. Otherwise the date starts at the acting user's local today and remains editable. Camera photos use today.
 - Portrait dates cannot predate the member's DOB or exceed the acting user's current local date. Multiple photos on the same date are allowed.
 - A failed or in-progress generation never displaces an older ready portrait. Regeneration keeps the previous output visible until a new attempt succeeds.
+- Image generation has a 90-second server deadline so ordinary OpenAI hangs persist `failed` before the Edge runtime shuts down. If the runtime is terminated too abruptly for cleanup, the client reclassifies the abandoned attempt as stalled after the existing 15-minute claim-reclaim window and exposes **Try again**.
 - There is no automatic “better portrait available” prompt and no automatic regeneration of old memories when portrait history changes.
 - Viewers can see the timeline but cannot mutate it.
 
@@ -89,7 +90,7 @@ The same resolver is used for today's family avatar, portrait-timeline **Current
 |----------------|-------|-------------------------|------|
 | `create_family_member_portrait_version` | version id, member id, date/source, exact source key | Validates family, local date, DOB, and caller-owned key; inserts row | authenticated owner/manager |
 | `update_family_member_portrait_version_date` | version id, date | Validates local date/DOB and changes source to `manual` | authenticated owner/manager |
-| `generate-portrait-illustration` | `{ portraitVersionId }` | Claims attempt, generates, publishes by token, retains prior output on failure | JWT owner/manager |
+| `generate-portrait-illustration` | `{ portraitVersionId }` | Claims attempt, generates within one 90-second image deadline, publishes by token, retains prior output on failure | JWT owner/manager |
 | `delete-portrait-version` | `{ portraitVersionId }` | Claims deletion, removes all version objects, then deletes row | JWT owner/manager |
 | `delete-family-member` | `{ familyMemberId }` | Enumerates legacy and version objects before deleting the member | JWT owner/manager |
 | `get-upload-url` | version photo key, JPEG, family id | Presigns caller-owned source upload | JWT owner/manager |
@@ -132,6 +133,7 @@ The new client may fall back to legacy member columns only during controlled rol
 - Add new visual consumers by loading versions in batches and resolving against that consumer's target date.
 - Preserve immutable source keys and unique output-attempt keys.
 - Keep generation state server-owned. Client timeouts must only refetch; they must never mark attempts failed directly.
+- Keep the client stalled-state threshold aligned with the server claim-reclaim window. The stalled UI may offer retry, but retry must reclaim through `generate-portrait-illustration`; it must not mutate claim columns.
 - Any new storage reference must be added to both owned-family deletion collection and the surviving-reference set used during non-owner account deletion.
 - Date rules belong in the DB/RPC as well as the UI. A client-only DOB or future-date check is insufficient.
 
@@ -143,6 +145,7 @@ The new client may fall back to legacy member columns only during controlled rol
 - Multiple same-day versions are valid and deterministic.
 - A member cannot lose their only version or last usable portrait through version deletion. Whole-member deletion uses a dedicated path that performs storage cleanup before the FK cascade.
 - Generation and deletion claims are service-role-only DB operations after Edge Function JWT/role authorization.
+- A normal image timeout is caught at 90 seconds and persisted as failed. Abrupt runtime termination is the exceptional fallback: after 15 minutes the UI derives a stalled state from `generation_started_at` (or `updated_at` for a never-claimed pending row), stops polling, and offers retry without changing the database itself.
 - Hard-delete account cleanup must retain version objects referenced by surviving shared families, even when those keys live under the deleted user's prefix.
 - Family/member deletion and account-retention sweeps fail closed when storage-reference enumeration fails; database cascades must never proceed from a partial reference set.
 
@@ -156,5 +159,7 @@ The new client may fall back to legacy member columns only during controlled rol
 | Deno | `supabase/functions/_shared/portrait-versions.test.ts`, `generate-portrait-illustration/index.test.ts`, `generate-illustration/index.test.ts`, `delete-portrait-version/index.test.ts`, `delete-family-member/index.test.ts`, `hard-delete-expired-accounts/index.test.ts`, `_shared/storage-keys.test.ts`, `_shared/family-access.test.ts` |
 
 Additional unit coverage lives in `src/utils/family-profile-photo-picker.test.ts`, `src/utils/storage-keys.test.ts`, `src/utils/e2e-fixtures.test.ts`, and `src/components/family-profile-portrait-photo.test.tsx`.
+
+Stalled-generation regression coverage lives in `src/utils/portrait-versions.test.ts`, `src/components/portrait-timeline.test.tsx`, and `supabase/functions/generate-portrait-illustration/index.test.ts` (server deadline → failed claim plus client stalled → retry UX).
 
 Run focused client tests with `npm test -- --runInBand portrait`, Edge tests with `npm run test:edge`, and the device flow with `maestro test .maestro/flows/portraits/view-portrait-timeline.yaml`.

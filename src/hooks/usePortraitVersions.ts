@@ -17,7 +17,10 @@ import {
   updatePortraitVersionDate,
   type CreatePortraitVersionInput,
 } from '@/services/portrait-versions';
-import type { PortraitDateSource } from '@/utils/portrait-versions';
+import {
+  isPortraitGenerationStalled,
+  type PortraitDateSource,
+} from '@/utils/portrait-versions';
 
 function toError(error: unknown, fallback: string): Error {
   if (error instanceof Error) return error;
@@ -50,9 +53,11 @@ export function useFamilyPortraitVersions() {
     refetchInterval: (queryState) => {
       const hasActiveWork = (queryState.state.data ?? []).some(
         (version) =>
-          version.illustrated_profile_status === 'pending' ||
-          version.illustrated_profile_status === 'generating' ||
-          Boolean(version.generation_token) ||
+          (!isPortraitGenerationStalled(version) && (
+            version.illustrated_profile_status === 'pending' ||
+            version.illustrated_profile_status === 'generating' ||
+            Boolean(version.generation_token)
+          )) ||
           Boolean(version.deletion_token),
       );
       return hasActiveWork ? 3000 : false;

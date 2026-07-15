@@ -4,6 +4,10 @@ const PRIMARY_IMAGE_MODEL = 'gpt-image-2';
 const FALLBACK_IMAGE_MODEL = 'gpt-image-1';
 const MODELS_SUPPORTING_INPUT_FIDELITY = new Set([FALLBACK_IMAGE_MODEL]);
 
+export interface OpenAiImageRequestOptions {
+  signal?: AbortSignal;
+}
+
 export { FALLBACK_IMAGE_MODEL, PRIMARY_IMAGE_MODEL };
 
 function getOpenAiKey(): string {
@@ -161,7 +165,11 @@ export async function transcribeAudio(
   return text.trim();
 }
 
-async function generateImageWithModel(prompt: string, model: string): Promise<Uint8Array> {
+async function generateImageWithModel(
+  prompt: string,
+  model: string,
+  options: OpenAiImageRequestOptions = {},
+): Promise<Uint8Array> {
   const response = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST',
     headers: {
@@ -173,6 +181,7 @@ async function generateImageWithModel(prompt: string, model: string): Promise<Ui
       prompt,
       size: '1024x1024',
     }),
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -192,15 +201,18 @@ async function generateImageWithModel(prompt: string, model: string): Promise<Ui
   return base64ToBytes(base64);
 }
 
-export async function generateImage(prompt: string): Promise<Uint8Array> {
+export async function generateImage(
+  prompt: string,
+  options: OpenAiImageRequestOptions = {},
+): Promise<Uint8Array> {
   try {
-    return await generateImageWithModel(prompt, PRIMARY_IMAGE_MODEL);
+    return await generateImageWithModel(prompt, PRIMARY_IMAGE_MODEL, options);
   } catch (primaryError) {
     console.error(
       'OpenAI image generation primary model failed',
       primaryError instanceof Error ? primaryError.message : 'unknown',
     );
-    return await generateImageWithModel(prompt, FALLBACK_IMAGE_MODEL);
+    return await generateImageWithModel(prompt, FALLBACK_IMAGE_MODEL, options);
   }
 }
 
@@ -214,14 +226,16 @@ export async function editImageWithModel(
   prompt: string,
   referenceImages: ReferenceImageInput[],
   model: string,
+  options: OpenAiImageRequestOptions = {},
 ): Promise<Uint8Array | null> {
-  return editImagesWithModel(prompt, referenceImages, model);
+  return editImagesWithModel(prompt, referenceImages, model, options);
 }
 
 async function editImagesWithModel(
   prompt: string,
   referenceImages: ReferenceImageInput[],
   model: string,
+  options: OpenAiImageRequestOptions = {},
 ): Promise<Uint8Array | null> {
   const formData = new FormData();
   formData.append('model', model);
@@ -248,6 +262,7 @@ async function editImagesWithModel(
       Authorization: `Bearer ${getOpenAiKey()}`,
     },
     body: formData,
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -270,29 +285,41 @@ async function editImagesWithModel(
 export async function editImageWithReferences(
   prompt: string,
   referenceImages: ReferenceImageInput[],
+  options: OpenAiImageRequestOptions = {},
 ): Promise<Uint8Array> {
   if (referenceImages.length === 0) {
-    return generateImage(prompt);
+    return generateImage(prompt, options);
   }
 
-  const primaryEdit = await editImagesWithModel(prompt, referenceImages, PRIMARY_IMAGE_MODEL);
+  const primaryEdit = await editImagesWithModel(
+    prompt,
+    referenceImages,
+    PRIMARY_IMAGE_MODEL,
+    options,
+  );
   if (primaryEdit) {
     return primaryEdit;
   }
 
-  const fallbackEdit = await editImagesWithModel(prompt, referenceImages, FALLBACK_IMAGE_MODEL);
+  const fallbackEdit = await editImagesWithModel(
+    prompt,
+    referenceImages,
+    FALLBACK_IMAGE_MODEL,
+    options,
+  );
   if (fallbackEdit) {
     return fallbackEdit;
   }
 
   console.error('OpenAI image edit exhausted; falling back to generation');
-  return generateImage(prompt);
+  return generateImage(prompt, options);
 }
 
 export async function editImageWithReference(
   prompt: string,
   referenceImageBytes: Uint8Array,
   referenceContentType = 'image/webp',
+  options: OpenAiImageRequestOptions = {},
 ): Promise<Uint8Array> {
   return editImageWithReferences(prompt, [
     {
@@ -300,7 +327,7 @@ export async function editImageWithReference(
       contentType: referenceContentType,
       filename: 'reference.webp',
     },
-  ]);
+  ], options);
 }
 
 export function encodeBytesToBase64(bytes: Uint8Array): string {
