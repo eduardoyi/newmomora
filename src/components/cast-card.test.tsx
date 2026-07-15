@@ -37,7 +37,7 @@ describe('CastCard', () => {
 
   it('opens the portrait timeline from the contextual history action', () => {
     const onPortraitTimelinePress = jest.fn();
-    const { getByLabelText, getByTestId } = render(
+    const { getByLabelText, getByTestId, queryByText } = render(
       <CastCard
         member={member}
         onPortraitTimelinePress={onPortraitTimelinePress}
@@ -46,6 +46,7 @@ describe('CastCard', () => {
     );
 
     expect(getByLabelText('Open portrait timeline, 4 portraits')).toBeTruthy();
+    expect(queryByText('4')).toBeNull();
     fireEvent.press(getByTestId('family-member-portrait-history'));
 
     expect(onPortraitTimelinePress).toHaveBeenCalledTimes(1);

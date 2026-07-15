@@ -62,11 +62,6 @@ export function CastCard({
               size={17}
               tintColor={colors.ink}
             />
-            {portraitCount > 0 ? (
-              <View style={styles.historyCount}>
-                <Text style={styles.historyCountText}>{portraitCount}</Text>
-              </View>
-            ) : null}
           </Pressable>
         ) : null}
       </View>
@@ -151,25 +146,5 @@ const styles = StyleSheet.create({
     color: colors.ink,
     fontFamily: fonts.sansBold,
     fontSize: 17,
-  },
-  historyCount: {
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-    borderColor: colors.white,
-    borderRadius: 9,
-    borderWidth: 1.5,
-    height: 18,
-    justifyContent: 'center',
-    minWidth: 18,
-    paddingHorizontal: 4,
-    position: 'absolute',
-    right: -5,
-    top: -5,
-  },
-  historyCountText: {
-    color: colors.white,
-    fontFamily: fonts.sansBold,
-    fontSize: 10,
-    lineHeight: 12,
   },
 });
