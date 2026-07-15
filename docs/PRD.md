@@ -242,7 +242,7 @@ Memories support three formats, derived from what the user provides — no upfro
 - Optional: tagged family members (multi-select, no global maximum). AI-illustrated memories support at most **6 tagged members**; text-only and media memories may tag the full family roster.
 - **Plain text only** — line breaks for paragraphs; no bold, italic, or rich text
 - Photo attachment: JPEG, HEIC, PNG, or WEBP; ≤ 20 MB
-- Video attachment: MP4 or MOV; ≤ 60 seconds duration; client validates duration before upload
+- Video attachment: MP4 or MOV; ≤ 3 minutes duration; client validates duration before upload
 - Up to **10 media assets per memory**; photos and videos can be mixed and reordered
 - Explicit Save required (autosave draft optional enhancement)
 - Edit and delete with confirmation dialog

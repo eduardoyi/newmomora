@@ -144,3 +144,51 @@ existing `-preview` key), pattern validation rejection.
 Video thumbnails (already exist), re-generating previews if size constants change
 later (would need a `--force` mode; not planned), any Cloudflare read-time
 transforms.
+
+## 7. Video-poster extension (added 2026-07-15)
+
+The upload-time preview feature this plan backfills was extended to videos:
+new video uploads now generate a first-frame poster JPEG at upload time,
+stored in the same `memory_media.preview_object_key` column and same
+`{mediaAssetId}-preview.jpg` key pattern as photo previews (see
+`docs/features/media-memories.md`'s "Video posters" architecture bullet). No
+schema change was needed — neither the column nor the
+`replace_memory_media_assets` RPC was ever gated to a content type.
+
+Legacy video rows (created before this shipped) get their own backfill
+script, `supabase/scripts/backfill-video-posters.ts` — same conventions as
+`backfill-media-previews.ts` (dry-run default, `--apply`/`--limit`/
+`--memory-id`/`--concurrency`/`--verify`, `IS NULL` update guard, one retry,
+byte report), reusing `deriveMediaPreviewKey` from that script directly
+(imported, not copied) so a backfilled key is byte-identical to what the
+client would have produced. It differs from the photo script in two ways:
+
+1. **No image-processing library** — Deno has no equivalent to `sharp` for
+   video. The script shells out to a local `ffmpeg` binary instead (mirrors
+   `backfill-media-aspect-ratios.ts`'s existing `ffprobe` shell-out
+   precedent), reading the presigned R2 GET URL directly as ffmpeg's input
+   (no download step) and piping a single scaled JPEG frame to stdout in one
+   command (`-vframes 1`, autorotate default, `scale='min(iw,1280)':'min(ih,1280)':force_original_aspect_ratio=decrease`,
+   `-q:v 3`, `-f image2pipe -vcodec mjpeg`). The `min(iw,N)`/`min(ih,N)` box
+   (rather than a fixed `N:N` box) is deliberate: a fixed box with
+   `force_original_aspect_ratio=decrease` still upscales a source smaller
+   than the box, verified empirically while building the script.
+2. **No skip-small decision** — unlike `decidePreviewResize`, there is no
+   "leave `preview_object_key` null because the source is already small"
+   case. A video has no acceptable full-quality fallback for a list
+   thumbnail the way a photo original does; skipping would just mean
+   permanently paying the runtime `useVideoThumbnail` extraction cost for
+   every small video. Every candidate row gets a poster whenever ffmpeg can
+   extract one.
+
+Local testing used a synthetic `ffmpeg -f lavfi -i testsrc=...` video served
+over a local HTTP server (no production data touched) to validate the exact
+`ffmpeg` invocation the script builds — confirmed it (a) never upscales a
+source already under 1280px, (b) correctly downscales larger sources
+preserving aspect ratio, and (c) reads a remote HTTP(S) URL directly the same
+way it will read a presigned R2 URL in production.
+
+**Status:** written and unit-tested; **not yet run against production** (no
+dry-run/apply pass has been executed — that is a separate, deliberate step
+for whoever operates the backfill, same as the photo pass was before its
+2026-07-15 production run documented above).

@@ -176,7 +176,7 @@ export function MemoryMediaPicker({
         orderedSelection: true,
         allowsEditing: false,
         quality: 0.85,
-        videoMaxDuration: 60,
+        videoMaxDuration: 180,
         exif: includeCaptureDate,
       });
 

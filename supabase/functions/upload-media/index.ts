@@ -12,6 +12,11 @@ export interface UploadMediaResponse {
 }
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+// Server-side authoritative cap for non-image uploads (i.e. compressed
+// videos). Must match MAX_VIDEO_BYTES in src/utils/media-validation.ts,
+// the client's post-compression/upload cap enforced before the PUT in
+// src/services/memory-posting.ts. Kept in sync by hand -- Deno edge
+// functions can't import from src/ -- so change both together.
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 function parseContentLength(value: string | null): number | null {

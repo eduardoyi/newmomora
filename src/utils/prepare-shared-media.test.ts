@@ -45,8 +45,8 @@ it('converts shared photos and videos into composer attachments', async () => {
   });
 });
 
-it('rejects a shared video longer than 60 seconds', async () => {
-  dependencies.getVideoDurationMs.mockResolvedValueOnce(60_001);
+it('rejects a shared video longer than 3 minutes', async () => {
+  dependencies.getVideoDurationMs.mockResolvedValueOnce(180_001);
 
   const result = await prepareSharedMedia([
     payload({
@@ -57,7 +57,22 @@ it('rejects a shared video longer than 60 seconds', async () => {
     }),
   ], dependencies);
 
-  expect(result).toEqual({ attachments: [], errorMessage: 'Videos must be 60 seconds or shorter.' });
+  expect(result).toEqual({ attachments: [], errorMessage: 'Videos must be 3 minutes or shorter.' });
+});
+
+it('accepts a shared video source file well over the old 100MB pick-time cap (share-sheet intake shares media-validation constants)', async () => {
+  const result = await prepareSharedMedia([
+    payload({
+      shareType: 'video',
+      mimeType: 'video/mp4',
+      contentType: 'video',
+      contentMimeType: 'video/mp4',
+      contentSize: 150 * 1024 * 1024,
+    }),
+  ], dependencies);
+
+  expect(result.errorMessage).toBeNull();
+  expect(result.attachments).toHaveLength(1);
 });
 
 it('keeps the first 10 supported items and explains the limit', async () => {

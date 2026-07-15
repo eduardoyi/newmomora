@@ -17,6 +17,7 @@
     "eval:illustration": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-illustration.ts",
     "regenerate:illustrations": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/regenerate-illustrations.ts",
     "backfill:previews": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-media-previews.ts",
+    "backfill:video-posters": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-video-posters.ts",
     "test:e2e:family-fixture": "maestro test .maestro/flows/onboarding/add-family-member-with-fixture.yaml",
     "test:e2e:family-picker": "maestro test .maestro/flows/onboarding/add-family-member-with-picker.yaml"
   },

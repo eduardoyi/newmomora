@@ -3,7 +3,9 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { createMediaMemory } from '@/services/memories';
 import { deleteStorageObject, uploadMediaObject } from '@/services/media';
 import { postMediaMemory, uploadMemoryMediaAssets } from '@/services/memory-posting';
-import { getVideoAspectRatio } from '@/utils/video-aspect-ratio';
+import { getLocalFileSizeBytes } from '@/utils/local-files';
+import { MAX_VIDEO_BYTES } from '@/utils/media-validation';
+import { getVideoFrame } from '@/utils/video-aspect-ratio';
 
 jest.mock('@/services/memories', () => ({
   createMediaMemory: jest.fn(),
@@ -19,7 +21,14 @@ jest.mock('@/services/ai', () => ({
 }));
 
 jest.mock('@/utils/video-aspect-ratio', () => ({
-  getVideoAspectRatio: jest.fn(async () => null),
+  getVideoFrame: jest.fn(async () => null),
+}));
+
+// Default: well within MAX_VIDEO_BYTES so existing video-asset tests that
+// don't care about the post-compression size check keep passing unchanged.
+// Individual tests override this to exercise the cap itself.
+jest.mock('@/utils/local-files', () => ({
+  getLocalFileSizeBytes: jest.fn(async () => 5 * 1024 * 1024),
 }));
 
 const mockedCreateMediaMemory = createMediaMemory as jest.MockedFunction<typeof createMediaMemory>;
@@ -28,8 +37,9 @@ const mockedDeleteStorageObject = deleteStorageObject as jest.MockedFunction<typ
 const mockedManipulateAsync = ImageManipulator.manipulateAsync as jest.MockedFunction<
   typeof ImageManipulator.manipulateAsync
 >;
-const mockedGetVideoAspectRatio = getVideoAspectRatio as jest.MockedFunction<
-  typeof getVideoAspectRatio
+const mockedGetVideoFrame = getVideoFrame as jest.MockedFunction<typeof getVideoFrame>;
+const mockedGetLocalFileSizeBytes = getLocalFileSizeBytes as jest.MockedFunction<
+  typeof getLocalFileSizeBytes
 >;
 
 const baseInput = {
@@ -152,10 +162,220 @@ describe('uploadMemoryMediaAssets', () => {
     });
 
     expect(mockedManipulateAsync).not.toHaveBeenCalled();
-    // Videos never get a preview (C3: "Videos: skip -- they already have
-    // compression + thumbnails").
+    // getVideoFrame is mocked to null by default here (no frame extracted),
+    // so no poster can be generated -- previewObjectKey stays null and the
+    // carousel falls back to runtime extraction.
     expect(asset.previewObjectKey).toBeNull();
     expect(mockedUploadMediaObject).toHaveBeenCalledTimes(1);
+  });
+
+  describe('video poster generation (upload-time first-frame poster)', () => {
+    const POSTER_ASSET_ID = '44444444-4444-4444-8444-444444444444';
+
+    it('generates and uploads a poster from the single frame grab, recording previewObjectKey', async () => {
+      mockedGetVideoFrame.mockResolvedValueOnce({
+        uri: 'file:///frame.jpg',
+        width: 1920,
+        height: 1080,
+      });
+      mockedManipulateAsync.mockResolvedValueOnce({
+        uri: 'poster:file:///frame.jpg',
+        width: 1280,
+        height: 720,
+      });
+      mockedUploadMediaObject
+        .mockResolvedValueOnce({ data: { objectKey: 'key', success: true }, error: null })
+        .mockResolvedValueOnce({ data: { objectKey: 'key', success: true }, error: null });
+
+      const uploadedKeys: string[] = [];
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [
+          { fileUri: 'file:///clip.mp4', contentType: 'video/mp4', mediaAssetId: POSTER_ASSET_ID },
+        ],
+        uploadedKeys,
+      });
+
+      const expectedPosterKey = `user-1/memories/memory-1/media/${POSTER_ASSET_ID}-preview.jpg`;
+
+      // Only one frame grab for both the aspect ratio and the poster.
+      expect(mockedGetVideoFrame).toHaveBeenCalledTimes(1);
+      expect(mockedGetVideoFrame).toHaveBeenCalledWith('file:///clip.mp4');
+      expect(asset.aspectRatio).toBe(1920 / 1080);
+
+      expect(mockedUploadMediaObject).toHaveBeenCalledTimes(2);
+      expect(mockedUploadMediaObject.mock.calls[1]?.[0]).toBe(expectedPosterKey);
+      expect(mockedUploadMediaObject.mock.calls[1]?.[1]).toBe('poster:file:///frame.jpg');
+      expect(mockedUploadMediaObject.mock.calls[1]?.[2]).toBe('image/jpeg');
+      expect(asset.previewObjectKey).toBe(expectedPosterKey);
+      expect(uploadedKeys).toContain(expectedPosterKey);
+    });
+
+    it('still produces a poster when the extracted frame is already small (no no-upscale skip for video)', async () => {
+      mockedGetVideoFrame.mockResolvedValueOnce({
+        uri: 'file:///frame.jpg',
+        width: 640,
+        height: 480,
+      });
+      mockedManipulateAsync.mockResolvedValueOnce({
+        uri: 'poster:file:///frame.jpg',
+        width: 640,
+        height: 480,
+      });
+
+      const uploadedKeys: string[] = [];
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///clip.mp4', contentType: 'video/mp4' }],
+        uploadedKeys,
+      });
+
+      expect(mockedManipulateAsync).toHaveBeenCalledWith('file:///frame.jpg', [], expect.any(Object));
+      expect(asset.previewObjectKey).not.toBeNull();
+      expect(mockedUploadMediaObject).toHaveBeenCalledTimes(2);
+    });
+
+    it('never attempts a poster when no frame could be extracted', async () => {
+      mockedGetVideoFrame.mockResolvedValueOnce(null);
+      const uploadedKeys: string[] = [];
+
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///clip.mp4', contentType: 'video/mp4' }],
+        uploadedKeys,
+      });
+
+      expect(mockedManipulateAsync).not.toHaveBeenCalled();
+      expect(asset.previewObjectKey).toBeNull();
+      expect(mockedUploadMediaObject).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails open when poster generation fails: original video upload still succeeds with previewObjectKey null', async () => {
+      mockedGetVideoFrame.mockResolvedValueOnce({
+        uri: 'file:///frame.jpg',
+        width: 1920,
+        height: 1080,
+      });
+      mockedManipulateAsync.mockRejectedValueOnce(new Error('poster manipulator unavailable'));
+
+      const uploadedKeys: string[] = [];
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///clip.mp4', contentType: 'video/mp4' }],
+        uploadedKeys,
+      });
+
+      expect(asset.previewObjectKey).toBeNull();
+      expect(mockedUploadMediaObject).toHaveBeenCalledTimes(1);
+      expect(uploadedKeys).toHaveLength(1);
+    });
+
+    it('fails open when the poster upload fails: falls back to previewObjectKey null', async () => {
+      mockedGetVideoFrame.mockResolvedValueOnce({
+        uri: 'file:///frame.jpg',
+        width: 1920,
+        height: 1080,
+      });
+      mockedManipulateAsync.mockResolvedValueOnce({
+        uri: 'poster:file:///frame.jpg',
+        width: 1280,
+        height: 720,
+      });
+      mockedUploadMediaObject
+        .mockResolvedValueOnce({ data: { objectKey: 'key', success: true }, error: null })
+        .mockResolvedValueOnce({ data: null, error: { message: 'poster upload failed' } });
+
+      const uploadedKeys: string[] = [];
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///clip.mp4', contentType: 'video/mp4' }],
+        uploadedKeys,
+      });
+
+      expect(asset.previewObjectKey).toBeNull();
+      expect(uploadedKeys).toHaveLength(1);
+    });
+  });
+
+  describe('post-compression size cap (video)', () => {
+    afterEach(() => {
+      mockedGetLocalFileSizeBytes.mockResolvedValue(5 * 1024 * 1024);
+    });
+
+    it('uploads a compressed video that fits MAX_VIDEO_BYTES', async () => {
+      mockedGetLocalFileSizeBytes.mockResolvedValue(MAX_VIDEO_BYTES);
+      const uploadedKeys: string[] = [];
+
+      const [asset] = await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///clip.mp4', contentType: 'video/mp4' }],
+        uploadedKeys,
+      });
+
+      expect(asset.objectKey).toMatch(/\.mp4$/);
+      expect(mockedUploadMediaObject).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails the asset and does not upload when the compressed output exceeds MAX_VIDEO_BYTES', async () => {
+      mockedGetLocalFileSizeBytes.mockResolvedValue(MAX_VIDEO_BYTES + 1);
+      const uploadedKeys: string[] = [];
+
+      await expect(
+        uploadMemoryMediaAssets({
+          userId: 'user-1',
+          familyId: 'family-1',
+          memoryId: 'memory-1',
+          assets: [{ fileUri: 'file:///clip.mp4', contentType: 'video/mp4' }],
+          uploadedKeys,
+        }),
+      ).rejects.toThrow(/too large/i);
+
+      expect(mockedUploadMediaObject).not.toHaveBeenCalled();
+      expect(uploadedKeys).toHaveLength(0);
+    });
+
+    it('fails the asset when the compressed output size cannot be determined', async () => {
+      mockedGetLocalFileSizeBytes.mockResolvedValue(null);
+      const uploadedKeys: string[] = [];
+
+      await expect(
+        uploadMemoryMediaAssets({
+          userId: 'user-1',
+          familyId: 'family-1',
+          memoryId: 'memory-1',
+          assets: [{ fileUri: 'file:///clip.mp4', contentType: 'video/mp4' }],
+          uploadedKeys,
+        }),
+      ).rejects.toThrow(/too large/i);
+
+      expect(mockedUploadMediaObject).not.toHaveBeenCalled();
+    });
+
+    it('never checks video size for image assets', async () => {
+      const uploadedKeys: string[] = [];
+
+      await uploadMemoryMediaAssets({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-1',
+        assets: [{ fileUri: 'file:///photo.jpg', contentType: 'image/jpeg' }],
+        uploadedKeys,
+      });
+
+      expect(mockedGetLocalFileSizeBytes).not.toHaveBeenCalled();
+    });
   });
 
   describe('image preview generation (Workstream C3/C4)', () => {
@@ -275,7 +495,11 @@ describe('uploadMemoryMediaAssets', () => {
   });
 
   it('persists a transformed video-frame aspect ratio with the uploaded asset', async () => {
-    mockedGetVideoAspectRatio.mockResolvedValueOnce(9 / 16);
+    mockedGetVideoFrame.mockResolvedValueOnce({
+      uri: 'file:///frame.jpg',
+      width: 1080,
+      height: 1920,
+    });
     const uploadedKeys: string[] = [];
 
     const [asset] = await uploadMemoryMediaAssets({
@@ -286,7 +510,7 @@ describe('uploadMemoryMediaAssets', () => {
       uploadedKeys,
     });
 
-    expect(mockedGetVideoAspectRatio).toHaveBeenCalledWith('file:///portrait.mp4');
+    expect(mockedGetVideoFrame).toHaveBeenCalledWith('file:///portrait.mp4');
     expect(asset.aspectRatio).toBe(9 / 16);
   });
 
@@ -379,5 +603,32 @@ describe('postMediaMemory', () => {
 
     expect(mockedCreateMediaMemory).not.toHaveBeenCalled();
     expect(mockedDeleteStorageObject).toHaveBeenCalledTimes(1);
+  });
+
+  it('rolls back completed uploads when a video exceeds the post-compression cap, so the queue can surface a Retry/Discard error', async () => {
+    // Only the video asset calls getLocalFileSizeBytes (image assets never
+    // do -- see "never checks video size for image assets" above).
+    mockedGetLocalFileSizeBytes.mockResolvedValueOnce(MAX_VIDEO_BYTES + 1);
+
+    await expect(
+      postMediaMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        input: {
+          ...baseInput,
+          mediaAssets: [
+            { fileUri: 'file:///a.jpg', contentType: 'image/jpeg' },
+            { fileUri: 'file:///clip.mp4', contentType: 'video/mp4' },
+          ],
+        },
+      }),
+    ).rejects.toThrow(/too large/i);
+
+    expect(mockedCreateMediaMemory).not.toHaveBeenCalled();
+    // The image upload that already completed must be rolled back even
+    // though the failure came from the size check, not uploadMediaObject.
+    expect(mockedDeleteStorageObject).toHaveBeenCalledTimes(1);
+
+    mockedGetLocalFileSizeBytes.mockResolvedValue(5 * 1024 * 1024);
   });
 });

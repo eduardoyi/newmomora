@@ -625,7 +625,7 @@ Presigned PUT for direct client → R2 upload.
 - Reject `objectKey` not matching any allowed pattern (still caller-prefix-scoped)
 - Reject `contentType` not in the allowed set for the matched pattern
 - Reject if `familyId` missing or caller isn't owner/manager of that family (`403 forbidden`)
-- Client is responsible for enforcing video duration ≤ 60 seconds, video size ≤ 100 MB, and image size ≤ 20 MB before upload
+- Client is responsible for enforcing video duration ≤ 3 minutes and raw source size ≤ 2 GB (pick-time sanity cap) before compression, video size ≤ 100 MB after compression (the same cap this function/`upload-media` enforce server-side), and image size ≤ 20 MB before upload — see [docs/features/media-memories.md](./features/media-memories.md#constraints--gotchas) for the full pipeline
 
 **Response:** `{ uploadUrl, objectKey, expiresIn }`
 
@@ -1237,7 +1237,7 @@ close-up viewing. See
 
 ```
 1. User picks up to 10 photos/videos from camera roll, or repeatedly captures photos with the camera
-2. Client validates each asset: image ≤ 20 MB; video duration ≤ 60 seconds (read metadata before upload)
+2. Client validates each asset: image ≤ 20 MB; video duration ≤ 3 minutes and raw source size ≤ 2 GB (read metadata before upload; the 2 GB check is a pick-time sanity cap on the original, not the post-compression upload cap — see media-memories.md)
 3. Client generates memoryId (UUID)
 4. Client generates one mediaAssetId per asset
 5. For videos, compress first and extract a transformed frame to derive the display `aspectRatio` (rotation metadata applied); images use their re-encoded output dimensions

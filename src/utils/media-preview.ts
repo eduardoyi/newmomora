@@ -40,3 +40,24 @@ export function resolvePreferredCoverKey(
   }
   return legacyMediaKey;
 }
+
+/**
+ * Resolves a VIDEO asset's stored poster key (a first-frame JPEG generated
+ * at upload time, see createVideoPosterForUpload/getVideoFrame in
+ * src/utils/create-image-preview.ts and src/services/memory-posting.ts),
+ * for use anywhere a paused/inactive video thumbnail is shown: timeline
+ * MemoryCard (via MemoryMediaCarousel), calendar MemoryStamp, and the family
+ * member profile's MemoryThumb.
+ *
+ * Deliberately separate from resolveMediaDisplayKey/resolvePreferredCoverKey:
+ * a video's actual playback source must always stay `object_key` (a poster
+ * is a JPEG, not a playable video), so this never substitutes for the
+ * display/source key -- callers fetch this key ADDITIONALLY, purely for the
+ * thumbnail affordance, and fall back to runtime extraction
+ * (useVideoThumbnail against the real video URL) when it's null: a legacy
+ * row predating this feature, a row not yet covered by
+ * backfill-video-posters.ts, or a failed upload-time poster (fail-open).
+ */
+export function resolveVideoPosterKey(asset: MediaAssetKeyPair | undefined): string | null {
+  return asset?.preview_object_key ?? null;
+}

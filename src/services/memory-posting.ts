@@ -1,11 +1,17 @@
 import { notifyFamilyActivity } from '@/services/ai';
 import { deleteStorageObject, uploadMediaObject } from '@/services/media';
 import { createMediaMemory, type MemoryWithTags } from '@/services/memories';
-import { createImagePreviewForUpload } from '@/utils/create-image-preview';
-import { getMediaExtensionFromContentType, isVideoContentType } from '@/utils/media-validation';
+import { createImagePreviewForUpload, createVideoPosterForUpload } from '@/utils/create-image-preview';
+import { getLocalFileSizeBytes } from '@/utils/local-files';
+import { aspectRatioFromDimensions } from '@/utils/media-aspect';
+import {
+  getMediaExtensionFromContentType,
+  isVideoContentType,
+  MAX_VIDEO_BYTES,
+} from '@/utils/media-validation';
 import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
 import { stripImageMetadataForUpload } from '@/utils/strip-image-metadata';
-import { getVideoAspectRatio } from '@/utils/video-aspect-ratio';
+import { getVideoFrame } from '@/utils/video-aspect-ratio';
 import { compressVideoForUpload } from '@/utils/video-compression';
 
 const MEDIA_UPLOAD_CONCURRENCY = 3;
@@ -35,10 +41,13 @@ export interface UploadedMemoryMediaAsset {
   durationMs: number | null;
   aspectRatio: number | null;
   /**
-   * Derived bandwidth-friendly preview key (images only, longest edge
-   * capped, see createImagePreviewForUpload), or `null` for videos, assets
-   * already at/under the cap (no-upscale guard), or a failed preview
-   * generation/upload (fail-open -- never fails the memory post).
+   * Derived bandwidth-friendly preview key: a resized JPEG for photos
+   * (createImagePreviewForUpload, longest edge capped, `null` when already
+   * at/under the cap -- no-upscale guard) or a first-frame poster JPEG for
+   * videos (createVideoPosterForUpload, always generated when a frame could
+   * be extracted). `null` for a failed preview/poster generation or upload
+   * (fail-open -- never fails the memory post) or a video whose frame could
+   * not be extracted at all.
    */
   previewObjectKey: string | null;
 }
@@ -65,6 +74,25 @@ function createUuid(): string {
 
 function getStorageMediaAssetId(mediaAssetId?: string): string {
   return mediaAssetId && UUID_PATTERN.test(mediaAssetId) ? mediaAssetId : createUuid();
+}
+
+/**
+ * Authoritative post-compression size check. compressVideoForUpload already
+ * fails the asset when it can't produce something within MAX_VIDEO_BYTES
+ * from a fallback (see video-compression.ts), but this is the backstop for
+ * the normal path too: react-native-compressor's 'auto' mode caps bitrate
+ * well under the limit in practice, but this must not silently trust that --
+ * an unusually long/high-motion clip that compresses over the cap has to
+ * fail the asset here, before the PUT, rather than let the server's own
+ * MAX_UPLOAD_BYTES (supabase/functions/upload-media/index.ts) reject it with
+ * a less actionable error.
+ */
+async function assertVideoWithinUploadCap(fileUri: string): Promise<void> {
+  const sizeBytes = await getLocalFileSizeBytes(fileUri);
+
+  if (sizeBytes == null || sizeBytes > MAX_VIDEO_BYTES) {
+    throw new Error('This video is too large to upload after compression. Try a shorter clip.');
+  }
 }
 
 export function hasImageMediaAsset(assets: { contentType: string }[]): boolean {
@@ -154,12 +182,20 @@ export async function uploadMemoryMediaAssets(params: {
     }
 
     // Videos are transcoded to ~720p H.264 MP4 on-device before upload
-    // (best-effort; falls back to the original file), so the content type
-    // and extension may differ from the picked asset.
+    // (falls back to the original file only when it already fits the
+    // upload cap -- see video-compression.ts), so the content type and
+    // extension may differ from the picked asset.
     const compressed = await compressVideoForUpload({
       fileUri: asset.fileUri,
       contentType: asset.contentType,
     });
+
+    // Post-compression enforcement: the result (transcoded or fallback)
+    // must fit MAX_VIDEO_BYTES before we spend a PUT on it. See
+    // assertVideoWithinUploadCap above.
+    if (isVideoContentType(compressed.contentType)) {
+      await assertVideoWithinUploadCap(compressed.fileUri);
+    }
 
     // Images are re-encoded to strip EXIF/GPS/device metadata before
     // upload (privacy control -- see strip-image-metadata.ts); videos pass
@@ -173,8 +209,16 @@ export async function uploadMemoryMediaAssets(params: {
       throw new Error('Unsupported file type');
     }
 
-    const aspectRatio = isVideoContentType(upload.contentType)
-      ? await getVideoAspectRatio(upload.fileUri) ?? asset.aspectRatio ?? null
+    const isVideo = isVideoContentType(upload.contentType);
+
+    // Single frame grab for videos: video-aspect-ratio.ts's getVideoFrame is
+    // used for BOTH the persisted aspect ratio and the upload-time poster
+    // below, so a video asset only pays for one native frame decode, not
+    // two (see that function's doc comment).
+    const videoFrame = isVideo ? await getVideoFrame(upload.fileUri) : null;
+
+    const aspectRatio = isVideo
+      ? aspectRatioFromDimensions(videoFrame?.width, videoFrame?.height) ?? asset.aspectRatio ?? null
       : upload.aspectRatio ?? asset.aspectRatio ?? null;
 
     const mediaAssetId = getStorageMediaAssetId(asset.mediaAssetId);
@@ -192,20 +236,43 @@ export async function uploadMemoryMediaAssets(params: {
 
     uploadedKeys.push(mediaKey);
 
-    // Preview generation/upload (Workstream C3/C4): images only, fail-open.
-    // A failure here must never fail the memory post -- falls back to
-    // `previewObjectKey: null`, and list surfaces render the original (C6).
+    // Preview/poster generation+upload: fail-open for both media kinds. A
+    // failure here must never fail the memory post -- falls back to
+    // `previewObjectKey: null`. Photos fall back to rendering the original
+    // (C6); videos fall back to runtime first-frame extraction
+    // (useVideoThumbnail).
     let previewObjectKey: string | null = null;
-    if (!isVideoContentType(upload.contentType)) {
-      previewObjectKey = await uploadImagePreviewForAsset({
+    if (isVideo) {
+      if (videoFrame) {
+        previewObjectKey = await uploadDerivedPreviewAsset({
+          userId,
+          familyId,
+          memoryId,
+          mediaAssetId,
+          uploadedKeys,
+          warningContext: 'Video poster',
+          generatePreview: () =>
+            createVideoPosterForUpload({
+              fileUri: videoFrame.uri,
+              width: videoFrame.width,
+              height: videoFrame.height,
+            }),
+        });
+      }
+    } else {
+      previewObjectKey = await uploadDerivedPreviewAsset({
         userId,
         familyId,
         memoryId,
         mediaAssetId,
-        fileUri: upload.fileUri,
-        width: upload.width,
-        height: upload.height,
         uploadedKeys,
+        warningContext: 'Preview',
+        generatePreview: () =>
+          createImagePreviewForUpload({
+            fileUri: upload.fileUri,
+            width: upload.width,
+            height: upload.height,
+          }),
       });
     }
 
@@ -224,31 +291,37 @@ export async function uploadMemoryMediaAssets(params: {
 }
 
 /**
- * Generates and uploads a derived preview for one image asset
- * (`{mediaAssetId}-preview.jpg`, same directory as the original -- verified
- * against `MEMORY_MEDIA_ASSET_EXTENSION_PATTERN` in
+ * Generates and uploads a derived `{mediaAssetId}-preview.jpg` asset (same
+ * directory as the original -- verified against
+ * `MEMORY_MEDIA_ASSET_EXTENSION_PATTERN` in
  * supabase/functions/_shared/storage-keys.ts, which permits hyphens in the
- * asset-id segment). Fail-open: any failure (generation or upload) is
- * swallowed and returns `null` rather than throwing, since a missing preview
- * is a rendering fallback, not a data-loss risk. A successful preview upload
- * is still pushed onto `uploadedKeys` so a later failure elsewhere in the
- * post rolls it back like any other uploaded object.
+ * asset-id segment). Shared by both derived-preview kinds:
+ *  - photos: `generatePreview` is `createImagePreviewForUpload`, which can
+ *    return `null` (no-upscale guard) -- this function passes that through.
+ *  - videos: `generatePreview` is `createVideoPosterForUpload`, which never
+ *    returns `null` (see that function's doc comment).
+ *
+ * Fail-open: any failure (generation or upload) is swallowed and returns
+ * `null` rather than throwing, since a missing preview/poster is a
+ * rendering fallback (original image, or runtime video-frame extraction),
+ * not a data-loss risk. A successful upload is still pushed onto
+ * `uploadedKeys` so a later failure elsewhere in the post rolls it back like
+ * any other uploaded object.
  */
-async function uploadImagePreviewForAsset(params: {
+async function uploadDerivedPreviewAsset(params: {
   userId: string;
   familyId: string;
   memoryId: string;
   mediaAssetId: string;
-  fileUri: string;
-  width?: number | null;
-  height?: number | null;
   uploadedKeys: string[];
+  warningContext: string;
+  generatePreview: () => Promise<{ fileUri: string; contentType: 'image/jpeg' } | null>;
 }): Promise<string | null> {
-  const { userId, familyId, memoryId, mediaAssetId, fileUri, width, height, uploadedKeys } =
+  const { userId, familyId, memoryId, mediaAssetId, uploadedKeys, warningContext, generatePreview } =
     params;
 
   try {
-    const preview = await createImagePreviewForUpload({ fileUri, width, height });
+    const preview = await generatePreview();
     if (!preview) {
       return null;
     }
@@ -262,7 +335,7 @@ async function uploadImagePreviewForAsset(params: {
     );
 
     if (error) {
-      console.warn('Preview upload failed; falling back to the original image', error.message);
+      console.warn(`${warningContext} upload failed; falling back`, error.message);
       return null;
     }
 
@@ -270,7 +343,7 @@ async function uploadImagePreviewForAsset(params: {
     return previewKey;
   } catch (error) {
     console.warn(
-      'Preview generation failed; falling back to the original image',
+      `${warningContext} generation failed; falling back`,
       error instanceof Error ? error.message : 'unknown',
     );
     return null;

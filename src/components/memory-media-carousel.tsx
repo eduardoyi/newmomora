@@ -24,7 +24,7 @@ import {
   DEFAULT_MEDIA_ASPECT_RATIO,
   aspectRatioFromDimensions,
 } from '@/utils/media-aspect';
-import { resolveMediaDisplayKey } from '@/utils/media-preview';
+import { resolveMediaDisplayKey, resolveVideoPosterKey } from '@/utils/media-preview';
 import { isVideoContentType } from '@/utils/media-validation';
 
 interface MemoryMediaCarouselProps {
@@ -40,6 +40,9 @@ interface MemoryMediaCarouselProps {
    * List-view surfaces (Workstream C6) request the derived preview key when
    * present, falling back to the original. Detail/full-screen callers must
    * leave this false (default) to always render the untouched original.
+   * Photos only -- video posters (paused/inactive thumbnail) are always
+   * preferred when present regardless of this flag; a video's playback
+   * source always stays its own object_key. See resolveVideoPosterKey.
    */
   preferPreview?: boolean;
 }
@@ -169,6 +172,7 @@ function MediaPage({
   onNaturalRatio,
   onUrlError,
   url,
+  posterUrl,
   shouldLoadVideoThumbnail,
   shouldMeasureNaturalRatio,
 }: {
@@ -180,19 +184,28 @@ function MediaPage({
   onNaturalRatio: (objectKey: string, ratio: number) => void;
   onUrlError: () => void;
   url?: string;
+  posterUrl?: string;
   shouldLoadVideoThumbnail: boolean;
   shouldMeasureNaturalRatio: boolean;
 }) {
   const isVideo = isVideoContentType(asset.content_type);
   const [hasRenderedFirstFrame, setHasRenderedFirstFrame] = useState(false);
+  // A stored poster (upload-time first frame, see resolveVideoPosterKey)
+  // covers the paused/inactive thumbnail without a runtime video
+  // fetch+decode. Still run the runtime extraction when there's no poster
+  // (legacy row, not yet backfilled, or a failed upload-time poster) OR when
+  // this page also needs to MEASURE a natural ratio for a legacy null
+  // aspect_ratio row -- a poster URL alone doesn't expose pixel dimensions.
+  const needsRuntimeThumbnail = shouldLoadVideoThumbnail && (!posterUrl || shouldMeasureNaturalRatio);
   // Track metadata can report the encoded dimensions before phone rotation
   // metadata is applied (for example 1920x1080 for a portrait 1080x1920
   // clip). A generated frame has the display transform applied, so it is the
   // authoritative aspect ratio for the asset that controls the container.
   const videoThumbnail = useVideoThumbnailResult(
-    isVideo && shouldLoadVideoThumbnail ? url : null,
+    isVideo && needsRuntimeThumbnail ? url : null,
     cacheKey,
   );
+  const thumbnailUri = posterUrl ?? videoThumbnail?.uri ?? null;
   const reportNaturalRatio = useCallback(
     (ratio: number) => onNaturalRatio(asset.object_key, ratio),
     [asset.object_key, onNaturalRatio],
@@ -236,11 +249,11 @@ function MediaPage({
             url={url}
           />
         ) : null}
-        {videoThumbnail && (!isActive || !hasRenderedFirstFrame) ? (
+        {thumbnailUri && (!isActive || !hasRenderedFirstFrame) ? (
           <Image
             contentFit="contain"
             pointerEvents="none"
-            source={{ uri: videoThumbnail.uri, cacheKey: `${cacheKey}:thumbnail` }}
+            source={{ uri: thumbnailUri, cacheKey: `${cacheKey}:thumbnail` }}
             style={StyleSheet.absoluteFill}
             testID={`memory-media-video-thumbnail-${asset.id}`}
           />
@@ -295,11 +308,24 @@ export function MemoryMediaCarousel({
   const [naturalRatios, setNaturalRatios] = useState<Record<string, number>>({});
   const tapStartRef = useRef<{ x: number; y: number; timestamp: number } | null>(null);
   const hasMovedRef = useRef(false);
-  // Videos never carry a preview_object_key (C3), so resolveMediaDisplayKey
-  // is a no-op for them regardless of preferPreview -- only image keys can
-  // actually change here.
-  const displayKeys = assets.map((asset) => resolveMediaDisplayKey(asset, preferPreview));
-  const { data: urls = {}, refetch: refetchMediaUrls } = useMediaUrls(displayKeys, cacheVersion);
+  // A video's display/playback source must always stay its own object_key
+  // (a stored preview_object_key on a video is a poster JPEG, not a
+  // playable file -- resolveMediaDisplayKey's preference logic is only
+  // correct for photos). Only photos honor preferPreview here.
+  const displayKeys = assets.map((asset) =>
+    isVideoContentType(asset.content_type)
+      ? asset.object_key
+      : resolveMediaDisplayKey(asset, preferPreview),
+  );
+  // Video posters are fetched separately -- purely for the paused/inactive
+  // thumbnail, never as a substitute for the playback source above.
+  const posterKeys = assets
+    .map((asset) => (isVideoContentType(asset.content_type) ? resolveVideoPosterKey(asset) : null))
+    .filter((key): key is string => Boolean(key));
+  const { data: urls = {}, refetch: refetchMediaUrls } = useMediaUrls(
+    [...displayKeys, ...posterKeys],
+    cacheVersion,
+  );
   const showPaging = assets.length > 1;
 
   // Stable list rows use the persisted ratio from their first render. Detail
@@ -391,28 +417,35 @@ export function MemoryMediaCarousel({
         showsHorizontalScrollIndicator={false}
         testID="memory-media-carousel-scroll"
       >
-        {assets.map((asset, index) => (
-          <View key={asset.id} style={[styles.pageWrap, { width: width || 1 }]}>
-            {width > 0 ? (
-              <MediaPage
-                asset={asset}
-                cacheKey={`${displayKeys[index]}:${cacheVersion ?? ''}`}
-                isActive={isActive && index === activeIndex}
-                mutedVideos={mutedVideos}
-                onNaturalRatio={handleNaturalRatio}
-                onUrlError={() => void refetchMediaUrls()}
-                url={urls[displayKeys[index]]}
-                videoTapToToggle={videoTapToToggle}
-                shouldLoadVideoThumbnail={
-                  index === 0 || (isActive && index === activeIndex)
-                }
-                shouldMeasureNaturalRatio={
-                  index === 0 && firstAsset?.aspect_ratio == null
-                }
-              />
-            ) : null}
-          </View>
-        ))}
+        {assets.map((asset, index) => {
+          const posterKey = isVideoContentType(asset.content_type)
+            ? resolveVideoPosterKey(asset)
+            : null;
+
+          return (
+            <View key={asset.id} style={[styles.pageWrap, { width: width || 1 }]}>
+              {width > 0 ? (
+                <MediaPage
+                  asset={asset}
+                  cacheKey={`${displayKeys[index]}:${cacheVersion ?? ''}`}
+                  isActive={isActive && index === activeIndex}
+                  mutedVideos={mutedVideos}
+                  onNaturalRatio={handleNaturalRatio}
+                  onUrlError={() => void refetchMediaUrls()}
+                  posterUrl={posterKey ? urls[posterKey] : undefined}
+                  url={urls[displayKeys[index]]}
+                  videoTapToToggle={videoTapToToggle}
+                  shouldLoadVideoThumbnail={
+                    index === 0 || (isActive && index === activeIndex)
+                  }
+                  shouldMeasureNaturalRatio={
+                    index === 0 && firstAsset?.aspect_ratio == null
+                  }
+                />
+              ) : null}
+            </View>
+          );
+        })}
       </ScrollView>
 
       {showPaging ? (

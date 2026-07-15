@@ -25,7 +25,7 @@ import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { editFamilyMemberRoute, memoryDetailRoute, portraitTimelineRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
-import { resolvePreferredCoverKey } from '@/utils/media-preview';
+import { resolvePreferredCoverKey, resolveVideoPosterKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
 import { formatDisplayDate } from '@/utils/memories';
 
@@ -35,17 +35,22 @@ function MemoryThumb({ memory }: { memory: MemoryWithTags }) {
   const coverAsset = memory.mediaAssets[0];
   const isVideo = coverAsset ? coverAsset.content_type.startsWith('video/') : isMedia && memory.media_content_type?.startsWith('video/');
 
-  // Prefers the derived preview key (Workstream C6) for the photo case;
-  // videos never have one, so this call always resolves to object_key there.
+  // Prefers the derived preview key (Workstream C6) for the photo case.
   const photoMediaKey = isMedia ? resolvePreferredCoverKey(coverAsset, memory.media_key) : null;
-  const videoMediaKey = isMedia ? (coverAsset?.object_key ?? memory.media_key ?? null) : null;
+  const posterKey = isVideo ? resolveVideoPosterKey(coverAsset) : null;
+  // Only fetch the actual video file when there's no stored poster -- avoids
+  // a full ranged fetch + native decode purely to render a paused thumbnail.
+  const videoMediaKey =
+    isMedia && isVideo && !posterKey ? (coverAsset?.object_key ?? memory.media_key ?? null) : null;
   const illustrationKey =
     memory.memory_type === 'text_illustration' ? (memory.illustration_key ?? null) : null;
 
   const { url: illustrationUrl } = useMediaUrl(illustrationKey, memory.updated_at);
   const { url: mediaUrl } = useMediaUrl(isMedia && !isVideo ? photoMediaKey : null, memory.updated_at);
-  const { url: videoUrl } = useMediaUrl(isVideo ? videoMediaKey : null, memory.updated_at);
-  const videoThumbnail = useVideoThumbnail(videoUrl);
+  const { url: posterUrl } = useMediaUrl(posterKey, memory.updated_at);
+  const { url: videoUrl } = useMediaUrl(videoMediaKey, memory.updated_at);
+  const runtimeVideoThumbnail = useVideoThumbnail(videoUrl);
+  const videoThumbnail = posterUrl ?? runtimeVideoThumbnail;
 
   const emo = getEmotionColors(memory.emotion);
 

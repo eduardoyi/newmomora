@@ -1,5 +1,7 @@
 import {
   getMediaExtensionFromContentType,
+  MAX_VIDEO_BYTES,
+  MAX_VIDEO_SOURCE_BYTES,
   validateMediaFile,
 } from '@/utils/media-validation';
 
@@ -26,10 +28,10 @@ describe('media validation utils', () => {
     expect(
       validateMediaFile({
         sizeBytes: 1024 * 1024,
-        durationMs: 61_000,
+        durationMs: 180 * 1000 + 1,
         contentType: 'video/mp4',
       }),
-    ).toMatch(/60 seconds/i);
+    ).toMatch(/3 minutes/i);
 
     expect(
       validateMediaFile({
@@ -40,14 +42,38 @@ describe('media validation utils', () => {
     ).toBeNull();
   });
 
-  it('rejects oversized videos', () => {
+  it('accepts a video source file well over the old 100MB pick-time cap, within the new source sanity cap', () => {
+    // The regression this fix addresses: a raw 4K/60 clip can legitimately
+    // exceed 100MB before compression. Pick-time validation must not block
+    // it -- MAX_VIDEO_BYTES is now the post-compression/upload cap, checked
+    // later in the pipeline, not here.
     expect(
       validateMediaFile({
-        sizeBytes: 101 * 1024 * 1024,
-        durationMs: 30_000,
+        sizeBytes: MAX_VIDEO_BYTES * 5,
+        durationMs: 150_000,
         contentType: 'video/mp4',
       }),
-    ).toMatch(/100 MB/i);
+    ).toBeNull();
+  });
+
+  it('rejects a video source file over the sanity cap', () => {
+    expect(
+      validateMediaFile({
+        sizeBytes: MAX_VIDEO_SOURCE_BYTES + 1,
+        durationMs: 150_000,
+        contentType: 'video/mp4',
+      }),
+    ).toMatch(/too large/i);
+  });
+
+  it('accepts a video source file exactly at the sanity cap', () => {
+    expect(
+      validateMediaFile({
+        sizeBytes: MAX_VIDEO_SOURCE_BYTES,
+        durationMs: 150_000,
+        contentType: 'video/mp4',
+      }),
+    ).toBeNull();
   });
 
   it('rejects unknown mime types', () => {

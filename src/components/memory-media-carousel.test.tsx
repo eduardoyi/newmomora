@@ -514,6 +514,92 @@ describe('MemoryMediaCarousel', () => {
     });
   });
 
+  describe('stored video posters (upload-time first-frame poster)', () => {
+    const posterVideoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+      aspect_ratio: 9 / 16,
+      preview_object_key: 'user/memory/media/video-1-preview.jpg',
+    };
+
+    it('requests both the video and poster keys, and renders the poster while inactive without a runtime extraction', () => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: {
+          'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4',
+          'user/memory/media/video-1-preview.jpg': 'https://example.com/video-1-preview.jpg',
+        },
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+
+      const { getByTestId } = render(
+        <MemoryMediaCarousel assets={[posterVideoAsset]} isActive={false} stableLayout />,
+      );
+
+      measureCarousel(getByTestId);
+
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(
+        ['user/memory/media/video-1.mp4', 'user/memory/media/video-1-preview.jpg'],
+        undefined,
+      );
+      // aspect_ratio is already persisted, so no legacy ratio measurement is
+      // needed -- the runtime extractor must not be asked to fetch/decode
+      // the actual video just to render a paused-state thumbnail.
+      expect(mockedUseVideoThumbnailResult).toHaveBeenCalledWith(null, expect.any(String));
+      expect(getByTestId('memory-media-video-thumbnail-asset-video').props.source).toEqual([{
+        uri: 'https://example.com/video-1-preview.jpg',
+        cacheKey: 'user/memory/media/video-1.mp4::thumbnail',
+      }]);
+    });
+
+    it('still runs the runtime extractor when a legacy row has both a poster and no persisted aspect ratio', () => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: {
+          'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4',
+          'user/memory/media/video-1-preview.jpg': 'https://example.com/video-1-preview.jpg',
+        },
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+
+      const legacyPosterAsset = { ...posterVideoAsset, aspect_ratio: null };
+      const { getByTestId } = render(
+        <MemoryMediaCarousel assets={[legacyPosterAsset]} stableLayout />,
+      );
+
+      measureCarousel(getByTestId);
+
+      expect(mockedUseVideoThumbnailResult).toHaveBeenCalledWith(
+        'https://example.com/video-1.mp4',
+        expect.any(String),
+      );
+    });
+
+    it('falls back to runtime extraction when a video asset has no stored poster', () => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+
+      const videoAsset = {
+        ...assets[0],
+        id: 'asset-video',
+        object_key: 'user/memory/media/video-1.mp4',
+        content_type: 'video/mp4',
+      };
+      const { getByTestId } = render(
+        <MemoryMediaCarousel assets={[videoAsset]} isActive={false} stableLayout />,
+      );
+      measureCarousel(getByTestId);
+
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(['user/memory/media/video-1.mp4'], undefined);
+      expect(mockedUseVideoThumbnailResult).toHaveBeenCalledWith(
+        'https://example.com/video-1.mp4',
+        expect.any(String),
+      );
+    });
+  });
+
   it('uses a stable image cache key and refreshes an expired signed URL', () => {
     const { getByTestId } = render(
       <MemoryMediaCarousel assets={[assets[0]]} cacheVersion="version-1" />,

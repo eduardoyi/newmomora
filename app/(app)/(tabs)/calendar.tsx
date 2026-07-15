@@ -24,7 +24,7 @@ import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
-import { resolvePreferredCoverKey } from '@/utils/media-preview';
+import { resolvePreferredCoverKey, resolveVideoPosterKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
   buildCalendarWeeks,
@@ -57,11 +57,17 @@ function MemoryStamp({ memory }: { memory: MemoryWithTags }) {
     isMedia && !isVideo ? resolvePreferredCoverKey(coverAsset, memory.media_key) : null,
     memory.updated_at,
   );
+  const posterKey = isVideo ? resolveVideoPosterKey(coverAsset) : null;
+  const { url: posterUrl } = useMediaUrl(posterKey, memory.updated_at);
   const { url: videoUrl } = useMediaUrl(
-    isVideo ? (coverAsset?.object_key ?? memory.media_key ?? null) : null,
+    // Only fetch the actual video file when there's no stored poster --
+    // avoids a full ranged fetch + native decode purely to render a
+    // paused-state thumbnail.
+    isVideo && !posterKey ? (coverAsset?.object_key ?? memory.media_key ?? null) : null,
     memory.updated_at,
   );
-  const videoThumbnail = useVideoThumbnail(videoUrl);
+  const runtimeVideoThumbnail = useVideoThumbnail(videoUrl);
+  const videoThumbnail = posterUrl ?? runtimeVideoThumbnail;
 
   if (memory.memory_type === 'text_illustration' && illustrationUrl) {
     return (

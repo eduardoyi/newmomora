@@ -2,6 +2,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 
 import {
   createImagePreviewForUpload,
+  createVideoPosterForUpload,
   MEMORY_IMAGE_PREVIEW_MAX_DIMENSION,
   MEMORY_IMAGE_PREVIEW_QUALITY,
 } from '@/utils/create-image-preview';
@@ -113,6 +114,86 @@ describe('createImagePreviewForUpload', () => {
 
     await expect(
       createImagePreviewForUpload({ fileUri: 'file:///wide.jpg', width: 4000, height: 3000 }),
+    ).rejects.toThrow('manipulator unavailable');
+  });
+});
+
+describe('createVideoPosterForUpload', () => {
+  beforeEach(() => {
+    mockedManipulateAsync.mockReset();
+    mockedManipulateAsync.mockImplementation(async (uri: string) => ({
+      uri: `poster:${uri}`,
+      width: 0,
+      height: 0,
+    }));
+  });
+
+  it('resizes a frame over the cap by width', async () => {
+    const result = await createVideoPosterForUpload({
+      fileUri: 'file:///frame.jpg',
+      width: 1920,
+      height: 1080,
+    });
+
+    expect(mockedManipulateAsync).toHaveBeenCalledWith(
+      'file:///frame.jpg',
+      [{ resize: { width: MEMORY_IMAGE_PREVIEW_MAX_DIMENSION } }],
+      { compress: MEMORY_IMAGE_PREVIEW_QUALITY, format: ImageManipulator.SaveFormat.JPEG },
+    );
+    expect(result).toEqual({ fileUri: 'poster:file:///frame.jpg', contentType: 'image/jpeg' });
+  });
+
+  it('resizes a portrait frame over the cap by height', async () => {
+    await createVideoPosterForUpload({
+      fileUri: 'file:///frame.jpg',
+      width: 1080,
+      height: 1920,
+    });
+
+    expect(mockedManipulateAsync).toHaveBeenCalledWith(
+      'file:///frame.jpg',
+      [{ resize: { height: MEMORY_IMAGE_PREVIEW_MAX_DIMENSION } }],
+      expect.any(Object),
+    );
+  });
+
+  it('unlike createImagePreviewForUpload, still produces a poster (no resize action, but no null) when the frame is already under the cap', async () => {
+    const result = await createVideoPosterForUpload({
+      fileUri: 'file:///frame.jpg',
+      width: 640,
+      height: 480,
+    });
+
+    expect(mockedManipulateAsync).toHaveBeenCalledWith(
+      'file:///frame.jpg',
+      [],
+      { compress: MEMORY_IMAGE_PREVIEW_QUALITY, format: ImageManipulator.SaveFormat.JPEG },
+    );
+    expect(result).toEqual({ fileUri: 'poster:file:///frame.jpg', contentType: 'image/jpeg' });
+  });
+
+  it('still produces a poster when dimensions are unknown', async () => {
+    const nullResult = await createVideoPosterForUpload({
+      fileUri: 'file:///frame.jpg',
+      width: null,
+      height: null,
+    });
+    const zeroResult = await createVideoPosterForUpload({
+      fileUri: 'file:///frame.jpg',
+      width: 0,
+      height: 0,
+    });
+
+    expect(nullResult).toEqual({ fileUri: 'poster:file:///frame.jpg', contentType: 'image/jpeg' });
+    expect(zeroResult).toEqual({ fileUri: 'poster:file:///frame.jpg', contentType: 'image/jpeg' });
+    expect(mockedManipulateAsync).toHaveBeenCalledWith('file:///frame.jpg', [], expect.any(Object));
+  });
+
+  it('propagates a manipulateAsync failure (caller is responsible for fail-open behavior)', async () => {
+    mockedManipulateAsync.mockRejectedValueOnce(new Error('manipulator unavailable'));
+
+    await expect(
+      createVideoPosterForUpload({ fileUri: 'file:///frame.jpg', width: 1920, height: 1080 }),
     ).rejects.toThrow('manipulator unavailable');
   });
 });

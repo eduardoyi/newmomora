@@ -71,3 +71,56 @@ export async function createImagePreviewForUpload(params: {
 
   return { fileUri: result.uri, contentType: 'image/jpeg' };
 }
+
+export interface VideoPosterResult {
+  fileUri: string;
+  contentType: 'image/jpeg';
+}
+
+/**
+ * Generates the upload-time video poster JPEG from an already-extracted
+ * first frame (see getVideoFrame in video-aspect-ratio.ts -- the same frame
+ * grab that computes the video's aspect ratio, reused here so a video only
+ * pays for one native decode). Same longest-edge cap and quality as
+ * createImagePreviewForUpload, but deliberately NOT the same no-upscale
+ * "return null" contract:
+ *
+ * Unlike a photo, an uploaded video has no acceptable "render the original
+ * at full size" fallback for a list-view thumbnail -- the original is a
+ * multi-second video, not a displayable image. The existing fallback for a
+ * video with no poster is a runtime first-frame extraction against the
+ * remote file (useVideoThumbnail), which is exactly the per-device
+ * ranged-fetch-and-decode cost this feature exists to avoid. So this
+ * function ALWAYS returns a poster -- even when the frame is already at or
+ * under MEMORY_IMAGE_PREVIEW_MAX_DIMENSION, it still runs through
+ * manipulateAsync (with no resize action) to get a real, quality-compressed
+ * JPEG file to upload, rather than skipping and leaving preview_object_key
+ * null.
+ */
+export async function createVideoPosterForUpload(params: {
+  fileUri: string;
+  width: number | null | undefined;
+  height: number | null | undefined;
+}): Promise<VideoPosterResult> {
+  const { fileUri, width, height } = params;
+
+  const actions: { resize: { width?: number; height?: number } }[] = [];
+  if (width && height && width > 0 && height > 0) {
+    const longestEdge = Math.max(width, height);
+    if (longestEdge > MEMORY_IMAGE_PREVIEW_MAX_DIMENSION) {
+      actions.push({
+        resize:
+          width >= height
+            ? { width: MEMORY_IMAGE_PREVIEW_MAX_DIMENSION }
+            : { height: MEMORY_IMAGE_PREVIEW_MAX_DIMENSION },
+      });
+    }
+  }
+
+  const result = await ImageManipulator.manipulateAsync(fileUri, actions, {
+    compress: MEMORY_IMAGE_PREVIEW_QUALITY,
+    format: ImageManipulator.SaveFormat.JPEG,
+  });
+
+  return { fileUri: result.uri, contentType: 'image/jpeg' };
+}
