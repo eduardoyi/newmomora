@@ -177,7 +177,7 @@ function VersionCard({
   onRetry,
 }: VersionCardProps) {
   const keys = [version.sourcePhotoKey, version.portraitKey].filter((key): key is string => Boolean(key));
-  const { data: urls = {} } = useMediaUrls(keys, version.updatedAt);
+  const { data: urls = {} } = useMediaUrls(keys);
   const sourceUri = urls[version.sourcePhotoKey];
   const portraitUri = version.portraitKey ? urls[version.portraitKey] : undefined;
   const age = formatPortraitAge(member.date_of_birth, version.referenceDate);
@@ -197,7 +197,7 @@ function VersionCard({
           testID={`portrait-version-${version.id}-source`}
         >
           {sourceUri ? (
-            <Image contentFit="cover" source={{ uri: sourceUri }} style={styles.visual} />
+            <Image contentFit="cover" source={{ uri: sourceUri, cacheKey: version.sourcePhotoKey }} style={styles.visual} />
           ) : (
             <View style={[styles.visual, styles.photoFallback]}>
               <ActivityIndicator color={colors.ink3} size="small" />
@@ -217,7 +217,7 @@ function VersionCard({
           {hasPortraitKey ? (
             <>
               {portraitUri ? (
-                <Image contentFit="cover" source={{ uri: portraitUri }} style={styles.visual} />
+                <Image contentFit="cover" source={{ uri: portraitUri, cacheKey: version.portraitKey ?? undefined }} style={styles.visual} />
               ) : (
                 <View style={[styles.visual, styles.photoFallback]}>
                   <ActivityIndicator color={colors.ink3} size="small" />
@@ -659,24 +659,42 @@ export function PortraitTimeline({
       <BottomSheet onClose={closeSheet} testID="portrait-date-sheet" visible={sheet === 'date'}>
         <Text style={styles.sheetTitle}>Portrait date</Text>
         <Text style={styles.sheetSubtitle}>This sets {member.name}’s age in the illustration.</Text>
-        <View style={styles.dateCard}>
-          <View style={styles.dateCardCopy}>
-            <Text style={styles.dateCardTitle}>{formatLongDate(draftDate)}</Text>
-            {formatPortraitAge(member.date_of_birth, draftDate) ? (
-              <Text style={styles.dateCardAge}>{formatPortraitAge(member.date_of_birth, draftDate)} old</Text>
-            ) : null}
-          </View>
-          {photoDraft ? (
-            <SourceChip source={draftDate === photoDraft.referenceDate ? photoDraft.dateSource : 'manual'} />
-          ) : null}
-        </View>
-        <Text style={styles.dateLabel}>Set the date</Text>
         <DatePickerField
           accessibilityHint="Cannot be after today or before this person’s birthday"
           defaultPickerDate={today}
           maximumDate={today}
           minimumDate={minimumDate}
           onChange={setDraftDate}
+          renderTrigger={({ openPicker }) => (
+            <Pressable
+              accessibilityHint="Cannot be after today or before this person’s birthday"
+              accessibilityLabel={`Edit portrait date, ${formatLongDate(draftDate)}`}
+              accessibilityRole="button"
+              onPress={openPicker}
+              style={({ pressed }) => [styles.dateCard, pressed && styles.dateCardPressed]}
+              testID="portrait-date-picker"
+            >
+              <View style={styles.dateCardCopy}>
+                <Text style={styles.dateCardTitle}>{formatLongDate(draftDate)}</Text>
+                {formatPortraitAge(member.date_of_birth, draftDate) ? (
+                  <Text style={styles.dateCardAge}>{formatPortraitAge(member.date_of_birth, draftDate)} old</Text>
+                ) : null}
+              </View>
+              <View style={styles.dateCardActions}>
+                {photoDraft ? (
+                  <SourceChip source={draftDate === photoDraft.referenceDate ? photoDraft.dateSource : 'manual'} />
+                ) : null}
+                <View style={styles.dateEditIcon} testID="portrait-date-edit-icon">
+                  <SymbolView
+                    fallback={<Text style={styles.dateEditFallback}>✎</Text>}
+                    name={{ ios: 'pencil', android: 'edit' }}
+                    size={16}
+                    tintColor={colors.primary}
+                  />
+                </View>
+              </View>
+            </Pressable>
+          )}
           testID="portrait-date-picker"
           value={draftDate}
         />
@@ -756,7 +774,7 @@ export function PortraitTimeline({
       {viewer ? (
         <FullScreenMediaViewer
           accessibilityLabel={`${member.name} portrait pair from ${formatLongDate(viewer.version.referenceDate)}`}
-          cacheVersion={viewer.version.updatedAt}
+          cacheVersion={`${viewer.version.sourcePhotoKey}|${viewer.version.portraitKey ?? ''}`}
           initialIndex={Math.min(viewer.index, Math.max(viewerItems.length - 1, 0))}
           items={viewerItems}
           onClose={() => setViewer(null)}
@@ -848,10 +866,13 @@ const styles = StyleSheet.create({
   sparkleFallback: { color: colors.primary, fontSize: 16 },
   helperText: { color: colors.ink2, flex: 1, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 18 },
   dateCard: { alignItems: 'center', backgroundColor: colors.surface, borderColor: colors.border, borderRadius: radius.lg, borderWidth: 1, flexDirection: 'row', gap: 10, justifyContent: 'space-between', padding: spacing.md },
+  dateCardPressed: { opacity: 0.78 },
   dateCardCopy: { flex: 1, minWidth: 0 },
   dateCardTitle: { color: colors.ink, fontFamily: fonts.displayMedium, fontSize: 20 },
   dateCardAge: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 12.5, marginTop: 4 },
-  dateLabel: { color: colors.ink2, fontFamily: fonts.sansBold, fontSize: 13, marginBottom: 6, marginTop: 14 },
+  dateCardActions: { alignItems: 'center', flexDirection: 'row', gap: 8 },
+  dateEditIcon: { alignItems: 'center', backgroundColor: colors.primaryTint, borderRadius: 15, height: 30, justifyContent: 'center', width: 30 },
+  dateEditFallback: { color: colors.primary, fontSize: 15 },
   dateHint: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 12, marginTop: 8, textAlign: 'center' },
   errorText: { color: colors.error, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 18, marginTop: 10 },
   primaryButton: { alignItems: 'center', backgroundColor: colors.primary, borderRadius: radius.pill, justifyContent: 'center', marginTop: 16, minHeight: 50, paddingHorizontal: 20 },

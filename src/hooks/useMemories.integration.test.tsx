@@ -175,7 +175,7 @@ describe('useMemories integration', () => {
     await waitFor(() => expect(result.current.memories).toHaveLength(1));
 
     expect(result.current.memories[0].taggedMembers[0].avatarImageKey).toBe('portrait-jan');
-    expect(result.current.memories[0].taggedMembers[0].avatarUpdatedAt).toBe('portrait-jan-time');
+    expect(result.current.memories[0].taggedMembers[0].avatarUpdatedAt).toBe('portrait-jan');
   });
 
   it('re-runs photo emotion analysis when caption changes', async () => {

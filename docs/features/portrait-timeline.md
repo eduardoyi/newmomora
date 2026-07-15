@@ -18,6 +18,7 @@ A family member can have many immutable source-photo/AI-portrait pairs over time
 - The portrait timeline shows paired source photos and illustrated portraits, newest first, with the photo date and the member's age on that date.
 - A **Current** badge marks the portrait selected for today by the canonical resolver.
 - Owners and managers can add a camera or library photo, confirm/edit its date, edit an existing date, regenerate a portrait, retry a failed portrait, or delete an eligible version.
+- The date confirmation sheet uses its date-and-age card as the date-picker trigger; an edit icon communicates that the card is interactive without repeating the date in a second field.
 - Library photos use trustworthy EXIF shutter/digitized dates when present. Otherwise the date starts at the acting user's local today and remains editable. Camera photos use today.
 - Portrait dates cannot predate the member's DOB or exceed the acting user's current local date. Multiple photos on the same date are allowed.
 - A failed or in-progress generation never displaces an older ready portrait. Regeneration keeps the previous output visible until a new attempt succeeds.
@@ -108,6 +109,8 @@ The generation endpoint intentionally no longer accepts `{ familyMemberId }`. Th
 
 Portrait-version queries are family-batched, then grouped by member. Memory lists batch portrait rows and signed URL requests; do not issue one version or signing request per `(memory, member)` chip.
 
+Versioned source and portrait object keys are also their image-cache identities. Metadata-only updates such as correcting `reference_date` must not invalidate signed media URLs or clear an already displayed image. `expo-image` receives stable object-key cache keys so immutable portraits can be restored from the device cache across app launches; signed URL refreshes retain the previous URL while a replacement is fetched.
+
 ## Legacy migration
 
 Run `supabase/scripts/migrate-legacy-portrait-versions.ts` without flags first. The audit reads the actual object bytes despite misleading legacy extensions, trusts only EXIF original/digitized capture dates within DOB/today bounds, and reports uncertain records as `legacy_unknown` for manual review. `--apply` normalizes source photos to metadata-free JPEG, copies legacy portraits to immutable keys, verifies copied objects, then inserts deterministic/idempotent version rows. It does not delete the stable legacy objects.
@@ -147,7 +150,7 @@ The new client may fall back to legacy member columns only during controlled rol
 
 | Layer | Files |
 |-------|-------|
-| Unit | `src/utils/portrait-versions.test.ts`, `src/components/portrait-timeline.test.tsx`, `src/components/cast-card.test.tsx` |
+| Unit | `src/utils/portrait-versions.test.ts`, `src/hooks/useMediaUrls.test.ts`, `src/components/portrait-timeline.test.tsx`, `src/components/cast-card.test.tsx` |
 | Integration | `src/services/portrait-versions.integration.test.ts`, `src/services/family-members.integration.test.ts`, `src/hooks/usePortraitVersions.integration.test.tsx`, `src/hooks/useFamilyMembers.integration.test.tsx`, `src/hooks/useMemories.integration.test.tsx`, `src/screen-tests/add-family-member-photo-date.integration.test.tsx`, `src/screen-tests/family-member-portrait-entry.integration.test.tsx`, `src/screen-tests/portrait-timeline.integration.test.tsx` |
 | E2E | `.maestro/flows/portraits/view-portrait-timeline.yaml` |
 | Deno | `supabase/functions/_shared/portrait-versions.test.ts`, `generate-portrait-illustration/index.test.ts`, `generate-illustration/index.test.ts`, `delete-portrait-version/index.test.ts`, `delete-family-member/index.test.ts`, `hard-delete-expired-accounts/index.test.ts`, `_shared/storage-keys.test.ts`, `_shared/family-access.test.ts` |

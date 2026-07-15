@@ -5,7 +5,7 @@ jest.mock('@/services/media', () => ({
 }));
 
 jest.mock('@tanstack/react-query', () => ({
-  useQuery: jest.fn((options: { queryKey: unknown[] }) => ({
+  useQuery: jest.fn((options: { queryKey: unknown[]; placeholderData?: (previousData: unknown) => unknown }) => ({
     data: undefined,
     isLoading: false,
     isError: false,
@@ -36,5 +36,13 @@ describe('useMediaUrl', () => {
       'user-1/memories/memory-1/illustration.webp',
       '2026-05-28T12:05:00Z',
     ]);
+  });
+
+  it('keeps the previous signed URL visible while a refreshed one loads', () => {
+    useMediaUrl('user-1/portrait.webp', 'version-1');
+
+    const placeholderData = useQuery.mock.calls[0][0].placeholderData;
+    const previousData = { 'user-1/portrait.webp': 'https://signed.example/old' };
+    expect(placeholderData(previousData)).toBe(previousData);
   });
 });

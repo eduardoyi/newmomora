@@ -198,6 +198,11 @@ export function resolveMemberPortraitFields(
     resolvedPortraitVersion: resolved,
     avatarImageKey: resolved?.illustrated_profile_key ?? sourceFallback?.profile_picture_key ?? null,
     avatarStatus: resolved?.illustrated_profile_status ?? sourceFallback?.illustrated_profile_status ?? null,
-    avatarUpdatedAt: resolved?.updated_at ?? sourceFallback?.updated_at ?? fallbackUpdatedAt,
+    // Versioned portrait objects are immutable. Use the selected object key as
+    // the cache identity so metadata-only changes do not refetch the image.
+    avatarUpdatedAt:
+      resolved?.illustrated_profile_key ??
+      sourceFallback?.profile_picture_key ??
+      fallbackUpdatedAt,
   };
 }

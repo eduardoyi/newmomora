@@ -31,7 +31,6 @@ function invalidatePortraitConsumers(queryClient: ReturnType<typeof useQueryClie
   queryClient.invalidateQueries({ queryKey: [portraitVersionsQueryKeyBase] });
   queryClient.invalidateQueries({ queryKey: [familyMembersQueryKeyBase] });
   queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase] });
-  queryClient.invalidateQueries({ queryKey: ['media-urls'] });
 }
 
 export function useFamilyPortraitVersions() {

@@ -80,7 +80,10 @@ export function FamilyProfilePortraitPhoto({
         <Image
           accessibilityLabel={accessibilityLabel ?? `${member.name} profile photo`}
           contentFit="cover"
-          source={{ uri: displayUri }}
+          source={{
+            uri: displayUri,
+            cacheKey: localPhotoUri ? undefined : remoteKey ?? undefined,
+          }}
           style={photoStyle}
         />
       ) : isLoading ? (

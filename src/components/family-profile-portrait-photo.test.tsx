@@ -4,9 +4,9 @@ import { FamilyProfilePortraitPhoto } from '@/components/family-profile-portrait
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 
 jest.mock('expo-image', () => ({
-  Image: ({ accessibilityLabel }: { accessibilityLabel?: string }) => {
+  Image: ({ accessibilityLabel, source }: { accessibilityLabel?: string; source?: unknown }) => {
     const { Text } = require('react-native');
-    return <Text>{accessibilityLabel}</Text>;
+    return <Text testID="profile-portrait-image">{`${accessibilityLabel}:${JSON.stringify(source)}`}</Text>;
   },
 }));
 
@@ -25,7 +25,7 @@ const mockedUseMediaUrl = useMediaUrl as jest.MockedFunction<typeof useMediaUrl>
 
 describe('FamilyProfilePortraitPhoto resolved version state', () => {
   it('uses the enriched ready portrait without a legacy pending overlay', () => {
-    const { queryByText } = render(
+    const { getByTestId, queryByText } = render(
       <FamilyProfilePortraitPhoto
         member={{
           name: 'Maya',
@@ -42,6 +42,7 @@ describe('FamilyProfilePortraitPhoto resolved version state', () => {
     );
 
     expect(mockedUseMediaUrl).toHaveBeenCalledWith('version-portrait', 'version-time');
+    expect(getByTestId('profile-portrait-image').props.children).toContain('"cacheKey":"version-portrait"');
     expect(queryByText('Portrait pending')).toBeNull();
   });
 

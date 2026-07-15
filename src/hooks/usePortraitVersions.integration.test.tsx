@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
@@ -9,6 +9,7 @@ import {
   createPortraitVersion,
   fetchFamilyPortraitVersions,
   generatePortraitVersion,
+  updatePortraitVersionDate,
 } from '@/services/portrait-versions';
 
 jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
@@ -28,17 +29,18 @@ const mockedFetch = fetchFamilyPortraitVersions as jest.MockedFunction<
 >;
 const mockedCreate = createPortraitVersion as jest.MockedFunction<typeof createPortraitVersion>;
 const mockedGenerate = generatePortraitVersion as jest.MockedFunction<typeof generatePortraitVersion>;
+const mockedUpdate = updatePortraitVersionDate as jest.MockedFunction<typeof updatePortraitVersionDate>;
 
-function wrapper({ children }: { children: ReactNode }) {
-  return (
-    <QueryClientProvider
-      client={new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-      })}
-    >
-      {children}
-    </QueryClientProvider>
-  );
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+}
+
+function createWrapper(queryClient = createQueryClient()) {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  };
 }
 
 describe('usePortraitVersions integration', () => {
@@ -58,7 +60,7 @@ describe('usePortraitVersions integration', () => {
       error: null,
     });
 
-    const { result } = renderHook(() => usePortraitVersions('member-1'), { wrapper });
+    const { result } = renderHook(() => usePortraitVersions('member-1'), { wrapper: createWrapper() });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     expect(mockedFetch).toHaveBeenCalledWith('family-1');
@@ -69,7 +71,7 @@ describe('usePortraitVersions integration', () => {
     mockedFetch.mockResolvedValue({ data: [], error: null });
     mockedCreate.mockResolvedValue({ data: { id: 'v3' } as never, error: null });
 
-    const { result } = renderHook(() => usePortraitVersions('member-1'), { wrapper });
+    const { result } = renderHook(() => usePortraitVersions('member-1'), { wrapper: createWrapper() });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     await result.current.createVersion({
@@ -87,5 +89,26 @@ describe('usePortraitVersions integration', () => {
       }),
     );
     await waitFor(() => expect(mockedGenerate).toHaveBeenCalledWith('v3'));
+  });
+
+  it('does not invalidate immutable media URLs after a date-only edit', async () => {
+    mockedFetch.mockResolvedValue({ data: [], error: null });
+    mockedUpdate.mockResolvedValue({ data: { id: 'v1' } as never, error: null });
+    const queryClient = createQueryClient();
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => usePortraitVersions('member-1'), {
+      wrapper: createWrapper(queryClient),
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.editVersionDate({
+        portraitVersionId: 'v1',
+        referenceDate: '2024-02-03',
+      });
+    });
+
+    expect(mockedUpdate).toHaveBeenCalledWith('v1', '2024-02-03', { dateOfBirth: undefined });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['media-urls'] });
   });
 });

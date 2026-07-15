@@ -111,6 +111,23 @@ describe('PortraitTimeline', () => {
     expect(getByTestId('portrait-version-ready-1-current')).toBeTruthy();
     expect(getByTestId('portrait-source-exif')).toBeTruthy();
     expect(getByTestId('portrait-version-failed-1-retry')).toBeTruthy();
+    expect(mockedUseMediaUrls).toHaveBeenCalledWith([
+      ready.sourcePhotoKey,
+      ready.portraitKey,
+    ]);
+  });
+
+  it('uses the date-and-age card as the only date picker trigger', () => {
+    const { getAllByTestId, getByTestId, queryByText } = render(
+      <PortraitTimeline {...baseProps} />,
+    );
+
+    fireEvent.press(getByTestId('portrait-version-ready-1-actions'));
+    fireEvent.press(getByTestId('portrait-action-edit-date'));
+
+    expect(getAllByTestId('portrait-date-picker')).toHaveLength(1);
+    expect(getByTestId('portrait-date-edit-icon')).toBeTruthy();
+    expect(queryByText('Set the date')).toBeNull();
   });
 
   it('opens both source photo and portrait in the paired full-screen viewer', () => {

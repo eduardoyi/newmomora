@@ -1,5 +1,6 @@
 import {
   extractPortraitReferenceDateIso,
+  resolveMemberPortraitFields,
   resolvePortraitVersion,
   validatePortraitReferenceDate,
   type FamilyMemberPortraitVersion,
@@ -85,6 +86,18 @@ describe('portrait version resolver', () => {
         '2026-02-01',
       )?.id,
     ).toBe('ready');
+  });
+
+  it('uses the immutable image key as avatar cache identity across date-only edits', () => {
+    const before = version('ready', '2026-01-01', {
+      updated_at: '2026-01-01T00:00:00Z',
+    });
+    const after = { ...before, reference_date: '2026-02-01', updated_at: '2026-03-01T00:00:00Z' };
+
+    expect(resolveMemberPortraitFields([before], '2026-04-01', 'member-time').avatarUpdatedAt)
+      .toBe(before.illustrated_profile_key);
+    expect(resolveMemberPortraitFields([after], '2026-04-01', 'member-time').avatarUpdatedAt)
+      .toBe(before.illustrated_profile_key);
   });
 });
 

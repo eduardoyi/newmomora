@@ -48,7 +48,7 @@ export function FamilyMemberAvatar({ member, size = 22, style, testID }: FamilyM
         <Image
           accessibilityLabel={`${member.name} portrait`}
           contentFit="cover"
-          source={{ uri: url }}
+          source={{ uri: url, cacheKey: imageKey ?? undefined }}
           style={{ width: size, height: size }}
         />
       ) : (

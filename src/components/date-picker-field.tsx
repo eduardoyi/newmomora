@@ -2,7 +2,7 @@ import DateTimePicker, {
   DateTimePickerAndroid,
   type DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import {
   Modal,
   Platform,
@@ -29,6 +29,11 @@ interface DatePickerFieldProps {
   /** Announced by screen readers alongside the field's accessibility label
    * (e.g. to note that the current value is a suggestion). */
   accessibilityHint?: string;
+  renderTrigger?: (options: {
+    displayValue: string | null;
+    openPicker: () => void;
+    placeholder: string;
+  }) => ReactNode;
 }
 
 function resolvePickerDate(
@@ -61,6 +66,7 @@ export function DatePickerField({
   maximumDate,
   defaultPickerDate,
   accessibilityHint,
+  renderTrigger,
 }: DatePickerFieldProps) {
   const insets = useSafeAreaInsets();
   const [showIosPicker, setShowIosPicker] = useState(false);
@@ -110,18 +116,20 @@ export function DatePickerField({
 
   return (
     <>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={displayValue ?? placeholder}
-        accessibilityHint={accessibilityHint}
-        onPress={openPicker}
-        style={({ pressed }) => [styles.field, pressed && styles.fieldPressed]}
-        testID={testID}
-      >
-        <Text style={[styles.fieldText, !displayValue && styles.placeholderText]}>
-          {displayValue ?? placeholder}
-        </Text>
-      </Pressable>
+      {renderTrigger ? renderTrigger({ displayValue, openPicker, placeholder }) : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={displayValue ?? placeholder}
+          accessibilityHint={accessibilityHint}
+          onPress={openPicker}
+          style={({ pressed }) => [styles.field, pressed && styles.fieldPressed]}
+          testID={testID}
+        >
+          <Text style={[styles.fieldText, !displayValue && styles.placeholderText]}>
+            {displayValue ?? placeholder}
+          </Text>
+        </Pressable>
+      )}
 
       {Platform.OS === 'ios' ? (
         <Modal

@@ -21,6 +21,7 @@ export function useMediaUrls(keys: string[], cacheVersion?: string | null) {
       return data?.urls ?? {};
     },
     enabled: normalizedKeys.length > 0,
+    placeholderData: (previousData) => previousData,
     staleTime: 50 * 60 * 1000,
   });
 }
