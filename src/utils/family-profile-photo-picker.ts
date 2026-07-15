@@ -4,10 +4,18 @@ import {
   getOrRequestNativePermission,
   waitForNativePresentationToSettle,
 } from '@/utils/native-permissions';
+import {
+  extractPortraitReferenceDateIso,
+  getLocalTodayIso,
+  type PortraitDateSource,
+} from '@/utils/portrait-versions';
 
 export interface FamilyProfilePhotoSelection {
   uri: string;
   contentType: string;
+  captureDate: string | null;
+  referenceDate: string;
+  dateSource: Extract<PortraitDateSource, 'exif' | 'default_today'>;
 }
 
 export interface FamilyProfilePhotoPickResult {
@@ -20,7 +28,7 @@ export const PROFILE_PHOTO_PICKER_OPTIONS = {
   allowsEditing: true,
   aspect: [1, 1],
   quality: 0.85,
-  exif: false,
+  exif: true,
   base64: false,
   allowsMultipleSelection: false,
 } satisfies ImagePicker.ImagePickerOptions;
@@ -54,19 +62,29 @@ export function resolveProfilePhotoContentType(asset: ImagePicker.ImagePickerAss
 
 export function assetToSelection(
   asset: ImagePicker.ImagePickerAsset,
+  includeCaptureDate = true,
 ): FamilyProfilePhotoSelection {
+  const captureDate = includeCaptureDate
+    ? extractPortraitReferenceDateIso(asset.exif)
+    : null;
   return {
     uri: asset.uri,
     contentType: resolveProfilePhotoContentType(asset),
+    captureDate,
+    referenceDate: captureDate ?? getLocalTodayIso(),
+    dateSource: captureDate ? 'exif' : 'default_today',
   };
 }
 
-function parsePickerResult(result: ImagePicker.ImagePickerResult): FamilyProfilePhotoPickResult {
+function parsePickerResult(
+  result: ImagePicker.ImagePickerResult,
+  includeCaptureDate: boolean,
+): FamilyProfilePhotoPickResult {
   if (result.canceled || !result.assets[0]) {
     return {};
   }
 
-  return { selection: assetToSelection(result.assets[0]) };
+  return { selection: assetToSelection(result.assets[0], includeCaptureDate) };
 }
 
 export function parsePendingPickerResult(
@@ -80,7 +98,7 @@ export function parsePendingPickerResult(
     return { error: result.message || 'Could not recover the selected profile photo.' };
   }
 
-  return parsePickerResult(result);
+  return parsePickerResult(result, true);
 }
 
 function isCameraUnavailableError(error: unknown): boolean {
@@ -106,7 +124,7 @@ export async function pickFamilyProfilePhotoFromLibrary(): Promise<FamilyProfile
     }
 
     const result = await ImagePicker.launchImageLibraryAsync(PROFILE_PHOTO_PICKER_OPTIONS);
-    return parsePickerResult(result);
+    return parsePickerResult(result, true);
   } catch {
     return { error: LIBRARY_PICK_ERROR };
   }
@@ -132,12 +150,21 @@ export async function pickFamilyProfilePhotoFromCamera(): Promise<FamilyProfileP
 
     const result = await ImagePicker.launchCameraAsync({
       ...PROFILE_PHOTO_PICKER_OPTIONS,
+      exif: false,
       cameraType: ImagePicker.CameraType.front,
     });
-    return parsePickerResult(result);
+    return parsePickerResult(result, false);
   } catch (error) {
     return {
       error: isCameraUnavailableError(error) ? CAMERA_UNAVAILABLE_ERROR : CAMERA_PICK_ERROR,
     };
   }
+}
+
+export type PortraitPhotoSource = 'camera' | 'library';
+
+export function pickPortraitVersionPhoto(source: PortraitPhotoSource) {
+  return source === 'camera'
+    ? pickFamilyProfilePhotoFromCamera()
+    : pickFamilyProfilePhotoFromLibrary();
 }

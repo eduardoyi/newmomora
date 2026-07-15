@@ -1,8 +1,6 @@
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const FAMILY_PHOTO_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-
 const MEMORY_MEDIA_CONTENT_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -23,6 +21,23 @@ export function buildFamilyPhotoKey(userId: string, familyMemberId: string): str
 
 export function buildFamilyPortraitKey(userId: string, familyMemberId: string): string {
   return `${userId}/family/${familyMemberId}/portrait.webp`;
+}
+
+export function buildPortraitVersionPhotoKey(
+  userId: string,
+  familyMemberId: string,
+  portraitVersionId: string,
+): string {
+  return `${userId}/family/${familyMemberId}/portraits/${portraitVersionId}/photo.jpg`;
+}
+
+export function buildPortraitVersionAttemptKey(
+  userId: string,
+  familyMemberId: string,
+  portraitVersionId: string,
+  attemptId: string,
+): string {
+  return `${userId}/family/${familyMemberId}/portraits/${portraitVersionId}/portrait/${attemptId}.webp`;
 }
 
 export function buildMemoryIllustrationKey(userId: string, memoryId: string): string {
@@ -60,6 +75,13 @@ export function isFamilyPhotoKey(objectKey: string, userId: string): boolean {
   return UUID_PATTERN.test(familyMemberId);
 }
 
+export function isPortraitVersionPhotoKey(objectKey: string, userId: string): boolean {
+  const match = objectKey.match(/^([^/]+)\/family\/([^/]+)\/portraits\/([^/]+)\/photo\.jpg$/i);
+  return Boolean(
+    match && match[1] === userId && UUID_PATTERN.test(match[2]) && UUID_PATTERN.test(match[3]),
+  );
+}
+
 export function isMemoryMediaKey(objectKey: string, userId: string): boolean {
   const prefix = `${userId}/memories/`;
   if (!objectKey.startsWith(prefix)) {
@@ -81,12 +103,12 @@ export function isMemoryMediaKey(objectKey: string, userId: string): boolean {
 }
 
 export function isAllowedUploadKey(objectKey: string, userId: string): boolean {
-  return isFamilyPhotoKey(objectKey, userId) || isMemoryMediaKey(objectKey, userId);
+  return isPortraitVersionPhotoKey(objectKey, userId) || isMemoryMediaKey(objectKey, userId);
 }
 
 export function getAllowedContentTypes(objectKey: string, userId: string): Set<string> | null {
-  if (isFamilyPhotoKey(objectKey, userId)) {
-    return FAMILY_PHOTO_CONTENT_TYPES;
+  if (isPortraitVersionPhotoKey(objectKey, userId)) {
+    return new Set(['image/jpeg']);
   }
 
   if (isMemoryMediaKey(objectKey, userId)) {
@@ -123,6 +145,7 @@ export function isFamilyPortraitKey(objectKey: string, userId: string): boolean 
 export function isDeletableUserObjectKey(objectKey: string, userId: string): boolean {
   return (
     isFamilyPhotoKey(objectKey, userId) ||
+    isPortraitVersionPhotoKey(objectKey, userId) ||
     isFamilyPortraitKey(objectKey, userId) ||
     isMemoryMediaKey(objectKey, userId) ||
     isMemoryIllustrationKey(objectKey, userId)
@@ -144,6 +167,8 @@ export function isDeletableUserObjectKey(objectKey: string, userId: string): boo
 export type StorageKeyKind =
   | 'family_photo'
   | 'family_portrait'
+  | 'portrait_version_photo'
+  | 'portrait_version_portrait'
   | 'memory_media'
   | 'memory_illustration';
 
@@ -153,9 +178,17 @@ export interface ParsedStorageKey {
   ownerUserId: string;
   /** The id embedded in the key: a family_members.id for family_photo/family_portrait, a memories.id otherwise. */
   entityId: string;
+  /** Present for portrait-version objects. */
+  portraitVersionId?: string;
+  /** Present for generated portrait attempt objects. */
+  attemptId?: string;
 }
 
 const FAMILY_MEMBER_PATTERN = /^([^/]+)\/family\/([^/]+)\/(photo|portrait)\.webp$/;
+const PORTRAIT_VERSION_PHOTO_PATTERN =
+  /^([^/]+)\/family\/([^/]+)\/portraits\/([^/]+)\/photo\.jpg$/i;
+const PORTRAIT_VERSION_PORTRAIT_PATTERN =
+  /^([^/]+)\/family\/([^/]+)\/portraits\/([^/]+)\/portrait\/([^/]+)\.webp$/i;
 const MEMORY_ILLUSTRATION_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/illustration\.webp$/;
 const MEMORY_MEDIA_FULL_PATTERN =
@@ -164,6 +197,44 @@ const MEMORY_MEDIA_ASSET_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/media\/[A-Za-z0-9_-]{1,128}\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
 
 export function parseStorageKey(objectKey: string): ParsedStorageKey | null {
+  const portraitVersionPhotoMatch = objectKey.match(PORTRAIT_VERSION_PHOTO_PATTERN);
+  if (portraitVersionPhotoMatch) {
+    const [, ownerUserId, entityId, portraitVersionId] = portraitVersionPhotoMatch;
+    if (
+      !UUID_PATTERN.test(ownerUserId) ||
+      !UUID_PATTERN.test(entityId) ||
+      !UUID_PATTERN.test(portraitVersionId)
+    ) {
+      return null;
+    }
+    return {
+      kind: 'portrait_version_photo',
+      ownerUserId,
+      entityId,
+      portraitVersionId,
+    };
+  }
+
+  const portraitVersionPortraitMatch = objectKey.match(PORTRAIT_VERSION_PORTRAIT_PATTERN);
+  if (portraitVersionPortraitMatch) {
+    const [, ownerUserId, entityId, portraitVersionId, attemptId] = portraitVersionPortraitMatch;
+    if (
+      !UUID_PATTERN.test(ownerUserId) ||
+      !UUID_PATTERN.test(entityId) ||
+      !UUID_PATTERN.test(portraitVersionId) ||
+      !UUID_PATTERN.test(attemptId)
+    ) {
+      return null;
+    }
+    return {
+      kind: 'portrait_version_portrait',
+      ownerUserId,
+      entityId,
+      portraitVersionId,
+      attemptId,
+    };
+  }
+
   const familyMemberMatch = objectKey.match(FAMILY_MEMBER_PATTERN);
   if (familyMemberMatch) {
     const [, ownerUserId, entityId, type] = familyMemberMatch;

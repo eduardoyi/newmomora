@@ -120,6 +120,21 @@ async function withMockedIllustrationNetwork(
         ]);
       }
 
+      if (table === 'family_member_portrait_versions') {
+        return jsonResponse([
+          {
+            id: '55555555-5555-4555-8555-555555555555',
+            family_member_id: MEMBER_ID,
+            reference_date: '2026-01-01',
+            profile_picture_key: `${USER_ID}/family/${MEMBER_ID}/portraits/55555555-5555-4555-8555-555555555555/photo.jpg`,
+            illustrated_profile_key: `${USER_ID}/family/${MEMBER_ID}/portraits/55555555-5555-4555-8555-555555555555/portrait/66666666-6666-4666-8666-666666666666.webp`,
+            illustrated_profile_status: 'ready',
+            deletion_token: null,
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ]);
+      }
+
       throw new Error(`Unexpected Supabase request: ${request.method} ${url}`);
     }
 
@@ -199,7 +214,6 @@ Deno.test('generate-illustration rejects unauthenticated requests', async () => 
 
   assertEquals(response.status, 401);
 });
-
 Deno.test('generate-illustration rejects more than six tagged members', async () => {
   const taggedMemberIds = Array.from(
     { length: 7 },

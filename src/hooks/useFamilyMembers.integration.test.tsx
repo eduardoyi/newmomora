@@ -8,10 +8,9 @@ import { useFamily } from '@/hooks/use-family';
 import {
   fetchFamilyMembers,
   createFamilyMemberWithPhoto,
-  markPortraitGenerationFailed,
   updateFamilyMemberWithPhoto,
 } from '@/services/family-members';
-import { generatePortraitIllustration } from '@/services/ai';
+import { generatePortraitVersion } from '@/services/portrait-versions';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -21,16 +20,19 @@ jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
 }));
 
+jest.mock('@/hooks/usePortraitVersions', () => ({
+  useFamilyPortraitVersions: jest.fn(() => ({ data: [], isLoading: false })),
+}));
+
+jest.mock('@/services/portrait-versions', () => ({
+  generatePortraitVersion: jest.fn().mockResolvedValue({ error: null }),
+}));
+
 jest.mock('@/services/family-members', () => ({
   fetchFamilyMembers: jest.fn(),
   createFamilyMemberWithPhoto: jest.fn(),
   updateFamilyMemberWithPhoto: jest.fn(),
   deleteFamilyMember: jest.fn(),
-  markPortraitGenerationFailed: jest.fn().mockResolvedValue({ error: null }),
-}));
-
-jest.mock('@/services/ai', () => ({
-  generatePortraitIllustration: jest.fn().mockResolvedValue({ error: null }),
 }));
 
 const mockedFetchFamilyMembers = fetchFamilyMembers as jest.MockedFunction<
@@ -42,11 +44,8 @@ const mockedCreateFamilyMemberWithPhoto = createFamilyMemberWithPhoto as jest.Mo
 const mockedUpdateFamilyMemberWithPhoto = updateFamilyMemberWithPhoto as jest.MockedFunction<
   typeof updateFamilyMemberWithPhoto
 >;
-const mockedGeneratePortraitIllustration = generatePortraitIllustration as jest.MockedFunction<
-  typeof generatePortraitIllustration
->;
-const mockedMarkPortraitGenerationFailed = markPortraitGenerationFailed as jest.MockedFunction<
-  typeof markPortraitGenerationFailed
+const mockedGeneratePortraitVersion = generatePortraitVersion as jest.MockedFunction<
+  typeof generatePortraitVersion
 >;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
@@ -119,6 +118,7 @@ describe('useFamilyMembers integration', () => {
         id: 'member-1',
         name: 'Maya',
       } as never,
+      portraitVersion: { id: 'version-1' } as never,
       error: null,
     });
 
@@ -143,10 +143,11 @@ describe('useFamilyMembers integration', () => {
     );
   });
 
-  it('updates a member without triggering portrait generation by default', async () => {
+  it('updates member details without triggering portrait generation', async () => {
     mockedFetchFamilyMembers.mockResolvedValue({ data: [], error: null });
     mockedUpdateFamilyMemberWithPhoto.mockResolvedValue({
       data: { id: 'member-1', name: 'Maya' } as never,
+      portraitVersion: null,
       error: null,
     });
 
@@ -159,21 +160,19 @@ describe('useFamilyMembers integration', () => {
     await result.current.updateMember({
       memberId: 'member-1',
       name: 'Maya',
-      photoUri: 'file:///photo.jpg',
-      photoContentType: 'image/jpeg',
-      regeneratePortrait: false,
     });
 
     expect(mockedUpdateFamilyMemberWithPhoto).toHaveBeenCalledWith(
-      expect.objectContaining({ regeneratePortrait: false }),
+      expect.objectContaining({ name: 'Maya' }),
     );
-    expect(mockedGeneratePortraitIllustration).not.toHaveBeenCalled();
+    expect(mockedGeneratePortraitVersion).not.toHaveBeenCalled();
   });
 
-  it('triggers portrait generation when regeneratePortrait is true', async () => {
+  it('generates the immutable portrait version returned for a new photo', async () => {
     mockedFetchFamilyMembers.mockResolvedValue({ data: [], error: null });
     mockedUpdateFamilyMemberWithPhoto.mockResolvedValue({
       data: { id: 'member-1', name: 'Maya' } as never,
+      portraitVersion: { id: 'version-2' } as never,
       error: null,
     });
 
@@ -187,19 +186,21 @@ describe('useFamilyMembers integration', () => {
       memberId: 'member-1',
       photoUri: 'file:///photo.jpg',
       photoContentType: 'image/jpeg',
-      regeneratePortrait: true,
+      photoReferenceDate: '2024-01-01',
+      photoDateSource: 'manual',
     });
 
-    expect(mockedGeneratePortraitIllustration).toHaveBeenCalledWith('member-1');
+    expect(mockedGeneratePortraitVersion).toHaveBeenCalledWith('version-2');
   });
 
-  it('marks a regenerated portrait failed when generation times out', async () => {
+  it('does not write a failed state when generation times out client-side', async () => {
     mockedFetchFamilyMembers.mockResolvedValue({ data: [], error: null });
     mockedUpdateFamilyMemberWithPhoto.mockResolvedValue({
       data: { id: 'member-1', name: 'Maya' } as never,
+      portraitVersion: { id: 'version-3' } as never,
       error: null,
     });
-    mockedGeneratePortraitIllustration.mockResolvedValueOnce({
+    mockedGeneratePortraitVersion.mockResolvedValueOnce({
       error: { message: 'Illustration generation timed out', code: 'generation_timeout' },
     });
 
@@ -211,11 +212,10 @@ describe('useFamilyMembers integration', () => {
       memberId: 'member-1',
       photoUri: 'file:///replacement.jpg',
       photoContentType: 'image/jpeg',
-      regeneratePortrait: true,
     });
 
     await waitFor(() => {
-      expect(mockedMarkPortraitGenerationFailed).toHaveBeenCalledWith('member-1');
+      expect(mockedGeneratePortraitVersion).toHaveBeenCalledWith('version-3');
     });
   });
 });

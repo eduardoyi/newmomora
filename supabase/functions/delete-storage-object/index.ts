@@ -4,6 +4,7 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import {
   getCallerFamilyRole,
   isManagerRole,
+  resolveReferencedStorageKeys,
   resolveStorageKeyFamilyIds,
 } from '../_shared/family-access.ts';
 import { deleteObject } from '../_shared/r2.ts';
@@ -56,6 +57,31 @@ export async function handleDeleteStorageObject(req: Request): Promise<Response>
 
   if (!isManagerRole(role)) {
     return errorResponse('Not authorized for this object', 403, 'forbidden');
+  }
+
+  const referenced = await resolveReferencedStorageKeys(serviceClient, [resolved]);
+  const isVersionSource = resolved.parsed?.kind === 'portrait_version_photo';
+  const isVersionManaged =
+    isVersionSource || resolved.parsed?.kind === 'portrait_version_portrait';
+
+  // Version rows are deleted only through delete-portrait-version, which
+  // removes the complete prefix and preserves last-usable invariants. This
+  // endpoint only supports rolling back a caller-owned source upload that
+  // never made it into the database.
+  if (isVersionManaged) {
+    if (
+      !isVersionSource ||
+      referenced.has(objectKey) ||
+      resolved.parsed?.ownerUserId !== user.id
+    ) {
+      return errorResponse(
+        'Portrait version objects require version deletion',
+        409,
+        'version_managed',
+      );
+    }
+  } else if (!referenced.has(objectKey)) {
+    return errorResponse('Invalid object key', 400, 'validation_error');
   }
 
   try {

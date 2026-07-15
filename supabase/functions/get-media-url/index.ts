@@ -1,7 +1,11 @@
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
-import { getCallerFamilyRoles, resolveStorageKeyFamilyIds } from '../_shared/family-access.ts';
+import {
+  getCallerFamilyRoles,
+  resolveReferencedStorageKeys,
+  resolveStorageKeyFamilyIds,
+} from '../_shared/family-access.ts';
 import { createPresignedGetUrls, R2_URL_EXPIRY } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 
@@ -69,6 +73,11 @@ export async function handleGetMediaUrl(req: Request): Promise<Response> {
 
   if (resolved.some((entry) => roles.get(entry.familyId as string) === null)) {
     return errorResponse('Not authorized for one or more objects', 403, 'forbidden');
+  }
+
+  const referenced = await resolveReferencedStorageKeys(serviceClient, resolved);
+  if (keys.some((key) => !referenced.has(key))) {
+    return errorResponse('Invalid object key', 400, 'validation_error');
   }
 
   try {

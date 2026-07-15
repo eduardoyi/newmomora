@@ -110,12 +110,12 @@ flowchart TD
 
 1. Sign up with email/password
 2. Prompt to add **first family member** — nudge: *"Add your child first — Momora is about capturing their moments"*
-3. First family member requires profile photo → AI character portrait generates (blocking for first memory)
+3. First family member requires a profile photo → AI character portrait generates asynchronously
 4. Optional: parent/co-parent profile can be added later (not required at signup)
 5. Guided first memory creation → first illustration generates
 6. Land on timeline with "aha" moment
 
-**Activation definition:** User completes onboarding when they have ≥1 family portrait ready, ≥1 saved memory, and ≥1 illustration ready.
+**Activation definition:** User completes onboarding when they have ≥1 family member and ≥1 saved memory. Portrait/illustration readiness is tracked separately and never blocks saving a memory.
 
 ### Journey B — Daily Capture (Text, Voice, or Media)
 
@@ -196,8 +196,14 @@ Each feature includes user stories, acceptance criteria, and deferred scope.
 - Onboarding **nudges user to add a child first**
 - Parent/co-parent profile is optional at signup; can be added later
 - Profile photo required for character generation on any illustrated member
-- Portrait generation triggered on save when photo is new or changed
-- Edit profile without forcing regeneration unless photo changes
+- Every new or updated profile photo creates a dated, immutable source-photo/portrait pair; existing pairs remain available
+- Library EXIF capture dates prefill the portrait date when trustworthy; users can correct it or backdate older photos
+- A portrait timeline shows the paired source/illustrated images and the member's age at each date
+- Portrait generation is asynchronous; adding a new version or regenerating one never hides the last ready portrait on failure
+- Memories use the latest ready portrait on or before `memory_date`; when none exists, they use the earliest ready portrait after the date, then an undated migrated legacy portrait
+- Timeline and memory-detail family chips use the same date-aware portrait selection as generation
+- Portrait dates cannot precede DOB or exceed the acting user's local current date
+- Edit profile fields without forcing portrait generation when no photo is added
 - User can manually retry failed portrait generation
 
 **Deferred:** Pets, shared co-parent accounts, LORA/custom character training
@@ -272,23 +278,23 @@ sequenceDiagram
 
 #### Portrait Generation (per family member)
 
-Triggered when a family member is saved with a new or changed profile photo.
+Triggered for each dated portrait version created from a new profile photo.
 
 | Input | Description |
 |-------|-------------|
 | Profile photo | User-uploaded reference |
 | Age / gender | From profile fields |
-| Style token | From `user_profiles.illustration_style` |
+| Style token | From `families.illustration_style` |
 
 **Style system**
 
 - MVP ships with a **single global style** (`illustration_style: 'default'`)
-- Style is stored as a **token** on `user_profiles` — architecture supports adding more styles post-MVP without schema changes
+- Style is stored as a **token** on `families` — architecture supports adding more styles post-MVP without schema changes
 - Style reference image mapped from token server-side
 
 **Model:** OpenAI `gpt-image-2` (fallback: `gpt-image-1`) via image edit endpoint with style reference
 
-**Output:** `illustrated_profile_url` and `illustrated_profile_status` on `family_members`
+**Output:** unique R2 portrait key and generation status on `family_member_portrait_versions`
 
 #### Memory Illustration Generation
 

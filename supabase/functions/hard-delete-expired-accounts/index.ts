@@ -24,10 +24,11 @@ export async function collectFamilyStorageKeys(
 ): Promise<string[]> {
   const keys: string[] = [];
 
-  const { data: memories } = await supabase
+  const { data: memories, error: memoriesError } = await supabase
     .from('memories')
     .select('id, media_key, illustration_key')
     .eq('family_id', familyId);
+  if (memoriesError) throw new Error(`Memory storage lookup failed: ${memoriesError.message}`);
 
   const memoryIds: string[] = [];
   for (const memory of memories ?? []) {
@@ -37,24 +38,42 @@ export async function collectFamilyStorageKeys(
   }
 
   if (memoryIds.length > 0) {
-    const { data: mediaAssets } = await supabase
+    const { data: mediaAssets, error: mediaAssetsError } = await supabase
       .from('memory_media')
       .select('object_key')
       .in('memory_id', memoryIds);
+    if (mediaAssetsError) {
+      throw new Error(`Memory media storage lookup failed: ${mediaAssetsError.message}`);
+    }
 
     for (const asset of mediaAssets ?? []) {
       if (asset.object_key) keys.push(asset.object_key);
     }
   }
 
-  const { data: members } = await supabase
+  const { data: members, error: membersError } = await supabase
     .from('family_members')
     .select('profile_picture_key, illustrated_profile_key')
     .eq('family_id', familyId);
+  if (membersError) throw new Error(`Family member storage lookup failed: ${membersError.message}`);
 
   for (const member of members ?? []) {
     if (member.profile_picture_key) keys.push(member.profile_picture_key);
     if (member.illustrated_profile_key) keys.push(member.illustrated_profile_key);
+  }
+
+  const { data: portraitVersions, error: portraitVersionsError } = await supabase
+    .from('family_member_portrait_versions')
+    .select('profile_picture_key, illustrated_profile_key, generation_output_key')
+    .eq('family_id', familyId);
+  if (portraitVersionsError) {
+    throw new Error(`Portrait version storage lookup failed: ${portraitVersionsError.message}`);
+  }
+
+  for (const version of portraitVersions ?? []) {
+    if (version.profile_picture_key) keys.push(version.profile_picture_key);
+    if (version.illustrated_profile_key) keys.push(version.illustrated_profile_key);
+    if (version.generation_output_key) keys.push(version.generation_output_key);
   }
 
   return [...new Set(keys)];
@@ -81,13 +100,20 @@ async function deleteOwnedFamilies(supabase: ServiceClient, ownerId: string): Pr
   for (const family of ownedFamilies ?? []) {
     try {
       const keys = await collectFamilyStorageKeys(supabase, family.id);
-      await Promise.all(keys.map((key) => deleteObject(key)));
+      const versionPrefixes = keys
+        .filter((key) => key.endsWith('/photo.jpg') && key.includes('/portraits/'))
+        .map((key) => key.slice(0, -'photo.jpg'.length));
+      const prefixKeys = (
+        await Promise.all(versionPrefixes.map((prefix) => listObjectKeys(prefix)))
+      ).flat();
+      await Promise.all([...new Set([...keys, ...prefixKeys])].map((key) => deleteObject(key)));
     } catch (storageError) {
       console.error(
         'hard-delete-expired-accounts owned-family storage cleanup failed',
         family.id,
         storageError instanceof Error ? storageError.message : 'unknown',
       );
+      continue;
     }
 
     const { error: deleteFamilyError } = await supabase.from('families').delete().eq('id', family.id);
@@ -121,17 +147,51 @@ export async function resolveReferencedKeys(
     return referenced;
   }
 
-  const [mediaAssetRows, memoryMediaKeyRows, memoryIllustrationKeyRows, memberPhotoRows, memberPortraitRows] =
-    await Promise.all([
-      supabase.from('memory_media').select('object_key').in('object_key', keys),
-      supabase.from('memories').select('media_key').in('media_key', keys),
-      supabase.from('memories').select('illustration_key').in('illustration_key', keys),
-      supabase.from('family_members').select('profile_picture_key').in('profile_picture_key', keys),
-      supabase
-        .from('family_members')
-        .select('illustrated_profile_key')
-        .in('illustrated_profile_key', keys),
-    ]);
+  const [
+    mediaAssetRows,
+    memoryMediaKeyRows,
+    memoryIllustrationKeyRows,
+    memberPhotoRows,
+    memberPortraitRows,
+    versionPhotoRows,
+    versionPortraitRows,
+    versionAttemptRows,
+  ] = await Promise.all([
+    supabase.from('memory_media').select('object_key').in('object_key', keys),
+    supabase.from('memories').select('media_key').in('media_key', keys),
+    supabase.from('memories').select('illustration_key').in('illustration_key', keys),
+    supabase.from('family_members').select('profile_picture_key').in('profile_picture_key', keys),
+    supabase
+      .from('family_members')
+      .select('illustrated_profile_key')
+      .in('illustrated_profile_key', keys),
+    supabase
+      .from('family_member_portrait_versions')
+      .select('profile_picture_key')
+      .in('profile_picture_key', keys),
+    supabase
+      .from('family_member_portrait_versions')
+      .select('illustrated_profile_key')
+      .in('illustrated_profile_key', keys),
+    supabase
+      .from('family_member_portrait_versions')
+      .select('generation_output_key')
+      .in('generation_output_key', keys),
+  ]);
+
+  const lookupError = [
+    mediaAssetRows,
+    memoryMediaKeyRows,
+    memoryIllustrationKeyRows,
+    memberPhotoRows,
+    memberPortraitRows,
+    versionPhotoRows,
+    versionPortraitRows,
+    versionAttemptRows,
+  ].find((result) => result.error)?.error;
+  if (lookupError) {
+    throw new Error(`Referenced storage lookup failed: ${lookupError.message}`);
+  }
 
   for (const row of mediaAssetRows.data ?? []) {
     if (row.object_key) referenced.add(row.object_key);
@@ -147,6 +207,15 @@ export async function resolveReferencedKeys(
   }
   for (const row of memberPortraitRows.data ?? []) {
     if (row.illustrated_profile_key) referenced.add(row.illustrated_profile_key);
+  }
+  for (const row of versionPhotoRows.data ?? []) {
+    if (row.profile_picture_key) referenced.add(row.profile_picture_key);
+  }
+  for (const row of versionPortraitRows.data ?? []) {
+    if (row.illustrated_profile_key) referenced.add(row.illustrated_profile_key);
+  }
+  for (const row of versionAttemptRows.data ?? []) {
+    if (row.generation_output_key) referenced.add(row.generation_output_key);
   }
 
   return referenced;

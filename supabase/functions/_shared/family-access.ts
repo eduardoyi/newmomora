@@ -157,3 +157,77 @@ export async function resolveStorageKeyFamilyIds(
     return { ...entry, familyId };
   });
 }
+
+/**
+ * Returns the exact keys currently referenced by their parsed owning rows.
+ * Parsing an entity id establishes tenancy, but is not enough to authorize
+ * a read: otherwise a caller could presign a fabricated object below a real
+ * member/memory prefix.
+ */
+export async function resolveReferencedStorageKeys(
+  supabase: SupabaseClient,
+  resolvedKeys: ResolvedStorageKey[],
+): Promise<Set<string>> {
+  const referenced = new Set<string>();
+  const memoryIds = new Set<string>();
+  const memberIds = new Set<string>();
+  const portraitVersionIds = new Set<string>();
+
+  for (const entry of resolvedKeys) {
+    if (!entry.parsed) continue;
+    if (entry.parsed.kind === 'memory_media' || entry.parsed.kind === 'memory_illustration') {
+      memoryIds.add(entry.parsed.entityId);
+    } else if (
+      entry.parsed.kind === 'portrait_version_photo' ||
+      entry.parsed.kind === 'portrait_version_portrait'
+    ) {
+      if (entry.parsed.portraitVersionId) {
+        portraitVersionIds.add(entry.parsed.portraitVersionId);
+      }
+    } else {
+      memberIds.add(entry.parsed.entityId);
+    }
+  }
+
+  if (memoryIds.size > 0) {
+    const ids = [...memoryIds];
+    const [{ data: memories }, { data: assets }] = await Promise.all([
+      supabase.from('memories').select('id, media_key, illustration_key').in('id', ids),
+      supabase.from('memory_media').select('memory_id, object_key').in('memory_id', ids),
+    ]);
+    for (const row of memories ?? []) {
+      if (row.media_key) referenced.add(row.media_key);
+      if (row.illustration_key) referenced.add(row.illustration_key);
+    }
+    for (const row of assets ?? []) {
+      if (row.object_key) referenced.add(row.object_key);
+    }
+  }
+
+  if (memberIds.size > 0) {
+    const { data } = await supabase
+      .from('family_members')
+      .select('id, profile_picture_key, illustrated_profile_key')
+      .in('id', [...memberIds]);
+    for (const row of data ?? []) {
+      if (row.profile_picture_key) referenced.add(row.profile_picture_key);
+      if (row.illustrated_profile_key) referenced.add(row.illustrated_profile_key);
+    }
+  }
+
+  if (portraitVersionIds.size > 0) {
+    const { data } = await supabase
+      .from('family_member_portrait_versions')
+      .select(
+        'id, family_member_id, profile_picture_key, illustrated_profile_key, generation_output_key',
+      )
+      .in('id', [...portraitVersionIds]);
+    for (const row of data ?? []) {
+      if (row.profile_picture_key) referenced.add(row.profile_picture_key);
+      if (row.illustrated_profile_key) referenced.add(row.illustrated_profile_key);
+      if (row.generation_output_key) referenced.add(row.generation_output_key);
+    }
+  }
+
+  return referenced;
+}

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useMemo } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
@@ -8,31 +8,36 @@ import {
   createFamilyMemberWithPhoto,
   deleteFamilyMember,
   fetchFamilyMembers,
-  markPortraitGenerationFailed,
   updateFamilyMemberWithPhoto,
   type CreateFamilyMemberWithPhotoInput,
   type FamilyMember,
 } from '@/services/family-members';
-import { generatePortraitIllustration } from '@/services/ai';
+import { generatePortraitVersion } from '@/services/portrait-versions';
+import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
+import {
+  getLocalTodayIso,
+  groupPortraitVersionsByMember,
+  resolveMemberPortraitFields,
+  type PortraitDateSource,
+} from '@/utils/portrait-versions';
 
 export function useFamilyMembers() {
   const { user } = useAuth();
   const { familyId } = useFamily();
   const queryClient = useQueryClient();
-  const previousPortraitStatusRef = useRef<Map<string, string>>(new Map());
+  const portraitVersionsQuery = useFamilyPortraitVersions();
   const familyMembersQueryKey = buildFamilyMembersQueryKey(familyId);
 
-  const startPortraitGeneration = (memberId: string) => {
+  const startPortraitGeneration = (portraitVersionId: string) => {
     void (async () => {
       try {
-        const { error } = await generatePortraitIllustration(memberId);
-        if (error) {
-          await markPortraitGenerationFailed(memberId);
-        }
+        await generatePortraitVersion(portraitVersionId);
       } catch {
-        await markPortraitGenerationFailed(memberId);
+        // Server-owned attempt state is polled; a client timeout must not
+        // overwrite an attempt that may still complete successfully.
       } finally {
         queryClient.invalidateQueries({ queryKey: familyMembersQueryKey });
+        queryClient.invalidateQueries({ queryKey: ['portrait-versions'] });
       }
     })();
   };
@@ -49,17 +54,23 @@ export function useFamilyMembers() {
       return data ?? [];
     },
     enabled: Boolean(user) && Boolean(familyId),
-    refetchInterval: (queryState) => {
-      const members = queryState.state.data ?? [];
-      const hasGeneratingPortrait = members.some(
-        (member) =>
-          member.illustrated_profile_status === 'pending' ||
-          member.illustrated_profile_status === 'generating',
-      );
-
-      return hasGeneratingPortrait ? 5000 : false;
-    },
   });
+
+  const members = useMemo(() => {
+    // During the expand/cutover window, keep legacy avatar fields visible
+    // until the portrait-version query has actually resolved.
+    if (portraitVersionsQuery.data === undefined) {
+      return query.data ?? [];
+    }
+    const portraitMap = groupPortraitVersionsByMember(portraitVersionsQuery.data ?? []);
+    const today = getLocalTodayIso();
+    return (query.data ?? []).map((member) => {
+      const versions = portraitMap.get(member.id) ?? [];
+      return versions.length === 0
+        ? member
+        : { ...member, ...resolveMemberPortraitFields(versions, today, member.updated_at) };
+    });
+  }, [query.data, portraitVersionsQuery.data]);
 
   const createMutation = useMutation({
     mutationFn: async (input: Omit<CreateFamilyMemberWithPhotoInput, 'userId' | 'familyId'>) => {
@@ -70,7 +81,7 @@ export function useFamilyMembers() {
         throw new Error('You must have a family to add a family member');
       }
 
-      const { data, error } = await createFamilyMemberWithPhoto({
+      const { data, portraitVersion, error } = await createFamilyMemberWithPhoto({
         ...input,
         userId: user.id,
         familyId,
@@ -80,12 +91,13 @@ export function useFamilyMembers() {
         throw error;
       }
 
-      return data as FamilyMember;
+      return { member: data as FamilyMember, portraitVersion };
     },
-    onSuccess: (member) => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: familyMembersQueryKey });
-      if (member?.id) {
-        startPortraitGeneration(member.id);
+      queryClient.invalidateQueries({ queryKey: ['portrait-versions'] });
+      if (result.portraitVersion?.id) {
+        startPortraitGeneration(result.portraitVersion.id);
       }
     },
   });
@@ -100,6 +112,9 @@ export function useFamilyMembers() {
       nicknames?: string[];
       photoUri?: string;
       photoContentType?: string;
+      photoReferenceDate?: string;
+      photoDateSource?: Exclude<PortraitDateSource, 'legacy_unknown'>;
+      /** Deprecated compatibility input; a new photo always creates a version. */
       regeneratePortrait?: boolean;
     }) => {
       if (!user) {
@@ -109,7 +124,7 @@ export function useFamilyMembers() {
         throw new Error('You must have a family to update a family member');
       }
 
-      const { data, error } = await updateFamilyMemberWithPhoto({
+      const { data, portraitVersion, error } = await updateFamilyMemberWithPhoto({
         memberId: input.memberId,
         userId: user.id,
         familyId,
@@ -120,49 +135,25 @@ export function useFamilyMembers() {
         nicknames: input.nicknames,
         photoUri: input.photoUri,
         photoContentType: input.photoContentType,
-        regeneratePortrait: input.regeneratePortrait,
+        photoReferenceDate: input.photoReferenceDate,
+        photoDateSource: input.photoDateSource,
       });
 
       if (error) {
         throw error;
       }
 
-      const member = data as FamilyMember;
-
-      if (input.photoUri && input.regeneratePortrait && member?.id) {
-        startPortraitGeneration(member.id);
+      if (portraitVersion?.id) {
+        startPortraitGeneration(portraitVersion.id);
       }
 
-      return member;
+      return data as FamilyMember;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: familyMembersQueryKey });
+      queryClient.invalidateQueries({ queryKey: ['portrait-versions'] });
     },
   });
-
-  useEffect(() => {
-    const members = query.data ?? [];
-    let portraitBecameReady = false;
-
-    for (const member of members) {
-      const previousStatus = previousPortraitStatusRef.current.get(member.id);
-      previousPortraitStatusRef.current.set(member.id, member.illustrated_profile_status);
-
-      if (
-        member.illustrated_profile_status === 'ready' &&
-        (previousStatus === 'pending' || previousStatus === 'generating')
-      ) {
-        portraitBecameReady = true;
-      }
-    }
-
-    if (!portraitBecameReady) {
-      return;
-    }
-
-    void query.refetch();
-    queryClient.invalidateQueries({ queryKey: ['media-urls'] });
-  }, [query.data, query.refetch, queryClient]);
 
   const deleteMutation = useMutation({
     mutationFn: async (memberId: string) => {
@@ -174,11 +165,14 @@ export function useFamilyMembers() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: familyMembersQueryKey });
+      queryClient.invalidateQueries({ queryKey: ['portrait-versions'] });
+      queryClient.invalidateQueries({ queryKey: ['memories'] });
+      queryClient.invalidateQueries({ queryKey: ['media-urls'] });
     },
   });
 
   return {
-    members: query.data ?? [],
+    members,
     isLoading: query.isLoading,
     isRefetching: query.isRefetching,
     isError: query.isError,
@@ -191,7 +185,7 @@ export function useFamilyMembers() {
     isUpdating: updateMutation.isPending,
     deleteMember: deleteMutation.mutateAsync,
     isDeleting: deleteMutation.isPending,
-    hasMembers: (query.data?.length ?? 0) > 0,
+    hasMembers: members.length > 0,
   };
 }
 

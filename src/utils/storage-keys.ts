@@ -6,6 +6,14 @@ export function buildFamilyPortraitKey(userId: string, familyMemberId: string): 
   return `${userId}/family/${familyMemberId}/portrait.webp`;
 }
 
+export function buildFamilyPortraitVersionPhotoKey(
+  userId: string,
+  familyMemberId: string,
+  portraitVersionId: string,
+): string {
+  return `${userId}/family/${familyMemberId}/portraits/${portraitVersionId}/photo.jpg`;
+}
+
 export function buildMemoryMediaKey(userId: string, memoryId: string, ext: string): string {
   return `${userId}/memories/${memoryId}/media.${ext}`;
 }

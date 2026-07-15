@@ -19,7 +19,7 @@ export type FamilyProfilePortraitMember = Pick<
   | 'illustrated_profile_key'
   | 'illustrated_profile_status'
   | 'updated_at'
->;
+> & Partial<Pick<FamilyMember, 'avatarImageKey' | 'avatarStatus' | 'avatarUpdatedAt'>>;
 
 interface FamilyProfilePortraitPhotoProps {
   member: FamilyProfilePortraitMember;
@@ -46,12 +46,16 @@ export function FamilyProfilePortraitPhoto({
   style,
   accessibilityLabel,
 }: FamilyProfilePortraitPhotoProps) {
-  const status = (member.illustrated_profile_status ?? 'pending') as IllustratedProfileStatus;
+  const status = (
+    'avatarStatus' in member
+      ? member.avatarStatus ?? 'pending'
+      : member.illustrated_profile_status ?? 'pending'
+  ) as IllustratedProfileStatus;
   const showGeneratingOverlay = isPortraitInProgress(status) || forceGeneratingOverlay;
   const remoteKey = getProfilePortraitPhotoKey(member);
   const { url: remoteUrl, isLoading } = useMediaUrl(
     localPhotoUri ? null : remoteKey,
-    member.updated_at,
+    member.avatarUpdatedAt ?? member.updated_at,
   );
   const displayUri = localPhotoUri ?? remoteUrl;
   const resolvedRadius = borderRadius ?? width / 2;

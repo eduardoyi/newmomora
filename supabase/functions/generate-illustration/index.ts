@@ -25,6 +25,10 @@ import { buildMemoryIllustrationKey } from '../_shared/storage-keys.ts';
 import { resolveMemberIdsForIllustration } from '../_shared/illustration-members.ts';
 import { isIllustrationGenerationStale } from '../_shared/illustration-status.ts';
 import { createUserClient } from '../_shared/supabase-admin.ts';
+import {
+  type PortraitVersionCandidate,
+  resolvePortraitVersionAtDate,
+} from '../_shared/portrait-versions.ts';
 
 export interface GenerateIllustrationRequest {
   memoryId: string;
@@ -36,18 +40,6 @@ export interface GenerateIllustrationRequest {
 export interface GenerateIllustrationResponse {
   success: true;
   illustrationKey: string;
-}
-
-interface ReadyFamilyMember {
-  id: string;
-  name: string;
-  nicknames: string[] | null;
-  date_of_birth: string | null;
-  gender: string | null;
-  additional_info: string | null;
-  illustrated_profile_key: string | null;
-  illustrated_profile_status: string | null;
-  profile_picture_key: string | null;
 }
 
 const EMPTY_MEMBER_ID = '00000000-0000-4000-8000-000000000000';
@@ -196,9 +188,7 @@ export async function handleGenerateIllustration(
 
   const { data: members, error: membersError } = await supabase
     .from('family_members')
-    .select(
-      'id, name, nicknames, date_of_birth, gender, additional_info, illustrated_profile_key, illustrated_profile_status, profile_picture_key',
-    )
+    .select('id, name, nicknames, date_of_birth, gender, additional_info')
     .eq('family_id', memory.family_id)
     .in('id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID]);
 
@@ -207,10 +197,42 @@ export async function handleGenerateIllustration(
     return errorResponse('Failed to load family members', 500, 'internal_error');
   }
 
+  const { data: portraitVersions, error: portraitVersionsError } = await supabase
+    .from('family_member_portrait_versions')
+    .select(
+      'id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, created_at',
+    )
+    .in('family_member_id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
+    .not('illustrated_profile_key', 'is', null);
+
+  if (portraitVersionsError) {
+    console.error('generate-illustration portrait lookup failed', portraitVersionsError.message);
+    return errorResponse('Failed to load character portraits', 500, 'internal_error');
+  }
+
+  const versionsByMember = new Map<string, PortraitVersionCandidate[]>();
+  for (const portraitVersion of (portraitVersions ?? []) as PortraitVersionCandidate[]) {
+    const current = versionsByMember.get(portraitVersion.family_member_id) ?? [];
+    current.push(portraitVersion);
+    versionsByMember.set(portraitVersion.family_member_id, current);
+  }
+
   const readyMembers = sortMembersByTagOrder(
-    (members ?? []).filter(
-      (member) => member.illustrated_profile_status === 'ready' && member.illustrated_profile_key,
-    ),
+    (members ?? []).flatMap((member) => {
+      const selected = resolvePortraitVersionAtDate(
+        versionsByMember.get(member.id) ?? [],
+        memory.memory_date,
+      );
+      return selected
+        ? [
+            {
+              ...member,
+              illustrated_profile_key: selected.illustrated_profile_key,
+              profile_picture_key: selected.profile_picture_key,
+            },
+          ]
+        : [];
+    }),
     memberIds,
   );
 

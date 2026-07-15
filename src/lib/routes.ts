@@ -42,3 +42,7 @@ export function familyMemberRoute(memberId: string): Href {
 export function editFamilyMemberRoute(memberId: string): Href {
   return `/(app)/family/${memberId}/edit` as Href;
 }
+
+export function portraitTimelineRoute(memberId: string): Href {
+  return `/(app)/family/${memberId}/portraits` as Href;
+}

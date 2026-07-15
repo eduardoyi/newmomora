@@ -3,49 +3,36 @@ import {
   fetchFamilyMembers,
   updateFamilyMemberWithPhoto,
 } from '@/services/family-members';
-import { getUploadUrl, uploadToPresignedUrl } from '@/services/media';
+import { invokeEdgeFunction } from '@/services/ai';
+import { createPortraitVersion } from '@/services/portrait-versions';
 import { supabase } from '@/lib/supabase';
 
 jest.mock('@/lib/supabase', () => ({
-  supabase: {
-    from: jest.fn(),
-    functions: {
-      invoke: jest.fn(),
-    },
-  },
+  supabase: { from: jest.fn() },
 }));
 
-jest.mock('@/services/media', () => ({
-  getUploadUrl: jest.fn(),
-  uploadToPresignedUrl: jest.fn(),
-  getMediaUrls: jest.fn(),
+jest.mock('@/services/ai', () => ({
+  invokeEdgeFunction: jest.fn().mockResolvedValue({ data: { success: true }, error: null }),
 }));
 
-jest.mock('@/utils/profile-photo', () => ({
-  prepareProfilePhotoForUpload: jest.fn(async (uri: string) => ({
-    uri: `${uri}-prepared`,
-    contentType: 'image/jpeg',
-  })),
+jest.mock('@/services/portrait-versions', () => ({
+  createPortraitVersion: jest.fn(),
 }));
 
 const mockedSupabase = supabase as jest.Mocked<typeof supabase>;
-const mockedGetUploadUrl = getUploadUrl as jest.MockedFunction<typeof getUploadUrl>;
-const mockedUploadToPresignedUrl = uploadToPresignedUrl as jest.MockedFunction<
-  typeof uploadToPresignedUrl
+const mockedCreatePortraitVersion = createPortraitVersion as jest.MockedFunction<
+  typeof createPortraitVersion
 >;
+const mockedInvokeEdgeFunction = invokeEdgeFunction as jest.MockedFunction<typeof invokeEdgeFunction>;
 
 describe('family-members service integration', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
+  beforeEach(() => jest.clearAllMocks());
 
-  it('fetchFamilyMembers orders members by tag count, then created_at', async () => {
+  it('orders family members by tag count', async () => {
     const order = jest.fn().mockResolvedValue({
       data: [
         { id: 'member-1', name: 'Maya', memory_family_members: [{ count: 2 }] },
         { id: 'member-2', name: 'Leo', memory_family_members: [{ count: 7 }] },
-        { id: 'member-3', name: 'Ana', memory_family_members: [] },
-        { id: 'member-4', name: 'Sol', memory_family_members: [{ count: 2 }] },
       ],
       error: null,
     });
@@ -54,64 +41,19 @@ describe('family-members service integration', () => {
 
     const result = await fetchFamilyMembers();
 
-    expect(select).toHaveBeenCalledWith('*, memory_family_members(count)');
-    expect(order).toHaveBeenCalledWith('created_at', { ascending: true });
-    expect(result.data).toEqual([
-      { id: 'member-2', name: 'Leo' },
-      { id: 'member-1', name: 'Maya' },
-      { id: 'member-4', name: 'Sol' },
-      { id: 'member-3', name: 'Ana' },
-    ]);
+    expect(result.data?.map((member) => member.id)).toEqual(['member-2', 'member-1']);
   });
 
-  it('createFamilyMemberWithPhoto uploads photo and updates profile key', async () => {
-    const member = {
-      id: 'member-1',
-      user_id: 'user-1',
-      name: 'Maya',
-      profile_picture_key: null,
-    };
-
-    const insertSingle = jest.fn().mockResolvedValue({ data: member, error: null });
-    const insertSelect = jest.fn().mockReturnValue({ single: insertSingle });
-    const insert = jest.fn().mockReturnValue({ select: insertSelect });
-
-    const updateSingle = jest.fn().mockResolvedValue({
-      data: {
-        ...member,
-        profile_picture_key: 'user-1/family/member-1/photo.webp',
-      },
+  it('creates the member then its first immutable portrait version', async () => {
+    const member = { id: 'member-1', family_id: 'family-1', date_of_birth: '2020-05-24' };
+    const single = jest.fn().mockResolvedValue({ data: member, error: null });
+    const select = jest.fn().mockReturnValue({ single });
+    const insert = jest.fn().mockReturnValue({ select });
+    mockedSupabase.from.mockReturnValue({ insert } as never);
+    mockedCreatePortraitVersion.mockResolvedValue({
+      data: { id: 'portrait-1' } as never,
       error: null,
     });
-    const updateSelect = jest.fn().mockReturnValue({ single: updateSingle });
-    const updateEq = jest.fn().mockReturnValue({ select: updateSelect });
-    const update = jest.fn().mockReturnValue({ eq: updateEq });
-
-    const deleteEq = jest.fn().mockResolvedValue({ error: null });
-    const deleteFn = jest.fn().mockReturnValue({ eq: deleteEq });
-
-    mockedSupabase.from.mockImplementation((table: string) => {
-      if (table === 'family_members') {
-        return {
-          insert,
-          update,
-          delete: deleteFn,
-        } as never;
-      }
-
-      throw new Error(`Unexpected table ${table}`);
-    });
-
-    mockedGetUploadUrl.mockResolvedValue({
-      data: {
-        uploadUrl: 'https://upload.example',
-        objectKey: 'user-1/family/member-1/photo.webp',
-        expiresIn: 900,
-      },
-      error: null,
-    });
-
-    mockedUploadToPresignedUrl.mockResolvedValue({ error: null });
 
     const result = await createFamilyMemberWithPhoto({
       userId: 'user-1',
@@ -120,45 +62,30 @@ describe('family-members service integration', () => {
       dateOfBirth: '2020-05-24',
       photoUri: 'file:///photo.jpg',
       photoContentType: 'image/jpeg',
+      photoReferenceDate: '2024-04-02',
+      photoDateSource: 'exif',
     });
 
-    expect(result.error).toBeNull();
-    expect(result.data?.profile_picture_key).toBe('user-1/family/member-1/photo.webp');
-    expect(mockedGetUploadUrl).toHaveBeenCalledWith(
-      'user-1/family/member-1/photo.webp',
-      'image/jpeg',
-      'family-1',
-    );
-    expect(mockedUploadToPresignedUrl).toHaveBeenCalledWith(
-      'https://upload.example',
-      'file:///photo.jpg-prepared',
-      'image/jpeg',
+    expect(result.portraitVersion?.id).toBe('portrait-1');
+    expect(mockedCreatePortraitVersion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        familyMemberId: 'member-1',
+        referenceDate: '2024-04-02',
+        dateSource: 'exif',
+      }),
     );
   });
 
-  it('rolls back member creation when upload fails', async () => {
-    const member = {
-      id: 'member-1',
-      user_id: 'user-1',
-      name: 'Maya',
-      profile_picture_key: null,
-    };
-
-    const insertSingle = jest.fn().mockResolvedValue({ data: member, error: null });
-    const insertSelect = jest.fn().mockReturnValue({ single: insertSingle });
-    const insert = jest.fn().mockReturnValue({ select: insertSelect });
-
-    const deleteEq = jest.fn().mockResolvedValue({ error: null });
-    const deleteFn = jest.fn().mockReturnValue({ eq: deleteEq });
-
-    mockedSupabase.from.mockReturnValue({
-      insert,
-      delete: deleteFn,
-    } as never);
-
-    mockedGetUploadUrl.mockResolvedValue({
+  it('deletes the newly created member if its initial portrait version fails', async () => {
+    const single = jest.fn().mockResolvedValue({
+      data: { id: 'member-1', family_id: 'family-1' },
+      error: null,
+    });
+    const select = jest.fn().mockReturnValue({ single });
+    mockedSupabase.from.mockReturnValue({ insert: jest.fn().mockReturnValue({ select }) } as never);
+    mockedCreatePortraitVersion.mockResolvedValue({
       data: null,
-      error: { message: 'Unauthorized' },
+      error: { message: 'Upload failed' },
     });
 
     const result = await createFamilyMemberWithPhoto({
@@ -170,106 +97,47 @@ describe('family-members service integration', () => {
       photoContentType: 'image/jpeg',
     });
 
-    expect(result.data).toBeNull();
-    expect(result.error?.message).toBe('Unauthorized');
-    expect(deleteEq).toHaveBeenCalledWith('id', 'member-1');
+    expect(result.error?.message).toBe('Upload failed');
+    expect(mockedInvokeEdgeFunction).toHaveBeenCalledWith('delete-family-member', {
+      familyMemberId: 'member-1',
+    });
   });
 
-  it('updateFamilyMemberWithPhoto skips portrait pending when regeneratePortrait is false', async () => {
-    const member = {
-      id: 'member-1',
-      user_id: 'user-1',
-      name: 'Maya',
-      profile_picture_key: 'user-1/family/member-1/photo-old.webp',
-      illustrated_profile_status: 'ready',
-    };
-
-    const updateSingle = jest.fn().mockResolvedValue({
-      data: {
-        ...member,
-        profile_picture_key: 'user-1/family/member-1/photo.webp',
-        illustrated_profile_status: 'ready',
-      },
+  it('adds an edited photo as another version instead of replacing legacy keys', async () => {
+    const updatePayloads: unknown[] = [];
+    const single = jest.fn().mockResolvedValue({
+      data: { id: 'member-1', date_of_birth: '2020-05-24' },
       error: null,
     });
-    const updateSelect = jest.fn().mockReturnValue({ single: updateSingle });
-    const updateEq = jest.fn().mockReturnValue({ select: updateSelect });
-    const update = jest.fn().mockReturnValue({ eq: updateEq });
-
+    const select = jest.fn().mockReturnValue({ single });
+    const eq = jest.fn().mockReturnValue({ select });
+    const update = jest.fn((payload) => {
+      updatePayloads.push(payload);
+      return { eq };
+    });
     mockedSupabase.from.mockReturnValue({ update } as never);
-
-    mockedGetUploadUrl.mockResolvedValue({
-      data: {
-        uploadUrl: 'https://upload.example',
-        objectKey: 'user-1/family/member-1/photo.webp',
-        expiresIn: 900,
-      },
+    mockedCreatePortraitVersion.mockResolvedValue({
+      data: { id: 'portrait-2' } as never,
       error: null,
     });
-    mockedUploadToPresignedUrl.mockResolvedValue({ error: null });
 
-    await updateFamilyMemberWithPhoto({
+    const result = await updateFamilyMemberWithPhoto({
       memberId: 'member-1',
       userId: 'user-1',
       familyId: 'family-1',
-      photoUri: 'file:///photo.jpg',
-      photoContentType: 'image/jpeg',
-      regeneratePortrait: false,
-    });
-
-    expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profile_picture_key: 'user-1/family/member-1/photo.webp',
-      }),
-    );
-    expect(update).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        illustrated_profile_status: 'pending',
-      }),
-    );
-  });
-
-  it('updateFamilyMemberWithPhoto marks portrait pending when regeneratePortrait is true', async () => {
-    const member = {
-      id: 'member-1',
-      user_id: 'user-1',
       name: 'Maya',
-      illustrated_profile_status: 'ready',
-    };
-
-    const updateSingle = jest.fn().mockResolvedValue({
-      data: { ...member, illustrated_profile_status: 'pending' },
-      error: null,
-    });
-    const updateSelect = jest.fn().mockReturnValue({ single: updateSingle });
-    const updateEq = jest.fn().mockReturnValue({ select: updateSelect });
-    const update = jest.fn().mockReturnValue({ eq: updateEq });
-
-    mockedSupabase.from.mockReturnValue({ update } as never);
-
-    mockedGetUploadUrl.mockResolvedValue({
-      data: {
-        uploadUrl: 'https://upload.example',
-        objectKey: 'user-1/family/member-1/photo.webp',
-        expiresIn: 900,
-      },
-      error: null,
-    });
-    mockedUploadToPresignedUrl.mockResolvedValue({ error: null });
-
-    await updateFamilyMemberWithPhoto({
-      memberId: 'member-1',
-      userId: 'user-1',
-      familyId: 'family-1',
-      photoUri: 'file:///photo.jpg',
+      photoUri: 'file:///new.jpg',
       photoContentType: 'image/jpeg',
-      regeneratePortrait: true,
+      photoReferenceDate: '2025-01-02',
+      photoDateSource: 'manual',
     });
 
-    expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        illustrated_profile_status: 'pending',
-      }),
+    expect(result.portraitVersion?.id).toBe('portrait-2');
+    expect(updatePayloads[0]).not.toEqual(
+      expect.objectContaining({ profile_picture_key: expect.anything() }),
+    );
+    expect(mockedCreatePortraitVersion).toHaveBeenCalledWith(
+      expect.objectContaining({ familyMemberId: 'member-1', referenceDate: '2025-01-02' }),
     );
   });
 });

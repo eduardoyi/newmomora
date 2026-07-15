@@ -23,6 +23,7 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { parseIsoDate } from '@/utils/dates';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
   E2E_FAMILY_MEMBER_DOB,
@@ -41,6 +42,16 @@ import {
   pickFamilyProfilePhotoFromLibrary,
 } from '@/utils/family-profile-photo-picker';
 import { runAfterNativeChooserDismisses } from '@/utils/native-permissions';
+import {
+  validatePortraitReferenceDate,
+  type PortraitDateSource,
+} from '@/utils/portrait-versions';
+
+const PHOTO_DATE_SOURCE_LABELS: Record<Exclude<PortraitDateSource, 'legacy_unknown'>, string> = {
+  exif: 'From photo',
+  manual: 'Set manually',
+  default_today: 'Added today',
+};
 
 export default function AddFamilyMemberScreen() {
   const { role } = useFamily();
@@ -60,6 +71,8 @@ export default function AddFamilyMemberScreen() {
   const [nicknames, setNicknames] = useState<string[]>([]);
   const [nicknameInput, setNicknameInput] = useState('');
   const [photo, setPhoto] = useState<FamilyProfilePhotoSelection | null>(null);
+  const [photoReferenceDate, setPhotoReferenceDate] = useState('');
+  const [photoDateSource, setPhotoDateSource] = useState<Exclude<PortraitDateSource, 'legacy_unknown'>>('default_today');
   const [errorMessage, setErrorMessage] = useState('');
 
   const showE2eFixturePhoto = isE2eFixturesEnabled();
@@ -82,10 +95,16 @@ export default function AddFamilyMemberScreen() {
     setNicknames((prev) => prev.filter((n) => n !== nick));
   };
 
+  const applyPhoto = useCallback((selection: FamilyProfilePhotoSelection) => {
+    setPhoto(selection);
+    setPhotoReferenceDate(selection.referenceDate);
+    setPhotoDateSource(selection.dateSource);
+  }, []);
+
   const applyE2eFixtures = async () => {
     setErrorMessage('');
     try {
-      setPhoto(await loadE2eProfilePhoto());
+      applyPhoto(await loadE2eProfilePhoto());
       setName(E2E_FAMILY_MEMBER_NAME);
       setDateOfBirth(E2E_FAMILY_MEMBER_DOB);
       setGender(E2E_FAMILY_MEMBER_GENDER);
@@ -102,10 +121,10 @@ export default function AddFamilyMemberScreen() {
     }
 
     if (result.selection) {
-      setPhoto(result.selection);
+      applyPhoto(result.selection);
       setErrorMessage('');
     }
-  }, []);
+  }, [applyPhoto]);
 
   const takePhoto = useCallback(async () => {
     applyPickResult(await pickFamilyProfilePhotoFromCamera());
@@ -181,6 +200,11 @@ export default function AddFamilyMemberScreen() {
 
     if (!photo) { setErrorMessage('Profile photo is required'); return; }
 
+    const photoDateError = validatePortraitReferenceDate(photoReferenceDate, {
+      dateOfBirth: dateOfBirth.trim(),
+    });
+    if (photoDateError) { setErrorMessage(photoDateError); return; }
+
     try {
       await createMember({
         name,
@@ -190,6 +214,8 @@ export default function AddFamilyMemberScreen() {
         nicknames: nicknames.length > 0 ? nicknames : undefined,
         photoUri: photo.uri,
         photoContentType: photo.contentType,
+        photoReferenceDate,
+        photoDateSource,
       });
       void updateProfile({ hasCompletedOnboarding: true });
       router.back();
@@ -272,6 +298,34 @@ export default function AddFamilyMemberScreen() {
             value={dateOfBirth}
           />
         </AuthField>
+
+        {photo ? (
+          <AuthField label="Photo date">
+            <View style={styles.photoDateCard}>
+              <DatePickerField
+                accessibilityHint="Cannot be after today or before this person’s birthday"
+                defaultPickerDate={today}
+                maximumDate={today}
+                minimumDate={parseIsoDate(dateOfBirth) ?? undefined}
+                onChange={(value) => {
+                  setPhotoReferenceDate(value);
+                  setPhotoDateSource('manual');
+                }}
+                testID="add-family-member-photo-date"
+                value={photoReferenceDate}
+              />
+              <View style={styles.photoDateSource}>
+                <View style={styles.photoDateSourceDot} />
+                <Text style={styles.photoDateSourceText} testID="add-family-member-photo-date-source">
+                  {PHOTO_DATE_SOURCE_LABELS[photoDateSource]}
+                </Text>
+              </View>
+              <Text style={styles.photoDateHint}>
+                Used to place this first portrait at the right age in the timeline.
+              </Text>
+            </View>
+          </AuthField>
+        ) : null}
 
         <AuthField label="Gender (optional)">
           <SelectField
@@ -432,6 +486,36 @@ const styles = StyleSheet.create({
   // Form
   form: {
     gap: spacing.md,
+  },
+  photoDateCard: {
+    gap: spacing.sm,
+  },
+  photoDateSource: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: colors.surface,
+    borderRadius: radius.pill,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  photoDateSourceDot: {
+    backgroundColor: colors.primary,
+    borderRadius: 3,
+    height: 6,
+    width: 6,
+  },
+  photoDateSourceText: {
+    color: colors.ink2,
+    fontFamily: fonts.sansBold,
+    fontSize: 11,
+  },
+  photoDateHint: {
+    color: colors.ink3,
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    lineHeight: 17,
   },
   notesInput: {
     minHeight: 96,

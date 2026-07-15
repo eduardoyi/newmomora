@@ -20,8 +20,9 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemories } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
+import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
-import { editFamilyMemberRoute, memoryDetailRoute } from '@/lib/routes';
+import { editFamilyMemberRoute, memoryDetailRoute, portraitTimelineRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
 import { canEditFamilyContent } from '@/utils/roles';
@@ -109,15 +110,16 @@ export default function ViewFamilyMemberScreen() {
   const { role } = useFamily();
   const canEdit = canEditFamilyContent(role);
   const { members, isLoading, deleteMember, isDeleting } = useFamilyMembers();
+  const { versions: portraitVersions } = usePortraitVersions(id);
   const { memories } = useMemories();
   const [deleteError, setDeleteError] = useState('');
   const [isPortraitFullScreen, setIsPortraitFullScreen] = useState(false);
 
   const member = members.find((m) => m.id === id);
-  const portraitKey = member?.illustrated_profile_status === 'ready'
-    ? member.illustrated_profile_key
-    : null;
-  const { url: portraitUrl } = useMediaUrl(portraitKey, member?.updated_at);
+  const portraitKey = member?.resolvedPortraitVersion?.illustrated_profile_key ?? null;
+  const portraitCacheVersion = member?.avatarUpdatedAt ?? member?.updated_at;
+  const { url: portraitUrl } = useMediaUrl(portraitKey, portraitCacheVersion);
+  const portraitCount = portraitVersions.filter((version) => !version.deletion_token).length;
 
   const memberMemories = memories.filter((m) =>
     m.taggedMembers.some((tm) => tm.id === id),
@@ -216,6 +218,8 @@ export default function ViewFamilyMemberScreen() {
         <CastCard
           member={member}
           onPortraitPress={portraitUrl ? () => setIsPortraitFullScreen(true) : undefined}
+          onPortraitTimelinePress={() => router.push(portraitTimelineRoute(member.id))}
+          portraitCount={portraitCount}
         />
 
         {deleteError ? <Text style={styles.deleteErrorText}>{deleteError}</Text> : null}
@@ -283,7 +287,7 @@ export default function ViewFamilyMemberScreen() {
       {isPortraitFullScreen && portraitUrl ? (
         <FullScreenMediaViewer
           accessibilityLabel={`Full-screen portrait of ${member.name}`}
-          cacheVersion={member.updated_at}
+          cacheVersion={portraitCacheVersion}
           items={[{
             id: member.id,
             contentType: 'image/webp',

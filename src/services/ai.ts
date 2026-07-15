@@ -57,16 +57,6 @@ export async function invokeEdgeFunction<TResponse>(
   return { data: data ?? null, error: null };
 }
 
-export async function generatePortraitIllustration(
-  familyMemberId: string,
-): Promise<{ error: ServiceError | null }> {
-  const { error } = await invokeEdgeFunction('generate-portrait-illustration', {
-    familyMemberId,
-  });
-
-  return { error };
-}
-
 export async function analyzeMemoryEmotion(
   memoryId: string,
 ): Promise<{ data: { emotion: string; colorPalette: string } | null; error: ServiceError | null }> {

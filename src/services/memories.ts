@@ -5,6 +5,7 @@ import {
   generateMemoryIllustration,
 } from '@/services/ai';
 import { deleteStorageObject } from '@/services/media';
+import type { FamilyMember } from '@/services/family-members';
 import {
   type CreateMediaMemoryInput,
   type MemoryMediaAssetInput,
@@ -20,7 +21,7 @@ import {
 } from '@/utils/memories';
 
 export type Memory = Database['public']['Tables']['memories']['Row'];
-export type FamilyMember = Database['public']['Tables']['family_members']['Row'];
+export type { FamilyMember } from '@/services/family-members';
 
 export interface MemoryMediaAsset {
   id: string;

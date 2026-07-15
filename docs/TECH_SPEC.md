@@ -133,7 +133,7 @@ create table public.family_members (
   nicknames text[] default '{}',
   date_of_birth date,
   gender text,
-  profile_picture_key text,          -- R2 object key (not a public URL)
+  profile_picture_key text,          -- deprecated cutover columns; portrait versions are canonical
   illustrated_profile_key text,
   illustrated_profile_status text not null default 'pending'
     check (illustrated_profile_status in ('pending', 'generating', 'ready', 'failed')),
@@ -141,6 +141,28 @@ create table public.family_members (
   is_user_profile boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+create table public.family_member_portrait_versions (
+  id uuid primary key,
+  family_id uuid not null,
+  family_member_id uuid not null,
+  user_id uuid references auth.users on delete set null,
+  reference_date date,               -- null only for migrated legacy_unknown rows
+  date_source text not null check (date_source in ('exif', 'manual', 'default_today', 'legacy_unknown')),
+  profile_picture_key text not null unique,
+  illustrated_profile_key text,
+  illustrated_profile_status text not null default 'pending'
+    check (illustrated_profile_status in ('pending', 'generating', 'ready', 'failed')),
+  generation_token uuid,
+  generation_started_at timestamptz,
+  generation_output_key text,
+  deletion_token uuid,
+  deletion_started_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  foreign key (family_member_id, family_id)
+    references public.family_members (id, family_id) on delete cascade
 );
 
 create table public.memories (
@@ -411,7 +433,8 @@ create trigger on_auth_user_created
 - `memories.media_key`: required (non-null) when `memory_type = 'media'`; must be null for other types — enforced in Edge Function / client layer
 - `memories.illustration_status`: on insert, set to `'pending'` for `text_illustration` and `'none'` for other types. Editing an illustrated memory to `text_only` deliberately retains its illustration key/prompt/status so toggling AI back on can reveal the existing asset without regeneration; rendering and generation eligibility branch on `memory_type`.
 - `memories.link_previews`: `jsonb`, defaults to `{}`; written only by `fetch-link-previews` (service-role client); malformed/absent entries are treated as no preview client-side (see [inline-links.md](./features/inline-links.md))
-- `family_members.profile_picture_key`: required before portrait generation
+- `family_member_portrait_versions`: new writes have a non-null date in `[family_members.date_of_birth, acting user's local today]`; only migration may write `legacy_unknown` with a null date. Identity/source fields are immutable and creator attribution may change only to null during auth-user deletion.
+- `family_members.date_of_birth`: cannot move after an existing dated portrait version
 - `family_memberships`: exactly one `role = 'owner'` row per `family_id` (partial unique index); max 50 rows per `family_id` (trigger); `user_id`/`family_id` immutable once inserted (a manager can only ever change `role`, and never to/from `'owner'`)
 - `family_invites.role`: `'manager'` or `'viewer'` only — invites can never carry the owner role
 - `memories.family_id` / `family_members.family_id`: immutable once set (`before update` trigger — see §2.6)
@@ -502,7 +525,7 @@ AI generation functions (`generate-portrait-illustration`, `generate-illustratio
 R2 keys keep the `{creatorUserId}/...` shape (see patterns below), but authorization no longer means "prefix = caller." It means "caller has the required role in the family that owns the entity the key belongs to," resolved through the DB with the service-role client:
 
 - **Uploads** (`get-upload-url`, `upload-media`): the key itself still must be written under the *caller's own* uid prefix (`assertUserOwnedKey`) — a memory row doesn't exist yet at upload time (client uploads assets before inserting the `memories` row), so per-entity authorization isn't possible yet. Instead the request carries an explicit `familyId`, and the caller must be **owner/manager** in that (non-deleted) family. Cross-family binding integrity is enforced later, at insert/RPC time, by `memories` RLS and `replace_memory_media_assets` key validation.
-- **Reads/deletes** (`get-media-url`, `delete-storage-object`): `_shared/storage-keys.ts#parseStorageKey` extracts `{ kind, ownerUserId, entityId }` from the key shape alone (no DB lookup). The `entityId` (a `memories.id` or `family_members.id`) is then used to look up that row's `family_id` — **never** by checking whether some `memory_media` row happens to reference the key, since direct `memory_media` inserts don't constrain `object_key` and a reference-based check would be spoofable. `get-media-url` requires the caller be a member (any role) of the resolved family; `delete-storage-object` requires owner/manager. Keys that don't parse, or whose entity has no owning row, are denied.
+- **Reads/deletes** (`get-media-url`, `delete-storage-object`): `_shared/storage-keys.ts#parseStorageKey` extracts `{ kind, ownerUserId, entityId, portraitVersionId? }` from the key shape. Legacy/member keys resolve through `family_members`; portrait-version keys must also match the exact referenced version row. `get-media-url` requires any family role. Rollback deletion of an unreferenced version source additionally requires its `{uid}` prefix to equal the caller; referenced version deletion uses `delete-portrait-version`.
 - Shared helpers: `_shared/family-access.ts` (`getCallerFamilyRoles`, `resolveStorageKeyFamilyIds`) and `_shared/storage-keys.ts#parseStorageKey`.
 
 ### R2 credentials (Edge Functions only)
@@ -529,7 +552,7 @@ Shared helper: `supabase/functions/_shared/r2.ts` (S3 client, put/get/delete, pr
 
 ### Account deletion
 
-`hard-delete-expired-accounts` (family-sharing Phase 3): **owner** case — before deleting any rows, collects every R2 key belonging to each owned family across ALL creators (`memory_media.object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key` — these can live under other members' `{uid}/` prefixes), deletes those R2 objects, then deletes the `families` row (FK cascades remove the rest). **Non-owner** case — their created content survives (`user_id` → null via `on delete set null`), so the old blanket `{userId}/`-prefix delete is gone; instead it enumerates objects under the prefix and deletes only the ones no surviving row references.
+`hard-delete-expired-accounts` (family-sharing Phase 3): **owner** case — before deleting any rows, collects every R2 key belonging to each owned family across ALL creators, including all portrait-version source/output/attempt objects, then deletes the `families` row. **Non-owner** case — their created content survives (`user_id` → null); prefix cleanup retains every key referenced by surviving memory, member, or portrait-version rows. Both the deletion enumeration and surviving-reference set must be updated for any new storage column.
 
 ---
 
@@ -550,7 +573,7 @@ Presigned PUT for direct client → R2 upload.
 
 | Pattern | Allowed `contentType` values | Notes |
 |---------|------------------------------|-------|
-| `{uid}/family/{memberId}/photo.webp` | `image/jpeg`, `image/png`, `image/webp` | Family profile photo |
+| `{uid}/family/{memberId}/portraits/{versionId}/photo.jpg` | `image/jpeg` | Immutable normalized portrait-version source |
 | `{uid}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | `image/jpeg`, `image/png`, `image/heic`, `image/heif`, `image/webp`, `video/mp4`, `video/quicktime` | Ordered memory photo/video asset |
 | `{uid}/memories/{memoryId}/media.{ext}` | Same as above | Legacy single media object |
 
@@ -596,7 +619,7 @@ Deletes a single R2 object (memory media rollback, memory delete cleanup).
 
 **Request:** `{ objectKey: string }` — same parse-and-resolve as `get-media-url`, but requires the caller be **owner/manager** of the resolved family (not just a member).
 
-**Allowed patterns:** family photo, family portrait, memory illustration, memory media
+**Allowed patterns:** unreferenced caller-owned portrait-version source rollback, legacy family photo/portrait, memory illustration, memory media. Referenced portrait-version objects are deleted only by `delete-portrait-version`.
 
 **Response:** `{ success: true }`
 
@@ -606,39 +629,47 @@ Deletes a single R2 object (memory media rollback, memory delete cleanup).
 
 ### 4.1 `generate-portrait-illustration`
 
-Generates a character portrait when a family member is saved with a photo.
+Generates or regenerates the character portrait for one immutable portrait version.
 
-**Trigger:** Client after family member save (when photo is new/changed)
+**Trigger:** Client after creating a portrait-version row, or manual retry/regenerate
 
 **Request**
 
 ```json
 {
-  "familyMemberId": "uuid"
+  "portraitVersionId": "uuid"
 }
 ```
 
-**Authorization (family-sharing Phase 3):** family member is looked up by id alone (no `user_id` filter); caller must be **owner/manager** of `member.family_id`. No caller-prefix check on `profile_picture_key` — the DB row is the trust anchor (a manager may have replaced another member's child photo under their own uid prefix). The output portrait key's `{uid}` prefix is derived from the member's *current* `profile_picture_key` prefix, not from the caller, so photo and portrait stay under the same uid segment.
+**Authorization:** the version and parent member are the trust anchors; caller must be owner/manager of that exact family. The old `{ familyMemberId }` request is rejected at the coordinated cutover.
 
 **Logic**
 
-1. Fetch family member by id; assert caller owner/manager of its family
-2. Fetch `families.illustration_style` for that family (moved off `user_profiles` in the family-sharing migration)
-3. Set `illustrated_profile_status = 'generating'`
-4. Fetch profile photo from R2 (`momora-profile-pictures`)
+1. Fetch version + parent member; assert caller owner/manager of its family
+2. Atomically claim a unique generation token/output key (service-role-only RPC)
+3. Fetch `families.illustration_style`
+4. Fetch the immutable source photo from R2
 5. Resolve style reference from R2 public assets (`momora-public-assets/_assets/styles/{token}.png`); fetch via `R2_PUBLIC_ASSETS_BASE_URL`
 6. Build prompt: age, gender, style description, identity/style reference instructions
 7. Call OpenAI image edit API with person photo + style reference (`gpt-image-2`, fallback `gpt-image-1`)
-8. Upload result to R2 `momora-character-portraits`
-9. Update `illustrated_profile_key`, set status `ready` (or `failed`)
+8. Upload result under `/portrait/{attemptId}.webp`
+9. Publish only if the token still owns the claim. On regeneration failure, retain the previous ready output and status.
 
 **Response**
 
 ```json
-{ "success": true, "illustratedProfileKey": "userId/memberId/portrait.webp" }
+{ "success": true, "illustratedProfileKey": ".../portraits/versionId/portrait/attemptId.webp" }
 ```
 
-**Errors:** `MEMBER_NOT_FOUND`, `PHOTO_MISSING`, `GENERATION_FAILED`
+**Errors:** `PORTRAIT_VERSION_NOT_FOUND`, `DATE_REQUIRED`, `GENERATION_IN_PROGRESS`, `GENERATION_CLAIM_LOST`, `GENERATION_FAILED`
+
+### 4.1a `delete-portrait-version`
+
+**Request:** `{ "portraitVersionId": "uuid" }`. Owner/manager only. Atomically claims the row, rejects deletion of the member's only version or last usable portrait, lists/deletes every object under the version prefix, then removes the claimed row.
+
+### 4.1b `delete-family-member`
+
+**Request:** `{ "familyMemberId": "uuid" }`. Owner/manager only. Collects legacy and portrait-version object keys/prefixes before deleting storage, then deletes the member row and cascaded version rows.
 
 ---
 
@@ -738,7 +769,7 @@ Set `forceRegenerate: true` when the client manually regenerates an illustration
 2. Set `illustration_status = 'generating'`
 3. Fetch memory content + tagged family members (max 6 for this memory type), and **all** family member id/name/nickname rows (not just tagged), scoped to the memory's `family_id`; reject more than 6 explicit tags with `ILLUSTRATION_MEMBER_LIMIT`, and cap the zero-tag name-inference fallback to its first 6 matches
 4. **Safety pre-check:** `gpt-4o-mini` rewrites unsafe content → child-safe scene description, given a nickname→canonical-name mapping built from every family member so nicknames never leak into the image prompt (see `buildSafetySystemPrompt`). Returns `{"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}`; `expressionStyle` is validated server-side and defaults to `neutral`
-5. Fetch ready character portraits from R2 (`momora-character-portraits`)
+5. For each selected member, resolve the usable portrait against `memory.memory_date`: latest dated ready version on/before the date, otherwise earliest dated ready version after it, otherwise a ready undated legacy version. Same-day ties use `created_at DESC, id DESC`. Fetch the resolved keys from R2.
 6. Build prompt (`buildIllustrationPrompt`): scene-first, newline-separated sections — Scene, Characters (reference map + preserve/adapt split), Emotional tone (`memory.emotion` mapped to `EMOTION_EXPRESSIONS`, plus comedic exaggeration when `expressionStyle === 'comedic'` and the emotion is in `COMEDIC_ELIGIBLE_EMOTIONS`), Style/palette/date, Constraints
 7. Call OpenAI image edit API with all ready portrait references (up to 6; `input_fidelity=high` only on `gpt-image-1` fallback when multiple)
 8. On moderation failure: rewrite + retry once
@@ -1131,12 +1162,13 @@ while the DB validates both tag insertion and the `memory_type` transition.
 ### 5.3 Add Family Member
 
 ```
-1. Request presigned PUT via get-upload-url
-2. Upload photo directly to R2
-3. INSERT family_members with profile_picture_key
-4. Invoke generate-portrait-illustration(familyMemberId)
-5. Poll illustrated_profile_status until ready | failed
-6. Display portrait via get-media-url
+1. INSERT `family_members` profile row
+2. Extract/confirm photo date and request a presigned PUT for the immutable version source key
+3. Upload normalized JPEG directly to R2
+4. Call `create_family_member_portrait_version` with the exact key/date/source
+5. Invoke `generate-portrait-illustration(portraitVersionId)`
+6. Poll portrait-version status until ready or failed; onboarding itself is not portrait-ready gated
+7. Resolve today's portrait and display it through `get-media-url`
 ```
 
 ### 5.4 Display images (timeline, detail, family)
@@ -1319,6 +1351,8 @@ Momora2/
 │       ├── get-upload-url/
 │       ├── get-media-url/
 │       ├── generate-portrait-illustration/
+│       ├── delete-portrait-version/
+│       ├── delete-family-member/
 │       ├── analyze-emotion/
 │       ├── generate-illustration/
 │       ├── process-voice-memory/

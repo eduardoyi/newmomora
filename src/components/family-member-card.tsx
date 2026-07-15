@@ -21,7 +21,11 @@ interface FamilyMemberCardProps {
 
 export function FamilyMemberCard({ member, onPress, onDelete, isDeleting }: FamilyMemberCardProps) {
   const ageLabel = member.date_of_birth ? formatAgeFromDob(member.date_of_birth) : null;
-  const portraitStatus = member.illustrated_profile_status as IllustratedProfileStatus;
+  const portraitStatus = (
+    'avatarStatus' in member
+      ? member.avatarStatus ?? 'pending'
+      : member.illustrated_profile_status
+  ) as IllustratedProfileStatus;
   const statusLabel = getPortraitStatusLabel(portraitStatus);
   const showStatusText = !isPortraitInProgress(portraitStatus);
 

@@ -15,7 +15,7 @@ export type FamilyMemberAvatarMember = Pick<
   | 'illustrated_profile_status'
   | 'profile_picture_key'
   | 'updated_at'
->;
+> & Pick<FamilyMember, 'avatarImageKey' | 'avatarUpdatedAt'>;
 
 interface FamilyMemberAvatarProps {
   member: FamilyMemberAvatarMember;
@@ -26,7 +26,7 @@ interface FamilyMemberAvatarProps {
 
 export function FamilyMemberAvatar({ member, size = 22, style, testID }: FamilyMemberAvatarProps) {
   const imageKey = getMemberAvatarImageKey(member);
-  const { url } = useMediaUrl(imageKey, member.updated_at);
+  const { url } = useMediaUrl(imageKey, member.avatarUpdatedAt ?? member.updated_at);
   const tint = PORTRAIT_TINTS[member.name.charCodeAt(0) % PORTRAIT_TINTS.length];
   const emo = emotionColors[tint];
 

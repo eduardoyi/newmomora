@@ -80,6 +80,7 @@ export default function AppLayout() {
         options={{ presentation: 'modal' }}
       />
       <Stack.Screen name="family/[id]" />
+      <Stack.Screen name="family/[id]/portraits" />
       <Stack.Screen
         name="family/[id]/edit"
         options={{ presentation: 'modal' }}

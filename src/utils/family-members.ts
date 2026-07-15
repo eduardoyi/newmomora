@@ -1,5 +1,3 @@
-import { buildFamilyPhotoKey } from '@/utils/storage-keys';
-
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export interface CreateFamilyMemberInput {
@@ -18,8 +16,6 @@ export interface UpdateFamilyMemberInput {
   gender?: string | null;
   additionalInfo?: string | null;
   nicknames?: string[] | null;
-  profilePictureKey?: string | null;
-  illustratedProfileStatus?: string;
 }
 
 export function validateFamilyMemberName(name: string): string | null {
@@ -58,10 +54,6 @@ export function validateDateOfBirth(dateOfBirth: string): string | null {
   }
 
   return null;
-}
-
-export function buildProfilePhotoKey(userId: string, familyMemberId: string): string {
-  return buildFamilyPhotoKey(userId, familyMemberId);
 }
 
 /** Ages at or above this threshold show whole years only in UI (no months). */
@@ -157,10 +149,14 @@ export function isPortraitInProgress(status: IllustratedProfileStatus): boolean 
 
 /** Photo used as the portrait source while generating; illustrated portrait when ready. */
 export function getProfilePortraitPhotoKey(member: {
+  avatarImageKey?: string | null;
   illustrated_profile_key: string | null;
   illustrated_profile_status: string | null;
   profile_picture_key: string | null;
 }): string | null {
+  if ('avatarImageKey' in member) {
+    return member.avatarImageKey ?? null;
+  }
   const status = (member.illustrated_profile_status ?? 'pending') as IllustratedProfileStatus;
 
   if (isPortraitInProgress(status)) {
@@ -171,10 +167,14 @@ export function getProfilePortraitPhotoKey(member: {
 }
 
 export function getMemberAvatarImageKey(member: {
+  avatarImageKey?: string | null;
   illustrated_profile_key: string | null;
   illustrated_profile_status: string | null;
   profile_picture_key: string | null;
 }): string | null {
+  if ('avatarImageKey' in member) {
+    return member.avatarImageKey ?? null;
+  }
   const status = (member.illustrated_profile_status ?? 'pending') as IllustratedProfileStatus;
 
   if (isPortraitInProgress(status)) {

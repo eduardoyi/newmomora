@@ -10,7 +10,6 @@ Deno.test('hard-delete-expired-accounts rejects missing cron secret', async () =
 
   assertEquals(response.status, 401);
 });
-
 const FAMILY_ID = '55555555-5555-4555-8555-555555555555';
 const OWNER_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_MEMBER_ID = '22222222-2222-4222-8222-222222222222';
@@ -19,6 +18,12 @@ function fakeSupabaseForCollect(options: {
   memories: Array<{ id: string; media_key: string | null; illustration_key: string | null }>;
   mediaAssets: Array<{ object_key: string }>;
   members: Array<{ profile_picture_key: string | null; illustrated_profile_key: string | null }>;
+  portraitVersions?: Array<{
+    profile_picture_key: string;
+    illustrated_profile_key: string | null;
+    generation_output_key: string | null;
+  }>;
+  portraitVersionsError?: { message: string } | null;
 }) {
   return {
     from(table: string) {
@@ -42,6 +47,17 @@ function fakeSupabaseForCollect(options: {
         return {
           select: () => ({
             eq: async () => ({ data: options.members, error: null }),
+          }),
+        };
+      }
+
+      if (table === 'family_member_portrait_versions') {
+        return {
+          select: () => ({
+            eq: async () => ({
+              data: options.portraitVersions ?? [],
+              error: options.portraitVersionsError ?? null,
+            }),
           }),
         };
       }
@@ -110,12 +126,33 @@ Deno.test('collectFamilyStorageKeys de-duplicates keys referenced from multiple 
   assertEquals(keys, [sharedKey]);
 });
 
+Deno.test('collectFamilyStorageKeys fails closed when portrait enumeration fails', async () => {
+  const supabase = fakeSupabaseForCollect({
+    memories: [],
+    mediaAssets: [],
+    members: [],
+    portraitVersionsError: { message: 'lookup failed' },
+  });
+
+  let message = '';
+  try {
+    await collectFamilyStorageKeys(supabase as never, FAMILY_ID);
+  } catch (error) {
+    message = error instanceof Error ? error.message : '';
+  }
+  assertEquals(message, 'Portrait version storage lookup failed: lookup failed');
+});
+
 function fakeSupabaseForReferenced(referencedByTable: {
   memory_media?: string[];
   media_key?: string[];
   illustration_key?: string[];
   profile_picture_key?: string[];
   illustrated_profile_key?: string[];
+  version_profile_picture_key?: string[];
+  version_illustrated_profile_key?: string[];
+  generation_output_key?: string[];
+  errorTable?: string;
 }) {
   return {
     from(table: string) {
@@ -126,7 +163,7 @@ function fakeSupabaseForReferenced(referencedByTable: {
               data: keys
                 .filter((key) => (referencedByTable.memory_media ?? []).includes(key))
                 .map((key) => ({ object_key: key })),
-              error: null,
+              error: referencedByTable.errorTable === table ? { message: 'lookup failed' } : null,
             }),
           }),
         };
@@ -141,7 +178,9 @@ function fakeSupabaseForReferenced(referencedByTable: {
                 data: keys
                   .filter((key) => (referencedByTable[field] ?? []).includes(key))
                   .map((key) => ({ [field]: key })),
-                error: null,
+                error: referencedByTable.errorTable === `${table}.${field}`
+                  ? { message: 'lookup failed' }
+                  : null,
               };
             },
           }),
@@ -157,7 +196,36 @@ function fakeSupabaseForReferenced(referencedByTable: {
                 data: keys
                   .filter((key) => (referencedByTable[field] ?? []).includes(key))
                   .map((key) => ({ [field]: key })),
-                error: null,
+                error: referencedByTable.errorTable === `${table}.${field}`
+                  ? { message: 'lookup failed' }
+                  : null,
+              };
+            },
+          }),
+        };
+      }
+
+      if (table === 'family_member_portrait_versions') {
+        return {
+          select: (col: string) => ({
+            in: async (_col: string, keys: string[]) => {
+              const sourceField = col as
+                | 'profile_picture_key'
+                | 'illustrated_profile_key'
+                | 'generation_output_key';
+              const fixtureField =
+                sourceField === 'profile_picture_key'
+                  ? 'version_profile_picture_key'
+                  : sourceField === 'illustrated_profile_key'
+                    ? 'version_illustrated_profile_key'
+                    : 'generation_output_key';
+              return {
+                data: keys
+                  .filter((key) => (referencedByTable[fixtureField] ?? []).includes(key))
+                  .map((key) => ({ [sourceField]: key })),
+                error: referencedByTable.errorTable === `${table}.${sourceField}`
+                  ? { message: 'lookup failed' }
+                  : null,
               };
             },
           }),
@@ -186,12 +254,15 @@ Deno.test(
   },
 );
 
-Deno.test('resolveReferencedKeys checks all five reference columns', async () => {
+Deno.test('resolveReferencedKeys checks legacy, memory, and portrait-version reference columns', async () => {
   const mediaAssetKey = 'a/memories/1/media/x.jpg';
   const memoryMediaKey = 'a/memories/2/media.jpg';
   const illustrationKey = 'a/memories/3/illustration.webp';
   const photoKey = 'a/family/1/photo.webp';
   const portraitKey = 'a/family/1/portrait.webp';
+  const versionPhotoKey = 'a/family/1/portraits/2/photo.jpg';
+  const versionPortraitKey = 'a/family/1/portraits/2/portrait/3.webp';
+  const activeAttemptKey = 'a/family/1/portraits/2/portrait/4.webp';
 
   const supabase = fakeSupabaseForReferenced({
     memory_media: [mediaAssetKey],
@@ -199,6 +270,9 @@ Deno.test('resolveReferencedKeys checks all five reference columns', async () =>
     illustration_key: [illustrationKey],
     profile_picture_key: [photoKey],
     illustrated_profile_key: [portraitKey],
+    version_profile_picture_key: [versionPhotoKey],
+    version_illustrated_profile_key: [versionPortraitKey],
+    generation_output_key: [activeAttemptKey],
   });
 
   const referenced = await resolveReferencedKeys(supabase as never, [
@@ -207,9 +281,12 @@ Deno.test('resolveReferencedKeys checks all five reference columns', async () =>
     illustrationKey,
     photoKey,
     portraitKey,
+    versionPhotoKey,
+    versionPortraitKey,
+    activeAttemptKey,
   ]);
 
-  assertEquals(referenced.size, 5);
+  assertEquals(referenced.size, 8);
 });
 
 Deno.test('resolveReferencedKeys returns an empty set for an empty key list without querying', async () => {
@@ -221,4 +298,16 @@ Deno.test('resolveReferencedKeys returns an empty set for an empty key list with
 
   const referenced = await resolveReferencedKeys(supabase as never, []);
   assertEquals(referenced.size, 0);
+});
+
+Deno.test('resolveReferencedKeys fails closed when any retention lookup fails', async () => {
+  const supabase = fakeSupabaseForReferenced({ errorTable: 'family_member_portrait_versions.profile_picture_key' });
+
+  let message = '';
+  try {
+    await resolveReferencedKeys(supabase as never, ['user/family/member/portraits/version/photo.jpg']);
+  } catch (error) {
+    message = error instanceof Error ? error.message : '';
+  }
+  assertEquals(message, 'Referenced storage lookup failed: lookup failed');
 });

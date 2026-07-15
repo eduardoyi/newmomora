@@ -32,10 +32,12 @@ describe('e2e-fixtures', () => {
 
     const photo = await loadE2eProfilePhoto();
 
-    expect(photo).toEqual({
+    expect(photo).toEqual(expect.objectContaining({
       uri: 'file:///cache/e2e-profile-fixture.jpg',
       contentType: 'image/jpeg',
-    });
+      captureDate: null,
+      dateSource: 'default_today',
+    }));
     expect(mockedCopyAsync).toHaveBeenCalledWith({
       from: 'file:///tmp/profile-fixture.jpg',
       to: 'file:///cache/e2e-profile-fixture.jpg',

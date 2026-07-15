@@ -1,7 +1,7 @@
 # Feature: Memories & illustrations
 
 **Status:** `done`
-**Last updated:** 2026-07-14
+**Last updated:** 2026-07-15
 **PRD reference:** §6.3 Memories, §6.4 Illustrations
 
 ## Overview
@@ -27,6 +27,7 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
   - `text_only`: excerpt + emotion chip; no image area.
   - `media`: photo/video carousel + optional caption; media with at least one photo may show emotion chip after async analysis.
 - Timeline cards show up to six tagged-member avatars. Memories with more than six tags keep the first six visible and append a compact `+N` avatar for the remaining count.
+- Tagged-member avatars on timeline cards and memory detail are resolved against `memory_date`, using the same portrait-version rule as illustration generation.
 - Illustrated and media memory details follow the Timeline card order: visual, engagement, story, then tagged members. Text-only details prioritize the story and tagged members before engagement. Every variant ends with date and emotion in a compact footer, with creator attribution on its own lowest-priority line. The detail background carries a soft top-down gradient tinted by the emotion (`getEmotionGradient` in `src/constants/theme.ts`), falling back to a neutral surface→bg fade when no emotion is set.
 - Timeline cards and memory detail expose like/comment actions with passive non-zero counts. Timeline comment taps open detail with the comments drawer already visible; see [likes-and-comments.md](./likes-and-comments.md).
 - Tapping a ready memory illustration opens the private image in the shared full-screen media viewer; closing returns to the detail card.
@@ -79,6 +80,7 @@ For `media` type: the client generates a `memoryId` UUID upfront, presigns a PUT
 | `memories.media_content_type` | Cover/cache MIME type for the first media asset |
 | `memory_media` | Canonical ordered 1-10 photo/video assets for `media` memories |
 | `memory_family_members` | Unlimited for `text_only`/`media`; max 6 for `text_illustration` (conditional triggers enforced) |
+| `family_member_portrait_versions` | Date-aware character references and tagged-member avatars; see [portrait-timeline.md](./portrait-timeline.md) |
 
 ## API & Edge Functions
 
@@ -104,7 +106,7 @@ See TECH_SPEC §4.0, §4.2–4.3 for contracts.
 ### Extension guide
 
 1. Add memory fields → migration + regenerate types + update `createMemory` / UI.
-2. New per-character illustration labels (age, visual guidance) → extend `buildMemberIllustrationDescription` in `_shared/illustration-references.ts`. Do not add nicknames back into that description — they're deliberately excluded from the image prompt (nickname leak fix) and handled only via the safety-rewrite nickname mapping in `_shared/prompts.ts`. Scene/safety copy stays in `_shared/prompts.ts`.
+2. New per-character illustration labels (age, visual guidance) → extend `buildMemberIllustrationDescription` in `_shared/illustration-references.ts`. Portrait selection itself must continue through the canonical memory-date resolver in `_shared/portrait-versions.ts`. Do not add nicknames back into the description — they're deliberately excluded from the image prompt and handled only via the safety-rewrite nickname mapping in `_shared/prompts.ts`.
 3. Always save text/row before invoking AI; never block save on illustration failure.
 4. New memory type → add value to `memory_type` check constraint, update `createMemory` service, update timeline card renderer, update `hard-delete-expired-accounts` if it introduces new storage keys.
 5. For media type details (upload flow, validation, video playback) see [media-memories.md](./media-memories.md).
@@ -124,8 +126,8 @@ role/tenancy model and the RLS rewrite.
 
 - No global tag maximum. `text_illustration` is capped at **6 tags** by client validation, a conditional junction-table trigger, a memory-type transition trigger, and `generate-illustration`; `text_only` and `media` are unlimited.
 - Turning AI off preserves all illustration columns and the R2 object. Timeline/detail rendering must continue to branch on `memory_type`, so retained keys on `text_only` rows remain hidden. Account deletion still collects retained keys normally.
-- Illustration requires tagged members with **ready** portraits (`NO_PORTRAITS` error otherwise).
-- `generate-illustration` passes **all** ready tagged portraits to OpenAI and labels each as `Reference image N: {description}` where description includes name, age, gender, and optional additional guidance. **Nicknames are never included in the image prompt** — a nickname like "cheeky monkey" was previously injected verbatim and could get drawn as a literal monkey. Instead, the safety-rewrite step (`buildSafetySystemPrompt` in `_shared/prompts.ts`) receives a nickname→canonical-name mapping for every family member (not just tagged ones, so mentions of any family member resolve) and is instructed to substitute nicknames with the member's real name in `safeDescription`, plus never treat a nickname as a literal visual element. `buildIllustrationPrompt` also carries a belt-and-suspenders constraint against drawing animals/objects/costumes implied by names or nicknames. The prompt instructs the model to draw **only those tagged humans** (no extra children or adults), while still allowing non-human scene elements (e.g. farm animals) from the memory text.
+- Illustration requires a usable date-resolved portrait for at least one selected character (`NO_PORTRAITS` otherwise). For each member, selection is latest ready portrait on/before `memory_date`, then earliest ready after it, then an undated migrated legacy portrait. Failed/generating/deleting rows do not displace a usable result.
+- `generate-illustration` passes all date-resolved tagged portraits to OpenAI and labels each as `Reference image N: {description}` where description includes name, age at `memory_date`, gender, and optional guidance. **Nicknames are never included in the image prompt** — a nickname like "cheeky monkey" was previously injected verbatim and could get drawn as a literal monkey. Instead, the safety-rewrite step receives a nickname→canonical-name mapping and substitutes real names in `safeDescription`. The prompt draws only tagged humans while allowing non-human scene elements from the memory text.
 - The safety rewrite returns `{"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}` (validated server-side, defaulting to `neutral`). `expressionStyle: "comedic"` only unlocks playful exaggerated expressions (see below) when the memory's `emotion` is also in `COMEDIC_ELIGIBLE_EMOTIONS` (`joy`, `funny`, `mischief`, `pride`).
 - `buildIllustrationPrompt` is scene-first, newline-separated sections (Scene → Characters → Emotional tone → Style/palette/date → Constraints) rather than one long paragraph. The Characters section PRESERVEs identity cues from each portrait reference (hairstyle, hair color, skin tone, face shape, approximate age, distinctive features) but ADAPTs pose/clothing/lighting/expression — the portrait's smile is explicitly called out as an identity sample only, not the required expression. The Emotional tone section maps `memory.emotion` to concrete expression guidance via `EMOTION_EXPRESSIONS` in `_shared/prompts.ts` (same keys as `EMOTION_PALETTES`) so illustrations stop defaulting every character to a smile — `worry`/`weary`/`sad` explicitly forbid smiles. When `expressionStyle === 'comedic'` and the emotion is whitelisted, an extra line invites playful exaggerated storybook expressions. `funny` is a first-class emotion (its own palette/expression entries); only the legacy label `joyful` is still mapped by `normalizeEmotion` (to `joy`) before palette/expression lookup; run `npm run eval:illustration -- --list-emotions` to audit labels in the DB.
 - **Auto-tag suppression vs illustration:** suppression is compose-session only. If a memory is saved with **zero** tags but the text still mentions names, `generate-illustration` may still infer members from text when no tags exist (existing fallback). That fallback is capped to the first 6 matched family members so it cannot bypass the portrait-input limit. Auto-tag reduces zero-tag saves with mentions.

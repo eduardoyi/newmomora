@@ -10,6 +10,8 @@ import {
   buildMemoryIllustrationKey,
   buildMemoryMediaAssetKey,
   buildMemoryMediaKey,
+  buildPortraitVersionAttemptKey,
+  buildPortraitVersionPhotoKey,
   parseStorageKey,
 } from './storage-keys.ts';
 
@@ -21,6 +23,7 @@ const FAMILY_A = '55555555-5555-4555-8555-555555555555';
 const FAMILY_B = '66666666-6666-4666-8666-666666666666';
 const MEMORY_ID = '77777777-7777-4777-8777-777777777777';
 const MEMBER_ID = '88888888-8888-4888-8888-888888888888';
+const VERSION_ID = '99999999-9999-4999-8999-999999999999';
 
 function fakeSupabase(options: {
   families: Array<{ id: string; owner_id: string; deleted_at: string | null }>;
@@ -92,7 +95,6 @@ Deno.test('getCallerFamilyRoles resolves owner/manager/viewer roles', async () =
   const roles = await getCallerFamilyRoles(supabase as never, [FAMILY_A], OWNER_ID);
   assertEquals(roles.get(FAMILY_A), 'owner');
 });
-
 Deno.test('getCallerFamilyRoles returns null for a non-member', async () => {
   const supabase = fakeSupabase({
     families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null }],
@@ -170,6 +172,22 @@ Deno.test('parseStorageKey extracts kind/ownerUserId/entityId for all four key s
   assertEquals(
     parseStorageKey(buildMemoryMediaAssetKey(OWNER_ID, MEMORY_ID, MEMBER_ID, 'mp4')),
     { kind: 'memory_media', ownerUserId: OWNER_ID, entityId: MEMORY_ID },
+  );
+  assertEquals(parseStorageKey(buildPortraitVersionPhotoKey(OWNER_ID, MEMBER_ID, VERSION_ID)), {
+    kind: 'portrait_version_photo',
+    ownerUserId: OWNER_ID,
+    entityId: MEMBER_ID,
+    portraitVersionId: VERSION_ID,
+  });
+  assertEquals(
+    parseStorageKey(buildPortraitVersionAttemptKey(OWNER_ID, MEMBER_ID, VERSION_ID, MEMORY_ID)),
+    {
+      kind: 'portrait_version_portrait',
+      ownerUserId: OWNER_ID,
+      entityId: MEMBER_ID,
+      portraitVersionId: VERSION_ID,
+      attemptId: MEMORY_ID,
+    },
   );
 });
 

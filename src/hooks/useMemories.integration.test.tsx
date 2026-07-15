@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { useMemories, useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
 import { memoriesQueryKey } from '@/hooks/queryKeys';
 import {
   createMemory,
@@ -24,6 +25,10 @@ jest.mock('@/hooks/use-auth', () => ({
 
 jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
+}));
+
+jest.mock('@/hooks/usePortraitVersions', () => ({
+  useFamilyPortraitVersions: jest.fn(),
 }));
 
 jest.mock('@/services/memories', () => ({
@@ -51,6 +56,9 @@ jest.mock('@/services/ai', () => ({
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
+const mockedUseFamilyPortraitVersions = useFamilyPortraitVersions as jest.MockedFunction<
+  typeof useFamilyPortraitVersions
+>;
 const mockedFetchMemories = fetchMemories as jest.MockedFunction<typeof fetchMemories>;
 const mockedCreateMemory = createMemory as jest.MockedFunction<typeof createMemory>;
 const mockedUpdateMemory = updateMemory as jest.MockedFunction<typeof updateMemory>;
@@ -113,6 +121,7 @@ describe('useMemories integration', () => {
       refetchMemberships: jest.fn(),
       justLostAccess: false,
     });
+    mockedUseFamilyPortraitVersions.mockReturnValue({ data: [], isLoading: false } as never);
 
     mockedFetchMemories.mockResolvedValue({ data: [], error: null });
     mockedNotifyFamilyActivity.mockResolvedValue({ data: { sent: true }, error: null });
@@ -122,6 +131,52 @@ describe('useMemories integration', () => {
   // Media memory creation moved to the pending-uploads queue -- see
   // src/hooks/use-pending-memory-uploads.test.tsx and
   // src/services/memory-posting.test.ts for its coverage.
+
+  it('resolves tagged-member avatars against each memory date', async () => {
+    mockedFetchMemories.mockResolvedValue({
+      data: [{
+        id: 'memory-1',
+        memory_date: '2026-05-30',
+        memory_type: 'text_only',
+        emotion: 'joy',
+        illustration_status: 'none',
+        taggedMembers: [{ id: 'member-1', name: 'Maya', updated_at: 'member-time' }],
+        mediaAssets: [],
+      }] as never,
+      error: null,
+    });
+    mockedUseFamilyPortraitVersions.mockReturnValue({
+      data: [
+        {
+          id: 'jan',
+          family_member_id: 'member-1',
+          reference_date: '2026-01-01',
+          illustrated_profile_key: 'portrait-jan',
+          illustrated_profile_status: 'ready',
+          deletion_token: null,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: 'portrait-jan-time',
+        },
+        {
+          id: 'jun',
+          family_member_id: 'member-1',
+          reference_date: '2026-06-01',
+          illustrated_profile_key: 'portrait-jun',
+          illustrated_profile_status: 'ready',
+          deletion_token: null,
+          created_at: '2026-06-01T00:00:00Z',
+          updated_at: 'portrait-jun-time',
+        },
+      ],
+      isLoading: false,
+    } as never);
+
+    const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.memories).toHaveLength(1));
+
+    expect(result.current.memories[0].taggedMembers[0].avatarImageKey).toBe('portrait-jan');
+    expect(result.current.memories[0].taggedMembers[0].avatarUpdatedAt).toBe('portrait-jan-time');
+  });
 
   it('re-runs photo emotion analysis when caption changes', async () => {
     mockedUpdateMemory.mockResolvedValue({

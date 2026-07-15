@@ -1,11 +1,8 @@
-import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  ActionSheetIOS,
   ActivityIndicator,
   Alert,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -14,7 +11,6 @@ import {
 
 import { AuthErrorMessage, AuthField, AuthInput } from '@/components/auth-screen';
 import { DatePickerField } from '@/components/date-picker-field';
-import { FamilyProfilePortraitPhoto } from '@/components/family-profile-portrait-photo';
 import { KeyboardAwareFormScreen } from '@/components/keyboard-aware-form-screen';
 import { NicknameInputRow } from '@/components/nickname-input-row';
 import { SelectField } from '@/components/select-field';
@@ -24,14 +20,6 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { canEditFamilyContent } from '@/utils/roles';
 import { validateDateOfBirth, validateFamilyMemberName } from '@/utils/family-members';
-import {
-  type FamilyProfilePhotoPickResult,
-  type FamilyProfilePhotoSelection,
-  parsePendingPickerResult,
-  pickFamilyProfilePhotoFromCamera,
-  pickFamilyProfilePhotoFromLibrary,
-} from '@/utils/family-profile-photo-picker';
-import { runAfterNativeChooserDismisses } from '@/utils/native-permissions';
 
 export default function EditFamilyMemberScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -53,10 +41,8 @@ export default function EditFamilyMemberScreen() {
   const [additionalInfo, setAdditionalInfo] = useState('');
   const [nicknames, setNicknames] = useState<string[]>([]);
   const [nicknameInput, setNicknameInput] = useState('');
-  const [newPhoto, setNewPhoto] = useState<FamilyProfilePhotoSelection | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [isInitialized, setIsInitialized] = useState(false);
-  const [isRegeneratingPortrait, setIsRegeneratingPortrait] = useState(false);
 
   const defaultDobPickerDate = useMemo(() => {
     const d = new Date();
@@ -88,87 +74,8 @@ export default function EditFamilyMemberScreen() {
     setNicknames((prev) => prev.filter((n) => n !== nick));
   };
 
-  const applyPickResult = useCallback((result: FamilyProfilePhotoPickResult) => {
-    if (result.error) {
-      setErrorMessage(result.error);
-      return;
-    }
-
-    if (result.selection) {
-      setNewPhoto(result.selection);
-      setErrorMessage('');
-    }
-  }, []);
-
-  const takePhoto = useCallback(async () => {
-    applyPickResult(await pickFamilyProfilePhotoFromCamera());
-  }, [applyPickResult]);
-
-  const choosePhotoFromLibrary = useCallback(async () => {
-    applyPickResult(await pickFamilyProfilePhotoFromLibrary());
-  }, [applyPickResult]);
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-
-    let isMounted = true;
-    const recoverPendingProfilePhoto = async () => {
-      try {
-        const pending = await ImagePicker.getPendingResultAsync();
-        if (isMounted) {
-          applyPickResult(parsePendingPickerResult(pending));
-        }
-      } catch {
-        if (isMounted) {
-          setErrorMessage('Could not recover the selected profile photo.');
-        }
-      }
-    };
-
-    void recoverPendingProfilePhoto();
-    return () => {
-      isMounted = false;
-    };
-  }, [applyPickResult]);
-
-  const showProfilePhotoSourceChooser = () => {
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: ['Take photo', 'Choose from library', 'Cancel'],
-          cancelButtonIndex: 2,
-        },
-        (buttonIndex) => {
-          if (buttonIndex === 0) {
-            runAfterNativeChooserDismisses(() => { void takePhoto(); });
-          }
-          if (buttonIndex === 1) {
-            runAfterNativeChooserDismisses(() => { void choosePhotoFromLibrary(); });
-          }
-        },
-      );
-      return;
-    }
-
-    Alert.alert('Profile photo', undefined, [
-      {
-        text: 'Take photo',
-        onPress: () => runAfterNativeChooserDismisses(() => { void takePhoto(); }),
-      },
-      {
-        text: 'Choose from library',
-        onPress: () => runAfterNativeChooserDismisses(() => { void choosePhotoFromLibrary(); }),
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  };
-
-  const saveChanges = async (regeneratePortrait: boolean) => {
+  const saveChanges = async () => {
     if (!member) return;
-
-    if (regeneratePortrait && newPhoto) {
-      setIsRegeneratingPortrait(true);
-    }
 
     try {
       await updateMember({
@@ -178,13 +85,9 @@ export default function EditFamilyMemberScreen() {
         gender: gender.trim() || null,
         additionalInfo: additionalInfo.trim() || null,
         nicknames,
-        photoUri: newPhoto?.uri,
-        photoContentType: newPhoto?.contentType,
-        regeneratePortrait,
       });
       router.back();
     } catch (error) {
-      setIsRegeneratingPortrait(false);
       setErrorMessage(error instanceof Error ? error.message : 'Could not update family member');
     }
   };
@@ -199,30 +102,7 @@ export default function EditFamilyMemberScreen() {
     const dobError = validateDateOfBirth(dateOfBirth);
     if (dobError) { setErrorMessage(dobError); return; }
 
-    if (newPhoto) {
-      Alert.alert(
-        'Update portrait?',
-        'You changed the profile photo. Regenerate the AI character portrait to match the new photo, or keep the current portrait for now.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Save without regenerating',
-            onPress: () => {
-              void saveChanges(false);
-            },
-          },
-          {
-            text: 'Regenerate portrait',
-            onPress: () => {
-              void saveChanges(true);
-            },
-          },
-        ],
-      );
-      return;
-    }
-
-    void saveChanges(false);
+    void saveChanges();
   };
 
   const handleDelete = () => {
@@ -279,27 +159,6 @@ export default function EditFamilyMemberScreen() {
           <Text style={styles.backButtonText}>Cancel</Text>
         </Pressable>
         <Text style={styles.title}>Edit person</Text>
-      </View>
-
-      {/* ── Photo ── */}
-      <View style={styles.photoSection}>
-        <Pressable
-          accessibilityRole="button"
-          onPress={showProfilePhotoSourceChooser}
-          style={styles.photoCircleWrap}
-          testID="edit-family-member-photo"
-        >
-          <FamilyProfilePortraitPhoto
-            forceGeneratingOverlay={isRegeneratingPortrait}
-            localPhotoUri={newPhoto?.uri}
-            member={member}
-            width={96}
-          />
-          <View style={styles.photoOverlay}>
-            <Text style={styles.photoOverlayIcon}>📷</Text>
-          </View>
-        </Pressable>
-        <Text style={styles.photoHint}>Take or change photo</Text>
       </View>
 
       {/* ── Form ── */}
@@ -440,56 +299,6 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 28,
     fontFamily: fonts.sansBold,
-  },
-
-  // Photo section
-  photoSection: {
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  photoCircleWrap: {
-    height: 96,
-    overflow: 'hidden',
-    position: 'relative',
-    width: 96,
-  },
-  photoCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    overflow: 'hidden',
-  },
-  photoCirclePlaceholder: {
-    backgroundColor: colors.surface,
-    borderWidth: 2,
-    borderColor: colors.borderStrong,
-    borderStyle: 'dashed',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  photoCircleInitial: {
-    fontFamily: fonts.displayItalic,
-    fontSize: 38,
-    color: colors.ink3,
-  },
-  photoOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  photoOverlayIcon: {
-    fontSize: 14,
-  },
-  photoHint: {
-    fontFamily: fonts.sans,
-    fontSize: 13,
-    color: colors.ink3,
   },
 
   // Form

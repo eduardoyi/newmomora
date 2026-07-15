@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
 import {
   calendarMemoriesQueryKeyBase,
   familyMembersQueryKeyBase,
@@ -42,6 +43,11 @@ import {
   memoriesNeedEmotionPolling,
   shouldPollForEmotion,
 } from '@/utils/media-emotion-polling';
+import {
+  groupPortraitVersionsByMember,
+  resolveMemberPortraitFields,
+  type FamilyMemberPortraitVersion,
+} from '@/utils/portrait-versions';
 
 export type { MemoryMediaMutationAsset } from '@/services/memory-posting';
 
@@ -158,6 +164,25 @@ function setMemoryEmotionInCache(
   emotion: string,
 ): void {
   patchMemoryInCaches(queryClient, familyId, memoryId, { emotion });
+}
+
+function resolveMemoryTagPortraits(
+  memories: readonly MemoryWithTags[],
+  portraitVersions: readonly FamilyMemberPortraitVersion[],
+): MemoryWithTags[] {
+  const portraitMap = groupPortraitVersionsByMember(portraitVersions);
+  return memories.map((memory) => ({
+    ...memory,
+    taggedMembers: memory.taggedMembers.map((member) => {
+      const versions = portraitMap.get(member.id) ?? [];
+      return versions.length === 0
+        ? member
+        : {
+            ...member,
+            ...resolveMemberPortraitFields(versions, memory.memory_date, member.updated_at),
+          };
+    }),
+  }));
 }
 
 export interface CreateMemoryMutationInput {
@@ -382,6 +407,7 @@ export function useMemories(searchQuery = '') {
   const recoveringIllustrationsRef = useRef(new Set<string>());
   const recoveringEmotionsRef = useRef(new Set<string>());
   const canRecoverIllustrations = canEditFamilyContent(role);
+  const portraitVersionsQuery = useFamilyPortraitVersions();
 
   const query = useQuery({
     queryKey: [...memoriesQueryKey(familyId), searchQuery],
@@ -415,6 +441,13 @@ export function useMemories(searchQuery = '') {
       return memoriesNeedEmotionPolling(memories) ? 5000 : false;
     },
   });
+  const resolvedMemories = useMemo(
+    () =>
+      portraitVersionsQuery.data === undefined
+        ? query.data ?? []
+        : resolveMemoryTagPortraits(query.data ?? [], portraitVersionsQuery.data),
+    [query.data, portraitVersionsQuery.data],
+  );
 
   // Viewers' writes are RLS-rejected (memories: update requires manager+),
   // so a viewer running this would have its illustration_status UPDATE and
@@ -517,7 +550,7 @@ export function useMemories(searchQuery = '') {
   const mutations = useMemoryMutations();
 
   return {
-    memories: query.data ?? [],
+    memories: resolvedMemories,
     isLoading: query.isLoading,
     isRefetching: query.isRefetching,
     isError: query.isError,
@@ -534,6 +567,7 @@ export function useMemory(memoryId: string | undefined) {
   const recoveringIllustrationRef = useRef(false);
   const previousIllustrationStatusRef = useRef<string | null>(null);
   const canRecoverIllustrations = canEditFamilyContent(role);
+  const portraitVersionsQuery = useFamilyPortraitVersions();
 
   const query = useQuery({
     queryKey: memoryDetailQueryKey(familyId, memoryId),
@@ -568,6 +602,7 @@ export function useMemory(memoryId: string | undefined) {
       return shouldPollForEmotion(memory) ? 5000 : false;
     },
   });
+  const refetchMemory = query.refetch;
 
   useEffect(() => {
     // Never act on the list-cache placeholder: its illustration_status can be
@@ -637,10 +672,16 @@ export function useMemory(memoryId: string | undefined) {
       return;
     }
 
-    void query.refetch();
+    void refetchMemory();
     queryClient.invalidateQueries({ queryKey: ['media-urls'] });
     queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
-  }, [query.data, query.isPlaceholderData, query.refetch, queryClient]);
+  }, [query.data, query.isPlaceholderData, refetchMemory, queryClient]);
 
-  return query;
+  const resolvedMemory = useMemo(() => {
+    if (!query.data) return query.data;
+    if (portraitVersionsQuery.data === undefined) return query.data;
+    return resolveMemoryTagPortraits([query.data], portraitVersionsQuery.data ?? [])[0];
+  }, [query.data, portraitVersionsQuery.data]);
+
+  return { ...query, data: resolvedMemory };
 }

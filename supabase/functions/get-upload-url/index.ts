@@ -4,7 +4,7 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { createPresignedPutUrl, R2_URL_EXPIRY } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
-import { assertUserOwnedKey, getAllowedContentTypes } from '../_shared/storage-keys.ts';
+import { assertUserOwnedKey, getAllowedContentTypes, parseStorageKey } from '../_shared/storage-keys.ts';
 
 export interface GetUploadUrlRequest {
   objectKey: string;
@@ -85,6 +85,29 @@ export async function handleGetUploadUrl(req: Request): Promise<Response> {
 
   if (!isManagerRole(role)) {
     return errorResponse('Not authorized for this family', 403, 'forbidden');
+  }
+
+  const parsed = parseStorageKey(objectKey);
+  if (parsed?.kind === 'portrait_version_photo') {
+    const [{ data: member }, { data: existingVersion }] = await Promise.all([
+      serviceClient
+        .from('family_members')
+        .select('id')
+        .eq('id', parsed.entityId)
+        .eq('family_id', familyId)
+        .maybeSingle(),
+      serviceClient
+        .from('family_member_portrait_versions')
+        .select('id')
+        .eq('id', parsed.portraitVersionId as string)
+        .maybeSingle(),
+    ]);
+    if (!member) {
+      return errorResponse('Family member not found in this family', 400, 'validation_error');
+    }
+    if (existingVersion) {
+      return errorResponse('Portrait version already exists', 409, 'version_exists');
+    }
   }
 
   try {

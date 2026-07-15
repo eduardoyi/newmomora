@@ -12,12 +12,12 @@ import {
   getIllustrationStyle,
   loadStyleReferenceBytes,
 } from '../_shared/styles.ts';
-import { buildFamilyPortraitKey, parseStorageKey } from '../_shared/storage-keys.ts';
-import { getObjectBytes, putObjectBytes } from '../_shared/r2.ts';
-import { createUserClient } from '../_shared/supabase-admin.ts';
+import { buildPortraitVersionAttemptKey, parseStorageKey } from '../_shared/storage-keys.ts';
+import { deleteObject, getObjectBytes, putObjectBytes } from '../_shared/r2.ts';
+import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 export interface GeneratePortraitRequest {
-  familyMemberId: string;
+  portraitVersionId: string;
 }
 
 export interface GeneratePortraitResponse {
@@ -25,7 +25,22 @@ export interface GeneratePortraitResponse {
   illustratedProfileKey: string;
 }
 
-export async function handleGeneratePortraitIllustration(req: Request): Promise<Response> {
+export interface GeneratePortraitDependencies {
+  getAuthenticatedUser: typeof getAuthenticatedUser;
+  createServiceClient: typeof createServiceClient;
+  getCallerFamilyRole: typeof getCallerFamilyRole;
+}
+
+const DEFAULT_DEPENDENCIES: GeneratePortraitDependencies = {
+  getAuthenticatedUser,
+  createServiceClient,
+  getCallerFamilyRole,
+};
+
+export async function handleGeneratePortraitIllustration(
+  req: Request,
+  dependencies: GeneratePortraitDependencies = DEFAULT_DEPENDENCIES,
+): Promise<Response> {
   const corsResponse = handleCors(req);
   if (corsResponse) {
     return corsResponse;
@@ -35,7 +50,7 @@ export async function handleGeneratePortraitIllustration(req: Request): Promise<
     return errorResponse('Method not allowed', 405, 'method_not_allowed');
   }
 
-  const user = await getAuthenticatedUser(req);
+  const user = await dependencies.getAuthenticatedUser(req);
   if (!user) {
     return errorResponse('Unauthorized', 401, 'unauthorized');
   }
@@ -47,76 +62,100 @@ export async function handleGeneratePortraitIllustration(req: Request): Promise<
     return errorResponse('Invalid JSON body', 400, 'invalid_json');
   }
 
-  const { familyMemberId } = body;
+  const { portraitVersionId } = body;
 
-  if (!familyMemberId || typeof familyMemberId !== 'string') {
-    return errorResponse('familyMemberId is required', 400, 'validation_error');
+  if (!portraitVersionId || typeof portraitVersionId !== 'string') {
+    return errorResponse('portraitVersionId is required', 400, 'validation_error');
   }
 
-  const authHeader = req.headers.get('Authorization');
-  if (!authHeader) {
-    return errorResponse('Unauthorized', 401, 'unauthorized');
+  const supabase = dependencies.createServiceClient();
+
+  const { data: version, error: versionError } = await supabase
+    .from('family_member_portrait_versions')
+    .select('*')
+    .eq('id', portraitVersionId)
+    .maybeSingle();
+
+  if (versionError) {
+    console.error('generate-portrait-illustration version lookup failed', versionError.message);
+    return errorResponse('Failed to load portrait version', 500, 'internal_error');
   }
 
-  const supabase = createUserClient(authHeader);
+  if (!version) {
+    return errorResponse('Portrait version not found', 404, 'PORTRAIT_VERSION_NOT_FOUND');
+  }
+
+  const callerRole = await dependencies.getCallerFamilyRole(supabase, version.family_id, user.id);
+  if (!isManagerRole(callerRole)) {
+    return errorResponse('Not authorized for this portrait version', 403, 'forbidden');
+  }
+
+  if (!version.reference_date) {
+    return errorResponse('Set a portrait date before generation', 400, 'DATE_REQUIRED');
+  }
 
   const { data: member, error: memberError } = await supabase
     .from('family_members')
     .select('*')
-    .eq('id', familyMemberId)
+    .eq('id', version.family_member_id)
+    .eq('family_id', version.family_id)
     .maybeSingle();
-
-  if (memberError) {
-    console.error('generate-portrait-illustration member lookup failed', memberError.message);
-    return errorResponse('Failed to load family member', 500, 'internal_error');
-  }
-
-  if (!member) {
+  if (memberError || !member) {
     return errorResponse('Family member not found', 404, 'MEMBER_NOT_FOUND');
   }
 
-  const callerRole = await getCallerFamilyRole(supabase, member.family_id, user.id);
-  if (!isManagerRole(callerRole)) {
-    return errorResponse('Not authorized for this family member', 403, 'forbidden');
-  }
-
-  if (!member.profile_picture_key) {
-    return errorResponse('Profile photo is required', 400, 'PHOTO_MISSING');
-  }
-
-  // The DB row is the trust anchor for this key now (a manager may have
-  // replaced the photo under their own uid prefix) -- no caller-prefix
-  // assertion. The portrait output key's {uid} prefix is derived from the
-  // member's *current* profile_picture_key prefix, not from the caller, so
-  // photo and portrait stay under the same uid segment.
-  const parsedPhotoKey = parseStorageKey(member.profile_picture_key);
-  if (!parsedPhotoKey) {
+  const parsedPhotoKey = parseStorageKey(version.profile_picture_key);
+  if (
+    !parsedPhotoKey ||
+    parsedPhotoKey.kind !== 'portrait_version_photo' ||
+    parsedPhotoKey.portraitVersionId !== version.id ||
+    parsedPhotoKey.entityId !== member.id
+  ) {
     return errorResponse('Invalid profile photo key', 400, 'validation_error');
   }
 
   const { data: family } = await supabase
     .from('families')
     .select('illustration_style')
-    .eq('id', member.family_id)
+    .eq('id', version.family_id)
     .maybeSingle();
 
   const styleToken = family?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN;
   const style = getIllustrationStyle(styleToken);
-  const portraitKey = buildFamilyPortraitKey(parsedPhotoKey.ownerUserId, familyMemberId);
+  const attemptId = crypto.randomUUID();
+  const portraitKey = buildPortraitVersionAttemptKey(
+    parsedPhotoKey.ownerUserId,
+    member.id,
+    version.id,
+    attemptId,
+  );
+  const { data: claimedVersion, error: claimError } = await supabase.rpc(
+    'claim_family_member_portrait_generation',
+    {
+      target_version_id: version.id,
+      attempt_token: attemptId,
+      attempt_key: portraitKey,
+      actor_user_id: user.id,
+    },
+  );
+  if (claimError || !claimedVersion) {
+    return errorResponse('Portrait generation already in progress', 409, 'GENERATION_IN_PROGRESS');
+  }
 
-  await supabase
-    .from('family_members')
-    .update({ illustrated_profile_status: 'generating' })
-    .eq('id', familyMemberId);
+  if (version.generation_output_key && version.generation_output_key !== portraitKey) {
+    await deleteObject(version.generation_output_key).catch(() => undefined);
+  }
+
+  let uploadedAttempt = false;
 
   try {
-    const photoBytes = await getObjectBytes(member.profile_picture_key);
+    const photoBytes = await getObjectBytes(version.profile_picture_key);
     const cappedPhoto = await capImageMaxEdge(
       photoBytes,
       MAX_PORTRAIT_REFERENCE_EDGE,
       'image/jpeg',
     );
-    const referenceDate = new Date().toISOString().slice(0, 10);
+    const referenceDate = version.reference_date;
     const ageDescription = member.date_of_birth
       ? describeAgeAtDate(member.date_of_birth, referenceDate)
       : 'young child';
@@ -171,14 +210,34 @@ export async function handleGeneratePortraitIllustration(req: Request): Promise<
     }
 
     await putObjectBytes(portraitKey, portraitBytes, 'image/webp');
+    uploadedAttempt = true;
 
-    await supabase
-      .from('family_members')
-      .update({
-        illustrated_profile_key: portraitKey,
-        illustrated_profile_status: 'ready',
-      })
-      .eq('id', familyMemberId);
+    const { error: finishError } = await supabase.rpc('finish_family_member_portrait_generation', {
+      target_version_id: version.id,
+      attempt_token: attemptId,
+      generated_portrait_key: portraitKey,
+    });
+    if (finishError) {
+      // The request may have failed after Postgres committed. Re-read before
+      // deleting the new object so a transient response failure cannot leave
+      // a ready row pointing at deleted bytes.
+      const { data: committedVersion } = await supabase
+        .from('family_member_portrait_versions')
+        .select('illustrated_profile_key, generation_token')
+        .eq('id', version.id)
+        .maybeSingle();
+      if (
+        committedVersion?.illustrated_profile_key !== portraitKey ||
+        committedVersion.generation_token !== null
+      ) {
+        await deleteObject(portraitKey).catch(() => undefined);
+        return errorResponse('Portrait generation claim lost', 409, 'GENERATION_CLAIM_LOST');
+      }
+    }
+
+    if (version.illustrated_profile_key && version.illustrated_profile_key !== portraitKey) {
+      await deleteObject(version.illustrated_profile_key).catch(() => undefined);
+    }
 
     const response: GeneratePortraitResponse = {
       success: true,
@@ -192,15 +251,18 @@ export async function handleGeneratePortraitIllustration(req: Request): Promise<
       error instanceof Error ? error.message : 'unknown',
     );
 
-    await supabase
-      .from('family_members')
-      .update({ illustrated_profile_status: 'failed' })
-      .eq('id', familyMemberId);
+    await supabase.rpc('fail_family_member_portrait_generation', {
+      target_version_id: version.id,
+      attempt_token: attemptId,
+    });
+    if (uploadedAttempt) {
+      await deleteObject(portraitKey).catch(() => undefined);
+    }
 
     return errorResponse('Portrait generation failed', 500, 'GENERATION_FAILED');
   }
 }
 
 if (import.meta.main) {
-  Deno.serve(handleGeneratePortraitIllustration);
+  Deno.serve((request) => handleGeneratePortraitIllustration(request));
 }

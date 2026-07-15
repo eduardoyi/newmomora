@@ -1,9 +1,13 @@
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
+import { getLocalTodayIso } from '@/utils/portrait-versions';
 
 export interface E2eProfilePhoto {
   uri: string;
   contentType: string;
+  captureDate: null;
+  referenceDate: string;
+  dateSource: 'default_today';
 }
 
 const E2E_PROFILE_FIXTURE_CACHE_URI = `${FileSystem.cacheDirectory}e2e-profile-fixture.jpg`;
@@ -36,5 +40,8 @@ export async function loadE2eProfilePhoto(): Promise<E2eProfilePhoto> {
   return {
     uri: E2E_PROFILE_FIXTURE_CACHE_URI,
     contentType: 'image/jpeg',
+    captureDate: null,
+    referenceDate: getLocalTodayIso(),
+    dateSource: 'default_today',
   };
 }

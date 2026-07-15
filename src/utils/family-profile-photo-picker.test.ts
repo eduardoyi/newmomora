@@ -94,7 +94,12 @@ describe('family profile photo picker', () => {
     });
 
     await expect(pickFamilyProfilePhotoFromLibrary()).resolves.toEqual({
-      selection: { uri: 'file:///profile.png', contentType: 'image/png' },
+      selection: expect.objectContaining({
+        uri: 'file:///profile.png',
+        contentType: 'image/png',
+        captureDate: null,
+        dateSource: 'default_today',
+      }),
     });
   });
 
@@ -105,7 +110,12 @@ describe('family profile photo picker', () => {
     });
 
     await expect(pickFamilyProfilePhotoFromCamera()).resolves.toEqual({
-      selection: { uri: 'file:///camera.jpg', contentType: 'image/jpeg' },
+      selection: expect.objectContaining({
+        uri: 'file:///camera.jpg',
+        contentType: 'image/jpeg',
+        captureDate: null,
+        dateSource: 'default_today',
+      }),
     });
     expect(mockedImagePicker.launchCameraAsync).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -150,7 +160,12 @@ describe('family profile photo picker', () => {
         assets: [imageAsset({ uri: 'file:///pending.webp', mimeType: 'image/webp' })],
       }),
     ).toEqual({
-      selection: { uri: 'file:///pending.webp', contentType: 'image/webp' },
+      selection: expect.objectContaining({
+        uri: 'file:///pending.webp',
+        contentType: 'image/webp',
+        captureDate: null,
+        dateSource: 'default_today',
+      }),
     });
     expect(parsePendingPickerResult({ canceled: true, assets: null })).toEqual({});
     expect(parsePendingPickerResult({ code: 'ERR', message: 'Picker failed' })).toEqual({
@@ -163,9 +178,31 @@ describe('family profile photo picker', () => {
     expect(resolveProfilePhotoContentType(imageAsset({ uri: 'file:///profile.HEIC' }))).toBe(
       'image/heic',
     );
-    expect(assetToSelection(imageAsset({ uri: 'file:///profile.heif?cache=1' }))).toEqual({
-      uri: 'file:///profile.heif?cache=1',
-      contentType: 'image/heic',
+    expect(assetToSelection(imageAsset({ uri: 'file:///profile.heif?cache=1' }))).toEqual(
+      expect.objectContaining({
+        uri: 'file:///profile.heif?cache=1',
+        contentType: 'image/heic',
+        captureDate: null,
+        dateSource: 'default_today',
+      }),
+    );
+  });
+
+  it('keeps only a strict EXIF capture date from library selection', async () => {
+    mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [imageAsset({ exif: { DateTimeOriginal: '2024:03:02 10:11:12', GPSLatitude: 1 } })],
     });
+
+    await expect(pickFamilyProfilePhotoFromLibrary()).resolves.toEqual({
+      selection: expect.objectContaining({
+        captureDate: '2024-03-02',
+        referenceDate: '2024-03-02',
+        dateSource: 'exif',
+      }),
+    });
+    expect(mockedImagePicker.launchImageLibraryAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ exif: true }),
+    );
   });
 });
