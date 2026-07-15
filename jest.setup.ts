@@ -28,3 +28,12 @@ jest.mock('lucide-react-native', () => ({
   MessageCircle: () => null,
   Send: () => null,
 }));
+
+// Native IME-inset controller. Its maintained Jest mock maps keyboard-aware
+// containers to React Native views while preserving their props for assertions.
+jest.mock('react-native-keyboard-controller', () =>
+  // Jest evaluates mock factories before imports, so the maintained mock must
+  // be loaded here rather than through a top-level import.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require('react-native-keyboard-controller/jest'),
+);

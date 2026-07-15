@@ -16,7 +16,7 @@ Family profiles power memory tagging and age-aware AI character portraits. Each 
 - **Member ordering:** everywhere `useFamilyMembers()` renders members (family tab, memory tag chips in new/edit memory), the list is ordered by how often each member is tagged in memories (most-tagged first, ties by `created_at`). `fetchFamilyMembers` embeds a `memory_family_members(count)` aggregate and sorts client-side; memory create/update/delete invalidates the `family-members` query so the order stays fresh.
 - **Add member modal:** name, DOB (YYYY-MM-DD), optional gender/notes, required photo from camera or library
 - **Edit member:** profile fields remain editable independently. Adding a newer or backdated photo creates a portrait version without replacing history.
-- **Keyboard-safe forms:** add/edit forms scroll the focused field above the keyboard. Android waits for the IME resize, then uses React Native's native focused-input scroll calculation so nicknames and notes remain visible even after prior automatic scrolling.
+- **Keyboard-safe forms:** add/edit forms use `react-native-keyboard-controller`'s edge-to-edge-aware `KeyboardAwareScrollView`. It follows native IME insets and focused-input layout changes on Android instead of relying on legacy `adjustResize`, React Native keyboard screen coordinates, or manual scroll measurements.
 - **Profile photo source chooser:** tapping the photo circle shows **Take photo** and **Choose from library**. iOS uses a native action sheet; Android uses a standard alert chooser.
 - **Timeline onboarding:** if no family members, CTA to add one before journaling
 - **Portrait history:** the member-detail history icon opens paired photos/illustrations with date, age, status, and management actions.
@@ -148,7 +148,7 @@ Library picker options request EXIF (never base64) only to read a trustworthy ca
 | `src/utils/e2e-fixtures.test.ts` | E2E profile fixture loader |
 | `src/services/media.test.ts` | Presigned upload (native FileSystem path) |
 | `src/components/cast-card.test.tsx` | Family-member detail portrait tap affordance |
-| `src/components/keyboard-aware-form-screen.test.ts` | Native focused-input scrolling after Android keyboard resize |
+| `src/components/keyboard-aware-form-screen.test.tsx` | Edge-to-edge keyboard-aware form configuration and focused-input offset |
 
 ### Integration tests
 
@@ -199,7 +199,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
-| 2026-07-15 | Use native focused-input scrolling after Android keyboard resize |
+| 2026-07-15 | Adopt native IME-inset-aware form scrolling for Android edge-to-edge layouts |
 | 2026-07-15 | Added dated portrait history and age-aware memory portrait selection |
 | 2026-07-14 | Keep lower add/edit profile fields visible above the Android keyboard |
 | 2026-07-12 | Members ordered by memory tag frequency (family tab + memory tag chips) |

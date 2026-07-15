@@ -1,7 +1,5 @@
-import { useRef } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { useFormScrollContext } from '@/components/keyboard-aware-form-screen';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 
 interface NicknameInputRowProps {
@@ -21,15 +19,11 @@ export function NicknameInputRow({
   addTestID,
   inputTestID,
 }: NicknameInputRowProps) {
-  const formScroll = useFormScrollContext();
-  const wrapperRef = useRef<View>(null);
-
   return (
-    <View ref={wrapperRef} collapsable={false} style={styles.row}>
+    <View style={styles.row}>
       <TextInput
         value={value}
         onChangeText={onChangeText}
-        onFocus={() => formScroll?.scrollInputIntoView(wrapperRef)}
         onSubmitEditing={onSubmitEditing}
         placeholder="Add a nickname…"
         placeholderTextColor={colors.ink3}

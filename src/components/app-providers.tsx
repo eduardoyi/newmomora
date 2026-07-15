@@ -1,6 +1,7 @@
 import { focusManager, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, type ReactNode } from 'react';
 import { AppState } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import { AuthProvider } from '@/hooks/use-auth';
 import { FamilyProvider } from '@/hooks/use-family';
@@ -21,12 +22,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <FamilyProvider>
-          <PendingMemoryUploadsProvider>{children}</PendingMemoryUploadsProvider>
-        </FamilyProvider>
-      </AuthProvider>
-    </QueryClientProvider>
+    <KeyboardProvider preload={false}>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <FamilyProvider>
+            <PendingMemoryUploadsProvider>{children}</PendingMemoryUploadsProvider>
+          </FamilyProvider>
+        </AuthProvider>
+      </QueryClientProvider>
+    </KeyboardProvider>
   );
 }

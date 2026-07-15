@@ -1,4 +1,4 @@
-import { ReactNode, useRef } from 'react';
+import { ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -13,7 +13,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, spacing } from '@/constants/theme';
-import { useFormScrollContext } from '@/components/keyboard-aware-form-screen';
 
 interface AuthScreenProps {
   title: string;
@@ -62,27 +61,13 @@ export function AuthField({ label, children }: AuthFieldProps) {
   );
 }
 
-export function AuthInput({ onFocus, ...props }: TextInputProps) {
-  const formScroll = useFormScrollContext();
-  const inputWrapperRef = useRef<View>(null);
-
-  const handleFocus: TextInputProps['onFocus'] = (event) => {
-    onFocus?.(event);
-
-    if (formScroll) {
-      formScroll.scrollInputIntoView(inputWrapperRef);
-    }
-  };
-
+export function AuthInput(props: TextInputProps) {
   return (
-    <View ref={inputWrapperRef} collapsable={false}>
-      <TextInput
-        {...props}
-        onFocus={handleFocus}
-        style={[styles.input, props.style]}
-        placeholderTextColor={colors.textMuted}
-      />
-    </View>
+    <TextInput
+      {...props}
+      style={[styles.input, props.style]}
+      placeholderTextColor={colors.textMuted}
+    />
   );
 }
 
