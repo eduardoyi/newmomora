@@ -381,6 +381,291 @@ describe('memories service integration', () => {
     );
   });
 
+  it('rounds a fractional durationMs before sending it to the RPC (belt-and-braces)', async () => {
+    // Client rounding (memory-media-picker.tsx) should already produce
+    // integers, but mediaAssetsToRpcPayload rounds again so no future call
+    // site can regress a fractional durationMs past the RPC's `::integer`
+    // cast (supabase/migrations/20260716120000_round_media_duration_ms_cast.sql).
+    const memoryRow = {
+      id: 'memory-video-1',
+      user_id: 'user-1',
+      content: null,
+      memory_date: '2026-05-24',
+      memory_type: 'media',
+      emotion: null,
+      illustration_key: null,
+      illustration_status: 'none',
+      illustration_prompt: null,
+      media_key: 'user-1/memories/memory-video-1/media.mov',
+      media_content_type: 'video/quicktime',
+      created_at: '2026-05-24T00:00:00Z',
+      updated_at: '2026-05-24T00:00:00Z',
+    };
+
+    const memoriesBuilder = createQueryBuilder({ data: memoryRow, error: null });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+    const mediaBuilder = createQueryBuilder({ data: [], error: null });
+
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') return memoriesBuilder;
+      if (table === 'memory_family_members') return tagsBuilder;
+      if (table === 'memory_media') return mediaBuilder;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await createMediaMemory({
+      userId: 'user-1',
+      memoryId: 'memory-video-1',
+      mediaAssets: [{
+        objectKey: 'user-1/memories/memory-video-1/media.mov',
+        contentType: 'video/quicktime',
+        durationMs: 21894.666666666668,
+      }],
+      memoryDate: '2026-05-24',
+      taggedMemberIds: [],
+    });
+
+    expect(result.error).toBeNull();
+    expect(supabase.rpc).toHaveBeenCalledWith('replace_memory_media_assets', {
+      target_memory_id: 'memory-video-1',
+      assets: [{
+        objectKey: 'user-1/memories/memory-video-1/media.mov',
+        contentType: 'video/quicktime',
+        durationMs: 21895,
+        aspectRatio: null,
+        previewObjectKey: null,
+      }],
+    });
+  });
+
+  it('repairs an orphaned memory row on a 23505 duplicate-key retry (self-healing retry)', async () => {
+    // The pending-upload queue retries createMediaMemory with the SAME
+    // client-generated memoryId. If a prior attempt inserted the memory row
+    // but failed (and its own rollback also failed) before recording any
+    // memory_media rows, the retry's insert collides with that orphan
+    // (Postgres 23505). This must repair the orphan in place, not fail.
+    const insertBuilder = createQueryBuilder({
+      data: null,
+      error: { message: 'duplicate key value violates unique constraint', code: '23505' },
+    });
+
+    const orphanRow = {
+      id: 'memory-orphan',
+      user_id: 'user-1',
+      family_id: 'family-1',
+      content: null,
+      memory_date: '2026-05-24',
+      memory_type: 'media',
+      emotion: null,
+      illustration_key: null,
+      illustration_status: 'none',
+      illustration_prompt: null,
+      media_key: 'user-1/memories/memory-orphan/media/asset-1.jpg',
+      media_content_type: 'image/jpeg',
+      created_at: '2026-05-24T00:00:00Z',
+      updated_at: '2026-05-24T00:00:00Z',
+    };
+    const conflictFetchBuilder = createQueryBuilder({ data: orphanRow, error: null });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+
+    const emptyMediaBuilder = createQueryBuilder({ data: [], error: null });
+    const populatedMediaBuilder = createQueryBuilder({
+      data: [{
+        id: 'asset-1',
+        memory_id: 'memory-orphan',
+        object_key: 'user-1/memories/memory-orphan/media/asset-1.jpg',
+        content_type: 'image/jpeg',
+        duration_ms: null,
+        position: 0,
+        created_at: '2026-05-24T00:00:00Z',
+        updated_at: '2026-05-24T00:00:00Z',
+      }],
+      error: null,
+    });
+
+    let memoriesCall = 0;
+    let mediaCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return memoriesCall === 1 ? insertBuilder : conflictFetchBuilder;
+      }
+      if (table === 'memory_family_members') return tagsBuilder;
+      if (table === 'memory_media') {
+        mediaCall += 1;
+        // First lookup (inside the conflict resolver) must see zero rows to
+        // classify this as an orphan; the final enrichment lookup (after
+        // continuing the flow) sees the now-populated row.
+        return mediaCall === 1 ? emptyMediaBuilder : populatedMediaBuilder;
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await createMediaMemory({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-orphan',
+      mediaAssets: [{
+        objectKey: 'user-1/memories/memory-orphan/media/asset-1.jpg',
+        contentType: 'image/jpeg',
+      }],
+      memoryDate: '2026-05-24',
+      taggedMemberIds: [],
+    });
+
+    expect(result.error).toBeNull();
+    expect(result.data?.id).toBe('memory-orphan');
+    expect(result.data?.mediaAssets).toHaveLength(1);
+    expect(supabase.rpc).toHaveBeenCalledWith('replace_memory_media_assets', {
+      target_memory_id: 'memory-orphan',
+      assets: [{
+        objectKey: 'user-1/memories/memory-orphan/media/asset-1.jpg',
+        contentType: 'image/jpeg',
+        durationMs: null,
+        aspectRatio: null,
+        previewObjectKey: null,
+      }],
+    });
+    // A repaired orphan must not re-delete the storage objects it already owns.
+    expect(deleteStorageObject).not.toHaveBeenCalled();
+  });
+
+  it('returns the existing memory idempotently when a 23505 retry finds it already fully posted', async () => {
+    // A prior attempt fully succeeded (memory row + media rows + tags) but
+    // the success response never reached the client (e.g. dropped
+    // connection), so the pending queue retries. The duplicate-key insert
+    // must not be treated as a failure -- return the already-posted memory.
+    const insertBuilder = createQueryBuilder({
+      data: null,
+      error: { message: 'duplicate key value violates unique constraint', code: '23505' },
+    });
+
+    const postedRow = {
+      id: 'memory-posted',
+      user_id: 'user-1',
+      family_id: 'family-1',
+      content: null,
+      memory_date: '2026-05-24',
+      memory_type: 'media',
+      emotion: null,
+      illustration_key: null,
+      illustration_status: 'none',
+      illustration_prompt: null,
+      media_key: 'user-1/memories/memory-posted/media/asset-1.jpg',
+      media_content_type: 'image/jpeg',
+      created_at: '2026-05-24T00:00:00Z',
+      updated_at: '2026-05-24T00:00:00Z',
+    };
+    const conflictFetchBuilder = createQueryBuilder({ data: postedRow, error: null });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+    const mediaBuilder = createQueryBuilder({
+      data: [{
+        id: 'asset-1',
+        memory_id: 'memory-posted',
+        object_key: 'user-1/memories/memory-posted/media/asset-1.jpg',
+        content_type: 'image/jpeg',
+        duration_ms: null,
+        position: 0,
+        created_at: '2026-05-24T00:00:00Z',
+        updated_at: '2026-05-24T00:00:00Z',
+      }],
+      error: null,
+    });
+
+    let memoriesCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return memoriesCall === 1 ? insertBuilder : conflictFetchBuilder;
+      }
+      if (table === 'memory_family_members') return tagsBuilder;
+      if (table === 'memory_media') return mediaBuilder;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await createMediaMemory({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-posted',
+      mediaAssets: [{
+        objectKey: 'user-1/memories/memory-posted/media/asset-1.jpg',
+        contentType: 'image/jpeg',
+      }],
+      memoryDate: '2026-05-24',
+      taggedMemberIds: [],
+    });
+
+    expect(result.error).toBeNull();
+    expect(result.data?.id).toBe('memory-posted');
+    expect(result.data?.mediaAssets).toHaveLength(1);
+    // Idempotent replay -- must not touch the RPC, tags, or storage again.
+    expect(supabase.rpc).not.toHaveBeenCalled();
+    expect(deleteStorageObject).not.toHaveBeenCalled();
+  });
+
+  it('warns when the rollback delete of an orphaned memory row itself fails', async () => {
+    // A silently-failed rollback delete is how the original production
+    // orphan (memory row with zero memory_media rows) was left behind --
+    // the rollback's own result must be checked and logged.
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const memoryRow = {
+      id: 'memory-rollback-fail',
+      user_id: 'user-1',
+      content: null,
+      memory_date: '2026-05-24',
+      memory_type: 'media',
+      emotion: null,
+      illustration_key: null,
+      illustration_status: 'none',
+      illustration_prompt: null,
+      media_key: 'user-1/memories/memory-rollback-fail/media.jpg',
+      media_content_type: 'image/jpeg',
+      created_at: '2026-05-24T00:00:00Z',
+      updated_at: '2026-05-24T00:00:00Z',
+    };
+
+    const insertBuilder = createQueryBuilder({ data: memoryRow, error: null });
+    const deleteFailBuilder = createQueryBuilder({
+      data: null,
+      error: { message: 'row is referenced from elsewhere' },
+    });
+    const failingTagsBuilder = createQueryBuilder({
+      data: null,
+      error: { message: 'tag insert failed' },
+    });
+
+    let memoriesCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return memoriesCall === 1 ? insertBuilder : deleteFailBuilder;
+      }
+      if (table === 'memory_family_members') return failingTagsBuilder;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await createMediaMemory({
+      userId: 'user-1',
+      memoryId: 'memory-rollback-fail',
+      mediaAssets: [{
+        objectKey: 'user-1/memories/memory-rollback-fail/media.jpg',
+        contentType: 'image/jpeg',
+      }],
+      memoryDate: '2026-05-24',
+      taggedMemberIds: ['member-1'],
+    });
+
+    expect(result.error?.message).toBe('tag insert failed');
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      'createMediaMemory rollback failed to delete memory row',
+      'memory-rollback-fail',
+      'row is referenced from elsewhere',
+    );
+
+    consoleWarnSpy.mockRestore();
+  });
+
   it('deletes the preview alongside the original for a media asset removed on edit', async () => {
     const existingBuilder = createQueryBuilder({
       data: {

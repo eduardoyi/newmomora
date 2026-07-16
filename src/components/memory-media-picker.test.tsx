@@ -86,6 +86,68 @@ describe('MemoryMediaPicker', () => {
     });
   });
 
+  it('rounds a fractional iOS video duration before emitting the attachment', async () => {
+    // iOS expo-image-picker reports duration as a fractional Double in ms
+    // (asset.duration.value / timescale * 1000) -- the RPC's `::integer`
+    // cast throws on fractional text, so this must be rounded at the
+    // source. See supabase/migrations/20260716120000_round_media_duration_ms_cast.sql.
+    mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [
+        {
+          uri: 'file:///clip.mov',
+          width: 100,
+          height: 100,
+          fileSize: 2048,
+          mimeType: 'video/quicktime',
+          duration: 21894.666666666668,
+        },
+      ],
+    } as ImagePicker.ImagePickerResult);
+    const onSelect = jest.fn();
+    const screen = render(<MemoryMediaPicker onError={jest.fn()} onSelect={onSelect} />);
+
+    fireEvent.press(screen.getByTestId('new-memory-attach-media'));
+    choosePhotoLibrary();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(300);
+    });
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    const [[attachments]] = onSelect.mock.calls;
+    expect(attachments[0].durationMs).toBe(21895);
+    expect(Number.isInteger(attachments[0].durationMs)).toBe(true);
+  });
+
+  it('emits durationMs undefined (not NaN) when a video reports no duration', async () => {
+    mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+      canceled: false,
+      assets: [
+        {
+          uri: 'file:///clip.mp4',
+          width: 100,
+          height: 100,
+          fileSize: 2048,
+          mimeType: 'video/mp4',
+          duration: undefined,
+        },
+      ],
+    } as ImagePicker.ImagePickerResult);
+    const onError = jest.fn();
+    const onSelect = jest.fn();
+    const screen = render(<MemoryMediaPicker onError={onError} onSelect={onSelect} />);
+
+    fireEvent.press(screen.getByTestId('new-memory-attach-media'));
+    choosePhotoLibrary();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(300);
+    });
+
+    // No duration -> validateMediaFile rejects the video before onSelect fires.
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenLastCalledWith('Could not read video duration. Try another clip.');
+  });
+
   describe('includeCaptureDate', () => {
     function buildImageAsset(overrides: Partial<ImagePicker.ImagePickerAsset> = {}) {
       return {

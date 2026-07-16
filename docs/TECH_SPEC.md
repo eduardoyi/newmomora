@@ -1264,6 +1264,15 @@ object keys are. When an older client edits an existing asset without one or
 both of `aspectRatio`/`previewObjectKey`, the RPC preserves the row's current
 value (keyed by matching `objectKey`) instead of clearing it.
 
+`durationMs` is cast via `round(nullif(asset->>'durationMs', '')::numeric)::integer`
+(migration `20260716120000_round_media_duration_ms_cast.sql`), not a bare
+`::integer` cast — iOS `expo-image-picker` reports video duration as a
+fractional Double in ms, and a plain `::integer` cast throws on fractional
+text (e.g. `'21894.667'`). The client rounds at the source too
+(`memory-media-picker.tsx`, `mediaAssetsToRpcPayload` in
+`src/services/memories.ts`), but the RPC accepts fractional input from any
+client, past or future, as defense in depth.
+
 Note: the client generates `memoryId` upfront so the R2 object key is known before the DB insert, mirroring the family-member photo flow (§5.3).
 
 **Preview image variants (bandwidth):** for each new image asset (not

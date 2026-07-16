@@ -291,7 +291,11 @@ function mediaAssetsToRpcPayload(assets: MemoryMediaAssetInput[]) {
   return assets.map((asset) => ({
     objectKey: asset.objectKey,
     contentType: asset.contentType,
-    durationMs: asset.durationMs ?? null,
+    // Belt-and-braces: round here too, in case a future call site regresses
+    // and passes a fractional duration (e.g. iOS expo-image-picker's
+    // fractional-Double ms value) straight through -- the RPC's
+    // `::integer` cast throws on fractional text.
+    durationMs: asset.durationMs != null ? Math.round(asset.durationMs) : null,
     aspectRatio: asset.aspectRatio ?? null,
     previewObjectKey: asset.previewObjectKey ?? null,
   }));
@@ -879,6 +883,103 @@ export async function createMemory(input: CreateMemoryInput): Promise<{
   return { data: attachTags([memory], tagMap)[0], error: null };
 }
 
+const POSTGRES_UNIQUE_VIOLATION = '23505';
+
+/** Deletes an orphaned/failed memory row created earlier in this call and
+ * warns (rather than silently swallowing) if the delete itself fails -- a
+ * silently-failed rollback is how a memory row with zero memory_media rows
+ * was left behind in production (see the migration/PR that added this). */
+async function rollbackMediaMemoryRow(memoryId: string): Promise<void> {
+  // select('id') so a silent zero-row delete (e.g. an RLS no-op) is
+  // detectable -- the production orphan was left by a rollback that
+  // reported no error but deleted nothing.
+  const { data, error } = await supabase
+    .from('memories')
+    .delete()
+    .eq('id', memoryId)
+    .select('id');
+
+  if (error) {
+    console.warn('createMediaMemory rollback failed to delete memory row', memoryId, error.message);
+  } else if (!data || data.length === 0) {
+    console.warn('createMediaMemory rollback deleted no rows for memory', memoryId);
+  }
+}
+
+/** Shared tail of createMediaMemory: replace media assets + tags against an
+ * already-inserted (or repaired-orphan) memory row, rolling back that row on
+ * either failure. Used by both the normal insert path and the 23505
+ * orphan-repair path below. */
+async function continueCreateMediaMemory(
+  memory: Memory,
+  input: CreateMediaMemoryInput,
+): Promise<{ data: MemoryWithTags | null; error: ServiceError | null }> {
+  const mediaReplaceError = await replaceMemoryMediaAssets(memory.id, input.mediaAssets);
+  if (mediaReplaceError) {
+    await rollbackMediaMemoryRow(memory.id);
+    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
+    return { data: null, error: mediaReplaceError };
+  }
+
+  const tagsError = await replaceMemoryTags(memory.id, input.taggedMemberIds);
+  if (tagsError) {
+    await rollbackMediaMemoryRow(memory.id);
+    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
+    return { data: null, error: tagsError };
+  }
+
+  const tagMap = await fetchTagsForMemories([memory.id]);
+  const mediaMap = await fetchMediaForMemories([memory.id]);
+  return { data: attachMediaAssets(attachTags([memory], tagMap), mediaMap)[0], error: null };
+}
+
+/** The pending-upload queue retries createMediaMemory with the SAME
+ * client-generated memoryId, so a half-failed prior attempt (memory row
+ * inserted, then replaceMemoryMediaAssets/replaceMemoryTags failed and the
+ * rollback delete also failed, or hadn't been reached yet before this fix)
+ * can leave an orphaned row that the retry's insert now collides with
+ * (Postgres 23505). Resolve the conflict instead of just failing:
+ *  - orphan (zero memory_media rows, owned by this user, memory_type
+ *    'media'): repair it in place by continuing the flow against it.
+ *  - already has media rows: a prior attempt actually completed and this
+ *    retry is redundant (e.g. the success response never reached the
+ *    client) -- return it as an idempotent success.
+ *  - anything else (not found, wrong owner/type): give up and let the
+ *    caller fall back to the original insert error. */
+async function resolveMediaMemoryInsertConflict(
+  input: CreateMediaMemoryInput,
+): Promise<{ data: MemoryWithTags | null; error: ServiceError | null } | null> {
+  const { data: existingMemory, error: fetchError } = await supabase
+    .from('memories')
+    .select('*')
+    .eq('id', input.memoryId)
+    .maybeSingle();
+
+  if (fetchError || !existingMemory) {
+    return null;
+  }
+
+  if (existingMemory.user_id !== input.userId || existingMemory.memory_type !== 'media') {
+    return null;
+  }
+
+  const existingMediaAssets =
+    (await fetchMediaForMemories([existingMemory.id])).get(existingMemory.id) ?? [];
+
+  if (existingMediaAssets.length === 0) {
+    return continueCreateMediaMemory(existingMemory as Memory, input);
+  }
+
+  const tagMap = await fetchTagsForMemories([existingMemory.id]);
+  return {
+    data: attachMediaAssets(
+      attachTags([existingMemory as Memory], tagMap),
+      new Map([[existingMemory.id, existingMediaAssets]]),
+    )[0],
+    error: null,
+  };
+}
+
 export async function createMediaMemory(input: CreateMediaMemoryInput): Promise<{
   data: MemoryWithTags | null;
   error: ServiceError | null;
@@ -922,27 +1023,18 @@ export async function createMediaMemory(input: CreateMediaMemoryInput): Promise<
     .single();
 
   if (error || !memory) {
+    if (error?.code === POSTGRES_UNIQUE_VIOLATION) {
+      const conflictResult = await resolveMediaMemoryInsertConflict(input);
+      if (conflictResult) {
+        return conflictResult;
+      }
+    }
+
     await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
     return { data: null, error: mapSupabaseError(error ?? { message: 'Memory was not created' }) };
   }
 
-  const mediaReplaceError = await replaceMemoryMediaAssets(memory.id, input.mediaAssets);
-  if (mediaReplaceError) {
-    await supabase.from('memories').delete().eq('id', memory.id);
-    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
-    return { data: null, error: mediaReplaceError };
-  }
-
-  const tagsError = await replaceMemoryTags(memory.id, input.taggedMemberIds);
-  if (tagsError) {
-    await supabase.from('memories').delete().eq('id', memory.id);
-    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
-    return { data: null, error: tagsError };
-  }
-
-  const tagMap = await fetchTagsForMemories([memory.id]);
-  const mediaMap = await fetchMediaForMemories([memory.id]);
-  return { data: attachMediaAssets(attachTags([memory], tagMap), mediaMap)[0], error: null };
+  return continueCreateMediaMemory(memory, input);
 }
 
 export async function updateMemory(

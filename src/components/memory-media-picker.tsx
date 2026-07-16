@@ -196,7 +196,11 @@ export function MemoryMediaPicker({
 
         const sizeBytes = await resolveFileSize(asset);
         const isVideo = isVideoContentType(contentType);
-        const durationMs = isVideo ? asset.duration ?? null : null;
+        // iOS returns a fractional Double (asset.duration.value / timescale * 1000
+        // in expo-image-picker's VideoUtils.swift) -- round to an integer at the
+        // source so it never reaches the `::integer` cast in
+        // replace_memory_media_assets as a fractional string like '21894.667'.
+        const durationMs = isVideo && asset.duration != null ? Math.round(asset.duration) : null;
         const validationError = validateMediaFile({
           sizeBytes,
           durationMs,
