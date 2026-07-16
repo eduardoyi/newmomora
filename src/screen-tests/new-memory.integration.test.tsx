@@ -6,12 +6,15 @@
 // calls would throw when the route module is evaluated at app startup --
 // crashing release bundles. See
 // docs/plans/media-exif-capture-date-prefill.md for the full rationale.
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Alert, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { JOURNALING_PROMPTS } from '@/constants/journaling-prompts';
+import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
@@ -19,10 +22,19 @@ import { useMemoryMutations } from '@/hooks/useMemories';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { navigateBack } from '@/lib/navigation';
+import { getNewMemoryDraftStorageKey, saveNewMemoryDraft } from '@/utils/new-memory-draft';
 
 // Imported with a relative path -- jest's moduleNameMapper only maps `@/` to
 // `src/`, it does not resolve the Expo Router `app/` tree.
 import NewMemoryScreen from '../../app/(app)/new-memory';
+
+// The draft-autosave util (src/utils/new-memory-draft.ts) is exercised for
+// real against this mock rather than stubbed out, so these tests assert
+// against actual persisted JSON instead of a jest.fn() call shape.
+jest.mock('@react-native-async-storage/async-storage', () =>
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- jest.mock factories cannot use ESM imports
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
 
 // MemoryTagPicker (rendered for real, not mocked) transitively imports
 // @/lib/supabase -> @react-native-async-storage/async-storage via
@@ -72,6 +84,10 @@ jest.mock('@/lib/navigation', () => ({
   navigateBack: jest.fn(),
 }));
 
+jest.mock('@/hooks/use-auth', () => ({
+  useAuth: jest.fn(),
+}));
+
 jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
 }));
@@ -104,6 +120,7 @@ const mockedImagePicker = ImagePicker as jest.Mocked<typeof ImagePicker>;
 const mockedDateTimePickerAndroid = DateTimePickerAndroid as jest.Mocked<
   typeof DateTimePickerAndroid
 >;
+const mockedUseAuth = useAuth as jest.Mock;
 const mockedUseFamily = useFamily as jest.Mock;
 const mockedUseFamilyMembers = useFamilyMembers as jest.Mock;
 const mockedUseMemoryMutations = useMemoryMutations as jest.Mock;
@@ -175,8 +192,9 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
   const createMemory = jest.fn();
   const updateProfile = jest.fn().mockResolvedValue(undefined);
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
+    await AsyncStorage.clear();
     jest.useFakeTimers();
     Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
     jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
@@ -186,6 +204,7 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
       canAskAgain: true,
     } as ImagePicker.MediaLibraryPermissionResponse);
 
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',
@@ -385,5 +404,250 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
         taggedMemberIds: members.map((member) => member.id),
       }),
     );
+  });
+});
+
+describe('NewMemoryScreen -- draft autosave and prompt placeholder integration', () => {
+  const enqueue = jest.fn();
+  const createMemory = jest.fn();
+  const updateProfile = jest.fn().mockResolvedValue(undefined);
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    await AsyncStorage.clear();
+    jest.useFakeTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+
+    mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as ImagePicker.MediaLibraryPermissionResponse);
+
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
+    mockedUseFamily.mockReturnValue({
+      role: 'manager',
+      familyId: 'family-1',
+      family: { id: 'family-1', name: 'Test family' },
+      memberships: [],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseFamilyMembers.mockReturnValue({ members: [] });
+    mockedUseMemoryMutations.mockReturnValue({ createMemory, isCreating: false });
+    mockedUseUserProfile.mockReturnValue({ updateProfile });
+    mockedUsePendingMemoryUploads.mockReturnValue({ enqueue, retry: jest.fn(), discard: jest.fn(), uploads: [] });
+    mockedUseIncomingMemoryShare.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+  });
+
+  it('autosaves the draft after a debounced delay and restores it on a fresh mount', async () => {
+    const screen = renderScreen();
+    // Let the mount-time restore attempt settle (it finds nothing to
+    // restore) before typing, so the debounce timer asserted below is the
+    // only in-flight timer -- otherwise the restore's own async completion
+    // can re-trigger the debounce effect mid-advance and push the write
+    // past a single 500ms window.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Grandma visited today');
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(500);
+    });
+
+    const stored = await AsyncStorage.getItem(getNewMemoryDraftStorageKey('user-1', 'family-1'));
+    expect(stored).toBeTruthy();
+    expect(JSON.parse(stored as string)).toMatchObject({ content: 'Grandma visited today' });
+
+    screen.unmount();
+
+    const secondMount = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    await waitFor(() => {
+      expect(secondMount.getByDisplayValue('Grandma visited today')).toBeTruthy();
+    });
+  });
+
+  it('does not restore a draft saved under a different family', async () => {
+    await saveNewMemoryDraft('user-1', 'family-2', {
+      content: 'Other family draft',
+      taggedMemberIds: [],
+      memoryDate: '2026-01-01',
+      illustrationEnabled: true,
+    });
+
+    const screen = renderScreen(); // renders scoped to family-1 (default mock above)
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.queryByDisplayValue('Other family draft')).toBeNull();
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('');
+  });
+
+  it('clears the saved draft once a text-only memory is successfully created', async () => {
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Bedtime story time');
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(500);
+    });
+    expect(await AsyncStorage.getItem(getNewMemoryDraftStorageKey('user-1', 'family-1'))).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(await AsyncStorage.getItem(getNewMemoryDraftStorageKey('user-1', 'family-1'))).toBeNull();
+  });
+
+  it('clears the saved draft immediately when a media memory is enqueued, without waiting for upload completion', async () => {
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Beach day caption');
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(500);
+    });
+    expect(await AsyncStorage.getItem(getNewMemoryDraftStorageKey('user-1', 'family-1'))).toBeTruthy();
+
+    await attachPhoto(screen, buildImageAsset());
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(await AsyncStorage.getItem(getNewMemoryDraftStorageKey('user-1', 'family-1'))).toBeNull();
+  });
+
+  it('never persists attached media in the draft payload', async () => {
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Zoo trip');
+    await attachPhoto(screen, buildImageAsset());
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(500);
+    });
+
+    const stored = await AsyncStorage.getItem(getNewMemoryDraftStorageKey('user-1', 'family-1'));
+    expect(stored).toBeTruthy();
+    const parsed = JSON.parse(stored as string) as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('attachedMedia');
+    expect(parsed).not.toHaveProperty('mediaAssets');
+    expect(JSON.stringify(parsed)).not.toContain('file://');
+  });
+
+  it('does not restore a stored draft once an incoming share has attached media (prefill wins)', async () => {
+    await saveNewMemoryDraft('user-1', 'family-1', {
+      content: 'stale draft text',
+      taggedMemberIds: [],
+      memoryDate: '2025-05-05',
+      illustrationEnabled: true,
+    });
+
+    let capturedOnPrepared:
+      | ((attachments: { id: string; uri: string; contentType: string; sizeBytes: number }[], message: string | null) => void)
+      | undefined;
+    let isPreparing = true;
+    mockedUseIncomingMemoryShare.mockImplementation((options) => {
+      capturedOnPrepared = options.onPrepared;
+      return isPreparing;
+    });
+
+    const screen = renderScreen();
+
+    // While the share is still preparing, the stored draft must not apply.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('');
+
+    isPreparing = false;
+    act(() => {
+      capturedOnPrepared?.(
+        [{ id: 'shared-1', uri: 'file:///shared.jpg', contentType: 'image/jpeg', sizeBytes: 10 }],
+        null,
+      );
+    });
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    // The share prefilled media -- the stale stored draft must never
+    // surface, even though `content` itself was still empty when the share
+    // settled.
+    expect(screen.queryByDisplayValue('stale draft text')).toBeNull();
+  });
+
+  it('restores the stored draft once a share settles with nothing to prefill', async () => {
+    await saveNewMemoryDraft('user-1', 'family-1', {
+      content: 'weekend recap',
+      taggedMemberIds: [],
+      memoryDate: '2025-05-05',
+      illustrationEnabled: false,
+    });
+
+    let capturedOnPrepared:
+      | ((attachments: never[], message: string | null) => void)
+      | undefined;
+    let isPreparing = true;
+    mockedUseIncomingMemoryShare.mockImplementation((options) => {
+      capturedOnPrepared = options.onPrepared;
+      return isPreparing;
+    });
+
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('');
+
+    isPreparing = false;
+    act(() => {
+      capturedOnPrepared?.([], 'Could not open the shared photos or videos. Try sharing them again.');
+    });
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('weekend recap')).toBeTruthy();
+    });
+  });
+
+  it('uses a rotating placeholder from the curated prompt list, stable across re-renders within the mount', async () => {
+    const screen = renderScreen();
+
+    const initialPlaceholder = screen.getByTestId('new-memory-content').props.placeholder;
+    expect(JOURNALING_PROMPTS).toContain(initialPlaceholder);
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'typing something');
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), '');
+
+    expect(screen.getByTestId('new-memory-content').props.placeholder).toBe(initialPlaceholder);
   });
 });

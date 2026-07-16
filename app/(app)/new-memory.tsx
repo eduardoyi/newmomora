@@ -22,7 +22,9 @@ import { MemoryTagPicker } from '@/components/memory-tag-picker';
 import { VoiceSpeakItModal } from '@/components/voice-speak-it-modal';
 import { DatePickerField } from '@/components/date-picker-field';
 import { colors, fonts, spacing } from '@/constants/theme';
+import { pickJournalingPrompt } from '@/constants/journaling-prompts';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
+import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemoryMutations } from '@/hooks/useMemories';
@@ -32,11 +34,22 @@ import { useSuggestedMemoryDate } from '@/hooks/use-suggested-memory-date';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
+  clearNewMemoryDraft,
+  isEmptyDraft,
+  loadNewMemoryDraft,
+  saveNewMemoryDraft,
+} from '@/utils/new-memory-draft';
+import {
   deriveMemoryType,
   MAX_ILLUSTRATION_MEMBERS,
   validateMemoryContent,
   validateMemoryDate,
 } from '@/utils/memories';
+
+// Debounced draft-autosave write delay -- long enough to coalesce
+// keystrokes, short enough that an interruption rarely loses more than
+// half a second of typing.
+const DRAFT_SAVE_DEBOUNCE_MS = 500;
 
 function createMemoryId(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
@@ -58,11 +71,13 @@ const TYPE_CONFIGS = {
 } as const;
 
 export default function NewMemoryScreen() {
-  const { role } = useFamily();
+  const { user } = useAuth();
+  const { role, familyId } = useFamily();
   const { members } = useFamilyMembers();
   const { createMemory, isCreating } = useMemoryMutations();
   const { enqueue: enqueuePendingMemoryUpload } = usePendingMemoryUploads();
   const { updateProfile } = useUserProfile();
+  const [placeholderPrompt] = useState(() => pickJournalingPrompt());
 
   // Guard on mount: viewers reaching this route directly (FAB is hidden for
   // them) get bounced back rather than seeing a form whose save would be
@@ -105,11 +120,98 @@ export default function NewMemoryScreen() {
     }
   }, []);
 
-  const { selectedMemberIds, applyForContent, toggleMember, applyVoiceResult } = useAutoMemoryTags({
+  const { selectedMemberIds, applyForContent, toggleMember, applyVoiceResult, initializeTags } = useAutoMemoryTags({
     members: tagMembers,
     enabled: true,
     onSelectedMemberIdsChange: handleSelectedMemberIdsChange,
   });
+
+  // ── Draft autosave (docs/features/memories.md "Draft autosave") ──
+  // Refs mirror the latest values of fields the restore effect checks, so
+  // that effect (which only runs once) never needs them in its dependency
+  // array or reads a stale closure. Synced in an effect (not during render)
+  // to avoid mutating a ref as a render side effect.
+  const contentRef = useRef(content);
+  const selectedMemberIdsRef = useRef(selectedMemberIds);
+  const attachedMediaRef = useRef(attachedMedia);
+  useEffect(() => {
+    contentRef.current = content;
+    selectedMemberIdsRef.current = selectedMemberIds;
+    attachedMediaRef.current = attachedMedia;
+  });
+
+  const hasAttemptedDraftRestoreRef = useRef(false);
+  const [isDraftRestoreReady, setIsDraftRestoreReady] = useState(false);
+
+  // Restore a saved draft once per mount. Deferred while an incoming share
+  // is still being prepared (`isPreparingIncomingShare`) so a share/voice
+  // prefill always wins -- a stored draft is only ever applied to an
+  // otherwise-empty form. Media is never restored (see new-memory-draft.ts).
+  useEffect(() => {
+    if (hasAttemptedDraftRestoreRef.current || isPreparingIncomingShare) {
+      return;
+    }
+    if (!user?.id || !familyId) {
+      return;
+    }
+    hasAttemptedDraftRestoreRef.current = true;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const draft = await loadNewMemoryDraft(user.id, familyId);
+        if (cancelled || !draft) {
+          return;
+        }
+
+        const formIsEmpty =
+          contentRef.current.trim().length === 0 &&
+          selectedMemberIdsRef.current.length === 0 &&
+          attachedMediaRef.current.length === 0;
+        if (!formIsEmpty) {
+          return;
+        }
+
+        setContent(draft.content);
+        if (draft.taggedMemberIds.length > 0) {
+          initializeTags(draft.taggedMemberIds);
+        }
+        if (draft.memoryDate) {
+          setMemoryDate(draft.memoryDate);
+        }
+        setIllustrationEnabled(draft.illustrationEnabled);
+      } finally {
+        if (!cancelled) {
+          setIsDraftRestoreReady(true);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPreparingIncomingShare, user?.id, familyId, initializeTags, setMemoryDate]);
+
+  // Debounced write on any change to the persisted fields, once restore has
+  // had its chance to run (avoids a premature empty-state save racing the
+  // async read above).
+  useEffect(() => {
+    if (!isDraftRestoreReady || !user?.id || !familyId) {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      const userId = user.id;
+      const draft = { content, taggedMemberIds: selectedMemberIds, memoryDate, illustrationEnabled };
+      if (isEmptyDraft(draft)) {
+        void clearNewMemoryDraft(userId, familyId);
+      } else {
+        void saveNewMemoryDraft(userId, familyId, draft);
+      }
+    }, DRAFT_SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [isDraftRestoreReady, user?.id, familyId, content, selectedMemberIds, memoryDate, illustrationEnabled]);
 
   const isIllustrationOverLimit = selectedMemberIds.length > MAX_ILLUSTRATION_MEMBERS;
   const isIllustrationEnabled = illustrationEnabled && !isIllustrationOverLimit;
@@ -204,6 +306,14 @@ export default function NewMemoryScreen() {
           memoryType,
         });
       }
+      // Both paths are considered "posted" here: the media path enqueues
+      // synchronously above (upload itself continues in the background),
+      // and the text path just awaited its DB insert -- either way the
+      // draft's job is done. Clear it now rather than waiting on upload
+      // completion.
+      if (user?.id && familyId) {
+        void clearNewMemoryDraft(user.id, familyId);
+      }
       finishSave();
     } catch (error) {
       hasEnqueuedMediaRef.current = false;
@@ -271,7 +381,7 @@ export default function NewMemoryScreen() {
           multiline
           value={content}
           onChangeText={handleContentChange}
-          placeholder="What happened on this day?"
+          placeholder={placeholderPrompt}
           placeholderTextColor={colors.ink3}
           style={[styles.textarea, attachedMedia.length > 0 ? styles.textareaCaption : null]}
           testID="new-memory-content"
