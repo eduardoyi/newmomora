@@ -1,4 +1,5 @@
 import { fireEvent, render, type RenderResult } from '@testing-library/react-native';
+import { createVideoPlayer } from 'expo-video';
 
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
@@ -11,6 +12,7 @@ const mockVideoPlayer = {
   play: jest.fn(),
   playing: true,
   release: jest.fn(),
+  muted: true,
 };
 
 jest.mock('@/hooks/useMediaUrls', () => ({
@@ -63,6 +65,7 @@ describe('MemoryMediaCarousel', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockVideoPlayer.playing = true;
+    mockVideoPlayer.muted = false;
     mockedUseVideoThumbnailResult.mockReturnValue(null);
     mockedUseMediaUrls.mockReturnValue({
       data: {
@@ -463,6 +466,36 @@ describe('MemoryMediaCarousel', () => {
     mockVideoPlayer.playing = false;
     fireEvent.press(getByTestId('memory-media-video-toggle'));
     expect(mockVideoPlayer.play).toHaveBeenCalled();
+  });
+
+  it('updates mute state without recreating the native player', () => {
+    mockVideoPlayer.play.mockImplementationOnce(() => {
+      expect(mockVideoPlayer.muted).toBe(true);
+    });
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+    const { getByTestId, rerender } = render(
+      <MemoryMediaCarousel assets={[videoAsset]} mutedVideos />,
+    );
+
+    measureCarousel(getByTestId);
+    expect(mockVideoPlayer.muted).toBe(true);
+    expect(mockVideoPlayer.play).toHaveBeenCalledTimes(1);
+    expect(createVideoPlayer).toHaveBeenCalledTimes(1);
+
+    rerender(<MemoryMediaCarousel assets={[videoAsset]} mutedVideos={false} />);
+
+    expect(mockVideoPlayer.muted).toBe(false);
+    expect(createVideoPlayer).toHaveBeenCalledTimes(1);
   });
 
   describe('preferPreview (Workstream C6)', () => {

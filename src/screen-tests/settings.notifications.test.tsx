@@ -73,7 +73,10 @@ const mockedUseNotificationsRegistration = useNotificationsRegistration as jest.
 
 function renderScreen() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { gcTime: Infinity, retry: false },
+      mutations: { gcTime: Infinity, retry: false },
+    },
   });
 
   return render(

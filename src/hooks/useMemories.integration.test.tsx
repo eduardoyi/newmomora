@@ -94,8 +94,8 @@ const mockedRunTextOnlyEmotionAnalysis = runTextOnlyEmotionAnalysis as jest.Mock
 function createQueryClient() {
   return new QueryClient({
     defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
+      queries: { gcTime: Infinity, retry: false },
+      mutations: { gcTime: Infinity, retry: false },
     },
   });
 }

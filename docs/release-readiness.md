@@ -112,17 +112,31 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
 
 ## 7. Code quality and automated tests
 
-- [ ] Fix the current lint error in `src/components/memory-media-carousel.tsx`.
-- [ ] Review the remaining lint warnings and distinguish release risks from cleanup that can follow the release.
-- [ ] Investigate and resolve the Jest open-handle warning.
-  - All **574 tests pass**, but Jest currently reports that it does not exit promptly.
+- [x] Fix the current lint error in `src/components/memory-media-carousel.tsx`.
+  - The native `VideoPlayer` remains intentionally imperative, while mute updates now go through a small adapter instead of directly mutating an object held in React state.
+  - Regression coverage verifies mute changes apply without recreating the native player; the existing deferred-release test still protects the Android surface-recycling workaround.
+- [x] Review the remaining lint warnings and distinguish release risks from cleanup that can follow the release.
+  - `npm run lint` now exits successfully with **0 errors and 39 warnings**.
+  - No remaining warning is a known blocker for the current release. React Compiler is not enabled in `app.json`.
+  - Post-release cleanup: 29 `react-hooks/refs` warnings in calendar/list/animation/latest-value patterns; 8 `react-hooks/set-state-in-effect` warnings in data-hydration, player, thumbnail, and client-only patterns; and 2 `react-hooks/exhaustive-deps` warnings caused by the family-membership fallback array.
+  - These should be handled in focused behavior-preserving changes with their existing screen/hook tests, especially before enabling React Compiler, rather than refactored during release stabilization.
+- [x] Investigate and resolve the Jest open-handle warning.
+  - Root cause: test-local TanStack Query clients scheduled five-minute query and mutation garbage-collection timers.
+  - All Jest QueryClient configurations now use test-only `gcTime: Infinity`; production cache settings are unchanged.
+  - `npm test -- --runInBand` now exits normally: **94 suites and 773 tests pass** with no open-handle warning.
+  - Some hook suites still print React `act(...)` console warnings from deferred TanStack Query notifications. They do not keep Jest alive and are post-release test-hygiene cleanup.
 - [ ] From the final clean release commit, rerun:
   - [ ] `npm run typecheck`
   - [ ] `npm run lint`
   - [ ] `npm test -- --runInBand`
   - [ ] `npm run test:edge`
   - [ ] Required Maestro flows
+  - Current working-tree validation on July 16, 2026: typecheck passed; lint passed with 0 errors/39 warnings; Jest passed 94 suites/773 tests and exited normally; Edge tests passed 287/287. This must still be repeated from the final clean release commit.
+  - Maestro 2.6.0 is installed, but no iOS simulator is booted and no Android device is attached. The flows also require an installed development build and test-account environment values, so no Maestro flow was runnable in this pass.
 - [ ] Confirm the final release commit has no secrets or untracked release inputs that the build depends on unexpectedly.
+  - The current diff passes `git diff --check` and the secret-pattern scan found no keys or credentials.
+  - Expected ignored local release inputs are `.env.local` (Expo public Supabase configuration), `google-services.json` (referenced by `app.json`), and `credentials.json` (required by the production Android profile's `credentialsSource: local`). They must be supplied securely to the final build and must not be committed.
+  - No unexpected untracked file is currently required by Jest, Expo, EAS, or the release build.
 
 ## 8. Release-channel smoke testing
 

@@ -47,6 +47,13 @@ interface MemoryMediaCarouselProps {
   preferPreview?: boolean;
 }
 
+function setVideoPlayerMuted(player: VideoPlayer, isMuted: boolean) {
+  // VideoPlayer is an imperative native shared object. Keep its mutation in
+  // this adapter rather than treating the player held in React state as
+  // ordinary immutable application data.
+  player.muted = isMuted;
+}
+
 function useDeferredReleaseVideoPlayer(url: string, isMuted: boolean): VideoPlayer | null {
   const [player, setPlayer] = useState<VideoPlayer | null>(null);
 
@@ -57,7 +64,6 @@ function useDeferredReleaseVideoPlayer(url: string, isMuted: boolean): VideoPlay
       maxBufferBytes: 16 * 1024 * 1024,
     };
     nextPlayer.loop = true;
-    nextPlayer.muted = isMuted;
     setPlayer(nextPlayer);
 
     return () => {
@@ -71,7 +77,7 @@ function useDeferredReleaseVideoPlayer(url: string, isMuted: boolean): VideoPlay
 
   useEffect(() => {
     if (player) {
-      player.muted = isMuted;
+      setVideoPlayerMuted(player, isMuted);
     }
   }, [isMuted, player]);
 

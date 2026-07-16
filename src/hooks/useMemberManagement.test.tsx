@@ -30,7 +30,10 @@ const initialProfiles: FamilyMemberProfile[] = [
 
 function setup() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { gcTime: Infinity, retry: false },
+      mutations: { gcTime: Infinity, retry: false },
+    },
   });
   queryClient.setQueryData(familyMemberProfilesQueryKey(familyId), initialProfiles);
 

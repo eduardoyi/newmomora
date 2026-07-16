@@ -235,7 +235,7 @@ async function deleteStorageKeys(keys: string[]) {
  * into one list -- every deletion path must clean up the derived preview
  * alongside its original (Workstream C5). */
 function mediaAssetStorageKeys(
-  assets: Array<{ object_key: string; preview_object_key?: string | null }>,
+  assets: { object_key: string; preview_object_key?: string | null }[],
 ): string[] {
   return assets.flatMap((asset) =>
     [asset.object_key, asset.preview_object_key].filter(Boolean) as string[],

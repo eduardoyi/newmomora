@@ -26,7 +26,10 @@ function statusRow(status: string, familyUnavailable = false) {
 
 function createWrapper() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: {
+      queries: { gcTime: Infinity, retry: false },
+      mutations: { gcTime: Infinity },
+    },
   });
 
   return function Wrapper({ children }: { children: ReactNode }) {

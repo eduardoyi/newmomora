@@ -75,7 +75,10 @@ const PAST_EXPIRY = '2020-01-01T00:00:00Z';
 
 function renderScreen() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { gcTime: Infinity, retry: false },
+      mutations: { gcTime: Infinity, retry: false },
+    },
   });
 
   return render(
@@ -238,7 +241,14 @@ describe('Settings Family section', () => {
           insets: { bottom: 34, left: 0, right: 0, top: 47 },
         }}
       >
-        <QueryClientProvider client={new QueryClient()}>
+        <QueryClientProvider
+          client={new QueryClient({
+            defaultOptions: {
+              queries: { gcTime: Infinity },
+              mutations: { gcTime: Infinity },
+            },
+          })}
+        >
           <SettingsScreen />
         </QueryClientProvider>
       </SafeAreaProvider>,
@@ -430,7 +440,14 @@ describe('Settings Family section', () => {
           insets: { bottom: 34, left: 0, right: 0, top: 47 },
         }}
       >
-        <QueryClientProvider client={new QueryClient()}>
+        <QueryClientProvider
+          client={new QueryClient({
+            defaultOptions: {
+              queries: { gcTime: Infinity },
+              mutations: { gcTime: Infinity },
+            },
+          })}
+        >
           <SettingsScreen />
         </QueryClientProvider>
       </SafeAreaProvider>,
@@ -456,7 +473,14 @@ describe('Settings Family section', () => {
           insets: { bottom: 34, left: 0, right: 0, top: 47 },
         }}
       >
-        <QueryClientProvider client={new QueryClient()}>
+        <QueryClientProvider
+          client={new QueryClient({
+            defaultOptions: {
+              queries: { gcTime: Infinity },
+              mutations: { gcTime: Infinity },
+            },
+          })}
+        >
           <SettingsScreen />
         </QueryClientProvider>
       </SafeAreaProvider>,

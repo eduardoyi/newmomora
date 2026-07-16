@@ -5,7 +5,7 @@ import { useMediaUrl } from '@/hooks/useMediaUrls';
 
 jest.mock('expo-image', () => ({
   Image: ({ accessibilityLabel, source }: { accessibilityLabel?: string; source?: unknown }) => {
-    const { Text } = require('react-native');
+    const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
     return <Text testID="profile-portrait-image">{`${accessibilityLabel}:${JSON.stringify(source)}`}</Text>;
   },
 }));
@@ -16,7 +16,7 @@ jest.mock('@/hooks/useMediaUrls', () => ({
 
 jest.mock('@/components/generating-visual-overlay', () => ({
   GeneratingVisualOverlay: ({ label }: { label: string }) => {
-    const { Text } = require('react-native');
+    const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
     return <Text>{label}</Text>;
   },
 }));

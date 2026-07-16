@@ -33,7 +33,10 @@ const mockedUpdate = updatePortraitVersionDate as jest.MockedFunction<typeof upd
 
 function createQueryClient() {
   return new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { gcTime: Infinity, retry: false },
+      mutations: { gcTime: Infinity, retry: false },
+    },
   });
 }
 

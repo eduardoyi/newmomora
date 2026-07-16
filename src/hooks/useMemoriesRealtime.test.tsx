@@ -108,7 +108,10 @@ describe('useMemoriesRealtime', () => {
     jest.clearAllMocks();
     jest.useFakeTimers();
     queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+      defaultOptions: {
+        queries: { retry: false, gcTime: Infinity },
+        mutations: { gcTime: Infinity },
+      },
     });
     fake = createFakeChannel();
     mockedChannel.mockReturnValue(fake.channel as never);

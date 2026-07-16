@@ -66,7 +66,10 @@ describe('useGenerationStatusPolling', () => {
     jest.useFakeTimers();
     resetRealtimeStatusForTests();
     queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+      defaultOptions: {
+        queries: { retry: false, gcTime: Infinity },
+        mutations: { gcTime: Infinity },
+      },
     });
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } } as never);
     mockedUseFamily.mockReturnValue({ familyId: FAMILY_ID } as never);

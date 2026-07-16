@@ -68,7 +68,12 @@ function createWrapperWithClient(queryClient: QueryClient) {
 
 function createWrapper() {
   return createWrapperWithClient(
-    new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }),
+    new QueryClient({
+      defaultOptions: {
+        queries: { gcTime: Infinity, retry: false },
+        mutations: { gcTime: Infinity, retry: false },
+      },
+    }),
   );
 }
 
@@ -389,7 +394,10 @@ describe('usePendingMemoryUploads', () => {
       mockedPostMediaMemory.mockResolvedValue(posted);
 
       const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+        defaultOptions: {
+          queries: { gcTime: Infinity, retry: false },
+          mutations: { gcTime: Infinity, retry: false },
+        },
       });
       queryClient.setQueryData(memoriesQueryKey('family-1'), buildInfiniteMemoriesData([existing]));
 
@@ -420,7 +428,10 @@ describe('usePendingMemoryUploads', () => {
       } as unknown as MemoryWithTags);
 
       const queryClient = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+        defaultOptions: {
+          queries: { gcTime: Infinity, retry: false },
+          mutations: { gcTime: Infinity, retry: false },
+        },
       });
       const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 
