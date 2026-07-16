@@ -1,8 +1,8 @@
 # Momora — Product Requirements Document
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Draft
-**Last updated:** May 24, 2026
+**Last updated:** July 16, 2026 (reframed problem/persona wording per [voice-of-customer.md](./voice-of-customer.md); no feature changes)
 **Platform:** iOS & Android (Expo)
 
 ---
@@ -11,7 +11,7 @@
 
 Momora is a memory journal for parents of young children. It helps them capture and preserve family moments in whatever form makes sense — a quick text note, a voice dictation, or an attached photo or video — and enriches written memories with AI-generated illustrations featuring consistent, age-aware family characters.
 
-The core insight: not every precious moment can be photographed. Some happen too fast, or parents are too busy to reach for a camera. Momora **fills the gaps** — providing a fast, frictionless way to capture moments that the camera would have missed, while also welcoming the ones it caught. When a moment is written down, AI illustrations act as **memory anchors**, helping parents relive how a moment *felt* rather than just what it looked like.
+The core insight, validated by voice-of-customer research ([voice-of-customer.md](./voice-of-customer.md)): parents of young children are **over-documented and under-storied**. They carry thousands of photos, yet what they fear losing is the *texture* of this stage — the funny things their kids say, the little voice, how a moment felt — and they're already forgetting it while it's still happening. Momora **fills the gaps** — capture so fast and forgiving it never becomes another chore, for the moments a camera missed and the ones it caught. When a moment is written down, AI illustrations act as **memory anchors**, helping parents relive how a moment *felt* rather than just what it looked like.
 
 ---
 
@@ -19,11 +19,14 @@ The core insight: not every precious moment can be photographed. Some happen too
 
 ### Problem Statement
 
-Parents often miss capturing precious moments with their children because:
+Parents of young children live with a quiet double fear: childhood is going by too fast ("it goes so fast"), and they're already forgetting it ("I already can't remember the little things"). Voice-of-customer research ([voice-of-customer.md](./voice-of-customer.md)) shows the pain is not a lack of photos — it's that their documentation doesn't preserve what they'll ache for later:
 
-- These moments happen spontaneously and are difficult to photograph or video
-- Parents are often busy or distracted when these moments occur
-- Traditional photo/video methods don't capture the emotional essence of these interactions
+- What slips away first is **texture** — the funny things kids say, the babble and mispronunciations, the context behind a photo — precisely the moments that happen too fast, or with hands too full, to photograph
+- The camera roll (often 5,000–30,000+ photos) proves they cared but doesn't function as memory: unfindable, uncurated, story-less
+- Existing memory-keeping fails by becoming **homework**: baby books are abandoned by month 3–6 and turn into guilt objects; prompt apps add a daily obligation and then punish lapses — and the guilt compounds for second and third children
+- Parents explicitly reject anything that adds another chore, makes missed days feel like failure, or holds their memories behind a subscription
+
+Momora's job is to rescue those moments without handing parents another job.
 
 ### Why Now
 
@@ -35,9 +38,10 @@ Parents often miss capturing precious moments with their children because:
 
 | Category | Examples | Gap |
 |----------|----------|-----|
-| Photo journals | Day One, Tinybeans | Require photos; can't capture moments that happen too fast to photograph |
+| Photo journals | Day One, Tinybeans | Require photos; can't capture moments that happen too fast to photograph; documented subscription/lock-in resentment when memories sit behind a paywall |
+| Prompt journals | Qeepsake | Daily prompts become "homework"; skipped prompts become a new guilt source; heavy churn |
 | Generic AI art | Midjourney, DALL-E apps | No family character continuity; no journaling or memory context |
-| **Momora** | — | Text/voice/media capture + persistent family characters + emotional illustrations — one place for every kind of memory |
+| **Momora** | — | Text/voice/media capture + persistent family characters + emotional illustrations — one place for every kind of memory, with no daily obligation |
 
 ---
 
@@ -51,6 +55,7 @@ These principles guide MVP tradeoffs:
 4. **Gentle structure** — Timeline, calendar, and search help rediscovery without turning journaling into admin work.
 5. **Privacy by default** — Child data is sensitive; no public sharing in MVP.
 6. **Honest AI** — Show generation status, handle failures gracefully, never block saving text.
+7. **Never homework** — Missing a day, week, or month is invisible and never punished. Backdating is a first-class path, not a recovery flow. Momora relieves memory guilt; it must never manufacture it.
 
 ---
 
@@ -60,9 +65,11 @@ These principles guide MVP tradeoffs:
 
 | Persona | Description | Primary need |
 |---------|-------------|--------------|
-| **Primary — Busy Parent** | Parent of child(ren) 0–10, often multitasking | Quick capture + emotional replay |
+| **Primary — Busy Parent** | Parent of young child(ren), core ages 0–6, often multitasking | Quick, guilt-free capture + emotional replay |
 | **Secondary — Co-parent** | Partner who journals occasionally | Simple tagging + shared family cast (future) |
 | **Out of MVP — Extended family** | Grandparents, aunts/uncles | Read-only shared access (post-MVP) |
+
+**Research notes on the primary persona** (see [voice-of-customer.md](./voice-of-customer.md)): the most acute segment is the **second/third-time parent** who documented kid #1 heavily and carries visible drop-off guilt (the half-blank baby book) — they are the most vocal and the most actively searching for something lighter. **Dads** enter through a different door: they rarely talk about baby-book guilt but talk constantly about photo/video chaos and recording their kids' voices. A third high-intensity segment is parents who **lost their own parent** and now treat recorded voice and ordinary moments as priceless. Messaging and onboarding should meet each at their own door; the product underneath is the same.
 
 ### Jobs-to-be-Done
 
@@ -72,6 +79,8 @@ These principles guide MVP tradeoffs:
 - When I'm driving or cooking, I want to dictate a memory hands-free so I don't lose the moment.
 - When I caught a great moment on video, I want to save it in my journal with a note so it lives alongside my other memories instead of getting lost in my camera roll.
 - When I'm feeling nostalgic, I want to scroll through illustrated memories so I can reconnect with how parenting felt at that stage.
+- When I realize I already can't remember the little things — what she called her blanket, how he mispronounced "spaghetti" — I want them written down somewhere so they aren't gone for good.
+- When I'm weeks or months behind, I want to backdate memories after the fact without the app making me feel like I failed.
 
 **Co-parent (future-focused)**
 
@@ -513,6 +522,7 @@ The following are **post-MVP**. They must not block or expand MVP scope:
 
 - App store rating ≥ 4.5 after beta
 - User interview theme: "Did the illustration feel like *your* family?"
+- User interview theme: "Did Momora ever feel like homework?" (target answer: no — this is the category's #1 failure mode)
 
 ---
 
@@ -523,7 +533,7 @@ The following are **post-MVP**. They must not block or expand MVP scope:
 | AI moderation blocks innocent parenting content | Failed illustrations, user frustration | Pre-check + rewrite pipeline; retry with softened prompt |
 | Character inconsistency across memories | Breaks core value prop | Fixed style reference + portrait-as-anchor workflow |
 | Slow/unreliable image generation | Poor UX, abandonment | Async jobs, status polling, retry UX; text always saves first |
-| Low daily habit formation | Low retention | Onboarding aha moment + single daily reminder |
+| App becomes "another chore" — the category-wide failure pattern (abandoned baby books, churned prompt apps) | Abandonment, and the app itself becomes a new guilt source | Forgiving capture (backdating first-class, no streaks, lapses invisible); onboarding aha moment; single gentle daily reminder, easily disabled |
 | Sensitive child data exposure | Trust/legal risk | Private buckets, RLS, no public links in MVP |
 | Voice transcription inaccuracy | Wrong tags, editing burden | Family-name context prompt + editable transcript + manual tag override |
 | Expo Go unavailable for SDK 56 | Dev friction | EAS development builds from day one |
