@@ -36,6 +36,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Portrait timeline | [portrait-timeline.md](./portrait-timeline.md) | done |
 | Memories & illustrations | [memories.md](./memories.md) | done |
 | Media memories (photo & video) | [media-memories.md](./media-memories.md) | done |
+| Calendar ribbon | [calendar.md](./calendar.md) | done |
 | Inline links in memory text | [inline-links.md](./inline-links.md) | done |
 | Likes & comments | [likes-and-comments.md](./likes-and-comments.md) | done |
 | Voice journaling | [voice-journaling.md](./voice-journaling.md) | done |

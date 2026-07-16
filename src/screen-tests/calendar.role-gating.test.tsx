@@ -37,6 +37,18 @@ jest.mock('@/hooks/useVideoThumbnail', () => ({
   useVideoThumbnail: jest.fn(() => null),
 }));
 
+// The native Reanimated module cannot run in Jest -- same test double used
+// by floating-tab-bar.test.tsx for the Today button's fade-in.
+jest.mock('react-native-reanimated', () => {
+  const { View } = jest.requireActual<typeof import('react-native')>('react-native');
+
+  return {
+    __esModule: true,
+    default: { View },
+    FadeIn: { duration: () => ({}) },
+  };
+});
+
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 
 function renderScreen() {
