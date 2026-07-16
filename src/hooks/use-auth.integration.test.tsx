@@ -174,7 +174,7 @@ describe('useAuth', () => {
     expect(response.error?.message).toBe('Token has expired or is invalid');
   });
 
-  it('dev/E2E path: signs in with a password', async () => {
+  it('review/dev path: signs in with a password', async () => {
     mockedSupabase.auth.signInWithPassword.mockResolvedValue({
       data: { session: null, user: null } as never,
       error: null,
@@ -195,6 +195,29 @@ describe('useAuth', () => {
     expect(mockedSupabase.auth.signInWithPassword).toHaveBeenCalledWith({
       email: 'parent@example.com',
       password: 'password123',
+    });
+  });
+
+  it('maps password sign-in failures for the reviewer UI', async () => {
+    mockedSupabase.auth.signInWithPassword.mockResolvedValue({
+      data: { session: null, user: null } as never,
+      error: { message: 'Invalid login credentials', code: 'invalid_credentials' } as never,
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const response = await result.current.signInWithPassword({
+      email: 'reviewer@example.com',
+      password: 'incorrect-password',
+    });
+
+    expect(response.error).toEqual({
+      message: 'Invalid login credentials',
+      code: 'invalid_credentials',
     });
   });
 

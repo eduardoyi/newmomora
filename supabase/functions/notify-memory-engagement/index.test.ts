@@ -21,6 +21,7 @@ interface FakeState {
   likes: Array<Record<string, unknown>>;
   comments: Array<Record<string, unknown>>;
   activityLog: Array<Record<string, unknown>>;
+  blocks: Array<Record<string, unknown>>;
 }
 
 function baseState(): FakeState {
@@ -43,6 +44,7 @@ function baseState(): FakeState {
     likes: [{ memory_id: MEMORY_ID, user_id: VIEWER_ID }],
     comments: [{ id: COMMENT_ID, memory_id: MEMORY_ID, user_id: VIEWER_ID }],
     activityLog: [],
+    blocks: [],
   };
 }
 
@@ -55,6 +57,7 @@ function createFakeClient(state: FakeState) {
     if (table === 'memory_likes') return state.likes;
     if (table === 'memory_comments') return state.comments;
     if (table === 'family_activity_log') return state.activityLog;
+    if (table === 'blocked_family_accounts') return state.blocks;
     throw new Error(`Unexpected table ${table}`);
   };
 
@@ -178,6 +181,25 @@ Deno.test('the recipient engagement preference disables delivery', async () => {
     { memoryId: MEMORY_ID, kind: 'like' },
   );
   assertEquals(await response.json(), { sent: false, reason: 'disabled' });
+});
+
+Deno.test('a recipient block suppresses engagement with the generic disabled result', async () => {
+  const state = baseState();
+  state.blocks.push({
+    id: '77777777-7777-4777-8777-777777777777',
+    family_id: FAMILY_ID,
+    blocker_user_id: CREATOR_ID,
+    blocked_user_id: VIEWER_ID,
+  });
+  const calls = await withPushCapture(async () => {
+    const response = await processNotifyMemoryEngagement(
+      createFakeClient(state) as never,
+      VIEWER_ID,
+      { memoryId: MEMORY_ID, kind: 'like' },
+    );
+    assertEquals(await response.json(), { sent: false, reason: 'disabled' });
+  });
+  assertEquals(calls.length, 0);
 });
 
 Deno.test('a comment must belong to the caller and target memory', async () => {

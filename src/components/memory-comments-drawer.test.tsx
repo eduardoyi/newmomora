@@ -22,6 +22,14 @@ jest.mock('@/hooks/useFamilyMemberProfiles', () => ({
     profiles.find((profile) => profile.user_id === id)?.name ?? 'a former member',
 }));
 jest.mock('@/hooks/useUserProfile', () => ({ useUserProfile: jest.fn() }));
+jest.mock('@/hooks/useContentSafety', () => ({
+  useContentSafety: () => ({
+    isLoading: false, isError: false, isReporting: false,
+    isTargetReported: () => false, hasActiveReport: () => false,
+    isUserBlocked: () => false, revealTarget: jest.fn(), revealBlockedUser: jest.fn(),
+    report: jest.fn(), refetch: jest.fn(),
+  }),
+}));
 jest.mock('@/services/engagement', () => ({ MAX_COMMENT_LENGTH: 1000 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
@@ -100,13 +108,14 @@ describe('MemoryCommentsDrawer', () => {
     await waitFor(() => expect(addComment).toHaveBeenCalledWith('A new comment'));
   });
 
-  it('lets the author long-press and confirm deletion', () => {
+  it('lets the author delete from the explicit comment actions', () => {
     jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
       buttons?.find((button) => button.text === 'Delete')?.onPress?.();
     });
     const { getByTestId } = renderDrawer();
 
-    fireEvent(getByTestId('comment-comment-1'), 'longPress');
+    fireEvent.press(getByTestId('comment-comment-1-actions'));
+    fireEvent.press(getByTestId('comment-action-delete', { includeHiddenElements: true }));
     expect(deleteComment).toHaveBeenCalledWith(ownComment);
   });
 

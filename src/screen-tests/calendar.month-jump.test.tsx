@@ -28,6 +28,18 @@ jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
 }));
 
+jest.mock('@/hooks/useContentSafety', () => ({
+  useContentSafety: () => ({
+    isLoading: false,
+    isError: false,
+    isTargetReported: () => false,
+    hasActiveReport: () => false,
+    isUserBlocked: () => false,
+    revealTarget: jest.fn(),
+    refetch: jest.fn(),
+  }),
+}));
+
 jest.mock('@/hooks/useCalendarMemories', () => ({
   useCalendarMemoriesInRange: jest.fn(),
   useOldestMemoryDate: jest.fn(),

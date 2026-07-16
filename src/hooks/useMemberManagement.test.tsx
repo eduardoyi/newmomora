@@ -12,6 +12,9 @@ import { removeMember, updateMemberRole, type FamilyMemberProfile } from '@/serv
 jest.mock('@/hooks/use-family', () => ({
   familyMembershipsQueryKey: ['family-memberships'],
 }));
+jest.mock('@/hooks/use-auth', () => ({
+  useAuth: () => ({ user: { id: 'user-1' } }),
+}));
 
 jest.mock('@/services/family', () => ({
   updateMemberRole: jest.fn(),
@@ -35,7 +38,7 @@ function setup() {
       mutations: { gcTime: Infinity, retry: false },
     },
   });
-  queryClient.setQueryData(familyMemberProfilesQueryKey(familyId), initialProfiles);
+  queryClient.setQueryData(familyMemberProfilesQueryKey('user-1', familyId), initialProfiles);
 
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -45,7 +48,7 @@ function setup() {
 }
 
 function getCachedRole(queryClient: QueryClient, userId: string) {
-  const cached = queryClient.getQueryData<FamilyMemberProfile[]>(familyMemberProfilesQueryKey(familyId));
+  const cached = queryClient.getQueryData<FamilyMemberProfile[]>(familyMemberProfilesQueryKey('user-1', familyId));
   return cached?.find((profile) => profile.user_id === userId);
 }
 

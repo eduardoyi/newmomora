@@ -19,6 +19,13 @@ jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
 jest.mock('@/hooks/usePortraitVersions', () => ({ usePortraitVersions: jest.fn() }));
 jest.mock('@/hooks/useMediaUrls', () => ({ useMediaUrls: jest.fn() }));
+jest.mock('@/hooks/useContentSafety', () => ({
+  useContentSafety: () => ({
+    isLoading: false, isError: false, isReporting: false,
+    isTargetReported: () => false, hasActiveReport: () => false,
+    revealTarget: jest.fn(), report: jest.fn(), refetch: jest.fn(),
+  }),
+}));
 jest.mock('@/utils/family-profile-photo-picker', () => ({
   parsePendingPickerResult: jest.fn(),
   pickPortraitVersionPhoto: jest.fn(),

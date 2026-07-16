@@ -103,6 +103,13 @@ export default function LoginScreen() {
         testID="login-submit-button"
       />
 
+      <AuthButton
+        label="App review access"
+        onPress={() => router.push('/(auth)/app-review-access')}
+        testID="app-review-access-link"
+        variant="ghost"
+      />
+
       {showDevPasswordToggle && (
         <>
           <AuthButton

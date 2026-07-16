@@ -1,5 +1,6 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import { router } from 'expo-router';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import ViewFamilyMemberScreen from '../../app/(app)/family/[id]';
 import { useFamily } from '@/hooks/use-family';
@@ -17,6 +18,19 @@ jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
 jest.mock('@/hooks/useMediaUrls', () => ({ useMediaUrl: jest.fn() }));
 jest.mock('@/hooks/useMemories', () => ({ useMemberMemories: jest.fn() }));
 jest.mock('@/hooks/usePortraitVersions', () => ({ usePortraitVersions: jest.fn() }));
+jest.mock('@/hooks/useContentSafety', () => ({
+  useContentSafety: () => ({
+    isLoading: false,
+    isError: false,
+    isReporting: false,
+    isTargetReported: () => false,
+    hasActiveReport: () => false,
+    isUserBlocked: () => false,
+    revealTarget: jest.fn(),
+    report: jest.fn(),
+    refetch: jest.fn(),
+  }),
+}));
 jest.mock('@/hooks/useVideoThumbnail', () => ({ useVideoThumbnail: () => null }));
 jest.mock('@/components/full-screen-media-viewer', () => ({
   FullScreenMediaViewer: ({ cacheVersion, items }: {
@@ -114,7 +128,16 @@ describe('family member portrait entry', () => {
   });
 
   it('counts every visual record and opens the resolved current portrait', () => {
-    const { getByLabelText, getByTestId } = render(<ViewFamilyMemberScreen />);
+    const { getByLabelText, getByTestId } = render(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <ViewFamilyMemberScreen />
+      </SafeAreaProvider>,
+    );
 
     expect(getByLabelText('Open portrait timeline, 2 portraits')).toBeTruthy();
     fireEvent.press(getByTestId('family-member-portrait'));

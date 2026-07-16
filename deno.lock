@@ -618,6 +618,7 @@
         "npm:react-dom@19.2.3",
         "npm:react-native-compressor@^1.16.0",
         "npm:react-native-gesture-handler@~2.31.1",
+        "npm:react-native-keyboard-controller@1.21.6",
         "npm:react-native-reanimated@4.3.1",
         "npm:react-native-safe-area-context@5.7",
         "npm:react-native-screens@4.25.2",

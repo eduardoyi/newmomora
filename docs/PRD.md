@@ -117,7 +117,7 @@ flowchart TD
 
 ### Journey A — Onboarding (Critical Path)
 
-1. Sign up with email/password
+1. Sign up with email and verify a one-time code
 2. Prompt to add **first family member** — nudge: *"Add your child first — Momora is about capturing their moments"*
 3. First family member requires a profile photo → AI character portrait generates asynchronously
 4. Optional: parent/co-parent profile can be added later (not required at signup)
@@ -155,14 +155,14 @@ Each feature includes user stories, acceptance criteria, and deferred scope.
 
 **User stories**
 
-- As a parent, I can sign up with email and password so I can start journaling privately.
-- As a parent, I can log in, reset my password, and manage my account profile.
+- As a parent, I can sign up and sign in with a one-time email code so I can start journaling privately without managing a password.
+- As a store reviewer, I can use reusable credentials supplied privately in the review console so review does not depend on email delivery.
 - As a parent, I can delete my account with a grace period to change my mind.
 
 **Acceptance criteria**
 
-- Email/password authentication via Supabase Auth
-- Password reset email flow
+- Email OTP authentication via Supabase Auth for normal users
+- A separate, clearly labeled app-review route supports a dedicated email/password review account; credentials are never stored in the app or repository
 - Account profile fields: display name, timezone (required for notification scheduling)
 - Session persistence across app restarts
 - Logout available in settings
@@ -594,9 +594,9 @@ See [TECH_SPEC.md](./TECH_SPEC.md) for database schema, Edge Function contracts,
 
 | Screen | Purpose |
 |--------|---------|
-| Login | Email/password sign in |
+| Login | Email-code sign in, with a separate app-review access link |
 | Sign up | Account creation |
-| Forgot password | Password reset request |
+| Verify code | One-time email code verification and resend |
 | Onboarding — Add family member | First profile creation (child-first nudge) |
 | Onboarding — Portrait wait | Progress while first portrait generates |
 | Onboarding — First memory | Guided first journal entry |

@@ -1,4 +1,5 @@
 import { Send } from 'lucide-react-native';
+import { SymbolView } from 'expo-symbols';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -17,9 +18,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
+import { ContentActionSheet } from '@/components/content-action-sheet';
+import { ReportSheet } from '@/components/report-sheet';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useMemoryEngagement } from '@/hooks/useMemoryEngagement';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import { resolveAttributionName, useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { MAX_COMMENT_LENGTH, type MemoryComment } from '@/services/engagement';
@@ -56,7 +60,10 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
   const { profile } = useUserProfile();
   const { profiles } = useFamilyMemberProfiles(familyId);
   const engagement = useMemoryEngagement(memory, { commentsEnabled: visible });
+  const contentSafety = useContentSafety();
   const [text, setText] = useState('');
+  const [actionComment, setActionComment] = useState<MemoryComment | null>(null);
+  const [reportComment, setReportComment] = useState<MemoryComment | null>(null);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const listRef = useRef<FlatList<MemoryComment>>(null);
   const canModerate = canEditFamilyContent(role);
@@ -159,9 +166,16 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
             ) : null}
           </View>
 
-          {engagement.areCommentsLoading ? (
+          {contentSafety.isLoading || engagement.areCommentsLoading ? (
             <View style={styles.centered}>
               <ActivityIndicator color={colors.primary} />
+            </View>
+          ) : contentSafety.isError ? (
+            <View style={styles.centered}>
+              <Text style={styles.errorText}>Could not safely load comments</Text>
+              <Pressable onPress={() => void contentSafety.refetch()}>
+                <Text style={styles.retryText}>Try again</Text>
+              </Pressable>
             </View>
           ) : engagement.commentsError ? (
             <View style={styles.centered}>
@@ -185,28 +199,53 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
               renderItem={({ item }) => {
                 const name = authorName(item);
                 const mine = item.user_id === user?.id;
+                const isBlocked = contentSafety.isUserBlocked(item.user_id);
+                const isReported = contentSafety.isTargetReported('comment', item.id);
+                const hasActiveReport = contentSafety.hasActiveReport('comment', item.id);
+                const canDelete = canDeleteComment(item);
+                const isHidden = isBlocked || isReported;
                 return (
-                  <Pressable
-                    accessibilityHint={canDeleteComment(item) ? 'Long press to delete' : undefined}
-                    delayLongPress={450}
-                    disabled={!canDeleteComment(item)}
-                    onLongPress={() => confirmDelete(item)}
-                    style={styles.commentRow}
-                    testID={`comment-${item.id}`}
-                  >
+                  <View style={styles.commentRow} testID={`comment-${item.id}`}>
                     <View style={styles.avatar}>
-                      <Text style={styles.avatarText}>{name.charAt(0).toUpperCase()}</Text>
+                      <Text style={styles.avatarText}>{isBlocked ? '•' : name.charAt(0).toUpperCase()}</Text>
                     </View>
                     <View style={styles.commentBody}>
                       <View style={styles.commentMeta}>
                         <Text style={styles.author} numberOfLines={1}>
-                          {name}{mine ? ' · you' : ''}
+                          {isBlocked ? 'Blocked account' : `${name}${mine ? ' · you' : ''}`}
                         </Text>
                         <Text style={styles.timestamp}>{formatEngagementTimestamp(item.created_at)}</Text>
                       </View>
-                      <Text style={styles.commentText}>{item.content}</Text>
+                      {isHidden ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          onPress={() => {
+                            if (isReported) contentSafety.revealTarget('comment', item.id);
+                            if (isBlocked) contentSafety.revealBlockedUser(item.user_id);
+                          }}
+                          testID={`comment-${item.id}-show`}
+                        >
+                          <Text style={styles.hiddenCommentText}>Comment hidden · Show anyway</Text>
+                        </Pressable>
+                      ) : <Text style={styles.commentText}>{item.content}</Text>}
                     </View>
-                  </Pressable>
+                    {!item.id.startsWith('optimistic-') && (canDelete || !hasActiveReport) ? (
+                      <Pressable
+                        accessibilityLabel={`Comment actions for ${isBlocked ? 'blocked account' : name}`}
+                        accessibilityRole="button"
+                        onPress={() => setActionComment(item)}
+                        style={styles.commentActions}
+                        testID={`comment-${item.id}-actions`}
+                      >
+                        <SymbolView
+                          fallback={<Text style={styles.commentActionsFallback}>•••</Text>}
+                          name={{ ios: 'ellipsis', android: 'more_horiz' }}
+                          size={16}
+                          tintColor={colors.ink3}
+                        />
+                      </Pressable>
+                    ) : null}
+                  </View>
                 );
               }}
               ListEmptyComponent={
@@ -256,6 +295,43 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
             <Text style={styles.composerError}>Could not post comment. Please try again.</Text>
           ) : null}
         </View>
+        <ContentActionSheet
+          actions={actionComment ? [
+            ...(canDeleteComment(actionComment) ? [{
+              danger: true,
+              label: 'Delete comment',
+              onPress: () => confirmDelete(actionComment),
+              testID: 'comment-action-delete',
+            }] : []),
+            ...(!contentSafety.hasActiveReport('comment', actionComment.id) ? [{
+              danger: true,
+              label: 'Report comment',
+              onPress: () => setReportComment(actionComment),
+              testID: 'comment-action-report',
+            }] : []),
+          ] : []}
+          onClose={() => setActionComment(null)}
+          testID="comment-actions-sheet"
+          visible={Boolean(
+            actionComment &&
+            (canDeleteComment(actionComment) || !contentSafety.hasActiveReport('comment', actionComment.id))
+          )}
+        />
+        {reportComment ? (
+          <ReportSheet
+            isSubmitting={contentSafety.isReporting}
+            onClose={() => setReportComment(null)}
+            onSubmit={(reason, note) => contentSafety.report({
+              targetType: 'comment',
+              targetId: reportComment.id,
+              reason,
+              note,
+            }).then(() => undefined)}
+            targetLabel="comment"
+            targetType="comment"
+            visible
+          />
+        ) : null}
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -318,6 +394,9 @@ const styles = StyleSheet.create({
   author: { color: colors.ink, flexShrink: 1, fontFamily: fonts.sansBold, fontSize: 13.5 },
   timestamp: { color: colors.ink3, fontFamily: fonts.sansMedium, fontSize: 11 },
   commentText: { color: colors.ink, fontFamily: fonts.sans, fontSize: 14, lineHeight: 21, marginTop: 2 },
+  hiddenCommentText: { color: colors.ink3, fontFamily: fonts.sansMedium, fontSize: 13, lineHeight: 20, marginTop: 2 },
+  commentActions: { alignItems: 'center', height: 44, justifyContent: 'center', marginRight: -8, width: 44 },
+  commentActionsFallback: { color: colors.ink3, fontSize: 12 },
   composer: {
     alignItems: 'center',
     borderTopColor: colors.border,

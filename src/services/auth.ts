@@ -19,7 +19,7 @@ export interface VerifyOtpInput {
   token: string;
 }
 
-/** Dev/E2E-only password sign-in. Password auth stays enabled server-side for Maestro. */
+/** Password sign-in for dedicated app-review access and dev/E2E accounts. */
 export interface PasswordSignInInput {
   email: string;
   password: string;

@@ -10,10 +10,14 @@ const ROLE_EXPLANATION =
 export interface MemberActionSheetProps {
   visible: boolean;
   memberName: string;
-  memberRole: 'manager' | 'viewer';
+  memberRole: 'owner' | 'manager' | 'viewer';
   onPromote: () => void;
   onDemote: () => void;
   onRemove: () => void;
+  onReport?: () => void;
+  onToggleBlock?: () => void;
+  isBlocked?: boolean;
+  showManagementActions?: boolean;
   onClose: () => void;
 }
 
@@ -33,6 +37,10 @@ export function MemberActionSheet({
   onPromote,
   onDemote,
   onRemove,
+  onReport,
+  onToggleBlock,
+  isBlocked = false,
+  showManagementActions = true,
   onClose,
 }: MemberActionSheetProps) {
   const insets = useSafeAreaInsets();
@@ -58,25 +66,58 @@ export function MemberActionSheet({
             <Text style={styles.name}>{memberName}</Text>
             <Text style={styles.roleLine}>{roleLabel(memberRole)}</Text>
           </View>
-          <Text style={styles.explanation}>{ROLE_EXPLANATION}</Text>
-          <View style={styles.divider} />
-          <Pressable
-            accessibilityRole="button"
-            onPress={handleRoleAction}
-            style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
-            testID={roleActionTestID}
-          >
-            <Text style={styles.optionText}>{roleActionLabel}</Text>
-          </Pressable>
-          <View style={styles.divider} />
-          <Pressable
-            accessibilityRole="button"
-            onPress={onRemove}
-            style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
-            testID="member-action-remove"
-          >
-            <Text style={[styles.optionText, styles.destructiveText]}>Remove from family</Text>
-          </Pressable>
+          {showManagementActions ? (
+            <>
+              <Text style={styles.explanation}>{ROLE_EXPLANATION}</Text>
+              <View style={styles.divider} />
+              <Pressable
+                accessibilityRole="button"
+                onPress={handleRoleAction}
+                style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
+                testID={roleActionTestID}
+              >
+                <Text style={styles.optionText}>{roleActionLabel}</Text>
+              </Pressable>
+              <View style={styles.divider} />
+              <Pressable
+                accessibilityRole="button"
+                onPress={onRemove}
+                style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
+                testID="member-action-remove"
+              >
+                <Text style={[styles.optionText, styles.destructiveText]}>Remove from family</Text>
+              </Pressable>
+            </>
+          ) : null}
+          {onToggleBlock ? (
+            <>
+              <View style={styles.divider} />
+              <Pressable
+                accessibilityLabel={isBlocked ? `Unblock account ${memberName}` : `Block account ${memberName}`}
+                accessibilityRole="button"
+                onPress={onToggleBlock}
+                style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
+                testID="member-action-toggle-block"
+              >
+                <Text style={styles.optionText}>{isBlocked ? 'Unblock account' : 'Block account'}</Text>
+                <Text style={styles.optionSubtitle}>Hide their memories, comments, and activity alerts in this family.</Text>
+              </Pressable>
+            </>
+          ) : null}
+          {onReport ? (
+            <>
+              <View style={styles.divider} />
+              <Pressable
+                accessibilityLabel={`Report ${memberName}`}
+                accessibilityRole="button"
+                onPress={onReport}
+                style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
+                testID="member-action-report"
+              >
+                <Text style={[styles.optionText, styles.destructiveText]}>Report account</Text>
+              </Pressable>
+            </>
+          ) : null}
         </View>
         <Pressable
           accessibilityRole="button"
@@ -150,6 +191,15 @@ const styles = StyleSheet.create({
   },
   destructiveText: {
     color: colors.error,
+  },
+  optionSubtitle: {
+    color: colors.ink3,
+    fontFamily: fonts.sans,
+    fontSize: 11.5,
+    lineHeight: 16,
+    marginTop: 3,
+    paddingHorizontal: spacing.md,
+    textAlign: 'center',
   },
   cancelCard: {
     alignItems: 'center',

@@ -4,8 +4,10 @@ import { router } from 'expo-router';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { CastCard } from '@/components/cast-card';
+import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import { addFamilyMemberRoute, familyMemberRoute } from '@/lib/routes';
 import { canEditFamilyContent } from '@/utils/roles';
 
@@ -13,8 +15,9 @@ export default function FamilyScreen() {
   const { role } = useFamily();
   const canEdit = canEditFamilyContent(role);
   const { members, isLoading, isRefetching, isError, refetch } = useFamilyMembers();
+  const contentSafety = useContentSafety();
 
-  if (isLoading) {
+  if (isLoading || contentSafety.isLoading) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator color={colors.primary} size="large" />
@@ -22,10 +25,15 @@ export default function FamilyScreen() {
     );
   }
 
-  if (isError) {
+  if (isError || contentSafety.isError) {
     return (
       <View style={styles.centered}>
         <Text style={styles.errorText}>Could not load family members</Text>
+        {contentSafety.isError ? (
+          <Pressable accessibilityRole="button" onPress={() => void contentSafety.refetch()}>
+            <Text style={styles.retryText}>Try again</Text>
+          </Pressable>
+        ) : null}
       </View>
     );
   }
@@ -49,17 +57,34 @@ export default function FamilyScreen() {
         </SafeAreaView>
 
         <View style={styles.castList}>
-          {members.map((member) => (
-            <Pressable
-              key={member.id}
-              accessibilityRole="button"
-              onPress={() => router.push(familyMemberRoute(member.id))}
-              style={({ pressed }) => pressed && styles.castCardPressed}
-              testID={`family-cast-card-${member.id}`}
-            >
-              <CastCard member={member} />
-            </Pressable>
-          ))}
+          {members.map((member) => {
+            const portraitId = member.resolvedPortraitVersion?.id ?? null;
+            const isProfileHidden = contentSafety.isTargetReported('family_member_profile', member.id);
+            const isPortraitHidden = contentSafety.isTargetReported('family_member_portrait', portraitId);
+            if (isProfileHidden) {
+              return (
+                <ContentHiddenNotice
+                  key={member.id}
+                  label="Reported family profile hidden"
+                  onShow={() => contentSafety.revealTarget('family_member_profile', member.id)}
+                  testID={`family-cast-card-${member.id}-hidden`}
+                />
+              );
+            }
+            return (
+              <View key={member.id} testID={`family-cast-card-${member.id}`}>
+                <CastCard
+                  isPortraitHidden={isPortraitHidden}
+                  member={member}
+                  onPress={() => router.push(familyMemberRoute(member.id))}
+                  onPortraitPress={() => router.push(familyMemberRoute(member.id))}
+                  onShowPortrait={portraitId
+                    ? () => contentSafety.revealTarget('family_member_portrait', portraitId)
+                    : undefined}
+                />
+              </View>
+            );
+          })}
 
           {canEdit ? (
             <Pressable
@@ -105,6 +130,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     padding: spacing.lg,
   },
+  retryText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 14 },
   scrollContent: {
     paddingBottom: 130,
   },

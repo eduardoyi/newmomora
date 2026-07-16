@@ -25,6 +25,7 @@ interface FakeState {
   memberships: Array<{ family_id: string; user_id: string; role: string }>;
   profiles: FakeProfile[];
   activityLog: Array<{ family_id: string; actor_id: string; kind: string; created_at: string }>;
+  blocks: Array<{ family_id: string; blocker_user_id: string; blocked_user_id: string }>;
 }
 
 function baseState(overrides?: Partial<FakeState>): FakeState {
@@ -62,6 +63,7 @@ function baseState(overrides?: Partial<FakeState>): FakeState {
       },
     ],
     activityLog: [],
+    blocks: [],
     ...overrides,
   };
 }
@@ -151,6 +153,22 @@ function createFakeServiceClient(state: FakeState) {
                 data: state.profiles.filter((profile) => ids.includes(profile.id)),
                 error: null,
               }),
+          }),
+        };
+      }
+
+      if (table === 'blocked_family_accounts') {
+        return {
+          select: () => ({
+            eq: (_familyCol: string, familyId: string) => ({
+              eq: (_blockedCol: string, blockedUserId: string) =>
+                Promise.resolve({
+                  data: state.blocks
+                    .filter((row) => row.family_id === familyId && row.blocked_user_id === blockedUserId)
+                    .map((row) => ({ blocker_user_id: row.blocker_user_id })),
+                  error: null,
+                }),
+            }),
           }),
         };
       }
@@ -281,11 +299,10 @@ Deno.test('a manager creator sends pushes to eligible members and excludes the a
 
   assertEquals(response.status, 200);
   const body = await response.json();
-  assertEquals(body.sent, true);
+  assertEquals(body, { sent: true });
   // Eligible: MANAGER_ID, VIEWER_ID, OTHER_MEMBER_ID (3). Excluded: actor
   // (OWNER_ID), NO_TOKEN_MEMBER_ID (no token), OPTED_OUT_MEMBER_ID (opted
   // out).
-  assertEquals(body.recipientCount, 3);
   assertEquals(pushCalls.length, 3);
 
   const recipients = pushCalls.map((call) => call.to).sort();
@@ -333,6 +350,30 @@ Deno.test('a second memory from the same actor within 15 minutes is debounced (n
   assertEquals(pushCalls.length, 0);
   // No new row was inserted -- still exactly the one seeded row.
   assertEquals(state.activityLog.length, 1);
+});
+
+Deno.test('members who blocked the actor receive no alert and the response is indistinguishable', async () => {
+  const unblockedState = baseState();
+  const unblockedClient = createFakeServiceClient(unblockedState);
+  let unblockedResponse!: Response;
+  await withMockedPush(async () => {
+    unblockedResponse = await processNotifyFamilyActivity(unblockedClient as never, OWNER_ID, MEMORY_ID);
+  });
+
+  const state = baseState({
+    blocks: [{ family_id: FAMILY_ID, blocker_user_id: VIEWER_ID, blocked_user_id: OWNER_ID }],
+  });
+  const client = createFakeServiceClient(state);
+
+  let response!: Response;
+  const pushCalls = await withMockedPush(async () => {
+    response = await processNotifyFamilyActivity(client as never, OWNER_ID, MEMORY_ID);
+  });
+
+  const body = await response.json();
+  assertEquals(body, await unblockedResponse.json());
+  assertEquals(body, { sent: true });
+  assertEquals(pushCalls.some((call) => call.to === 'ExponentPushToken[vera]'), false);
 });
 
 Deno.test('a log row older than 15 minutes does not debounce a new notification', async () => {
@@ -402,7 +443,7 @@ Deno.test('opportunistically prunes activity log rows older than 24h', async () 
   assertEquals(state.activityLog[0].actor_id, OWNER_ID);
 });
 
-Deno.test('no recipients (solo family) still reports sent: true with recipientCount 0', async () => {
+Deno.test('no recipients (solo family) still returns generic success', async () => {
   const state = baseState({
     memberships: [{ family_id: FAMILY_ID, user_id: OWNER_ID, role: 'owner' }],
   });
@@ -415,7 +456,7 @@ Deno.test('no recipients (solo family) still reports sent: true with recipientCo
 
   assertEquals(response.status, 200);
   const body = await response.json();
-  assertEquals(body, { sent: true, recipientCount: 0 });
+  assertEquals(body, { sent: true });
   assertEquals(pushCalls.length, 0);
 });
 

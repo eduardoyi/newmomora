@@ -15,22 +15,35 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
 import { CastCard } from '@/components/cast-card';
+import { ContentActionSheet } from '@/components/content-action-sheet';
+import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { FullScreenMediaViewer } from '@/components/full-screen-media-viewer';
+import { ReportSheet } from '@/components/report-sheet';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import { useMemberMemories } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { editFamilyMemberRoute, memoryDetailRoute, portraitTimelineRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
+import type { ReportTargetType } from '@/services/content-safety';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
 import { resolvePreferredCoverKey, resolveVideoPosterKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
 import { formatDisplayDate } from '@/utils/memories';
 
 // ── Thumbnail for the memories list ──────────────────────────────────────────
-function MemoryThumb({ memory }: { memory: MemoryWithTags }) {
+function MemoryThumb({
+  memory,
+  isIllustrationHidden = false,
+  onShowIllustration,
+}: {
+  memory: MemoryWithTags;
+  isIllustrationHidden?: boolean;
+  onShowIllustration?: () => void;
+}) {
   const isMedia = memory.memory_type === 'media';
   const coverAsset = memory.mediaAssets[0];
   const isVideo = coverAsset ? coverAsset.content_type.startsWith('video/') : isMedia && memory.media_content_type?.startsWith('video/');
@@ -45,7 +58,10 @@ function MemoryThumb({ memory }: { memory: MemoryWithTags }) {
   const illustrationKey =
     memory.memory_type === 'text_illustration' ? (memory.illustration_key ?? null) : null;
 
-  const { url: illustrationUrl } = useMediaUrl(illustrationKey, memory.updated_at);
+  const { url: illustrationUrl } = useMediaUrl(
+    isIllustrationHidden ? null : illustrationKey,
+    memory.updated_at,
+  );
   const { url: mediaUrl } = useMediaUrl(isMedia && !isVideo ? photoMediaKey : null, memory.updated_at);
   const { url: posterUrl } = useMediaUrl(posterKey, memory.updated_at);
   const { url: videoUrl } = useMediaUrl(videoMediaKey, memory.updated_at);
@@ -53,6 +69,23 @@ function MemoryThumb({ memory }: { memory: MemoryWithTags }) {
   const videoThumbnail = posterUrl ?? runtimeVideoThumbnail;
 
   const emo = getEmotionColors(memory.emotion);
+
+  if (memory.memory_type === 'text_illustration' && isIllustrationHidden && onShowIllustration) {
+    return (
+      <Pressable
+        accessibilityLabel="Show reported AI illustration"
+        accessibilityRole="button"
+        onPress={(event) => {
+          event.stopPropagation();
+          onShowIllustration();
+        }}
+        style={[styles.thumb, styles.hiddenThumb]}
+        testID={`member-memory-${memory.id}-illustration-show`}
+      >
+        <Text style={styles.hiddenThumbText}>Show</Text>
+      </Pressable>
+    );
+  }
 
   if (memory.memory_type === 'text_illustration' && illustrationUrl) {
     return (
@@ -118,6 +151,7 @@ export default function ViewFamilyMemberScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { role } = useFamily();
   const canEdit = canEditFamilyContent(role);
+  const contentSafety = useContentSafety();
   const { members, isLoading, deleteMember, isDeleting } = useFamilyMembers();
   const { versions: portraitVersions } = usePortraitVersions(id);
   // Server-filtered to this member (Workstream A6) instead of paging in and
@@ -126,11 +160,27 @@ export default function ViewFamilyMemberScreen() {
     useMemberMemories(id);
   const [deleteError, setDeleteError] = useState('');
   const [isPortraitFullScreen, setIsPortraitFullScreen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [reportTarget, setReportTarget] = useState<{
+    type: ReportTargetType;
+    id: string;
+  } | null>(null);
 
   const member = members.find((m) => m.id === id);
   const portraitKey = member?.resolvedPortraitVersion?.illustrated_profile_key ?? null;
   const portraitCacheVersion = member?.avatarUpdatedAt ?? member?.updated_at;
-  const { url: portraitUrl } = useMediaUrl(portraitKey, portraitCacheVersion);
+  const currentPortraitId = member?.resolvedPortraitVersion?.id ?? null;
+  const shouldLoadPortrait = Boolean(
+    member &&
+    !contentSafety.isLoading &&
+    !contentSafety.isError &&
+    !contentSafety.isTargetReported('family_member_profile', member.id) &&
+    !contentSafety.isTargetReported('family_member_portrait', currentPortraitId),
+  );
+  const { url: portraitUrl } = useMediaUrl(
+    shouldLoadPortrait ? portraitKey : null,
+    portraitCacheVersion,
+  );
   const portraitCount = portraitVersions.filter((version) => !version.deletion_token).length;
 
   const handleDelete = () => {
@@ -157,7 +207,7 @@ export default function ViewFamilyMemberScreen() {
     );
   };
 
-  if (isLoading) {
+  if (isLoading || contentSafety.isLoading) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator color={colors.primary} size="large" />
@@ -173,6 +223,27 @@ export default function ViewFamilyMemberScreen() {
     );
   }
 
+  if (contentSafety.isError) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.notFoundText}>Couldn’t load this profile</Text>
+        <Pressable onPress={() => void contentSafety.refetch()}>
+          <Text style={styles.retryText}>Try again</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  const isProfileHidden = contentSafety.isTargetReported('family_member_profile', member.id);
+  const isPortraitHidden = contentSafety.isTargetReported('family_member_portrait', currentPortraitId);
+  const visibleMemberMemories = memberMemories.filter((memory) => !contentSafety.isUserBlocked(memory.user_id));
+  const canReportProfile = !contentSafety.hasActiveReport('family_member_profile', member.id);
+  const canReportPortrait = Boolean(
+    currentPortraitId && member.resolvedPortraitVersion?.illustrated_profile_status === 'ready' &&
+    member.resolvedPortraitVersion.illustrated_profile_key &&
+    !contentSafety.hasActiveReport('family_member_portrait', currentPortraitId),
+  );
+
   const listHeader = (
     <>
       {/* ── Header ── */}
@@ -186,8 +257,23 @@ export default function ViewFamilyMemberScreen() {
               fallback={<Text style={styles.iconBtnText}>‹</Text>}
             />
           </Pressable>
-          {canEdit && (
-            <View style={styles.headerRight}>
+          <View style={styles.headerRight}>
+            {canReportProfile || canReportPortrait ? <Pressable
+              accessibilityLabel="Profile actions"
+              accessibilityRole="button"
+              onPress={() => setActionsOpen(true)}
+              style={styles.iconBtn}
+              testID="view-member-more"
+            >
+              <SymbolView
+                name={{ ios: 'ellipsis', android: 'more_horiz' }}
+                size={17}
+                tintColor={colors.ink2}
+                fallback={<Text style={styles.iconBtnText}>•••</Text>}
+              />
+            </Pressable> : null}
+            {canEdit ? (
+              <>
               <Pressable
                 onPress={() => router.push(editFamilyMemberRoute(member.id))}
                 style={styles.iconBtn}
@@ -217,24 +303,39 @@ export default function ViewFamilyMemberScreen() {
                   />
                 )}
               </Pressable>
-            </View>
-          )}
+              </>
+            ) : null}
+          </View>
         </View>
       </SafeAreaView>
 
       <View style={styles.content}>
-        <CastCard
-          member={member}
-          onPortraitPress={portraitUrl ? () => setIsPortraitFullScreen(true) : undefined}
-          onPortraitTimelinePress={() => router.push(portraitTimelineRoute(member.id))}
-          portraitCount={portraitCount}
-        />
+        {isProfileHidden ? (
+          <ContentHiddenNotice
+            label="Reported family profile hidden"
+            onShow={() => {
+              contentSafety.revealTarget('family_member_profile', member.id);
+            }}
+            testID="family-profile-hidden"
+          />
+        ) : (
+          <CastCard
+            isPortraitHidden={isPortraitHidden}
+            member={member}
+            onPortraitPress={portraitUrl && !isPortraitHidden ? () => setIsPortraitFullScreen(true) : undefined}
+            onPortraitTimelinePress={() => router.push(portraitTimelineRoute(member.id))}
+            onShowPortrait={currentPortraitId
+              ? () => contentSafety.revealTarget('family_member_portrait', currentPortraitId)
+              : undefined}
+            portraitCount={portraitCount}
+          />
+        )}
 
         {deleteError ? <Text style={styles.deleteErrorText}>{deleteError}</Text> : null}
 
         {/* ── Memories with this person ── */}
-        {memberMemories.length > 0 ? (
-          <Text style={styles.memoriesEyebrow}>Memories with {member.name}</Text>
+        {visibleMemberMemories.length > 0 ? (
+          <Text style={styles.memoriesEyebrow}>Memories with {isProfileHidden ? 'this person' : member.name}</Text>
         ) : null}
       </View>
     </>
@@ -244,7 +345,7 @@ export default function ViewFamilyMemberScreen() {
     <View style={styles.container}>
       <FlatList
         contentContainerStyle={styles.scrollContent}
-        data={memberMemories}
+        data={visibleMemberMemories}
         keyExtractor={(m) => m.id}
         ListHeaderComponent={listHeader}
         initialNumToRender={10}
@@ -260,14 +361,39 @@ export default function ViewFamilyMemberScreen() {
             <ActivityIndicator style={styles.footerSpinner} color={colors.primary} />
           ) : null
         }
-        renderItem={({ item: m }) => (
-          <View style={styles.memoryRowWrap}>
+        renderItem={({ item: m }) => {
+          const isMemoryReported = contentSafety.isTargetReported('memory', m.id);
+          const isIllustrationReported = contentSafety.isTargetReported(
+            'memory_illustration',
+            m.id,
+            m.illustration_generation_id,
+          );
+          if (isMemoryReported) {
+            return (
+              <View style={styles.memoryRowWrap}>
+                <ContentHiddenNotice
+                  label="Reported memory hidden"
+                  onShow={() => contentSafety.revealTarget('memory', m.id)}
+                  testID={`member-memory-${m.id}-hidden`}
+                />
+              </View>
+            );
+          }
+          return <View style={styles.memoryRowWrap}>
             <Pressable
               onPress={() => router.push(memoryDetailRoute(m.id))}
               style={({ pressed }) => [styles.memoryRow, pressed && styles.memoryRowPressed]}
               testID={`member-memory-${m.id}`}
             >
-              <MemoryThumb memory={m} />
+              <MemoryThumb
+                isIllustrationHidden={isIllustrationReported}
+                memory={m}
+                onShowIllustration={() => contentSafety.revealTarget(
+                  'memory_illustration',
+                  m.id,
+                  m.illustration_generation_id,
+                )}
+              />
               <View style={styles.memoryRowContent}>
                 <Text style={styles.memoryDate}>{formatDisplayDate(m.memory_date)}</Text>
                 {m.content ? (
@@ -300,10 +426,50 @@ export default function ViewFamilyMemberScreen() {
                 fallback={<Text style={styles.chevronText}>›</Text>}
               />
             </Pressable>
-          </View>
-        )}
+          </View>;
+        }}
       />
-      {isPortraitFullScreen && portraitUrl ? (
+      <ContentActionSheet
+        actions={[
+          ...(canReportProfile ? [{
+            danger: true,
+            label: 'Report family profile',
+            onPress: () => setReportTarget({
+              type: 'family_member_profile' as const,
+              id: member.id,
+            }),
+            testID: 'family-profile-action-report',
+          }] : []),
+          ...(canReportPortrait ? [{
+              danger: true,
+              label: 'Report current AI portrait',
+              onPress: () => setReportTarget({
+                type: 'family_member_portrait' as const,
+                id: currentPortraitId!,
+              }),
+              testID: 'family-profile-action-report-portrait',
+            }] : []),
+        ]}
+        onClose={() => setActionsOpen(false)}
+        testID="family-profile-actions-sheet"
+        visible={actionsOpen}
+      />
+      {reportTarget ? (
+        <ReportSheet
+          isSubmitting={contentSafety.isReporting}
+          onClose={() => setReportTarget(null)}
+          onSubmit={(reason, note) => contentSafety.report({
+            targetType: reportTarget.type,
+            targetId: reportTarget.id,
+            reason,
+            note,
+          }).then(() => undefined)}
+          targetLabel={reportTarget.type === 'family_member_portrait' ? 'AI portrait' : 'family profile'}
+          targetType={reportTarget.type}
+          visible
+        />
+      ) : null}
+      {isPortraitFullScreen && portraitUrl && !isPortraitHidden ? (
         <FullScreenMediaViewer
           accessibilityLabel={`Full-screen portrait of ${member.name}`}
           cacheVersion={portraitCacheVersion}
@@ -335,6 +501,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.ink3,
   },
+  retryText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 14, marginTop: spacing.sm },
+  hiddenThumb: { alignItems: 'center', backgroundColor: colors.surface, justifyContent: 'center' },
+  hiddenThumbText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 11 },
   scrollContent: {
     paddingBottom: 60,
   },

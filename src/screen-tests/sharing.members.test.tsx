@@ -32,6 +32,22 @@ jest.mock('@/hooks/useFamilyMemberProfiles', () => ({
   useFamilyMemberProfiles: jest.fn(),
 }));
 
+jest.mock('@/hooks/useContentSafety', () => ({
+  useContentSafety: () => ({
+    isLoading: false,
+    isError: false,
+    isReporting: false,
+    isUpdatingBlock: false,
+    isTargetReported: () => false,
+    hasActiveReport: () => false,
+    getBlockForUser: () => undefined,
+    isUserBlocked: () => false,
+    setAccountBlocked: jest.fn(),
+    report: jest.fn(),
+    refetch: jest.fn(),
+  }),
+}));
+
 jest.mock('@/services/family', () => ({
   updateMemberRole: jest.fn(),
   removeMember: jest.fn(),

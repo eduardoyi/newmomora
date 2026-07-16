@@ -458,6 +458,7 @@ export interface MemoryGenerationStatusRow {
   id: string;
   illustration_status: Memory['illustration_status'];
   illustration_key: string | null;
+  illustration_generation_id: string | null;
   emotion: string | null;
   updated_at: string;
 }
@@ -472,7 +473,7 @@ export async function fetchMemoryGenerationStatuses(memoryIds: string[]): Promis
 
   const { data, error } = await supabase
     .from('memories')
-    .select('id, illustration_status, illustration_key, emotion, updated_at')
+    .select('id, illustration_status, illustration_key, illustration_generation_id, emotion, updated_at')
     .in('id', memoryIds);
 
   if (error) {
@@ -712,18 +713,6 @@ interface MemoryIllustrationPipelineOptions {
   forceRegenerate?: boolean;
 }
 
-export async function markMemoryIllustrationFailed(memoryId: string): Promise<void> {
-  const { error } = await supabase
-    .from('memories')
-    .update({ illustration_status: 'failed' })
-    .eq('id', memoryId)
-    .in('illustration_status', ['pending', 'generating']);
-
-  if (error) {
-    console.warn('markMemoryIllustrationFailed', memoryId, error.message);
-  }
-}
-
 // The analyze-emotion edge function enforces a short cooldown per memory, so an
 // immediate retry would be rejected. Wait past that window before trying again.
 const EMOTION_RETRY_DELAY_MS = 6000;
@@ -783,7 +772,6 @@ export async function runMemoryIllustrationPipeline(
 
     if (illustrationError) {
       console.warn('generate-illustration failed', memoryId, illustrationError.message);
-      await markMemoryIllustrationFailed(memoryId);
       return illustrationError;
     }
 
@@ -794,8 +782,6 @@ export async function runMemoryIllustrationPipeline(
       memoryId,
       error instanceof Error ? error.message : 'unknown',
     );
-
-    await markMemoryIllustrationFailed(memoryId);
 
     return {
       message: error instanceof Error ? error.message : 'Illustration pipeline failed',

@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
+import { useAuth } from '@/hooks/use-auth';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import {
   familyInvitesQueryKey,
@@ -32,6 +33,7 @@ interface ApprovalEntry {
 }
 
 export default function ApprovalsScreen() {
+  const { user } = useAuth();
   const { familyId, role } = useFamily();
   const queryClient = useQueryClient();
   const canManage = canEditFamilyContent(role);
@@ -82,7 +84,7 @@ export default function ApprovalsScreen() {
       // the member list.
       queryClient.invalidateQueries({ queryKey: familyInvitesQueryKey(familyId) });
       if (action === 'approve') {
-        queryClient.invalidateQueries({ queryKey: familyMemberProfilesQueryKey(familyId) });
+        queryClient.invalidateQueries({ queryKey: familyMemberProfilesQueryKey(user?.id, familyId) });
       }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not resolve the invite');

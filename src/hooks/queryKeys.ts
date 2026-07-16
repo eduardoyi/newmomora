@@ -47,8 +47,11 @@ export function portraitVersionsQueryKey(familyId: string | null | undefined) {
   return [portraitVersionsQueryKeyBase, familyId] as const;
 }
 
-export function familyMemberProfilesQueryKey(familyId: string | null | undefined) {
-  return [familyMemberProfilesQueryKeyBase, familyId] as const;
+export function familyMemberProfilesQueryKey(
+  userId: string | null | undefined,
+  familyId: string | null | undefined,
+) {
+  return [familyMemberProfilesQueryKeyBase, userId, familyId] as const;
 }
 
 export function familyInvitesQueryKey(familyId: string | null | undefined) {

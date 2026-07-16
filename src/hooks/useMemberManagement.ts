@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { familyMemberProfilesQueryKey } from '@/hooks/queryKeys';
+import { useAuth } from '@/hooks/use-auth';
 import { familyMembershipsQueryKey } from '@/hooks/use-family';
 import {
   removeMember,
@@ -53,8 +54,9 @@ interface ChangeRoleInput {
  * mutations just surface its outcome.
  */
 export function useMemberManagement(familyId: string | null | undefined) {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
-  const profilesKey = familyMemberProfilesQueryKey(familyId);
+  const profilesKey = familyMemberProfilesQueryKey(user?.id, familyId);
 
   const changeRoleMutation = useMutation({
     mutationFn: async ({ userId, role }: ChangeRoleInput) => {

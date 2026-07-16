@@ -1,6 +1,6 @@
 # Momora release-readiness tracker
 
-**Last updated:** July 14, 2026
+**Last updated:** July 16, 2026
 
 **Release version:** 1.1.0
 
@@ -19,18 +19,24 @@ This is the working must-do list for the next App Store and Google Play release.
 
 ## 1. Safety, reporting, and moderation
 
-- [ ] Implement in-app reporting for AI-generated family-member portraits.
-- [ ] Implement in-app reporting for AI-generated memory illustrations.
-- [ ] Decide and document the minimum reporting/moderation behavior for family-shared memories and family members.
-  - [ ] Define what can be reported and by whom.
-  - [ ] Define what happens immediately after a report.
-  - [ ] Define who can review or resolve a report.
-  - [ ] Define whether reported content is hidden, retained, or deleted.
-  - [ ] Define the minimum audit/support information retained without storing unnecessary child data.
+- [x] Implement in-app reporting for AI-generated family-member portraits.
+- [x] Implement in-app reporting for AI-generated memory illustrations.
+- [x] Decide and document the minimum reporting/moderation behavior for family-shared memories and family members.
+  - [x] Define what can be reported and by whom.
+  - [x] Define what happens immediately after a report.
+  - [x] Define who can review or resolve a report.
+  - [x] Define whether reported content is hidden, retained, or deleted.
+  - [x] Define the minimum audit/support information retained without storing unnecessary child data.
+  - Behavior and implementation: [content-reporting.md](./features/content-reporting.md).
+  - Private review procedure: [content-reporting-operations.md](./content-reporting-operations.md).
+- [ ] Assign the release operator responsible for the daily private report-queue check and urgent safety escalation.
+- [ ] Run the reporting Maestro happy path from an installed release candidate with a clean illustrated-memory fixture.
 
 ## 2. Legal, support, and public copy
 
 - [x] Update the privacy policy, Terms of Service, FAQ, website copy, and account-deletion page copy.
+- [ ] 🔒 Deploy and verify the additional reporting/blocking Privacy and Terms additions in the separate `momora-marketing` site after the implemented behavior is accepted.
+  - This is a new reporting-specific deployment task; it does not reopen the completed general copy update above.
 - [x] Add Terms acknowledgment during account creation.
 - [x] Add direct FAQ, privacy, Terms, and support/contact routes in the app.
   - Implemented in the current working tree; include these changes in the release commit.
@@ -48,8 +54,10 @@ This is the working must-do list for the next App Store and Google Play release.
 - [ ] 🔒 Complete Apple’s current age-rating questionnaire.
 - [ ] 🔒 Complete Google Play’s target-audience and content declarations.
 - [ ] Prepare reviewer access for the email-OTP login flow.
-  - [ ] Decide how reviewers will receive or obtain the OTP reliably.
-  - [ ] Create reviewer instructions and any required test account.
+  - [x] Use the reusable app-review email/password route so reviewers do not depend on receiving a live OTP.
+  - [x] Create reviewer instructions and the setup/rotation runbook: [reviewer-access.md](./reviewer-access.md).
+  - [x] Add focused integration and Maestro flow coverage for the reviewer route.
+  - [ ] Seed/verify the production reviewer account and enter its credentials securely in the store review consoles.
   - [ ] Verify the flow from a clean install before submission.
 
 ## 4. iPad compatibility
@@ -69,15 +77,15 @@ This is the working must-do list for the next App Store and Google Play release.
 ## 5. Build numbers and release artifacts
 
 - [ ] 🔒 Raise and verify the EAS remote build numbers before producing final artifacts.
-  - [ ] Android `versionCode` is at least **34**.
-  - [ ] iOS `buildNumber` is at least **35**.
+  - [x] EAS remote Android `versionCode` is **34**.
+  - [x] EAS remote iOS `buildNumber` is **35**.
   - [ ] Confirm both values on the final artifacts, not only in EAS configuration.
 
 🟡 Produce a fresh physical-device iOS build and create or verify all required Apple capabilities and credentials.
 
-- [ ] Main-app provisioning profile.
-- [ ] Share-extension provisioning profile.
-- [ ] App Group: `group.com.memora.app.shared`.
+- [x] Main-app provisioning profile verified in the July 13 physical-device development IPA; reconfirm on the final production artifact.
+- [x] Share-extension provisioning profile verified in the July 13 physical-device development IPA; reconfirm on the final production artifact.
+- [x] App Group `group.com.memora.app.shared` verified in both entitlements in the July 13 physical-device development IPA; reconfirm on the final production artifact.
 - [ ] Associated Domains entitlement for `applinks:usemomora.com`.
 - [x] APNs key linked to the Momora app target in EAS.
 - [ ] Confirm APNs registration and delivery on a physical iPhone or iPad.
@@ -116,9 +124,9 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
   - The native `VideoPlayer` remains intentionally imperative, while mute updates now go through a small adapter instead of directly mutating an object held in React state.
   - Regression coverage verifies mute changes apply without recreating the native player; the existing deferred-release test still protects the Android surface-recycling workaround.
 - [x] Review the remaining lint warnings and distinguish release risks from cleanup that can follow the release.
-  - `npm run lint` now exits successfully with **0 errors and 39 warnings**.
+  - `npm run lint` currently exits successfully with **0 errors and 33 warnings**.
   - No remaining warning is a known blocker for the current release. React Compiler is not enabled in `app.json`.
-  - Post-release cleanup: 29 `react-hooks/refs` warnings in calendar/list/animation/latest-value patterns; 8 `react-hooks/set-state-in-effect` warnings in data-hydration, player, thumbnail, and client-only patterns; and 2 `react-hooks/exhaustive-deps` warnings caused by the family-membership fallback array.
+  - Remaining warnings are React hook/compiler-readiness cleanup in existing calendar/list/animation/data-hydration patterns.
   - These should be handled in focused behavior-preserving changes with their existing screen/hook tests, especially before enabling React Compiler, rather than refactored during release stabilization.
 - [x] Investigate and resolve the Jest open-handle warning.
   - Root cause: test-local TanStack Query clients scheduled five-minute query and mutation garbage-collection timers.
@@ -131,8 +139,8 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
   - [ ] `npm test -- --runInBand`
   - [ ] `npm run test:edge`
   - [ ] Required Maestro flows
-  - Current working-tree validation on July 16, 2026: typecheck passed; lint passed with 0 errors/39 warnings; Jest passed 94 suites/773 tests and exited normally; Edge tests passed 287/287. This must still be repeated from the final clean release commit.
-  - Maestro 2.6.0 is installed, but no iOS simulator is booted and no Android device is attached. The flows also require an installed development build and test-account environment values, so no Maestro flow was runnable in this pass.
+  - Current reporting-slice validation on July 16, 2026: typecheck passed; lint passed with 0 errors/33 warnings; full Jest passed 869/869 and exited normally; database pgTAP passed 54/54; the full Edge suite passed 295/295. Every command above still requires the final clean-commit rerun.
+  - Maestro 2.6.0 is installed. A physical iPhone is paired but does not have the app installed; no iOS simulator is booted, no Android device is attached, and test credentials/fixtures are unavailable. Maestro was not runnable in this pass.
 - [ ] Confirm the final release commit has no secrets or untracked release inputs that the build depends on unexpectedly.
   - The current diff passes `git diff --check` and the secret-pattern scan found no keys or credentials.
   - Expected ignored local release inputs are `.env.local` (Expo public Supabase configuration), `google-services.json` (referenced by `app.json`), and `credentials.json` (required by the production Android profile's `credentialsSource: local`). They must be supplied securely to the final build and must not be committed.
@@ -158,20 +166,20 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
 
 ## 9. Legacy backend decision
 
-- [ ] Decide how long the old backend must remain available for users stuck on iOS **15.1–16.3**.
-  - [ ] Estimate or measure the number of affected active users.
-  - [ ] Choose a support end date.
-  - [ ] Define what the old app should show after that date.
-  - [ ] Document the shutdown and rollback plan.
+- [x] Decide how long the old backend must remain available for users stuck on iOS **15.1–16.3**.
+  - [x] No active-user compatibility window is required: there are no real active users on the legacy backend, and the two relevant accounts were migrated to the new database.
+  - [x] Owner: the release operator keeps the old backend available only as a short rollback path through successful production verification.
+  - [x] End condition: after TestFlight and Google Play production-candidate verification succeeds and rollback is no longer needed, decommission the old backend. No invented calendar date is required.
+  - [ ] Decommission the old backend after that end condition is met and record completion here.
 
 ## Release exit criteria
 
 The release is ready to submit only when:
 
-- [ ] All required reporting/moderation behavior is implemented and documented.
+- [ ] All required reporting/moderation behavior is implemented and documented, the daily queue owner is assigned, and the release-candidate reporting flow passes.
 - [ ] Store declarations, ratings, reviewer access, listings, and IAP cleanup are complete.
 - [ ] Android build number is at least 34 and iOS build number is at least 35.
 - [ ] Physical-device push delivery works on Android and iOS/iPadOS.
 - [ ] Typecheck, lint, Jest, Edge tests, and required Maestro flows pass from the final clean commit.
 - [ ] TestFlight and Google Play internal-testing smoke tests pass, including the basic iPad pass.
-- [ ] The legacy-backend support window has an owner and end date.
+- [x] The legacy-backend rollback-only window has an owner and a production-verification end condition.

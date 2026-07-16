@@ -186,7 +186,7 @@ flowchart LR
     SaveTI[Save memory] --> DB1[(memories + tags)]
     DB1 --> Emotion[analyze-emotion]
     Emotion --> Illustrate[generate-illustration]
-    Illustrate --> R2illus[(R2 illustration.webp)]
+    Illustrate --> R2illus[(R2 immutable illustration generation)]
   end
 
   subgraph text_only

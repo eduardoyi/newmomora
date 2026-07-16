@@ -11,6 +11,13 @@ import type { FamilyMember } from '@/services/family-members';
 jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrls: jest.fn(),
 }));
+jest.mock('@/hooks/useContentSafety', () => ({
+  useContentSafety: () => ({
+    isLoading: false, isError: false, isReporting: false,
+    isTargetReported: () => false, hasActiveReport: () => false,
+    revealTarget: jest.fn(), report: jest.fn(), refetch: jest.fn(),
+  }),
+}));
 
 jest.mock('react-native-safe-area-context', () => {
   const actual = jest.requireActual('react-native-safe-area-context');
@@ -162,14 +169,17 @@ describe('PortraitTimeline', () => {
   });
 
   it('keeps viewer access read-only', () => {
-    const { queryByTestId, getByText } = render(
+    const { queryByTestId, getByTestId, getByText } = render(
       <PortraitTimeline {...baseProps} canEdit={false} />,
     );
 
     expect(queryByTestId('portrait-timeline-add')).toBeNull();
-    expect(queryByTestId('portrait-version-ready-1-actions')).toBeNull();
+    expect(getByTestId('portrait-version-ready-1-actions')).toBeTruthy();
     expect(queryByTestId('portrait-version-failed-1-retry')).toBeNull();
     expect(getByText('Family managers can add and update portraits.')).toBeTruthy();
+    fireEvent.press(getByTestId('portrait-version-ready-1-actions'));
+    expect(getByTestId('portrait-action-report')).toBeTruthy();
+    expect(queryByTestId('portrait-action-edit-date')).toBeNull();
   });
 
   it('welcomes backdated photos and protects the sole timeline record', () => {

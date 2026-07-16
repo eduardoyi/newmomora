@@ -116,7 +116,6 @@ export async function processVoiceMemory(
 export interface NotifyFamilyActivityResponse {
   sent: boolean;
   reason?: 'debounced';
-  recipientCount?: number;
 }
 
 /**

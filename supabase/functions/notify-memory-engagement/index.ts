@@ -76,7 +76,13 @@ export async function processNotifyMemoryEngagement(
     return jsonResponse({ sent: false, reason: 'self' } satisfies NotifyMemoryEngagementResponse);
   }
 
-  const [{ data: recipientMembership }, { data: recipientProfile }, { data: actorProfile }, { data: family }] =
+  const [
+    { data: recipientMembership },
+    { data: recipientProfile },
+    { data: actorProfile },
+    { data: family },
+    { data: recipientBlock, error: recipientBlockError },
+  ] =
     await Promise.all([
       serviceClient
         .from('family_memberships')
@@ -91,10 +97,27 @@ export async function processNotifyMemoryEngagement(
         .maybeSingle(),
       serviceClient.from('user_profiles').select('name').eq('id', callerId).maybeSingle(),
       serviceClient.from('families').select('name').eq('id', memory.family_id).maybeSingle(),
+      serviceClient
+        .from('blocked_family_accounts')
+        .select('id')
+        .eq('family_id', memory.family_id)
+        .eq('blocker_user_id', memory.user_id)
+        .eq('blocked_user_id', callerId)
+        .maybeSingle(),
     ]);
 
   if (!recipientMembership) {
     return jsonResponse({ sent: false, reason: 'no_recipient' } satisfies NotifyMemoryEngagementResponse);
+  }
+
+  // Reuse the existing generic disabled result so the actor cannot infer
+  // whether the recipient blocked them, disabled notifications, or has no
+  // deliverable token. Fail closed on lookup errors.
+  if (recipientBlockError || recipientBlock) {
+    if (recipientBlockError) {
+      console.error('notify-memory-engagement block lookup failed', recipientBlockError.message);
+    }
+    return jsonResponse({ sent: false, reason: 'disabled' } satisfies NotifyMemoryEngagementResponse);
   }
 
   const recipient = recipientProfile as {

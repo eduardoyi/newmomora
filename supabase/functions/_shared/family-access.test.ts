@@ -25,6 +25,7 @@ const FAMILY_B = '66666666-6666-4666-8666-666666666666';
 const MEMORY_ID = '77777777-7777-4777-8777-777777777777';
 const MEMBER_ID = '88888888-8888-4888-8888-888888888888';
 const VERSION_ID = '99999999-9999-4999-8999-999999999999';
+const ILLUSTRATION_GENERATION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 function fakeSupabase(options: {
   families: Array<{ id: string; owner_id: string; deleted_at: string | null }>;
@@ -160,7 +161,11 @@ Deno.test('parseStorageKey extracts kind/ownerUserId/entityId for all four key s
     ownerUserId: OWNER_ID,
     entityId: MEMBER_ID,
   });
-  assertEquals(parseStorageKey(buildMemoryIllustrationKey(OWNER_ID, MEMORY_ID)), {
+  assertEquals(parseStorageKey(buildMemoryIllustrationKey(
+    OWNER_ID,
+    MEMORY_ID,
+    ILLUSTRATION_GENERATION_ID,
+  )), {
     kind: 'memory_illustration',
     ownerUserId: OWNER_ID,
     entityId: MEMORY_ID,
@@ -236,7 +241,7 @@ Deno.test('resolveStorageKeyFamilyIds denies unresolvable keys (no owning row)',
   const supabase = fakeSupabase({ families: [], memberships: [], memories: [] });
 
   const [resolved] = await resolveStorageKeyFamilyIds(supabase as never, [
-    buildMemoryIllustrationKey(OWNER_ID, MEMORY_ID),
+    buildMemoryIllustrationKey(OWNER_ID, MEMORY_ID, ILLUSTRATION_GENERATION_ID),
   ]);
 
   assertEquals(resolved.familyId, null);
@@ -436,7 +441,7 @@ Deno.test('resolveStorageKeyFamilyIds batches one query per entity type across m
 
   await resolveStorageKeyFamilyIds(supabase as never, [
     buildMemoryMediaKey(OWNER_ID, MEMORY_ID, 'jpg'),
-    buildMemoryIllustrationKey(OWNER_ID, MEMORY_ID),
+    buildMemoryIllustrationKey(OWNER_ID, MEMORY_ID, ILLUSTRATION_GENERATION_ID),
     buildFamilyPhotoKey(OWNER_ID, MEMBER_ID),
     buildFamilyPortraitKey(OWNER_ID, MEMBER_ID),
   ]);

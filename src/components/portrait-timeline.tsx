@@ -15,12 +15,15 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DatePickerField } from '@/components/date-picker-field';
+import { ContentHiddenNotice } from '@/components/content-hidden-notice';
+import { ReportSheet } from '@/components/report-sheet';
 import {
   FullScreenMediaViewer,
   type FullScreenMediaItem,
 } from '@/components/full-screen-media-viewer';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import type { FamilyMember } from '@/services/family-members';
 import { getLocalTodayIso } from '@/utils/portrait-versions';
 
@@ -180,6 +183,8 @@ interface VersionCardProps {
   onActions: () => void;
   onOpen: (initialIndex: number) => void;
   onRetry: () => void;
+  isPortraitHidden: boolean;
+  onShowPortrait: () => void;
 }
 
 function VersionCard({
@@ -190,8 +195,13 @@ function VersionCard({
   onActions,
   onOpen,
   onRetry,
+  isPortraitHidden,
+  onShowPortrait,
 }: VersionCardProps) {
-  const keys = [version.sourcePhotoKey, version.portraitKey].filter((key): key is string => Boolean(key));
+  const keys = [
+    version.sourcePhotoKey,
+    ...(isPortraitHidden ? [] : [version.portraitKey]),
+  ].filter((key): key is string => Boolean(key));
   const { data: urls = {} } = useMediaUrls(keys);
   const sourceUri = urls[version.sourcePhotoKey];
   const portraitUri = version.portraitKey ? urls[version.portraitKey] : undefined;
@@ -224,14 +234,23 @@ function VersionCard({
           <View style={styles.pairTag}><Text style={styles.pairTagText}>Photo</Text></View>
         </Pressable>
 
-        <Pressable
-          accessibilityLabel={`Open illustrated portrait from ${formatLongDate(version.referenceDate)}`}
-          accessibilityRole="button"
-          disabled={!hasUsablePortrait}
-          onPress={() => onOpen(1)}
-          style={styles.visualSlot}
-          testID={`portrait-version-${version.id}-portrait`}
-        >
+        {isPortraitHidden ? (
+          <View style={styles.visualSlot} testID={`portrait-version-${version.id}-portrait`}>
+            <ContentHiddenNotice
+              label="Reported AI portrait hidden"
+              onShow={onShowPortrait}
+              testID={`portrait-version-${version.id}-hidden`}
+            />
+          </View>
+        ) : (
+          <Pressable
+            accessibilityLabel={`Open illustrated portrait from ${formatLongDate(version.referenceDate)}`}
+            accessibilityRole="button"
+            disabled={!hasUsablePortrait}
+            onPress={() => onOpen(1)}
+            style={styles.visualSlot}
+            testID={`portrait-version-${version.id}-portrait`}
+          >
           {hasPortraitKey ? (
             <>
               {portraitUri ? (
@@ -262,7 +281,8 @@ function VersionCard({
           ) : (
             <PortraitPlaceholder version={version} />
           )}
-        </Pressable>
+          </Pressable>
+        )}
       </View>
 
       <View style={styles.infoRow}>
@@ -288,7 +308,7 @@ function VersionCard({
             <View style={styles.workingDot} />
             <Text style={styles.workingText}>Working</Text>
           </View>
-        ) : canEdit ? (
+        ) : canEdit || hasUsablePortrait ? (
           <Pressable
             accessibilityLabel="Portrait options"
             accessibilityRole="button"
@@ -446,6 +466,8 @@ export function PortraitTimeline({
   const [isMutating, setIsMutating] = useState(false);
   const [localError, setLocalError] = useState('');
   const [viewer, setViewer] = useState<{ version: PortraitTimelineVersion; index: number } | null>(null);
+  const [reportVersion, setReportVersion] = useState<PortraitTimelineVersion | null>(null);
+  const contentSafety = useContentSafety();
 
   const timelineCount = versions.filter((version) => !version.isDeleting).length;
   const usablePortraitCount = versions.filter((version) => (
@@ -530,13 +552,16 @@ export function PortraitTimeline({
     );
   };
 
+  const viewerPortraitIsHidden = Boolean(
+    viewer && contentSafety.isTargetReported('family_member_portrait', viewer.version.id),
+  );
   const viewerItems: FullScreenMediaItem[] = viewer ? [
     {
       id: `${viewer.version.id}-source`,
       contentType: 'image/jpeg',
       objectKey: viewer.version.sourcePhotoKey,
     },
-    ...(viewer.version.portraitKey ? [{
+    ...(viewer.version.portraitKey && !viewerPortraitIsHidden ? [{
       id: `${viewer.version.id}-portrait`,
       contentType: 'image/webp',
       objectKey: viewer.version.portraitKey,
@@ -561,15 +586,62 @@ export function PortraitTimeline({
       }}
       onOpen={(index) => setViewer({ version: item, index })}
       onRetry={() => void runMutation(() => onRetry(item.id))}
+      isPortraitHidden={contentSafety.isTargetReported('family_member_portrait', item.id)}
+      onShowPortrait={() => contentSafety.revealTarget('family_member_portrait', item.id)}
       version={item}
     />
   );
 
-  if (isLoading) {
+  if (isLoading || contentSafety.isLoading) {
     return (
       <SafeAreaView style={styles.centered}>
         <ActivityIndicator color={colors.primary} size="large" />
       </SafeAreaView>
+    );
+  }
+
+  if (contentSafety.isError) {
+    return (
+      <SafeAreaView style={styles.centered} testID="portrait-timeline-safety-error">
+        <Text style={styles.errorText}>Couldn’t load portraits</Text>
+        <Pressable accessibilityRole="button" onPress={() => void contentSafety.refetch()}>
+          <Text style={styles.retryText}>Try again</Text>
+        </Pressable>
+      </SafeAreaView>
+    );
+  }
+
+  if (contentSafety.isTargetReported('family_member_profile', member.id)) {
+    return (
+      <View style={styles.container} testID="portrait-timeline-profile-hidden">
+        <SafeAreaView edges={['top']} style={styles.safeHeader}>
+          <View style={styles.header}>
+            <Pressable
+              accessibilityLabel="Back"
+              accessibilityRole="button"
+              onPress={onBack}
+              style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+              testID="portrait-timeline-back"
+            >
+              <SymbolView
+                fallback={<Text style={styles.backFallback}>‹</Text>}
+                name={{ ios: 'chevron.left', android: 'chevron_left' }}
+                size={18}
+                tintColor={colors.ink2}
+              />
+            </Pressable>
+            <Text style={styles.headerTitle}>Then &amp; now</Text>
+            <View style={styles.iconButtonSpacer} />
+          </View>
+        </SafeAreaView>
+        <View style={styles.profileHiddenWrap}>
+          <ContentHiddenNotice
+            label="Reported family profile hidden"
+            onShow={() => contentSafety.revealTarget('family_member_profile', member.id)}
+            testID="portrait-timeline-profile-show"
+          />
+        </View>
+      </View>
     );
   }
 
@@ -755,46 +827,83 @@ export function PortraitTimeline({
               {focusedVersion.id === currentVersionId ? <Text style={styles.currentPill}>Current</Text> : null}
             </View>
             <View style={styles.divider} />
-            <SheetRow
-              disabled={isMutating || focusedVersion.isGenerating || focusedVersion.isDeleting}
-              onPress={() => {
-                setPhotoDraft(null);
-                setDraftDate(focusedVersion.referenceDate ?? getLocalTodayIso());
-                setSheet('date');
-              }}
-              subtitle={focusedVersion.dateSource === 'legacy_unknown' ? 'Add a date to place this portrait' : undefined}
-              symbol={{ ios: 'calendar', android: 'calendar_month' }}
-              testID="portrait-action-edit-date"
-              title="Edit date"
-            />
-            <SheetRow
-              disabled={isMutating || !focusedVersion.referenceDate || focusedVersion.isGenerating || focusedVersion.isDeleting}
-              onPress={() => void runMutation(() => onRegenerate(focusedVersion.id))}
-              subtitle={focusedVersion.referenceDate
-                ? 'Make a new illustration from the same photo'
-                : 'Add a date before regenerating this portrait'}
-              symbol={{ ios: 'arrow.clockwise', android: 'refresh' }}
-              testID="portrait-action-regenerate"
-              title="Regenerate portrait"
-            />
-            <View style={styles.divider} />
-            <SheetRow
-              danger={!cannotDeleteFocusedVersion}
-              disabled={isMutating || focusedVersion.isGenerating || focusedVersion.isDeleting || cannotDeleteFocusedVersion}
-              onPress={() => requestDelete(focusedVersion)}
-              subtitle={timelineCount <= 1
-                ? `${member.name}’s only timeline record — can’t be removed`
-                : focusedIsLastUsablePortrait
-                  ? 'Keep at least one finished portrait before removing this one'
-                : undefined}
-              symbol={{ ios: 'trash', android: 'delete' }}
-              testID="portrait-action-delete"
-              title={cannotDeleteFocusedVersion ? 'Delete' : 'Delete portrait'}
-            />
+            {canEdit ? (
+              <>
+                <SheetRow
+                  disabled={isMutating || focusedVersion.isGenerating || focusedVersion.isDeleting}
+                  onPress={() => {
+                    setPhotoDraft(null);
+                    setDraftDate(focusedVersion.referenceDate ?? getLocalTodayIso());
+                    setSheet('date');
+                  }}
+                  subtitle={focusedVersion.dateSource === 'legacy_unknown' ? 'Add a date to place this portrait' : undefined}
+                  symbol={{ ios: 'calendar', android: 'calendar_month' }}
+                  testID="portrait-action-edit-date"
+                  title="Edit date"
+                />
+                <SheetRow
+                  disabled={isMutating || !focusedVersion.referenceDate || focusedVersion.isGenerating || focusedVersion.isDeleting}
+                  onPress={() => void runMutation(() => onRegenerate(focusedVersion.id))}
+                  subtitle={focusedVersion.referenceDate
+                    ? 'Make a new illustration from the same photo'
+                    : 'Add a date before regenerating this portrait'}
+                  symbol={{ ios: 'arrow.clockwise', android: 'refresh' }}
+                  testID="portrait-action-regenerate"
+                  title="Regenerate portrait"
+                />
+                <View style={styles.divider} />
+                <SheetRow
+                  danger={!cannotDeleteFocusedVersion}
+                  disabled={isMutating || focusedVersion.isGenerating || focusedVersion.isDeleting || cannotDeleteFocusedVersion}
+                  onPress={() => requestDelete(focusedVersion)}
+                  subtitle={timelineCount <= 1
+                    ? `${member.name}’s only timeline record — can’t be removed`
+                    : focusedIsLastUsablePortrait
+                      ? 'Keep at least one finished portrait before removing this one'
+                      : undefined}
+                  symbol={{ ios: 'trash', android: 'delete' }}
+                  testID="portrait-action-delete"
+                  title={cannotDeleteFocusedVersion ? 'Delete' : 'Delete portrait'}
+                />
+              </>
+            ) : null}
+            {focusedVersion.status === 'ready' && focusedVersion.portraitKey &&
+              !contentSafety.hasActiveReport('family_member_portrait', focusedVersion.id) ? (
+              <>
+                <View style={styles.divider} />
+                <SheetRow
+                  danger
+                  disabled={contentSafety.isReporting}
+                  onPress={() => {
+                    setSheet(null);
+                    setReportVersion(focusedVersion);
+                  }}
+                  symbol={{ ios: 'exclamationmark.bubble', android: 'report' }}
+                  testID="portrait-action-report"
+                  title="Report AI portrait"
+                />
+              </>
+            ) : null}
             {localError ? <Text style={styles.errorText}>{localError}</Text> : null}
           </>
         ) : null}
       </BottomSheet>
+
+      {reportVersion ? (
+        <ReportSheet
+          isSubmitting={contentSafety.isReporting}
+          onClose={() => setReportVersion(null)}
+          onSubmit={(reason, note) => contentSafety.report({
+            targetType: 'family_member_portrait',
+            targetId: reportVersion.id,
+            reason,
+            note,
+          }).then(() => undefined)}
+          targetLabel="AI portrait"
+          targetType="family_member_portrait"
+          visible
+        />
+      ) : null}
 
       {viewer ? (
         <FullScreenMediaViewer
@@ -812,6 +921,7 @@ export function PortraitTimeline({
 const styles = StyleSheet.create({
   container: { backgroundColor: colors.bg, flex: 1 },
   centered: { alignItems: 'center', backgroundColor: colors.bg, flex: 1, justifyContent: 'center' },
+  profileHiddenWrap: { flex: 1, justifyContent: 'center', paddingHorizontal: spacing.lg },
   safeHeader: { backgroundColor: colors.bg },
   header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 4 },
   iconButton: { alignItems: 'center', backgroundColor: colors.white, borderColor: colors.border, borderRadius: 19, borderWidth: 1, height: 38, justifyContent: 'center', width: 38 },

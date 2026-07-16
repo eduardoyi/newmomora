@@ -40,6 +40,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Inline links in memory text | [inline-links.md](./inline-links.md) | done |
 | Likes & comments | [likes-and-comments.md](./likes-and-comments.md) | done |
 | Voice journaling | [voice-journaling.md](./voice-journaling.md) | done |
+| Content reporting & account blocking | [content-reporting.md](./content-reporting.md) | done |
 
 ## Template
 

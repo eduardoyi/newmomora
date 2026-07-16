@@ -40,6 +40,7 @@ export interface GenerateIllustrationRequest {
 export interface GenerateIllustrationResponse {
   success: true;
   illustrationKey: string;
+  illustrationGenerationId: string;
 }
 
 const EMPTY_MEMBER_ID = '00000000-0000-4000-8000-000000000000';
@@ -49,16 +50,85 @@ type ExpressionStyle = 'comedic' | 'tender' | 'neutral';
 
 export interface GenerateIllustrationDependencies {
   getObjectBytes: typeof getObjectBytes;
+  putObjectBytes: typeof putObjectBytes;
+  deleteObject: typeof deleteObject;
+  createId: () => string;
 }
 
 const DEFAULT_DEPENDENCIES: GenerateIllustrationDependencies = {
   getObjectBytes,
+  putObjectBytes,
+  deleteObject,
+  createId: () => crypto.randomUUID(),
 };
+
+interface CommitIllustrationGenerationInput {
+  oldKey: string | null;
+  newKey: string;
+  bytes: Uint8Array;
+  put: (key: string, bytes: Uint8Array, contentType: string) => Promise<void>;
+  remove: (key: string) => Promise<void>;
+  commitDatabase: () => Promise<boolean>;
+  reconcileDatabase: () => Promise<boolean | null>;
+}
+
+/**
+ * Publishes immutable bytes before the checked DB pointer swap. A failed or
+ * superseded swap removes only the new object; the old DB pointer/object stay
+ * intact. The old object is deleted only after the new pointer is committed.
+ */
+export async function commitIllustrationGeneration({
+  oldKey,
+  newKey,
+  bytes,
+  put,
+  remove,
+  commitDatabase,
+  reconcileDatabase,
+}: CommitIllustrationGenerationInput): Promise<void> {
+  await put(newKey, bytes, 'image/webp');
+
+  let didCommit = false;
+  try {
+    didCommit = await commitDatabase();
+    if (!didCommit) throw new Error('Illustration generation was superseded');
+  } catch (error) {
+    let reconciliation: boolean | null = null;
+    try {
+      reconciliation = await reconcileDatabase();
+    } catch {
+      // Ambiguous reconciliation keeps the immutable new object. An orphan is
+      // safer than deleting bytes a committed DB row may reference.
+    }
+
+    if (reconciliation === true) {
+      didCommit = true;
+    } else {
+      if (reconciliation === false) {
+        try {
+          await remove(newKey);
+        } catch {
+          // Best effort orphan cleanup. Never touch the prior object here.
+        }
+      }
+      throw error;
+    }
+  }
+
+  if (oldKey && oldKey !== newKey) {
+    try {
+      await remove(oldKey);
+    } catch {
+      // Best effort cleanup after the authoritative DB swap.
+    }
+  }
+}
 
 export async function handleGenerateIllustration(
   req: Request,
-  dependencies: GenerateIllustrationDependencies = DEFAULT_DEPENDENCIES,
+  dependencyOverrides: Partial<GenerateIllustrationDependencies> = {},
 ): Promise<Response> {
+  const dependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   const corsResponse = handleCors(req);
   if (corsResponse) {
     return corsResponse;
@@ -96,7 +166,7 @@ export async function handleGenerateIllustration(
   const { data: memory, error: memoryError } = await supabase
     .from('memories')
     .select(
-      'id, family_id, content, memory_date, emotion, illustration_key, illustration_status, updated_at, memory_type',
+      'id, family_id, content, memory_date, emotion, illustration_key, illustration_generation_id, illustration_generation_attempt_id, illustration_status, updated_at, memory_type',
     )
     .eq('id', memoryId)
     .maybeSingle();
@@ -126,11 +196,13 @@ export async function handleGenerateIllustration(
   if (
     !forceRegenerate &&
     memory.illustration_status === 'ready' &&
-    memory.illustration_key
+    memory.illustration_key &&
+    memory.illustration_generation_id
   ) {
     const response: GenerateIllustrationResponse = {
       success: true,
       illustrationKey: memory.illustration_key,
+      illustrationGenerationId: memory.illustration_generation_id,
     };
     return jsonResponse(response);
   }
@@ -143,6 +215,58 @@ export async function handleGenerateIllustration(
     return errorResponse('Illustration generation in progress', 409, 'GENERATION_IN_PROGRESS');
   }
 
+  const generationAttemptId = dependencies.createId();
+  let startUpdate = supabase
+    .from('memories')
+    .update({
+      illustration_status: 'generating',
+      illustration_generation_attempt_id: generationAttemptId,
+    })
+    .eq('id', memoryId)
+    .eq('content', memory.content)
+    .eq('memory_date', memory.memory_date)
+    .eq('memory_type', memory.memory_type)
+    .eq('illustration_status', memory.illustration_status);
+
+  startUpdate = memory.emotion
+    ? startUpdate.eq('emotion', memory.emotion)
+    : startUpdate.is('emotion', null);
+  startUpdate = memory.illustration_generation_id
+    ? startUpdate.eq('illustration_generation_id', memory.illustration_generation_id)
+    : startUpdate.is('illustration_generation_id', null);
+  startUpdate = memory.illustration_generation_attempt_id
+    ? startUpdate.eq('illustration_generation_attempt_id', memory.illustration_generation_attempt_id)
+    : startUpdate.is('illustration_generation_attempt_id', null);
+  startUpdate = memory.illustration_key
+    ? startUpdate.eq('illustration_key', memory.illustration_key)
+    : startUpdate.is('illustration_key', null);
+
+  const { data: startedMemory, error: startError } = await startUpdate
+    .select('id')
+    .maybeSingle();
+
+  if (startError) {
+    console.error('generate-illustration start update failed', startError.message);
+    return errorResponse('Failed to start illustration generation', 500, 'internal_error');
+  }
+  if (!startedMemory) {
+    return errorResponse('Illustration generation was superseded', 409, 'GENERATION_SUPERSEDED');
+  }
+
+  const restoreClaimedAttempt = async () => {
+    await supabase
+      .from('memories')
+      .update({
+        illustration_status: memory.illustration_key && memory.illustration_generation_id
+          ? 'ready'
+          : 'failed',
+        illustration_generation_attempt_id: null,
+      })
+      .eq('id', memoryId)
+      .eq('illustration_generation_attempt_id', generationAttemptId)
+      .eq('illustration_status', 'generating');
+  };
+
   const { data: tagRows, error: tagError } = await supabase
     .from('memory_family_members')
     .select('family_member_id')
@@ -150,12 +274,14 @@ export async function handleGenerateIllustration(
 
   if (tagError) {
     console.error('generate-illustration tag lookup failed', tagError.message);
+    await restoreClaimedAttempt();
     return errorResponse('Failed to load memory tags', 500, 'internal_error');
   }
 
   const taggedMemberIds = (tagRows ?? []).map((row) => row.family_member_id);
 
   if (taggedMemberIds.length > MAX_ILLUSTRATION_MEMBERS) {
+    await restoreClaimedAttempt();
     return errorResponse(
       `AI illustrations support up to ${MAX_ILLUSTRATION_MEMBERS} family members`,
       400,
@@ -174,6 +300,7 @@ export async function handleGenerateIllustration(
 
   if (nameRowsError) {
     console.error('generate-illustration name lookup failed', nameRowsError.message);
+    await restoreClaimedAttempt();
     return errorResponse('Failed to load family members', 500, 'internal_error');
   }
 
@@ -194,6 +321,7 @@ export async function handleGenerateIllustration(
 
   if (membersError) {
     console.error('generate-illustration members lookup failed', membersError.message);
+    await restoreClaimedAttempt();
     return errorResponse('Failed to load family members', 500, 'internal_error');
   }
 
@@ -207,6 +335,7 @@ export async function handleGenerateIllustration(
 
   if (portraitVersionsError) {
     console.error('generate-illustration portrait lookup failed', portraitVersionsError.message);
+    await restoreClaimedAttempt();
     return errorResponse('Failed to load character portraits', 500, 'internal_error');
   }
 
@@ -237,7 +366,7 @@ export async function handleGenerateIllustration(
   );
 
   if (readyMembers.length === 0) {
-    await supabase.from('memories').update({ illustration_status: 'failed' }).eq('id', memoryId);
+    await restoreClaimedAttempt();
 
     return errorResponse('No ready character portraits for tagged members', 400, 'NO_PORTRAITS');
   }
@@ -249,7 +378,7 @@ export async function handleGenerateIllustration(
   const strippedContent = stripUrls(memory.content);
 
   if (!strippedContent.trim()) {
-    await supabase.from('memories').update({ illustration_status: 'failed' }).eq('id', memoryId);
+    await restoreClaimedAttempt();
 
     return errorResponse(
       'Illustration requires descriptive text, not just a link',
@@ -268,17 +397,17 @@ export async function handleGenerateIllustration(
     family?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN,
   );
 
-  const illustrationKey = buildMemoryIllustrationKey(user.id, memoryId);
+  const illustrationGenerationId = dependencies.createId();
+  const illustrationKey = buildMemoryIllustrationKey(
+    user.id,
+    memoryId,
+    illustrationGenerationId,
+  );
   const normalizedEmotion = normalizeEmotion(memory.emotion);
   const resolvedPalette =
     colorPalette ??
     (normalizedEmotion ? EMOTION_PALETTES[normalizedEmotion] : undefined) ??
     EMOTION_PALETTES.tender;
-
-  await supabase
-    .from('memories')
-    .update({ illustration_status: 'generating' })
-    .eq('id', memoryId);
 
   let generationSucceeded = false;
 
@@ -315,30 +444,57 @@ export async function handleGenerateIllustration(
 
     const illustrationBytes = await editImageWithReferences(prompt, referenceImages);
 
-    if (memory.illustration_key && memory.illustration_key !== illustrationKey) {
-      try {
-        await deleteObject(memory.illustration_key);
-      } catch {
-        // Best effort cleanup.
-      }
-    }
+    await commitIllustrationGeneration({
+      oldKey: memory.illustration_key,
+      newKey: illustrationKey,
+      bytes: illustrationBytes,
+      put: dependencies.putObjectBytes,
+      remove: dependencies.deleteObject,
+      commitDatabase: async () => {
+        const { data: committedMemory, error: commitError } = await supabase
+          .from('memories')
+          .update({
+            illustration_key: illustrationKey,
+            illustration_generation_id: illustrationGenerationId,
+            illustration_generation_attempt_id: null,
+            illustration_prompt: prompt,
+            illustration_status: 'ready',
+          })
+          .eq('id', memoryId)
+          .eq('illustration_generation_attempt_id', generationAttemptId)
+          .eq('illustration_status', 'generating')
+          .select('id')
+          .maybeSingle();
 
-    await putObjectBytes(illustrationKey, illustrationBytes, 'image/webp');
-
-    await supabase
-      .from('memories')
-      .update({
-        illustration_key: illustrationKey,
-        illustration_prompt: prompt,
-        illustration_status: 'ready',
-      })
-      .eq('id', memoryId);
+        if (commitError) {
+          console.error('generate-illustration commit update failed', commitError.message);
+          throw new Error('Failed to commit illustration generation');
+        }
+        return Boolean(committedMemory);
+      },
+      reconcileDatabase: async () => {
+        const { data: currentMemory, error: reconcileError } = await supabase
+          .from('memories')
+          .select('illustration_key, illustration_generation_id')
+          .eq('id', memoryId)
+          .maybeSingle();
+        if (reconcileError) {
+          console.error('generate-illustration commit reconciliation failed', reconcileError.message);
+          return null;
+        }
+        return Boolean(
+          currentMemory?.illustration_key === illustrationKey &&
+          currentMemory.illustration_generation_id === illustrationGenerationId
+        );
+      },
+    });
 
     generationSucceeded = true;
 
     const response: GenerateIllustrationResponse = {
       success: true,
       illustrationKey,
+      illustrationGenerationId,
     };
 
     return jsonResponse(response);
@@ -350,9 +506,15 @@ export async function handleGenerateIllustration(
     if (!generationSucceeded) {
       await supabase
         .from('memories')
-        .update({ illustration_status: 'failed' })
+        .update({
+          illustration_status: memory.illustration_key && memory.illustration_generation_id
+            ? 'ready'
+            : 'failed',
+          illustration_generation_attempt_id: null,
+        })
         .eq('id', memoryId)
-        .in('illustration_status', ['pending', 'generating']);
+        .eq('illustration_generation_attempt_id', generationAttemptId)
+        .eq('illustration_status', 'generating');
     }
   }
 }

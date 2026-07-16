@@ -3,6 +3,7 @@ import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-na
 
 import { emotionColors, fonts, type EmotionName } from '@/constants/theme';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import type { FamilyMember } from '@/services/family-members';
 import { getMemberAvatarImageKey } from '@/utils/family-members';
 
@@ -16,9 +17,12 @@ export type FamilyMemberAvatarMember = Pick<
   | 'profile_picture_key'
   | 'updated_at'
 > & Pick<FamilyMember, 'avatarImageKey' | 'avatarUpdatedAt'>;
+export type SafetyAwareFamilyMemberAvatarMember = FamilyMemberAvatarMember & Partial<
+  Pick<FamilyMember, 'id' | 'resolvedPortraitVersion'>
+>;
 
 interface FamilyMemberAvatarProps {
-  member: FamilyMemberAvatarMember;
+  member: SafetyAwareFamilyMemberAvatarMember;
   size?: number;
   style?: StyleProp<ViewStyle>;
   testID?: string;
@@ -26,7 +30,16 @@ interface FamilyMemberAvatarProps {
 
 export function FamilyMemberAvatar({ member, size = 22, style, testID }: FamilyMemberAvatarProps) {
   const imageKey = getMemberAvatarImageKey(member);
-  const { url } = useMediaUrl(imageKey, member.avatarUpdatedAt ?? member.updated_at);
+  const contentSafety = useContentSafety();
+  const isProfileHidden = Boolean(
+    member.id && contentSafety.isTargetReported('family_member_profile', member.id),
+  );
+  const isPortraitHidden = contentSafety.isTargetReported(
+    'family_member_portrait',
+    member.resolvedPortraitVersion?.id,
+  );
+  const isSafetyHidden = contentSafety.isLoading || contentSafety.isError || isProfileHidden || isPortraitHidden;
+  const { url } = useMediaUrl(isSafetyHidden ? null : imageKey, member.avatarUpdatedAt ?? member.updated_at);
   const tint = PORTRAIT_TINTS[member.name.charCodeAt(0) % PORTRAIT_TINTS.length];
   const emo = emotionColors[tint];
 
@@ -44,7 +57,7 @@ export function FamilyMemberAvatar({ member, size = 22, style, testID }: FamilyM
       ]}
       testID={testID}
     >
-      {url ? (
+      {url && !isSafetyHidden ? (
         <Image
           accessibilityLabel={`${member.name} portrait`}
           contentFit="cover"
@@ -53,7 +66,7 @@ export function FamilyMemberAvatar({ member, size = 22, style, testID }: FamilyM
         />
       ) : (
         <Text style={[styles.initial, { fontSize: size * 0.4, color: emo.ink }]}>
-          {member.name.charAt(0).toUpperCase()}
+          {isSafetyHidden ? '•' : member.name.charAt(0).toUpperCase()}
         </Text>
       )}
     </View>

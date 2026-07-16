@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
-import { handleGenerateIllustration } from './index.ts';
+import { commitIllustrationGeneration, handleGenerateIllustration } from './index.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const MEMORY_ID = '22222222-2222-4222-8222-222222222222';
@@ -69,6 +69,10 @@ async function withMockedIllustrationNetwork(
       const select = url.searchParams.get('select') ?? '';
 
       if (request.method === 'PATCH') {
+        const payload = await request.json();
+        if (payload.illustration_generation_attempt_id && select.includes('id')) {
+          return jsonResponse({ id: MEMORY_ID });
+        }
         return jsonResponse([]);
       }
 
@@ -80,6 +84,8 @@ async function withMockedIllustrationNetwork(
           memory_date: '2026-07-12',
           emotion: 'joy',
           illustration_key: null,
+          illustration_generation_id: null,
+          illustration_generation_attempt_id: null,
           illustration_status: 'pending',
           updated_at: '2026-07-12T00:00:00.000Z',
           memory_type: 'text_illustration',
@@ -213,6 +219,95 @@ Deno.test('generate-illustration rejects unauthenticated requests', async () => 
   );
 
   assertEquals(response.status, 401);
+});
+
+Deno.test('illustration commit publishes, swaps, then deletes the old object', async () => {
+  const events: string[] = [];
+  await commitIllustrationGeneration({
+    oldKey: 'old.webp',
+    newKey: 'new.webp',
+    bytes: new Uint8Array([1]),
+    put: async (key) => { events.push(`put:${key}`); },
+    commitDatabase: async () => { events.push('commit'); return true; },
+    reconcileDatabase: async () => false,
+    remove: async (key) => { events.push(`delete:${key}`); },
+  });
+  assertEquals(events, ['put:new.webp', 'commit', 'delete:old.webp']);
+});
+
+Deno.test('illustration commit failure removes only the new object', async () => {
+  const events: string[] = [];
+  let message = '';
+  try {
+    await commitIllustrationGeneration({
+      oldKey: 'old.webp',
+      newKey: 'new.webp',
+      bytes: new Uint8Array([1]),
+      put: async (key) => { events.push(`put:${key}`); },
+      commitDatabase: async () => { events.push('commit'); throw new Error('db failed'); },
+      reconcileDatabase: async () => false,
+      remove: async (key) => { events.push(`delete:${key}`); },
+    });
+  } catch (error) {
+    message = error instanceof Error ? error.message : '';
+  }
+  assertEquals(message, 'db failed');
+  assertEquals(events, ['put:new.webp', 'commit', 'delete:new.webp']);
+});
+
+Deno.test('superseded illustration attempt removes only its new object', async () => {
+  const events: string[] = [];
+  try {
+    await commitIllustrationGeneration({
+      oldKey: 'old.webp',
+      newKey: 'stale.webp',
+      bytes: new Uint8Array([1]),
+      put: async (key) => { events.push(`put:${key}`); },
+      commitDatabase: async () => { events.push('cas:false'); return false; },
+      reconcileDatabase: async () => false,
+      remove: async (key) => { events.push(`delete:${key}`); },
+    });
+  } catch {
+    // Expected: another attempt owns the DB token.
+  }
+  assertEquals(events, ['put:stale.webp', 'cas:false', 'delete:stale.webp']);
+});
+
+Deno.test('ambiguous commit error keeps committed bytes after reconciliation', async () => {
+  const events: string[] = [];
+  await commitIllustrationGeneration({
+    oldKey: 'old.webp',
+    newKey: 'new.webp',
+    bytes: new Uint8Array([1]),
+    put: async (key) => { events.push(`put:${key}`); },
+    commitDatabase: async () => { events.push('commit:error-after-write'); throw new Error('timeout'); },
+    reconcileDatabase: async () => { events.push('reconcile:committed'); return true; },
+    remove: async (key) => { events.push(`delete:${key}`); },
+  });
+  assertEquals(events, [
+    'put:new.webp',
+    'commit:error-after-write',
+    'reconcile:committed',
+    'delete:old.webp',
+  ]);
+});
+
+Deno.test('ambiguous commit and reconciliation errors keep the new object', async () => {
+  const events: string[] = [];
+  try {
+    await commitIllustrationGeneration({
+      oldKey: 'old.webp',
+      newKey: 'new.webp',
+      bytes: new Uint8Array([1]),
+      put: async (key) => { events.push(`put:${key}`); },
+      commitDatabase: async () => { events.push('commit:error'); throw new Error('timeout'); },
+      reconcileDatabase: async () => { events.push('reconcile:error'); throw new Error('offline'); },
+      remove: async (key) => { events.push(`delete:${key}`); },
+    });
+  } catch {
+    // Unknown DB outcome deliberately retains the unique object as an orphan.
+  }
+  assertEquals(events, ['put:new.webp', 'commit:error', 'reconcile:error']);
 });
 Deno.test('generate-illustration rejects more than six tagged members', async () => {
   const taggedMemberIds = Array.from(

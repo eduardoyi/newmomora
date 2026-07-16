@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   type LayoutChangeEvent,
   type ListRenderItemInfo,
@@ -22,6 +23,7 @@ import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
 import { useCalendarMemoriesInRange, useOldestMemoryDate } from '@/hooks/useCalendarMemories';
 import { useFamily } from '@/hooks/use-family';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
@@ -70,14 +72,24 @@ type RibbonCalendarDay = CalendarDay & {
   memory: MemoryWithTags | undefined;
 };
 
-function MemoryStamp({ memory }: { memory: MemoryWithTags }) {
+function MemoryStamp({
+  memory,
+  isIllustrationHidden,
+  onShowIllustration,
+}: {
+  memory: MemoryWithTags;
+  isIllustrationHidden: boolean;
+  onShowIllustration: () => void;
+}) {
   const emo = getEmotionColors(memory.emotion);
   const isMedia = memory.memory_type === 'media';
   const coverAsset = memory.mediaAssets[0];
   const isVideo = coverAsset ? coverAsset.content_type.startsWith('video/') : isMedia && memory.media_content_type?.startsWith('video/');
 
   const { url: illustrationUrl } = useMediaUrl(
-    memory.memory_type === 'text_illustration' ? (memory.illustration_key ?? null) : null,
+    memory.memory_type === 'text_illustration' && !isIllustrationHidden
+      ? (memory.illustration_key ?? null)
+      : null,
     memory.updated_at,
   );
   const { url: mediaUrl } = useMediaUrl(
@@ -97,6 +109,23 @@ function MemoryStamp({ memory }: { memory: MemoryWithTags }) {
   );
   const runtimeVideoThumbnail = useVideoThumbnail(videoUrl);
   const videoThumbnail = posterUrl ?? runtimeVideoThumbnail;
+
+  if (memory.memory_type === 'text_illustration' && isIllustrationHidden) {
+    return (
+      <Pressable
+        accessibilityLabel="Show reported AI illustration"
+        accessibilityRole="button"
+        onPress={(event) => {
+          event.stopPropagation();
+          onShowIllustration();
+        }}
+        style={[styles.stamp, styles.hiddenStamp]}
+        testID={`calendar-memory-${memory.id}-illustration-show`}
+      >
+        <Text style={styles.hiddenStampText}>Show</Text>
+      </Pressable>
+    );
+  }
 
   if (memory.memory_type === 'text_illustration' && illustrationUrl) {
     return (
@@ -161,9 +190,17 @@ function MemoryStamp({ memory }: { memory: MemoryWithTags }) {
 function RibbonDay({
   day,
   onPress,
+  isMemoryHidden,
+  isIllustrationHidden,
+  onShowMemory,
+  onShowIllustration,
 }: {
   day: RibbonCalendarDay;
   onPress: (m: MemoryWithTags) => void;
+  isMemoryHidden: boolean;
+  isIllustrationHidden: boolean;
+  onShowMemory: () => void;
+  onShowIllustration: () => void;
 }) {
   const hasMemory = !!day.memory;
   const emo = getEmotionColors(day.memory?.emotion);
@@ -182,8 +219,25 @@ function RibbonDay({
 
       {/* Stamp or empty state */}
       {hasMemory && day.memory ? (
+        isMemoryHidden ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={(event) => {
+              event.stopPropagation();
+              onShowMemory();
+            }}
+            style={styles.hiddenMemoryRow}
+            testID={`calendar-memory-${day.memory.id}-hidden`}
+          >
+            <Text style={styles.hiddenMemoryText}>Reported memory hidden · Show anyway</Text>
+          </Pressable>
+        ) : (
         <>
-          <MemoryStamp memory={day.memory} />
+          <MemoryStamp
+            isIllustrationHidden={isIllustrationHidden}
+            memory={day.memory}
+            onShowIllustration={onShowIllustration}
+          />
           <View style={styles.ribbonText}>
             {day.memory.content ? (
               <Text style={styles.ribbonCaption} numberOfLines={1}>
@@ -208,6 +262,7 @@ function RibbonDay({
             )}
           </View>
         </>
+        )
       ) : (
         <View style={[styles.emptySlot, day.today && styles.emptySlotToday]}>
           {day.today && <Text style={styles.emptySlotText}>+ capture today</Text>}
@@ -220,6 +275,7 @@ function RibbonDay({
 export default function CalendarScreen() {
   const { role } = useFamily();
   const canEdit = canEditFamilyContent(role);
+  const contentSafety = useContentSafety();
   const referenceDateRef = useRef(new Date());
   const flatListRef = useRef<FlatList<CalendarWeek>>(null);
   const [visibleWeekRange, setVisibleWeekRange] = useState(INITIAL_VISIBLE_WEEK_RANGE);
@@ -266,17 +322,23 @@ export default function CalendarScreen() {
     isRefetching: isCalendarMemoriesRefetching,
     refetch: refetchCalendarMemories,
   } = useCalendarMemoriesInRange(fetchRange);
+  const visibleMemories = useMemo(
+    () => memories.filter((memory) =>
+      !contentSafety.isUserBlocked(memory.user_id)
+    ),
+    [contentSafety, memories],
+  );
   const memoriesByDate = useMemo(() => {
     const map = new Map<string, MemoryWithTags>();
 
-    for (const memory of memories) {
+    for (const memory of visibleMemories) {
       if (!map.has(memory.memory_date)) {
         map.set(memory.memory_date, memory);
       }
     }
 
     return map;
-  }, [memories]);
+  }, [visibleMemories]);
 
   // The topmost visible row drives both the header label and the Today
   // button below -- keyed off only the start index (not the whole range) so
@@ -563,12 +625,48 @@ export default function CalendarScreen() {
           <RibbonDay
             key={day.iso}
             day={{ ...day, memory: memoriesByDate.get(day.iso) }}
+            isIllustrationHidden={contentSafety.isTargetReported(
+              'memory_illustration',
+              memoriesByDate.get(day.iso)?.id,
+              memoriesByDate.get(day.iso)?.illustration_generation_id,
+            )}
+            isMemoryHidden={contentSafety.isTargetReported('memory', memoriesByDate.get(day.iso)?.id)}
             onPress={(memory) => router.push(memoryDetailRoute(memory.id))}
+            onShowIllustration={() => {
+              const memoryId = memoriesByDate.get(day.iso)?.id;
+              const generationId = memoriesByDate.get(day.iso)?.illustration_generation_id;
+              if (memoryId) {
+                contentSafety.revealTarget('memory_illustration', memoryId, generationId);
+              }
+            }}
+            onShowMemory={() => {
+              const memoryId = memoriesByDate.get(day.iso)?.id;
+              if (memoryId) contentSafety.revealTarget('memory', memoryId);
+            }}
           />
         ))}
       </View>
     </View>
-  ), [handleWeekLayout, memoriesByDate]);
+  ), [contentSafety, handleWeekLayout, memoriesByDate]);
+
+  if (contentSafety.isLoading) {
+    return (
+      <View style={styles.centered} testID="calendar-safety-loading">
+        <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  if (contentSafety.isError) {
+    return (
+      <View style={styles.centered} testID="calendar-safety-error">
+        <Text style={styles.errorText}>Couldn’t load memories</Text>
+        <Pressable onPress={() => void contentSafety.refetch()}>
+          <Text style={styles.retryText}>Try again</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -654,6 +752,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
+  centered: { alignItems: 'center', backgroundColor: colors.bg, flex: 1, gap: spacing.sm, justifyContent: 'center' },
+  errorText: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 15 },
+  retryText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 14 },
   scrollContent: {
     paddingBottom: 130,
   },
@@ -849,6 +950,10 @@ const styles = StyleSheet.create({
     lineHeight: 34,
     opacity: 0.45,
   },
+  hiddenStamp: { backgroundColor: colors.surface },
+  hiddenStampText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 10 },
+  hiddenMemoryRow: { flex: 1, justifyContent: 'center', minHeight: 56 },
+  hiddenMemoryText: { color: colors.ink3, fontFamily: fonts.sansMedium, fontSize: 13 },
   ribbonText: {
     flex: 1,
     gap: 4,

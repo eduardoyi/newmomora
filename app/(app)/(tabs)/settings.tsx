@@ -74,7 +74,6 @@ function FamilySection() {
   const { profiles } = useFamilyMemberProfiles(familyId);
   const queryClient = useQueryClient();
   const canEditName = canEditFamilyContent(role);
-  const isViewer = isViewerRole(role);
   const isOwner = isOwnerRole(role);
   // Pending/approvals rows: the invites query is manager+-only under RLS, so
   // it is gated on role rather than fired (and denied) for viewers.
@@ -228,15 +227,13 @@ function FamilySection() {
         />
       )}
 
-      {!isViewer && (
-        <SettingsRow
-          chevron
-          label="Family members"
-          onPress={() => router.push(sharingMembersRoute)}
-          testID="settings-family-members"
-          value={String(activeMemberCount)}
-        />
-      )}
+      <SettingsRow
+        chevron
+        label="Family members"
+        onPress={() => router.push(sharingMembersRoute)}
+        testID="settings-family-members"
+        value={String(activeMemberCount)}
+      />
 
       {canEditName && (
         <SettingsRow

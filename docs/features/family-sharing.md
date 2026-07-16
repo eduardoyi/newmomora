@@ -300,7 +300,7 @@ the RLS it's supposed to gate; `security definer` sidesteps it).
 |---|---|---|---|
 | `redeem-family-invite` | `{ code: string }` | `{ familyName: string, role: string }` | JWT |
 | `resolve-family-invite` | `{ inviteId: string, action: 'approve'\|'reject' }` | `{ success: true, status: 'approved'\|'rejected' }` | JWT, manager+ of the invite's family |
-| `notify-family-activity` | `{ memoryId: string }` | `{ sent: boolean, reason?: 'debounced', recipientCount?: number }` | JWT, caller must be both the memory's creator and manager+ of its family |
+| `notify-family-activity` | `{ memoryId: string }` | `{ sent: boolean, reason?: 'debounced' }` | JWT, caller must be both the memory's creator and manager+ of its family |
 
 See [TECH_SPEC.md §4.10–4.12](../TECH_SPEC.md) for the canonical contracts
 (request/response shapes copied verbatim from the code below); this section

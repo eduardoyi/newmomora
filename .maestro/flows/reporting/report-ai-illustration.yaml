@@ -1,0 +1,31 @@
+appId: com.memora.app
+---
+# Prerequisite: REPORT_MEMORY_ID belongs to TEST_EMAIL's active family, has a
+# ready AI illustration, and has no active report by that account.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: memory-card-${REPORT_MEMORY_ID}
+- extendedWaitUntil:
+    visible:
+      id: memory-detail-illustration
+    timeout: 30000
+- tapOn:
+    id: memory-detail-more
+- tapOn:
+    id: memory-action-report-illustration
+- extendedWaitUntil:
+    visible:
+      id: report-sheet
+    timeout: 10000
+- tapOn:
+    id: report-reason-misleading_ai_depiction
+- tapOn:
+    id: report-submit
+- extendedWaitUntil:
+    visible:
+      id: memory-illustration-hidden
+    timeout: 15000
+- tapOn:
+    id: memory-illustration-hidden-show
+- assertVisible:
+    id: memory-detail-illustration

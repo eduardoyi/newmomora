@@ -115,6 +115,7 @@ export function useMemoriesRealtime(familyId: string | null | undefined): void {
           patchMemoryInCaches(queryClient, familyId, row.id, {
             illustration_status: row.illustration_status,
             illustration_key: row.illustration_key,
+            illustration_generation_id: row.illustration_generation_id,
             emotion: row.emotion,
             updated_at: row.updated_at,
             link_previews: row.link_previews,

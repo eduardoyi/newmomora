@@ -24,7 +24,6 @@ export interface NotifyFamilyActivityRequest {
 export interface NotifyFamilyActivityResponse {
   sent: boolean;
   reason?: 'debounced';
-  recipientCount?: number;
 }
 
 const DEBOUNCE_WINDOW_MS = 15 * 60 * 1000;
@@ -118,9 +117,11 @@ export async function processNotifyFamilyActivity(
     console.error('notify-family-activity log prune failed', pruneError.message);
   }
 
-  const recipientCount = await sendActivityPushes(serviceClient, memory, callerId);
+  await sendActivityPushes(serviceClient, memory, callerId);
 
-  const response: NotifyFamilyActivityResponse = { sent: true, recipientCount };
+  // Never expose recipient counts: in a two-person family that would reveal
+  // whether the other account blocked the actor.
+  const response: NotifyFamilyActivityResponse = { sent: true };
   return jsonResponse(response);
 }
 
@@ -130,7 +131,12 @@ async function sendActivityPushes(
   actorId: string,
 ): Promise<number> {
   try {
-    const [{ data: family }, { data: actorProfile }, { data: memberships }] = await Promise.all([
+    const [
+      { data: family },
+      { data: actorProfile },
+      { data: memberships },
+      { data: blockedRecipients, error: blockedRecipientsError },
+    ] = await Promise.all([
       serviceClient.from('families').select('name').eq('id', memory.family_id).maybeSingle(),
       serviceClient.from('user_profiles').select('name').eq('id', actorId).maybeSingle(),
       serviceClient
@@ -138,9 +144,28 @@ async function sendActivityPushes(
         .select('user_id')
         .eq('family_id', memory.family_id)
         .neq('user_id', actorId),
+      serviceClient
+        .from('blocked_family_accounts')
+        .select('blocker_user_id')
+        .eq('family_id', memory.family_id)
+        .eq('blocked_user_id', actorId),
     ]);
 
-    const recipientIds = ((memberships ?? []) as Array<{ user_id: string }>).map((m) => m.user_id);
+    // Fail closed: a block lookup failure must never deliver an alert the
+    // recipient asked not to receive. The caller receives no delivery count
+    // or other block-dependent signal.
+    if (blockedRecipientsError) {
+      console.error('notify-family-activity block lookup failed', blockedRecipientsError.message);
+      return 0;
+    }
+
+    const blockedRecipientIds = new Set(
+      ((blockedRecipients ?? []) as Array<{ blocker_user_id: string }>).map((row) => row.blocker_user_id),
+    );
+
+    const recipientIds = ((memberships ?? []) as Array<{ user_id: string }>)
+      .map((m) => m.user_id)
+      .filter((userId) => !blockedRecipientIds.has(userId));
 
     if (recipientIds.length === 0) {
       return 0;

@@ -817,7 +817,7 @@ describe('memories service integration', () => {
     });
   });
 
-  it('marks illustration failed when generate-illustration returns an error', async () => {
+  it('does not blindly change status when generate-illustration returns an error', async () => {
     const updateBuilder = createQueryBuilder({ data: null, error: null });
 
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
@@ -835,7 +835,18 @@ describe('memories service integration', () => {
     const result = await runMemoryIllustrationPipeline('memory-timeout', { forceRegenerate: true });
 
     expect(result?.code).toBe('generation_timeout');
-    expect(updateBuilder.update).toHaveBeenCalledWith({ illustration_status: 'failed' });
+    expect(updateBuilder.update).not.toHaveBeenCalled();
+  });
+
+  it('does not blindly change status after a pipeline transport exception', async () => {
+    const builder = createQueryBuilder({ data: { emotion: 'joy' }, error: null });
+    (supabase.from as jest.Mock).mockReturnValue(builder);
+    (generateMemoryIllustration as jest.Mock).mockRejectedValueOnce(new Error('network lost'));
+
+    const result = await runMemoryIllustrationPipeline('memory-transport', { forceRegenerate: true });
+
+    expect(result?.code).toBe('pipeline_failed');
+    expect(builder.update).not.toHaveBeenCalled();
   });
 
   it('rejects illustration retry for non-illustrated memories', async () => {
@@ -1582,7 +1593,7 @@ describe('memories service integration', () => {
 
       expect(error).toBeNull();
       expect(memoriesBuilder.select).toHaveBeenCalledWith(
-        'id, illustration_status, illustration_key, emotion, updated_at',
+        'id, illustration_status, illustration_key, illustration_generation_id, emotion, updated_at',
       );
       expect(memoriesBuilder.in).toHaveBeenCalledWith('id', ['memory-1']);
       expect(data).toHaveLength(1);

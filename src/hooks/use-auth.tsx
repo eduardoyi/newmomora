@@ -29,7 +29,7 @@ interface AuthContextValue {
   requestSignInOtp: (email: string) => Promise<RequestSignInOtpResult>;
   requestSignUpOtp: (input: RequestSignUpOtpInput) => Promise<{ error: AuthError | null }>;
   verifyOtp: (input: VerifyOtpInput) => Promise<{ error: AuthError | null }>;
-  /** Dev/E2E only — password provider stays enabled server-side; UI access is __DEV__-gated. */
+  /** Password sign-in for dedicated app-review access and dev/E2E accounts. */
   signInWithPassword: (input: PasswordSignInInput) => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<void>;
 }

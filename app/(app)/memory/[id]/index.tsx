@@ -15,16 +15,20 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
+import { ContentActionSheet } from '@/components/content-action-sheet';
+import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { FullScreenMediaViewer, type FullScreenMediaItem } from '@/components/full-screen-media-viewer';
 import { MemoryCommentsDrawer } from '@/components/memory-comments-drawer';
 import { MemoryContentText } from '@/components/memory-content-text';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
+import { ReportSheet } from '@/components/report-sheet';
 import { colors, fonts, getEmotionColors, getEmotionGradient, radius, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMemberProfiles, resolveAttributionName } from '@/hooks/useFamilyMemberProfiles';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { navigateBack } from '@/lib/navigation';
@@ -41,6 +45,7 @@ import {
   needsIllustrationRecovery,
   type IllustrationStatus,
 } from '@/utils/memories';
+import type { ReportTargetType } from '@/services/content-safety';
 
 // ── Shared header chrome ──────────────────────────────────────────────────────
 function DetailChrome({
@@ -48,6 +53,7 @@ function DetailChrome({
   onRegenerateIllustration,
   onEdit,
   onDelete,
+  onMore,
   isDeleting = false,
   isRegeneratingIllustration = false,
   regenerateIllustrationDisabled = false,
@@ -56,6 +62,7 @@ function DetailChrome({
   onRegenerateIllustration?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  onMore?: () => void;
   isDeleting?: boolean;
   isRegeneratingIllustration?: boolean;
   regenerateIllustrationDisabled?: boolean;
@@ -72,6 +79,20 @@ function DetailChrome({
         />
       </Pressable>
       <View style={styles.chromeRight}>
+        {onMore ? <Pressable
+          accessibilityLabel="More actions"
+          accessibilityRole="button"
+          onPress={onMore}
+          style={styles.chromeBtn}
+          testID="memory-detail-more"
+        >
+          <SymbolView
+            name={{ ios: 'ellipsis', android: 'more_horiz' }}
+            size={17}
+            tintColor="rgba(44,36,24,0.75)"
+            fallback={<Text style={styles.chromeBtnText}>•••</Text>}
+          />
+        </Pressable> : null}
         {onRegenerateIllustration && (
           <Pressable
             disabled={chromeActionDisabled || regenerateIllustrationDisabled}
@@ -132,11 +153,15 @@ function DetailChrome({
 // ── Member tag pill ───────────────────────────────────────────────────────────
 function MemberPill({ member }: { member: FamilyMember }) {
   const age = member.date_of_birth ? formatTaggedMemberAge(member.date_of_birth) : null;
+  const contentSafety = useContentSafety();
+  const isProfileHidden = contentSafety.isTargetReported('family_member_profile', member.id);
 
   return (
     <View style={styles.memberPill}>
       <FamilyMemberAvatar member={member} size={22} />
-      <Text style={styles.memberName}>{member.name}{age ? `, ${age}` : ''}</Text>
+      <Text style={styles.memberName}>
+        {isProfileHidden ? 'Reported profile' : `${member.name}${age ? `, ${age}` : ''}`}
+      </Text>
     </View>
   );
 }
@@ -186,6 +211,9 @@ function MemoryDetailFramed({
   isRetrying,
   onRetry,
   onOpenComments,
+  onMore,
+  isIllustrationHidden,
+  onShowIllustration,
 }: {
   memory: NonNullable<ReturnType<typeof useMemory>['data']>;
   illustrationUrl: string | null | undefined;
@@ -201,6 +229,9 @@ function MemoryDetailFramed({
   isRetrying: boolean;
   onRetry: () => void;
   onOpenComments: () => void;
+  onMore?: () => void;
+  isIllustrationHidden: boolean;
+  onShowIllustration: () => void;
 }) {
   const isMedia = memory.memory_type === 'media';
   const showIllustrationGenerating = isIllustrationInProgress(memory.illustration_status);
@@ -235,6 +266,7 @@ function MemoryDetailFramed({
           onRegenerateIllustration={onRegenerateIllustration}
           onEdit={onEdit}
           onDelete={onDelete}
+          onMore={onMore}
         />
       </SafeAreaView>
       <ScrollView contentContainerStyle={styles.detailScrollContent}>
@@ -256,6 +288,13 @@ function MemoryDetailFramed({
                   <Text style={styles.placeholderText}>Loading…</Text>
                 </View>
               )
+            ) : isIllustrationHidden ? (
+              <ContentHiddenNotice
+                label="Reported AI illustration hidden"
+                onShow={onShowIllustration}
+                style={styles.hiddenIllustration}
+                testID="memory-illustration-hidden"
+              />
             ) : showIllustrationGenerating || !illustrationUrl ? (
               <View style={[styles.framedImage, styles.placeholderFrame, { aspectRatio: 1 }]}>
                 <GeneratingVisualOverlay
@@ -356,6 +395,7 @@ function MemoryDetailEditorial({
   onDelete,
   isDeleting,
   onOpenComments,
+  onMore,
 }: {
   memory: NonNullable<ReturnType<typeof useMemory>['data']>;
   attributionName: string;
@@ -364,6 +404,7 @@ function MemoryDetailEditorial({
   onDelete?: () => void;
   isDeleting: boolean;
   onOpenComments: () => void;
+  onMore?: () => void;
 }) {
   const emo = getEmotionColors(memory.emotion);
 
@@ -376,7 +417,7 @@ function MemoryDetailEditorial({
         pointerEvents="none"
       />
       <SafeAreaView edges={['top']}>
-        <DetailChrome isDeleting={isDeleting} onBack={onBack} onEdit={onEdit} onDelete={onDelete} />
+        <DetailChrome isDeleting={isDeleting} onBack={onBack} onEdit={onEdit} onDelete={onDelete} onMore={onMore} />
       </SafeAreaView>
       <ScrollView contentContainerStyle={styles.detailScrollContent}>
         <View style={styles.editorialCard}>
@@ -417,8 +458,15 @@ export default function MemoryDetailScreen() {
   const { id, comments } = useLocalSearchParams<{ id: string; comments?: string }>();
   const { data: memory, isLoading, isError } = useMemory(id);
   const [commentsOpen, setCommentsOpen] = useState(comments === '1');
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [reportTarget, setReportTarget] = useState<{
+    type: ReportTargetType;
+    id: string;
+    versionId?: string | null;
+  } | null>(null);
   const { familyId, role } = useFamily();
   const canEdit = canEditFamilyContent(role);
+  const contentSafety = useContentSafety();
   const { profiles: memberProfiles } = useFamilyMemberProfiles(familyId);
   const attributionName = resolveAttributionName(memberProfiles, memory?.user_id);
   const {
@@ -430,8 +478,20 @@ export default function MemoryDetailScreen() {
     isRegenerating,
   } = useMemoryMutations();
   const isLeavingRef = useRef(false);
+  const shouldLoadIllustration = Boolean(
+    memory &&
+    !contentSafety.isLoading &&
+    !contentSafety.isError &&
+    !contentSafety.isTargetReported('memory', memory.id) &&
+    !contentSafety.isUserBlocked(memory.user_id) &&
+    !contentSafety.isTargetReported(
+      'memory_illustration',
+      memory.id,
+      memory.illustration_generation_id,
+    ),
+  );
   const { url: illustrationUrl } = useMediaUrl(
-    memory?.illustration_key,
+    shouldLoadIllustration ? memory?.illustration_key : null,
     memory?.updated_at,
   );
 
@@ -527,6 +587,121 @@ export default function MemoryDetailScreen() {
     );
   }
 
+  if (contentSafety.isLoading) {
+    return (
+      <View style={styles.centeredFull} testID="memory-detail-safety-loading">
+        <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  if (contentSafety.isError) {
+    return (
+      <View style={styles.centeredFull} testID="memory-detail-safety-error">
+        <Text style={styles.errorText}>Couldn’t load this memory</Text>
+        <Pressable onPress={() => void contentSafety.refetch()}>
+          <Text style={styles.retryBtnText}>Try again</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  const isMemoryReported = contentSafety.isTargetReported('memory', memory.id);
+  const isMemoryHidden = isMemoryReported ||
+    contentSafety.isUserBlocked(memory.user_id);
+  const isIllustrationHidden = contentSafety.isTargetReported(
+    'memory_illustration',
+    memory.id,
+    memory.illustration_generation_id,
+  );
+  const canReportMemory = !contentSafety.hasActiveReport('memory', memory.id);
+  const canReportIllustration = Boolean(
+    memory.memory_type === 'text_illustration' &&
+    memory.illustration_status === 'ready' &&
+    memory.illustration_key &&
+    memory.illustration_generation_id &&
+    !contentSafety.hasActiveReport(
+      'memory_illustration',
+      memory.id,
+      memory.illustration_generation_id,
+    ),
+  );
+  const hasReportActions = canReportMemory || canReportIllustration;
+  const showHiddenMemory = () => {
+    if (isMemoryReported) {
+      contentSafety.revealTarget('memory', memory.id);
+    }
+    if (memory.user_id && contentSafety.isUserBlocked(memory.user_id)) {
+      contentSafety.revealBlockedUser(memory.user_id);
+    }
+  };
+
+  const safetyModals = (
+    <>
+      {hasReportActions ? <ContentActionSheet
+        actions={[
+          ...(canReportMemory ? [{
+            label: 'Report memory',
+            onPress: () => setReportTarget({ type: 'memory', id: memory.id }),
+            testID: 'memory-action-report-memory',
+          }] : []),
+          ...(canReportIllustration
+            ? [{
+                label: 'Report AI illustration',
+                onPress: () => setReportTarget({
+                  type: 'memory_illustration' as const,
+                  id: memory.id,
+                  versionId: memory.illustration_generation_id,
+                }),
+                testID: 'memory-action-report-illustration',
+              }]
+            : []),
+        ]}
+        onClose={() => setActionsOpen(false)}
+        testID="memory-actions-sheet"
+        visible={actionsOpen}
+      /> : null}
+      {reportTarget ? (
+        <ReportSheet
+          isSubmitting={contentSafety.isReporting}
+          onClose={() => setReportTarget(null)}
+          onSubmit={(reason, note) => contentSafety.report({
+            targetType: reportTarget.type,
+            targetId: reportTarget.id,
+            targetVersionId: reportTarget.versionId,
+            reason,
+            note,
+          }).then(() => undefined)}
+          targetLabel={reportTarget.type === 'memory_illustration' ? 'AI illustration' : 'memory'}
+          targetType={reportTarget.type}
+          visible
+        />
+      ) : null}
+    </>
+  );
+
+  if (isMemoryHidden) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <SafeAreaView edges={['top']}>
+          <DetailChrome
+            isDeleting={false}
+            onBack={leaveMemoryDetail}
+            onMore={hasReportActions ? () => setActionsOpen(true) : undefined}
+          />
+        </SafeAreaView>
+        <View style={styles.hiddenDetailWrap}>
+          <ContentHiddenNotice
+            label={contentSafety.isUserBlocked(memory.user_id) ? 'Content from a blocked account hidden' : undefined}
+            onShow={showHiddenMemory}
+            testID="memory-detail-hidden"
+          />
+        </View>
+        {safetyModals}
+      </View>
+    );
+  }
+
   if (memory.memory_type === 'text_only') {
     return (
       <>
@@ -538,12 +713,14 @@ export default function MemoryDetailScreen() {
           onEdit={canEdit ? () => router.push(editMemoryRoute(id)) : undefined}
           onDelete={canEdit ? handleDelete : undefined}
           onOpenComments={() => setCommentsOpen(true)}
+          onMore={hasReportActions ? () => setActionsOpen(true) : undefined}
         />
         <MemoryCommentsDrawer
           memory={memory}
           onClose={() => setCommentsOpen(false)}
           visible={commentsOpen}
         />
+        {safetyModals}
       </>
     );
   }
@@ -567,7 +744,15 @@ export default function MemoryDetailScreen() {
         isRetrying={isRetrying}
         onRetry={handleRetry}
         onOpenComments={() => setCommentsOpen(true)}
+        onMore={hasReportActions ? () => setActionsOpen(true) : undefined}
+        isIllustrationHidden={isIllustrationHidden}
+        onShowIllustration={() => contentSafety.revealTarget(
+          'memory_illustration',
+          memory.id,
+          memory.illustration_generation_id,
+        )}
       />
+      {safetyModals}
       <MemoryCommentsDrawer
         memory={memory}
         onClose={() => setCommentsOpen(false)}
@@ -679,6 +864,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 24,
   },
+  hiddenDetailWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
 
   // ── Framed detail ──
   framedCard: {
@@ -696,6 +886,10 @@ const styles = StyleSheet.create({
   },
   framedMediaWrap: {
     padding: 10,
+  },
+  hiddenIllustration: {
+    aspectRatio: 1,
+    width: '100%',
   },
   framedCardBody: {
     paddingHorizontal: 20,

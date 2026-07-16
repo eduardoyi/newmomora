@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 import { familyMemberProfilesQueryKey } from '@/hooks/queryKeys';
+import { useAuth } from '@/hooks/use-auth';
 import { fetchFamilyMemberProfiles, type FamilyMemberProfile } from '@/services/family';
 
 function toError(error: unknown, fallbackMessage: string): Error {
@@ -23,13 +24,17 @@ function toError(error: unknown, fallbackMessage: string): Error {
 /**
  * Names/roles for every current + former member of a family, used to
  * resolve "Added by {name}" attribution and the Settings member list.
- * Cached per family via get_family_member_profiles (a definer RPC -- see
+ * Cached per authenticated caller + family via get_family_member_profiles
+ * because caller-local blocked-only former rows must never cross accounts.
+ * The definer RPC (see
  * supabase/migrations/20260711120000_family_sharing.sql) rather than a
  * direct table read, since `user_profiles` RLS stays "own row only".
  */
 export function useFamilyMemberProfiles(familyId: string | null | undefined) {
+  const { user } = useAuth();
+  const userId = user?.id;
   const query = useQuery({
-    queryKey: familyMemberProfilesQueryKey(familyId),
+    queryKey: familyMemberProfilesQueryKey(userId, familyId),
     queryFn: async () => {
       if (!familyId) {
         return [];
@@ -43,7 +48,7 @@ export function useFamilyMemberProfiles(familyId: string | null | undefined) {
 
       return data ?? [];
     },
-    enabled: Boolean(familyId),
+    enabled: Boolean(userId && familyId),
     staleTime: 5 * 60 * 1000,
   });
 

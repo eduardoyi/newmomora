@@ -21,6 +21,13 @@ jest.mock('@/hooks/useFamilyMembers', () => ({
   useOnboardingStatus: jest.fn(),
 }));
 jest.mock('@/hooks/useMemories', () => ({ useMemories: jest.fn() }));
+jest.mock('@/hooks/useContentSafety', () => ({
+  useContentSafety: () => ({
+    isLoading: false, isError: false,
+    isTargetReported: () => false, isUserBlocked: () => false,
+    revealTarget: jest.fn(), revealBlockedUser: jest.fn(), refetch: jest.fn(),
+  }),
+}));
 
 jest.mock('@/components/memory-card', () => ({
   MemoryCard: () => null,

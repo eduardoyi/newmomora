@@ -16,11 +16,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MemoryCard } from '@/components/memory-card';
+import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { MemoryFab } from '@/components/memory-fab';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useMemories } from '@/hooks/useMemories';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import type { MemoryWithTags } from '@/services/memories';
 import { useOnboardingStatus } from '@/hooks/useFamilyMembers';
 import {
@@ -28,6 +30,7 @@ import {
   memoryDetailCommentsRoute,
   memoryDetailRoute,
   newMemoryRoute,
+  sharingMembersRoute,
 } from '@/lib/routes';
 import { canEditFamilyContent } from '@/utils/roles';
 import { isVideoContentType } from '@/utils/media-validation';
@@ -113,6 +116,11 @@ export default function TimelineScreen() {
     fetchNextPage,
     isFetchingNextPage,
   } = useMemories();
+  const contentSafety = useContentSafety();
+  const visibleMemories = useMemo(
+    () => memories.filter((memory) => !contentSafety.isUserBlocked(memory.user_id)),
+    [contentSafety, memories],
+  );
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
 
   const viewabilityConfig = useRef<ViewabilityConfig>({
@@ -145,27 +153,52 @@ export default function TimelineScreen() {
   const keyExtractor = useCallback((item: MemoryWithTags) => item.id, []);
 
   const renderItem = useCallback(
-    ({ item }: ListRenderItemInfo<MemoryWithTags>) => (
-      <View style={styles.cardItem}>
-        <MemoryCard
-          memory={item}
-          onPress={handleCardPress}
-          onOpenComments={handleOpenComments}
-          isVideoActive={item.id === activeVideoId}
-        />
-      </View>
-    ),
-    [activeVideoId, handleCardPress, handleOpenComments],
+    ({ item }: ListRenderItemInfo<MemoryWithTags>) => {
+      const isMemoryReported = contentSafety.isTargetReported('memory', item.id);
+      const isIllustrationReported = contentSafety.isTargetReported(
+        'memory_illustration',
+        item.id,
+        item.illustration_generation_id,
+      );
+      if (isMemoryReported) {
+        return (
+          <View style={styles.cardItem}>
+            <ContentHiddenNotice
+              label="Reported memory hidden"
+              onShow={() => contentSafety.revealTarget('memory', item.id)}
+              testID={`timeline-memory-${item.id}-hidden`}
+            />
+          </View>
+        );
+      }
+      return (
+        <View style={styles.cardItem}>
+          <MemoryCard
+            memory={item}
+            onPress={handleCardPress}
+            onOpenComments={handleOpenComments}
+            isVideoActive={item.id === activeVideoId}
+            isIllustrationHidden={isIllustrationReported}
+            onShowIllustration={() => contentSafety.revealTarget(
+              'memory_illustration',
+              item.id,
+              item.illustration_generation_id,
+            )}
+          />
+        </View>
+      );
+    },
+    [activeVideoId, contentSafety, handleCardPress, handleOpenComments],
   );
 
   const listHeader = useMemo(
     () => (
       <SafeAreaView>
-        <TimelineHeader memories={memories} />
+        <TimelineHeader memories={visibleMemories} />
         <PendingMemoryUploadsBanner />
       </SafeAreaView>
     ),
-    [memories],
+    [visibleMemories],
   );
 
   // fetchNextPage's signature (FetchNextPageOptions) doesn't match FlatList's
@@ -180,10 +213,21 @@ export default function TimelineScreen() {
     </View>
   ) : null;
 
-  if (isOnboardingLoading) {
+  if (isOnboardingLoading || contentSafety.isLoading) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  if (contentSafety.isError) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>Couldn’t load memories</Text>
+        <Pressable onPress={() => void contentSafety.refetch()}>
+          <Text style={styles.buttonText}>Try again</Text>
+        </Pressable>
       </View>
     );
   }
@@ -235,7 +279,32 @@ export default function TimelineScreen() {
           </SafeAreaView>
           <Text style={styles.errorText}>Could not load memories</Text>
         </ScrollView>
-      ) : memories.length === 0 ? (
+      ) : memories.length > 0 && visibleMemories.length === 0 ? (
+        <ScrollView
+          contentContainerStyle={styles.hiddenOnlyWrap}
+          refreshControl={
+            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
+          }
+          testID="timeline-hidden-content-state"
+        >
+          <SafeAreaView>
+            <TimelineHeader memories={memories} />
+            <PendingMemoryUploadsBanner />
+            <View style={styles.emptyCard}>
+              <Text style={styles.hiddenOnlyTitle}>Blocked-account memories are hidden</Text>
+              <Text style={styles.emptyBody}>You can review or change blocked accounts at any time.</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push(sharingMembersRoute)}
+                style={styles.hiddenOnlyButton}
+                testID="timeline-manage-blocked-accounts"
+              >
+                <Text style={styles.hiddenOnlyButtonText}>Manage blocked accounts</Text>
+              </Pressable>
+            </View>
+          </SafeAreaView>
+        </ScrollView>
+      ) : visibleMemories.length === 0 ? (
         <ScrollView
           style={styles.emptyWrap}
           refreshControl={
@@ -244,7 +313,7 @@ export default function TimelineScreen() {
           testID="timeline-empty-state"
         >
           <SafeAreaView>
-              <TimelineHeader memories={memories} />
+              <TimelineHeader memories={visibleMemories} />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.emptyScript}>nothing yet</Text>
@@ -258,7 +327,7 @@ export default function TimelineScreen() {
       ) : (
         <FlatList
           contentContainerStyle={styles.listContent}
-          data={memories}
+          data={visibleMemories}
           initialNumToRender={6}
           keyExtractor={keyExtractor}
           ListFooterComponent={listFooter}
@@ -435,6 +504,28 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: spacing.xl,
     marginTop: spacing.lg,
+  },
+  hiddenOnlyWrap: {
+    flexGrow: 1,
+  },
+  hiddenOnlyTitle: {
+    color: colors.ink,
+    fontFamily: fonts.sansBold,
+    fontSize: 18,
+    textAlign: 'center',
+  },
+  hiddenOnlyButton: {
+    alignSelf: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    marginTop: spacing.lg,
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  hiddenOnlyButtonText: {
+    color: colors.white,
+    fontFamily: fonts.sansBold,
   },
   errorText: {
     color: colors.error,

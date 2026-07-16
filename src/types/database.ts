@@ -7,11 +7,6 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.5"
-  }
   graphql_public: {
     Tables: {
       [_ in never]: never
@@ -39,6 +34,110 @@ export type Database = {
   }
   public: {
     Tables: {
+      blocked_family_accounts: {
+        Row: {
+          blocked_membership_id: string | null
+          blocked_user_id: string
+          blocker_user_id: string
+          created_at: string
+          family_id: string
+          id: string
+        }
+        Insert: {
+          blocked_membership_id?: string | null
+          blocked_user_id: string
+          blocker_user_id: string
+          created_at?: string
+          family_id: string
+          id?: string
+        }
+        Update: {
+          blocked_membership_id?: string | null
+          blocked_user_id?: string
+          blocker_user_id?: string
+          created_at?: string
+          family_id?: string
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blocked_family_accounts_blocked_membership_id_fkey"
+            columns: ["blocked_membership_id"]
+            isOneToOne: false
+            referencedRelation: "family_memberships"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blocked_family_accounts_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      content_reports: {
+        Row: {
+          created_at: string
+          family_id: string
+          id: string
+          note: string | null
+          reason: string
+          reporter_user_id: string | null
+          resolution: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          status: string
+          target_id: string
+          target_type: string
+          target_user_id: string | null
+          target_version_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          family_id: string
+          id?: string
+          note?: string | null
+          reason: string
+          reporter_user_id?: string | null
+          resolution?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          status?: string
+          target_id: string
+          target_type: string
+          target_user_id?: string | null
+          target_version_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          family_id?: string
+          id?: string
+          note?: string | null
+          reason?: string
+          reporter_user_id?: string | null
+          resolution?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          status?: string
+          target_id?: string
+          target_type?: string
+          target_user_id?: string | null
+          target_version_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "content_reports_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       families: {
         Row: {
           created_at: string
@@ -151,6 +250,71 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "families"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      family_member_portrait_versions: {
+        Row: {
+          created_at: string
+          date_source: string
+          deletion_started_at: string | null
+          deletion_token: string | null
+          family_id: string
+          family_member_id: string
+          generation_output_key: string | null
+          generation_started_at: string | null
+          generation_token: string | null
+          id: string
+          illustrated_profile_key: string | null
+          illustrated_profile_status: string
+          profile_picture_key: string
+          reference_date: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          date_source: string
+          deletion_started_at?: string | null
+          deletion_token?: string | null
+          family_id: string
+          family_member_id: string
+          generation_output_key?: string | null
+          generation_started_at?: string | null
+          generation_token?: string | null
+          id: string
+          illustrated_profile_key?: string | null
+          illustrated_profile_status?: string
+          profile_picture_key: string
+          reference_date?: string | null
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          date_source?: string
+          deletion_started_at?: string | null
+          deletion_token?: string | null
+          family_id?: string
+          family_member_id?: string
+          generation_output_key?: string | null
+          generation_started_at?: string | null
+          generation_token?: string | null
+          id?: string
+          illustrated_profile_key?: string | null
+          illustrated_profile_status?: string
+          profile_picture_key?: string
+          reference_date?: string | null
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_member_portrait_versions_member_family_fkey"
+            columns: ["family_member_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id", "family_id"]
           },
         ]
       }
@@ -285,6 +449,8 @@ export type Database = {
           emotion: string | null
           family_id: string
           id: string
+          illustration_generation_attempt_id: string | null
+          illustration_generation_id: string | null
           illustration_key: string | null
           illustration_prompt: string | null
           illustration_status: string
@@ -302,6 +468,8 @@ export type Database = {
           emotion?: string | null
           family_id: string
           id?: string
+          illustration_generation_attempt_id?: string | null
+          illustration_generation_id?: string | null
           illustration_key?: string | null
           illustration_prompt?: string | null
           illustration_status?: string
@@ -319,6 +487,8 @@ export type Database = {
           emotion?: string | null
           family_id?: string
           id?: string
+          illustration_generation_attempt_id?: string | null
+          illustration_generation_id?: string | null
           illustration_key?: string | null
           illustration_prompt?: string | null
           illustration_status?: string
@@ -539,6 +709,79 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_family_member_portrait_deletion: {
+        Args: {
+          actor_user_id: string
+          delete_token: string
+          target_version_id: string
+        }
+        Returns: {
+          created_at: string
+          date_source: string
+          deletion_started_at: string | null
+          deletion_token: string | null
+          family_id: string
+          family_member_id: string
+          generation_output_key: string | null
+          generation_started_at: string | null
+          generation_token: string | null
+          id: string
+          illustrated_profile_key: string | null
+          illustrated_profile_status: string
+          profile_picture_key: string
+          reference_date: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "family_member_portrait_versions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      claim_family_member_portrait_generation: {
+        Args: {
+          actor_user_id: string
+          attempt_key: string
+          attempt_token: string
+          target_version_id: string
+        }
+        Returns: {
+          created_at: string
+          date_source: string
+          deletion_started_at: string | null
+          deletion_token: string | null
+          family_id: string
+          family_member_id: string
+          generation_output_key: string | null
+          generation_started_at: string | null
+          generation_token: string | null
+          id: string
+          illustrated_profile_key: string | null
+          illustrated_profile_status: string
+          profile_picture_key: string
+          reference_date: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "family_member_portrait_versions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      create_content_report: {
+        Args: {
+          p_note?: string
+          p_reason: string
+          p_target_id: string
+          p_target_type: string
+          p_target_version_id?: string
+        }
+        Returns: string
+      }
       create_family: {
         Args: { name: string }
         Returns: {
@@ -581,11 +824,108 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      create_family_member_portrait_version: {
+        Args: {
+          portrait_date_source: string
+          portrait_reference_date: string
+          source_profile_picture_key: string
+          target_family_member_id: string
+          version_id: string
+        }
+        Returns: {
+          created_at: string
+          date_source: string
+          deletion_started_at: string | null
+          deletion_token: string | null
+          family_id: string
+          family_member_id: string
+          generation_output_key: string | null
+          generation_started_at: string | null
+          generation_token: string | null
+          id: string
+          illustrated_profile_key: string | null
+          illustrated_profile_status: string
+          profile_picture_key: string
+          reference_date: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "family_member_portrait_versions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      current_user_local_date: { Args: never; Returns: string }
+      fail_family_member_portrait_generation: {
+        Args: { attempt_token: string; target_version_id: string }
+        Returns: {
+          created_at: string
+          date_source: string
+          deletion_started_at: string | null
+          deletion_token: string | null
+          family_id: string
+          family_member_id: string
+          generation_output_key: string | null
+          generation_started_at: string | null
+          generation_token: string | null
+          id: string
+          illustrated_profile_key: string | null
+          illustrated_profile_status: string
+          profile_picture_key: string
+          reference_date: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "family_member_portrait_versions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      finish_family_member_portrait_deletion: {
+        Args: { delete_token: string; target_version_id: string }
+        Returns: boolean
+      }
+      finish_family_member_portrait_generation: {
+        Args: {
+          attempt_token: string
+          generated_portrait_key: string
+          target_version_id: string
+        }
+        Returns: {
+          created_at: string
+          date_source: string
+          deletion_started_at: string | null
+          deletion_token: string | null
+          family_id: string
+          family_member_id: string
+          generation_output_key: string | null
+          generation_started_at: string | null
+          generation_token: string | null
+          id: string
+          illustrated_profile_key: string | null
+          illustrated_profile_status: string
+          profile_picture_key: string
+          reference_date: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "family_member_portrait_versions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       get_family_member_profiles: {
         Args: { fam: string }
         Returns: {
           created_at: string
           is_active_member: boolean
+          membership_id: string
           name: string
           role: string
           user_id: string
@@ -607,6 +947,18 @@ export type Database = {
           memory_id: string
         }[]
       }
+      get_my_open_content_reports: {
+        Args: { p_family_id: string }
+        Returns: {
+          created_at: string
+          family_id: string
+          id: string
+          status: string
+          target_id: string
+          target_type: string
+          target_version_id: string
+        }[]
+      }
       get_my_redeemed_invite_status: {
         Args: never
         Returns: {
@@ -625,6 +977,27 @@ export type Database = {
         Args: { assets: Json; target_memory_id: string }
         Returns: undefined
       }
+      set_family_account_block: {
+        Args: {
+          p_block_id?: string
+          p_membership_id?: string
+          p_should_block: boolean
+        }
+        Returns: {
+          blocked_membership_id: string | null
+          blocked_user_id: string
+          blocker_user_id: string
+          created_at: string
+          family_id: string
+          id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "blocked_family_accounts"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       set_memory_like: {
         Args: { should_like: boolean; target_memory_id: string }
         Returns: {
@@ -632,6 +1005,33 @@ export type Database = {
           like_count: number
           liked: boolean
         }[]
+      }
+      update_family_member_portrait_version_date: {
+        Args: { portrait_reference_date: string; target_version_id: string }
+        Returns: {
+          created_at: string
+          date_source: string
+          deletion_started_at: string | null
+          deletion_token: string | null
+          family_id: string
+          family_member_id: string
+          generation_output_key: string | null
+          generation_started_at: string | null
+          generation_token: string | null
+          id: string
+          illustrated_profile_key: string | null
+          illustrated_profile_status: string
+          profile_picture_key: string
+          reference_date: string | null
+          updated_at: string
+          user_id: string | null
+        }
+        SetofOptions: {
+          from: "*"
+          to: "family_member_portrait_versions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
     }
     Enums: {
@@ -651,12 +1051,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends (DefaultSchemaTableNameOrOptions extends {
+  TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never) = never,
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -678,12 +1078,13 @@ export type Tables<
 
 export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
-    keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
-  TableName extends (DefaultSchemaTableNameOrOptions extends {
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never) = never,
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -702,12 +1103,13 @@ export type TablesInsert<
 
 export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
-    keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
-  TableName extends (DefaultSchemaTableNameOrOptions extends {
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never) = never,
+    : never = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -726,12 +1128,13 @@ export type TablesUpdate<
 
 export type Enums<
   DefaultSchemaEnumNameOrOptions extends
-    keyof DefaultSchema["Enums"] | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
+    | keyof DefaultSchema["Enums"]
+    | { schema: keyof DatabaseWithoutInternals },
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never) = never,
+    : never = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -744,11 +1147,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never) = never,
+    : never = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }

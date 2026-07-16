@@ -1,6 +1,7 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import {
   buildFamilyPhotoKey,
+  buildMemoryIllustrationKey,
   buildPortraitVersionPhotoKey,
   buildMemoryMediaAssetKey,
   buildMemoryMediaKey,
@@ -13,6 +14,14 @@ const USER_ID = '11111111-1111-4111-8111-111111111111';
 const MEMBER_ID = '22222222-2222-4222-8222-222222222222';
 const MEMORY_ID = '33333333-3333-4333-8333-333333333333';
 const VERSION_ID = '44444444-4444-4444-8444-444444444444';
+const GENERATION_ID = '55555555-5555-4555-8555-555555555555';
+
+Deno.test('buildMemoryIllustrationKey includes the immutable generation id', () => {
+  assertEquals(
+    buildMemoryIllustrationKey(USER_ID, MEMORY_ID, GENERATION_ID),
+    `${USER_ID}/memories/${MEMORY_ID}/illustrations/${GENERATION_ID}.webp`,
+  );
+});
 
 Deno.test('buildFamilyPhotoKey uses user and member ids', () => {
   assertEquals(

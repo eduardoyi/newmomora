@@ -97,6 +97,7 @@ function applyStatusPatches(
     const changed =
       previous.illustration_status !== status.illustration_status ||
       previous.illustration_key !== status.illustration_key ||
+      previous.illustration_generation_id !== status.illustration_generation_id ||
       previous.emotion !== status.emotion;
 
     if (!changed) {
@@ -106,6 +107,7 @@ function applyStatusPatches(
     patchMemoryInCaches(queryClient, familyId, status.id, {
       illustration_status: status.illustration_status,
       illustration_key: status.illustration_key,
+      illustration_generation_id: status.illustration_generation_id,
       emotion: status.emotion,
       updated_at: status.updated_at,
     });

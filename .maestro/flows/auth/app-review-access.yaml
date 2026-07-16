@@ -1,0 +1,37 @@
+appId: com.memora.app
+---
+- launchApp:
+    appId: com.memora.app
+    clearState: true
+    arguments:
+      EXDevMenuIsOnboardingFinished: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- extendedWaitUntil:
+    visible: "Welcome back"
+    timeout: 90000
+- tapOn:
+    id: app-review-access-link
+- tapOn:
+    id: app-review-email-input
+- inputText: ${REVIEWER_EMAIL}
+- tapOn:
+    id: app-review-password-input
+- inputText: ${REVIEWER_PASSWORD}
+- tapOn:
+    id: app-review-submit-button
+- extendedWaitUntil:
+    visible: "Timeline"
+    timeout: 90000

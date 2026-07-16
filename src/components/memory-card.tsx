@@ -3,6 +3,7 @@ import { memo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
+import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
@@ -29,6 +30,8 @@ interface MemoryCardProps {
   onPress: (memoryId: string) => void;
   onOpenComments: (memoryId: string) => void;
   isVideoActive?: boolean;
+  isIllustrationHidden?: boolean;
+  onShowIllustration?: () => void;
 }
 
 const MAX_TIMELINE_MEMBER_AVATARS = 6;
@@ -106,8 +109,17 @@ function CardFooter({ memory }: { memory: MemoryWithTags }) {
 }
 
 // ── Illustration visual ───────────────────────────────────────────────────────
-function IllustrationVisual({ memory }: { memory: MemoryWithTags }) {
-  const { url } = useMediaUrl(memory.illustration_key, memory.updated_at);
+function IllustrationVisual({
+  memory,
+  isHidden,
+}: {
+  memory: MemoryWithTags;
+  isHidden: boolean;
+}) {
+  const { url } = useMediaUrl(
+    isHidden ? null : memory.illustration_key,
+    memory.updated_at,
+  );
   const emo = getEmotionColors(memory.emotion);
   const status = (memory.illustration_status ?? 'pending') as IllustrationStatus;
   const showGenerating = isIllustrationInProgress(status);
@@ -193,7 +205,14 @@ function MediaVisual({
 }
 
 // ── Spread card (text_illustration + media) ───────────────────────────────────
-function SpreadCard({ memory, onPress, onOpenComments, isVideoActive = false }: MemoryCardProps) {
+function SpreadCard({
+  memory,
+  onPress,
+  onOpenComments,
+  isVideoActive = false,
+  isIllustrationHidden = false,
+  onShowIllustration,
+}: MemoryCardProps) {
   const excerpt = memory.content
     ? formatMemoryExcerpt(memory.content, 140, toLinkPreviewMap(memory.link_previews))
     : null;
@@ -229,9 +248,16 @@ function SpreadCard({ memory, onPress, onOpenComments, isVideoActive = false }: 
 
   return (
     <View style={styles.card} testID={`memory-card-${memory.id}`}>
-      <Pressable accessibilityRole="button" onPress={handlePress}>
-        <IllustrationVisual memory={memory} />
-      </Pressable>
+      {isIllustrationHidden && onShowIllustration ? (
+        <ContentHiddenNotice
+          label="Reported AI illustration hidden"
+          onShow={onShowIllustration}
+          style={styles.hiddenIllustration}
+          testID={`memory-card-${memory.id}-illustration-hidden`}
+        />
+      ) : <Pressable accessibilityRole="button" onPress={handlePress}>
+        <IllustrationVisual memory={memory} isHidden={isIllustrationHidden} />
+      </Pressable>}
       <View style={styles.engagementWrap}>
         <MemoryEngagementBar memory={memory} onOpenComments={handleOpenComments} iconSize={23} />
       </View>
@@ -294,6 +320,8 @@ export const MemoryCard = memo(function MemoryCard({
   onPress,
   onOpenComments,
   isVideoActive,
+  isIllustrationHidden,
+  onShowIllustration,
 }: MemoryCardProps) {
   if (memory.memory_type === 'text_only') {
     return <QuoteCard memory={memory} onPress={onPress} onOpenComments={onOpenComments} />;
@@ -304,6 +332,8 @@ export const MemoryCard = memo(function MemoryCard({
       onPress={onPress}
       onOpenComments={onOpenComments}
       isVideoActive={isVideoActive}
+      isIllustrationHidden={isIllustrationHidden}
+      onShowIllustration={onShowIllustration}
     />
   );
 });
@@ -335,6 +365,12 @@ const styles = StyleSheet.create({
     width: '100%',
     aspectRatio: 4 / 3,
     overflow: 'hidden',
+  },
+  hiddenIllustration: {
+    aspectRatio: 4 / 3,
+    borderRadius: 0,
+    borderWidth: 0,
+    width: '100%',
   },
   mediaVisual: {
     width: '100%',

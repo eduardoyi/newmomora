@@ -44,8 +44,12 @@ export function buildPortraitVersionAttemptKey(
   return `${userId}/family/${familyMemberId}/portraits/${portraitVersionId}/portrait/${attemptId}.webp`;
 }
 
-export function buildMemoryIllustrationKey(userId: string, memoryId: string): string {
-  return `${userId}/memories/${memoryId}/illustration.webp`;
+export function buildMemoryIllustrationKey(
+  userId: string,
+  memoryId: string,
+  generationId: string,
+): string {
+  return `${userId}/memories/${memoryId}/illustrations/${generationId}.webp`;
 }
 
 export function buildMemoryMediaKey(userId: string, memoryId: string, ext: string): string {
@@ -124,14 +128,18 @@ export function getAllowedContentTypes(objectKey: string, userId: string): Set<s
 
 export function isMemoryIllustrationKey(objectKey: string, userId: string): boolean {
   const prefix = `${userId}/memories/`;
-  const suffix = '/illustration.webp';
+  const legacyMatch = objectKey.match(/^([^/]+)\/memories\/([^/]+)\/illustration\.webp$/);
+  const versionedMatch = objectKey.match(
+    /^([^/]+)\/memories\/([^/]+)\/illustrations\/([^/]+)\.webp$/,
+  );
 
-  if (!objectKey.startsWith(prefix) || !objectKey.endsWith(suffix)) {
-    return false;
-  }
-
-  const memoryId = objectKey.slice(prefix.length, objectKey.length - suffix.length);
-  return UUID_PATTERN.test(memoryId);
+  if (!objectKey.startsWith(prefix)) return false;
+  if (legacyMatch) return UUID_PATTERN.test(legacyMatch[2]);
+  return Boolean(
+    versionedMatch &&
+      UUID_PATTERN.test(versionedMatch[2]) &&
+      UUID_PATTERN.test(versionedMatch[3]),
+  );
 }
 
 export function isFamilyPortraitKey(objectKey: string, userId: string): boolean {
@@ -195,12 +203,27 @@ const PORTRAIT_VERSION_PORTRAIT_PATTERN =
   /^([^/]+)\/family\/([^/]+)\/portraits\/([^/]+)\/portrait\/([^/]+)\.webp$/i;
 const MEMORY_ILLUSTRATION_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/illustration\.webp$/;
+const MEMORY_ILLUSTRATION_VERSIONED_FULL_PATTERN =
+  /^([^/]+)\/memories\/([^/]+)\/illustrations\/([^/]+)\.webp$/;
 const MEMORY_MEDIA_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
 const MEMORY_MEDIA_ASSET_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/media\/[A-Za-z0-9_-]{1,128}\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
 
 export function parseStorageKey(objectKey: string): ParsedStorageKey | null {
+  const versionedIllustrationMatch = objectKey.match(MEMORY_ILLUSTRATION_VERSIONED_FULL_PATTERN);
+  if (versionedIllustrationMatch) {
+    const [, ownerUserId, entityId, generationId] = versionedIllustrationMatch;
+    if (
+      !UUID_PATTERN.test(ownerUserId) ||
+      !UUID_PATTERN.test(entityId) ||
+      !UUID_PATTERN.test(generationId)
+    ) {
+      return null;
+    }
+    return { kind: 'memory_illustration', ownerUserId, entityId };
+  }
+
   const portraitVersionPhotoMatch = objectKey.match(PORTRAIT_VERSION_PHOTO_PATTERN);
   if (portraitVersionPhotoMatch) {
     const [, ownerUserId, entityId, portraitVersionId] = portraitVersionPhotoMatch;

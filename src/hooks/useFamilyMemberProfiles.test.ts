@@ -8,6 +8,7 @@ import type { FamilyMemberProfile } from '@/services/family';
 jest.mock('@/services/family', () => ({
   fetchFamilyMemberProfiles: jest.fn(),
 }));
+jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
 
 function profile(overrides: Partial<FamilyMemberProfile> = {}): FamilyMemberProfile {
   return {

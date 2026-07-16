@@ -61,6 +61,14 @@ jest.mock('@/hooks/useMemories', () => ({
 jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrl: jest.fn(),
 }));
+jest.mock('@/hooks/useContentSafety', () => ({
+  useContentSafety: () => ({
+    isLoading: false, isError: false, isReporting: false,
+    isTargetReported: () => false, hasActiveReport: () => false,
+    isUserBlocked: () => false, revealTarget: jest.fn(), revealBlockedUser: jest.fn(),
+    report: jest.fn(), refetch: jest.fn(),
+  }),
+}));
 
 const mockedUseFamily = useFamily as jest.Mock;
 const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.Mock;

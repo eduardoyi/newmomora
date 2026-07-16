@@ -2,6 +2,7 @@ import { SymbolView } from 'expo-symbols';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { FamilyProfilePortraitPhoto } from '@/components/family-profile-portrait-photo';
+import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { colors, emotionColors, fonts, radius, type EmotionName } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
 import { formatAgeFromDob } from '@/utils/family-members';
@@ -17,6 +18,9 @@ interface CastCardProps {
   onPortraitPress?: () => void;
   onPortraitTimelinePress?: () => void;
   portraitCount?: number;
+  isPortraitHidden?: boolean;
+  onShowPortrait?: () => void;
+  onPress?: () => void;
 }
 
 export function CastCard({
@@ -24,13 +28,23 @@ export function CastCard({
   onPortraitPress,
   onPortraitTimelinePress,
   portraitCount = 0,
+  isPortraitHidden = false,
+  onShowPortrait,
+  onPress,
 }: CastCardProps) {
   const emo = emotionColors[memberTint(member)];
   const age = member.date_of_birth ? formatAgeFromDob(member.date_of_birth) : null;
   return (
     <View style={styles.castCard}>
       <View style={styles.castPortraitSlot}>
-        <Pressable
+        {isPortraitHidden && onShowPortrait ? (
+          <ContentHiddenNotice
+            label="AI portrait hidden"
+            onShow={onShowPortrait}
+            style={styles.hiddenPortrait}
+            testID="family-member-portrait-hidden"
+          />
+        ) : <Pressable
           accessibilityLabel={onPortraitPress ? `View ${member.name}'s portrait full screen` : undefined}
           accessibilityRole={onPortraitPress ? 'button' : undefined}
           disabled={!onPortraitPress}
@@ -46,7 +60,7 @@ export function CastCard({
             member={member}
             width={120}
           />
-        </Pressable>
+        </Pressable>}
         {onPortraitTimelinePress ? (
           <Pressable
             accessibilityLabel={`Open portrait timeline, ${portraitCount} ${portraitCount === 1 ? 'portrait' : 'portraits'}`}
@@ -66,13 +80,18 @@ export function CastCard({
         ) : null}
       </View>
 
-      <View style={styles.castInfo}>
+      <Pressable
+        accessibilityRole={onPress ? 'button' : undefined}
+        disabled={!onPress}
+        onPress={onPress}
+        style={({ pressed }) => [styles.castInfo, pressed && styles.portraitPressed]}
+      >
         <Text style={styles.castName}>{member.name}</Text>
         {age && <Text style={styles.castAge}>{age}</Text>}
         {member.nicknames && member.nicknames.length > 0 && (
           <Text style={styles.castNicknames}>“{member.nicknames.join(', ')}”</Text>
         )}
-      </View>
+      </Pressable>
     </View>
   );
 }
@@ -96,6 +115,14 @@ const styles = StyleSheet.create({
   },
   castPortraitPressable: {
     height: 120,
+    width: 120,
+  },
+  hiddenPortrait: {
+    borderRadius: 0,
+    borderWidth: 0,
+    height: 120,
+    minHeight: 120,
+    padding: 8,
     width: 120,
   },
   portraitPressed: {

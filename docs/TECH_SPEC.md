@@ -51,17 +51,17 @@ flowchart TB
 
 ### Auth
 
-Email OTP (one-time code) for every user via Supabase Auth — see
+Email OTP (one-time code) is the default for users via Supabase Auth — see
 [docs/features/auth.md](./features/auth.md) for the full client flow
 (`signInWithOtp`/`verifyOtp`, sign-up metadata trigger, resend cooldown).
-Passwords are not part of the production UX; a `__DEV__`-only password
-sign-in path stays enabled so Maestro E2E can authenticate deterministically
-without reading a real inbox (`src/utils/e2e-fixtures.ts#isE2eFixturesEnabled`
-gates the UI; the Supabase Email password provider itself stays enabled
-server-side). Supabase dashboard prerequisites (custom SMTP, OTP email
-template, OTP expiry) are documented in `docs/features/auth.md` — none of
-them are verifiable from a coding environment; a human must confirm them
-against the live project.
+A separate production `app-review-access` route calls `signInWithPassword`
+for one manually provisioned, pre-populated App Store/Google Play reviewer
+account. The app contains no reviewer email or password. A `__DEV__`-only
+shortcut to the same method remains available for Maestro E2E
+(`src/utils/e2e-fixtures.ts#isE2eFixturesEnabled`). Supabase dashboard
+prerequisites (reviewer account, custom SMTP, OTP email template, OTP expiry)
+are documented in `docs/features/auth.md` and `docs/reviewer-access.md`; a
+human must confirm them against the live project.
 
 ### Client
 
@@ -475,6 +475,7 @@ create trigger on_auth_user_created
 - `memories.memory_type`: drives whether AI pipeline fires and whether `media_key` is expected
 - `memories.media_key`: required (non-null) when `memory_type = 'media'`; must be null for other types — enforced in Edge Function / client layer
 - `memories.illustration_status`: on insert, set to `'pending'` for `text_illustration` and `'none'` for other types. Editing an illustrated memory to `text_only` deliberately retains its illustration key/prompt/status so toggling AI back on can reveal the existing asset without regeneration; rendering and generation eligibility branch on `memory_type`.
+- `memories.illustration_generation_id`: identifies the exact immutable R2 illustration object currently referenced by the row. `illustration_generation_attempt_id` is a transient CAS token owned by one generator attempt.
 - `memories.link_previews`: `jsonb`, defaults to `{}`; written only by `fetch-link-previews` (service-role client); malformed/absent entries are treated as no preview client-side (see [inline-links.md](./features/inline-links.md))
 - `family_member_portrait_versions`: new writes have a non-null date in `[family_members.date_of_birth, acting user's local today]`; only migration may write `legacy_unknown` with a null date. Identity/source fields are immutable and creator attribution may change only to null during auth-user deletion.
 - `family_members.date_of_birth`: cannot move after an existing dated portrait version
@@ -508,6 +509,45 @@ Quick reference:
   (schema + RLS + backfill) and `20260711120001_invite_code_words_seed.sql`
   (word list).
 
+### 2.7 Content reporting and account blocking
+
+Migration `20260716150000_content_reporting.sql` adds the operator-only
+`content_reports` queue, reporter-local `blocked_family_accounts`, and the
+illustration generation/attempt ids described in §2.5. Authenticated clients
+have no direct access to the reports table.
+
+Client-callable security-definer RPCs:
+
+```sql
+create_content_report(
+  p_target_type text,
+  p_target_id uuid,
+  p_reason text,
+  p_note text default null,
+  p_target_version_id uuid default null
+) returns uuid
+
+get_my_open_content_reports(p_family_id uuid)
+  returns table (
+    id uuid, family_id uuid, target_type text, target_id uuid,
+    target_version_id uuid, status text, created_at timestamptz
+  )
+
+set_family_account_block(
+  p_should_block boolean,
+  p_membership_id uuid default null,
+  p_block_id uuid default null
+) returns blocked_family_accounts
+```
+
+`create_content_report` resolves tenancy and protected `target_user_id`
+server-side. For memory illustrations, the client must send the generation it
+selected and the RPC rejects a stale generation; it never substitutes the
+current value. The narrow reporter RPC deliberately omits notes, account
+attribution, resolution, and operator fields. See
+[content-reporting.md](./features/content-reporting.md) and the private
+[operator runbook](./content-reporting-operations.md).
+
 ---
 
 ## 3. Object Storage (Cloudflare R2)
@@ -522,7 +562,7 @@ Momora uses a **single private R2 bucket** (`R2_BUCKET`, e.g. `momora-prod`) wit
 |---------------------|--------|---------|
 | `{userId}/family/{memberId}/photo.webp` | Private (presigned) | User-uploaded family photos |
 | `{userId}/family/{memberId}/portrait.webp` | Private (presigned) | AI character portraits |
-| `{userId}/memories/{memoryId}/illustration.webp` | Private (presigned) | AI memory illustrations (`text_illustration` type) |
+| `{userId}/memories/{memoryId}/illustrations/{generationId}.webp` | Private (presigned) | Immutable AI memory-illustration generation (`text_illustration` type) |
 | `{userId}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | Private (presigned) | Ordered user-uploaded memory photo/video assets (`media` type) |
 | `{userId}/memories/{memoryId}/media.{ext}` | Private (presigned) | Legacy single media object |
 | `_assets/styles/{illustration_style}.png` | Private (Edge Function read) | Style reference images |
@@ -805,31 +845,36 @@ Generates memory illustration using tagged character portraits.
 }
 ```
 
-Set `forceRegenerate: true` when the client manually regenerates an illustration that is already `ready` (same R2 key is overwritten).
+Set `forceRegenerate: true` when the client manually regenerates an illustration that is already `ready`. Each successful generation uses a fresh UUID and immutable R2 object key.
 
 **Authorization (family-sharing Phase 3):** memory looked up by id alone; caller must be **owner/manager** of `memory.family_id` (not `memory.user_id = caller`). Internal lookups are re-scoped from `family_members.user_id = caller` to `family_members.family_id = memory.family_id` — otherwise a manager tagging children the family *owner* created would find zero portraits and fail with `NO_PORTRAITS`. `illustration_style` is read from `families` (moved off `user_profiles` in the family-sharing migration).
 
 **Logic**
 
-1. Fetch memory by id; assert caller owner/manager of its family
-2. Set `illustration_status = 'generating'`
-3. Fetch memory content + tagged family members (max 6 for this memory type), and **all** family member id/name/nickname rows (not just tagged), scoped to the memory's `family_id`; reject more than 6 explicit tags with `ILLUSTRATION_MEMBER_LIMIT`, and cap the zero-tag name-inference fallback to its first 6 matches
+1. Fetch memory by id; assert caller owner/manager of its family.
+2. Claim generation immediately with a unique `illustration_generation_attempt_id`, CAS-matching the exact status/attempt/current generation and relevant memory inputs read in step 1. Concurrent same-snapshot calls cannot both claim.
+3. Fetch tagged family members (max 6 for this memory type), and **all** family member id/name/nickname rows (not just tagged), scoped to the memory's `family_id`; reject more than 6 explicit tags with `ILLUSTRATION_MEMBER_LIMIT`, and cap the zero-tag name-inference fallback to its first 6 matches. Content/date/type/emotion or tag edits clear the active token and restore the retained ready/none/pending state; link-preview hydration does not invalidate generation.
 4. **Safety pre-check:** `gpt-4o-mini` rewrites unsafe content → child-safe scene description, given a nickname→canonical-name mapping built from every family member so nicknames never leak into the image prompt (see `buildSafetySystemPrompt`). Returns `{"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}`; `expressionStyle` is validated server-side and defaults to `neutral`
 5. For each selected member, resolve the usable portrait against `memory.memory_date`: latest dated ready version on/before the date, otherwise earliest dated ready version after it, otherwise a ready undated legacy version. Same-day ties use `created_at DESC, id DESC`. Fetch the resolved keys from R2.
 6. Build prompt (`buildIllustrationPrompt`): scene-first, newline-separated sections — Scene, Characters (reference map + preserve/adapt split), Emotional tone (`memory.emotion` mapped to `EMOTION_EXPRESSIONS`, plus comedic exaggeration when `expressionStyle === 'comedic'` and the emotion is in `COMEDIC_ELIGIBLE_EMOTIONS`), Style/palette/date, Constraints
 7. Call OpenAI image edit API with all ready portrait references (up to 6; `input_fidelity=high` only on `gpt-image-1` fallback when multiple)
 8. On moderation failure: rewrite + retry once
-9. Upload to R2 `momora-memory-illustrations`
-10. Update `illustration_key`, `illustration_prompt`, status `ready` (or `failed`)
-11. Delete previous illustration object from R2 if regenerating
+9. Create a fresh generation UUID and upload the new bytes to `{userId}/memories/{memoryId}/illustrations/{generationId}.webp` without touching the prior object.
+10. CAS-update `illustration_key`, `illustration_generation_id`, prompt, and status `ready` only if this attempt still owns the token. A superseded/failed swap deletes only the new object and preserves the prior DB pointer/object.
+11. If the DB response is ambiguous after a timeout, re-read key + generation: treat an exact match as committed, delete the new object only when definitively not committed, and retain it as a possible orphan if reconciliation also fails.
+12. After a confirmed DB swap, delete the previous object best-effort. Old child imagery is not retained solely for moderation.
 
 **Response**
 
 ```json
-{ "success": true, "illustrationKey": "userId/memoryId/illustration.webp" }
+{
+  "success": true,
+  "illustrationKey": "userId/memories/memoryId/illustrations/generationId.webp",
+  "illustrationGenerationId": "uuid"
+}
 ```
 
-**Errors:** `MEMORY_NOT_FOUND`, `NO_PORTRAITS`, `GENERATION_FAILED`, `MODERATION_BLOCKED`
+**Errors:** `MEMORY_NOT_FOUND`, `NO_PORTRAITS`, `GENERATION_IN_PROGRESS`, `GENERATION_SUPERSEDED`, `GENERATION_FAILED`, `MODERATION_BLOCKED`
 
 ---
 
@@ -1057,7 +1102,7 @@ Fire-and-forget push after a successful memory create. Only ever announces the c
 **Response**
 
 ```json
-{ "sent": true, "recipientCount": 2 }
+{ "sent": true }
 ```
 
 or, when debounced (another push for this `(family, actor)` fired within the last 15 minutes):
@@ -1067,6 +1112,8 @@ or, when debounced (another push for this `(family, actor)` fired within the las
 ```
 
 **Auth:** JWT; caller must be both the memory's creator (`memory.user_id`) **and** owner/manager of its family.
+
+No recipient/delivery count is returned because it could reveal whether another household account blocked the actor.
 
 **Errors:** `validation_error`, `not_found` (404), `forbidden` (403), `internal_error` (500)
 
