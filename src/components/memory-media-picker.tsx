@@ -24,6 +24,7 @@ import {
   runAfterNativeChooserDismisses,
   waitForNativePresentationToSettle,
 } from '@/utils/native-permissions';
+import { extractVideoCaptureDateIso } from '@/utils/video-capture-date';
 
 export interface MediaAttachment {
   id: string;
@@ -33,9 +34,11 @@ export interface MediaAttachment {
   aspectRatio?: number;
   sizeBytes: number;
   objectKey?: string;
-  /** Derived `YYYY-MM-DD` EXIF capture date for library photos, when
-   * `includeCaptureDate` requested it and a valid date was found. Never the
-   * raw EXIF object -- see `src/utils/media-capture-date.ts`. */
+  /** Derived `YYYY-MM-DD` capture date for library photos and videos, when
+   * `includeCaptureDate` requested it and a valid date was found. Photos:
+   * from EXIF (`src/utils/media-capture-date.ts`). Videos: from MP4/MOV
+   * container metadata (`src/utils/video-capture-date.ts`). Never the raw
+   * EXIF object or any other container metadata. */
   capturedAtIso?: string;
 }
 
@@ -47,10 +50,12 @@ interface MemoryMediaPickerProps {
   compact?: boolean;
   remainingSlots?: number;
   /**
-   * Requests EXIF from the native library picker so capture dates can be
-   * derived client-side. Off by default -- the picker is shared with the
-   * edit-memory flow, which must never request EXIF. Only the create screen
-   * opts in. Has no effect on `launchCameraAsync`, which never requests EXIF.
+   * Requests EXIF from the native library picker (photos) and reads
+   * MP4/MOV container metadata from the picked local file (videos) so
+   * capture dates can be derived client-side. Off by default -- the picker
+   * is shared with the edit-memory flow, which must never request or read
+   * capture metadata. Only the create screen opts in. Has no effect on
+   * `launchCameraAsync`, which never derives a capture date.
    */
   includeCaptureDate?: boolean;
 }
@@ -212,13 +217,18 @@ export function MemoryMediaPicker({
           return;
         }
 
-        // Only image assets are candidates for a capture-date suggestion;
-        // the extracted value is a plain YYYY-MM-DD scalar -- asset.exif
-        // itself (which can include GPS/device fields) is never retained.
-        const capturedAtIso =
-          includeCaptureDate && !isVideo
-            ? extractCaptureDateIso(asset.exif) ?? undefined
-            : undefined;
+        // The extracted value is always a plain YYYY-MM-DD scalar. Photos
+        // read asset.exif (which can include GPS/device fields, never
+        // retained); videos read the local file's MP4/MOV container
+        // metadata directly (also never retained beyond the date scalar).
+        // Both extractors are fail-closed/fail-open on their own -- a parse
+        // failure yields undefined here, never a thrown error.
+        let capturedAtIso: string | undefined;
+        if (includeCaptureDate) {
+          capturedAtIso = isVideo
+            ? (await extractVideoCaptureDateIso(asset.uri)) ?? undefined
+            : extractCaptureDateIso(asset.exif) ?? undefined;
+        }
 
         attachments.push({
           id: createAttachmentId(),

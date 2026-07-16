@@ -208,7 +208,7 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
     Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
   });
 
-  it('attaching an EXIF-dated photo updates the displayed date and shows the "From photo" hint', async () => {
+  it('attaching an EXIF-dated photo updates the displayed date and shows the "From media" hint', async () => {
     const screen = renderScreen();
 
     await attachPhoto(
@@ -217,7 +217,7 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
     );
 
     expect(screen.getByTestId('new-memory-date-source', { includeHiddenElements: true })).toBeTruthy();
-    expect(screen.getByText('From photo', { includeHiddenElements: true })).toBeTruthy();
+    expect(screen.getByText('From media', { includeHiddenElements: true })).toBeTruthy();
 
     const dateField = screen.getByTestId('new-memory-date');
     expect(dateField.props.accessibilityLabel).toContain('2024');

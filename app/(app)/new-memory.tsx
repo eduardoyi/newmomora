@@ -261,7 +261,7 @@ export default function NewMemoryScreen() {
               style={styles.dateSourceHint}
               testID="new-memory-date-source"
             >
-              From photo
+              From media
             </Text>
           ) : null}
         </View>

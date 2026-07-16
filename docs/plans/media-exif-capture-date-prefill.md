@@ -374,7 +374,8 @@ Also manually verify on physical/simulated iOS and Android with:
 ## Explicitly out of scope
 
 - GPS/location extraction, `ACCESS_MEDIA_LOCATION`, maps, or place search
-- Video container creation metadata
+- ~~Video container creation metadata~~ **Done (2026-07-16):** see "Addendum:
+  video container capture-date parsing" below.
 - Memory edit-screen date suggestion
 - Incoming-share EXIF extraction
 - Server-side EXIF parsing or validation
@@ -388,3 +389,52 @@ raw EXIF. If Phase 2 needs location, extract a minimal typed value at the picker
 boundary, review Android scoped-media permission behavior and iOS privacy copy,
 define explicit retention/storage semantics, and update PRD/TECH_SPEC/security
 documentation before implementation.
+
+## Addendum (2026-07-16): video container capture-date parsing
+
+Videos are now in scope for the same create-only, library-picker-only,
+overridable memory-date suggestion that photos got in the original plan
+above. This did **not** require a new native module: `src/utils/video-capture-date.ts`
+is a pure-JS parser that walks the picked local file's top-level MP4/MOV
+atom ("box") tree using positioned `expo-file-system` reads (`readAsStringAsync`
+with `{ position, length, encoding: Base64 }`) rather than loading the whole
+file -- important because a camera recording typically stores `moov` (the
+metadata box) *after* the multi-hundred-MB `mdat` box, and the parser must
+skip `mdat`'s payload by its declared size, never read it.
+
+- **Preference order**, mirroring the photo extractor's priority-fallback
+  shape: Apple's timezone-aware `com.apple.quicktime.creationdate`
+  (`moov/meta`, or `moov/udta/meta`, keys+ilst structure; an ISO 8601 string
+  with an explicit UTC offset, parsed manually -- never handed to
+  `new Date(...)`) first; `mvhd`'s `creation_time` (seconds since
+  1904-01-01 UTC, version 0 = 32-bit / version 1 = 64-bit) as the fallback
+  when the Apple key is absent, malformed, or present but implausible.
+- **UTC caveat:** unlike EXIF (which has no offset information at all and is
+  read as the camera's literal local calendar date with no conversion), the
+  `mvhd` fallback *is* a true UTC instant with zero offset information of
+  its own -- it is converted to the device's current local calendar date via
+  `Date`. This is a different mechanism than the photo path but the same
+  tradeoff class: neither source can know the camera's timezone at capture
+  time, so both accept a small chance of an off-by-one-day suggestion near
+  a timezone boundary. The Apple `creationdate` key does not have this gap
+  when present, since it carries its own explicit offset.
+- **Same sanity guards as the photo extractor, adapted for this source:**
+  `creation_time == 0` (the format's own "unknown" sentinel), a resulting
+  local year before 1990, or a resulting local date more than one calendar
+  day beyond `today` are all rejected (null), never clamped.
+- **Same scope boundaries as photos:** library picker only (`includeCaptureDate`,
+  create screen only); camera captures, web picks, and incoming-share
+  attachments do not get a video capture date. `use-suggested-memory-date.ts`
+  required no changes -- it already treats `capturedAtIso` generically
+  regardless of which extractor produced it.
+- **Same privacy posture:** only the derived `YYYY-MM-DD` scalar is returned
+  from `extractVideoCaptureDateIso`; no other atom/box content (track
+  metadata, any embedded location atoms, device info) is retained past the
+  call, logged, or added to any request/queue payload.
+- **Scan budget:** the atom walk is capped at a fixed number of atom-header
+  reads per extraction call so a truncated, corrupt, or adversarially
+  crafted file (e.g. thousands of fake tiny top-level atoms before ever
+  reaching `moov`) bails out to `null` instead of scanning unboundedly.
+
+See [docs/features/media-memories.md](../features/media-memories.md) for the
+full user-facing description and file-by-file integration table.

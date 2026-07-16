@@ -3,6 +3,7 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Alert, Platform } from 'react-native';
 
 import { MemoryMediaPicker } from './memory-media-picker';
+import { extractVideoCaptureDateIso } from '@/utils/video-capture-date';
 
 jest.mock('expo-image-picker', () => ({
   getCameraPermissionsAsync: jest.fn(),
@@ -13,7 +14,16 @@ jest.mock('expo-image-picker', () => ({
   requestMediaLibraryPermissionsAsync: jest.fn(),
 }));
 
+// Video container parsing is unit-tested on its own in
+// video-capture-date.test.ts; this file only asserts the picker's wiring
+// (calls it for video assets, awaits it, maps the result onto
+// capturedAtIso) against a mock.
+jest.mock('@/utils/video-capture-date', () => ({
+  extractVideoCaptureDateIso: jest.fn(),
+}));
+
 const mockedImagePicker = ImagePicker as jest.Mocked<typeof ImagePicker>;
+const mockedExtractVideoCaptureDateIso = extractVideoCaptureDateIso as jest.Mock;
 
 describe('MemoryMediaPicker', () => {
   const originalPlatform = Platform.OS;
@@ -173,12 +183,26 @@ describe('MemoryMediaPicker', () => {
       return screen;
     }
 
+    function buildVideoAsset(overrides: Partial<ImagePicker.ImagePickerAsset> = {}) {
+      return {
+        uri: 'file:///clip.mp4',
+        width: 100,
+        height: 100,
+        fileSize: 2048,
+        mimeType: 'video/mp4',
+        duration: 5000,
+        ...overrides,
+      } as ImagePicker.ImagePickerAsset;
+    }
+
     let onSelect: jest.Mock;
     let includeCaptureDate: boolean | undefined;
 
     beforeEach(() => {
       onSelect = jest.fn();
       includeCaptureDate = undefined;
+      mockedExtractVideoCaptureDateIso.mockReset();
+      mockedExtractVideoCaptureDateIso.mockResolvedValue(null);
     });
 
     it('passes exif: true to launchImageLibraryAsync when includeCaptureDate is true', async () => {
@@ -317,6 +341,70 @@ describe('MemoryMediaPicker', () => {
       expect(onSelect).toHaveBeenCalledTimes(1);
       const [[attachments]] = onSelect.mock.calls;
       expect(attachments[0].capturedAtIso).toBeUndefined();
+    });
+
+    describe('video container capture date', () => {
+      it('attaches a capturedAtIso derived from the video file when includeCaptureDate is true', async () => {
+        includeCaptureDate = true;
+        mockedExtractVideoCaptureDateIso.mockResolvedValue('2024-06-01');
+        mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+          canceled: false,
+          assets: [buildVideoAsset()],
+        } as ImagePicker.ImagePickerResult);
+
+        await pickLibraryAndFlush();
+
+        expect(mockedExtractVideoCaptureDateIso).toHaveBeenCalledWith('file:///clip.mp4');
+        expect(onSelect).toHaveBeenCalledTimes(1);
+        const [[attachments]] = onSelect.mock.calls;
+        expect(attachments[0].capturedAtIso).toBe('2024-06-01');
+      });
+
+      it('does not call the video extractor when includeCaptureDate is false', async () => {
+        includeCaptureDate = false;
+        mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+          canceled: false,
+          assets: [buildVideoAsset()],
+        } as ImagePicker.ImagePickerResult);
+
+        await pickLibraryAndFlush();
+
+        expect(mockedExtractVideoCaptureDateIso).not.toHaveBeenCalled();
+        expect(onSelect).toHaveBeenCalledTimes(1);
+        const [[attachments]] = onSelect.mock.calls;
+        expect(attachments[0].capturedAtIso).toBeUndefined();
+      });
+
+      it('emits a valid attachment without a capture date when the video extractor resolves null (parse failure)', async () => {
+        includeCaptureDate = true;
+        mockedExtractVideoCaptureDateIso.mockResolvedValue(null);
+        mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+          canceled: false,
+          assets: [buildVideoAsset()],
+        } as ImagePicker.ImagePickerResult);
+
+        await pickLibraryAndFlush();
+
+        expect(onSelect).toHaveBeenCalledTimes(1);
+        const [[attachments]] = onSelect.mock.calls;
+        expect(attachments[0].capturedAtIso).toBeUndefined();
+        expect(attachments[0].uri).toBe('file:///clip.mp4');
+      });
+
+      it('does not call the video extractor for a photo asset', async () => {
+        includeCaptureDate = true;
+        mockedImagePicker.launchImageLibraryAsync.mockResolvedValue({
+          canceled: false,
+          assets: [buildImageAsset()],
+        } as ImagePicker.ImagePickerResult);
+
+        await pickLibraryAndFlush();
+
+        expect(mockedExtractVideoCaptureDateIso).not.toHaveBeenCalled();
+        expect(onSelect).toHaveBeenCalledTimes(1);
+        const [[attachments]] = onSelect.mock.calls;
+        expect(attachments[0].capturedAtIso).toBe('2024-06-01');
+      });
     });
   });
 });
