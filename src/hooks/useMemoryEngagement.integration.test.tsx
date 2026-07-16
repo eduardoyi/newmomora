@@ -129,9 +129,20 @@ describe('useMemoryEngagement integration', () => {
 
     const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey('family-1'));
     expect(list?.pages[0]?.memories[0].commentCount).toBe(1);
-    expect(result.current.comments).toEqual([
-      expect.objectContaining({ id: 'comment-1', content: 'Lovely' }),
-    ]);
+    // result.current.comments only reflects the post-mutation cache once the
+    // QueryObserver's listener fires -- react-query always defers that via a
+    // real (non-fake-timer-controllable) setTimeout(0) in notifyManager, so
+    // reading result.current synchronously right after act() races that
+    // macrotask. It usually wins locally, but loses often enough under the
+    // real-timer contention of a full `--runInBand` run (many suites'
+    // pending notifyManager/query timers sharing the same process event
+    // loop) to flake. waitFor polls with real timers, matching the pattern
+    // already used above for the like-mutation cache assertion.
+    await waitFor(() => {
+      expect(result.current.comments).toEqual([
+        expect.objectContaining({ id: 'comment-1', content: 'Lovely' }),
+      ]);
+    });
     expect(mockedNotify).toHaveBeenCalledWith(memory.id, 'comment', 'comment-1');
   });
 });
