@@ -186,7 +186,10 @@ function withMockedNetwork(
       url: url.toString(),
       body: init?.body ? JSON.parse(init.body as string) : undefined,
     });
-    return Promise.resolve(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    const response = url.toString().includes('bentonow.com')
+      ? { results: 1 }
+      : { data: {} };
+    return Promise.resolve(new Response(JSON.stringify(response), { status: 200 }));
   };
 
   return run()
@@ -418,9 +421,8 @@ Deno.test('approve sends a "You\'re in!" Bento email to the redeemer alongside t
   assertEquals(Boolean(pushCall), true);
   assertEquals(Boolean(emailCall), true);
 
-  const emailBody = emailCall!.body as { site_uuid: string; emails: Array<{ to: string; from: string; subject: string; html_body: string; transactional: boolean }> };
-  // site_uuid rides in the POST body, matching the official bento-node-sdk.
-  assertEquals(emailBody.site_uuid, 'test-site-uuid');
+  assertStringIncludes(emailCall!.url, 'site_uuid=test-site-uuid');
+  const emailBody = emailCall!.body as { emails: Array<{ to: string; from: string; subject: string; html_body: string; transactional: boolean }> };
   const email = emailBody.emails[0];
   assertEquals(email.to, 'carmen@example.com');
   assertEquals(email.from, 'hello@usemomora.com');

@@ -23,15 +23,18 @@ appId: com.memora.app
     visible: "Welcome back"
     timeout: 90000
 - tapOn:
-    id: app-review-access-link
-- tapOn:
-    id: app-review-email-input
+    id: login-email-input
 - inputText: ${REVIEWER_EMAIL}
 - tapOn:
-    id: app-review-password-input
+    id: login-submit-button
+- extendedWaitUntil:
+    visible: "Enter your password"
+    timeout: 10000
+- tapOn:
+    id: password-input
 - inputText: ${REVIEWER_PASSWORD}
 - tapOn:
-    id: app-review-submit-button
+    id: password-submit-button
 - extendedWaitUntil:
     visible: "Timeline"
     timeout: 90000

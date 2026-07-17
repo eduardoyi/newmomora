@@ -76,6 +76,41 @@ export type Database = {
           },
         ]
       }
+      content_report_email_alerts: {
+        Row: {
+          attempt_count: number
+          attempt_token: string | null
+          last_attempt_at: string | null
+          report_id: string
+          sent_at: string | null
+          status: string
+        }
+        Insert: {
+          attempt_count?: number
+          attempt_token?: string | null
+          last_attempt_at?: string | null
+          report_id: string
+          sent_at?: string | null
+          status?: string
+        }
+        Update: {
+          attempt_count?: number
+          attempt_token?: string | null
+          last_attempt_at?: string | null
+          report_id?: string
+          sent_at?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "content_report_email_alerts_report_id_fkey"
+            columns: ["report_id"]
+            isOneToOne: true
+            referencedRelation: "content_reports"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       content_reports: {
         Row: {
           created_at: string
@@ -709,6 +744,13 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_content_report_email_alert: {
+        Args: { p_report_id: string }
+        Returns: {
+          attempt_token: string
+          report_id: string
+        }[]
+      }
       claim_family_member_portrait_deletion: {
         Args: {
           actor_user_id: string
@@ -920,6 +962,12 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      get_content_report_email_alert_redrive_candidates: {
+        Args: { p_limit?: number }
+        Returns: {
+          report_id: string
+        }[]
+      }
       get_family_member_profiles: {
         Args: { fam: string }
         Returns: {
@@ -973,6 +1021,14 @@ export type Database = {
         Returns: boolean
       }
       is_family_member: { Args: { fam: string }; Returns: boolean }
+      mark_content_report_email_alert_sent: {
+        Args: { p_attempt_token: string; p_report_id: string }
+        Returns: boolean
+      }
+      release_content_report_email_alert: {
+        Args: { p_attempt_token: string; p_report_id: string }
+        Returns: boolean
+      }
       replace_memory_media_assets: {
         Args: { assets: Json; target_memory_id: string }
         Returns: undefined

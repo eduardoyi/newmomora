@@ -162,7 +162,7 @@ Each feature includes user stories, acceptance criteria, and deferred scope.
 **Acceptance criteria**
 
 - Email OTP authentication via Supabase Auth for normal users
-- A separate, clearly labeled app-review route supports a dedicated email/password review account; credentials are never stored in the app or repository
+- Entering the dedicated review email in the normal email field opens a guarded password step for that account. The non-secret email classifier is committed solely for this routing; the password and all other secrets are never stored in the app or repository, and the reusable credential pair is maintained operationally only in secure store-console fields and the team's password manager.
 - Account profile fields: display name, timezone (required for notification scheduling)
 - Session persistence across app restarts
 - Logout available in settings
@@ -594,7 +594,7 @@ See [TECH_SPEC.md](./TECH_SPEC.md) for database schema, Edge Function contracts,
 
 | Screen | Purpose |
 |--------|---------|
-| Login | Email-code sign in, with a separate app-review access link |
+| Login | Email-code sign in; the dedicated review email continues to a guarded password step |
 | Sign up | Account creation |
 | Verify code | One-time email code verification and resend |
 | Onboarding — Add family member | First profile creation (child-first nudge) |

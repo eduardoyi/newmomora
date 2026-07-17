@@ -4,7 +4,12 @@ This runbook is for the private Momora operator/service-role environment. Never 
 
 ## Review cadence and priority
 
+- **Owner:** Founder/operator. This is a private operational responsibility,
+  not a name or role shown to users in the app.
 - Review open/reviewing reports at least daily during release operation.
+- Each new report queues a best-effort Bento email to `hello@usemomora.com`.
+  It contains only report UUID, target type, reason, and timestamp. Treat it
+  as a prompt; the daily queue check remains the required fallback.
 - Immediately prioritize suspected child sexual content, credible threats, exploitation, or imminent safety concerns. Follow applicable legal/escalation obligations; do not copy sensitive child content into tickets or chat.
 - Next prioritize harassment/abuse and privacy reports, then misleading AI depictions and other reports.
 - Momora does not promise a public fixed response time.
@@ -35,10 +40,19 @@ This runbook is for the private Momora operator/service-role environment. Never 
 - Family deletion cascades its queue records. Account hard deletion and the existing 15-day deletion lifecycle remain authoritative.
 - Access the table only through a secured service-role/operator path. Authenticated clients have no direct access.
 - Operational logs may contain generic report id, target type, status, and error code. They must not contain note text, names, journal content, image URLs/keys, or raw invite codes.
+- `content_report_email_alerts` is a service-role-only delivery outbox. pg_cron
+  retries eligible `pending` rows every five minutes (maximum 20 per run, at
+  most 5 automatic attempts; 5 min, 15 min, 1 hour, then 6 hour backoff).
+  A `pending` row can also be redriven by securely POSTing its report UUID to
+  `send-content-report-alert` with `x-cron-secret`; it sends only metadata.
+  Do not automatically reclaim a `sending` row: first check Bento delivery
+  activity, then deliberately reset/redrive it only if delivery did not occur.
 
 ## Release operations checklist
 
-- [ ] Assign the person responsible for the daily queue check.
+- [x] Assign the person responsible for the daily queue check: Founder/operator.
+- [x] Configure/verify Bento transactional credentials and one metadata-only alert delivery to `hello@usemomora.com` in the production-like environment.
+  - Verified July 17, 2026: the alert arrived, the delivery outbox recorded one successful attempt, and the report remained open for review.
 - [ ] Verify only approved operators/service roles can query or update `content_reports`.
 - [ ] Verify the client RPC returns no `note`, `target_user_id`, resolution, or operator fields.
 - [ ] Exercise one report through review and resolution in the production-like environment.

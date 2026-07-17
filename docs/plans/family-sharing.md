@@ -283,11 +283,10 @@ history, ahead of this plan's own Phase 8.
 
 ### Where reality deviated from the plan
 
-- **Bento `site_uuid` placement:** the plan didn't specify body vs. query
-  param. `_shared/bento.ts` sends it in the JSON body for the batch-emails
-  POST (verified against Bento's docs + the official Node SDK, not a live
-  account — see the file's header comment). Flagged as unverified against
-  a real Bento account.
+- **Bento `site_uuid` placement:** `_shared/bento.ts` sends it as the
+  `site_uuid` query parameter for the batch-emails POST, matching Bento's
+  current transactional-email documentation. The body contains only the
+  `emails` array and a send is considered accepted only when `results = 1`.
 - **Attribution not on timeline cards:** §8 said "memory detail (and card,
   space permitting)." Only the detail screen shows "Added by {name}"
   (`app/(app)/memory/[id]/index.tsx`); `memory-card.tsx` does not. Cheap

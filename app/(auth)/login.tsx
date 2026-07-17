@@ -11,6 +11,7 @@ import {
 } from '@/components/auth-screen';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { isReviewerEmail, normalizeEmail } from '@/services/reviewer-auth';
 import { isE2eFixturesEnabled } from '@/utils/e2e-fixtures';
 
 export default function LoginScreen() {
@@ -29,15 +30,24 @@ export default function LoginScreen() {
 
   const handleContinue = async () => {
     setErrorMessage('');
-    setIsSubmitting(true);
 
-    const trimmedEmail = email.trim();
-    const { error, userNotFound } = await requestSignInOtp(trimmedEmail);
+    const normalizedEmail = normalizeEmail(email);
+
+    if (isReviewerEmail(normalizedEmail)) {
+      router.push({
+        pathname: '/(auth)/password',
+        params: { email: normalizedEmail },
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    const { error, userNotFound } = await requestSignInOtp(normalizedEmail);
 
     setIsSubmitting(false);
 
     if (userNotFound) {
-      router.push({ pathname: '/(auth)/signup', params: { email: trimmedEmail } });
+      router.push({ pathname: '/(auth)/signup', params: { email: normalizedEmail } });
       return;
     }
 
@@ -48,7 +58,7 @@ export default function LoginScreen() {
 
     router.push({
       pathname: '/(auth)/verify-otp',
-      params: { email: trimmedEmail, mode: 'signin' },
+      params: { email: normalizedEmail, mode: 'signin' },
     });
   };
 
@@ -78,7 +88,7 @@ export default function LoginScreen() {
           </Link>
         </Text>
       }
-      subtitle="Enter your email and we'll send you a sign-in code."
+      subtitle="Enter your email to continue."
       title="Welcome back"
     >
       <AuthField label="Email">
@@ -101,13 +111,6 @@ export default function LoginScreen() {
         label={isSubmitting ? 'Sending code…' : 'Continue'}
         onPress={handleContinue}
         testID="login-submit-button"
-      />
-
-      <AuthButton
-        label="App review access"
-        onPress={() => router.push('/(auth)/app-review-access')}
-        testID="app-review-access-link"
-        variant="ghost"
       />
 
       {showDevPasswordToggle && (

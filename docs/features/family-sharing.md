@@ -594,9 +594,9 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
   Functions that write them, not by a separate cron job.
 - **Bento env vars:** `BENTO_SITE_UUID`, `BENTO_PUBLISHABLE_KEY`,
   `BENTO_SECRET_KEY`, `BENTO_FROM_EMAIL` (Edge Function secrets).
-  `site_uuid` goes in the **JSON body**, not a query param — the official
-  SDK only uses a query param for GET requests, and this integration is
-  POST-only (`_shared/bento.ts`). `from` must be a pre-registered/verified
+  `site_uuid` goes in the **query parameter** for the POST batch-email API;
+  the body contains the `emails` array and Bento accepts success only when its
+  `results` count is `1` (`_shared/bento.ts`). `from` must be a pre-registered/verified
   author on the Bento site (Phase 0 external prerequisite).
 - **Supabase dashboard prerequisites** (see also [auth.md](./auth.md)):
   custom SMTP (`yubin.sentbybento.com:587` STARTTLS, username = Bento site

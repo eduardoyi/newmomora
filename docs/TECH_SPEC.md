@@ -54,10 +54,11 @@ flowchart TB
 Email OTP (one-time code) is the default for users via Supabase Auth — see
 [docs/features/auth.md](./features/auth.md) for the full client flow
 (`signInWithOtp`/`verifyOtp`, sign-up metadata trigger, resend cooldown).
-A separate production `app-review-access` route calls `signInWithPassword`
-for one manually provisioned, pre-populated App Store/Google Play reviewer
-account. The app contains no reviewer email or password. A `__DEV__`-only
-shortcut to the same method remains available for Maestro E2E
+A dedicated production reviewer email, entered through the normal login email
+field, branches to a guarded generic password screen that calls
+`signInWithPassword` for one manually provisioned, pre-populated App
+Store/Google Play reviewer account. The app contains no reviewer password. A
+`__DEV__`-only shortcut to the same method remains available for Maestro E2E
 (`src/utils/e2e-fixtures.ts#isE2eFixturesEnabled`). Supabase dashboard
 prerequisites (reviewer account, custom SMTP, OTP email template, OTP expiry)
 are documented in `docs/features/auth.md` and `docs/reviewer-access.md`; a
@@ -515,6 +516,15 @@ Migration `20260716150000_content_reporting.sql` adds the operator-only
 `content_reports` queue, reporter-local `blocked_family_accounts`, and the
 illustration generation/attempt ids described in §2.5. Authenticated clients
 have no direct access to the reports table.
+
+Migration `20260717120000_content_report_email_alerts.sql` adds a private,
+metadata-only delivery outbox. An `after insert` trigger records a `pending`
+alert for every new report, then best-effort POSTs only its UUID to
+`send-content-report-alert` through pg_net. Missing Vault/Bento configuration
+or request failure never rolls back report creation. The Edge Function claims
+the outbox row atomically, re-reads the report with the service role, and sends
+only the report UUID, target type, reason category, and timestamp to the
+configured operator address (default `hello@usemomora.com`).
 
 Client-callable security-definer RPCs:
 
@@ -1221,6 +1231,50 @@ See [docs/features/likes-and-comments.md](./features/likes-and-comments.md).
 
 ---
 
+### 4.15 `send-content-report-alert`
+
+Private, metadata-only operator email alert for a newly created report.
+
+**Trigger:** `content_reports` `after insert` trigger in
+`20260717120000_content_report_email_alerts.sql`. It first creates a durable
+`content_report_email_alerts` outbox row, then asks pg_net to POST only the
+report UUID. This is best-effort: a missing Vault secret, pg_net failure, Bento
+failure, or Edge Function outage must not affect the report RPC. A pg_cron job
+redrives at most 20 definitely-unsent rows every five minutes with bounded
+backoff and no more than five automatic attempts; it never reclaims an
+ambiguous `sending` row.
+
+**Request**
+
+```json
+{ "reportId": "uuid" }
+```
+
+**Logic**
+
+1. Validate `x-cron-secret` and a UUID-only payload.
+2. Atomically claim a `pending` outbox row. A retry sees `already_sent` or
+   `in_progress` and does not send a second email.
+3. Fetch the report itself with the service role, selecting only its UUID,
+   target type, reason, and timestamp.
+4. Send a Bento transactional email to `CONTENT_REPORT_ALERT_EMAIL`, defaulting
+   to `hello@usemomora.com`; the email contains only those four metadata
+   values.
+5. Mark the row `sent`, or release it back to `pending` only after a definite
+   Bento rejection (4xx or `results: 0`) so bounded automatic redrive can try
+   again. A timeout, network error, 5xx, malformed response, or uncertain
+   post-send finalization stays `sending` to avoid a duplicate; reconcile Bento
+   before manual redrive.
+
+**Auth:** `verify_jwt = false`; requires the `CRON_SECRET` header. The client
+never calls it and cannot access the outbox or claim/complete RPCs.
+
+**Response:** `{ "success": true, "sent": true }`, or a non-error skip/failure
+state with `sent: false`. No report note, account/family/target identifiers,
+names, journal text, media keys, or URLs appear in a response or email.
+
+---
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)
@@ -1448,10 +1502,11 @@ per family, not per user). No style picker UI.
 | `R2_SECRET_ACCESS_KEY` | R2 S3 API secret |
 | `R2_ENDPOINT` | R2 S3 endpoint URL |
 | `R2_PUBLIC_ASSETS_BASE_URL` | Public URL for style reference images |
-| `BENTO_SITE_UUID` | Bento site UUID — sent in the JSON body (not a query param) of transactional email sends |
+| `BENTO_SITE_UUID` | Bento site UUID — sent as the `site_uuid` query parameter of transactional email sends |
 | `BENTO_PUBLISHABLE_KEY` | Bento publishable key — HTTP Basic auth username |
 | `BENTO_SECRET_KEY` | Bento secret key — HTTP Basic auth password |
 | `BENTO_FROM_EMAIL` | Sender address; must be pre-registered as an author on the Bento site |
+| `CONTENT_REPORT_ALERT_EMAIL` | Optional safe operator recipient; defaults to `hello@usemomora.com` |
 
 ### Database Vault secrets (read by pg_cron jobs)
 
@@ -1498,6 +1553,7 @@ Momora2/
 │       ├── resolve-family-invite/
 │       ├── notify-family-activity/
 │       ├── notify-memory-engagement/
+│       ├── send-content-report-alert/
 │       └── _shared/               # family-access.ts, storage-keys.ts, bento.ts, expo-push.ts, ...
 ├── docs/
 │   ├── PRD.md

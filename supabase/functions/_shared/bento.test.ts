@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
-import { sendTransactionalEmail } from './bento.ts';
+import { sendTransactionalEmail, sendTransactionalEmailWithOutcome } from './bento.ts';
 
 const BENTO_ENV_KEYS = [
   'BENTO_SITE_UUID',
@@ -71,7 +71,7 @@ for (const missingKey of BENTO_ENV_KEYS) {
 
     await withEnv(partialEnv, async () => {
       calls = await withMockedFetch(
-        () => new Response(JSON.stringify({ data: {} }), { status: 200 }),
+        () => new Response(JSON.stringify({ results: 1 }), { status: 200 }),
         async () => {
           result = await sendTransactionalEmail({
             to: 'carmen@example.com',
@@ -87,13 +87,13 @@ for (const missingKey of BENTO_ENV_KEYS) {
   });
 }
 
-Deno.test('sendTransactionalEmail posts the batch/emails payload shape with basic auth and site_uuid', async () => {
+Deno.test('sendTransactionalEmail posts the Bento batch contract with site_uuid in the query', async () => {
   let calls: Array<{ url: string; init?: RequestInit }> = [];
   let result: boolean | undefined;
 
   await withEnv(FULL_ENV, async () => {
     calls = await withMockedFetch(
-      () => new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      () => new Response(JSON.stringify({ results: 1 }), { status: 200 }),
       async () => {
         result = await sendTransactionalEmail({
           to: 'carmen@example.com',
@@ -108,17 +108,15 @@ Deno.test('sendTransactionalEmail posts the batch/emails payload shape with basi
   assertEquals(calls.length, 1);
 
   const call = calls[0];
-  assertStringIncludes(call.url, 'https://app.bentonow.com/api/v1/batch/emails');
+  assertStringIncludes(call.url, 'https://app.bentonow.com/api/v1/batch/emails?site_uuid=site-123');
 
   const headers = call.init?.headers as Record<string, string>;
   assertEquals(headers.Authorization, `Basic ${btoa('pub-abc:secret-xyz')}`);
   assertEquals(headers['Content-Type'], 'application/json');
+  assertEquals(call.init?.signal instanceof AbortSignal, true);
 
-  // site_uuid rides in the POST body, matching the official bento-node-sdk
-  // (query parameters are only used for GETs there).
   const body = JSON.parse(call.init?.body as string);
   assertEquals(body, {
-    site_uuid: 'site-123',
     emails: [
       {
         to: 'carmen@example.com',
@@ -131,7 +129,7 @@ Deno.test('sendTransactionalEmail posts the batch/emails payload shape with basi
   });
 });
 
-Deno.test('sendTransactionalEmail returns false (does not throw) on a non-2xx response', async () => {
+Deno.test('sendTransactionalEmail reports a definite provider rejection for a 4xx response', async () => {
   let result: boolean | undefined;
 
   await withEnv(FULL_ENV, async () => {
@@ -148,9 +146,22 @@ Deno.test('sendTransactionalEmail returns false (does not throw) on a non-2xx re
   });
 
   assertEquals(result, false);
+
+  let outcome: string | undefined;
+  await withEnv(FULL_ENV, async () => {
+    await withMockedFetch(
+      () => new Response('', { status: 422 }),
+      async () => {
+        outcome = await sendTransactionalEmailWithOutcome({
+          to: 'carmen@example.com', subject: 'Hi', htmlBody: '<p>Hi</p>',
+        });
+      },
+    );
+  });
+  assertEquals(outcome, 'rejected');
 });
 
-Deno.test('sendTransactionalEmail returns false (does not throw) when fetch itself rejects', async () => {
+Deno.test('sendTransactionalEmail reports an unknown outcome for network failure or ambiguous success', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = () => Promise.reject(new Error('network down'));
 
@@ -168,4 +179,45 @@ Deno.test('sendTransactionalEmail returns false (does not throw) when fetch itse
   }
 
   assertEquals(result, false);
+
+  let malformedOutcome: string | undefined;
+  await withEnv(FULL_ENV, async () => {
+    await withMockedFetch(
+      () => new Response(JSON.stringify({ results: 0 }), { status: 200 }),
+      async () => {
+        malformedOutcome = await sendTransactionalEmailWithOutcome({
+          to: 'carmen@example.com', subject: 'Hi', htmlBody: '<p>Hi</p>',
+        });
+      },
+    );
+  });
+  assertEquals(malformedOutcome, 'rejected');
+
+  for (const results of [2, -1, 0.5]) {
+    let unexpectedCountOutcome: string | undefined;
+    await withEnv(FULL_ENV, async () => {
+      await withMockedFetch(
+        () => new Response(JSON.stringify({ results }), { status: 200 }),
+        async () => {
+          unexpectedCountOutcome = await sendTransactionalEmailWithOutcome({
+            to: 'carmen@example.com', subject: 'Hi', htmlBody: '<p>Hi</p>',
+          });
+        },
+      );
+    });
+    assertEquals(unexpectedCountOutcome, 'unknown');
+  }
+
+  let serverOutcome: string | undefined;
+  await withEnv(FULL_ENV, async () => {
+    await withMockedFetch(
+      () => new Response('', { status: 503 }),
+      async () => {
+        serverOutcome = await sendTransactionalEmailWithOutcome({
+          to: 'carmen@example.com', subject: 'Hi', htmlBody: '<p>Hi</p>',
+        });
+      },
+    );
+  });
+  assertEquals(serverOutcome, 'unknown');
 });

@@ -1,4 +1,4 @@
-import { Link, router } from 'expo-router';
+import { Link, Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, Text } from 'react-native';
 
@@ -11,10 +11,21 @@ import {
 } from '@/components/auth-screen';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { isReviewerEmail, normalizeEmail } from '@/services/reviewer-auth';
 
-export default function AppReviewAccessScreen() {
+export default function PasswordScreen() {
+  const { email: routeEmail } = useLocalSearchParams<{ email?: string | string[] }>();
+  const email = typeof routeEmail === 'string' ? normalizeEmail(routeEmail) : '';
+
+  if (!isReviewerEmail(email)) {
+    return <Redirect href="/(auth)/login" />;
+  }
+
+  return <PasswordForm email={email} />;
+}
+
+function PasswordForm({ email }: { email: string }) {
   const { signInWithPassword } = useAuth();
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -23,10 +34,7 @@ export default function AppReviewAccessScreen() {
     setErrorMessage('');
     setIsSubmitting(true);
 
-    const { error } = await signInWithPassword({
-      email: email.trim(),
-      password,
-    });
+    const { error } = await signInWithPassword({ email, password });
 
     setIsSubmitting(false);
 
@@ -43,36 +51,21 @@ export default function AppReviewAccessScreen() {
       footer={
         <Text style={styles.footerText}>
           <Link href="/(auth)/login" style={styles.link}>
-            Back to email code sign-in
+            Use a different email
           </Link>
         </Text>
       }
-      subtitle="For App Store and Google Play reviewers using credentials supplied in the review notes."
-      title="App review access"
+      subtitle={`Sign in as ${email}.`}
+      title="Enter your password"
     >
-      <AuthField label="Reviewer email">
+      <AuthField label="Password">
         <AuthInput
-          accessibilityLabel="Reviewer email"
-          autoCapitalize="none"
-          autoComplete="email"
-          keyboardType="email-address"
-          onChangeText={setEmail}
-          placeholder="Reviewer email"
-          testID="app-review-email-input"
-          textContentType="emailAddress"
-          value={email}
-        />
-      </AuthField>
-
-      <AuthField label="Reviewer password">
-        <AuthInput
-          accessibilityLabel="Reviewer password"
-          autoCapitalize="none"
-          autoComplete="password"
+          accessibilityLabel="Password"
+          autoComplete="current-password"
           onChangeText={setPassword}
-          placeholder="Reviewer password"
+          placeholder="Your password"
           secureTextEntry
-          testID="app-review-password-input"
+          testID="password-input"
           textContentType="password"
           value={password}
         />
@@ -81,10 +74,10 @@ export default function AppReviewAccessScreen() {
       <AuthErrorMessage message={errorMessage} />
 
       <AuthButton
-        disabled={isSubmitting || !email.trim() || !password}
-        label={isSubmitting ? 'Signing in…' : 'Sign in for review'}
+        disabled={isSubmitting || !password}
+        label={isSubmitting ? 'Signing in…' : 'Sign in'}
         onPress={handleSignIn}
-        testID="app-review-submit-button"
+        testID="password-submit-button"
       />
     </AuthScreen>
   );

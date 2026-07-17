@@ -229,7 +229,7 @@ For the IARC/content questionnaire, answer feature facts rather than trying to f
 
 ## 5. Reviewer access
 
-The credential provisioning and clean-install test procedure is in [reviewer-access.md](./reviewer-access.md). Do not put credentials in this document, source control, EAS public variables, screenshots, release notes, or ordinary support messages.
+The credential provisioning and clean-install test procedure is in [reviewer-access.md](./reviewer-access.md). The app intentionally commits a non-secret dedicated-email classifier, but never put the actual reviewer email, password, or any other secret in this document, EAS public variables, screenshots, release notes, or ordinary support messages. Keep the reusable credential pair only in the team's password manager and secure store-console fields.
 
 ### Apple App Review Information
 
@@ -245,11 +245,11 @@ Apple requires a working demo account or fully featured demo mode for account-ba
 - Access restriction: **All or some functionality is restricted**.
 - Instruction name: `Momora reviewer access`.
 - Credentials/instructions: use the Play Console wording in `docs/reviewer-access.md`.
-- OTP/MFA: tell the reviewer to use **App review access**, which uses reusable credentials and does not require OTP.
+- OTP/MFA: tell the reviewer to enter the dedicated supplied email on the normal Welcome back screen, tap **Continue**, then enter the password on the next step. This path does not require OTP.
 
 Google requires credentials to remain reusable, location-independent, and valid at all times; OTP-dependent access must have a reusable bypass for review. See [Google's sign-in-detail requirements](https://support.google.com/googleplay/android-developer/answer/15748846) and [App content setup](https://support.google.com/googleplay/android-developer/answer/9859455).
 
-**HUMAN CONFIRMATION REQUIRED:** Provision and seed the synthetic production account, enter its credentials in both consoles, and test from a clean install of the exact final build. Do not use real child/family data. The code and docs alone do not complete this task.
+**HUMAN CONFIRMATION REQUIRED:** Backend/account/media fixture verification is complete, but the email-triggered UI still must be tested from a clean install of the exact final build. Enter the reusable credential pair in both consoles. Do not use real child/family data. The code and docs alone do not complete this task.
 
 ## 6. IAP and monetization cleanup
 

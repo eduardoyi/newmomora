@@ -377,6 +377,9 @@ verify_jwt = false
 [functions.hard-delete-expired-accounts]
 verify_jwt = false
 
+[functions.send-content-report-alert]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

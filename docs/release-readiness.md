@@ -1,6 +1,6 @@
 # Momora release-readiness tracker
 
-**Last updated:** July 16, 2026
+**Last updated:** July 17, 2026
 
 **Release version:** 1.1.0
 
@@ -29,7 +29,10 @@ This is the working must-do list for the next App Store and Google Play release.
   - [x] Define the minimum audit/support information retained without storing unnecessary child data.
   - Behavior and implementation: [content-reporting.md](./features/content-reporting.md).
   - Private review procedure: [content-reporting-operations.md](./content-reporting-operations.md).
-- [ ] Assign the release operator responsible for the daily private report-queue check and urgent safety escalation.
+- [x] Assign the release operator responsible for the daily private report-queue check and urgent safety escalation: Founder/operator.
+  - [x] Queue a metadata-only Bento alert to `hello@usemomora.com` for each new report; daily manual review remains the fallback.
+  - [x] 🔒 Configure/verify Bento credentials and one production-like alert delivery.
+    - Verified July 17, 2026: the metadata-only alert arrived; the outbox recorded one successful attempt and the report remained open for review.
 - [ ] Run the reporting Maestro happy path from an installed release candidate with a clean illustrated-memory fixture.
 
 ## 2. Legal, support, and public copy
@@ -54,11 +57,14 @@ This is the working must-do list for the next App Store and Google Play release.
 - [ ] 🔒 Complete Apple’s current age-rating questionnaire.
 - [ ] 🔒 Complete Google Play’s target-audience and content declarations.
 - [ ] Prepare reviewer access for the email-OTP login flow.
-  - [x] Use the reusable app-review email/password route so reviewers do not depend on receiving a live OTP.
+  - [x] Route the dedicated reviewer email from the normal login field to a guarded password step so reviewers do not depend on receiving a live OTP.
   - [x] Create reviewer instructions and the setup/rotation runbook: [reviewer-access.md](./reviewer-access.md).
-  - [x] Add focused integration and Maestro flow coverage for the reviewer route.
-  - [ ] Seed/verify the production reviewer account and enter its credentials securely in the store review consoles.
-  - [ ] Verify the flow from a clean install before submission.
+  - [x] Add focused integration and Maestro flow coverage for the email-triggered reviewer password branch.
+  - [x] Provision and backend/fixture-verify the production reviewer account and synthetic data.
+    - Backend/account/media verification on July 17, 2026: confirmed email and password authentication; one active owner membership with onboarding complete; two explicitly synthetic adult profiles with ready portraits; one text-only and one ready illustrated memory tagged only to the intended synthetic profile; and authenticated private-media access.
+    - The production `get-media-url` function was redeployed and verified active at version 12 after version 11 rejected versioned memory-illustration keys.
+  - [ ] Enter the stored reviewer credentials securely in both store review consoles.
+  - [ ] Verify the email-triggered reviewer flow from a clean install of the exact release build before submission (the current fixture verification does not cover this UI).
 
 ## 4. iPad compatibility
 
@@ -158,6 +164,7 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
   - [ ] Family onboarding and portrait generation.
   - [ ] Text, voice, photo, and video memory creation.
   - [ ] Illustration generation and retry behavior.
+    - [ ] Investigate and retest normal Edge illustration generation without an operator fallback. During reviewer-fixture seeding, two production attempts remained `generating` beyond the app's three-minute stale threshold and required the fixture-only local fallback.
   - [ ] Family invite, redeem, and approval.
   - [ ] Likes and comments.
   - [ ] Push registration, delivery, and notification routing.

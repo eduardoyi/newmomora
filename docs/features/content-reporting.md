@@ -1,7 +1,7 @@
 # Feature: Content reporting and family-scoped account blocking
 
 **Status:** `done`
-**Last updated:** 2026-07-16
+**Last updated:** 2026-07-17
 **PRD reference:** [Safety and privacy](../PRD.md)
 
 ## Overview
@@ -29,6 +29,8 @@ flowchart LR
   A["Overflow action"] --> B["Report sheet"]
   B --> C["create_content_report RPC"]
   C --> D["content_reports"]
+  D --> K["Private alert outbox"]
+  K --> L["Bento operator email"]
   D --> E["Reporter-local query cache"]
   E --> F["Neutral hidden notice"]
   G["Block account"] --> H["set_family_account_block RPC"]
@@ -43,6 +45,7 @@ The client never inserts a report or block directly. Security-definer RPCs resol
 | Table / column | Role |
 |---|---|
 | `content_reports` | Operator-only queue. Stores target identifiers, selected illustration generation, reason, optional note, workflow status, and protected account attribution. It never snapshots journal text, names, URLs, keys, or image bytes. |
+| `content_report_email_alerts` | Operator-only durable outbox. It stores only report id, delivery state, attempt token/count, and timestamps; it never stores a report snapshot or message body. |
 | `blocked_family_accounts` | Reporter-owned, family-scoped account hides. Membership removal does not erase the block; it can still be removed by block id. |
 | `memories.illustration_generation_id` | Immutable logical identity for the exact currently referenced generated illustration. |
 | `memories.illustration_generation_attempt_id` | Short-lived ownership token that prevents stale/concurrent generation attempts from publishing or changing newer status. |
@@ -60,6 +63,7 @@ Direct authenticated access to `content_reports` is revoked. `blocked_family_acc
 | `set_family_account_block` | block + membership id, or unblock + block id | Block row | Authenticated active member of target family |
 | `notify-family-activity` | memory UUID | Generic success/debounce result | Memory author and family manager+ |
 | `notify-memory-engagement` | event payload | Generic sent/disabled result | Existing engagement authorization |
+| `send-content-report-alert` | report UUID only | Generic sent/skip result | `CRON_SECRET`; pg_net trigger only |
 
 The selected illustration generation is sent by the client and checked against the current database generation. A regeneration between selection and submission fails generically; the server never substitutes the newer generation.
 
@@ -111,6 +115,15 @@ Activity pushes exclude recipients who blocked the actor. The caller never recei
 
 Follow [content-reporting-operations.md](../content-reporting-operations.md). Review the private queue at least daily; child-safety threats receive immediate priority. Public copy deliberately promises no fixed resolution SLA.
 
+Every new report also queues a generic Bento transactional alert to
+`hello@usemomora.com` (or the safe `CONTENT_REPORT_ALERT_EMAIL` override). It
+contains only the report UUID, target type, reason, and timestamp. It is a
+best-effort prompt—not a replacement for daily review—and it never contains a
+note, names, journal content, account/family/target identifiers, or media. A
+five-minute bounded pg_cron redrive handles only definitely rejected sends
+(maximum five automatic attempts with increasing delays); ambiguous sends stay
+claimed for manual Bento reconciliation to prevent duplicate alerts.
+
 ## Testing
 
 | File | Covers |
@@ -121,14 +134,17 @@ Follow [content-reporting-operations.md](../content-reporting-operations.md). Re
 | `supabase/functions/generate-illustration/index.test.ts` | Immutable publish ordering, failed/superseded cleanup |
 | `supabase/functions/notify-family-activity/index.test.ts` | Block suppression without response leakage |
 | `supabase/functions/notify-memory-engagement/index.test.ts` | Block suppression with generic disabled response |
+| `supabase/functions/send-content-report-alert/index.test.ts` | Cron auth, UUID payload, metadata-only Bento body, outbox claim/dedupe, failure/retry behavior |
 | `supabase/tests/content_reporting.sql` | Exact generations, durable attribution/deletion, reporter projection, block lifecycle |
 | `supabase/tests/content_reporting_security.sql` | Cross-tenant denial, validation/rate limits, attribution, input-attempt invalidation, cascades |
+| `supabase/tests/content_reporting_email_alerts.sql` | Durable trigger outbox, service-only claim, atomic delivery claim, release/retry, completion |
 | `.maestro/flows/reporting/report-ai-illustration.yaml` | Ready AI illustration report, local hide, and Show anyway happy path |
 
-Run focused client tests with `npm test -- --runInBand content-safety useContentSafety report-sheet`, database tests with `supabase test db supabase/tests/content_reporting.sql supabase/tests/content_reporting_security.sql`, and Edge tests with `npm run test:edge`. The advisory-lock concurrency cap is code-reviewed; pgTAP does not attempt a truly parallel transaction race.
+Run focused client tests with `npm test -- --runInBand content-safety useContentSafety report-sheet`, database tests with `supabase test db supabase/tests/content_reporting.sql supabase/tests/content_reporting_security.sql supabase/tests/content_reporting_email_alerts.sql`, and Edge tests with `npm run test:edge`. The advisory-lock concurrency cap is code-reviewed; pgTAP does not attempt a truly parallel transaction race.
 
 ## Changelog
 
 | Date | Change |
 |---|---|
 | 2026-07-16 | Initial reporting, family-scoped blocking, exact-generation visual reports, and notification suppression |
+| 2026-07-17 | Added durable metadata-only Bento email alerts for the private operator queue. |
