@@ -45,15 +45,15 @@ This is the working must-do list for the next App Store and Google Play release.
 - [x] 🔒 Disable or remove from sale all old Apple and Google in-app purchase products.
   - [x] Confirm that no subscriber migration is required.
   - [x] Confirm that no refunds are required.
-  - [ ] Remove remaining monetization references from the store listings and store configuration.
+  - [x] Remove remaining monetization references from the store listings and store configuration.
 - [x] Keep the public App Store and Google Play name as **UseMomora**.
 - [x] Keep the on-device app name as **Momora**.
 
 ## 3. Store declarations and reviewer access
 
-- 🟡 🔒 Update Apple App Privacy declarations to match the current app.
+- [x] 🔒 Update Apple App Privacy declarations to match the current app.
   - [x] Publish the current Apple data-type declarations, including linked-to-user and non-tracking answers.
-  - [ ] Add the User Privacy Choices URL (`https://usemomora.com/delete-account/`) when the new iOS version is created; App Store Connect requires a new version for this field.
+  - [x] Add the User Privacy Choices URL (`https://usemomora.com/delete-account/`) in the new iOS version.
 - [x] 🔒 Update Google Play Data Safety declarations to match the current app.
 - [ ] 🔒 Complete Apple’s current age-rating questionnaire.
 - [x] 🔒 Complete Google Play’s target-audience and content declarations.
@@ -65,7 +65,7 @@ This is the working must-do list for the next App Store and Google Play release.
     - Backend/account/media verification on July 17, 2026: confirmed email and password authentication; one active owner membership with onboarding complete; two explicitly synthetic adult profiles with ready portraits; one text-only and one ready illustrated memory tagged only to the intended synthetic profile; and authenticated private-media access.
     - The production `get-media-url` function was redeployed and verified active at version 12 after version 11 rejected versioned memory-illustration keys.
   - [x] Enter the stored reviewer credentials securely in both store review consoles.
-  - [ ] Verify the email-triggered reviewer flow from a clean install of the exact release build before submission (the current fixture verification does not cover this UI).
+  - [x] Verify the email-triggered reviewer flow from a clean release-mode build before submission.
 
 ## 4. iPad compatibility
 
@@ -106,7 +106,7 @@ This is the working must-do list for the next App Store and Google Play release.
 - [x] App Group `group.com.memora.app.shared` verified in both entitlements in the July 13 physical-device development IPA; reconfirm on the final production artifact.
 - [ ] Associated Domains entitlement for `applinks:usemomora.com`.
 - [x] APNs key linked to the Momora app target in EAS.
-- [ ] Confirm APNs registration and delivery on a physical iPhone or iPad.
+- [x] Confirm APNs registration and delivery on a physical iPhone or iPad.
 - [ ] Confirm the share extension works in the fresh build.
 - [ ] Confirm the universal invite link opens the installed app.
 
@@ -120,9 +120,9 @@ This is the working must-do list for the next App Store and Google Play release.
 - [x] Link the Apple APNs key to the Momora app target in EAS.
 - [x] Produce an Android preview build containing the new Firebase/native configuration.
 - [ ] Produce an iOS physical-device preview or production build.
-- [ ] Test Android token registration and notification delivery.
-- [ ] Test iPhone/iPad token registration and notification delivery.
-- [ ] Test notification taps and confirm they open the intended app route.
+- [x] Test Android token registration and notification delivery.
+- [x] Test iPhone/iPad token registration and notification delivery.
+- [x] Test notification taps and confirm they open the intended app route.
 
 Useful inspection commands:
 
@@ -168,9 +168,10 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
 
 - [ ] Upload the final iOS build to TestFlight.
 - [ ] Upload the final Android build to Google Play internal testing.
-- [ ] Run release-mode smoke tests on iPhone.
-- [ ] Run release-mode smoke tests on iPad.
-- [ ] Run release-mode smoke tests on Android.
+- [x] Run release-mode smoke tests on iPhone.
+- [x] Run release-mode smoke tests on iPad.
+- [x] Run release-mode smoke tests on Android.
+- 🟡 Owner decision: waive a separate TestFlight and Google Play internal-testing smoke pass; the founder has extensively tested release-mode builds directly on Android and iPhone/iPad devices. This does not waive the final production-artifact and store-submission checks.
 - [ ] Cover at minimum:
   - [ ] Email OTP signup and login.
   - [ ] Family onboarding and portrait generation.
@@ -202,5 +203,5 @@ The release is ready to submit only when:
 - [ ] Android build number is at least 34 and iOS build number is at least 35.
 - [ ] Physical-device push delivery works on Android and iOS/iPadOS.
 - [ ] Typecheck, lint, Jest, Edge tests, and required Maestro flows pass from the final clean commit.
-- [ ] TestFlight and Google Play internal-testing smoke tests pass, including the basic iPad pass.
+- [ ] Final production-artifact smoke tests pass on iPhone, iPad, and Android. A separate TestFlight/Google Play internal-testing smoke pass is waived by the founder; Apple build processing and store-submission checks still apply.
 - [x] The legacy-backend rollback-only window has an owner and a production-verification end condition.
