@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Momora — Store Screenshot</title>
+<style>
+  @font-face {
+    font-family: "Newsreader";
+    src: url("../fonts/Newsreader/Newsreader_400Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: "Newsreader";
+    src: url("../fonts/Newsreader/Newsreader_500Medium.ttf") format("truetype");
+    font-weight: 500;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: "Newsreader";
+    src: url("../fonts/Newsreader/Newsreader_400Regular_Italic.ttf") format("truetype");
+    font-weight: 400;
+    font-style: italic;
+  }
+  @font-face {
+    font-family: "Plus Jakarta Sans";
+    src: url("../fonts/PlusJakartaSans/PlusJakartaSans_400Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: "Plus Jakarta Sans";
+    src: url("../fonts/PlusJakartaSans/PlusJakartaSans_500Medium.ttf") format("truetype");
+    font-weight: 500;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: "Plus Jakarta Sans";
+    src: url("../fonts/PlusJakartaSans/PlusJakartaSans_700Bold.ttf") format("truetype");
+    font-weight: 700;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: "Caveat";
+    src: url("../fonts/Caveat/Caveat_400Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: "Caveat";
+    src: url("../fonts/Caveat/Caveat_700Bold.ttf") format("truetype");
+    font-weight: 700;
+    font-style: normal;
+  }
+
+  :root {
+    /* Layout is authored in a fixed 1260-unit-wide coordinate space.
+       --scale maps it to the requested canvas width; --stage-h (in
+       1260-space units) is recomputed per output size so stage-h * scale
+       always equals the target canvas height exactly. Top-level vertical
+       placement uses percentages of stage height so blocks reflow
+       proportionally between the different canvas aspect ratios
+       (appstore ~0.460, appstore-alt ~0.460, play 0.5625). */
+    --canvas-w: 1260;
+    --canvas-h: 2736;
+    --scale: 1;
+    --stage-h: 2736;
+
+    --color-paper: #FAFAFD;
+    --color-primary: #D63E78;
+    --color-primary-dark: #B22A60;
+    --color-soft-pink: #FBD3E2;
+    --color-tint: #FDEAF1;
+    --color-ink: #2C2418;
+    --color-ink2: #6B5E4F;
+    --color-surface: #F4F3F8;
+    --color-border: #EBE7F2;
+
+    --emotion-joy: #FFE7B0;
+    --emotion-wonder: #CFE1F4;
+    --emotion-calm: #D6EDDE;
+    --emotion-tender: #FBD6E1;
+    --emotion-mischief: #E5D2F1;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: calc(var(--canvas-w) * 1px);
+    height: calc(var(--canvas-h) * 1px);
+    overflow: hidden;
+    background: var(--color-paper);
+  }
+
+  #stage {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1260px;
+    height: calc(var(--stage-h) * 1px);
+    transform-origin: top left;
+    transform: scale(var(--scale));
+  }
+
+  #bg {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(120% 70% at 50% -10%, rgba(214, 62, 120, 0.07), rgba(214, 62, 120, 0) 60%),
+      var(--color-paper);
+  }
+
+  /* Wordmark lockup — small "momora" + pink dot, present on every slide. */
+  #wordmark {
+    position: absolute;
+    top: 1.9%;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    align-items: baseline;
+    font-family: "Newsreader", serif;
+    font-weight: 500;
+    font-size: 46px;
+    line-height: 1;
+    color: var(--color-ink);
+    letter-spacing: -0.01em;
+    z-index: 8;
+  }
+
+  #wordmark .dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    margin-left: 5px;
+    transform: translateY(-3px);
+  }
+
+  #wordmark.bottom {
+    top: auto;
+    bottom: 3.2%;
+    font-size: 84px;
+  }
+
+  #wordmark.bottom .dot {
+    width: 16px;
+    height: 16px;
+    margin-left: 8px;
+    transform: translateY(-6px);
+  }
+
+  /* Soft paper glow behind the bottom wordmark so it stays legible when it
+     sits over the full-bleed art of a hero slide. */
+  #wordmark.bottom .glow {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 620px;
+    height: 260px;
+    background: radial-gradient(50% 50% at 50% 50%, rgba(250, 250, 253, 0.92), rgba(250, 250, 253, 0) 70%);
+    z-index: -1;
+    border-radius: 50%;
+  }
+
+  #caption {
+    position: absolute;
+    top: 5.48%;
+    left: 90px;
+    right: 90px;
+    text-align: center;
+    z-index: 7;
+  }
+
+  #headline {
+    font-family: "Newsreader", serif;
+    font-weight: 500;
+    font-style: normal;
+    font-size: 100px;
+    line-height: 1.1;
+    color: var(--color-ink);
+    letter-spacing: -0.01em;
+    margin: 0;
+  }
+
+  #script-accent {
+    display: none;
+    font-family: "Caveat", cursive;
+    font-weight: 700;
+    font-size: 74px;
+    color: var(--color-primary);
+    margin-top: 18px;
+    line-height: 1;
+  }
+
+  #subline {
+    display: none;
+    margin: 26px 0 0;
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 500;
+    font-size: 46px;
+    line-height: 1.4;
+    color: var(--color-ink2);
+  }
+
+  /* ---- Device frame layout ---- */
+  #device-wrap {
+    position: absolute;
+    left: 50%;
+    top: 20.47%;
+    transform: translateX(-50%);
+    width: 1040px;
+    height: 76.75%;
+    z-index: 2;
+  }
+
+  #device-wrap.bleed {
+    top: auto;
+    bottom: -5.12%;
+  }
+
+  #device {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: #1a1518;
+    border-radius: 96px;
+    padding: 22px;
+    box-shadow: 0 60px 120px -30px rgba(44, 36, 24, 0.35), 0 20px 40px -10px rgba(44, 36, 24, 0.18);
+  }
+
+  #screen {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 74px;
+    overflow: hidden;
+    background: var(--color-paper);
+  }
+
+  #screen img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top center;
+    display: block;
+  }
+
+  /* Clean replacement status bar. It sits over the top strip of the
+     screenshot (which is anchored object-position:top), fully covering the
+     raw capture's own status bar (~120px at 1170-wide source scale ≈
+     ~102px in 996px screen space; we use 106px for margin). Background is
+     parameterized (statusbar_bg) to match each screenshot's own
+     top-of-screen tone. */
+  #statusbar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 106px;
+    z-index: 4;
+    background: var(--color-paper);
+  }
+
+  #statusbar .time,
+  #statusbar .glyphs {
+    position: absolute;
+    top: 8px;
+    height: 62px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #12100E;
+  }
+
+  /* Left/right "ears" beside the dynamic island: island is 220px wide,
+     centered in the 996px screen, so each ear is (996-220)/2 = 388px. */
+  #statusbar .time {
+    left: 0;
+    width: 388px;
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 700;
+    font-size: 34px;
+    letter-spacing: 0.01em;
+  }
+
+  #statusbar .glyphs {
+    right: 0;
+    width: 388px;
+    gap: 12px;
+  }
+
+  #statusbar .glyphs svg {
+    display: block;
+  }
+
+  #dynamic-island {
+    position: absolute;
+    top: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 220px;
+    height: 62px;
+    background: #0a080a;
+    border-radius: 40px;
+    z-index: 5;
+  }
+
+  /* ---- iPad device-frame variant (tablet buckets: ipad, play-tablet7,
+     play-tablet10) ---- Slimmer uniform bezel than the iPhone frame,
+     squarer corners, no dynamic island. Device width is a percentage of
+     the (always-1260px-wide) stage, so it's an absolute local value
+     regardless of the target canvas's aspect ratio — same "fixed local
+     chrome" pattern the iPhone frame uses. Height is derived from width
+     via aspect-ratio (iPad Pro 13" screenshot aspect, 2064:2752) instead
+     of a fixed percent of stage height, so it naturally bleeds off the
+     bottom edge on tall/narrow canvases. */
+  #device-wrap.device-ipad {
+    width: 81%;
+    height: auto;
+    aspect-ratio: 2064 / 2752;
+  }
+
+  #device-wrap.device-ipad #device {
+    border-radius: 56px;
+    padding: 1.6%;
+  }
+
+  #device-wrap.device-ipad #screen {
+    border-radius: 40px;
+  }
+
+  #device-wrap.device-ipad #dynamic-island {
+    display: none;
+  }
+
+  #device-wrap.device-ipad #statusbar {
+    display: none;
+  }
+
+  /* Replacement status bar for the iPad captures: crops the raw capture's
+     own status bar strip (measured at 64px tall in the 2064x2752 source,
+     i.e. y=19-45 for the "11:19 PM Sat Jul 18" text with margin before the
+     app's own header content, which starts no earlier than y=84). No
+     dynamic island, so time+date sit flush left and wifi/battery flush
+     right — matches real iPadOS status bar layout. */
+  #statusbar-ipad {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    z-index: 4;
+    background: var(--color-paper);
+  }
+
+  #device-wrap.device-ipad #statusbar-ipad {
+    display: block;
+  }
+
+  #statusbar-ipad .time,
+  #statusbar-ipad .glyphs {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    color: #12100E;
+  }
+
+  #statusbar-ipad .time {
+    left: 30px;
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 700;
+    font-size: 20px;
+    letter-spacing: 0.01em;
+    gap: 8px;
+  }
+
+  #statusbar-ipad .glyphs {
+    right: 30px;
+    gap: 10px;
+  }
+
+  #statusbar-ipad .glyphs svg {
+    display: block;
+  }
+
+  /* ---- Hero layout (no device frame, full-bleed art) ----
+     The container's top edge is set from JS: it starts just below the
+     rendered caption block (so the caption always sits on clean paper at
+     every aspect ratio) plus a small intentional gap, and runs to the
+     bottom edge — roughly the lower 78-82% of the canvas. The soft fade
+     covers the top ~12% of the art. */
+  #hero-art {
+    display: none;
+    position: absolute;
+    left: -12px;
+    right: -12px;
+    top: 20%;
+    bottom: -12px;
+    z-index: 1;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12%);
+    mask-image: linear-gradient(to bottom, transparent 0%, black 12%);
+  }
+
+  #hero-art img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+    display: block;
+  }
+
+  .layout-hero #device-wrap { display: none; }
+  .layout-hero #hero-art { display: block; }
+
+  /* ---- Decorative chips (floating pastel emotion squares). Rendered
+     ABOVE the device frame (z-index 6 > device's 2) so a chip near the
+     bezel reads as an intentional floating element, never as a sliver
+     peeking out from behind the device. ---- */
+  #chips {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 6;
+  }
+
+  .chip {
+    position: absolute;
+    border-radius: 26%;
+    box-shadow: 0 16px 32px -12px rgba(44, 36, 24, 0.22);
+    border: 3px solid rgba(255, 255, 255, 0.65);
+  }
+
+  /* Optional generated-art spot slot (absolute positioned, off by default). */
+  #art-slot {
+    position: absolute;
+    display: none;
+    object-fit: contain;
+  }
+  #art-slot.visible {
+    display: block;
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="bg"></div>
+
+    <div id="hero-art"><img id="hero-art-img" src="" alt="" /></div>
+
+    <div id="chips"></div>
+
+    <img id="art-slot" src="" alt="" />
+
+    <div id="wordmark"><span class="glow"></span><span id="wordmark-text">momora</span><span class="dot"></span></div>
+
+    <div id="caption">
+      <h1 id="headline"></h1>
+      <div id="script-accent"></div>
+      <p id="subline"></p>
+    </div>
+
+    <div id="device-wrap">
+      <div id="device">
+        <div id="dynamic-island"></div>
+        <div id="screen">
+          <img id="screenshot" src="" alt="" />
+          <div id="statusbar">
+            <div class="time">9:41</div>
+            <div class="glyphs">
+              <!-- wifi -->
+              <svg width="34" height="26" viewBox="0 0 34 26" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M17 21.2c1.9 0 3.5 1.5 3.5 3.4 0 .3-.2.4-.5.4h-6c-.3 0-.5-.1-.5-.4 0-1.9 1.6-3.4 3.5-3.4z" fill="#12100E"/>
+                <path d="M17 13.2c3.1 0 5.9 1.2 8 3.2l-2.9 2.9a7.3 7.3 0 0 0-10.2 0L9 16.4c2.1-2 4.9-3.2 8-3.2z" fill="#12100E"/>
+                <path d="M17 5.2c5.3 0 10.1 2.1 13.7 5.5l-2.9 2.9A15.3 15.3 0 0 0 17 9.2c-4.2 0-8 1.7-10.8 4.4l-2.9-2.9C6.9 7.3 11.7 5.2 17 5.2z" fill="#12100E"/>
+              </svg>
+              <!-- battery (full) -->
+              <svg width="52" height="26" viewBox="0 0 52 26" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1.5" y="1.5" width="42" height="23" rx="7.5" stroke="#12100E" stroke-opacity="0.4" stroke-width="2.4"/>
+                <rect x="5" y="5" width="35" height="16" rx="4.5" fill="#12100E"/>
+                <path d="M47 8.5v9c2.2-.6 3.6-2.4 3.6-4.5S49.2 9.1 47 8.5z" fill="#12100E" fill-opacity="0.4"/>
+              </svg>
+            </div>
+          </div>
+          <div id="statusbar-ipad">
+            <div class="time">9:41&nbsp;&nbsp;Sat Jul 18</div>
+            <div class="glyphs">
+              <!-- wifi (smaller, no dynamic island to clear) -->
+              <svg width="22" height="17" viewBox="0 0 34 26" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M17 21.2c1.9 0 3.5 1.5 3.5 3.4 0 .3-.2.4-.5.4h-6c-.3 0-.5-.1-.5-.4 0-1.9 1.6-3.4 3.5-3.4z" fill="#12100E"/>
+                <path d="M17 13.2c3.1 0 5.9 1.2 8 3.2l-2.9 2.9a7.3 7.3 0 0 0-10.2 0L9 16.4c2.1-2 4.9-3.2 8-3.2z" fill="#12100E"/>
+                <path d="M17 5.2c5.3 0 10.1 2.1 13.7 5.5l-2.9 2.9A15.3 15.3 0 0 0 17 9.2c-4.2 0-8 1.7-10.8 4.4l-2.9-2.9C6.9 7.3 11.7 5.2 17 5.2z" fill="#12100E"/>
+              </svg>
+              <!-- battery (full, smaller) -->
+              <svg width="34" height="17" viewBox="0 0 52 26" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1.5" y="1.5" width="42" height="23" rx="7.5" stroke="#12100E" stroke-opacity="0.4" stroke-width="2.4"/>
+                <rect x="5" y="5" width="35" height="16" rx="4.5" fill="#12100E"/>
+                <path d="M47 8.5v9c2.2-.6 3.6-2.4 3.6-4.5S49.2 9.1 47 8.5z" fill="#12100E" fill-opacity="0.4"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Params are injected by render.mjs as window.__SLIDE__ = {...}
+    // Falls back to a ?data=<base64 json> query param for manual preview.
+    function getSlideData() {
+      if (window.__SLIDE__) return window.__SLIDE__;
+      const usp = new URLSearchParams(location.search);
+      const raw = usp.get("data");
+      if (raw) {
+        try {
+          return JSON.parse(decodeURIComponent(escape(atob(raw))));
+        } catch (e) {
+          console.error("Failed to parse data param", e);
+        }
+      }
+      return {};
+    }
+
+    const SIZES = {
+      appstore: { w: 1260, h: 2736 },
+      "appstore-alt": { w: 1320, h: 2868 },
+      play: { w: 1080, h: 1920 },
+      ipad: { w: 2064, h: 2752 },
+      "play-tablet7": { w: 1080, h: 1920 },
+      "play-tablet10": { w: 1620, h: 2880 },
+    };
+
+    // Buckets that use the iPad capture set + iPad device frame instead of
+    // the iPhone one.
+    const TABLET_SIZES = new Set(["ipad", "play-tablet7", "play-tablet10"]);
+
+    function applyScale(sizeKey) {
+      const target = SIZES[sizeKey] || SIZES.appstore;
+      const scale = target.w / 1260;
+      const stageHeightUnits = 1260 * (target.h / target.w);
+
+      document.documentElement.style.setProperty("--scale", String(scale));
+      document.documentElement.style.setProperty("--stage-h", String(stageHeightUnits));
+      document.documentElement.style.width = target.w + "px";
+      document.documentElement.style.height = target.h + "px";
+      document.body.style.width = target.w + "px";
+      document.body.style.height = target.h + "px";
+    }
+
+    function render() {
+      const data = getSlideData();
+      const usp = new URLSearchParams(location.search);
+      const sizeKey = data.size || usp.get("size") || "appstore";
+
+      applyScale(sizeKey);
+
+      const stage = document.getElementById("stage");
+      const headlineEl = document.getElementById("headline");
+      const sublineEl = document.getElementById("subline");
+      const scriptEl = document.getElementById("script-accent");
+      const screenshotEl = document.getElementById("screenshot");
+      const deviceWrap = document.getElementById("device-wrap");
+      const artSlot = document.getElementById("art-slot");
+      const chipsLayer = document.getElementById("chips");
+      const wordmark = document.getElementById("wordmark");
+      const caption = document.getElementById("caption");
+      const heroArtImg = document.getElementById("hero-art-img");
+      const statusbar = document.getElementById("statusbar");
+
+      // Headline supports explicit line breaks via "\n" in the manifest
+      // (e.g. "Say it.\nWatch it become art.").
+      const headlineLines = String(data.headline || "").split("\n");
+      headlineLines.forEach((line, i) => {
+        if (i > 0) headlineEl.appendChild(document.createElement("br"));
+        headlineEl.appendChild(document.createTextNode(line));
+      });
+
+      if (data.subline) {
+        sublineEl.textContent = data.subline;
+        sublineEl.style.display = "block";
+      }
+
+      if (data.script_accent) {
+        scriptEl.textContent = data.script_accent;
+        scriptEl.style.display = "block";
+      }
+
+      if (data.caption_top != null) {
+        caption.style.top = data.caption_top + "%";
+      }
+
+      // Layout: "device" (default) or "hero" (no frame, full-bleed art).
+      if (data.layout === "hero") {
+        stage.classList.add("layout-hero");
+        if (data.art && data.art.src) {
+          heroArtImg.src = data.art.src;
+        }
+        // Position the art container so its soft top fade BEGINS just below
+        // the caption block (caption stays fully on clean paper), with a
+        // small intentional gap. Computed from the caption's actual rendered
+        // bottom so it holds at every canvas aspect ratio. Re-run once the
+        // web fonts have loaded, since the caption's height (and therefore
+        // its bottom edge) shifts when fallback metrics are replaced.
+        const positionHeroArt = () => {
+          const target = SIZES[sizeKey] || SIZES.appstore;
+          const stageH = 1260 * (target.h / target.w);
+          const captionBottom = caption.offsetTop + caption.offsetHeight;
+          const gap = 0.015 * stageH;
+          document.getElementById("hero-art").style.top = Math.round(captionBottom + gap) + "px";
+        };
+        positionHeroArt();
+        document.fonts.ready.then(positionHeroArt);
+      } else {
+        const isTablet = TABLET_SIZES.has(sizeKey);
+        const statusbarIpad = document.getElementById("statusbar-ipad");
+
+        if (isTablet) {
+          // Tablet buckets always use the iPad capture set + iPad frame
+          // (squarer, thinner bezel, no dynamic island), regardless of the
+          // manifest's `bleed` flag (which is authored for the iPhone
+          // frame/aspect ratios). The iPad frame's height is aspect-ratio
+          // driven rather than a fixed percent of stage height.
+          deviceWrap.classList.add("device-ipad");
+          screenshotEl.src = data.screenshot_tablet || data.screenshot || "";
+          const tabletBg = data.statusbar_bg_tablet || data.statusbar_bg;
+          if (tabletBg) {
+            statusbarIpad.style.background = tabletBg;
+          }
+
+          // All tablet buckets position the device dynamically just below
+          // the caption's actual rendered bottom (same technique as the
+          // hero art layout), then bleed it off the bottom edge. A fixed
+          // bottom-anchored offset (like the iPhone .bleed class) is wrong
+          // here in both directions: on the squarer 3:4 ipad canvas it
+          // pushes the device up into the caption, and on the tall 9:16
+          // tablet canvases it leaves a dead paper band between the
+          // subline and the frame with the chips stranded in it.
+          //
+          // On the 9:16 canvases (play-tablet7/10) the stage is 2240 units
+          // tall, so a 3:4 frame narrow enough to fit on-canvas can never
+          // span from below the caption to the bottom edge — instead the
+          // frame width is computed so the aspect-kept frame runs from
+          // caption-bottom + gap to just past the bottom edge. That width
+          // comes out slightly wider than the canvas (~105-112% depending
+          // on caption height), so the sides bleed off-canvas; the clipped
+          // strip is mostly bezel plus the capture's own blank margin, and
+          // the chips end up overlapping the on-canvas device rather than
+          // floating in empty paper. The squarer ipad canvas keeps its
+          // approved 81% width (bleeds off the bottom on its own).
+          //
+          // Re-run once web fonts load since caption height shifts when
+          // fallback metrics are replaced.
+          const positionTabletDevice = () => {
+            const target = SIZES[sizeKey] || SIZES.appstore;
+            const stageH = 1260 * (target.h / target.w);
+            const captionBottom = caption.offsetTop + caption.offsetHeight;
+            // ipad keeps the 2% gap its approved renders shipped with; the
+            // 9:16 buckets use a slightly larger 2.5% breathing gap.
+            const gap = (sizeKey === "ipad" ? 0.02 : 0.025) * stageH;
+            const top = Math.round(captionBottom + gap);
+            deviceWrap.style.top = top + "px";
+            deviceWrap.style.bottom = "auto";
+            if (sizeKey !== "ipad") {
+              const overrun = 16; // frame bottom lands this far past the edge
+              const neededWidth = Math.ceil((stageH - top + overrun) * (2064 / 2752));
+              deviceWrap.style.width = Math.max(neededWidth, 1134) + "px";
+            }
+          };
+          positionTabletDevice();
+          document.fonts.ready.then(positionTabletDevice);
+        } else {
+          if (data.screenshot) {
+            screenshotEl.src = data.screenshot;
+          }
+          if (data.bleed) {
+            deviceWrap.classList.add("bleed");
+          }
+          if (data.statusbar === false) {
+            statusbar.style.display = "none";
+          } else if (data.statusbar_bg) {
+            statusbar.style.background = data.statusbar_bg;
+          }
+        }
+        // Non-hero slides may still use the free-floating spot-art slot.
+        if (data.art && data.art.src) {
+          artSlot.src = data.art.src;
+          artSlot.classList.add("visible");
+          artSlot.style.top = (data.art.top || "0") + "px";
+          artSlot.style.left = (data.art.left || "0") + "px";
+          artSlot.style.width = (data.art.width || "400") + "px";
+          artSlot.style.height = (data.art.height || "400") + "px";
+          if (data.art.z) artSlot.style.zIndex = data.art.z;
+        }
+      }
+
+      // Wordmark lockup: {position: "top"|"bottom"} — top small (default),
+      // bottom large (hero closing slide).
+      const wm = data.wordmark || {};
+      if (wm.position === "bottom") {
+        wordmark.classList.add("bottom");
+      }
+
+      if (Array.isArray(data.chips)) {
+        const emotionVarMap = {
+          joy: "--emotion-joy",
+          wonder: "--emotion-wonder",
+          calm: "--emotion-calm",
+          tender: "--emotion-tender",
+          mischief: "--emotion-mischief",
+          // The app's "funny" tag renders in the tender-pink pastel.
+          funny: "--emotion-tender",
+        };
+        const isTabletBucket = TABLET_SIZES.has(sizeKey);
+        data.chips.forEach((chip) => {
+          const el = document.createElement("div");
+          el.className = "chip";
+          const colorVar = emotionVarMap[chip.emotion] || "--emotion-joy";
+          el.style.background = "var(" + colorVar + ")";
+          // Chip positions are authored against the phone layout; on the
+          // tablet buckets the device geometry differs (full-bleed on
+          // 9:16), so a chip may land on TEXT inside the capture. Optional
+          // per-chip `top_pct_tablet` / `left_tablet` override the position
+          // on the three tablet buckets only.
+          const topPct = isTabletBucket && chip.top_pct_tablet != null ? chip.top_pct_tablet : chip.top_pct;
+          const left = isTabletBucket && chip.left_tablet != null ? chip.left_tablet : chip.left;
+          if (topPct != null) {
+            el.style.top = topPct + "%";
+          } else {
+            el.style.top = (chip.top || 0) + "px";
+          }
+          el.style.left = (left || 0) + "px";
+          el.style.width = (chip.size || 48) + "px";
+          el.style.height = (chip.size || 48) + "px";
+          if (chip.rotate) el.style.transform = "rotate(" + chip.rotate + "deg)";
+          chipsLayer.appendChild(el);
+        });
+      }
+
+      document.documentElement.setAttribute("data-ready", "true");
+    }
+
+    render();
+  </script>
+</body>
+</html>

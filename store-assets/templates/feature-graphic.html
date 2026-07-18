@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Momora — Feature Graphic</title>
+<style>
+  @font-face {
+    font-family: "Newsreader";
+    src: url("../fonts/Newsreader/Newsreader_400Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: "Newsreader";
+    src: url("../fonts/Newsreader/Newsreader_500Medium.ttf") format("truetype");
+    font-weight: 500;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: "Plus Jakarta Sans";
+    src: url("../fonts/PlusJakartaSans/PlusJakartaSans_400Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: "Plus Jakarta Sans";
+    src: url("../fonts/PlusJakartaSans/PlusJakartaSans_500Medium.ttf") format("truetype");
+    font-weight: 500;
+    font-style: normal;
+  }
+
+  :root {
+    --color-paper: #FAFAFD;
+    --color-primary: #D63E78;
+    --color-primary-dark: #B22A60;
+    --color-soft-pink: #FBD3E2;
+    --color-tint: #FDEAF1;
+    --color-ink: #2C2418;
+    --color-ink2: #6B5E4F;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 1024px;
+    height: 500px;
+    overflow: hidden;
+    background: var(--color-tint);
+  }
+
+  #stage {
+    position: relative;
+    width: 1024px;
+    height: 500px;
+    overflow: hidden;
+    /* Blush gradient, deliberately richer than the in-app paper so the
+       graphic doesn't wash out against Play's dark UI. */
+    background:
+      radial-gradient(90% 130% at 85% 20%, rgba(214, 62, 120, 0.10), rgba(214, 62, 120, 0) 60%),
+      linear-gradient(120deg, var(--color-tint) 0%, var(--color-soft-pink) 100%);
+  }
+
+  /* Everything critical lives inside the centered 860x480 safe zone:
+     (1024-860)/2 = 82px horizontal, (500-480)/2 = 10px vertical. */
+  #safe-zone {
+    position: absolute;
+    top: 10px;
+    left: 82px;
+    width: 860px;
+    height: 480px;
+    display: flex;
+    align-items: center;
+    gap: 36px;
+  }
+
+  /* Left ~45%: wordmark + headline, nothing else. */
+  #text-block {
+    flex: 0 0 384px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  #wordmark {
+    display: flex;
+    align-items: baseline;
+    font-family: "Newsreader", serif;
+    font-weight: 500;
+    font-size: 44px;
+    line-height: 1;
+    color: var(--color-ink);
+    text-transform: lowercase;
+    letter-spacing: -0.01em;
+  }
+
+  #wordmark .dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--color-primary);
+    margin-left: 5px;
+    transform: translateY(-3px);
+  }
+
+  #headline {
+    position: relative;
+    margin: 26px 0 0;
+    font-family: "Newsreader", serif;
+    font-weight: 500;
+    font-size: 64px;
+    line-height: 1.12;
+    color: var(--color-ink);
+    letter-spacing: -0.01em;
+  }
+
+  /* Saturated pink brush-stroke accent under the headline. */
+  #brush {
+    margin-top: 20px;
+    width: 240px;
+    height: 22px;
+  }
+
+  /* Right ~55%: generated watercolor art in a soft-rounded organic mask.
+     Focal point of the art sits inside the safe zone. */
+  #art-block {
+    flex: 1 1 auto;
+    height: 430px;
+    border-radius: 44% 56% 52% 48% / 52% 46% 54% 48%;
+    overflow: hidden;
+    box-shadow: 0 24px 60px -20px rgba(178, 42, 96, 0.35);
+  }
+
+  #art-block img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    display: block;
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="safe-zone">
+      <div id="text-block">
+        <div id="wordmark"><span id="wordmark-text">momora</span><span class="dot"></span></div>
+        <h1 id="headline"></h1>
+        <svg id="brush" viewBox="0 0 240 22" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+          <path d="M3 14 C 40 6, 90 4, 130 8 C 170 12, 210 10, 237 6 C 220 13, 200 18, 160 19 C 110 21, 50 20, 8 17 Z" fill="#D63E78" opacity="0.9"/>
+        </svg>
+      </div>
+      <div id="art-block">
+        <img id="art-img" src="" alt="" />
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function getSlideData() {
+      if (window.__SLIDE__) return window.__SLIDE__;
+      const usp = new URLSearchParams(location.search);
+      const raw = usp.get("data");
+      if (raw) {
+        try {
+          return JSON.parse(decodeURIComponent(escape(atob(raw))));
+        } catch (e) {
+          console.error("Failed to parse data param", e);
+        }
+      }
+      return {};
+    }
+
+    function render() {
+      const data = getSlideData();
+
+      if (data.wordmark) {
+        document.getElementById("wordmark-text").textContent = data.wordmark;
+      }
+      document.getElementById("headline").textContent = data.headline || "";
+
+      if (data.art && data.art.src) {
+        document.getElementById("art-img").src = data.art.src;
+      }
+
+      document.documentElement.setAttribute("data-ready", "true");
+    }
+
+    render();
+  </script>
+</body>
+</html>

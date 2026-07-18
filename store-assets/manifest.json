@@ -1,0 +1,109 @@
+{
+  "slides": [
+    {
+      "id": "s1-hook",
+      "template": "screenshot.html",
+      "sizes": ["appstore", "appstore-alt", "play", "ipad", "play-tablet7", "play-tablet10"],
+      "params": {
+        "layout": "hero",
+        "headline": "You don't have to remember it all.",
+        "script_accent": "we'll keep the little things",
+        "caption_top": 7.2,
+        "art": { "src": "../art/hero-family.png" },
+        "wordmark": { "position": "top" }
+      }
+    },
+    {
+      "id": "s2-transformation",
+      "template": "screenshot.html",
+      "sizes": ["appstore", "appstore-alt", "play", "ipad", "play-tablet7", "play-tablet10"],
+      "params": {
+        "headline": "Say it.\nWatch it become art.",
+        "subline": "A ten-second jot becomes an illustrated memory.",
+        "screenshot": "../source/IMG_0912.PNG",
+        "statusbar_bg": "linear-gradient(to bottom, #D1E2F4, #D7E5F6)",
+        "bleed": true,
+        "screenshot_tablet": "../source/ipad/s2-memory-detail.png",
+        "statusbar_bg_tablet": "#FCDCC0",
+        "chips": [
+          { "emotion": "tender", "top_pct": 30, "left": 58, "size": 56, "rotate": -10 },
+          { "emotion": "wonder", "top_pct": 56, "left": 1142, "size": 48, "rotate": 12 }
+        ],
+        "wordmark": { "position": "top" }
+      }
+    },
+    {
+      "id": "s3-no-homework",
+      "template": "screenshot.html",
+      "sizes": ["appstore", "appstore-alt", "play", "ipad", "play-tablet7", "play-tablet10"],
+      "params": {
+        "headline": "No blank pages. No homework.",
+        "subline": "Type it or say it while the coffee's still warm.",
+        "screenshot": "../source/IMG_0908.PNG",
+        "screenshot_tablet": "../source/ipad/s3-timeline.png",
+        "statusbar_bg_tablet": "#FAFAFD",
+        "chips": [
+          { "emotion": "funny", "top_pct": 28, "top_pct_tablet": 46, "left": 62, "size": 52, "rotate": -8 },
+          { "emotion": "joy", "top_pct": 58, "left": 1146, "size": 46, "rotate": 10 }
+        ],
+        "wordmark": { "position": "top" }
+      }
+    },
+    {
+      "id": "s4-family-cast",
+      "template": "screenshot.html",
+      "sizes": ["appstore", "appstore-alt", "play", "ipad", "play-tablet7", "play-tablet10"],
+      "params": {
+        "headline": "Everyone becomes a character.",
+        "subline": "Portraits drawn from your own photos.",
+        "screenshot": "../source/IMG_0909.PNG",
+        "screenshot_tablet": "../source/ipad/s4-family.png",
+        "statusbar_bg_tablet": "#FAFAFD",
+        "chips": [
+          { "emotion": "mischief", "top_pct": 32, "left": 1140, "size": 52, "rotate": 9 }
+        ],
+        "wordmark": { "position": "top" }
+      }
+    },
+    {
+      "id": "s5-look-back",
+      "template": "screenshot.html",
+      "sizes": ["appstore", "appstore-alt", "play", "ipad", "play-tablet7", "play-tablet10"],
+      "params": {
+        "headline": "Made for the 2 a.m. scroll.",
+        "subline": "Every little moment, right where you left it.",
+        "screenshot": "../source/IMG_0910.PNG",
+        "screenshot_tablet": "../source/ipad/s5-calendar.png",
+        "statusbar_bg_tablet": "#FAFAFD",
+        "chips": [
+          { "emotion": "calm", "top_pct": 30, "top_pct_tablet": 56.8, "left": 60, "size": 50, "rotate": -7 },
+          { "emotion": "wonder", "top_pct": 60, "top_pct_tablet": 52, "left": 1148, "size": 44, "rotate": 8 }
+        ],
+        "wordmark": { "position": "top" }
+      }
+    },
+    {
+      "id": "s6-closing",
+      "template": "screenshot.html",
+      "sizes": ["appstore", "appstore-alt", "play", "ipad", "play-tablet7", "play-tablet10"],
+      "params": {
+        "layout": "hero",
+        "headline": "Start where you are.",
+        "subline": "It's not too late. Tonight's little moment is enough.",
+        "caption_top": 6.0,
+        "art": { "src": "../art/evening-moment.png" },
+        "wordmark": { "position": "bottom" }
+      }
+    },
+    {
+      "id": "feature-graphic",
+      "template": "feature-graphic.html",
+      "size": "feature",
+      "params": {
+        "wordmark": "momora",
+        "headline": "Keep the little things.",
+        "art": { "src": "../art/feature-hero.png" }
+      }
+    }
+  ]
+}

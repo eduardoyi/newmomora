@@ -1,0 +1,14 @@
+{
+  "name": "momora-store-assets",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Rendering pipeline for Momora app store listing assets (screenshots, feature graphic, watercolor art).",
+  "type": "module",
+  "scripts": {
+    "render": "node render.mjs",
+    "generate-art": "node generate-art.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
+}
