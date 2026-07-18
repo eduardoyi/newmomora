@@ -2,7 +2,7 @@ import { useEventListener } from 'expo';
 import { Image } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
 import { SymbolView } from 'expo-symbols';
-import { useVideoPlayer, VideoView } from 'expo-video';
+import { createVideoPlayer, type VideoPlayer, VideoView } from 'expo-video';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -37,8 +37,54 @@ interface FullScreenMediaViewerProps {
   onClose: () => void;
 }
 
+// expo-video's own `useVideoPlayer` recreates and releases the player
+// whenever its source argument changes (see `useReleasingSharedObject`),
+// which is exactly what makes memory-media-carousel's equivalent unsafe: a
+// caption edit bumps cacheVersion, producing a fresh signed URL for the same
+// asset while this VideoView stays mounted (same activeIndex). Create the
+// player once and swap its source in place instead.
+function useVideoSourcePlayer(uri: string, setup: (player: VideoPlayer) => void): VideoPlayer {
+  const [player] = useState(() => {
+    const nextPlayer = createVideoPlayer({ uri, useCaching: true });
+    setup(nextPlayer);
+    return nextPlayer;
+  });
+  const loadedUriRef = useRef(uri);
+
+  useEffect(() => {
+    if (loadedUriRef.current === uri) {
+      return;
+    }
+    loadedUriRef.current = uri;
+    // Swap the source on the existing player instead of recreating it. Sync
+    // `replace` can stall the UI thread on Android; `replaceAsync` offloads
+    // the load to a different thread.
+    const wasPlaying = player.playing;
+    void player.replaceAsync({ uri, useCaching: true }).then(() => {
+      // A source swap can leave the native player paused on the new asset.
+      // Only resume if it was actually playing -- a user's manual
+      // tap-to-pause must not be overridden by an unrelated caption edit.
+      if (wasPlaying) {
+        player.play();
+      }
+      // The swap can lose the race with unmount/release ("already released"
+      // rejection); failure just leaves the old frame until the next mount.
+    }).catch(() => {});
+  }, [player, uri]);
+
+  useEffect(() => {
+    return () => {
+      player.release();
+    };
+    // Released only on unmount -- see the swap effect above for uri changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return player;
+}
+
 function FullScreenVideo({ isActive, uri }: { isActive: boolean; uri: string }) {
-  const player = useVideoPlayer({ uri, useCaching: true }, (videoPlayer) => {
+  const player = useVideoSourcePlayer(uri, (videoPlayer) => {
     videoPlayer.bufferOptions = {
       preferredForwardBufferDuration: 8,
       maxBufferBytes: 16 * 1024 * 1024,

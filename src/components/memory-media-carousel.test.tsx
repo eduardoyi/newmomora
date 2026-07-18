@@ -12,6 +12,7 @@ const mockVideoPlayer = {
   play: jest.fn(),
   playing: true,
   release: jest.fn(),
+  replaceAsync: jest.fn(() => Promise.resolve()),
   muted: true,
 };
 
@@ -325,6 +326,45 @@ describe('MemoryMediaCarousel', () => {
     } finally {
       requestAnimationFrameSpy.mockRestore();
     }
+  });
+
+  it('swaps the source in place (no recreate) when a caption edit refreshes the signed URL for an active video', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+    const { getByTestId, rerender } = render(
+      <MemoryMediaCarousel assets={[videoAsset]} cacheVersion="version-1" />,
+    );
+
+    measureCarousel(getByTestId);
+
+    expect(getByTestId('memory-media-video')).toBeTruthy();
+    expect(createVideoPlayer).toHaveBeenCalledTimes(1);
+
+    // Editing the memory's caption bumps cacheVersion, which produces a
+    // fresh signed URL for the same object_key while this video stays
+    // mounted -- the regression this hook exists to guard against.
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4?refreshed=1' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+
+    rerender(<MemoryMediaCarousel assets={[videoAsset]} cacheVersion="version-2" />);
+
+    expect(createVideoPlayer).toHaveBeenCalledTimes(1);
+    expect(mockVideoPlayer.release).not.toHaveBeenCalled();
+    expect(mockVideoPlayer.replaceAsync).toHaveBeenCalledWith({
+      uri: 'https://example.com/video-1.mp4?refreshed=1',
+      useCaching: true,
+    });
   });
 
   it('keeps the thumbnail over an active player until its first frame renders', () => {

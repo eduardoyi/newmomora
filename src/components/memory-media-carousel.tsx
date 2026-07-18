@@ -56,9 +56,10 @@ function setVideoPlayerMuted(player: VideoPlayer, isMuted: boolean) {
 
 function useDeferredReleaseVideoPlayer(url: string, isMuted: boolean): VideoPlayer | null {
   const [player, setPlayer] = useState<VideoPlayer | null>(null);
+  const loadedUrlRef = useRef(url);
 
   useEffect(() => {
-    const nextPlayer = createVideoPlayer({ uri: url, useCaching: true });
+    const nextPlayer = createVideoPlayer({ uri: loadedUrlRef.current, useCaching: true });
     nextPlayer.bufferOptions = {
       preferredForwardBufferDuration: 8,
       maxBufferBytes: 16 * 1024 * 1024,
@@ -73,7 +74,35 @@ function useDeferredReleaseVideoPlayer(url: string, isMuted: boolean): VideoPlay
       // assigned a dead shared object on Android.
       requestAnimationFrame(() => nextPlayer.release());
     };
-  }, [url]);
+    // Created once per mount and released only on unmount above -- a caption
+    // edit bumps cacheVersion, which changes `url` (a fresh signed URL for
+    // the same object_key) without the VideoView ever unmounting. Recreating
+    // the player on every `url` change raced VideoView's prop diff against
+    // the just-released old player (native "already released" throw that
+    // wedges React). See the swap effect below for URL changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!player || loadedUrlRef.current === url) {
+      return;
+    }
+    loadedUrlRef.current = url;
+    // Swap the source on the existing player instead of recreating it. Sync
+    // `replace` can stall the UI thread on Android; `replaceAsync` offloads
+    // the load to a different thread.
+    const wasPlaying = player.playing;
+    void player.replaceAsync({ uri: url, useCaching: true }).then(() => {
+      // A source swap can leave the native player paused on the new asset.
+      // Only resume if it was actually playing -- a user's manual
+      // tap-to-pause must not be overridden by an unrelated caption edit.
+      if (wasPlaying) {
+        player.play();
+      }
+      // The swap can lose the race with unmount/release ("already released"
+      // rejection); failure just leaves the old frame until the next mount.
+    }).catch(() => {});
+  }, [player, url]);
 
   useEffect(() => {
     if (player) {

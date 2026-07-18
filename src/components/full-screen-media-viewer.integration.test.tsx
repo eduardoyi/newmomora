@@ -1,4 +1,5 @@
 import { fireEvent, render, within } from '@testing-library/react-native';
+import { createVideoPlayer } from 'expo-video';
 import type { ReactElement } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -10,6 +11,8 @@ const mockVideoPlayer = {
   removeListener: jest.fn(),
   pause: jest.fn(),
   play: jest.fn(),
+  release: jest.fn(),
+  replaceAsync: jest.fn(() => Promise.resolve()),
   playing: true,
 };
 
@@ -18,10 +21,7 @@ jest.mock('@/hooks/useMediaUrls', () => ({
 }));
 
 jest.mock('expo-video', () => ({
-  useVideoPlayer: jest.fn((_source, setup) => {
-    setup?.(mockVideoPlayer);
-    return mockVideoPlayer;
-  }),
+  createVideoPlayer: jest.fn(() => mockVideoPlayer),
   VideoView: 'VideoView',
 }));
 
@@ -134,5 +134,43 @@ describe('FullScreenMediaViewer integration', () => {
     }]);
     fireEvent(image, 'error', { nativeEvent: { error: 'expired' } });
     expect(mockRefetchMediaUrls).toHaveBeenCalledTimes(1);
+  });
+
+  it('swaps the active video source in place (no recreate) when a caption edit refreshes the signed URL, and releases only on unmount', () => {
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/video.mp4': 'https://example.com/video.mp4' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+
+    const items = [{ id: 'video', contentType: 'video/mp4', objectKey: 'user/memory/video.mp4' }];
+    const { getByTestId, rerender, unmount } = renderWithSafeArea(
+      <FullScreenMediaViewer items={items} onClose={jest.fn()} />,
+    );
+
+    expect(getByTestId('full-screen-media-video')).toBeTruthy();
+    expect(createVideoPlayer).toHaveBeenCalledTimes(1);
+
+    // Editing a memory's caption bumps cacheVersion, which changes the
+    // signed URL for the same object_key while this video stays mounted.
+    mockedUseMediaUrls.mockReturnValue({
+      data: { 'user/memory/video.mp4': 'https://example.com/video.mp4?refreshed=1' },
+      refetch: mockRefetchMediaUrls,
+    } as ReturnType<typeof useMediaUrls>);
+
+    rerender(
+      <SafeAreaProvider initialMetrics={safeAreaMetrics}>
+        <FullScreenMediaViewer items={items} onClose={jest.fn()} />
+      </SafeAreaProvider>,
+    );
+
+    expect(createVideoPlayer).toHaveBeenCalledTimes(1);
+    expect(mockVideoPlayer.release).not.toHaveBeenCalled();
+    expect(mockVideoPlayer.replaceAsync).toHaveBeenCalledWith({
+      uri: 'https://example.com/video.mp4?refreshed=1',
+      useCaching: true,
+    });
+
+    unmount();
+    expect(mockVideoPlayer.release).toHaveBeenCalledTimes(1);
   });
 });
