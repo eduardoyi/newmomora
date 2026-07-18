@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert@1';
+import { assertEquals, assertRejects } from 'jsr:@std/assert@1';
 import {
   buildMemberIllustrationDescription,
   prepareIllustrationReferences,
@@ -233,4 +233,34 @@ Deno.test('prepareIllustrationReferences reindexes when an earlier portrait fail
     { referenceIndex: 1, description: 'Mara (1 year and 6 months old, Female)' },
   ]);
   assertEquals(bundle.referenceImages[0]?.filename, 'reference-1-mara.webp');
+});
+
+Deno.test('prepareIllustrationReferences propagates an abort without trying the next source', async () => {
+  const controller = new AbortController();
+  const requestedKeys: string[] = [];
+
+  await assertRejects(() =>
+    prepareIllustrationReferences(
+      [
+        {
+          id: 'mara-id',
+          name: 'Mara',
+          date_of_birth: '2024-11-01',
+          gender: 'Female',
+          additional_info: null,
+          illustrated_profile_key: 'user/family/mara/portrait.webp',
+          profile_picture_key: 'user/family/mara/photo.jpg',
+        },
+      ],
+      '2026-05-26',
+      async (key) => {
+        requestedKeys.push(key);
+        controller.abort('deadline reached');
+        throw new DOMException('Aborted', 'AbortError');
+      },
+      { signal: controller.signal },
+    ),
+  );
+
+  assertEquals(requestedKeys, ['user/family/mara/portrait.webp']);
 });

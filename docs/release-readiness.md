@@ -164,7 +164,9 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
   - [ ] Family onboarding and portrait generation.
   - [ ] Text, voice, photo, and video memory creation.
   - [ ] Illustration generation and retry behavior.
-    - [ ] Investigate and retest normal Edge illustration generation without an operator fallback. During reviewer-fixture seeding, two production attempts remained `generating` beyond the app's three-minute stale threshold and required the fixture-only local fallback.
+    - [x] Investigate and retest normal Edge illustration generation without an operator fallback. During reviewer-fixture seeding, two production attempts remained `generating` beyond the app's three-minute stale threshold and required the fixture-only local fallback.
+      - On July 18, 2026, `generate-illustration` v33 completed a controlled regeneration against the synthetic reviewer fixture in 85.3 seconds, published a new generation, left the memory `ready`, and cleared its attempt token. Privacy-safe phase telemetry attributed 73.7 seconds to OpenAI image generation and 6.9 seconds to publication.
+      - The deployed function now applies a request-wide 120-second cancellable pre-finalization deadline, preserving intended headroom under Supabase's 150-second request-idle limit. A preceding timeout-path check restored the retained illustration and cleared the attempt token instead of leaving the row stuck in `generating`.
   - [ ] Family invite, redeem, and approval.
   - [ ] Likes and comments.
   - [ ] Push registration, delivery, and notification routing.

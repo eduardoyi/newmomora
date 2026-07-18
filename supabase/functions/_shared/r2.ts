@@ -15,6 +15,10 @@ export interface R2Config {
   bucket: string;
 }
 
+export interface R2RequestOptions {
+  signal?: AbortSignal;
+}
+
 const DEFAULT_UPLOAD_EXPIRES_IN = 900;
 const DEFAULT_DOWNLOAD_EXPIRES_IN = 3600;
 
@@ -92,7 +96,7 @@ export const R2_URL_EXPIRY = {
   download: DEFAULT_DOWNLOAD_EXPIRES_IN,
 } as const;
 
-export async function getObjectBytes(objectKey: string): Promise<Uint8Array> {
+export async function getObjectBytes(objectKey: string, options: R2RequestOptions = {}): Promise<Uint8Array> {
   const urls = await createPresignedGetUrls([objectKey], 300);
   const url = urls[objectKey];
 
@@ -100,7 +104,7 @@ export async function getObjectBytes(objectKey: string): Promise<Uint8Array> {
     throw new Error('Failed to create presigned download URL');
   }
 
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: options.signal });
 
   if (!response.ok) {
     throw new Error(`R2 fetch failed with status ${response.status}`);

@@ -2,8 +2,10 @@ import { substituteLinkLabels, type LinkPreviewMap } from '@/utils/links';
 
 export const MAX_ILLUSTRATION_MEMBERS = 6;
 
-/** Edge image generation can exceed function limits; recover after this window. */
-/** Slightly above Supabase Edge ~150s limit so stuck jobs recover quickly. */
+/**
+ * Backstop for a worker that dies before its 120-second pre-finalization deadline can
+ * clear the claim. Manager clients recover stale rows on their next load.
+ */
 export const ILLUSTRATION_GENERATION_STALE_MS = 3 * 60 * 1000;
 
 export type IllustrationStatus = 'none' | 'pending' | 'generating' | 'ready' | 'failed';

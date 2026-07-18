@@ -45,6 +45,12 @@ export interface GenerateIllustrationResponse {
 
 const EMPTY_MEMBER_ID = '00000000-0000-4000-8000-000000000000';
 const MAX_ILLUSTRATION_MEMBERS = 6;
+// Supabase's 150-second request-idle limit leaves 30 seconds for the
+// un-aborted immutable upload, CAS publication, and claim cleanup.
+const SUPABASE_REQUEST_IDLE_LIMIT_MS = 150_000;
+const ILLUSTRATION_FINALIZATION_RESERVE_MS = 30_000;
+export const ILLUSTRATION_GENERATION_TIMEOUT_MS =
+  SUPABASE_REQUEST_IDLE_LIMIT_MS - ILLUSTRATION_FINALIZATION_RESERVE_MS;
 const ALLOWED_EXPRESSION_STYLES = new Set(['comedic', 'tender', 'neutral']);
 type ExpressionStyle = 'comedic' | 'tender' | 'neutral';
 
@@ -52,14 +58,20 @@ export interface GenerateIllustrationDependencies {
   getObjectBytes: typeof getObjectBytes;
   putObjectBytes: typeof putObjectBytes;
   deleteObject: typeof deleteObject;
+  chatJson: typeof chatJson;
+  editImageWithReferences: typeof editImageWithReferences;
   createId: () => string;
+  generationTimeoutMs: number;
 }
 
 const DEFAULT_DEPENDENCIES: GenerateIllustrationDependencies = {
   getObjectBytes,
   putObjectBytes,
   deleteObject,
+  chatJson,
+  editImageWithReferences,
   createId: () => crypto.randomUUID(),
+  generationTimeoutMs: ILLUSTRATION_GENERATION_TIMEOUT_MS,
 };
 
 interface CommitIllustrationGenerationInput {
@@ -124,6 +136,27 @@ export async function commitIllustrationGeneration({
   }
 }
 
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw signal.reason ?? new DOMException('Illustration generation aborted', 'AbortError');
+  }
+}
+
+function logGenerationPhase(memoryId: string, phase: string, startedAt: number): void {
+  console.info('generate-illustration phase complete', {
+    memoryId,
+    phase,
+    durationMs: Date.now() - startedAt,
+  });
+}
+
+function remainingPreFinalizationDeadlineMs(
+  preFinalizationDeadlineMs: number,
+  requestStartedAt: number,
+): number {
+  return Math.max(1, preFinalizationDeadlineMs - (Date.now() - requestStartedAt));
+}
+
 export async function handleGenerateIllustration(
   req: Request,
   dependencyOverrides: Partial<GenerateIllustrationDependencies> = {},
@@ -137,6 +170,8 @@ export async function handleGenerateIllustration(
   if (req.method !== 'POST') {
     return errorResponse('Method not allowed', 405, 'method_not_allowed');
   }
+
+  const requestStartedAt = Date.now();
 
   const user = await getAuthenticatedUser(req);
   if (!user) {
@@ -253,180 +288,194 @@ export async function handleGenerateIllustration(
     return errorResponse('Illustration generation was superseded', 409, 'GENERATION_SUPERSEDED');
   }
 
-  const restoreClaimedAttempt = async () => {
-    await supabase
-      .from('memories')
-      .update({
-        illustration_status: memory.illustration_key && memory.illustration_generation_id
-          ? 'ready'
-          : 'failed',
-        illustration_generation_attempt_id: null,
-      })
-      .eq('id', memoryId)
-      .eq('illustration_generation_attempt_id', generationAttemptId)
-      .eq('illustration_status', 'generating');
-  };
-
-  const { data: tagRows, error: tagError } = await supabase
-    .from('memory_family_members')
-    .select('family_member_id')
-    .eq('memory_id', memoryId);
-
-  if (tagError) {
-    console.error('generate-illustration tag lookup failed', tagError.message);
-    await restoreClaimedAttempt();
-    return errorResponse('Failed to load memory tags', 500, 'internal_error');
-  }
-
-  const taggedMemberIds = (tagRows ?? []).map((row) => row.family_member_id);
-
-  if (taggedMemberIds.length > MAX_ILLUSTRATION_MEMBERS) {
-    await restoreClaimedAttempt();
-    return errorResponse(
-      `AI illustrations support up to ${MAX_ILLUSTRATION_MEMBERS} family members`,
-      400,
-      'ILLUSTRATION_MEMBER_LIMIT',
-    );
-  }
-
-  // Always load name/nickname rows for the whole family: used both for the
-  // no-tag fallback member match below and for the safety-rewrite nickname
-  // mapping, so any nickname mentioned in the text gets resolved even for
-  // members that aren't tagged on this memory.
-  const { data: nameRows, error: nameRowsError } = await supabase
-    .from('family_members')
-    .select('id, name, nicknames')
-    .eq('family_id', memory.family_id);
-
-  if (nameRowsError) {
-    console.error('generate-illustration name lookup failed', nameRowsError.message);
-    await restoreClaimedAttempt();
-    return errorResponse('Failed to load family members', 500, 'internal_error');
-  }
-
-  // URLs can't match member names, but strip for consistency with every
-  // other content->prompt call site (docs/plans/inline-links.md §8).
-  const memberIds = resolveMemberIdsForIllustration(
-    taggedMemberIds,
-    stripUrls(memory.content),
-    nameRows ?? [],
-    MAX_ILLUSTRATION_MEMBERS,
-  );
-
-  const { data: members, error: membersError } = await supabase
-    .from('family_members')
-    .select('id, name, nicknames, date_of_birth, gender, additional_info')
-    .eq('family_id', memory.family_id)
-    .in('id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID]);
-
-  if (membersError) {
-    console.error('generate-illustration members lookup failed', membersError.message);
-    await restoreClaimedAttempt();
-    return errorResponse('Failed to load family members', 500, 'internal_error');
-  }
-
-  const { data: portraitVersions, error: portraitVersionsError } = await supabase
-    .from('family_member_portrait_versions')
-    .select(
-      'id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, created_at',
-    )
-    .in('family_member_id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
-    .not('illustrated_profile_key', 'is', null);
-
-  if (portraitVersionsError) {
-    console.error('generate-illustration portrait lookup failed', portraitVersionsError.message);
-    await restoreClaimedAttempt();
-    return errorResponse('Failed to load character portraits', 500, 'internal_error');
-  }
-
-  const versionsByMember = new Map<string, PortraitVersionCandidate[]>();
-  for (const portraitVersion of (portraitVersions ?? []) as PortraitVersionCandidate[]) {
-    const current = versionsByMember.get(portraitVersion.family_member_id) ?? [];
-    current.push(portraitVersion);
-    versionsByMember.set(portraitVersion.family_member_id, current);
-  }
-
-  const readyMembers = sortMembersByTagOrder(
-    (members ?? []).flatMap((member) => {
-      const selected = resolvePortraitVersionAtDate(
-        versionsByMember.get(member.id) ?? [],
-        memory.memory_date,
-      );
-      return selected
-        ? [
-            {
-              ...member,
-              illustrated_profile_key: selected.illustrated_profile_key,
-              profile_picture_key: selected.profile_picture_key,
-            },
-          ]
-        : [];
-    }),
-    memberIds,
-  );
-
-  if (readyMembers.length === 0) {
-    await restoreClaimedAttempt();
-
-    return errorResponse('No ready character portraits for tagged members', 400, 'NO_PORTRAITS');
-  }
-
-  // A URL-only memory passes the raw-content check at the top of the
-  // handler but would produce an empty scene description once URLs are
-  // stripped for the prompt -- never let that reach the safety rewrite or
-  // the image API (docs/plans/inline-links.md §8).
-  const strippedContent = stripUrls(memory.content);
-
-  if (!strippedContent.trim()) {
-    await restoreClaimedAttempt();
-
-    return errorResponse(
-      'Illustration requires descriptive text, not just a link',
-      400,
-      'EMPTY_CONTENT',
-    );
-  }
-
-  const { data: family } = await supabase
-    .from('families')
-    .select('illustration_style')
-    .eq('id', memory.family_id)
-    .maybeSingle();
-
-  const styleDescription = getStyleDescription(
-    family?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN,
-  );
-
-  const illustrationGenerationId = dependencies.createId();
-  const illustrationKey = buildMemoryIllustrationKey(
-    user.id,
-    memoryId,
-    illustrationGenerationId,
-  );
-  const normalizedEmotion = normalizeEmotion(memory.emotion);
-  const resolvedPalette =
-    colorPalette ??
-    (normalizedEmotion ? EMOTION_PALETTES[normalizedEmotion] : undefined) ??
-    EMOTION_PALETTES.tender;
-
+  const generationStartedAt = Date.now();
+  const generationController = new AbortController();
+  let generationPhase = 'preparation';
+  // Keep a small, bounded portion of the one claim-scoped budget for the
+  // immutable upload + checked DB swap. Aborting those operations can make an
+  // upload outcome ambiguous; the existing commit helper is deliberately
+  // allowed to finish or reconcile that finalization safely.
+  const generationTimeoutId = setTimeout(() => {
+    generationController.abort('Illustration generation deadline exceeded');
+    console.warn('generate-illustration deadline reached', {
+      memoryId,
+      phase: generationPhase,
+      durationMs: Date.now() - generationStartedAt,
+    });
+  }, remainingPreFinalizationDeadlineMs(dependencies.generationTimeoutMs, requestStartedAt));
   let generationSucceeded = false;
 
   try {
-    const safetyMembers: SafetyPromptMember[] = nameRows ?? [];
-    const safety = await chatJson<{ safeDescription?: string; expressionStyle?: string }>(
-      buildSafetySystemPrompt(safetyMembers),
-      strippedContent,
+    throwIfAborted(generationController.signal);
+    const tagPhaseStartedAt = Date.now();
+    const { data: tagRows, error: tagError } = await supabase
+      .from('memory_family_members')
+      .select('family_member_id')
+      .eq('memory_id', memoryId)
+      .abortSignal(generationController.signal);
+
+    throwIfAborted(generationController.signal);
+    if (tagError) {
+      console.error('generate-illustration tag lookup failed', tagError.message);
+      return errorResponse('Failed to load memory tags', 500, 'internal_error');
+    }
+    logGenerationPhase(memoryId, 'tags', tagPhaseStartedAt);
+
+    const taggedMemberIds = (tagRows ?? []).map((row) => row.family_member_id);
+
+    if (taggedMemberIds.length > MAX_ILLUSTRATION_MEMBERS) {
+      return errorResponse(
+        `AI illustrations support up to ${MAX_ILLUSTRATION_MEMBERS} family members`,
+        400,
+        'ILLUSTRATION_MEMBER_LIMIT',
+      );
+    }
+
+    // Always load name/nickname rows for the whole family: used both for the
+    // no-tag fallback member match below and for the safety-rewrite nickname
+    // mapping, so any nickname mentioned in the text gets resolved even for
+    // members that aren't tagged on this memory.
+    generationPhase = 'family-member-lookup';
+    const memberLookupPhaseStartedAt = Date.now();
+    const { data: nameRows, error: nameRowsError } = await supabase
+      .from('family_members')
+      .select('id, name, nicknames')
+      .eq('family_id', memory.family_id)
+      .abortSignal(generationController.signal);
+
+    throwIfAborted(generationController.signal);
+    if (nameRowsError) {
+      console.error('generate-illustration name lookup failed', nameRowsError.message);
+      return errorResponse('Failed to load family members', 500, 'internal_error');
+    }
+
+    // URLs can't match member names, but strip for consistency with every
+    // other content->prompt call site (docs/plans/inline-links.md §8).
+    const memberIds = resolveMemberIdsForIllustration(
+      taggedMemberIds,
+      stripUrls(memory.content),
+      nameRows ?? [],
+      MAX_ILLUSTRATION_MEMBERS,
     );
+
+    const { data: members, error: membersError } = await supabase
+      .from('family_members')
+      .select('id, name, nicknames, date_of_birth, gender, additional_info')
+      .eq('family_id', memory.family_id)
+      .in('id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
+      .abortSignal(generationController.signal);
+
+    throwIfAborted(generationController.signal);
+    if (membersError) {
+      console.error('generate-illustration members lookup failed', membersError.message);
+      return errorResponse('Failed to load family members', 500, 'internal_error');
+    }
+
+    const { data: portraitVersions, error: portraitVersionsError } = await supabase
+      .from('family_member_portrait_versions')
+      .select(
+        'id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, created_at',
+        )
+        .in('family_member_id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
+        .not('illustrated_profile_key', 'is', null)
+        .abortSignal(generationController.signal);
+
+    throwIfAborted(generationController.signal);
+    if (portraitVersionsError) {
+      console.error('generate-illustration portrait lookup failed', portraitVersionsError.message);
+      return errorResponse('Failed to load character portraits', 500, 'internal_error');
+    }
+    logGenerationPhase(memoryId, generationPhase, memberLookupPhaseStartedAt);
+
+    const versionsByMember = new Map<string, PortraitVersionCandidate[]>();
+    for (const portraitVersion of (portraitVersions ?? []) as PortraitVersionCandidate[]) {
+      const current = versionsByMember.get(portraitVersion.family_member_id) ?? [];
+      current.push(portraitVersion);
+      versionsByMember.set(portraitVersion.family_member_id, current);
+    }
+
+    const readyMembers = sortMembersByTagOrder(
+      (members ?? []).flatMap((member) => {
+        const selected = resolvePortraitVersionAtDate(
+          versionsByMember.get(member.id) ?? [],
+          memory.memory_date,
+        );
+        return selected
+          ? [
+              {
+                ...member,
+                illustrated_profile_key: selected.illustrated_profile_key,
+                profile_picture_key: selected.profile_picture_key,
+              },
+            ]
+          : [];
+      }),
+      memberIds,
+    );
+
+    if (readyMembers.length === 0) {
+      return errorResponse('No ready character portraits for tagged members', 400, 'NO_PORTRAITS');
+    }
+
+    // A URL-only memory passes the raw-content check at the top of the
+    // handler but would produce an empty scene description once URLs are
+    // stripped for the prompt -- never let that reach the safety rewrite or
+    // the image API (docs/plans/inline-links.md §8).
+    const strippedContent = stripUrls(memory.content);
+
+    if (!strippedContent.trim()) {
+      return errorResponse('Illustration requires descriptive text, not just a link', 400, 'EMPTY_CONTENT');
+    }
+
+    generationPhase = 'style-lookup';
+    const stylePhaseStartedAt = Date.now();
+    const { data: family } = await supabase
+      .from('families')
+      .select('illustration_style')
+      .eq('id', memory.family_id)
+      .abortSignal(generationController.signal)
+      .maybeSingle();
+    throwIfAborted(generationController.signal);
+    logGenerationPhase(memoryId, generationPhase, stylePhaseStartedAt);
+
+    const styleDescription = getStyleDescription(
+      family?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN,
+    );
+
+    const illustrationGenerationId = dependencies.createId();
+    const illustrationKey = buildMemoryIllustrationKey(user.id, memoryId, illustrationGenerationId);
+    const normalizedEmotion = normalizeEmotion(memory.emotion);
+    const resolvedPalette =
+      colorPalette ??
+      (normalizedEmotion ? EMOTION_PALETTES[normalizedEmotion] : undefined) ??
+      EMOTION_PALETTES.tender;
+
+    generationPhase = 'safety-precheck';
+    const safetyPhaseStartedAt = Date.now();
+    const safetyMembers: SafetyPromptMember[] = nameRows ?? [];
+    const safety = await dependencies.chatJson<{
+      safeDescription?: string;
+      expressionStyle?: string;
+    }>(buildSafetySystemPrompt(safetyMembers), strippedContent, {
+      signal: generationController.signal,
+    });
+    throwIfAborted(generationController.signal);
+    logGenerationPhase(memoryId, generationPhase, safetyPhaseStartedAt);
 
     const safeDescription = safety.safeDescription?.trim() || strippedContent.slice(0, 280);
     const expressionStyle: ExpressionStyle = ALLOWED_EXPRESSION_STYLES.has(safety.expressionStyle ?? '')
       ? (safety.expressionStyle as ExpressionStyle)
       : 'neutral';
+    generationPhase = 'portrait-reference-preparation';
+    const referencePhaseStartedAt = Date.now();
     const { characterReferences, referenceImages } = await prepareIllustrationReferences(
       readyMembers,
       memory.memory_date,
       dependencies.getObjectBytes,
+      { signal: generationController.signal },
     );
+    throwIfAborted(generationController.signal);
+    logGenerationPhase(memoryId, generationPhase, referencePhaseStartedAt);
 
     if (referenceImages.length === 0) {
       throw new Error('Failed to load portrait references for tagged members');
@@ -442,8 +491,20 @@ export async function handleGenerateIllustration(
       styleDescription,
     });
 
-    const illustrationBytes = await editImageWithReferences(prompt, referenceImages);
+    generationPhase = 'image-generation';
+    const imagePhaseStartedAt = Date.now();
+    const illustrationBytes = await dependencies.editImageWithReferences(prompt, referenceImages, {
+      signal: generationController.signal,
+    });
+    throwIfAborted(generationController.signal);
+    logGenerationPhase(memoryId, generationPhase, imagePhaseStartedAt);
 
+    // Do not pass an abort signal into immutable upload/CAS finalization. The
+    // timer has reserved intended publication headroom so a
+    // provider timeout cannot leave an ambiguous publication result.
+    clearTimeout(generationTimeoutId);
+    generationPhase = 'publication';
+    const publicationPhaseStartedAt = Date.now();
     await commitIllustrationGeneration({
       oldKey: memory.illustration_key,
       newKey: illustrationKey,
@@ -484,10 +545,11 @@ export async function handleGenerateIllustration(
         }
         return Boolean(
           currentMemory?.illustration_key === illustrationKey &&
-          currentMemory.illustration_generation_id === illustrationGenerationId
+          currentMemory.illustration_generation_id === illustrationGenerationId,
         );
       },
     });
+    logGenerationPhase(memoryId, generationPhase, publicationPhaseStartedAt);
 
     generationSucceeded = true;
 
@@ -501,15 +563,19 @@ export async function handleGenerateIllustration(
   } catch (error) {
     console.error('generate-illustration failed', error instanceof Error ? error.message : 'unknown');
 
+    if (generationController.signal.aborted) {
+      return errorResponse('Illustration generation timed out. Please try again.', 504, 'GENERATION_TIMEOUT');
+    }
+
     return errorResponse('Illustration generation failed', 500, 'GENERATION_FAILED');
   } finally {
+    clearTimeout(generationTimeoutId);
     if (!generationSucceeded) {
       await supabase
         .from('memories')
         .update({
-          illustration_status: memory.illustration_key && memory.illustration_generation_id
-            ? 'ready'
-            : 'failed',
+          illustration_status:
+            memory.illustration_key && memory.illustration_generation_id ? 'ready' : 'failed',
           illustration_generation_attempt_id: null,
         })
         .eq('id', memoryId)

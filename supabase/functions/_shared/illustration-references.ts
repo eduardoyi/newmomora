@@ -58,7 +58,8 @@ function sanitizeReferenceFilename(name: string, referenceIndex: number, extensi
 export async function prepareIllustrationReferences(
   members: IllustrationFamilyMember[],
   memoryDate: string,
-  getObjectBytes: (key: string) => Promise<Uint8Array>,
+  getObjectBytes: (key: string, options?: { signal?: AbortSignal }) => Promise<Uint8Array>,
+  options: { signal?: AbortSignal } = {},
 ): Promise<IllustrationReferenceBundle> {
   const characterReferences: Array<{ referenceIndex: number; description: string }> = [];
   const referenceImages: ReferenceImageInput[] = [];
@@ -84,7 +85,7 @@ export async function prepareIllustrationReferences(
 
     for (const attempt of attempts) {
       try {
-        const bytes = await getObjectBytes(attempt.key);
+        const bytes = await getObjectBytes(attempt.key, { signal: options.signal });
         const capped = await capIllustrationReferenceImage(bytes, attempt.contentType);
         const referenceIndex = referenceImages.length + 1;
 
@@ -102,7 +103,11 @@ export async function prepareIllustrationReferences(
           ),
         });
         break;
-      } catch {
+      } catch (error) {
+        if (options.signal?.aborted) {
+          throw error;
+        }
+
         // Try the next source for this member.
       }
     }

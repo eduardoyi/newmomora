@@ -4,9 +4,11 @@ const PRIMARY_IMAGE_MODEL = 'gpt-image-2';
 const FALLBACK_IMAGE_MODEL = 'gpt-image-1';
 const MODELS_SUPPORTING_INPUT_FIDELITY = new Set([FALLBACK_IMAGE_MODEL]);
 
-export interface OpenAiImageRequestOptions {
+export interface OpenAiRequestOptions {
   signal?: AbortSignal;
 }
+
+export interface OpenAiImageRequestOptions extends OpenAiRequestOptions {}
 
 export { FALLBACK_IMAGE_MODEL, PRIMARY_IMAGE_MODEL };
 
@@ -18,6 +20,12 @@ function getOpenAiKey(): string {
   }
 
   return apiKey;
+}
+
+function throwIfAborted(options: OpenAiRequestOptions): void {
+  if (options.signal?.aborted) {
+    throw options.signal.reason ?? new DOMException('OpenAI request aborted', 'AbortError');
+  }
 }
 
 async function readOpenAiErrorSnippet(response: Response): Promise<string> {
@@ -45,7 +53,11 @@ function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-export async function chatJson<T>(systemPrompt: string, userPrompt: string): Promise<T> {
+export async function chatJson<T>(
+  systemPrompt: string,
+  userPrompt: string,
+  options: OpenAiRequestOptions = {},
+): Promise<T> {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -61,6 +73,7 @@ export async function chatJson<T>(systemPrompt: string, userPrompt: string): Pro
         { role: 'user', content: userPrompt },
       ],
     }),
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -208,6 +221,7 @@ export async function generateImage(
   try {
     return await generateImageWithModel(prompt, PRIMARY_IMAGE_MODEL, options);
   } catch (primaryError) {
+    throwIfAborted(options);
     console.error(
       'OpenAI image generation primary model failed',
       primaryError instanceof Error ? primaryError.message : 'unknown',
@@ -300,6 +314,7 @@ export async function editImageWithReferences(
   if (primaryEdit) {
     return primaryEdit;
   }
+  throwIfAborted(options);
 
   const fallbackEdit = await editImagesWithModel(
     prompt,
@@ -310,6 +325,7 @@ export async function editImageWithReferences(
   if (fallbackEdit) {
     return fallbackEdit;
   }
+  throwIfAborted(options);
 
   console.error('OpenAI image edit exhausted; falling back to generation');
   return generateImage(prompt, options);

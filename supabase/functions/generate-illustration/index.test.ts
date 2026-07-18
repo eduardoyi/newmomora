@@ -1,5 +1,9 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
-import { commitIllustrationGeneration, handleGenerateIllustration } from './index.ts';
+import {
+  commitIllustrationGeneration,
+  handleGenerateIllustration,
+  ILLUSTRATION_GENERATION_TIMEOUT_MS,
+} from './index.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const MEMORY_ID = '22222222-2222-4222-8222-222222222222';
@@ -20,6 +24,7 @@ interface MockNetworkResult {
   openAiChatSystemPrompts: string[];
   openAiImagePrompts: string[];
   portraitLoads: number;
+  memoryPatches: Array<{ payload: Record<string, unknown>; url: string }>;
 }
 
 const TEST_ENV = {
@@ -32,6 +37,7 @@ async function withMockedIllustrationNetwork(
   content: string,
   run: (result: MockNetworkResult) => Promise<void>,
   taggedMemberIds: string[] = [MEMBER_ID],
+  memoryOverrides: Record<string, unknown> = {},
 ): Promise<void> {
   const originalFetch = globalThis.fetch;
   const originalEnv = new Map(
@@ -42,6 +48,7 @@ async function withMockedIllustrationNetwork(
     openAiChatSystemPrompts: [],
     openAiImagePrompts: [],
     portraitLoads: 0,
+    memoryPatches: [],
   };
 
   for (const [key, value] of Object.entries(TEST_ENV)) {
@@ -70,6 +77,9 @@ async function withMockedIllustrationNetwork(
 
       if (request.method === 'PATCH') {
         const payload = await request.json();
+        if (table === 'memories') {
+          result.memoryPatches.push({ payload, url: url.toString() });
+        }
         if (payload.illustration_generation_attempt_id && select.includes('id')) {
           return jsonResponse({ id: MEMORY_ID });
         }
@@ -89,6 +99,7 @@ async function withMockedIllustrationNetwork(
           illustration_status: 'pending',
           updated_at: '2026-07-12T00:00:00.000Z',
           memory_type: 'text_illustration',
+          ...memoryOverrides,
         });
       }
 
@@ -219,6 +230,10 @@ Deno.test('generate-illustration rejects unauthenticated requests', async () => 
   );
 
   assertEquals(response.status, 401);
+});
+
+Deno.test('generate-illustration reserves 30 seconds after its 120-second pre-finalization deadline', () => {
+  assertEquals(ILLUSTRATION_GENERATION_TIMEOUT_MS, 120_000);
 });
 
 Deno.test('illustration commit publishes, swaps, then deletes the old object', async () => {
@@ -409,4 +424,98 @@ Deno.test('generate-illustration rejects URL-only content before OpenAI or image
     assertEquals(network.openAiImagePrompts, []);
     assertEquals(network.portraitLoads, 0);
   });
+});
+
+Deno.test(
+  'generate-illustration clears its claimed attempt when the safety provider exceeds the pre-finalization deadline',
+  async () => {
+    await withMockedIllustrationNetwork('A quiet afternoon drawing with crayons.', async (network) => {
+      const response = await handleGenerateIllustration(authenticatedRequest(), {
+        chatJson: async <T>(
+          _systemPrompt: string,
+          _userPrompt: string,
+          options: { signal?: AbortSignal } = {},
+        ) => {
+          await new Promise<void>((_resolve, reject) => {
+            const rejectAsAborted = () => {
+              reject(new DOMException('Aborted', 'AbortError'));
+            };
+
+            if (options.signal?.aborted) {
+              rejectAsAborted();
+              return;
+            }
+
+            options.signal?.addEventListener('abort', rejectAsAborted, {
+              once: true,
+            });
+          });
+
+          return {} as T;
+        },
+        generationTimeoutMs: 10,
+        createId: () => 'attempt-token',
+      });
+      const body = await response.json();
+
+      assertEquals(response.status, 504);
+      assertEquals(body.code, 'GENERATION_TIMEOUT');
+      assertEquals(network.openAiImagePrompts, []);
+      assertEquals(
+        network.memoryPatches.some(
+          ({ payload, url }) =>
+            payload.illustration_status === 'failed' &&
+            payload.illustration_generation_attempt_id === null &&
+            url.includes('illustration_generation_attempt_id=eq.attempt-token') &&
+            url.includes('illustration_status=eq.generating'),
+        ),
+        true,
+      );
+    });
+  },
+);
+
+Deno.test('generate-illustration restores a retained illustration when the deadline expires', async () => {
+  await withMockedIllustrationNetwork(
+    'A quiet afternoon drawing with crayons.',
+    async (network) => {
+      const response = await handleGenerateIllustration(authenticatedRequest(), {
+        chatJson: async <T>(
+          _systemPrompt: string,
+          _userPrompt: string,
+          options: { signal?: AbortSignal } = {},
+        ) => {
+          await new Promise<void>((_resolve, reject) => {
+            options.signal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('Aborted', 'AbortError')),
+              { once: true },
+            );
+          });
+
+          return {} as T;
+        },
+        generationTimeoutMs: 10,
+      });
+      const body = await response.json();
+
+      assertEquals(response.status, 504);
+      assertEquals(body.code, 'GENERATION_TIMEOUT');
+      assertEquals(
+        network.memoryPatches.some(
+          ({ payload, url }) =>
+            payload.illustration_status === 'ready' &&
+            payload.illustration_generation_attempt_id === null &&
+            url.includes('illustration_generation_attempt_id=eq.') &&
+            url.includes('illustration_status=eq.generating'),
+        ),
+        true,
+      );
+    },
+    [MEMBER_ID],
+    {
+      illustration_key: 'existing-illustration.webp',
+      illustration_generation_id: '77777777-7777-4777-8777-777777777777',
+    },
+  );
 });
