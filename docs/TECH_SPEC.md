@@ -749,15 +749,17 @@ Generates or regenerates the character portrait for one immutable portrait versi
 9. Upload result under `/portrait/{attemptId}.webp`
 10. Publish only if the token still owns the claim. On regeneration failure, retain the previous ready output and status.
 
+After authorization and claim acquisition, the function immediately returns and finishes steps 3–10 in an `EdgeRuntime.waitUntil` background task. This keeps the portrait timeline interactive while the client polls the claimed row for its status.
+
 The client polls active portrait versions. If a `pending` version or active generation claim is still unresolved after the claim's 15-minute server reclaim window, the client stops treating it as live work and shows a stalled failure state with **Try again**. Retry still goes through this endpoint; the client never clears or overwrites generation claims directly. A retry after the reclaim window atomically replaces the abandoned claim, and the endpoint removes its prior attempt object when known.
 
 **Response**
 
 ```json
-{ "success": true, "illustratedProfileKey": ".../portraits/versionId/portrait/attemptId.webp" }
+{ "success": true, "queued": true }
 ```
 
-**Errors:** `PORTRAIT_VERSION_NOT_FOUND`, `DATE_REQUIRED`, `GENERATION_IN_PROGRESS`, `GENERATION_CLAIM_LOST`, `GENERATION_FAILED`
+**Synchronous errors:** `PORTRAIT_VERSION_NOT_FOUND`, `DATE_REQUIRED`, `GENERATION_IN_PROGRESS`. Failures after a successful queue response are persisted on the portrait version and surfaced by its status polling.
 
 ### 4.1a `delete-portrait-version`
 
