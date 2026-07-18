@@ -15,7 +15,7 @@ A family member can have many immutable source-photo/AI-portrait pairs over time
 ## User-facing behavior
 
 - The member detail screen exposes the history through a compact clock/history icon.
-- The portrait timeline shows paired source photos and illustrated portraits, newest first, with the photo date and the member's age on that date.
+- The portrait timeline shows paired source photos and illustrated portraits, newest first, with the photo date and the member's age on that date. It does not add image-type or date-provenance pills to the timeline or date-confirmation UI.
 - A **Current** badge marks the portrait selected for today by the canonical resolver.
 - Owners and managers can add a camera or library photo, confirm/edit its date, edit an existing date, regenerate a portrait, retry a failed portrait, or delete an eligible version.
 - The date confirmation sheet uses its date-and-age card as the date-picker trigger; an edit icon communicates that the card is interactive without repeating the date in a second field.

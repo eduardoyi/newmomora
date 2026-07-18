@@ -74,13 +74,6 @@ interface PortraitTimelineProps {
 
 type SheetName = 'add' | 'date' | 'actions' | null;
 
-const DATE_SOURCE_COPY: Record<PortraitDateSource, { label: string; symbol: SymbolViewProps['name'] }> = {
-  exif: { label: 'From photo', symbol: { ios: 'camera', android: 'photo_camera' } },
-  manual: { label: 'Set manually', symbol: { ios: 'pencil', android: 'edit' } },
-  default_today: { label: 'Added today', symbol: { ios: 'clock', android: 'schedule' } },
-  legacy_unknown: { label: 'Date unknown', symbol: { ios: 'clock', android: 'schedule' } },
-};
-
 function parseCivilDate(value: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!match) return null;
@@ -118,21 +111,6 @@ export function formatPortraitAge(dateOfBirth: string | null, referenceDate: str
   if (years === 0) return monthCopy;
   if (months === 0) return yearCopy;
   return `${yearCopy}, ${monthCopy}`;
-}
-
-function SourceChip({ source }: { source: PortraitDateSource }) {
-  const copy = DATE_SOURCE_COPY[source];
-  return (
-    <View style={styles.sourceChip} testID={`portrait-source-${source}`}>
-      <SymbolView
-        fallback={<Text style={styles.sourceChipFallback}>•</Text>}
-        name={copy.symbol}
-        size={12}
-        tintColor={colors.ink3}
-      />
-      <Text style={styles.sourceChipText}>{copy.label}</Text>
-    </View>
-  );
 }
 
 function PortraitPlaceholder({ version }: { version: PortraitTimelineVersion }) {
@@ -231,7 +209,6 @@ function VersionCard({
               <ActivityIndicator color={colors.ink3} size="small" />
             </View>
           )}
-          <View style={styles.pairTag}><Text style={styles.pairTagText}>Photo</Text></View>
         </Pressable>
 
         {isPortraitHidden ? (
@@ -260,9 +237,6 @@ function VersionCard({
                   <ActivityIndicator color={colors.ink3} size="small" />
                 </View>
               )}
-              <View style={[styles.pairTag, styles.pairTagRight]}>
-                <Text style={styles.pairTagText}>Portrait</Text>
-              </View>
               {isCurrent ? (
                 <View style={styles.currentBadge} testID={`portrait-version-${version.id}-current`}>
                   <View style={styles.currentDot} />
@@ -288,10 +262,7 @@ function VersionCard({
       <View style={styles.infoRow}>
         <View style={styles.infoCopy}>
           <Text style={styles.dateTitle}>{formatLongDate(version.referenceDate)}</Text>
-          <View style={styles.metaRow}>
-            {age ? <Text style={styles.ageText}>{age} old</Text> : null}
-            <SourceChip source={version.dateSource} />
-          </View>
+          {age ? <Text style={styles.ageText}>{age} old</Text> : null}
         </View>
         {version.isDeleting ? (
           <View style={styles.workingLabel}>
@@ -778,9 +749,6 @@ export function PortraitTimeline({
                 ) : null}
               </View>
               <View style={styles.dateCardActions}>
-                {photoDraft ? (
-                  <SourceChip source={draftDate === photoDraft.referenceDate ? photoDraft.dateSource : 'manual'} />
-                ) : null}
                 <View style={styles.dateEditIcon} testID="portrait-date-edit-icon">
                   <SymbolView
                     fallback={<Text style={styles.dateEditFallback}>✎</Text>}
@@ -947,9 +915,6 @@ const styles = StyleSheet.create({
   failedVisual: { alignItems: 'center', backgroundColor: colors.surface, gap: 7, justifyContent: 'center' },
   failedText: { color: colors.ink2, fontFamily: fonts.sansBold, fontSize: 12 },
   failedFallback: { color: colors.error, fontFamily: fonts.sansBold, fontSize: 20 },
-  pairTag: { backgroundColor: 'rgba(28,20,10,0.5)', borderRadius: radius.pill, bottom: 8, left: 8, paddingHorizontal: 7, paddingVertical: 2, position: 'absolute' },
-  pairTagRight: { left: undefined, right: 8 },
-  pairTagText: { color: colors.white, fontFamily: fonts.sansBold, fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' },
   currentBadge: { alignItems: 'center', backgroundColor: colors.primary, borderRadius: radius.pill, flexDirection: 'row', gap: 5, paddingHorizontal: 9, paddingVertical: 4, position: 'absolute', right: 8, top: 8 },
   currentDot: { backgroundColor: colors.white, borderRadius: 3, height: 5, width: 5 },
   currentBadgeText: { color: colors.white, fontFamily: fonts.sansBold, fontSize: 10.5 },
@@ -959,11 +924,7 @@ const styles = StyleSheet.create({
   infoRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 10, padding: 14 },
   infoCopy: { flex: 1, minWidth: 0 },
   dateTitle: { color: colors.ink, fontFamily: fonts.displayMedium, fontSize: 17, lineHeight: 20 },
-  metaRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 7 },
-  ageText: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 13 },
-  sourceChip: { alignItems: 'center', alignSelf: 'flex-start', backgroundColor: colors.surface, borderColor: colors.border, borderRadius: radius.pill, borderWidth: 1, flexDirection: 'row', gap: 5, paddingHorizontal: 8, paddingVertical: 4 },
-  sourceChipText: { color: colors.ink2, fontFamily: fonts.sansBold, fontSize: 11.5 },
-  sourceChipFallback: { color: colors.ink3, fontSize: 10 },
+  ageText: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 13, marginTop: 7 },
   smallIconButton: { alignItems: 'center', backgroundColor: colors.white, borderColor: colors.border, borderRadius: 17, borderWidth: 1, height: 34, justifyContent: 'center', width: 34 },
   moreFallback: { color: colors.ink2, fontFamily: fonts.sansBold, fontSize: 11 },
   workingLabel: { alignItems: 'center', flexDirection: 'row', gap: 6, paddingTop: 9 },

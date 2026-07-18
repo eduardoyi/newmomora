@@ -118,14 +118,18 @@ describe('PortraitTimeline', () => {
     }) as ReturnType<typeof useMediaUrls>);
   });
 
-  it('renders paired versions, source provenance, current badge, and failed retry', () => {
-    const { getByTestId, getByText } = render(<PortraitTimeline {...baseProps} />);
+  it('renders paired versions without image or date-provenance labels', () => {
+    const { getByTestId, getByText, queryByText, queryByTestId } = render(<PortraitTimeline {...baseProps} />);
 
     expect(getByText('Then & now')).toBeTruthy();
     expect(getByText('2 portraits · how Lila has looked over time')).toBeTruthy();
     expect(getByTestId('portrait-version-ready-1-current')).toBeTruthy();
-    expect(getByTestId('portrait-source-exif')).toBeTruthy();
     expect(getByTestId('portrait-version-failed-1-retry')).toBeTruthy();
+    expect(queryByText('Photo')).toBeNull();
+    expect(queryByText('Portrait')).toBeNull();
+    expect(queryByText('From photo')).toBeNull();
+    expect(queryByText('Set manually')).toBeNull();
+    expect(queryByTestId('portrait-source-exif')).toBeNull();
     expect(mockedUseMediaUrls).toHaveBeenCalledWith([
       ready.sourcePhotoKey,
       ready.portraitKey,
@@ -207,7 +211,7 @@ describe('PortraitTimeline', () => {
   });
 
   it('restores a recovered Android picker result into date confirmation', () => {
-    const { getAllByTestId, getByTestId, getByText } = render(
+    const { getByTestId, getByText, queryByText, queryByTestId } = render(
       <PortraitTimeline
         {...baseProps}
         recoveredPhotoDraft={{
@@ -221,6 +225,7 @@ describe('PortraitTimeline', () => {
 
     expect(getByTestId('portrait-date-sheet')).toBeTruthy();
     expect(getByText(/February.*3.*2024|3.*February.*2024/)).toBeTruthy();
-    expect(getAllByTestId('portrait-source-exif').length).toBeGreaterThan(1);
+    expect(queryByText('From photo')).toBeNull();
+    expect(queryByTestId('portrait-source-exif')).toBeNull();
   });
 });
