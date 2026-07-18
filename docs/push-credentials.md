@@ -74,6 +74,13 @@ Consequences:
 
 - Client registration: `src/hooks/useNotifications.ts` stores the Expo push
   token in `user_profiles.expo_push_token`.
+- **Known limitation (accepted for MVP, 2026-07-18):** that column holds ONE
+  token per account — last registered device wins, so a user signed in on two
+  phones only gets pushes on whichever device most recently opened Settings
+  or toggled a notification setting. Verified in practice (Android/iOS on the
+  same account). The fix, if it ever matters, is a `user_push_tokens` table
+  (one row per device, pruned on `DeviceNotRegistered` receipts) with fan-out
+  in the sending Edge Functions.
 - Sending: Edge Functions call the Expo push API via
   `supabase/functions/_shared/expo-push.ts` — unauthenticated, which is fine
   unless "enhanced push security" is enabled on the Expo account (then add an

@@ -388,7 +388,11 @@ for the full table; summary:
 
 All pushes are **best-effort** — a push/email failure never fails the
 triggering request (the underlying state change is already committed by the
-time the notification is attempted). Push `data` payload carries a `route`
+time the notification is attempted). They also reach **one device per
+account**: `user_profiles.expo_push_token` is a single column, last
+registered device wins (accepted MVP limitation — see
+`docs/push-credentials.md` for the multi-device fix sketch if it's ever
+needed). Push `data` payload carries a `route`
 plus `familyId`/`memoryId` for deep-linking (`_shared/expo-push.ts`); the
 client's notification-response listener (`src/hooks/useNotifications.ts`)
 switches on `route`:
