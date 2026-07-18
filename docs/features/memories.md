@@ -89,7 +89,8 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
     patch); another member's create/delete on their device is now also live
     via realtime (see below). Another member's content edit, retag, or
     engagement change on their device still reconciles on app foreground
-    (once the timeline query has gone stale) or pull-to-refresh -- not
+    (once the timeline query has gone stale, and only while the timeline is
+    scrolled near the top -- see below) or pull-to-refresh -- not
     mid-session; realtime only pushes the fields called out below.
   - **Recovery/backfill is now bounded to loaded pages**, not a whole-library
     sweep: a memory stuck `pending`/`generating` deep in history only
@@ -104,7 +105,17 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
     page 1 before refetching (never a raw multi-page `refetch()`, never
     `resetQueries`, never react-query's `maxPages` -- see the plan doc for
     why each of those is wrong here) -- deeper pages a user had scrolled to
-    are dropped and reload on demand via `fetchNextPage`.
+    are dropped and reload on demand via `fetchNextPage`. Pull-to-refresh can
+    only fire while the user is at the top, but app foreground can happen
+    from anywhere in the list -- trimming to page 1 while scrolled deep would
+    collapse the `FlatList`'s data out from under the visible scroll position
+    and clamp it to the bottom of the shortened list. `useMemories` takes an
+    optional `shouldReconcileOnForeground` getter for this; the timeline
+    screen (`timeline.tsx`) tracks the `FlatList`'s scroll offset in a ref via
+    `onScroll` and passes a getter that returns true only within roughly one
+    viewport height of the top. A foreground reconcile skipped this way isn't
+    lost, just deferred to the next pull-to-refresh or the next
+    foreground-while-near-top.
 - **Realtime (2026-07-15, Workstream D):** `public.memories` is added to the
   `supabase_realtime` publication
   (`supabase/migrations/20260715150000_memories_realtime_publication.sql`,

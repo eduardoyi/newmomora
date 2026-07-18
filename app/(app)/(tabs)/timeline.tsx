@@ -4,11 +4,14 @@ import {
   ActivityIndicator,
   FlatList,
   type ListRenderItemInfo,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
   type ViewabilityConfig,
   type ViewToken,
@@ -99,14 +102,29 @@ export default function TimelineScreen() {
   const { role } = useFamily();
   const canEdit = canEditFamilyContent(role);
   const { isLoading: isOnboardingLoading, needsFamilyMember } = useOnboardingStatus();
+  const windowHeight = useWindowDimensions().height;
+  // Coarse scroll-position tracking (a ref write, so no re-renders) --
+  // useMemories' app-foreground reconcile trims the cached timeline down to
+  // page 1, which clamps the FlatList's scroll to the bottom of the
+  // shortened list if the user was scrolled deep when it fires. Reading this
+  // ref from shouldReconcileOnForeground below lets that reconcile skip
+  // itself while scrolled deep instead of losing the user's place.
+  const scrollOffsetRef = useRef(0);
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+  }, []);
+  const shouldReconcileOnForeground = useCallback(
+    () => scrollOffsetRef.current <= windowHeight,
+    [windowHeight],
+  );
   // refetch here trims to page 1 then refetches (Workstream A4) -- not a
   // raw multi-page useInfiniteQuery.refetch(). The old useFocusEffect(refetch)
   // is gone: it bypassed staleTime on every tab focus, and tab screens never
   // unmount so it fired far more than intended. Freshness is now staleTime +
   // mutation/poll cache patches + this pull-to-refresh + an app-foreground
-  // reconcile inside useMemories (see docs/features/memories.md). No search
-  // UI exists yet (useMemories no longer takes a search query -- see
-  // useMemoriesSearch in useMemories.ts).
+  // reconcile inside useMemories, gated to near-top scroll positions (see
+  // docs/features/memories.md). No search UI exists yet (useMemories no
+  // longer takes a search query -- see useMemoriesSearch in useMemories.ts).
   const {
     memories,
     isLoading,
@@ -115,7 +133,7 @@ export default function TimelineScreen() {
     refetch,
     fetchNextPage,
     isFetchingNextPage,
-  } = useMemories();
+  } = useMemories({ shouldReconcileOnForeground });
   const contentSafety = useContentSafety();
   const visibleMemories = useMemo(
     () => memories.filter((memory) => !contentSafety.isUserBlocked(memory.user_id)),
@@ -335,12 +353,14 @@ export default function TimelineScreen() {
           maxToRenderPerBatch={6}
           onEndReached={handleEndReached}
           onEndReachedThreshold={0.5}
+          onScroll={handleScroll}
           onViewableItemsChanged={onViewableItemsChanged}
           refreshControl={
             <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
           }
           removeClippedSubviews
           renderItem={renderItem}
+          scrollEventThrottle={100}
           testID="timeline-memory-list"
           viewabilityConfig={viewabilityConfig}
           windowSize={7}

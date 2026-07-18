@@ -1,6 +1,7 @@
-import { renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { AppState } from 'react-native';
 
 import { useMemberMemories, useMemories, useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useAuth } from '@/hooks/use-auth';
@@ -668,6 +669,124 @@ describe('useMemories integration', () => {
       expect(
         new Date(result.current.memories[0]?.updated_at ?? 0).getTime(),
       ).toBeGreaterThan(Date.now() - 60_000);
+    });
+  });
+
+  // The app-foreground reconcile (A4a) trims the timeline cache to page 1
+  // before refetching, which is wrong UX if the user is scrolled deep --
+  // the caller-supplied shouldReconcileOnForeground getter gates that. These
+  // simulate the same AppState 'active' transition app-providers.test.tsx
+  // and incoming-share-router.integration.test.tsx use.
+  describe('app-foreground reconcile gated by shouldReconcileOnForeground', () => {
+    function mockAppStateListener() {
+      let handleAppStateChange: ((status: 'active' | 'background') => void) | undefined;
+      jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => {
+        handleAppStateChange = listener as (status: 'active' | 'background') => void;
+        return { remove: jest.fn() };
+      });
+      return (status: 'active' | 'background') => handleAppStateChange?.(status);
+    }
+
+    // Marks the cached query stale the way another member's mutation would
+    // (refetchType: 'none' only flips isStale, it never refetches itself),
+    // then fires the AppState 'active' transition -- each wrapped in its own
+    // act()+tick so the hook's isStaleRef has actually caught up with the
+    // invalidation before the AppState handler reads it (both updates route
+    // through react-query's notifyManager, which batches via a macrotask).
+    async function markStaleAndGoActive(
+      queryClient: QueryClient,
+      fireAppStateChange: (status: 'active' | 'background') => void,
+    ) {
+      await act(async () => {
+        queryClient.invalidateQueries({ queryKey: memoriesQueryKey('family-1'), refetchType: 'none' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      await act(async () => {
+        fireAppStateChange('active');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    const memoryOne = {
+      id: 'memory-1',
+      memory_type: 'text_only',
+      memory_date: '2026-05-20',
+      created_at: '2026-05-20T00:00:00Z',
+      taggedMembers: [],
+      mediaAssets: [],
+    };
+    const memoryTwo = {
+      id: 'memory-2',
+      memory_type: 'text_only',
+      memory_date: '2026-05-19',
+      created_at: '2026-05-19T00:00:00Z',
+      taggedMembers: [],
+      mediaAssets: [],
+    };
+
+    it('does not trim or refetch when shouldReconcileOnForeground returns false (scrolled deep)', async () => {
+      const fireAppStateChange = mockAppStateListener();
+      mockedFetchMemoriesPage.mockResolvedValue(pageResult([memoryOne as never]));
+      const queryClient = createQueryClient();
+      const shouldReconcileOnForeground = jest.fn().mockReturnValue(false);
+
+      const { result } = renderHook(() => useMemories({ shouldReconcileOnForeground }), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+      await waitFor(() => expect(result.current.memories).toHaveLength(1));
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
+
+      await markStaleAndGoActive(queryClient, fireAppStateChange);
+
+      expect(shouldReconcileOnForeground).toHaveBeenCalled();
+      // Deep-scrolled: reconcile is skipped, no extra fetch, data untouched.
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
+      expect(result.current.memories).toHaveLength(1);
+    });
+
+    it('trims to page 1 and refetches when shouldReconcileOnForeground returns true (near top)', async () => {
+      const fireAppStateChange = mockAppStateListener();
+      mockedFetchMemoriesPage
+        .mockResolvedValueOnce(pageResult([memoryOne as never], 'cursor-2'))
+        .mockResolvedValueOnce(pageResult([memoryTwo as never]))
+        .mockResolvedValue(pageResult([memoryOne as never]));
+      const queryClient = createQueryClient();
+      const shouldReconcileOnForeground = jest.fn().mockReturnValue(true);
+
+      const { result } = renderHook(() => useMemories({ shouldReconcileOnForeground }), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+      await waitFor(() => expect(result.current.memories).toHaveLength(1));
+
+      await result.current.fetchNextPage();
+      await waitFor(() => expect(result.current.memories).toHaveLength(2));
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(2);
+
+      await markStaleAndGoActive(queryClient, fireAppStateChange);
+
+      await waitFor(() => expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(3));
+      expect(shouldReconcileOnForeground).toHaveBeenCalled();
+      // Trimmed to page 1 before the refetch -- back down to the one row
+      // the third mocked call resolves, not the two loaded pages.
+      await waitFor(() => expect(result.current.memories).toHaveLength(1));
+      expect(result.current.memories[0]?.id).toBe('memory-1');
+    });
+
+    it('reconciles unconditionally when shouldReconcileOnForeground is omitted (previous behavior)', async () => {
+      const fireAppStateChange = mockAppStateListener();
+      mockedFetchMemoriesPage.mockResolvedValue(pageResult([memoryOne as never]));
+      const queryClient = createQueryClient();
+
+      const { result } = renderHook(() => useMemories(), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+      await waitFor(() => expect(result.current.memories).toHaveLength(1));
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
+
+      await markStaleAndGoActive(queryClient, fireAppStateChange);
+
+      await waitFor(() => expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(2));
     });
   });
 

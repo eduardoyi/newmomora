@@ -128,6 +128,47 @@ describe('TimelineScreen', () => {
     expect(fetchNextPage).toHaveBeenCalledTimes(1);
   });
 
+  // The app-foreground reconcile inside useMemories trims the cached
+  // timeline to page 1, which clamps this FlatList's scroll to the bottom
+  // of the shortened list if it fires while the user is scrolled deep --
+  // the screen guards that by tracking scroll offset and only telling
+  // useMemories it's safe to reconcile within one viewport height of the
+  // top. useMemories is mocked in this file, so this asserts the getter the
+  // screen wires up reports the right answer for each scroll position
+  // rather than asserting the (already hook-tested) trim/refetch itself --
+  // see the shouldReconcileOnForeground coverage in
+  // useMemories.integration.test.tsx for that.
+  it('reports near-top only within one viewport height of the top after scrolling', () => {
+    const { getByTestId } = render(<TimelineScreen />);
+    const list = getByTestId('timeline-memory-list');
+
+    expect(mockedUseMemories).toHaveBeenLastCalledWith(
+      expect.objectContaining({ shouldReconcileOnForeground: expect.any(Function) }),
+    );
+    const shouldReconcileOnForeground = mockedUseMemories.mock.calls.at(-1)?.[0]
+      ?.shouldReconcileOnForeground as () => boolean;
+
+    // FlatList's own scroll handling (onEndReached distance, etc.) reads
+    // contentSize/layoutMeasurement off the same event, so a realistic
+    // scroll event needs all three, not just contentOffset.
+    const scrollEvent = (y: number) => ({
+      nativeEvent: {
+        contentOffset: { x: 0, y },
+        contentSize: { width: 400, height: 10000 },
+        layoutMeasurement: { width: 400, height: 800 },
+      },
+    });
+
+    // Starts at the top.
+    expect(shouldReconcileOnForeground()).toBe(true);
+
+    list.props.onScroll(scrollEvent(5000));
+    expect(shouldReconcileOnForeground()).toBe(false);
+
+    list.props.onScroll(scrollEvent(0));
+    expect(shouldReconcileOnForeground()).toBe(true);
+  });
+
   it('shows a footer spinner while fetching the next page', () => {
     mockedUseMemories.mockReturnValue({
       memories: [memory],

@@ -381,7 +381,7 @@ export function useMemoryMutations() {
 // scrolls. `memories` is the flattened, id-deduplicated set of every page
 // loaded so far (dedup guards against a row shifting pages between
 // fetches), not the whole library.
-export function useMemories() {
+export function useMemories(options?: { shouldReconcileOnForeground?: () => boolean }) {
   const { user } = useAuth();
   const { familyId, role } = useFamily();
   const queryClient = useQueryClient();
@@ -428,6 +428,11 @@ export function useMemories() {
 
   const isStaleRef = useRef(query.isStale);
   isStaleRef.current = query.isStale;
+  // Ref (not a dep) so a caller passing a new function identity each render
+  // -- as the timeline screen does -- doesn't resubscribe the AppState
+  // effect below.
+  const shouldReconcileOnForegroundRef = useRef(options?.shouldReconcileOnForeground);
+  shouldReconcileOnForegroundRef.current = options?.shouldReconcileOnForeground;
   const refetchQuery = query.refetch;
 
   const refreshFirstPage = useCallback(async () => {
@@ -436,9 +441,11 @@ export function useMemories() {
     // branch mid-gesture) or react-query's maxPages (evicts from the FRONT
     // of `pages` on this forward-only infinite query, i.e. drops the NEWEST
     // page and permanently hides new memories once pageParams desync -- see
-    // docs/plans/performance-optimizations.md §A4). The user is at the top
-    // of the list when pulling to refresh or foregrounding the app, so
-    // trimming to page 1 before refetching is correct UX and keeps the
+    // docs/plans/performance-optimizations.md §A4). Pull-to-refresh can only
+    // fire while the user is at the top of the list, and the AppState
+    // handler below only calls this when the caller reports the scroll
+    // position is near the top too (see shouldReconcileOnForeground) -- so
+    // trimming to page 1 before refetching stays correct UX and keeps the
     // refetch to a single page's enrichment cost.
     trimListCacheToFirstPage(queryClient, familyId);
     await refetchQuery();
@@ -447,16 +454,29 @@ export function useMemories() {
   // A4a: refetchOnWindowFocus is off above, and tab screens never unmount
   // (so "next mount" never reconciles this query either) -- reconcile
   // explicitly on app foreground when the query has gone stale, using the
-  // same trim-to-page-1 refresh as pull-to-refresh. Other members'
-  // content edits/retags/engagement reconcile here or on pull-to-refresh,
-  // not mid-session (documented in docs/features/memories.md).
+  // same trim-to-page-1 refresh as pull-to-refresh. Trimming to page 1 only
+  // reads correctly when the user is actually near the top of the list, so
+  // the optional shouldReconcileOnForeground getter gates it -- a caller
+  // that's scrolled deep returns false and the reconcile is skipped rather
+  // than collapsing the loaded pages out from under the visible scroll
+  // position (which clamps the scroll to the bottom of the shortened list).
+  // A skipped reconcile isn't lost, just deferred: it happens on the next
+  // pull-to-refresh or the next foreground-while-near-top instead. Other
+  // members' content edits/retags/engagement reconcile here or on
+  // pull-to-refresh, not mid-session (documented in
+  // docs/features/memories.md).
   useEffect(() => {
     if (!familyId) {
       return;
     }
 
     const subscription = AppState.addEventListener('change', (status) => {
-      if (status === 'active' && isStaleRef.current) {
+      const shouldReconcile = shouldReconcileOnForegroundRef.current;
+      if (
+        status === 'active' &&
+        isStaleRef.current &&
+        (shouldReconcile === undefined || shouldReconcile())
+      ) {
         void refreshFirstPage();
       }
     });
