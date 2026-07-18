@@ -1,6 +1,6 @@
 # Momora release-readiness tracker
 
-**Last updated:** July 18, 2026
+**Last updated:** July 19, 2026
 
 **Release version:** 1.1.0
 
@@ -33,7 +33,7 @@ This is the working must-do list for the next App Store and Google Play release.
   - [x] Queue a metadata-only Bento alert to `hello@usemomora.com` for each new report; daily manual review remains the fallback.
   - [x] 🔒 Configure/verify Bento credentials and one production-like alert delivery.
     - Verified July 17, 2026: the metadata-only alert arrived; the outbox recorded one successful attempt and the report remained open for review.
-- [ ] Run the reporting Maestro happy path from an installed release candidate with a clean illustrated-memory fixture.
+- 🟡 Owner decision: waive the reporting Maestro happy path for this release along with the other Maestro flows. Direct release-mode verification and the production-like Bento alert verification remain recorded above.
 
 ## 2. Legal, support, and public copy
 
@@ -55,7 +55,7 @@ This is the working must-do list for the next App Store and Google Play release.
   - [x] Publish the current Apple data-type declarations, including linked-to-user and non-tracking answers.
   - [x] Add the User Privacy Choices URL (`https://usemomora.com/delete-account/`) in the new iOS version.
 - [x] 🔒 Update Google Play Data Safety declarations to match the current app.
-- [ ] 🔒 Complete Apple’s current age-rating questionnaire.
+- [x] 🔒 Complete Apple’s current age-rating questionnaire.
 - [x] 🔒 Complete Google Play’s target-audience and content declarations.
 - 🟡 Prepare reviewer access for the email-OTP login flow.
   - [x] Route the dedicated reviewer email from the normal login field to a guarded password step so reviewers do not depend on receiving a live OTP.
@@ -78,26 +78,26 @@ This is the working must-do list for the next App Store and Google Play release.
   - [ ] View the timeline and memory detail.
   - [ ] Create a text memory and a media memory.
   - [ ] Open Settings and account deletion.
-- [ ] Replace the old iPad App Store screenshots with current screenshots.
+- [x] Replace the old iPad App Store screenshots with current screenshots.
 - [ ] Fix only submission blockers or severe layout/usability problems found during the smoke test.
 
 ## 4.1 Store listings, descriptions, and screenshots
 
-- [ ] 🔒 Review and update the App Store description, promotional text, keywords, and support/marketing URLs for the current release.
-  - [ ] Remove references to subscriptions, trials, credits, premium access, or purchases.
-  - [ ] Keep the private, invite-only family-sharing model and AI illustration behavior accurate; do not imply public sharing or discovery.
-- [ ] 🔒 Review and update the Google Play short description, full description, and privacy-policy link for the current release.
-  - [ ] Remove references to subscriptions, trials, credits, premium access, or purchases.
-  - [ ] Keep the private, invite-only family-sharing model and AI illustration behavior accurate; do not imply public sharing or discovery.
-- [ ] 🔒 Replace outdated App Store and Google Play phone screenshots that show old UI, pricing, or obsolete flows.
-- [ ] 🔒 Replace the old App Store iPad screenshots with current iPad screenshots.
+- [x] 🔒 Review and update the App Store description, promotional text, keywords, and support/marketing URLs for the current release.
+  - [x] Remove references to subscriptions, trials, credits, premium access, or purchases.
+  - [x] Keep the private, invite-only family-sharing model and AI illustration behavior accurate; do not imply public sharing or discovery.
+- [x] 🔒 Review and update the Google Play short description, full description, and privacy-policy link for the current release.
+  - [x] Remove references to subscriptions, trials, credits, premium access, or purchases.
+  - [x] Keep the private, invite-only family-sharing model and AI illustration behavior accurate; do not imply public sharing or discovery.
+- [x] 🔒 Replace outdated App Store and Google Play phone screenshots that show old UI, pricing, or obsolete flows.
+- [x] 🔒 Replace the old App Store iPad screenshots with current iPad screenshots.
 
 ## 5. Build numbers and release artifacts
 
-- [ ] 🔒 Raise and verify the EAS remote build numbers before producing final artifacts.
-  - [x] EAS remote Android `versionCode` is **34**.
-  - [x] EAS remote iOS `buildNumber` is **35**.
-  - [ ] Confirm both values on the final artifacts, not only in EAS configuration.
+- [x] 🔒 Raise and verify the EAS remote build numbers before producing final artifacts.
+  - [x] Final Android production artifact: version `1.1.0`, `versionCode` **35**.
+  - [x] Final iOS production artifact: version `1.1.0`, `buildNumber` **40**.
+  - [x] Confirm both values on the final artifacts, not only in EAS configuration.
 
 🟡 Produce a fresh physical-device iOS build and create or verify all required Apple capabilities and credentials.
 
@@ -119,7 +119,7 @@ This is the working must-do list for the next App Store and Google Play release.
 - [x] Upload and assign the FCM v1 service-account key to `com.memora.app` in EAS.
 - [x] Link the Apple APNs key to the Momora app target in EAS.
 - [x] Produce an Android preview build containing the new Firebase/native configuration.
-- [ ] Produce an iOS physical-device preview or production build.
+- [x] Produce an iOS physical-device preview or production build.
 - [x] Test Android token registration and notification delivery.
 - [x] Test iPhone/iPad token registration and notification delivery.
 - [x] Test notification taps and confirm they open the intended app route.
@@ -151,14 +151,13 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
   - All Jest QueryClient configurations now use test-only `gcTime: Infinity`; production cache settings are unchanged.
   - `npm test -- --runInBand` now exits normally: **94 suites and 773 tests pass** with no open-handle warning.
   - Some hook suites still print React `act(...)` console warnings from deferred TanStack Query notifications. They do not keep Jest alive and are post-release test-hygiene cleanup.
-- [ ] From the final clean release commit, rerun:
-  - [ ] `npm run typecheck`
-  - [ ] `npm run lint`
-  - [ ] `npm test -- --runInBand`
-  - [ ] `npm run test:edge`
-  - [ ] Required Maestro flows
-  - Current reporting-slice validation on July 16, 2026: typecheck passed; lint passed with 0 errors/33 warnings; full Jest passed 869/869 and exited normally; database pgTAP passed 54/54; the full Edge suite passed 295/295. Every command above still requires the final clean-commit rerun.
-  - Maestro 2.6.0 is installed. A physical iPhone is paired but does not have the app installed; no iOS simulator is booted, no Android device is attached, and test credentials/fixtures are unavailable. Maestro was not runnable in this pass.
+- [x] From the final clean release commit, rerun:
+  - [x] `npm run typecheck`
+  - [x] `npm run lint`
+  - [x] `npm test -- --runInBand`
+  - [x] `npm run test:edge`
+  - 🟡 Owner decision: waive Maestro flows for this release. Maestro supports iOS simulators, not physical iPhones; the founder has extensively performed direct release-mode testing on both platforms. This waiver does not waive final production-artifact checks.
+  - Final-clean-commit validation on July 18, 2026: typecheck passed; lint passed (0 errors, existing warnings only); Jest passed **103 suites / 883 tests** and exited normally; Edge tests passed **333 / 333**.
 - [ ] Confirm the final release commit has no secrets or untracked release inputs that the build depends on unexpectedly.
   - The current diff passes `git diff --check` and the secret-pattern scan found no keys or credentials.
   - Expected ignored local release inputs are `.env.local` (Expo public Supabase configuration), `google-services.json` (referenced by `app.json`), and `credentials.json` (required by the production Android profile's `credentialsSource: local`). They must be supplied securely to the final build and must not be committed.
@@ -166,8 +165,8 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
 
 ## 8. Release-channel smoke testing
 
-- [ ] Upload the final iOS build to TestFlight.
-- [ ] Upload the final Android build to Google Play internal testing.
+- [x] Submit final iOS build `1.1.0 (40)` to App Store review — awaiting review as of July 19, 2026.
+- [x] Submit final Android build `1.1.0 (35)` to Google Play production review — awaiting review as of July 19, 2026.
 - [x] Run release-mode smoke tests on iPhone.
 - [x] Run release-mode smoke tests on iPad.
 - [x] Run release-mode smoke tests on Android.
@@ -191,17 +190,17 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
 - [x] Decide how long the old backend must remain available for users stuck on iOS **15.1–16.3**.
   - [x] No active-user compatibility window is required: there are no real active users on the legacy backend, and the two relevant accounts were migrated to the new database.
   - [x] Owner: the release operator keeps the old backend available only as a short rollback path through successful production verification.
-  - [x] End condition: after TestFlight and Google Play production-candidate verification succeeds and rollback is no longer needed, decommission the old backend. No invented calendar date is required.
+  - [x] End condition: after successful production verification and the rollback path is no longer needed, decommission the old backend. No invented calendar date is required.
   - [ ] Decommission the old backend after that end condition is met and record completion here.
 
 ## Release exit criteria
 
 The release is ready to submit only when:
 
-- [ ] All required reporting/moderation behavior is implemented and documented, the daily queue owner is assigned, and the release-candidate reporting flow passes.
-- [ ] Store declarations, ratings, reviewer access, listings, and IAP cleanup are complete.
-- [ ] Android build number is at least 34 and iOS build number is at least 35.
-- [ ] Physical-device push delivery works on Android and iOS/iPadOS.
-- [ ] Typecheck, lint, Jest, Edge tests, and required Maestro flows pass from the final clean commit.
+- [x] All required reporting/moderation behavior is implemented and documented, the daily queue owner is assigned, and release-mode verification is complete. Maestro is waived by the founder for this release.
+- [x] Store declarations, ratings, reviewer access, listings, and IAP cleanup are complete.
+- [x] Android build number is at least 34 and iOS build number is at least 35.
+- [x] Physical-device push delivery works on Android and iOS/iPadOS.
+- [x] Typecheck, lint, Jest, and Edge tests pass from the final clean commit. Maestro is waived by the founder for this release; final production-artifact checks remain required.
 - [ ] Final production-artifact smoke tests pass on iPhone, iPad, and Android. A separate TestFlight/Google Play internal-testing smoke pass is waived by the founder; Apple build processing and store-submission checks still apply.
 - [x] The legacy-backend rollback-only window has an owner and a production-verification end condition.
