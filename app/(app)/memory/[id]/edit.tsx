@@ -221,9 +221,13 @@ export default function EditMemoryScreen() {
     setErrorMessage('');
     if (!id) return;
     try {
+      // Always send content -- `undefined` means "unchanged" to updateMemory,
+      // so mapping an emptied caption to undefined would silently keep the
+      // old caption. An empty string clears it (media memories allow empty;
+      // text memories can't reach here empty because canSave blocks them).
       await updateMemory({
         memoryId: id,
-        content: content.trim() || undefined,
+        content: content.trim(),
         memoryDate: memoryDate.trim(),
         taggedMemberIds: selectedMemberIds,
         memoryType: isMedia

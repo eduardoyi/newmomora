@@ -186,6 +186,49 @@ describe('EditMemoryScreen', () => {
     );
   });
 
+  it('clears a media memory caption by sending empty content on save', async () => {
+    mockedUseMemory.mockReturnValue({
+      data: {
+        id: 'memory-1',
+        content: 'Old caption',
+        memory_date: '2026-07-14',
+        memory_type: 'media',
+        media_key: null,
+        media_content_type: 'image/jpeg',
+        mediaAssets: [
+          {
+            id: 'asset-1',
+            object_key: 'user-1/memories/memory-1/photo.jpg',
+            content_type: 'image/jpeg',
+            duration_ms: null,
+            aspect_ratio: null,
+          },
+        ],
+        taggedMembers: [],
+        illustration_key: null,
+        illustration_status: 'none',
+        updated_at: '2026-07-14T09:00:00.000Z',
+      },
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const screen = renderScreen();
+
+    fireEvent.changeText(screen.getByTestId('edit-memory-content'), '');
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-save-btn'));
+    });
+
+    // `undefined` means "unchanged" to updateMemory -- clearing the caption
+    // must send '' so the service persists the removal (regression: emptied
+    // captions were mapped to undefined and silently kept the old text).
+    expect(updateMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '', memoryType: 'media' }),
+    );
+  });
+
   it('disables AI with concise helper copy above six tags', () => {
     mockedUseAutoMemoryTags.mockReturnValue({
       selectedMemberIds: Array.from({ length: 7 }, (_, index) => `member-${index}`),
