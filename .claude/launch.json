@@ -7,6 +7,12 @@
       "runtimeArgs": ["/tmp/expo-web-start.sh"],
       "port": 8081,
       "autoPort": false
+    },
+    {
+      "name": "marketing-site",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["--yes", "serve", "-l", "4173", "/Users/eduardoyi/Coding/momora-marketing/dist"],
+      "port": 4173
     }
   ]
 }
