@@ -8,7 +8,27 @@ export interface OpenAiRequestOptions {
   signal?: AbortSignal;
 }
 
-export interface OpenAiImageRequestOptions extends OpenAiRequestOptions {}
+export type OpenAiImageQuality = 'low' | 'medium' | 'high' | 'auto';
+export type OpenAiImageOutputFormat = 'jpeg' | 'png' | 'webp';
+
+export interface OpenAiImageRequestOptions extends OpenAiRequestOptions {
+  /**
+   * The Image API's output-quality setting. Keeping this explicit matters
+   * for request-tail latency: `auto` may choose an expensive output for a
+   * multi-character edit.
+   */
+  quality?: OpenAiImageQuality;
+  /** Match the persisted object format instead of storing PNG bytes as .webp. */
+  outputFormat?: OpenAiImageOutputFormat;
+  outputCompression?: number;
+  /**
+   * Start the alternate edit model after this delay while the primary is
+   * still running. Used only for larger multi-reference illustration jobs,
+   * where a single slow provider call would otherwise consume the whole Edge
+   * request budget. The first successful image wins and aborts the loser.
+   */
+  fallbackHedgeDelayMs?: number;
+}
 
 export { FALLBACK_IMAGE_MODEL, PRIMARY_IMAGE_MODEL };
 
@@ -28,12 +48,10 @@ function throwIfAborted(options: OpenAiRequestOptions): void {
   }
 }
 
-async function readOpenAiErrorSnippet(response: Response): Promise<string> {
-  try {
-    return (await response.text()).slice(0, 300);
-  } catch {
-    return '';
-  }
+class NonRetryableImageRequestError extends Error {}
+
+function isRetryableImageStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 429 || status >= 500;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -193,15 +211,25 @@ async function generateImageWithModel(
       model,
       prompt,
       size: '1024x1024',
+      ...(options.quality ? { quality: options.quality } : {}),
+      ...(options.outputFormat ? { output_format: options.outputFormat } : {}),
+      ...(options.outputCompression !== undefined
+        ? { output_compression: options.outputCompression }
+        : {}),
     }),
     signal: options.signal,
   });
 
   if (!response.ok) {
-    const detail = await readOpenAiErrorSnippet(response);
-    throw new Error(
-      `OpenAI image generation failed (${model}, ${response.status})${detail ? `: ${detail}` : ''}`,
-    );
+    console.error('OpenAI image generation failed', { model, status: response.status });
+    // A second model cannot fix an invalid request, an authentication error,
+    // or a policy refusal. Do not turn those into duplicate paid requests.
+    if (response.status >= 400 && response.status < 500 && !isRetryableImageStatus(response.status)) {
+      throw new NonRetryableImageRequestError(
+        `OpenAI image generation failed (${model}, ${response.status})`,
+      );
+    }
+    throw new Error(`OpenAI image generation failed (${model}, ${response.status})`);
   }
 
   const payload = await response.json();
@@ -222,6 +250,9 @@ export async function generateImage(
     return await generateImageWithModel(prompt, PRIMARY_IMAGE_MODEL, options);
   } catch (primaryError) {
     throwIfAborted(options);
+    if (primaryError instanceof NonRetryableImageRequestError) {
+      throw primaryError;
+    }
     console.error(
       'OpenAI image generation primary model failed',
       primaryError instanceof Error ? primaryError.message : 'unknown',
@@ -255,6 +286,15 @@ async function editImagesWithModel(
   formData.append('model', model);
   formData.append('prompt', prompt);
   formData.append('size', '1024x1024');
+  if (options.quality) {
+    formData.append('quality', options.quality);
+  }
+  if (options.outputFormat) {
+    formData.append('output_format', options.outputFormat);
+  }
+  if (options.outputCompression !== undefined) {
+    formData.append('output_compression', String(options.outputCompression));
+  }
 
   if (referenceImages.length > 1 && MODELS_SUPPORTING_INPUT_FIDELITY.has(model)) {
     formData.append('input_fidelity', 'high');
@@ -280,8 +320,14 @@ async function editImagesWithModel(
   });
 
   if (!response.ok) {
-    const detail = await readOpenAiErrorSnippet(response);
-    console.error('OpenAI image edit failed', model, response.status, detail || 'no response body');
+    console.error('OpenAI image edit failed', { model, status: response.status });
+    // A second model cannot fix an invalid request, an authentication error,
+    // or a policy refusal. Do not turn those into duplicate paid requests.
+    if (response.status >= 400 && response.status < 500 && !isRetryableImageStatus(response.status)) {
+      throw new NonRetryableImageRequestError(
+        `OpenAI image edit failed (${model}, ${response.status})`,
+      );
+    }
     return null;
   }
 
@@ -301,34 +347,184 @@ export async function editImageWithReferences(
   referenceImages: ReferenceImageInput[],
   options: OpenAiImageRequestOptions = {},
 ): Promise<Uint8Array> {
+  throwIfAborted(options);
+
   if (referenceImages.length === 0) {
     return generateImage(prompt, options);
   }
 
-  const primaryEdit = await editImagesWithModel(
-    prompt,
-    referenceImages,
-    PRIMARY_IMAGE_MODEL,
-    options,
-  );
-  if (primaryEdit) {
-    return primaryEdit;
+  const runEdit = async (
+    model: string,
+    signal: AbortSignal,
+  ): Promise<Uint8Array | null> => {
+    try {
+      const image = await editImagesWithModel(prompt, referenceImages, model, { ...options, signal });
+      if (signal.aborted) {
+        throw signal.reason ?? new DOMException('OpenAI image edit aborted', 'AbortError');
+      }
+      return image;
+    } catch (error) {
+      if (signal.aborted) {
+        throw error;
+      }
+      if (error instanceof NonRetryableImageRequestError) {
+        throw error;
+      }
+
+      console.error(
+        'OpenAI image edit request failed',
+        model,
+        error instanceof Error ? error.message : 'unknown',
+      );
+      return null;
+    }
+  };
+
+  // A three-or-more-character request is the tail-latency case in practice:
+  // gpt-image-2 always processes reference images at high fidelity. Start a
+  // second compatible edit only after the primary has been slow for a while,
+  // rather than abandoning an otherwise-good primary at an arbitrary cutoff.
+  // This keeps normal jobs single-provider while giving slow jobs a genuine
+  // second chance inside the function-wide deadline.
+  if (options.fallbackHedgeDelayMs !== undefined) {
+    const primaryController = new AbortController();
+    const fallbackController = new AbortController();
+    const abortForParent = () => {
+      primaryController.abort(options.signal?.reason);
+      fallbackController.abort(options.signal?.reason);
+    };
+    options.signal?.addEventListener('abort', abortForParent, { once: true });
+
+    let fallbackStarted = false;
+    const fallbackState: { promise: Promise<Uint8Array | null> | null } = { promise: null };
+    const startFallback = (): Promise<Uint8Array | null> => {
+      if (!fallbackStarted) {
+        fallbackStarted = true;
+        fallbackState.promise = runEdit(FALLBACK_IMAGE_MODEL, fallbackController.signal);
+      }
+      return fallbackState.promise!;
+    };
+
+    const primaryPromise = runEdit(PRIMARY_IMAGE_MODEL, primaryController.signal);
+    let signalHedge: (() => void) | null = null;
+    const hedgeReached = new Promise<void>((resolve) => {
+      signalHedge = resolve;
+    });
+    const hedgeTimer = setTimeout(() => {
+      if (options.signal?.aborted) {
+        return;
+      }
+      startFallback();
+      signalHedge?.();
+    }, options.fallbackHedgeDelayMs);
+
+    type EditOutcome = {
+      source: 'primary' | 'fallback';
+      image: Uint8Array | null;
+      nonRetryableError?: NonRetryableImageRequestError;
+    };
+    const observeEdit = (
+      source: EditOutcome['source'],
+      edit: Promise<Uint8Array | null>,
+    ): Promise<EditOutcome> => edit.then(
+      (image) => ({ source, image }),
+      (error) => {
+        if (error instanceof NonRetryableImageRequestError) {
+          return { source, image: null, nonRetryableError: error };
+        }
+        throw error;
+      },
+    );
+
+    const resolveFirstSuccessfulEdit = async (): Promise<Uint8Array | null> => {
+      const first = await Promise.race([
+        observeEdit('primary', primaryPromise),
+        hedgeReached.then(() => ({ source: 'hedge' as const, image: null })),
+      ]);
+
+      if (first.source === 'primary') {
+        if (first.nonRetryableError) {
+          fallbackController.abort('Primary image edit was not retryable');
+          throw first.nonRetryableError;
+        }
+        if (first.image) {
+          fallbackController.abort('Primary image edit completed first');
+          return first.image;
+        }
+
+        clearTimeout(hedgeTimer);
+        const fallbackEdit = await startFallback();
+        if (fallbackEdit) {
+          return fallbackEdit;
+        }
+        return null;
+      }
+
+      const fallback = startFallback();
+      const winner = await Promise.race([
+        observeEdit('primary', primaryPromise),
+        observeEdit('fallback', fallback),
+      ]);
+
+      if (winner.nonRetryableError && winner.source === 'primary') {
+        fallbackController.abort('Primary image edit was not retryable');
+        throw winner.nonRetryableError;
+      }
+      if (winner.image) {
+        if (winner.source === 'primary') {
+          fallbackController.abort('Primary image edit completed first');
+        } else {
+          primaryController.abort('Fallback image edit completed first');
+        }
+        return winner.image;
+      }
+
+      const other = winner.source === 'primary'
+        ? await observeEdit('fallback', fallback)
+        : await observeEdit('primary', primaryPromise);
+      if (other.nonRetryableError) {
+        throw other.nonRetryableError;
+      }
+      return other.image;
+    };
+
+    try {
+      const image = await resolveFirstSuccessfulEdit();
+      if (image) {
+        return image;
+      }
+    } finally {
+      clearTimeout(hedgeTimer);
+      primaryController.abort('Image edit finished');
+      fallbackController.abort('Image edit finished');
+      // A cancelled losing request may reject after the winner returned.
+      // Observe it so cancellation never becomes an unhandled rejection.
+      const pendingFallback = fallbackState.promise;
+      if (pendingFallback) {
+        void pendingFallback.catch(() => undefined);
+      }
+      options.signal?.removeEventListener('abort', abortForParent);
+    }
+  } else {
+    const primaryEdit = await runEdit(PRIMARY_IMAGE_MODEL, options.signal ?? new AbortController().signal);
+    if (primaryEdit) {
+      return primaryEdit;
+    }
+    throwIfAborted(options);
+
+    const fallbackEdit = await runEdit(FALLBACK_IMAGE_MODEL, options.signal ?? new AbortController().signal);
+    if (fallbackEdit) {
+      return fallbackEdit;
+    }
   }
   throwIfAborted(options);
 
-  const fallbackEdit = await editImagesWithModel(
-    prompt,
-    referenceImages,
-    FALLBACK_IMAGE_MODEL,
-    options,
-  );
-  if (fallbackEdit) {
-    return fallbackEdit;
-  }
-  throwIfAborted(options);
-
-  console.error('OpenAI image edit exhausted; falling back to generation');
-  return generateImage(prompt, options);
+  // A text-only generation after reference edits fail would lose the family
+  // characters that make a Momora illustration meaningful. It also used to
+  // add two more provider calls after the edit path had already exhausted the
+  // request budget. Preserve the explicit no-reference generation branch
+  // above, but fail reference-based jobs cleanly so the user can retry.
+  throw new Error('OpenAI image edit failed for all reference-aware models');
 }
 
 export async function editImageWithReference(

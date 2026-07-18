@@ -868,6 +868,36 @@ describe('memories service integration', () => {
     expect(result.error?.code).toBe('invalid_memory_type');
   });
 
+  it('does not start the illustration pipeline when retry cannot mark the memory pending', async () => {
+    const fetchBuilder = createQueryBuilder({
+      data: {
+        memory_type: 'text_illustration',
+        illustration_status: 'failed',
+        updated_at: '2026-05-24T00:00:00Z',
+      },
+      error: null,
+    });
+    const updateBuilder = createQueryBuilder({
+      data: null,
+      error: { message: 'memory update denied', code: '42501' },
+    });
+
+    let memoriesCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return memoriesCall === 1 ? fetchBuilder : updateBuilder;
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await retryMemoryIllustration('memory-update-denied');
+
+    expect(result.error?.message).toBe('memory update denied');
+    expect(generateMemoryIllustration).not.toHaveBeenCalled();
+  });
+
   it('switches an illustrated memory to text-only without clearing its illustration', async () => {
     const existingBuilder = createQueryBuilder({
       data: {

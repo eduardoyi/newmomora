@@ -54,6 +54,25 @@ export const ILLUSTRATION_GENERATION_TIMEOUT_MS =
 const ALLOWED_EXPRESSION_STYLES = new Set(['comedic', 'tender', 'neutral']);
 type ExpressionStyle = 'comedic' | 'tender' | 'neutral';
 
+export function getIllustrationImageRequestOptions(referenceCount: number) {
+  const isLargeReferenceSet = referenceCount >= 3;
+
+  return {
+    // `auto` can choose a costly output for a multi-character edit. Medium
+    // keeps a polished final illustration while making that tail predictable;
+    // we deliberately do not trade family-image quality down to `low`.
+    quality: isLargeReferenceSet ? ('medium' as const) : undefined,
+    // Illustration keys and R2 metadata are .webp/image-webp. Request the
+    // same format instead of storing default PNG bytes under that identity.
+    outputFormat: 'webp' as const,
+    outputCompression: 85,
+    // Do not cut off a healthy primary at a fixed point. For the slow
+    // multi-character tail, start the compatible fallback halfway through
+    // the pre-finalization budget and publish whichever edit completes.
+    fallbackHedgeDelayMs: isLargeReferenceSet ? 55_000 : undefined,
+  };
+}
+
 export interface GenerateIllustrationDependencies {
   getObjectBytes: typeof getObjectBytes;
   putObjectBytes: typeof putObjectBytes;
@@ -495,6 +514,7 @@ export async function handleGenerateIllustration(
     const imagePhaseStartedAt = Date.now();
     const illustrationBytes = await dependencies.editImageWithReferences(prompt, referenceImages, {
       signal: generationController.signal,
+      ...getIllustrationImageRequestOptions(referenceImages.length),
     });
     throwIfAborted(generationController.signal);
     logGenerationPhase(memoryId, generationPhase, imagePhaseStartedAt);

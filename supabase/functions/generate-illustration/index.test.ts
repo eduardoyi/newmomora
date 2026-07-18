@@ -1,6 +1,7 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import {
   commitIllustrationGeneration,
+  getIllustrationImageRequestOptions,
   handleGenerateIllustration,
   ILLUSTRATION_GENERATION_TIMEOUT_MS,
 } from './index.ts';
@@ -234,6 +235,21 @@ Deno.test('generate-illustration rejects unauthenticated requests', async () => 
 
 Deno.test('generate-illustration reserves 30 seconds after its 120-second pre-finalization deadline', () => {
   assertEquals(ILLUSTRATION_GENERATION_TIMEOUT_MS, 120_000);
+});
+
+Deno.test('generate-illustration applies the robust provider strategy only to three-or-more references', () => {
+  assertEquals(getIllustrationImageRequestOptions(1), {
+    quality: undefined,
+    outputFormat: 'webp',
+    outputCompression: 85,
+    fallbackHedgeDelayMs: undefined,
+  });
+  assertEquals(getIllustrationImageRequestOptions(3), {
+    quality: 'medium',
+    outputFormat: 'webp',
+    outputCompression: 85,
+    fallbackHedgeDelayMs: 55_000,
+  });
 });
 
 Deno.test('illustration commit publishes, swaps, then deletes the old object', async () => {

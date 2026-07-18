@@ -1257,7 +1257,15 @@ export async function retryMemoryIllustration(memoryId: string): Promise<{ error
     return { error: null };
   }
 
-  await supabase.from('memories').update({ illustration_status: 'pending' }).eq('id', memoryId);
+  const { error: updateError } = await supabase
+    .from('memories')
+    .update({ illustration_status: 'pending' })
+    .eq('id', memoryId);
+
+  if (updateError) {
+    return { error: mapSupabaseError(updateError) };
+  }
+
   void runMemoryIllustrationPipeline(memoryId, { forceRegenerate });
   return { error: null };
 }
