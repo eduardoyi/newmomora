@@ -29,7 +29,7 @@ interface AuthContextValue {
   requestSignInOtp: (email: string) => Promise<RequestSignInOtpResult>;
   requestSignUpOtp: (input: RequestSignUpOtpInput) => Promise<{ error: AuthError | null }>;
   verifyOtp: (input: VerifyOtpInput) => Promise<{ error: AuthError | null }>;
-  /** Password sign-in for the guarded dedicated reviewer account and dev/E2E accounts. */
+  /** Password sign-in for guarded fixture accounts and dev/E2E accounts. */
   signInWithPassword: (input: PasswordSignInInput) => Promise<{ error: AuthError | null }>;
   signOut: () => Promise<void>;
 }

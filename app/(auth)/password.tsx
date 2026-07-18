@@ -11,13 +11,13 @@ import {
 } from '@/components/auth-screen';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { isReviewerEmail, normalizeEmail } from '@/services/reviewer-auth';
+import { isPasswordLoginEmail, normalizeEmail } from '@/services/reviewer-auth';
 
 export default function PasswordScreen() {
   const { email: routeEmail } = useLocalSearchParams<{ email?: string | string[] }>();
   const email = typeof routeEmail === 'string' ? normalizeEmail(routeEmail) : '';
 
-  if (!isReviewerEmail(email)) {
+  if (!isPasswordLoginEmail(email)) {
     return <Redirect href="/(auth)/login" />;
   }
 

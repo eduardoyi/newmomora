@@ -5,7 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import PasswordScreen from '../../app/(auth)/password';
 import LoginScreen from '../../app/(auth)/login';
 import { useAuth } from '@/hooks/use-auth';
-import { REVIEWER_EMAIL } from '@/services/reviewer-auth';
+import { DEMO_EMAIL, REVIEWER_EMAIL } from '@/services/reviewer-auth';
 
 jest.mock('expo-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
@@ -70,6 +70,31 @@ describe('reviewer password sign-in', () => {
     expect(requestSignInOtp).not.toHaveBeenCalled();
     expect(queryByText('App review access')).toBeNull();
     expect(queryByText(/App Store|Google Play|reviewer/i)).toBeNull();
+  });
+
+  it('uses the same guarded password branch for the screenshot demo account', async () => {
+    const { getByTestId } = renderScreen(<LoginScreen />);
+
+    fireEvent.changeText(getByTestId('login-email-input'), '  HELLO+DEMO@USEMOMORA.COM  ');
+    fireEvent.press(getByTestId('login-submit-button'));
+
+    await waitFor(() => {
+      expect(router.push).toHaveBeenCalledWith({
+        pathname: '/(auth)/password',
+        params: { email: DEMO_EMAIL },
+      });
+    });
+    expect(requestSignInOtp).not.toHaveBeenCalled();
+  });
+
+  it('allows the guarded demo email to render the password form', () => {
+    mockUseLocalSearchParams.mockReturnValue({ email: DEMO_EMAIL });
+
+    const { getByTestId, getByText } = renderScreen(<PasswordScreen />);
+
+    expect(getByTestId('password-input')).toBeTruthy();
+    expect(getByText(`Sign in as ${DEMO_EMAIL}.`)).toBeTruthy();
+    expect(mockRedirect).not.toHaveBeenCalled();
   });
 
   it('keeps the normal OTP flow unchanged for other emails', async () => {

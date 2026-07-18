@@ -19,7 +19,7 @@ export interface VerifyOtpInput {
   token: string;
 }
 
-/** Password sign-in for the guarded dedicated reviewer account and dev/E2E accounts. */
+/** Password sign-in for guarded fixture accounts and dev/E2E accounts. */
 export interface PasswordSignInInput {
   email: string;
   password: string;

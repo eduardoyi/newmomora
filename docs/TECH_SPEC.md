@@ -54,10 +54,10 @@ flowchart TB
 Email OTP (one-time code) is the default for users via Supabase Auth — see
 [docs/features/auth.md](./features/auth.md) for the full client flow
 (`signInWithOtp`/`verifyOtp`, sign-up metadata trigger, resend cooldown).
-A dedicated production reviewer email, entered through the normal login email
-field, branches to a guarded generic password screen that calls
-`signInWithPassword` for one manually provisioned, pre-populated App
-Store/Google Play reviewer account. The app contains no reviewer password. A
+Two allowlisted production fixture emails, entered through the normal login
+email field, branch to a guarded generic password screen that calls
+`signInWithPassword`: the manually provisioned App Store/Google Play reviewer
+account and the screenshot demo account. The app contains no passwords. A
 `__DEV__`-only shortcut to the same method remains available for Maestro E2E
 (`src/utils/e2e-fixtures.ts#isE2eFixturesEnabled`). Supabase dashboard
 prerequisites (reviewer account, custom SMTP, OTP email template, OTP expiry)

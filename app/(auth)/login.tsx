@@ -11,7 +11,7 @@ import {
 } from '@/components/auth-screen';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { isReviewerEmail, normalizeEmail } from '@/services/reviewer-auth';
+import { isPasswordLoginEmail, normalizeEmail } from '@/services/reviewer-auth';
 import { isE2eFixturesEnabled } from '@/utils/e2e-fixtures';
 
 export default function LoginScreen() {
@@ -33,7 +33,7 @@ export default function LoginScreen() {
 
     const normalizedEmail = normalizeEmail(email);
 
-    if (isReviewerEmail(normalizedEmail)) {
+    if (isPasswordLoginEmail(normalizedEmail)) {
       router.push({
         pathname: '/(auth)/password',
         params: { email: normalizedEmail },
