@@ -1,6 +1,6 @@
 # Momora release-readiness tracker
 
-**Last updated:** July 17, 2026
+**Last updated:** July 18, 2026
 
 **Release version:** 1.1.0
 
@@ -38,12 +38,11 @@ This is the working must-do list for the next App Store and Google Play release.
 ## 2. Legal, support, and public copy
 
 - [x] Update the privacy policy, Terms of Service, FAQ, website copy, and account-deletion page copy.
-- [ ] 🔒 Deploy and verify the additional reporting/blocking Privacy and Terms additions in the separate `momora-marketing` site after the implemented behavior is accepted.
-  - This is a new reporting-specific deployment task; it does not reopen the completed general copy update above.
+- [x] 🔒 Deploy and verify the additional reporting/blocking Privacy and Terms additions in the separate `momora-marketing` site.
 - [x] Add Terms acknowledgment during account creation.
 - [x] Add direct FAQ, privacy, Terms, and support/contact routes in the app.
   - Implemented in the current working tree; include these changes in the release commit.
-- [ ] 🔒 Disable or remove from sale all old Apple and Google in-app purchase products.
+- [x] 🔒 Disable or remove from sale all old Apple and Google in-app purchase products.
   - [x] Confirm that no subscriber migration is required.
   - [x] Confirm that no refunds are required.
   - [ ] Remove remaining monetization references from the store listings and store configuration.
@@ -52,18 +51,20 @@ This is the working must-do list for the next App Store and Google Play release.
 
 ## 3. Store declarations and reviewer access
 
-- [ ] 🔒 Update Apple App Privacy declarations to match the current app.
-- [ ] 🔒 Update Google Play Data Safety declarations to match the current app.
+- 🟡 🔒 Update Apple App Privacy declarations to match the current app.
+  - [x] Publish the current Apple data-type declarations, including linked-to-user and non-tracking answers.
+  - [ ] Add the User Privacy Choices URL (`https://usemomora.com/delete-account/`) when the new iOS version is created; App Store Connect requires a new version for this field.
+- [x] 🔒 Update Google Play Data Safety declarations to match the current app.
 - [ ] 🔒 Complete Apple’s current age-rating questionnaire.
-- [ ] 🔒 Complete Google Play’s target-audience and content declarations.
-- [ ] Prepare reviewer access for the email-OTP login flow.
+- [x] 🔒 Complete Google Play’s target-audience and content declarations.
+- 🟡 Prepare reviewer access for the email-OTP login flow.
   - [x] Route the dedicated reviewer email from the normal login field to a guarded password step so reviewers do not depend on receiving a live OTP.
   - [x] Create reviewer instructions and the setup/rotation runbook: [reviewer-access.md](./reviewer-access.md).
   - [x] Add focused integration and Maestro flow coverage for the email-triggered reviewer password branch.
   - [x] Provision and backend/fixture-verify the production reviewer account and synthetic data.
     - Backend/account/media verification on July 17, 2026: confirmed email and password authentication; one active owner membership with onboarding complete; two explicitly synthetic adult profiles with ready portraits; one text-only and one ready illustrated memory tagged only to the intended synthetic profile; and authenticated private-media access.
     - The production `get-media-url` function was redeployed and verified active at version 12 after version 11 rejected versioned memory-illustration keys.
-  - [ ] Enter the stored reviewer credentials securely in both store review consoles.
+  - [x] Enter the stored reviewer credentials securely in both store review consoles.
   - [ ] Verify the email-triggered reviewer flow from a clean install of the exact release build before submission (the current fixture verification does not cover this UI).
 
 ## 4. iPad compatibility
@@ -79,6 +80,17 @@ This is the working must-do list for the next App Store and Google Play release.
   - [ ] Open Settings and account deletion.
 - [ ] Replace the old iPad App Store screenshots with current screenshots.
 - [ ] Fix only submission blockers or severe layout/usability problems found during the smoke test.
+
+## 4.1 Store listings, descriptions, and screenshots
+
+- [ ] 🔒 Review and update the App Store description, promotional text, keywords, and support/marketing URLs for the current release.
+  - [ ] Remove references to subscriptions, trials, credits, premium access, or purchases.
+  - [ ] Keep the private, invite-only family-sharing model and AI illustration behavior accurate; do not imply public sharing or discovery.
+- [ ] 🔒 Review and update the Google Play short description, full description, and privacy-policy link for the current release.
+  - [ ] Remove references to subscriptions, trials, credits, premium access, or purchases.
+  - [ ] Keep the private, invite-only family-sharing model and AI illustration behavior accurate; do not imply public sharing or discovery.
+- [ ] 🔒 Replace outdated App Store and Google Play phone screenshots that show old UI, pricing, or obsolete flows.
+- [ ] 🔒 Replace the old App Store iPad screenshots with current iPad screenshots.
 
 ## 5. Build numbers and release artifacts
 
