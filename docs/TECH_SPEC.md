@@ -501,7 +501,7 @@ Quick reference:
 - **Helper functions:** `is_family_member(fam uuid)`, `has_family_role(fam
   uuid, roles text[])` — both `security definer stable`, gate every RLS
   policy on shared tables, include an owner exemption on `deleted_at`.
-- **Definer RPCs:** `create_family`, `create_family_invite`,
+- **Definer RPCs:** `create_family`, `create_family_invite`, `delete_family`,
   `get_family_member_profiles`, `get_invite_redeemer`,
   `get_my_redeemed_invite_status`, `replace_memory_media_assets`.
 - **New Edge Functions:** `redeem-family-invite`, `resolve-family-invite`,
@@ -509,6 +509,16 @@ Quick reference:
 - **Migration:** `supabase/migrations/20260711120000_family_sharing.sql`
   (schema + RLS + backfill) and `20260711120001_invite_code_words_seed.sql`
   (word list).
+- **`delete_family(fam uuid) returns families`** —
+  `supabase/migrations/20260720110000_delete_family.sql`. Owner-only soft
+  delete (`families.deleted_at = now()`), callable from the client's "Manage
+  families" screen (`app/(app)/sharing/manage.tsx`,
+  `src/services/family.ts#deleteFamily`) so an owner can retire one of
+  several families without going through full account deletion. Mirrors
+  `delete-user-account`'s per-family soft-delete side effect (§4.7) — no
+  separate invite-revocation step, since `is_family_member`/`has_family_role`
+  already exempt only the owner from a soft-deleted family, and
+  `redeem-family-invite` already rejects `family.deleted_at` truthy.
 
 ### 2.7 Content reporting and account blocking
 

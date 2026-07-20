@@ -109,6 +109,24 @@ describe('useFamilyMembers integration', () => {
 
     expect(result.current.members).toHaveLength(1);
     expect(result.current.hasMembers).toBe(true);
+    expect(mockedFetchFamilyMembers).toHaveBeenCalledWith('family-1');
+  });
+
+  it('does not fetch family members when there is no active family', async () => {
+    mockedUseFamily.mockReturnValue({
+      family: null,
+      familyId: null,
+      role: null,
+      memberships: [],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    renderHook(() => useFamilyMembers(), { wrapper: createWrapper() });
+
+    expect(mockedFetchFamilyMembers).not.toHaveBeenCalled();
   });
 
   it('creates a member and refreshes the list', async () => {

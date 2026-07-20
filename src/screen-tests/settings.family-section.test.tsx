@@ -13,6 +13,7 @@ import { useUserProfile } from '@/hooks/useUserProfile';
 import {
   sharingApprovalsRoute,
   sharingInviteRoute,
+  sharingManageRoute,
   sharingMembersRoute,
   sharingPendingInvitesRoute,
   sharingRedeemRoute,
@@ -545,7 +546,29 @@ describe('Settings Family section', () => {
     expect(getByText('2')).toBeTruthy();
   });
 
-  it('only renders the family picker when there is more than one membership', () => {
+  it('never renders a standalone picker field — the modal opens only via the Switch link', () => {
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [
+        { id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" },
+        { id: 'm2', familyId: 'family-2', role: 'owner', name: 'Second family' },
+      ],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    const { queryByTestId, queryByText } = renderScreen();
+    // hideTrigger: even with multiple memberships there is no inline field
+    // trigger and no "Switch family" row -- only the Switch link.
+    expect(queryByTestId('settings-family-picker')).toBeNull();
+    expect(queryByText('Switch family')).toBeNull();
+  });
+
+  it('hides the Switch link next to the family name when there is only one membership', () => {
     mockedUseFamily.mockReturnValue({
       family: { id: 'family-1', name: "Rosa's family" },
       familyId: 'family-1',
@@ -558,6 +581,51 @@ describe('Settings Family section', () => {
     });
 
     const { queryByTestId } = renderScreen();
-    expect(queryByTestId('settings-family-picker')).toBeNull();
+    expect(queryByTestId('settings-family-switch')).toBeNull();
+  });
+
+  it('shows a Switch link next to the family name that opens the family picker', async () => {
+    const setActiveFamily = jest.fn().mockResolvedValue(undefined);
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [
+        { id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" },
+        { id: 'm2', familyId: 'family-2', role: 'owner', name: 'Second family' },
+      ],
+      isLoading: false,
+      setActiveFamily,
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    const { getByTestId } = renderScreen();
+
+    fireEvent.press(getByTestId('settings-family-switch'));
+    fireEvent.press(getByTestId('settings-family-picker-option-family-2'));
+
+    await waitFor(() => {
+      expect(setActiveFamily).toHaveBeenCalledWith('family-2');
+    });
+  });
+
+  it('routes to the manage-families screen', () => {
+    const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    const { getByTestId } = renderScreen();
+
+    fireEvent.press(getByTestId('settings-manage-families'));
+    expect(router.push).toHaveBeenCalledWith(sharingManageRoute);
   });
 });

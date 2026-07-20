@@ -45,7 +45,11 @@ export function useFamilyMembers() {
   const query = useQuery({
     queryKey: familyMembersQueryKey,
     queryFn: async () => {
-      const { data, error } = await fetchFamilyMembers();
+      if (!familyId) {
+        return [];
+      }
+
+      const { data, error } = await fetchFamilyMembers(familyId);
 
       if (error) {
         throw error;

@@ -82,6 +82,7 @@ describe('useCalendarMemories hooks', () => {
     });
 
     expect(mockedFetchOldestMemoryDate).toHaveBeenCalledTimes(1);
+    expect(mockedFetchOldestMemoryDate).toHaveBeenCalledWith('family-1');
   });
 
   it('loads memories only for the requested calendar date range', async () => {
@@ -112,6 +113,30 @@ describe('useCalendarMemories hooks', () => {
       expect(result.current.data).toHaveLength(1);
     });
 
-    expect(mockedFetchMemoriesInDateRange).toHaveBeenCalledWith('2026-05-01', '2026-05-31');
+    expect(mockedFetchMemoriesInDateRange).toHaveBeenCalledWith(
+      'family-1',
+      '2026-05-01',
+      '2026-05-31',
+    );
+  });
+
+  it('does not fetch a calendar range when there is no active family', async () => {
+    mockedUseFamily.mockReturnValue({
+      family: null,
+      familyId: null,
+      role: null,
+      memberships: [],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    renderHook(
+      () => useCalendarMemoriesInRange({ startDate: '2026-05-01', endDate: '2026-05-31' }),
+      { wrapper: createWrapper() },
+    );
+
+    expect(mockedFetchMemoriesInDateRange).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -27,6 +27,7 @@ import { useUserProfile } from '@/hooks/useUserProfile';
 import {
   sharingApprovalsRoute,
   sharingInviteRoute,
+  sharingManageRoute,
   sharingMembersRoute,
   sharingPendingInvitesRoute,
   sharingRedeemRoute,
@@ -36,7 +37,7 @@ import { leaveFamily, updateFamilyName } from '@/services/family';
 import { isPendingInviteActive } from '@/utils/invites';
 import { canEditFamilyContent, isOwnerRole, isViewerRole, roleLabel } from '@/utils/roles';
 import { AuthField, AuthInput } from '@/components/auth-screen';
-import { SelectField, type SelectOption } from '@/components/select-field';
+import { SelectField, type SelectFieldHandle, type SelectOption } from '@/components/select-field';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 
 const DEFAULT_REMINDER_TIME = '20:00:00';
@@ -87,6 +88,9 @@ function FamilySection() {
   const [nameError, setNameError] = useState('');
   const [isLeaving, setIsLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState('');
+  // Backs the "Switch" link next to the family name: the picker below
+  // renders modal-only (hideTrigger) and this ref is its sole opener.
+  const familyPickerRef = useRef<SelectFieldHandle>(null);
 
   useEffect(() => {
     if (!isEditingName) {
@@ -215,13 +219,25 @@ function FamilySection() {
           label={family.name}
           caption={roleLabel(role)}
           right={
-            canEditName ? (
-              <Pressable
-                onPress={() => setIsEditingName(true)}
-                testID="settings-family-name-edit"
-              >
-                <Text style={styles.familyEditTrigger}>Edit</Text>
-              </Pressable>
+            canEditName || memberships.length > 1 ? (
+              <View style={styles.familyNameActions}>
+                {canEditName && (
+                  <Pressable
+                    onPress={() => setIsEditingName(true)}
+                    testID="settings-family-name-edit"
+                  >
+                    <Text style={styles.familyEditTrigger}>Edit</Text>
+                  </Pressable>
+                )}
+                {memberships.length > 1 && (
+                  <Pressable
+                    onPress={() => familyPickerRef.current?.open()}
+                    testID="settings-family-switch"
+                  >
+                    <Text style={styles.familyEditTrigger}>Switch</Text>
+                  </Pressable>
+                )}
+              </View>
             ) : undefined
           }
         />
@@ -273,21 +289,26 @@ function FamilySection() {
         testID="settings-join-family"
       />
 
+      <SettingsRow
+        chevron
+        label="Manage families"
+        caption="Create a new family journal or delete one you own."
+        onPress={() => router.push(sharingManageRoute)}
+        testID="settings-manage-families"
+      />
+
       {memberships.length > 1 && (
-        <View style={[styles.row, styles.rowBorder]}>
-          <View style={styles.rowContent}>
-            <Text style={styles.rowLabel}>Switch family</Text>
-          </View>
-          <SelectField
-            onChange={(value) => void handlePickFamily(value)}
-            options={memberships.map((membership) => ({
-              value: membership.familyId,
-              label: membership.name,
-            }))}
-            testID="settings-family-picker"
-            value={familyId}
-          />
-        </View>
+        <SelectField
+          hideTrigger
+          onChange={(value) => void handlePickFamily(value)}
+          options={memberships.map((membership) => ({
+            value: membership.familyId,
+            label: membership.name,
+          }))}
+          ref={familyPickerRef}
+          testID="settings-family-picker"
+          value={familyId}
+        />
       )}
 
       {!isOwner && (
@@ -800,6 +821,11 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sansBold,
     fontSize: 13,
     color: colors.primary,
+  },
+  familyNameActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
   },
   familyEditRow: {
     flexDirection: 'column',

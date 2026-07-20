@@ -209,6 +209,33 @@ describe('useMemories integration', () => {
     expect(result.current.memories[0].taggedMembers[0].avatarUpdatedAt).toBe('portrait-jan');
   });
 
+  it('scopes the timeline fetch to the active family', async () => {
+    const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(mockedFetchMemoriesPage).toHaveBeenCalledWith(
+      'family-1',
+      expect.objectContaining({ limit: 40 }),
+    );
+  });
+
+  it('does not fetch the timeline when there is no active family', async () => {
+    mockedUseFamily.mockReturnValue({
+      family: null,
+      familyId: null,
+      role: null,
+      memberships: [],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    renderHook(() => useMemories(), { wrapper: createWrapper() });
+
+    expect(mockedFetchMemoriesPage).not.toHaveBeenCalled();
+  });
+
   it('re-runs photo emotion analysis when caption changes', async () => {
     mockedUpdateMemory.mockResolvedValue({
       data: {

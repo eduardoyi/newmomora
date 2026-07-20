@@ -196,10 +196,35 @@ the client currently shows. `FamilyProvider` (`src/hooks/use-family.tsx`)
 resolves it: match `active_family_id` against the user's memberships, or
 fall back to the first membership (and persist the correction) if it's
 stale/missing/removed. A family picker only appears in Settings when a user
-has more than one membership — the common case (one family) never sees it.
-Switching families invalidates every family-scoped React Query cache
+has more than one membership — the common case (one family) never sees it
+(a "Switch" link next to the family name opens the same picker). Switching
+families invalidates every family-scoped React Query cache
 (`memoriesQueryKeyBase`, `calendarMemoriesQueryKeyBase`,
 `familyMembersQueryKeyBase`, `familyMemberProfilesQueryKeyBase`).
+
+**Reads must filter by `family_id` client-side.** RLS is a security
+boundary, not a tenant selector: `is_family_member` matches *every* family
+the caller belongs to, so an unfiltered `select` on `memories` or
+`family_members` returns rows from all of a multi-family user's families
+mixed together. Every read service takes the active `familyId` and applies
+`.eq('family_id', familyId)` (`fetchMemoriesPage`, `fetchMemoriesInDateRange`,
+`fetchOldestMemoryDate`, `fetchFamilyMembers`); hooks guard on a null
+`familyId` before fetching. Any new family-scoped read must do the same.
+Relatedly, `is_family_member`'s owner exemption (`deleted_at is null OR
+owner_id = auth.uid()`, kept for cancel-account-deletion) means an owner
+still sees their own soft-deleted families through RLS — `FamilyProvider`'s
+memberships queryFn filters embedded families with `deleted_at` set so a
+deleted family drops out of the switcher/Manage list immediately.
+
+**Managing families:** Settings → "Manage families"
+(`app/(app)/sharing/manage.tsx`) lists all memberships, creates additional
+families (reuses `create_family`; client-side `setActiveFamily` after —
+the RPC only sets `active_family_id` when it was null), and lets owners
+soft-delete via `delete_family`. Joining a family sets it active: the
+server does this in `resolve-family-invite`, and the waiting screen
+re-applies it explicitly after refetching memberships (order matters — see
+the comment in `app/(app)/sharing/waiting.tsx` about the stale-active-family
+correction race).
 
 **Content ownership:** `memories.family_id` and `family_members.family_id`
 are the tenancy columns (`not null`, immutable once set — see
@@ -289,6 +314,7 @@ the RLS it's supposed to gate; `security definer` sidesteps it).
 |---|---|---|
 | `create_family(name)` | Any authenticated user | New family + caller as owner; sets `active_family_id` if the caller had none; capped at 5 owned families/user |
 | `create_family_invite(fam, invite_role)` | Manager+ of `fam` | Generates a unique 3-word code, `invite_role in ('manager','viewer')` |
+| `delete_family(fam)` | Owner of `fam` | Soft delete (`deleted_at = now()`) — the single column flip is the whole side-effect surface: RLS helpers stop matching for non-owners and `redeem-family-invite` rejects codes for deleted families, so no invite rows are touched. See `supabase/migrations/20260720110000_delete_family.sql` |
 | `get_family_member_profiles(fam)` | Member of `fam` | Names/roles for attribution + Settings member list, covering current members **and** former members who still appear as creators (see gotchas) |
 | `get_invite_redeemer(invite_id)` | Manager+ of **that invite's** family (resolved internally, not "manager anywhere") | Redeemer's name + email for the approvals screen |
 | `get_my_redeemed_invite_status()` | The redeemer themselves (scoped by `redeemed_by = auth.uid()`) | Waiting-screen poll target |
@@ -694,3 +720,4 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 | 2026-07-12 | Family management IA restructure: the member list moved off Settings onto its own **Family members** screen (`app/(app)/sharing/members.tsx`) so Settings stays constant-size for families up to the 50-member cap; Settings now shows a "Family members" row with the active-member count, and "Pending invites"/"Approvals" only render when there's at least one non-expired/redeemed invite to act on. See [Member management](#member-management). |
 | 2026-07-12 | Viewer Settings and calendar are further trimmed: viewers cannot see the calendar create FAB, daily journal reminder, or the Settings entry for Family members. They retain read-only timeline/calendar/family-roster access. |
 | 2026-07-13 | Likes/comments add a deliberate viewer-write exception: all active roles may engage, authors may delete their own comments, manager+ may moderate, and engagement notifications deep-link to memory detail. |
+| 2026-07-20 | Multi-family correctness + management: timeline/calendar/children-roster reads now filter by the active `family_id` client-side (previously RLS-only, which mixed families for multi-family users); joining a family now reliably sets it active (waiting-screen invalidation-order race fixed); new "Manage families" screen (create additional families in-app, owner soft-delete via new `delete_family` RPC); "Switch" link next to the family name; invite share message rewritten to walk fresh installs through signup → "I have an invite code" → code entry, and the no-family screen's invite button promoted to an equal-weight CTA with that exact label. |

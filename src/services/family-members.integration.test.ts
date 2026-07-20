@@ -36,11 +36,13 @@ describe('family-members service integration', () => {
       ],
       error: null,
     });
-    const select = jest.fn().mockReturnValue({ order });
+    const eq = jest.fn().mockReturnValue({ order });
+    const select = jest.fn().mockReturnValue({ eq });
     mockedSupabase.from.mockReturnValue({ select } as never);
 
-    const result = await fetchFamilyMembers();
+    const result = await fetchFamilyMembers('family-1');
 
+    expect(eq).toHaveBeenCalledWith('family_id', 'family-1');
     expect(result.data?.map((member) => member.id)).toEqual(['member-2', 'member-1']);
   });
 

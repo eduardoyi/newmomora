@@ -383,15 +383,19 @@ function nextCursorFor(memories: Memory[], limit: number): MemoriesPageCursor | 
   return { memoryDate: lastRow.memory_date, createdAt: lastRow.created_at };
 }
 
-export async function fetchMemoriesPage(opts: {
-  cursor?: MemoriesPageCursor;
-  limit?: number;
-}): Promise<{ data: MemoriesPage | null; error: ServiceError | null }> {
+export async function fetchMemoriesPage(
+  familyId: string,
+  opts: {
+    cursor?: MemoriesPageCursor;
+    limit?: number;
+  },
+): Promise<{ data: MemoriesPage | null; error: ServiceError | null }> {
   const limit = opts.limit ?? MEMORIES_PAGE_SIZE;
 
   let query = supabase
     .from('memories')
     .select('*')
+    .eq('family_id', familyId)
     .order('memory_date', { ascending: false })
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -483,13 +487,14 @@ export async function fetchMemoryGenerationStatuses(memoryIds: string[]): Promis
   return { data: (data ?? []) as MemoryGenerationStatusRow[], error: null };
 }
 
-export async function fetchOldestMemoryDate(): Promise<{
+export async function fetchOldestMemoryDate(familyId: string): Promise<{
   data: string | null;
   error: ServiceError | null;
 }> {
   const { data, error } = await supabase
     .from('memories')
     .select('memory_date')
+    .eq('family_id', familyId)
     .order('memory_date', { ascending: true })
     .limit(1)
     .maybeSingle();
@@ -502,6 +507,7 @@ export async function fetchOldestMemoryDate(): Promise<{
 }
 
 export async function fetchMemoriesInDateRange(
+  familyId: string,
   startDate: string,
   endDate: string,
 ): Promise<{
@@ -531,6 +537,7 @@ export async function fetchMemoriesInDateRange(
   const { data, error } = await supabase
     .from('memories')
     .select('*')
+    .eq('family_id', familyId)
     .gte('memory_date', startDate)
     .lte('memory_date', endDate)
     .order('memory_date', { ascending: false })

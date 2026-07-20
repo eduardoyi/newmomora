@@ -69,6 +69,41 @@ export async function createFamily(name: string): Promise<{
   return { data: data as Family, error: null };
 }
 
+/**
+ * Rewrites the "maximum N owned families" backend error (raised by both
+ * `create_family` and, incidentally, hit by the same cap on retry) into
+ * copy a parent can act on. Shared with the no-family screen's own local
+ * copy of this mapping (app/(app)/no-family.tsx) -- kept separate there
+ * since that screen is owned by another concurrent change.
+ */
+export function friendlyFamilyLimitError(message: string, code?: string): string {
+  if (code === 'P0001' && /maximum 5 owned families/i.test(message)) {
+    return "You've reached the limit of 5 family journals for one account.";
+  }
+  return message;
+}
+
+/**
+ * Owner-only soft-delete of a family (`delete_family` RPC -- see
+ * supabase/migrations/20260720110000_delete_family.sql). Setting
+ * `deleted_at` is the only side effect; it is enough to cut off every other
+ * member's access and reject pending invite redemptions for this family
+ * (see the migration's header comment for why no separate invite update is
+ * needed).
+ */
+export async function deleteFamily(familyId: string): Promise<{
+  data: Family | null;
+  error: ServiceError | null;
+}> {
+  const { data, error } = await supabase.rpc('delete_family', { fam: familyId });
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  return { data: data as Family, error: null };
+}
+
 export async function fetchFamilyMemberProfiles(familyId: string): Promise<{
   data: FamilyMemberProfile[] | null;
   error: ServiceError | null;

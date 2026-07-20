@@ -399,7 +399,11 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
   const query = useInfiniteQuery({
     queryKey: memoriesQueryKey(familyId),
     queryFn: async ({ pageParam }) => {
-      const { data, error } = await fetchMemoriesPage({
+      if (!familyId) {
+        return { memories: [], nextCursor: null };
+      }
+
+      const { data, error } = await fetchMemoriesPage(familyId, {
         cursor: pageParam ?? undefined,
         limit: MEMORIES_PAGE_SIZE,
       });

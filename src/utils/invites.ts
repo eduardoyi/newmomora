@@ -39,7 +39,10 @@ export function formatInviteCodeInput(text: string): string {
 export const INVITE_LINK_BASE_URL = 'https://usemomora.com/invite';
 
 /**
- * The two-step share-sheet message, verbatim from the plan (§9).
+ * The share-sheet message. Step 2's quoted label must match the button on the
+ * no-family screen (app/(app)/no-family.tsx) -- fresh installs launch with no
+ * URL, so the invitee follows these steps manually and the copy has to mirror
+ * what they actually see after signing up.
  *
  * `familyName` is part of the stable API (callers already know it and future
  * copy iterations will want it) but the approved template deliberately says
@@ -51,7 +54,8 @@ export function buildInviteShareMessage(code: string, familyName: string): strin
   return [
     "Hi! I'm journaling our family's memories with Momora and I'd love you to join.",
     `1. Get the app: ${INVITE_LINK_BASE_URL}?code=${code}`,
-    `2. Open it and enter code: ${code}`,
+    '2. Sign up, then tap "I have an invite code"',
+    `3. Enter code: ${code}`,
     'The code expires in 7 days.',
   ].join('\n');
 }
@@ -110,6 +114,51 @@ export type WaitingOutcome =
  * unexpected status (e.g. the invite was revoked out from under the
  * redeemer) also lands there rather than polling forever.
  */
+export interface FamilyMembershipLike {
+  familyId: string;
+  name: string;
+}
+
+/**
+ * After an invite is approved, the joiner's `active_family_id` needs to
+ * switch to the newly joined family (waiting screen, see
+ * app/(app)/sharing/waiting.tsx) -- but the `get_my_redeemed_invite_status`
+ * RPC that drives the waiting screen returns no `family_id` (see
+ * `RedeemedInviteStatusRow` above), only `family_name`. This picks the
+ * newly joined family out of a fresh memberships fetch by diffing against a
+ * snapshot taken before that fetch. Falls back to matching by family name
+ * (e.g. the redeemer re-opened the app after approval already happened, so
+ * the "new" membership was already present in the snapshot) and returns
+ * `null` when neither approach finds a candidate -- callers should skip
+ * switching the active family rather than block on it.
+ */
+export function pickNewlyJoinedFamilyId(
+  previousMemberships: FamilyMembershipLike[],
+  refreshedMemberships: FamilyMembershipLike[],
+  fallbackFamilyName: string | null,
+): string | null {
+  const previousFamilyIds = new Set(previousMemberships.map((membership) => membership.familyId));
+  const added = refreshedMemberships.find(
+    (membership) => !previousFamilyIds.has(membership.familyId),
+  );
+
+  if (added) {
+    return added.familyId;
+  }
+
+  if (fallbackFamilyName) {
+    const byName = refreshedMemberships.find(
+      (membership) => membership.name === fallbackFamilyName,
+    );
+
+    if (byName) {
+      return byName.familyId;
+    }
+  }
+
+  return null;
+}
+
 export function deriveWaitingOutcome(row: RedeemedInviteStatusRow | null): WaitingOutcome {
   if (!row || row.family_unavailable) {
     return { kind: 'unavailable' };

@@ -53,6 +53,23 @@ function familyAMembership() {
   };
 }
 
+// Soft-deleted family (delete_family RPC). is_family_member's owner exemption
+// keeps this row RLS-visible (with `row.family` still populated) to the
+// owner even after deletion -- the queryFn must filter it out itself.
+function deletedFamilyBMembership() {
+  return {
+    id: 'membership-b',
+    family_id: 'family-b',
+    role: 'owner',
+    family: {
+      id: 'family-b',
+      name: "B's family",
+      illustration_style: 'default',
+      deleted_at: '2026-07-20T00:00:00.000Z',
+    },
+  };
+}
+
 function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -166,5 +183,57 @@ describe('FamilyProvider', () => {
 
     expect(result.current.familyId).toBeNull();
     expect(result.current.justLostAccess).toBe(false);
+  });
+
+  it('excludes a membership whose embedded family is soft-deleted (owner RLS exemption)', async () => {
+    // Only membership is the owner's own soft-deleted family -- the owner
+    // exemption in is_family_member keeps `row.family` populated, but the
+    // queryFn must still drop it so the deleted family doesn't resolve as
+    // active or surface in the switcher/Manage list.
+    mockedFetchUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-b', name: 'Test' } as never,
+      error: null,
+    });
+    mockedFetchMemberships.mockResolvedValue({ data: [deletedFamilyBMembership()], error: null });
+
+    const { result } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(result.current.memberships).toHaveLength(0);
+    expect(result.current.familyId).toBeNull();
+    expect(result.current.family).toBeNull();
+  });
+
+  it('falls through to a non-deleted membership when the active family is soft-deleted', async () => {
+    mockedFetchUserProfile
+      .mockResolvedValueOnce({
+        data: { id: 'user-1', active_family_id: 'family-b', name: 'Test' } as never,
+        error: null,
+      })
+      .mockResolvedValue({
+        data: { id: 'user-1', active_family_id: 'family-a', name: 'Test' } as never,
+        error: null,
+      });
+    mockedFetchMemberships.mockResolvedValue({
+      data: [deletedFamilyBMembership(), familyAMembership()],
+      error: null,
+    });
+    mockedUpdateUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-a' } as never,
+      error: null,
+    });
+
+    const { result } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.familyId).toBe('family-a'));
+
+    expect(result.current.memberships).toHaveLength(1);
+    expect(result.current.memberships[0].familyId).toBe('family-a');
+    await waitFor(() => {
+      expect(mockedUpdateUserProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ activeFamilyId: 'family-a' }),
+      );
+    });
   });
 });

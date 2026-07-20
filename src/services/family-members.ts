@@ -39,13 +39,14 @@ type FamilyMemberWithTagCount = FamilyMemberRow & {
   memory_family_members: { count: number }[] | null;
 };
 
-export async function fetchFamilyMembers(): Promise<{
+export async function fetchFamilyMembers(familyId: string): Promise<{
   data: FamilyMember[] | null;
   error: ServiceError | null;
 }> {
   const { data, error } = await supabase
     .from('family_members')
     .select('*, memory_family_members(count)')
+    .eq('family_id', familyId)
     .order('created_at', { ascending: true });
 
   if (error) {

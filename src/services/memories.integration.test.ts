@@ -1123,9 +1123,10 @@ describe('memories service integration', () => {
       error: null,
     });
 
-    const { data, error } = await fetchMemoriesPage({});
+    const { data, error } = await fetchMemoriesPage('family-1', {});
 
     expect(error).toBeNull();
+    expect(memoriesBuilder.eq).toHaveBeenCalledWith('family_id', 'family-1');
     expect(data?.memories[0]?.taggedMembers).toHaveLength(1);
     expect(data?.memories[0]?.taggedMembers[0]?.name).toBe('Emma');
     expect(data?.memories[0]).toMatchObject({ likeCount: 4, commentCount: 2, likedByMe: true });
@@ -1239,7 +1240,7 @@ describe('memories service integration', () => {
       throw new Error(`Unexpected table ${table}`);
     });
 
-    const { data, error } = await fetchMemoriesPage({ limit: 205 });
+    const { data, error } = await fetchMemoriesPage('family-1', { limit: 205 });
 
     expect(error).toBeNull();
     expect(data?.memories).toHaveLength(205);
@@ -1276,11 +1277,12 @@ describe('memories service integration', () => {
       throw new Error(`Unexpected table ${table}`);
     });
 
-    const { data, error } = await fetchOldestMemoryDate();
+    const { data, error } = await fetchOldestMemoryDate('family-1');
 
     expect(error).toBeNull();
     expect(data).toBe('2024-01-09');
     expect(memoriesBuilder.select).toHaveBeenCalledWith('memory_date');
+    expect(memoriesBuilder.eq).toHaveBeenCalledWith('family_id', 'family-1');
     expect(memoriesBuilder.order).toHaveBeenCalledWith('memory_date', { ascending: true });
     expect(memoriesBuilder.limit).toHaveBeenCalledWith(1);
   });
@@ -1334,9 +1336,10 @@ describe('memories service integration', () => {
       throw new Error(`Unexpected table ${table}`);
     });
 
-    const { data, error } = await fetchMemoriesInDateRange('2026-05-01', '2026-05-31');
+    const { data, error } = await fetchMemoriesInDateRange('family-1', '2026-05-01', '2026-05-31');
 
     expect(error).toBeNull();
+    expect(memoriesBuilder.eq).toHaveBeenCalledWith('family_id', 'family-1');
     expect(memoriesBuilder.gte).toHaveBeenCalledWith('memory_date', '2026-05-01');
     expect(memoriesBuilder.lte).toHaveBeenCalledWith('memory_date', '2026-05-31');
     expect(data?.[0]?.id).toBe('memory-range-1');
@@ -1380,9 +1383,10 @@ describe('memories service integration', () => {
       const memoriesBuilder = createQueryBuilder({ data: [memoryRow()], error: null });
       mockEnrichmentTables(memoriesBuilder);
 
-      const { data, error } = await fetchMemoriesPage({ limit: MEMORIES_PAGE_SIZE });
+      const { data, error } = await fetchMemoriesPage('family-1', { limit: MEMORIES_PAGE_SIZE });
 
       expect(error).toBeNull();
+      expect(memoriesBuilder.eq).toHaveBeenCalledWith('family_id', 'family-1');
       expect(memoriesBuilder.or).not.toHaveBeenCalled();
       expect(memoriesBuilder.limit).toHaveBeenCalledWith(MEMORIES_PAGE_SIZE);
       expect(data?.memories).toHaveLength(1);
@@ -1395,7 +1399,7 @@ describe('memories service integration', () => {
       // Real ISO timestamp fixture (with the +00:00-equivalent 'Z' suffix) --
       // per the plan's risk note, verify supabase-js's .or() call receives the
       // exact cursor values it needs to URL-encode, not a mangled string.
-      await fetchMemoriesPage({
+      await fetchMemoriesPage('family-1', {
         cursor: { memoryDate: '2026-05-20', createdAt: '2026-05-20T08:30:00.000Z' },
         limit: 40,
       });
@@ -1414,7 +1418,7 @@ describe('memories service integration', () => {
       const memoriesBuilder = createQueryBuilder({ data: rows, error: null });
       mockEnrichmentTables(memoriesBuilder);
 
-      const { data } = await fetchMemoriesPage({ limit: 2 });
+      const { data } = await fetchMemoriesPage('family-1', { limit: 2 });
 
       expect(data?.nextCursor).toEqual({ memoryDate: '2026-05-23', createdAt: '2026-05-23T02:00:00.000Z' });
     });
@@ -1423,7 +1427,7 @@ describe('memories service integration', () => {
       const memoriesBuilder = createQueryBuilder({ data: [memoryRow()], error: null });
       mockEnrichmentTables(memoriesBuilder);
 
-      const { data } = await fetchMemoriesPage({ limit: 40 });
+      const { data } = await fetchMemoriesPage('family-1', { limit: 40 });
 
       expect(data?.nextCursor).toBeNull();
     });

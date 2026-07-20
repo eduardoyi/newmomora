@@ -9,13 +9,19 @@ import { useFamily } from '@/hooks/use-family';
 import { useRedeemedInviteStatus } from '@/hooks/useRedeemedInviteStatus';
 import { userProfileQueryKey } from '@/hooks/useUserProfile';
 import { noFamilyRoute, timelineRoute } from '@/lib/routes';
+import { pickNewlyJoinedFamilyId } from '@/utils/invites';
 
 export default function WaitingForApprovalScreen() {
   const params = useLocalSearchParams<{ familyName?: string }>();
-  const { familyId, refetchMemberships } = useFamily();
+  const { familyId, memberships, refetchMemberships, setActiveFamily } = useFamily();
   const queryClient = useQueryClient();
   const [isFinishing, setIsFinishing] = useState(false);
   const handledApprovalRef = useRef(false);
+  // Always-fresh snapshot of memberships for the approved-outcome effect
+  // below, without needing `memberships` in its dependency array (the ref
+  // only needs to be read once, at the moment approval is handled).
+  const membershipsRef = useRef(memberships);
+  membershipsRef.current = memberships;
 
   // Poll while this screen is up; the hook stops polling on a terminal
   // outcome, and the screen unmounts (replace-navigation) once handled.
@@ -34,15 +40,38 @@ export default function WaitingForApprovalScreen() {
     setIsFinishing(true);
 
     void (async () => {
-      // The Edge Function already pointed active_family_id at the new
-      // family; refresh the profile + membership caches so FamilyProvider
-      // resolves it, then land on the timeline with a small welcome.
+      // resolve-family-invite already pointed active_family_id at the new
+      // family server-side, but the client's cached memberships and profile
+      // are both still stale. Refetch memberships FIRST -- before touching
+      // active_family_id at all -- so the newly joined family is already
+      // present in the list by the time active_family_id changes;
+      // otherwise FamilyProvider's stale-active-family correction effect
+      // (use-family.tsx) can race and flip active_family_id straight back
+      // to the previous family because the new one isn't in the (still
+      // stale) memberships list yet.
+      const previousMemberships = membershipsRef.current;
+      const refreshedMemberships = (await refetchMemberships()) ?? previousMemberships;
+      const newFamilyId = pickNewlyJoinedFamilyId(previousMemberships, refreshedMemberships, familyName);
+
+      if (newFamilyId) {
+        try {
+          await setActiveFamily(newFamilyId);
+        } catch {
+          // Best-effort -- never block navigation on the active-family
+          // switch; worst case the user lands on whichever family was
+          // already active and can switch manually from settings.
+        }
+      }
+
+      // setActiveFamily (when it ran) already invalidates the profile query
+      // as part of its own update; this covers the fallback path where no
+      // newFamilyId was found but the server-side update should still be
+      // picked up.
       await queryClient.invalidateQueries({ queryKey: userProfileQueryKey });
-      await refetchMemberships();
       router.replace(timelineRoute);
       Alert.alert('Welcome!', `You've joined ${familyName}.`);
     })();
-  }, [outcome.kind, familyName, queryClient, refetchMemberships]);
+  }, [outcome.kind, familyName, queryClient, refetchMemberships, setActiveFamily]);
 
   const handleLeave = () => {
     router.replace(familyId ? timelineRoute : noFamilyRoute);

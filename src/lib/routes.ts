@@ -9,6 +9,7 @@ export const noFamilyRoute = '/(app)/no-family' as Href;
 // `family/` (that group means the *children* roster; see plan §9 on the
 // children-vs-household naming hazard).
 export const sharingInviteRoute = '/(app)/sharing/invite' as Href;
+export const sharingManageRoute = '/(app)/sharing/manage' as Href;
 export const sharingMembersRoute = '/(app)/sharing/members' as Href;
 export const sharingPendingInvitesRoute = '/(app)/sharing/pending-invites' as Href;
 export const sharingApprovalsRoute = '/(app)/sharing/approvals' as Href;

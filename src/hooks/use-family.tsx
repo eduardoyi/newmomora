@@ -34,8 +34,14 @@ interface FamilyContextValue {
   memberships: FamilyMembershipSummary[];
   isLoading: boolean;
   setActiveFamily: (familyId: string) => Promise<void>;
-  /** Re-fetches the caller's membership list (e.g. after create_family or redeeming an invite). */
-  refetchMemberships: () => Promise<unknown>;
+  /**
+   * Re-fetches the caller's membership list (e.g. after create_family or
+   * redeeming an invite) and returns the freshly fetched memberships (or
+   * `undefined` if the refetch failed) so callers can diff against a prior
+   * snapshot without a second round-trip -- see the waiting screen's
+   * approved-outcome handling (app/(app)/sharing/waiting.tsx).
+   */
+  refetchMemberships: () => Promise<FamilyMembershipSummary[] | undefined>;
   /**
    * True once the user has had at least one family membership this session
    * and now has none -- distinguishes "just got removed" from "brand new
@@ -74,6 +80,16 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
         if (!row.family) {
           // RLS-invisible (e.g. soft-deleted family, non-owner) -- skip rather
           // than surface a membership row with no family to show.
+          continue;
+        }
+        if (row.family.deleted_at) {
+          // Soft-deleted family (delete_family RPC). is_family_member's owner
+          // exemption (supabase/migrations/20260711120000_family_sharing.sql,
+          // ~line 139: `f.deleted_at is null OR f.owner_id = auth.uid()`,
+          // kept so cancel-account-deletion can restore it) keeps the row
+          // RLS-visible to the owner even after deletion -- skip it here too,
+          // same as the RLS-invisible case above, so a deleted family doesn't
+          // keep showing in the switcher/Manage list or resolve as active.
           continue;
         }
         memberships.push({
@@ -156,7 +172,8 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
   );
 
   const refetchMemberships = useCallback(async () => {
-    return membershipsQuery.refetch();
+    const result = await membershipsQuery.refetch();
+    return result.data;
   }, [membershipsQuery]);
 
   const value = useMemo<FamilyContextValue>(

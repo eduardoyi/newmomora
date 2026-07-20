@@ -130,10 +130,10 @@ export default function NoFamilyScreen() {
         <Pressable
           accessibilityRole="button"
           onPress={handleInviteCodePress}
-          style={styles.inviteCodeButton}
+          style={({ pressed }) => [styles.inviteCodeButton, pressed && styles.inviteCodeButtonPressed]}
           testID="no-family-invite-code-button"
         >
-          <Text style={styles.inviteCodeButtonText}>Have an invite code?</Text>
+          <Text style={styles.inviteCodeButtonText}>I have an invite code</Text>
         </Pressable>
       </View>
     </KeyboardAwareFormScreen>
@@ -186,11 +186,17 @@ const styles = StyleSheet.create({
   },
   inviteCodeButton: {
     alignItems: 'center',
-    paddingVertical: spacing.sm,
+    borderColor: colors.primary,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    paddingVertical: 15,
+  },
+  inviteCodeButtonPressed: {
+    opacity: 0.7,
   },
   inviteCodeButtonText: {
     fontFamily: fonts.sansBold,
-    fontSize: 14,
-    color: colors.ink3,
+    fontSize: 16,
+    color: colors.primary,
   },
 });

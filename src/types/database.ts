@@ -900,6 +900,24 @@ export type Database = {
         }
       }
       current_user_local_date: { Args: never; Returns: string }
+      delete_family: {
+        Args: { fam: string }
+        Returns: {
+          created_at: string
+          deleted_at: string | null
+          id: string
+          illustration_style: string
+          name: string
+          owner_id: string
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "families"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       fail_family_member_portrait_generation: {
         Args: { attempt_token: string; target_version_id: string }
         Returns: {

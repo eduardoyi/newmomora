@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { forwardRef, useImperativeHandle, useMemo, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -16,6 +16,13 @@ export interface SelectOption {
   label: string;
 }
 
+/** Imperative handle so a caller elsewhere on screen (e.g. a "Switch" link
+ * next to the family name) can open this field's picker without a second,
+ * duplicate field of its own. */
+export interface SelectFieldHandle {
+  open: () => void;
+}
+
 function optionTestIdSuffix(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, '-');
 }
@@ -26,17 +33,29 @@ interface SelectFieldProps {
   options: SelectOption[];
   placeholder?: string;
   testID?: string;
+  /**
+   * Render only the picker modal, no inline field trigger — for callers that
+   * open the picker exclusively through the imperative `ref` handle (e.g.
+   * Settings' "Switch" link next to the family name).
+   */
+  hideTrigger?: boolean;
 }
 
-export function SelectField({
-  value,
-  onChange,
-  options,
-  placeholder = 'Select an option',
-  testID,
-}: SelectFieldProps) {
+export const SelectField = forwardRef<SelectFieldHandle, SelectFieldProps>(function SelectField(
+  {
+    value,
+    onChange,
+    options,
+    placeholder = 'Select an option',
+    testID,
+    hideTrigger = false,
+  },
+  ref,
+) {
   const [isOpen, setIsOpen] = useState(false);
   const insets = useSafeAreaInsets();
+
+  useImperativeHandle(ref, () => ({ open: () => setIsOpen(true) }), []);
 
   const displayValue = useMemo(() => {
     const trimmed = value.trim();
@@ -63,17 +82,19 @@ export function SelectField({
 
   return (
     <>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={displayValue ?? placeholder}
-        onPress={openPicker}
-        style={({ pressed }) => [styles.field, pressed && styles.fieldPressed]}
-        testID={testID}
-      >
-        <Text style={[styles.fieldText, !displayValue && styles.placeholderText]}>
-          {displayValue ?? placeholder}
-        </Text>
-      </Pressable>
+      {!hideTrigger && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={displayValue ?? placeholder}
+          onPress={openPicker}
+          style={({ pressed }) => [styles.field, pressed && styles.fieldPressed]}
+          testID={testID}
+        >
+          <Text style={[styles.fieldText, !displayValue && styles.placeholderText]}>
+            {displayValue ?? placeholder}
+          </Text>
+        </Pressable>
+      )}
 
       <Modal
         animationType="slide"
@@ -120,7 +141,7 @@ export function SelectField({
       </Modal>
     </>
   );
-}
+});
 
 const styles = StyleSheet.create({
   field: {

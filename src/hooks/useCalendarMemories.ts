@@ -35,7 +35,11 @@ export function useOldestMemoryDate() {
   return useQuery({
     queryKey: [...calendarMemoriesQueryKey(familyId), 'oldest-date'],
     queryFn: async () => {
-      const { data, error } = await fetchOldestMemoryDate();
+      if (!familyId) {
+        return null;
+      }
+
+      const { data, error } = await fetchOldestMemoryDate(familyId);
 
       if (error) {
         throw toError(error, 'Could not load calendar range');
@@ -60,11 +64,11 @@ export function useCalendarMemoriesInRange(range: CalendarMemoryRange | null) {
   return useQuery({
     queryKey: [...calendarMemoriesQueryKey(familyId), 'range', range?.startDate, range?.endDate],
     queryFn: async () => {
-      if (!range) {
+      if (!range || !familyId) {
         return [];
       }
 
-      const { data, error } = await fetchMemoriesInDateRange(range.startDate, range.endDate);
+      const { data, error } = await fetchMemoriesInDateRange(familyId, range.startDate, range.endDate);
 
       if (error) {
         throw toError(error, 'Could not load calendar memories');

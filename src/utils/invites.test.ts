@@ -5,6 +5,8 @@ import {
   formatInviteExpiry,
   isValidInviteCodeShape,
   normalizeInviteCode,
+  pickNewlyJoinedFamilyId,
+  type FamilyMembershipLike,
 } from '@/utils/invites';
 
 describe('normalizeInviteCode', () => {
@@ -69,12 +71,13 @@ describe('formatInviteCodeInput', () => {
 });
 
 describe('buildInviteShareMessage', () => {
-  it('produces exactly the plan §9 two-step template', () => {
+  it('produces the three-step template matching the no-family screen button', () => {
     expect(buildInviteShareMessage('sunny-tiger-lake', "Rosa's family")).toBe(
       [
         "Hi! I'm journaling our family's memories with Momora and I'd love you to join.",
         '1. Get the app: https://usemomora.com/invite?code=sunny-tiger-lake',
-        '2. Open it and enter code: sunny-tiger-lake',
+        '2. Sign up, then tap "I have an invite code"',
+        '3. Enter code: sunny-tiger-lake',
         'The code expires in 7 days.',
       ].join('\n'),
     );
@@ -83,7 +86,7 @@ describe('buildInviteShareMessage', () => {
   it('embeds the code in both the universal link and the manual step', () => {
     const message = buildInviteShareMessage('brave-otter-moon', 'Any family');
     expect(message).toContain('https://usemomora.com/invite?code=brave-otter-moon');
-    expect(message).toContain('enter code: brave-otter-moon');
+    expect(message).toContain('Enter code: brave-otter-moon');
   });
 });
 
@@ -151,5 +154,57 @@ describe('deriveWaitingOutcome (waiting screen state machine)', () => {
 
   it('is terminal for unexpected statuses (e.g. revoked mid-wait) instead of polling forever', () => {
     expect(deriveWaitingOutcome(row('revoked'))).toEqual({ kind: 'unavailable' });
+  });
+});
+
+describe('pickNewlyJoinedFamilyId', () => {
+  const membership = (familyId: string, name: string): FamilyMembershipLike => ({
+    familyId,
+    name,
+  });
+
+  it('picks the family present in the refreshed list but not the snapshot', () => {
+    const previous = [membership('family-a', "A's family")];
+    const refreshed = [membership('family-a', "A's family"), membership('family-b', "B's family")];
+
+    expect(pickNewlyJoinedFamilyId(previous, refreshed, "B's family")).toBe('family-b');
+  });
+
+  it('falls back to matching by family name when the diff finds nothing new', () => {
+    // e.g. the redeemer re-opened the app after approval already landed, so
+    // the membership was already present in both snapshots.
+    const previous = [membership('family-a', "A's family"), membership('family-b', "B's family")];
+    const refreshed = [membership('family-a', "A's family"), membership('family-b', "B's family")];
+
+    expect(pickNewlyJoinedFamilyId(previous, refreshed, "B's family")).toBe('family-b');
+  });
+
+  it('returns null when neither the diff nor the name match finds a candidate', () => {
+    const previous = [membership('family-a', "A's family")];
+    const refreshed = [membership('family-a', "A's family")];
+
+    expect(pickNewlyJoinedFamilyId(previous, refreshed, "Nonexistent family")).toBeNull();
+  });
+
+  it('returns null with no fallback name and nothing new in the diff', () => {
+    const previous = [membership('family-a', "A's family")];
+    const refreshed = [membership('family-a', "A's family")];
+
+    expect(pickNewlyJoinedFamilyId(previous, refreshed, null)).toBeNull();
+  });
+
+  it('prefers the diff result over the name match when both would match', () => {
+    // Two families could plausibly share a display name; the diff (which of
+    // them is actually new) is the more reliable signal.
+    const previous = [membership('family-a', 'Our family')];
+    const refreshed = [membership('family-a', 'Our family'), membership('family-b', 'Our family')];
+
+    expect(pickNewlyJoinedFamilyId(previous, refreshed, 'Our family')).toBe('family-b');
+  });
+
+  it('handles an empty previous snapshot (first-ever membership)', () => {
+    const refreshed = [membership('family-a', "A's family")];
+
+    expect(pickNewlyJoinedFamilyId([], refreshed, "A's family")).toBe('family-a');
   });
 });
