@@ -67,8 +67,10 @@ export default function NoFamilyScreen() {
         throw new Error(friendlyCreateFamilyError(error?.message ?? 'Could not create your family', error?.code));
       }
 
+      // The familyId effect above owns the route transition. Navigating here
+      // as well races the app layout's no-family guard while this refetch is
+      // publishing its result and can issue two replacements in one update.
       await refetchMemberships();
-      router.replace(timelineRoute);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not create your family');
     } finally {

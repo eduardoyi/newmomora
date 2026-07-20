@@ -650,7 +650,7 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 | `src/screen-tests/settings.family-section.test.tsx` | Family section rendering by role, owner/manager-only "Family members" row count + navigation, leave/switch family, conditional Pending invites/Approvals rows (non-expired-only, hidden while loading, count badge) |
 | `src/screen-tests/calendar.role-gating.test.tsx` | Calendar create-FAB role gate (viewer hidden, manager visible) |
 | `src/screen-tests/sharing.members.test.tsx` | Family members screen: invite affordance by role, member-management affordance matrix (owner/manager/viewer × own/owner/other rows), promote/demote/remove wiring, destructive-confirm gating, zero-row refresh copy |
-| `src/screen-tests/no-family.test.tsx` | Create-family / redeem entry points, `pendingInviteCode` guard precedence |
+| `src/screen-tests/no-family.test.tsx` | Create-family / redeem entry points, single state-driven post-create navigation, `pendingInviteCode` guard precedence |
 | `src/screen-tests/sharing.redeem.test.tsx` | Redeem screen prefill, definitive-vs-transient error handling |
 
 ### E2E (Maestro)

@@ -98,7 +98,21 @@ describe('NoFamilyScreen', () => {
     expect(mockedCreateFamily).not.toHaveBeenCalled();
   });
 
-  it('creates a family, refetches memberships, and navigates to the timeline', async () => {
+  it('creates a family and navigates once after the refreshed membership becomes active', async () => {
+    let familyId: string | null = null;
+    const refetchMemberships = jest.fn().mockImplementation(async () => {
+      familyId = 'family-1';
+    });
+    mockedUseFamily.mockImplementation(() => ({
+      family: familyId ? { id: familyId, name: 'The Rivera family' } : null,
+      familyId,
+      role: familyId ? 'owner' : null,
+      memberships: [],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships,
+      justLostAccess: false,
+    }));
     mockedCreateFamily.mockResolvedValue({
       data: {
         id: 'family-1',
@@ -112,17 +126,34 @@ describe('NoFamilyScreen', () => {
       error: null,
     });
 
-    const { getByTestId } = renderScreen();
+    const screen = renderScreen();
 
-    fireEvent.changeText(getByTestId('no-family-name-input'), 'The Rivera family');
-    fireEvent.press(getByTestId('no-family-create-button'));
+    fireEvent.changeText(screen.getByTestId('no-family-name-input'), 'The Rivera family');
+    fireEvent.press(screen.getByTestId('no-family-create-button'));
 
     await waitFor(() => {
       expect(mockedCreateFamily).toHaveBeenCalledWith('The Rivera family');
     });
     await waitFor(() => {
-      expect(router.replace).toHaveBeenCalledWith(timelineRoute);
+      expect(refetchMemberships).toHaveBeenCalledTimes(1);
     });
+
+    // FamilyProvider publishes the refetched membership on its next render.
+    // Navigation belongs to that state transition, not the submit handler;
+    // otherwise both paths replace the route and can race the layout guard.
+    screen.rerender(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <NoFamilyScreen />
+      </SafeAreaProvider>,
+    );
+
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith(timelineRoute));
+    expect(router.replace).toHaveBeenCalledTimes(1);
   });
 
   it('navigates to the redeem screen from the invite-code button', () => {
