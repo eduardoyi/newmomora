@@ -718,6 +718,12 @@ async function replaceMemoryTags(memoryId: string, taggedMemberIds: string[]): P
 
 interface MemoryIllustrationPipelineOptions {
   forceRegenerate?: boolean;
+  /** Called when generate-illustration defers (PORTRAITS_NOT_READY) because a
+   * tagged member's character portrait is still generating. The pipeline
+   * itself always resolves this case as success (see below) -- only
+   * explicit-action callers (regenerateMemoryIllustration) need to know, to
+   * surface a distinct notice instead of going silent. */
+  onDeferred?: () => void;
 }
 
 // The analyze-emotion edge function enforces a short cooldown per memory, so an
@@ -778,6 +784,15 @@ export async function runMemoryIllustrationPipeline(
     );
 
     if (illustrationError) {
+      if (illustrationError.code === 'PORTRAITS_NOT_READY') {
+        // Deferral, not a failure: the server parked the memory back at
+        // 'pending' (or left a retained illustration at 'ready') and will
+        // retrigger it once the portrait finishes. Success-shaped for the
+        // fire-and-forget create pipeline and the recovery loop -- no warn.
+        options?.onDeferred?.();
+        return null;
+      }
+
       console.warn('generate-illustration failed', memoryId, illustrationError.message);
       return illustrationError;
     }
@@ -1312,6 +1327,26 @@ export async function regenerateMemoryIllustration(
     return { error: mapSupabaseError(updateError) };
   }
 
-  const pipelineError = await runMemoryIllustrationPipeline(memoryId, { forceRegenerate: true });
+  let deferredForPortraits = false;
+  const pipelineError = await runMemoryIllustrationPipeline(memoryId, {
+    forceRegenerate: true,
+    onDeferred: () => {
+      deferredForPortraits = true;
+    },
+  });
+
+  if (deferredForPortraits) {
+    // Explicit action -- unlike the silent fire-and-forget/recovery callers,
+    // surface the deferral distinctly so the caller can show a non-error
+    // notice instead of letting the tap dissolve into silence.
+    return {
+      error: {
+        message:
+          'Character portraits are still generating — the illustration will finish automatically.',
+        code: 'PORTRAITS_NOT_READY',
+      },
+    };
+  }
+
   return { error: pipelineError };
 }

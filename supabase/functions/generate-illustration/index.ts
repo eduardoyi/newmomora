@@ -24,11 +24,12 @@ import { deleteObject, getObjectBytes, putObjectBytes } from '../_shared/r2.ts';
 import { buildMemoryIllustrationKey } from '../_shared/storage-keys.ts';
 import { resolveMemberIdsForIllustration } from '../_shared/illustration-members.ts';
 import { isIllustrationGenerationStale } from '../_shared/illustration-status.ts';
-import { createUserClient } from '../_shared/supabase-admin.ts';
 import {
-  type PortraitVersionCandidate,
-  resolvePortraitVersionAtDate,
-} from '../_shared/portrait-versions.ts';
+  hasFreshInFlightPortraitVersion,
+  type PortraitFreshnessCandidate,
+} from '../_shared/portrait-readiness.ts';
+import { createUserClient } from '../_shared/supabase-admin.ts';
+import { resolvePortraitVersionAtDate } from '../_shared/portrait-versions.ts';
 
 export interface GenerateIllustrationRequest {
   memoryId: string;
@@ -81,6 +82,42 @@ export interface GenerateIllustrationDependencies {
   editImageWithReferences: typeof editImageWithReferences;
   createId: () => string;
   generationTimeoutMs: number;
+  /** Re-invokes this function for a deferred memory once portraits settle. */
+  invokeGenerateIllustration: (memoryId: string, authHeader: string) => Promise<void>;
+  waitUntil: (task: Promise<void>) => void;
+}
+
+export async function defaultInvokeGenerateIllustration(
+  memoryId: string,
+  authHeader: string,
+): Promise<void> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  if (!supabaseUrl) {
+    throw new Error('Missing SUPABASE_URL for self-retrigger invoke');
+  }
+
+  const response = await fetch(`${supabaseUrl}/functions/v1/generate-illustration`, {
+    method: 'POST',
+    headers: {
+      Authorization: authHeader,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ memoryId }),
+  });
+  // Always drain the body -- an unconsumed response leaks the underlying
+  // Deno resource even when we're about to discard the result.
+  await response.text().catch(() => '');
+
+  if (response.status === 409) {
+    // GENERATION_IN_PROGRESS/GENERATION_SUPERSEDED: a normal race outcome
+    // (e.g. the portrait's own retrigger or a concurrent call already
+    // claimed this memory), not a failure worth logging.
+    return;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Self-retrigger invoke failed with status ${response.status}`);
+  }
 }
 
 const DEFAULT_DEPENDENCIES: GenerateIllustrationDependencies = {
@@ -91,6 +128,13 @@ const DEFAULT_DEPENDENCIES: GenerateIllustrationDependencies = {
   editImageWithReferences,
   createId: () => crypto.randomUUID(),
   generationTimeoutMs: ILLUSTRATION_GENERATION_TIMEOUT_MS,
+  invokeGenerateIllustration: defaultInvokeGenerateIllustration,
+  waitUntil: (task) =>
+    (
+      globalThis as unknown as {
+        EdgeRuntime: { waitUntil: (task: Promise<void>) => void };
+      }
+    ).EdgeRuntime.waitUntil(task),
 };
 
 interface CommitIllustrationGenerationInput {
@@ -323,6 +367,69 @@ export async function handleGenerateIllustration(
     });
   }, remainingPreFinalizationDeadlineMs(dependencies.generationTimeoutMs, requestStartedAt));
   let generationSucceeded = false;
+  // Set only on the fresh-in-flight-portrait deferral path below; read in
+  // `finally` (a different block scope from `try`, so it can't be a local
+  // there) to decide the reset target and whether to schedule a retrigger.
+  let deferredForPortraits = false;
+  // Also read in `finally`'s self-retrigger recheck, so it's declared here
+  // rather than as a `const` inside `try`.
+  let memberIds: string[] = [];
+  // Narrowing from the earlier null checks above doesn't carry into a nested
+  // function declaration, so alias the already-validated values here.
+  const memoryDateForRetriggerRecheck = memory.memory_date;
+  const authHeaderForRetrigger = authHeader;
+
+  // Runs only for the no-key deferral path, after the `finally` reset below
+  // lands. While this invocation held the CAS claim, the memory read
+  // 'generating', so a portrait completing in that window is invisible both
+  // to a candidate query keyed on `illustration_status = 'pending'` and to
+  // any concurrent caller (which would see `GENERATION_IN_PROGRESS`) -- and
+  // the portrait pipeline's own retrigger fires at most once. Re-checking
+  // here, after our own reset, closes that race without a second durable
+  // mechanism.
+  async function selfRetriggerAfterDeferral(): Promise<void> {
+    try {
+      const { data: recheckVersions, error: recheckError } = await supabase
+        .from('family_member_portrait_versions')
+        .select(
+          'id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, generation_token, generation_started_at, created_at',
+        )
+        .in('family_member_id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID]);
+
+      if (recheckError) {
+        console.error('generate-illustration self-retrigger recheck failed', recheckError.message);
+        return;
+      }
+
+      const versions = (recheckVersions ?? []) as PortraitFreshnessCandidate[];
+      const versionsByMemberRecheck = new Map<string, PortraitFreshnessCandidate[]>();
+      for (const version of versions) {
+        const current = versionsByMemberRecheck.get(version.family_member_id) ?? [];
+        current.push(version);
+        versionsByMemberRecheck.set(version.family_member_id, current);
+      }
+
+      const someMemberNowReady = memberIds.some(
+        (id) =>
+          resolvePortraitVersionAtDate(versionsByMemberRecheck.get(id) ?? [], memoryDateForRetriggerRecheck) !==
+          null,
+      );
+      const stillFreshInFlight = hasFreshInFlightPortraitVersion(versions);
+
+      if (!someMemberNowReady && stillFreshInFlight) {
+        // Genuinely still generating -- the portrait pipeline's own
+        // completion retrigger (out of scope here) will resume this memory.
+        return;
+      }
+
+      await dependencies.invokeGenerateIllustration(memoryId, authHeaderForRetrigger);
+    } catch (error) {
+      console.error(
+        'generate-illustration self-retrigger failed',
+        error instanceof Error ? error.message : 'unknown',
+      );
+    }
+  }
 
   try {
     throwIfAborted(generationController.signal);
@@ -370,7 +477,7 @@ export async function handleGenerateIllustration(
 
     // URLs can't match member names, but strip for consistency with every
     // other content->prompt call site (docs/plans/inline-links.md §8).
-    const memberIds = resolveMemberIdsForIllustration(
+    memberIds = resolveMemberIdsForIllustration(
       taggedMemberIds,
       stripUrls(memory.content),
       nameRows ?? [],
@@ -390,14 +497,17 @@ export async function handleGenerateIllustration(
       return errorResponse('Failed to load family members', 500, 'internal_error');
     }
 
+    // No `.not('illustrated_profile_key', 'is', null)` filter here: that
+    // would hide in-flight versions from the fresh-in-flight check below.
+    // `resolvePortraitVersionAtDate` still requires `ready`, so it is
+    // unaffected by widening this select.
     const { data: portraitVersions, error: portraitVersionsError } = await supabase
       .from('family_member_portrait_versions')
       .select(
-        'id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, created_at',
-        )
-        .in('family_member_id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
-        .not('illustrated_profile_key', 'is', null)
-        .abortSignal(generationController.signal);
+        'id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, generation_token, generation_started_at, created_at',
+      )
+      .in('family_member_id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
+      .abortSignal(generationController.signal);
 
     throwIfAborted(generationController.signal);
     if (portraitVersionsError) {
@@ -406,8 +516,9 @@ export async function handleGenerateIllustration(
     }
     logGenerationPhase(memoryId, generationPhase, memberLookupPhaseStartedAt);
 
-    const versionsByMember = new Map<string, PortraitVersionCandidate[]>();
-    for (const portraitVersion of (portraitVersions ?? []) as PortraitVersionCandidate[]) {
+    const portraitVersionRows = (portraitVersions ?? []) as PortraitFreshnessCandidate[];
+    const versionsByMember = new Map<string, PortraitFreshnessCandidate[]>();
+    for (const portraitVersion of portraitVersionRows) {
       const current = versionsByMember.get(portraitVersion.family_member_id) ?? [];
       current.push(portraitVersion);
       versionsByMember.set(portraitVersion.family_member_id, current);
@@ -433,6 +544,15 @@ export async function handleGenerateIllustration(
     );
 
     if (readyMembers.length === 0) {
+      // A resolved member's portrait may just not have finished yet (the
+      // onboarding-guaranteed case: the first memory lands seconds after
+      // portrait generation starts). Only defer for a version that could
+      // still plausibly complete; a dead/deletion-claimed attempt falls
+      // through to the ordinary NO_PORTRAITS failure below.
+      if (hasFreshInFlightPortraitVersion(portraitVersionRows)) {
+        deferredForPortraits = true;
+        return errorResponse('Character portraits are still generating', 409, 'PORTRAITS_NOT_READY');
+      }
       return errorResponse('No ready character portraits for tagged members', 400, 'NO_PORTRAITS');
     }
 
@@ -591,16 +711,34 @@ export async function handleGenerateIllustration(
   } finally {
     clearTimeout(generationTimeoutId);
     if (!generationSucceeded) {
+      const hasRetainedIllustration = Boolean(
+        memory.illustration_key && memory.illustration_generation_id,
+      );
+      // Key-aware deferral: a memory with a retained illustration keeps the
+      // existing 'ready' restore (the old illustration stays visible) even
+      // when this was a portrait deferral. Only a keyless deferral parks at
+      // 'pending' -- reusing the status the client's shared poll already
+      // treats as in-flight -- and only that case needs a self-retrigger,
+      // since a retained-key memory isn't waiting on anything to resume.
+      const parkedPendingForPortraits = deferredForPortraits && !hasRetainedIllustration;
+
       await supabase
         .from('memories')
         .update({
-          illustration_status:
-            memory.illustration_key && memory.illustration_generation_id ? 'ready' : 'failed',
+          illustration_status: hasRetainedIllustration
+            ? 'ready'
+            : parkedPendingForPortraits
+              ? 'pending'
+              : 'failed',
           illustration_generation_attempt_id: null,
         })
         .eq('id', memoryId)
         .eq('illustration_generation_attempt_id', generationAttemptId)
         .eq('illustration_status', 'generating');
+
+      if (parkedPendingForPortraits) {
+        dependencies.waitUntil(selfRetriggerAfterDeferral());
+      }
     }
   }
 }

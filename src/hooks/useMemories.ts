@@ -348,9 +348,16 @@ export function useMemoryMutations() {
     mutationFn: async (memoryId: string) => {
       const { error } = await regenerateMemoryIllustration(memoryId);
 
-      if (error) {
+      // PORTRAITS_NOT_READY is a deferral, not a failure -- the memory is
+      // parked at pending/ready server-side and will retrigger on its own.
+      // Resolve normally so the mutation doesn't enter an error state; the
+      // caller reads deferredForPortraits to show a distinct notice instead
+      // of treating a successful tap as silent.
+      if (error && error.code !== 'PORTRAITS_NOT_READY') {
         throw toError(error, 'Could not regenerate illustration');
       }
+
+      return { deferredForPortraits: error?.code === 'PORTRAITS_NOT_READY' };
     },
     onMutate: async (memoryId) => {
       await queryClient.cancelQueries({ queryKey: memoriesQueryKey(familyId) });
@@ -512,6 +519,19 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
   // pending/generating deep in history now only self-heals when its page is
   // loaded or its detail screen is opened. A server-side periodic sweep
   // would be the durable fix; out of scope here (see docs/features/memories.md).
+  //
+  // This is also the backstop for a memory deferred at 'pending' because a
+  // tagged member's portrait wasn't ready (see docs/features/memories.md
+  // "Illustration deferral"): isIllustrationPendingTooLong's 3-minute
+  // threshold catches it here same as a stale 'generating' row.
+  // retryMemoryIllustration -> runMemoryIllustrationPipeline treats a repeat
+  // PORTRAITS_NOT_READY as success (not an `error` below), so a still-not-
+  // ready portrait just re-parks the memory at 'pending' with a fresh
+  // updated_at -- the next recovery attempt is >=3 minutes later, not a
+  // tight loop. Primary recovery is the server-side retrigger on portrait
+  // completion; this loop only runs on the next identity change of
+  // `memories` (event-driven here, not clock-driven -- see the detail
+  // screen's effect below for the clock-driven case).
   useEffect(() => {
     if (!canRecoverIllustrations) {
       return;
@@ -702,6 +722,12 @@ export function useMemory(memoryId: string | undefined) {
     // marked it 'failed'), and firing recovery off it would relaunch the
     // OpenAI pipeline behind the manual retry gate. Recovery re-evaluates
     // once the real fetch resolves.
+    //
+    // Unlike the list effect above, this one is genuinely clock-driven: the
+    // 3s refetchInterval above keeps re-running it while pending/generating,
+    // including a portrait-deferred memory -- each PORTRAITS_NOT_READY retry
+    // resolves as success (see runMemoryIllustrationPipeline) and just
+    // re-parks the memory at 'pending' until the portrait completes.
     if (query.isPlaceholderData) {
       return;
     }

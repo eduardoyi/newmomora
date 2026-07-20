@@ -550,16 +550,28 @@ export default function MemoryDetailScreen() {
         {
           text: 'Regenerate',
           onPress: () => {
-            void regenerateIllustration(memory.id).catch((error: unknown) => {
-              const message =
-                error &&
-                typeof error === 'object' &&
-                'message' in error &&
-                typeof error.message === 'string'
-                  ? error.message
-                  : 'Please try again in a moment.';
-              Alert.alert('Could not regenerate illustration', message);
-            });
+            void regenerateIllustration(memory.id)
+              .then((result) => {
+                // Not an error -- the memory is parked at pending/ready and
+                // will finish on its own once the portrait is ready. Still
+                // worth telling the user why nothing changed yet.
+                if (result?.deferredForPortraits) {
+                  Alert.alert(
+                    'Illustration will finish automatically',
+                    'Character portraits are still generating — the illustration will finish automatically.',
+                  );
+                }
+              })
+              .catch((error: unknown) => {
+                const message =
+                  error &&
+                  typeof error === 'object' &&
+                  'message' in error &&
+                  typeof error.message === 'string'
+                    ? error.message
+                    : 'Please try again in a moment.';
+                Alert.alert('Could not regenerate illustration', message);
+              });
           },
         },
       ],

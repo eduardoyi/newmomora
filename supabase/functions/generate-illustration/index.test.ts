@@ -1,6 +1,7 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import {
   commitIllustrationGeneration,
+  defaultInvokeGenerateIllustration,
   getIllustrationImageRequestOptions,
   handleGenerateIllustration,
   ILLUSTRATION_GENERATION_TIMEOUT_MS,
@@ -39,6 +40,13 @@ async function withMockedIllustrationNetwork(
   run: (result: MockNetworkResult) => Promise<void>,
   taggedMemberIds: string[] = [MEMBER_ID],
   memoryOverrides: Record<string, unknown> = {},
+  options: {
+    // Overrides the default single ready-portrait row. A function is called
+    // once per query, so a test can hand back different rows for the
+    // deferral path's initial check vs. the self-retrigger's post-reset
+    // recheck.
+    portraitVersions?: Record<string, unknown>[] | (() => Record<string, unknown>[]);
+  } = {},
 ): Promise<void> {
   const originalFetch = globalThis.fetch;
   const originalEnv = new Map(
@@ -139,6 +147,13 @@ async function withMockedIllustrationNetwork(
       }
 
       if (table === 'family_member_portrait_versions') {
+        if (options.portraitVersions) {
+          const rows =
+            typeof options.portraitVersions === 'function'
+              ? options.portraitVersions()
+              : options.portraitVersions;
+          return jsonResponse(rows);
+        }
         return jsonResponse([
           {
             id: '55555555-5555-4555-8555-555555555555',
@@ -251,6 +266,84 @@ Deno.test('generate-illustration applies the robust provider strategy only to th
     fallbackHedgeDelayMs: 55_000,
   });
 });
+
+Deno.test(
+  'defaultInvokeGenerateIllustration treats a fulfilled 409 as a benign race, not an error, and drains the body',
+  async () => {
+    const originalFetch = globalThis.fetch;
+    const originalSupabaseUrl = Deno.env.get('SUPABASE_URL');
+    Deno.env.set('SUPABASE_URL', 'https://supabase.test');
+    let bodyConsumed = false;
+
+    globalThis.fetch = (async () => {
+      const response = new Response(JSON.stringify({ code: 'GENERATION_IN_PROGRESS' }), {
+        status: 409,
+      });
+      const originalText = response.text.bind(response);
+      response.text = async () => {
+        bodyConsumed = true;
+        return originalText();
+      };
+      return response;
+    }) as typeof fetch;
+
+    try {
+      // GENERATION_IN_PROGRESS/GENERATION_SUPERSEDED are normal race
+      // outcomes for a self-retrigger (e.g. the portrait's own retrigger, or
+      // a concurrent call, already claimed this memory) -- must not throw.
+      await defaultInvokeGenerateIllustration(MEMORY_ID, 'Bearer test-jwt');
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalSupabaseUrl === undefined) {
+        Deno.env.delete('SUPABASE_URL');
+      } else {
+        Deno.env.set('SUPABASE_URL', originalSupabaseUrl);
+      }
+    }
+
+    assertEquals(bodyConsumed, true);
+  },
+);
+
+Deno.test(
+  'defaultInvokeGenerateIllustration throws (loggable) for a fulfilled 500 and still drains the body',
+  async () => {
+    const originalFetch = globalThis.fetch;
+    const originalSupabaseUrl = Deno.env.get('SUPABASE_URL');
+    Deno.env.set('SUPABASE_URL', 'https://supabase.test');
+    let bodyConsumed = false;
+
+    globalThis.fetch = (async () => {
+      const response = new Response(JSON.stringify({ code: 'internal_error' }), { status: 500 });
+      const originalText = response.text.bind(response);
+      response.text = async () => {
+        bodyConsumed = true;
+        return originalText();
+      };
+      return response;
+    }) as typeof fetch;
+
+    let thrownMessage: string | undefined;
+    try {
+      await defaultInvokeGenerateIllustration(MEMORY_ID, 'Bearer test-jwt');
+    } catch (error) {
+      thrownMessage = error instanceof Error ? error.message : undefined;
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalSupabaseUrl === undefined) {
+        Deno.env.delete('SUPABASE_URL');
+      } else {
+        Deno.env.set('SUPABASE_URL', originalSupabaseUrl);
+      }
+    }
+
+    // selfRetriggerAfterDeferral's catch is what actually logs this; a
+    // genuine failure status must still surface as a thrown error so it
+    // doesn't silently vanish.
+    assertEquals(thrownMessage, 'Self-retrigger invoke failed with status 500');
+    assertEquals(bodyConsumed, true);
+  },
+);
 
 Deno.test('illustration commit publishes, swaps, then deletes the old object', async () => {
   const events: string[] = [];
@@ -535,3 +628,304 @@ Deno.test('generate-illustration restores a retained illustration when the deadl
     },
   );
 });
+
+// --- Portrait-deferral tests (WS2a) ---------------------------------------
+
+function freshUnclaimedPendingPortraitRow(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: '55555555-5555-4555-8555-555555555555',
+    family_member_id: MEMBER_ID,
+    reference_date: '2026-01-01',
+    profile_picture_key: `${USER_ID}/family/${MEMBER_ID}/portraits/55555555-5555-4555-8555-555555555555/photo.jpg`,
+    illustrated_profile_key: null,
+    illustrated_profile_status: 'pending',
+    deletion_token: null,
+    generation_token: null,
+    generation_started_at: null,
+    // Well within the ~5-minute unclaimed-pending grace window.
+    created_at: new Date(Date.now() - 60_000).toISOString(),
+    ...overrides,
+  };
+}
+
+function readyPortraitRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: '55555555-5555-4555-8555-555555555555',
+    family_member_id: MEMBER_ID,
+    reference_date: '2026-01-01',
+    profile_picture_key: `${USER_ID}/family/${MEMBER_ID}/portraits/55555555-5555-4555-8555-555555555555/photo.jpg`,
+    illustrated_profile_key: `${USER_ID}/family/${MEMBER_ID}/portraits/55555555-5555-4555-8555-555555555555/portrait/66666666-6666-4666-8666-666666666666.webp`,
+    illustrated_profile_status: 'ready',
+    deletion_token: null,
+    generation_token: null,
+    generation_started_at: null,
+    created_at: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+interface SelfRetriggerCall {
+  memoryId: string;
+  authHeader: string;
+}
+
+function trackedRetriggerDependencies(): {
+  invokeGenerateIllustration: (memoryId: string, authHeader: string) => Promise<void>;
+  waitUntil: (task: Promise<void>) => void;
+  calls: SelfRetriggerCall[];
+  backgroundTask: () => Promise<void> | undefined;
+} {
+  const calls: SelfRetriggerCall[] = [];
+  let backgroundTask: Promise<void> | undefined;
+  return {
+    invokeGenerateIllustration: async (memoryId, authHeader) => {
+      calls.push({ memoryId, authHeader });
+    },
+    waitUntil: (task) => {
+      backgroundTask = task;
+    },
+    calls,
+    backgroundTask: () => backgroundTask,
+  };
+}
+
+Deno.test(
+  'generate-illustration defers a keyless memory when a fresh in-flight portrait exists',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon drawing with crayons.',
+      async (network) => {
+        const retrigger = trackedRetriggerDependencies();
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+          waitUntil: retrigger.waitUntil,
+        });
+        const body = await response.json();
+
+        assertEquals(response.status, 409);
+        assertEquals(body.code, 'PORTRAITS_NOT_READY');
+        assertEquals(
+          network.memoryPatches.some(
+            ({ payload, url }) =>
+              payload.illustration_status === 'pending' &&
+              payload.illustration_generation_attempt_id === null &&
+              url.includes('illustration_generation_attempt_id=eq.') &&
+              url.includes('illustration_status=eq.generating'),
+          ),
+          true,
+        );
+
+        // The recheck sees the same still-fresh row, so no retrigger fires
+        // yet -- the portrait pipeline's own completion is what resumes it.
+        await retrigger.backgroundTask();
+        assertEquals(retrigger.calls.length, 0);
+      },
+      [MEMBER_ID],
+      {},
+      { portraitVersions: () => [freshUnclaimedPendingPortraitRow()] },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration defers but restores a retained illustration when a fresh in-flight portrait exists',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon drawing with crayons.',
+      async (network) => {
+        const retrigger = trackedRetriggerDependencies();
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+          waitUntil: retrigger.waitUntil,
+        });
+        const body = await response.json();
+
+        assertEquals(response.status, 409);
+        assertEquals(body.code, 'PORTRAITS_NOT_READY');
+        assertEquals(
+          network.memoryPatches.some(
+            ({ payload, url }) =>
+              payload.illustration_status === 'ready' &&
+              payload.illustration_generation_attempt_id === null &&
+              url.includes('illustration_generation_attempt_id=eq.') &&
+              url.includes('illustration_status=eq.generating'),
+          ),
+          true,
+        );
+
+        // A retained illustration isn't parked at 'pending', so nothing
+        // needs to resume it -- no self-retrigger should be scheduled.
+        assertEquals(retrigger.backgroundTask(), undefined);
+        assertEquals(retrigger.calls.length, 0);
+      },
+      [MEMBER_ID],
+      {
+        illustration_key: 'existing-illustration.webp',
+        illustration_generation_id: '77777777-7777-4777-8777-777777777777',
+      },
+      { portraitVersions: () => [freshUnclaimedPendingPortraitRow()] },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration treats a stale claimed portrait as NO_PORTRAITS, not a deferral',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon drawing with crayons.',
+      async (network) => {
+        const retrigger = trackedRetriggerDependencies();
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+          waitUntil: retrigger.waitUntil,
+        });
+        const body = await response.json();
+
+        assertEquals(response.status, 400);
+        assertEquals(body.code, 'NO_PORTRAITS');
+        assertEquals(
+          network.memoryPatches.some(
+            ({ payload, url }) =>
+              payload.illustration_status === 'failed' &&
+              payload.illustration_generation_attempt_id === null &&
+              url.includes('illustration_generation_attempt_id=eq.') &&
+              url.includes('illustration_status=eq.generating'),
+          ),
+          true,
+        );
+        assertEquals(retrigger.backgroundTask(), undefined);
+        assertEquals(retrigger.calls.length, 0);
+      },
+      [MEMBER_ID],
+      {},
+      {
+        portraitVersions: () => [
+          freshUnclaimedPendingPortraitRow({
+            illustrated_profile_status: 'generating',
+            generation_token: 'stale-attempt-token',
+            // Past the RPC's own 15-minute reclaim window.
+            generation_started_at: new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+          }),
+        ],
+      },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration treats a deletion-claimed portrait as NO_PORTRAITS, not a deferral',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon drawing with crayons.',
+      async (network) => {
+        const retrigger = trackedRetriggerDependencies();
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+          waitUntil: retrigger.waitUntil,
+        });
+        const body = await response.json();
+
+        assertEquals(response.status, 400);
+        assertEquals(body.code, 'NO_PORTRAITS');
+        assertEquals(
+          network.memoryPatches.some(
+            ({ payload, url }) =>
+              payload.illustration_status === 'failed' &&
+              payload.illustration_generation_attempt_id === null &&
+              url.includes('illustration_generation_attempt_id=eq.') &&
+              url.includes('illustration_status=eq.generating'),
+          ),
+          true,
+        );
+        assertEquals(retrigger.backgroundTask(), undefined);
+        assertEquals(retrigger.calls.length, 0);
+      },
+      [MEMBER_ID],
+      {},
+      { portraitVersions: () => [freshUnclaimedPendingPortraitRow({ deletion_token: 'deletion-token' })] },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration self-retriggers exactly once when the post-reset recheck finds a ready portrait',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon drawing with crayons.',
+      async (network) => {
+        const retrigger = trackedRetriggerDependencies();
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+          waitUntil: retrigger.waitUntil,
+        });
+        const body = await response.json();
+
+        assertEquals(response.status, 409);
+        assertEquals(body.code, 'PORTRAITS_NOT_READY');
+        assertEquals(
+          network.memoryPatches.some(
+            ({ payload }) =>
+              payload.illustration_status === 'pending' && payload.illustration_generation_attempt_id === null,
+          ),
+          true,
+        );
+
+        await retrigger.backgroundTask();
+        assertEquals(retrigger.calls.length, 1);
+        assertEquals(retrigger.calls[0].memoryId, MEMORY_ID);
+        assertEquals(retrigger.calls[0].authHeader, 'Bearer test-jwt');
+      },
+      [MEMBER_ID],
+      {},
+      {
+        portraitVersions: (() => {
+          let call = 0;
+          return () => {
+            call += 1;
+            // First read: the deferral's own check, still generating.
+            // Second read: the finally block's post-reset self-retrigger
+            // recheck, now ready.
+            return call === 1 ? [freshUnclaimedPendingPortraitRow()] : [readyPortraitRow()];
+          };
+        })(),
+      },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration leaves NO_PORTRAITS/failed unchanged when no member has any portrait version',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon with no names mentioned.',
+      async (network) => {
+        const retrigger = trackedRetriggerDependencies();
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+          waitUntil: retrigger.waitUntil,
+        });
+        const body = await response.json();
+
+        assertEquals(response.status, 400);
+        assertEquals(body.code, 'NO_PORTRAITS');
+        assertEquals(
+          network.memoryPatches.some(
+            ({ payload, url }) =>
+              payload.illustration_status === 'failed' &&
+              payload.illustration_generation_attempt_id === null &&
+              url.includes('illustration_generation_attempt_id=eq.') &&
+              url.includes('illustration_status=eq.generating'),
+          ),
+          true,
+        );
+        assertEquals(retrigger.backgroundTask(), undefined);
+        assertEquals(retrigger.calls.length, 0);
+      },
+      [],
+      {},
+      { portraitVersions: () => [] },
+    );
+  },
+);

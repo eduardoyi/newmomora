@@ -47,7 +47,15 @@ export interface GeneratePortraitDependencies {
   deleteObject: typeof deleteObject;
   generationTimeoutMs: number;
   waitUntil: (task: Promise<void>) => void;
+  fetch: typeof fetch;
 }
+
+/** Deferred `text_illustration` memories are excluded until they are at
+ * least this old, so a retrigger cannot race a memory's own client pipeline
+ * while it is still inside emotion analysis. */
+export const RETRIGGER_MIN_AGE_MS = 30_000;
+/** Bounds the retrigger's contribution to the waitUntil budget. */
+export const RETRIGGER_MAX_CANDIDATES = 3;
 
 export const PORTRAIT_GENERATION_TIMEOUT_MS = 90_000;
 
@@ -63,6 +71,7 @@ const DEFAULT_DEPENDENCIES: GeneratePortraitDependencies = {
   putObjectBytes,
   deleteObject,
   generationTimeoutMs: PORTRAIT_GENERATION_TIMEOUT_MS,
+  fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
   waitUntil: (task) =>
     (
       globalThis as unknown as {
@@ -218,6 +227,98 @@ export async function handleGeneratePortraitIllustration(
     );
   }
 
+  async function retriggerPendingIllustrations(): Promise<void> {
+    try {
+      const { data: candidates, error: candidatesError } = await supabase
+        .from("memories")
+        .select("id")
+        .eq("family_id", version.family_id)
+        .eq("memory_type", "text_illustration")
+        .eq("illustration_status", "pending")
+        .lt(
+          "created_at",
+          new Date(Date.now() - RETRIGGER_MIN_AGE_MS).toISOString(),
+        )
+        .order("created_at", { ascending: false })
+        .limit(RETRIGGER_MAX_CANDIDATES);
+
+      if (candidatesError) {
+        console.error(
+          "generate-portrait-illustration retrigger query failed",
+          candidatesError.message,
+        );
+        return;
+      }
+
+      const memoryIds = (candidates ?? []).map((row) =>
+        (row as { id: string }).id
+      );
+      if (memoryIds.length === 0) {
+        return;
+      }
+
+      const authHeader = req.headers.get("Authorization");
+      const supabaseUrl = Deno.env.get("SUPABASE_URL");
+      if (!authHeader || !supabaseUrl) {
+        return;
+      }
+
+      const headers: Record<string, string> = {
+        Authorization: authHeader,
+        "Content-Type": "application/json",
+      };
+      const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+      if (anonKey) {
+        headers.apikey = anonKey;
+      }
+
+      const results = await Promise.allSettled(
+        memoryIds.map((memoryId) =>
+          dependencies.fetch(
+            `${supabaseUrl}/functions/v1/generate-illustration`,
+            {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ memoryId }),
+            },
+          )
+        ),
+      );
+
+      await Promise.all(results.map(async (result, index) => {
+        if (result.status === "rejected") {
+          console.error(
+            "generate-portrait-illustration retrigger invocation failed",
+            memoryIds[index],
+            result.reason instanceof Error
+              ? result.reason.message
+              : "unknown",
+          );
+          return;
+        }
+
+        const response = result.value;
+        // Always consume the body so it isn't left unconsumed by Deno.
+        await response.text().catch(() => "");
+
+        if (!response.ok && response.status !== 409) {
+          // 409 (GENERATION_IN_PROGRESS / GENERATION_SUPERSEDED) is a normal
+          // race outcome, not a failure worth alerting on.
+          console.error(
+            "generate-portrait-illustration retrigger returned an error status",
+            memoryIds[index],
+            response.status,
+          );
+        }
+      }));
+    } catch (error) {
+      console.error(
+        "generate-portrait-illustration retrigger failed",
+        error instanceof Error ? error.message : "unknown",
+      );
+    }
+  }
+
   const completeGeneration = async (): Promise<void> => {
     let uploadedAttempt = false;
     const generationController = new AbortController();
@@ -334,6 +435,7 @@ export async function handleGeneratePortraitIllustration(
         ) {
           await dependencies.deleteObject(portraitKey).catch(() => undefined);
           console.error("generate-portrait-illustration generation claim lost");
+          await retriggerPendingIllustrations();
           return;
         }
       }
@@ -346,6 +448,8 @@ export async function handleGeneratePortraitIllustration(
           () => undefined,
         );
       }
+
+      await retriggerPendingIllustrations();
     } catch (error) {
       console.error(
         "generate-portrait-illustration failed",
@@ -359,6 +463,7 @@ export async function handleGeneratePortraitIllustration(
       if (uploadedAttempt) {
         await dependencies.deleteObject(portraitKey).catch(() => undefined);
       }
+      await retriggerPendingIllustrations();
     } finally {
       clearTimeout(generationTimeoutId);
     }

@@ -3,7 +3,7 @@
 Create and manage family members with profile photos stored in Cloudflare R2. Onboarding nudges users to add a child first before journaling.
 
 **Status:** `done`
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-20
 **PRD reference:** [PRD §6.2 Family Profiles](../PRD.md)
 
 ## Overview
@@ -23,6 +23,7 @@ Family profiles power memory tagging and age-aware AI character portraits. Each 
 - **Portrait status:** a new generation can show pending/generating state while the previous ready portrait remains the current avatar. Unique output keys avoid stale cached regeneration results.
 - **Full-screen portrait:** tapping a ready illustrated portrait on the family-member detail page opens it in the same warm, dark full-screen viewer used by memory media. The original profile photo is not substituted when an illustrated portrait is unavailable.
 - **Timeout recovery:** if the portrait Edge Function returns a gateway timeout after moving the row to `generating`, the client conditionally changes an in-progress status to `failed`. This prevents indefinite polling and exposes the existing retry affordance. A concurrently completed `ready` portrait is never overwritten.
+- **Portrait-completion retrigger (cross-feature):** `generate-portrait-illustration`'s background task retriggers any memory illustrations that were waiting on this member's portrait — the onboarding-guaranteed case where the first memory is captured while the just-created member's portrait is still generating. On every background-task exit (finish success, catch-path failure, or a claim-lost bare return), it best-effort invokes `generate-illustration` for up to 3 of this family's `pending` `text_illustration` memories (`created_at` at least 30s old), forwarding the original request's `Authorization` header; failures are logged, never thrown, and never affect the portrait commit/cleanup that runs first. See [memories.md](./memories.md) "Illustration deferral" and [TECH_SPEC §4.1/§4.3](../TECH_SPEC.md#41-generate-portrait-illustration) for the full contract — this doc only notes that portrait generation has this side effect.
 
 ## Architecture
 
@@ -199,6 +200,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
+| 2026-07-20 | Portrait generation retriggers memory illustrations that deferred waiting on it (see memories.md "Illustration deferral") |
 | 2026-07-15 | Adopt native IME-inset-aware form scrolling for Android edge-to-edge layouts |
 | 2026-07-15 | Added dated portrait history and age-aware memory portrait selection |
 | 2026-07-14 | Keep lower add/edit profile fields visible above the Android keyboard |

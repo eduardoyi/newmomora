@@ -73,7 +73,7 @@ const TYPE_CONFIGS = {
 export default function NewMemoryScreen() {
   const { user } = useAuth();
   const { role, familyId } = useFamily();
-  const { members } = useFamilyMembers();
+  const { members, isLoading: isLoadingMembers } = useFamilyMembers();
   const { createMemory, isCreating } = useMemoryMutations();
   const { enqueue: enqueuePendingMemoryUpload } = usePendingMemoryUploads();
   const { updateProfile } = useUserProfile();
@@ -120,7 +120,7 @@ export default function NewMemoryScreen() {
     }
   }, []);
 
-  const { selectedMemberIds, applyForContent, toggleMember, applyVoiceResult, initializeTags } = useAutoMemoryTags({
+  const { selectedMemberIds, suppressedMemberIds, applyForContent, toggleMember, applyVoiceResult, initializeTags } = useAutoMemoryTags({
     members: tagMembers,
     enabled: true,
     onSelectedMemberIdsChange: handleSelectedMemberIdsChange,
@@ -192,6 +192,31 @@ export default function NewMemoryScreen() {
     };
   }, [isPreparingIncomingShare, user?.id, familyId, initializeTags, setMemoryDate]);
 
+  // Auto-tag the sole family member so onboarding users can't save an
+  // untagged memory (docs/plans/onboarding-illustration-reliability.md WS1).
+  // Fires at most once per mount (hasSeededRef) and strictly after draft
+  // restore has settled -- seeding first would make the form non-empty and
+  // make the restore effect above silently discard a real draft. A draft
+  // that already tagged someone, or a manual untag (suppressedMemberIds),
+  // takes priority and this effect stays a no-op.
+  const hasSeededRef = useRef(false);
+  const seededMemberIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (hasSeededRef.current || isLoadingMembers || members.length !== 1) {
+      return;
+    }
+    if (!isDraftRestoreReady) {
+      return;
+    }
+    if (selectedMemberIds.length > 0 || suppressedMemberIds.length > 0) {
+      return;
+    }
+
+    hasSeededRef.current = true;
+    seededMemberIdRef.current = members[0].id;
+    initializeTags([members[0].id]);
+  }, [isLoadingMembers, members, isDraftRestoreReady, selectedMemberIds, suppressedMemberIds, initializeTags]);
+
   // Debounced write on any change to the persisted fields, once restore has
   // had its chance to run (avoids a premature empty-state save racing the
   // async read above).
@@ -203,7 +228,17 @@ export default function NewMemoryScreen() {
     const timeoutId = setTimeout(() => {
       const userId = user.id;
       const draft = { content, taggedMemberIds: selectedMemberIds, memoryDate, illustrationEnabled };
-      if (isEmptyDraft(draft)) {
+      // An untouched mount-time seed (no typing, no media, tags still
+      // exactly the seeded member) isn't a real draft -- persisting it
+      // would resurrect a stale single-member tag even after a second
+      // member joins the family.
+      const isUntouchedSeed =
+        content.trim().length === 0 &&
+        attachedMedia.length === 0 &&
+        seededMemberIdRef.current !== null &&
+        selectedMemberIds.length === 1 &&
+        selectedMemberIds[0] === seededMemberIdRef.current;
+      if (isEmptyDraft(draft) || isUntouchedSeed) {
         void clearNewMemoryDraft(userId, familyId);
       } else {
         void saveNewMemoryDraft(userId, familyId, draft);
@@ -211,7 +246,7 @@ export default function NewMemoryScreen() {
     }, DRAFT_SAVE_DEBOUNCE_MS);
 
     return () => clearTimeout(timeoutId);
-  }, [isDraftRestoreReady, user?.id, familyId, content, selectedMemberIds, memoryDate, illustrationEnabled]);
+  }, [isDraftRestoreReady, user?.id, familyId, content, selectedMemberIds, memoryDate, illustrationEnabled, attachedMedia]);
 
   const isIllustrationOverLimit = selectedMemberIds.length > MAX_ILLUSTRATION_MEMBERS;
   const isIllustrationEnabled = illustrationEnabled && !isIllustrationOverLimit;
@@ -487,7 +522,17 @@ export default function NewMemoryScreen() {
         onDismiss={() => setShowVoiceModal(false)}
         onResult={(result) => {
           setContent(result.cleanedText);
-          applyVoiceResult(result);
+          // applyVoiceResult overwrites selectedMemberIds with the mention
+          // match. With no name mentioned ("she took her first steps
+          // today") and a single-member family, the match is empty and
+          // would wipe an existing tag -- fall back to the sole member,
+          // same as the mount-time seed above. Kept at the call site (not
+          // in the hook) since the hook has no member-count policy.
+          const mentionedMemberIds =
+            result.mentionedMemberIds.length === 0 && members.length === 1
+              ? [members[0].id]
+              : result.mentionedMemberIds;
+          applyVoiceResult({ ...result, mentionedMemberIds });
           setShowVoiceModal(false);
         }}
         visible={showVoiceModal}

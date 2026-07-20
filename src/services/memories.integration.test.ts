@@ -849,6 +849,66 @@ describe('memories service integration', () => {
     expect(builder.update).not.toHaveBeenCalled();
   });
 
+  it('treats a PORTRAITS_NOT_READY deferral as success-shaped and does not warn', async () => {
+    const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const builder = createQueryBuilder({ data: { emotion: 'joy' }, error: null });
+    (supabase.from as jest.Mock).mockReturnValue(builder);
+    (generateMemoryIllustration as jest.Mock).mockResolvedValueOnce({
+      error: {
+        message: 'Character portraits are still generating',
+        code: 'PORTRAITS_NOT_READY',
+      },
+    });
+
+    const result = await runMemoryIllustrationPipeline('memory-deferred', { forceRegenerate: true });
+
+    // Deferral is not a failure -- the server already parked the memory at
+    // pending/ready and will retrigger it; the fire-and-forget/recovery
+    // callers must see this as a no-op success, not an error to log.
+    expect(result).toBeNull();
+    expect(consoleWarnSpy).not.toHaveBeenCalled();
+
+    consoleWarnSpy.mockRestore();
+  });
+
+  it('surfaces a distinct PORTRAITS_NOT_READY notice when an explicit regenerate defers', async () => {
+    const fetchBuilder = createQueryBuilder({
+      data: {
+        memory_type: 'text_illustration',
+        illustration_status: 'ready',
+        updated_at: '2026-05-24T00:00:00Z',
+      },
+      error: null,
+    });
+    const updateBuilder = createQueryBuilder({ data: null, error: null });
+
+    let memoriesCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return memoriesCall === 1 ? fetchBuilder : updateBuilder;
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    (generateMemoryIllustration as jest.Mock).mockResolvedValueOnce({
+      error: {
+        message: 'Character portraits are still generating',
+        code: 'PORTRAITS_NOT_READY',
+      },
+    });
+
+    const result = await regenerateMemoryIllustration('memory-deferred-explicit');
+
+    // Explicit action: unlike the silent pipeline case above, the caller
+    // (detail screen) needs to know why nothing changed yet.
+    expect(result.error?.code).toBe('PORTRAITS_NOT_READY');
+    expect(result.error?.message).toBe(
+      'Character portraits are still generating — the illustration will finish automatically.',
+    );
+  });
+
   it('rejects illustration retry for non-illustrated memories', async () => {
     const fetchBuilder = createQueryBuilder({
       data: { memory_type: 'media' },
@@ -1053,6 +1113,69 @@ describe('memories service integration', () => {
     });
 
     expect(result.error).toBeNull();
+    expect(enableBuilder.update).toHaveBeenCalledWith({
+      memory_type: 'text_illustration',
+    });
+    expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
+    expect(generateMemoryIllustration).not.toHaveBeenCalled();
+  });
+
+  // Documents the "type-toggle trap" (docs/plans/onboarding-illustration-
+  // reliability.md WS2d, review #2): deferral makes 'pending' a parked state
+  // that can last minutes (waiting on a portrait), not just an in-flight
+  // pipeline marker. Toggling text_only -> text_illustration while a prior
+  // run is still 'pending' assumes a pipeline is already in flight and does
+  // NOT restart it -- recovery relies entirely on the server retrigger or
+  // the client backstop (useMemories.ts recovery effects), not this path.
+  // This is existing, intentional behavior -- no code change accompanies it.
+  it('does not restart the pipeline when re-enabling illustration on a still-pending memory', async () => {
+    const existingBuilder = createQueryBuilder({
+      data: {
+        content: 'Deferred while hidden as text-only',
+        memory_type: 'text_only',
+        illustration_key: null,
+        illustration_status: 'pending',
+      },
+      error: null,
+    });
+    const enableBuilder = createQueryBuilder({ data: null, error: null });
+    const detailBuilder = createQueryBuilder({
+      data: {
+        id: 'memory-toggle-trap',
+        content: 'Deferred while hidden as text-only',
+        memory_date: '2026-07-14',
+        memory_type: 'text_illustration',
+        illustration_key: null,
+        illustration_status: 'pending',
+        media_key: null,
+        media_content_type: null,
+        created_at: '2026-07-14T00:00:00Z',
+        updated_at: '2026-07-14T00:00:00Z',
+      },
+      error: null,
+    });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+    const mediaBuilder = createQueryBuilder({ data: [], error: null });
+
+    let memoriesCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return [existingBuilder, enableBuilder, detailBuilder][memoriesCall - 1];
+      }
+      if (table === 'memory_family_members') return tagsBuilder;
+      if (table === 'memory_media') return mediaBuilder;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await updateMemory('memory-toggle-trap', {
+      memoryType: 'text_illustration',
+      taggedMemberIds: [],
+    });
+
+    expect(result.error).toBeNull();
+    // No illustration_status in the payload -- shouldStartIllustration is
+    // false, so the existing 'pending' is left exactly as-is.
     expect(enableBuilder.update).toHaveBeenCalledWith({
       memory_type: 'text_illustration',
     });

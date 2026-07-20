@@ -5,6 +5,7 @@ import { Pressable } from 'react-native';
 import { MemoryCard } from '@/components/memory-card';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
+import { useMediaUrl } from '@/hooks/useMediaUrls';
 import type { MemoryWithTags } from '@/services/memories';
 
 jest.mock('@/components/family-member-avatar', () => {
@@ -30,7 +31,7 @@ jest.mock('@/components/memory-media-carousel', () => ({
 }));
 
 jest.mock('@/hooks/useMediaUrls', () => ({
-  useMediaUrl: () => ({ url: null }),
+  useMediaUrl: jest.fn(() => ({ url: null })),
 }));
 
 const createMember = (index: number) => ({
@@ -102,6 +103,27 @@ describe('MemoryCard media (Workstream C6)', () => {
     expect(mockedCarousel.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ preferPreview: true }),
     );
+  });
+});
+
+describe('MemoryCard failed illustration overlay', () => {
+  it('shows a tap-to-retry hint over a retained illustration that failed to regenerate', () => {
+    (useMediaUrl as jest.Mock).mockReturnValueOnce({
+      url: 'https://example.com/illustration.webp',
+    });
+
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'text_illustration',
+      illustration_key: 'user-1/memories/memory-1/illustration.webp',
+      illustration_status: 'failed',
+    } as MemoryWithTags;
+
+    const { getByText } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />,
+    );
+
+    expect(getByText('Illustration failed — tap to retry')).toBeTruthy();
   });
 });
 

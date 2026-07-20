@@ -161,7 +161,7 @@ function IllustrationVisual({
             style={StyleSheet.absoluteFill}
           />
           <View style={styles.failedOverlay}>
-            <Text style={styles.failedOverlayText}>Illustration failed</Text>
+            <Text style={styles.failedOverlayText}>Illustration failed — tap to retry</Text>
           </View>
         </>
       ) : (

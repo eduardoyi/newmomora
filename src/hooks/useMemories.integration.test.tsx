@@ -15,6 +15,7 @@ import {
   fetchMemoriesPageForMember,
   fetchMemoryById,
   fetchMemoryGenerationStatuses,
+  regenerateMemoryIllustration,
   retryMemoryIllustration,
   runMediaPhotoEmotionAnalysis,
   runTextOnlyEmotionAnalysis,
@@ -44,6 +45,7 @@ jest.mock('@/services/memories', () => ({
   fetchMemoriesPageForMember: jest.fn(),
   fetchMemoryById: jest.fn(),
   fetchMemoryGenerationStatuses: jest.fn(),
+  regenerateMemoryIllustration: jest.fn(),
   retryMemoryIllustration: jest.fn(),
   runMediaPhotoEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
   runTextOnlyEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
@@ -87,6 +89,9 @@ const mockedFetchLinkPreviews = fetchLinkPreviews as jest.MockedFunction<typeof 
 const mockedFetchMemoryById = fetchMemoryById as jest.MockedFunction<typeof fetchMemoryById>;
 const mockedRetryMemoryIllustration = retryMemoryIllustration as jest.MockedFunction<
   typeof retryMemoryIllustration
+>;
+const mockedRegenerateMemoryIllustration = regenerateMemoryIllustration as jest.MockedFunction<
+  typeof regenerateMemoryIllustration
 >;
 const mockedRunTextOnlyEmotionAnalysis = runTextOnlyEmotionAnalysis as jest.MockedFunction<
   typeof runTextOnlyEmotionAnalysis
@@ -697,6 +702,44 @@ describe('useMemories integration', () => {
         new Date(result.current.memories[0]?.updated_at ?? 0).getTime(),
       ).toBeGreaterThan(Date.now() - 60_000);
     });
+
+    it('recovers a memory deferred at pending because a portrait was not ready', async () => {
+      // Same backstop as the 'generating' case above, but for a memory the
+      // server parked at 'pending' (docs/features/memories.md "Illustration
+      // deferral") because a tagged member's portrait was still generating.
+      // needsIllustrationRecovery treats a stale 'pending' the same as a
+      // stale 'generating' -- both go through retryMemoryIllustration.
+      const deferred = {
+        id: 'memory-deferred-1',
+        family_id: 'family-1',
+        memory_type: 'text_illustration',
+        content: 'Deferred for a not-yet-ready portrait',
+        emotion: 'joy',
+        illustration_status: 'pending',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        taggedMembers: [],
+        mediaAssets: [],
+      };
+      mockedFetchMemoriesPage.mockResolvedValue(pageResult([deferred as never]));
+      // retryMemoryIllustration -> runMemoryIllustrationPipeline resolves
+      // PORTRAITS_NOT_READY as success (no error), whether or not the
+      // portrait is ready yet by the time this retry lands.
+      mockedRetryMemoryIllustration.mockResolvedValue({ error: null });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(mockedRetryMemoryIllustration).toHaveBeenCalledWith('memory-deferred-1');
+      });
+      expect(mockedRetryMemoryIllustration).toHaveBeenCalledTimes(1);
+      expect(result.current.memories[0]?.illustration_status).toBe('pending');
+      // Re-parked with a fresh updated_at, same as the 'generating' case --
+      // the next recovery attempt is >=3 minutes later, not a tight loop.
+      expect(
+        new Date(result.current.memories[0]?.updated_at ?? 0).getTime(),
+      ).toBeGreaterThan(Date.now() - 60_000);
+    });
   });
 
   // The app-foreground reconcile (A4a) trims the timeline cache to page 1
@@ -999,6 +1042,36 @@ describe('useMemories integration', () => {
       });
 
       expect(mockedFetchMemoriesPage).not.toHaveBeenCalled();
+    });
+
+    it('resolves the regenerate mutation without throwing when portraits are still generating', async () => {
+      mockedRegenerateMemoryIllustration.mockResolvedValue({
+        error: {
+          message: 'Character portraits are still generating — the illustration will finish automatically.',
+          code: 'PORTRAITS_NOT_READY',
+        },
+      });
+
+      const { result } = renderHook(() => useMemoryMutations(), { wrapper: createWrapper() });
+
+      // PORTRAITS_NOT_READY is a deferral, not a failure -- the mutation must
+      // resolve (not reject) so the caller can read deferredForPortraits and
+      // show a notice instead of a red error state.
+      const mutationResult = await result.current.regenerateIllustration('memory-1');
+
+      expect(mutationResult).toEqual({ deferredForPortraits: true });
+    });
+
+    it('rejects the regenerate mutation for a genuine error', async () => {
+      mockedRegenerateMemoryIllustration.mockResolvedValue({
+        error: { message: 'Illustration regeneration is only available for illustrated memories', code: 'invalid_memory_type' },
+      });
+
+      const { result } = renderHook(() => useMemoryMutations(), { wrapper: createWrapper() });
+
+      await expect(result.current.regenerateIllustration('memory-1')).rejects.toThrow(
+        'Illustration regeneration is only available for illustrated memories',
+      );
     });
   });
 });
