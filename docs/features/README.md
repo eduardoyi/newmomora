@@ -42,6 +42,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Likes & comments | [likes-and-comments.md](./likes-and-comments.md) | done |
 | Voice journaling | [voice-journaling.md](./voice-journaling.md) | done |
 | Content reporting & account blocking | [content-reporting.md](./content-reporting.md) | done |
+| EAS Update delivery | [eas-update.md](./eas-update.md) | done |
 
 ## Template
 
