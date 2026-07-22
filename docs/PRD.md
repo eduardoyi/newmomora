@@ -301,7 +301,7 @@ Triggered for each dated portrait version created from a new profile photo.
 - Style is stored as a **token** on `families` — architecture supports adding more styles post-MVP without schema changes
 - Style reference image mapped from token server-side
 
-**Model:** OpenAI `gpt-image-2` (fallback: `gpt-image-1`) via image edit endpoint with style reference
+**Model:** OpenAI `gpt-image-2` (fallback: `gpt-image-1.5`) via image edit endpoint with style reference
 
 **Output:** unique R2 portrait key and generation status on `family_member_portrait_versions`
 
@@ -315,7 +315,7 @@ Triggered after memory save.
 | 2. Emotion detection | LLM returns emotion label + color palette string |
 | 3. Image generation | Uses tagged members' character portraits as reference anchors + emotion palette in prompt |
 
-**Model:** OpenAI `gpt-image-2` (fallback: `gpt-image-1`)
+**Model:** OpenAI `gpt-image-2` (fallback: `gpt-image-1.5`)
 
 **Output:** `illustration_url`, `emotion`, `illustration_status` on `memories`
 
@@ -562,7 +562,7 @@ Pin to current stable versions at project init (May 2026). Use `npx expo install
 | Builds | EAS Build + dev client | Required |
 | AI — transcription | OpenAI Speech-to-Text | `gpt-4o-mini-transcribe` |
 | AI — text/emotion | OpenAI Chat | `gpt-4o-mini` |
-| AI — images | OpenAI Images | `gpt-image-2` (fallback: `gpt-image-1`) |
+| AI — images | OpenAI Images | `gpt-image-2` (fallback: `gpt-image-1.5`) |
 
 **Scaffold reference:**
 

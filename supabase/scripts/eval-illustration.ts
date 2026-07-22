@@ -7,7 +7,7 @@
  *   npm run eval:illustration -- --memory-id 89aa4af8-db47-4f30-ba89-3d57d67e9c12
  *   npm run eval:illustration -- --memory-id <uuid> --memory-id <uuid>
  *   npm run eval:illustration -- --search "meltdown" --limit 5
- *   npm run eval:illustration -- --search "fever" --model gpt-image-1
+ *   npm run eval:illustration -- --search "fever" --model gpt-image-1.5
  *
  * Requires OPENAI_API_KEY + R2/Supabase vars in supabase/.env.local.
  * DB/OpenAI env access is not available in every environment this script

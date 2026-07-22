@@ -57,7 +57,10 @@ export const RETRIGGER_MIN_AGE_MS = 30_000;
 /** Bounds the retrigger's contribution to the waitUntil budget. */
 export const RETRIGGER_MAX_CANDIDATES = 3;
 
-export const PORTRAIT_GENERATION_TIMEOUT_MS = 90_000;
+// Leave 30 seconds of the 150-second Supabase limit for the immutable R2
+// upload and CAS finalization. gpt-image-1.5 is the shared fallback and gets
+// the same practical provider window as memory illustrations.
+export const PORTRAIT_GENERATION_TIMEOUT_MS = 120_000;
 
 const DEFAULT_DEPENDENCIES: GeneratePortraitDependencies = {
   getAuthenticatedUser,
@@ -279,7 +282,7 @@ export async function handleGeneratePortraitIllustration(
             {
               method: "POST",
               headers,
-              body: JSON.stringify({ memoryId }),
+              body: JSON.stringify({ memoryId, requestIntent: "recovery" }),
             },
           )
         ),

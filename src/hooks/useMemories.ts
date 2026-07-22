@@ -339,6 +339,12 @@ export function useMemoryMutations() {
       await queryClient.cancelQueries({ queryKey: memoriesQueryKey(familyId) });
       setMemoryIllustrationPendingInCache(queryClient, familyId, memoryId);
     },
+    onError: () => {
+      // The optimistic local clock is valid only after dispatcher acceptance.
+      // An active refetch restores the authoritative failed/pending state
+      // when the request itself was rejected before a job could exist.
+      queryClient.invalidateQueries({ queryKey: memoriesQueryKey(familyId) });
+    },
     onSettled: () => {
       invalidateMemoryQueries(queryClient);
     },
@@ -362,6 +368,9 @@ export function useMemoryMutations() {
     onMutate: async (memoryId) => {
       await queryClient.cancelQueries({ queryKey: memoriesQueryKey(familyId) });
       setMemoryIllustrationPendingInCache(queryClient, familyId, memoryId);
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: memoriesQueryKey(familyId) });
     },
     onSettled: () => {
       invalidateMemoryQueries(queryClient);
@@ -509,10 +518,8 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
     [memories, portraitVersionsQuery.data],
   );
 
-  // Viewers' writes are RLS-rejected (memories: update requires manager+),
-  // so a viewer running this would have its illustration_status UPDATE and
-  // generate-illustration call rejected every time -- a permanent retry
-  // loop (plan §7's analyze-emotion row explains the same failure shape).
+  // Viewers cannot dispatch a generation (the server requires manager+), so
+  // running recovery for them would create a permanent rejected-request loop.
   //
   // A7: this only walks memories the user has actually paged into this
   // session (bounded work), not the whole library -- a memory stuck
@@ -523,11 +530,11 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
   // This is also the backstop for a memory deferred at 'pending' because a
   // tagged member's portrait wasn't ready (see docs/features/memories.md
   // "Illustration deferral"): isIllustrationPendingTooLong's 3-minute
-  // threshold catches it here same as a stale 'generating' row.
+  // threshold catches it; generating jobs use a separate 5m30 threshold.
   // retryMemoryIllustration -> runMemoryIllustrationPipeline treats a repeat
   // PORTRAITS_NOT_READY as success (not an `error` below), so a still-not-
   // ready portrait just re-parks the memory at 'pending' with a fresh
-  // updated_at -- the next recovery attempt is >=3 minutes later, not a
+  // server-owned generation clock -- the next recovery attempt is >=3 minutes later, not a
   // tight loop. Primary recovery is the server-side retrigger on portrait
   // completion; this loop only runs on the next identity change of
   // `memories` (event-driven here, not clock-driven -- see the detail
@@ -548,8 +555,8 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
 
       recoveringIllustrationsRef.current.add(memory.id);
 
-      // Patch just this memory to 'pending' instead of invalidating every
-      // memory query -- the shared A5 poll picks up the real status from
+      // Patch just this memory to 'pending' in cache instead of invalidating every
+      // memory query -- the shared A5 poll picks up the real server status from
       // there once it notices the pending row.
       void retryMemoryIllustration(memory.id)
         .then(({ error }) => {
@@ -745,8 +752,8 @@ export function useMemory(memoryId: string | undefined) {
 
     recoveringIllustrationRef.current = true;
 
-    // Patch just this memory to 'pending' (with a fresh updated_at) instead
-    // of invalidating every memory query; the detail query's own 3s
+    // Patch just this memory to 'pending' in cache instead of invalidating
+    // every memory query; the detail query's own 3s
     // illustration polling takes over from there.
     void retryMemoryIllustration(memory.id)
       .then(({ error }) => {

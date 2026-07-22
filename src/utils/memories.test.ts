@@ -7,6 +7,8 @@ import {
   isIllustrationInProgress,
   groupMemoriesByDate,
   ILLUSTRATION_GENERATION_STALE_MS,
+  ILLUSTRATION_PENDING_RECOVERY_MS,
+  getIllustrationRecoveryStartedAt,
   isIllustrationGenerationStale,
   isIllustrationPendingTooLong,
   needsIllustrationRecovery,
@@ -121,14 +123,23 @@ describe('memories utils', () => {
     expect(getIllustrationStatusLabel('failed')).toMatch(/failed/i);
   });
 
-  it('detects stale illustration generation and pending recovery', () => {
+  it('uses the dedicated generation clock and distinct pending/generating recovery windows', () => {
     const now = Date.parse('2026-05-28T12:00:00Z');
-    const staleUpdatedAt = new Date(now - ILLUSTRATION_GENERATION_STALE_MS - 1000).toISOString();
+    const staleGenerationStartedAt = new Date(
+      now - ILLUSTRATION_GENERATION_STALE_MS - 1000,
+    ).toISOString();
+    const stalePendingStartedAt = new Date(
+      now - ILLUSTRATION_PENDING_RECOVERY_MS - 1000,
+    ).toISOString();
     const freshUpdatedAt = new Date(now - 60_000).toISOString();
 
     expect(
       isIllustrationGenerationStale(
-        { illustration_status: 'generating', updated_at: staleUpdatedAt },
+        {
+          illustration_status: 'generating',
+          illustration_generation_started_at: staleGenerationStartedAt,
+          updated_at: freshUpdatedAt,
+        },
         now,
       ),
     ).toBe(true);
@@ -140,7 +151,11 @@ describe('memories utils', () => {
     ).toBe(false);
     expect(
       isIllustrationPendingTooLong(
-        { illustration_status: 'pending', updated_at: staleUpdatedAt },
+        {
+          illustration_status: 'pending',
+          illustration_generation_started_at: stalePendingStartedAt,
+          updated_at: freshUpdatedAt,
+        },
         now,
       ),
     ).toBe(true);
@@ -149,7 +164,8 @@ describe('memories utils', () => {
         {
           memory_type: 'text_illustration',
           illustration_status: 'generating',
-          updated_at: staleUpdatedAt,
+          illustration_generation_started_at: staleGenerationStartedAt,
+          updated_at: freshUpdatedAt,
         },
         now,
       ),
@@ -159,11 +175,65 @@ describe('memories utils', () => {
         {
           memory_type: 'text_illustration',
           illustration_status: 'ready',
-          updated_at: staleUpdatedAt,
+          illustration_generation_started_at: staleGenerationStartedAt,
+          updated_at: freshUpdatedAt,
         },
         now,
       ),
     ).toBe(false);
+  });
+
+  it('recovers a never-dispatched pending row using its legacy fallback clock', () => {
+    const now = Date.parse('2026-05-28T12:00:00Z');
+    const staleCreatedAt = new Date(now - ILLUSTRATION_PENDING_RECOVERY_MS - 1).toISOString();
+
+    expect(
+      getIllustrationRecoveryStartedAt({
+        illustration_generation_started_at: null,
+        updated_at: 'not-a-date',
+        created_at: staleCreatedAt,
+      }),
+    ).toBe(Date.parse(staleCreatedAt));
+    expect(
+      isIllustrationPendingTooLong(
+        {
+          illustration_status: 'pending',
+          illustration_generation_started_at: null,
+          updated_at: 'not-a-date',
+          created_at: staleCreatedAt,
+        },
+        now,
+      ),
+    ).toBe(true);
+  });
+
+  it('does not supersede a Workflow at five minutes, but recovers it at five minutes thirty seconds', () => {
+    const now = Date.parse('2026-05-28T12:00:00Z');
+    const fiveMinuteStartedAt = new Date(now - 5 * 60 * 1000).toISOString();
+    const leaseBoundaryStartedAt = new Date(
+      now - ILLUSTRATION_GENERATION_STALE_MS,
+    ).toISOString();
+
+    expect(
+      isIllustrationGenerationStale(
+        {
+          illustration_status: 'generating',
+          illustration_generation_started_at: fiveMinuteStartedAt,
+          updated_at: fiveMinuteStartedAt,
+        },
+        now,
+      ),
+    ).toBe(false);
+    expect(
+      isIllustrationGenerationStale(
+        {
+          illustration_status: 'generating',
+          illustration_generation_started_at: leaseBoundaryStartedAt,
+          updated_at: leaseBoundaryStartedAt,
+        },
+        now,
+      ),
+    ).toBe(true);
   });
 
   it('derives memory type from form state', () => {

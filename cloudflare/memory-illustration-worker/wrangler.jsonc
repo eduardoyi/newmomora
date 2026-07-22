@@ -1,0 +1,85 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "momora-memory-illustration-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-illustration-bridge"
+  },
+  "secrets": {
+    "required": [
+      "DISPATCH_SIGNING_SECRET",
+      "SUPABASE_BRIDGE_HMAC_SECRET",
+      "OPENAI_API_KEY"
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "MEMORY_ILLUSTRATIONS",
+      "bucket_name": "momora-prod"
+    },
+    {
+      "binding": "CHARACTER_PORTRAITS",
+      "bucket_name": "momora-prod"
+    },
+    {
+      "binding": "PROFILE_PICTURES",
+      "bucket_name": "momora-prod"
+    }
+  ],
+  "images": {
+    "binding": "IMAGES"
+  },
+  "workflows": [
+    {
+      "binding": "MEMORY_ILLUSTRATION_WORKFLOW",
+      "name": "momora-memory-illustration",
+      "class_name": "MemoryIllustrationWorkflow"
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "momora-memory-illustration-worker-staging",
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.functions.supabase.co/workflow-illustration-bridge"
+      },
+      "secrets": {
+        "required": [
+          "DISPATCH_SIGNING_SECRET",
+          "SUPABASE_BRIDGE_HMAC_SECRET",
+          "OPENAI_API_KEY"
+        ]
+      },
+      "r2_buckets": [
+        {
+          "binding": "MEMORY_ILLUSTRATIONS",
+          "bucket_name": "REPLACE_WITH_STAGING_MEMORY_ILLUSTRATIONS_BUCKET"
+        },
+        {
+          "binding": "CHARACTER_PORTRAITS",
+          "bucket_name": "REPLACE_WITH_STAGING_CHARACTER_PORTRAITS_BUCKET"
+        },
+        {
+          "binding": "PROFILE_PICTURES",
+          "bucket_name": "REPLACE_WITH_STAGING_PROFILE_PICTURES_BUCKET"
+        }
+      ],
+      "images": {
+        "binding": "IMAGES"
+      },
+      "workflows": [
+        {
+          "binding": "MEMORY_ILLUSTRATION_WORKFLOW",
+          "name": "momora-memory-illustration-staging",
+          "class_name": "MemoryIllustrationWorkflow"
+        }
+      ]
+    }
+  }
+}

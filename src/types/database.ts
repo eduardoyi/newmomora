@@ -486,6 +486,7 @@ export type Database = {
           id: string
           illustration_generation_attempt_id: string | null
           illustration_generation_id: string | null
+          illustration_generation_started_at: string | null
           illustration_key: string | null
           illustration_prompt: string | null
           illustration_status: string
@@ -505,6 +506,7 @@ export type Database = {
           id?: string
           illustration_generation_attempt_id?: string | null
           illustration_generation_id?: string | null
+          illustration_generation_started_at?: string | null
           illustration_key?: string | null
           illustration_prompt?: string | null
           illustration_status?: string
@@ -524,6 +526,7 @@ export type Database = {
           id?: string
           illustration_generation_attempt_id?: string | null
           illustration_generation_id?: string | null
+          illustration_generation_started_at?: string | null
           illustration_key?: string | null
           illustration_prompt?: string | null
           illustration_status?: string
@@ -606,6 +609,123 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      memory_illustration_jobs: {
+        Row: {
+          attempt_id: string
+          color_palette: string
+          completed_at: string | null
+          created_at: string
+          emotion: string | null
+          error_code: string | null
+          expression_style: string | null
+          fallback_attempts: number
+          family_id: string
+          id: string
+          illustration_prompt: string | null
+          memory_date: string
+          memory_id: string
+          model: string | null
+          old_illustration_key: string | null
+          output_key: string
+          primary_attempts: number
+          provider_deadline_at: string
+          reference_candidates: Json
+          request_intent: string
+          safe_scene_description: string | null
+          started_at: string
+          status: string
+          style_description: string | null
+          updated_at: string
+          workflow_instance_id: string
+        }
+        Insert: {
+          attempt_id: string
+          color_palette: string
+          completed_at?: string | null
+          created_at?: string
+          emotion?: string | null
+          error_code?: string | null
+          expression_style?: string | null
+          fallback_attempts?: number
+          family_id: string
+          id: string
+          illustration_prompt?: string | null
+          memory_date: string
+          memory_id: string
+          model?: string | null
+          old_illustration_key?: string | null
+          output_key: string
+          primary_attempts?: number
+          provider_deadline_at: string
+          reference_candidates?: Json
+          request_intent: string
+          safe_scene_description?: string | null
+          started_at?: string
+          status?: string
+          style_description?: string | null
+          updated_at?: string
+          workflow_instance_id: string
+        }
+        Update: {
+          attempt_id?: string
+          color_palette?: string
+          completed_at?: string | null
+          created_at?: string
+          emotion?: string | null
+          error_code?: string | null
+          expression_style?: string | null
+          fallback_attempts?: number
+          family_id?: string
+          id?: string
+          illustration_prompt?: string | null
+          memory_date?: string
+          memory_id?: string
+          model?: string | null
+          old_illustration_key?: string | null
+          output_key?: string
+          primary_attempts?: number
+          provider_deadline_at?: string
+          reference_candidates?: Json
+          request_intent?: string
+          safe_scene_description?: string | null
+          started_at?: string
+          status?: string
+          style_description?: string | null
+          updated_at?: string
+          workflow_instance_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "memory_illustration_jobs_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "memory_illustration_jobs_memory_id_fkey"
+            columns: ["memory_id"]
+            isOneToOne: false
+            referencedRelation: "memories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      memory_illustration_workflow_bridge_nonces: {
+        Row: {
+          nonce: string
+          received_at: string
+        }
+        Insert: {
+          nonce: string
+          received_at?: string
+        }
+        Update: {
+          nonce?: string
+          received_at?: string
+        }
+        Relationships: []
       }
       memory_likes: {
         Row: {
@@ -945,6 +1065,13 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      fail_memory_illustration_workflow_job: {
+        Args: { p_error_code: string; p_job_id: string }
+        Returns: {
+          failed: boolean
+          output_key: string
+        }[]
+      }
       finish_family_member_portrait_deletion: {
         Args: { delete_token: string; target_version_id: string }
         Returns: boolean
@@ -1043,6 +1170,14 @@ export type Database = {
         Args: { p_attempt_token: string; p_report_id: string }
         Returns: boolean
       }
+      publish_memory_illustration_workflow_job: {
+        Args: { p_job_id: string; p_model: string }
+        Returns: {
+          already_published: boolean
+          old_key: string
+          published: boolean
+        }[]
+      }
       release_content_report_email_alert: {
         Args: { p_attempt_token: string; p_report_id: string }
         Returns: boolean
@@ -1050,6 +1185,10 @@ export type Database = {
       replace_memory_media_assets: {
         Args: { assets: Json; target_memory_id: string }
         Returns: undefined
+      }
+      reserve_memory_illustration_provider_attempt: {
+        Args: { p_attempt_number: number; p_job_id: string; p_provider: string }
+        Returns: boolean
       }
       set_family_account_block: {
         Args: {

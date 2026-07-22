@@ -26,8 +26,9 @@ flowchart TB
         Edge[Edge Functions]
     end
 
-    subgraph cloudflare [Cloudflare R2]
-        R2Private[Private buckets]
+    subgraph cloudflare [Cloudflare]
+        Workflow[Memory Illustration Workflow]
+        R2Private[Private family-content bucket]
         R2Public[Public style assets]
     end
 
@@ -45,7 +46,11 @@ flowchart TB
     Edge --> R2Public
     Edge --> STT
     Edge --> LLM
-    Edge --> Image
+    Edge -->|portraits + legacy memory only| Image
+    Edge -->|dispatch, HMAC| Workflow
+    Workflow -->|private bridge, HMAC| Edge
+    Workflow --> Image
+    Workflow --> R2Private
     client -. presigned URLs .-> Edge
 ```
 
@@ -83,12 +88,20 @@ human must confirm them against the live project.
 |---------|--------|
 | Auth & database | Supabase (Auth, PostgreSQL, RLS) |
 | **Object storage** | **Cloudflare R2** (S3-compatible) — all images |
-| Serverless | Supabase Edge Functions (Deno) — orchestration, presigned URLs, AI |
+| Request/auth, DB and publication | Supabase Edge Functions (Deno) — JWT/RLS, prompt safety, job claims, presigned URLs, and compare-and-set publication |
+| Durable memory illustration execution | Cloudflare Workers + Workflows — bounded OpenAI generation/retry and direct R2 upload |
 | Scheduled jobs | Supabase cron or scheduled Edge Functions |
 
 **Why R2 instead of Supabase Storage:** Momora is image-heavy (profile photos, portraits, every memory illustration). Timeline/calendar views re-fetch images often. Supabase charges for **egress** beyond plan quotas (~$0.09/GB uncached); R2 has **$0 egress** and ~$0.015/GB-month storage. See [COST_OPTIMIZATION.md](./COST_OPTIMIZATION.md).
 
 **Supabase Storage is not used** in Momora2.
+
+The `MEMORY_ILLUSTRATION_BACKEND` Supabase secret controls the rollout.
+`legacy` (or an unset value) retains the existing in-function image path;
+`cloudflare` uses the durable Workflow path above. The Workflow never receives a
+Supabase service-role key: it receives only a job ID and fetches short-lived,
+signed job input from the Supabase bridge. Supabase remains the authority for
+claiming and publishing a memory illustration.
 
 ---
 
@@ -477,6 +490,7 @@ create trigger on_auth_user_created
 - `memories.media_key`: required (non-null) when `memory_type = 'media'`; must be null for other types — enforced in Edge Function / client layer
 - `memories.illustration_status`: on insert, set to `'pending'` for `text_illustration` and `'none'` for other types. Editing an illustrated memory to `text_only` deliberately retains its illustration key/prompt/status so toggling AI back on can reveal the existing asset without regeneration; rendering and generation eligibility branch on `memory_type`.
 - `memories.illustration_generation_id`: identifies the exact immutable R2 illustration object currently referenced by the row. `illustration_generation_attempt_id` is a transient CAS token owned by one generator attempt.
+- `memories.illustration_generation_started_at`: server-owned recovery clock. It is set when an illustrated memory is parked/claimed, cleared at terminal publication/failure, and is never written by the client. Older/null rows fall back to `updated_at`, then `created_at`, so a memory saved before a dispatch attempt remains recoverable.
 - `memories.link_previews`: `jsonb`, defaults to `{}`; written only by `fetch-link-previews` (service-role client); malformed/absent entries are treated as no preview client-side (see [inline-links.md](./features/inline-links.md))
 - `family_member_portrait_versions`: new writes have a non-null date in `[family_members.date_of_birth, acting user's local today]`; only migration may write `legacy_unknown` with a null date. Identity/source fields are immutable and creator attribution may change only to null during auth-user deletion.
 - `family_members.date_of_birth`: cannot move after an existing dated portrait version
@@ -754,7 +768,7 @@ Generates or regenerates the character portrait for one immutable portrait versi
 4. Fetch the immutable source photo from R2
 5. Resolve style reference from R2 public assets (`momora-public-assets/_assets/styles/{token}.png`); fetch via `R2_PUBLIC_ASSETS_BASE_URL`
 6. Build prompt: age, gender, style description, identity/style reference instructions
-7. Call OpenAI image edit API with person photo + style reference (`gpt-image-2`, fallback `gpt-image-1`)
+7. Call OpenAI image edit API with person photo + style reference (`gpt-image-2`, fallback `gpt-image-1.5`)
 8. Enforce one 90-second deadline across the primary/fallback image calls so the function still has time to persist a failed attempt before the Edge runtime shuts down
 9. Upload result under `/portrait/{attemptId}.webp`
 10. Publish only if the token still owns the claim. On regeneration failure, retain the previous ready output and status.
@@ -854,61 +868,63 @@ Does **not** invoke `generate-illustration` for `media`.
 
 ### 4.3 `generate-illustration`
 
-Generates memory illustration using tagged character portraits.
+Authenticates and dispatches durable memory-illustration generation. Supabase
+remains the trust boundary for authorization, family data, prompt/safety work,
+and atomic publication. Cloudflare Workflows performs only the paid image
+generation and R2 transfer.
 
-**Trigger:** Client after `analyze-emotion` succeeds
+**Trigger:** Client after saving a `text_illustration`, a bounded client
+recovery loop, portrait completion, or an explicit regenerate action.
 
 **Request**
 
 ```json
 {
   "memoryId": "uuid",
-  "colorPalette": "warm golden yellows, soft peach, light sky blue accents",
-  "forceRegenerate": false
+  "colorPalette": "optional legacy palette",
+  "forceRegenerate": false,
+  "requestIntent": "initial"
 }
 ```
 
-Set `forceRegenerate: true` when the client manually regenerates an illustration that is already `ready`. Each successful generation uses a fresh UUID and immutable R2 object key.
+`requestIntent` is optional for installed-client compatibility and is one of
+`initial`, `recovery`, or `manual_regenerate`. New clients send
+`manual_regenerate` plus the legacy `forceRegenerate: true` field for an
+explicit regenerate. New initial/recovery callers omit `colorPalette`; the
+dispatcher is authoritative for emotion/palette resolution. Existing callers
+that supply it remain valid.
 
 **Authorization (family-sharing Phase 3):** memory looked up by id alone; caller must be **owner/manager** of `memory.family_id` (not `memory.user_id = caller`). Internal lookups are re-scoped from `family_members.user_id = caller` to `family_members.family_id = memory.family_id` — otherwise a manager tagging children the family *owner* created would find zero portraits and fail with `NO_PORTRAITS`. `illustration_style` is read from `families` (moved off `user_profiles` in the family-sharing migration).
 
 **Logic**
 
-1. Fetch memory by id; assert caller owner/manager of its family.
-2. Claim generation immediately with a unique `illustration_generation_attempt_id`, CAS-matching the exact status/attempt/current generation and relevant memory inputs read in step 1. Concurrent same-snapshot calls cannot both claim.
-3. Fetch tagged family members (max 6 for this memory type), and **all** family member id/name/nickname rows (not just tagged), scoped to the memory's `family_id`; reject more than 6 explicit tags with `ILLUSTRATION_MEMBER_LIMIT`, and cap the zero-tag name-inference fallback to its first 6 matches. Content/date/type/emotion or tag edits clear the active token and restore the retained ready/none/pending state; link-preview hydration does not invalidate generation.
-4. **Safety pre-check:** `gpt-4o-mini` rewrites unsafe content → child-safe scene description, given a nickname→canonical-name mapping built from every family member so nicknames never leak into the image prompt (see `buildSafetySystemPrompt`). Returns `{"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}`; `expressionStyle` is validated server-side and defaults to `neutral`.
-5. For each selected member, resolve the usable portrait against `memory.memory_date`: latest dated ready version on/before the date, otherwise earliest dated ready version after it, otherwise a ready undated legacy version. Same-day ties use `created_at DESC, id DESC`. Fetch the resolved keys from R2.
-6. Build prompt (`buildIllustrationPrompt`): scene-first, newline-separated sections — Scene, Characters (reference map + preserve/adapt split), Emotional tone (`memory.emotion` mapped to `EMOTION_EXPRESSIONS`, plus comedic exaggeration when `expressionStyle === 'comedic'` and the emotion is in `COMEDIC_ELIGIBLE_EMOTIONS`), Style/palette/date, Constraints
-7. Call OpenAI image edit API with all ready portrait references (up to 6; `input_fidelity=high` only on `gpt-image-1` fallback when multiple). The normal primary is `gpt-image-2`; a 3+ reference edit explicitly requests `medium` output quality (rather than provider `auto`) and, if still running after 55 seconds, starts the compatible `gpt-image-1` edit in parallel. The first successful reference-aware result wins and cancels the other request. One- and two-reference memories retain the provider default quality and never hedge. All new outputs explicitly request WebP with compression 85, matching the immutable `.webp` storage key and `image/webp` metadata.
-8. A deterministic image-provider moderation/policy refusal ends this attempt without duplicating the same request on another model; the saved memory remains retryable from the client.
-9. Create a fresh generation UUID and upload the new bytes to `{userId}/memories/{memoryId}/illustrations/{generationId}.webp` without touching the prior object.
-10. CAS-update `illustration_key`, `illustration_generation_id`, prompt, and status `ready` only if this attempt still owns the token. A superseded/failed swap deletes only the new object and preserves the prior DB pointer/object.
-11. If the DB response is ambiguous after a timeout, re-read key + generation: treat an exact match as committed, delete the new object only when definitively not committed, and retain it as a possible orphan if reconciliation also fails.
-12. After a confirmed DB swap, delete the previous object best-effort. Old child imagery is not retained solely for moderation.
-13. A successful CAS claim has a **120-second cancellable pre-finalization deadline** for lookup, safety, R2 reference-read, and OpenAI edit work. Its timer accounts for earlier request processing and stays below Supabase Edge Functions' documented 150-second **request-idle limit**, leaving intended ~30-second headroom for an un-aborted immutable R2 upload plus checked DB swap/reconciliation; publication is not hard-capped by this deadline. One shared `AbortSignal` cancels every abortable operation in the pre-finalization phase. A cutoff returns `504 GENERATION_TIMEOUT` and runs the claim-token-guarded cleanup, leaving the memory `failed` (or restoring a retained ready illustration) with the attempt id cleared. A CAS that already committed remains `ready`; cleanup is conditional on the owned `generating` token. A non-retryable provider 4xx/policy rejection is surfaced without trying another image model; transient failures (including 408, 409, 429, and 5xx) may use the alternate **reference-aware** edit model, but the pipeline never falls through to a text-only image generation after portraits were supplied (that would lose character continuity). Telemetry contains only the memory id, phase, and elapsed duration—never prompts, content, member data, URLs, keys, or credentials.
+1. Validate the caller and reuse a fresh active job for automatic recovery and legacy requests. New `manual_regenerate` supersedes immediately; legacy clients that only send `forceRegenerate` may reuse the job until the 5:30 recovery window.
+2. For `initial` or `recovery` with no emotion, run the same emotion analysis with one retry before claiming. If both attempts fail, use Tender; this is intentionally server-owned so a client killed after save does not lose the palette-recovery path.
+3. Claim a new attempt with a UUID, set `illustration_generation_started_at`, preserve the key-aware portrait deferral/retrigger behavior, and create no job when deferring.
+4. Persist private job input after the safety rewrite and reference resolution. The jobs table has RLS but no client policies; only authorized service-side code accesses it.
+5. Dispatch the deterministic Workflow instance ID. An existing instance ID is an idempotent successful 202, not an error.
+6. The Workflow fetches job input inside its generate-and-upload step; it returns no prompt, family data, or image bytes as Workflow step state. It checks the deterministic R2 key before an OpenAI call, then uploads the generated bytes directly to R2 in the same step.
+7. Primary model is `gpt-image-2`. Retryable primary failures may use sequential `gpt-image-1.5` fallback; `input_fidelity: high` is used for multi-reference fallback edits. One/two references omit `quality`; three or more explicitly use `medium`. The prior 55-second parallel hedge is removed to avoid duplicate paid work. Output is WebP compression 85. A moderation refusal maps to `MODERATION_BLOCKED` and never falls back.
+8. Provider work has a 4:30 pre-finalization budget, preserving 30 seconds for publication inside the 5-minute Workflow lease. The client automatic generating recovery threshold is 5:30, so it cannot supersede normal finalization.
+9. Publication/failure returns through a signed Supabase bridge. Publication matches the attempt ID rather than status, so a legacy direct status reset cannot discard a finished image; input edits still clear the attempt ID and prevent stale publication. It atomically writes the prompt/key/generation/status and deletes the prior object only after a confirmed swap.
 
-**Illustration deferral (`PORTRAITS_NOT_READY`).** When step 5 resolves zero ready portraits (`readyMembers.length === 0`) but at least one resolved tagged member has a **fresh in-flight** portrait version, this is a deferral, not a failure — waiting for at least one portrait to finish beats failing a memory that's guaranteed to be retriggered shortly (see the onboarding case: creating the first family member fires portrait generation, and the very next action is usually the first memory). Partial-ready multi-member memories are unaffected (they still generate with the ready subset); only the all-unready case defers.
-
-- Portrait versions are loaded for the resolved `memberIds` **without** filtering out unset `illustrated_profile_key` — that filter hides exactly the in-flight rows this check needs (`family_member_portrait_versions_ready_shape` guarantees the key is `NULL` for any non-`ready` status).
-- A version counts as **fresh in-flight** only if: `illustrated_profile_status` is `pending` or `generating`; `deletion_token IS NULL` (a deletion-claimed row will never complete, and the deletion-claim UPDATE bumps `updated_at`, so `updated_at` alone would misread it as fresh); and it's recent — a claimed row (`generation_token IS NOT NULL`) uses `generation_started_at` within the same 15-minute reclaim window `claim_family_member_portrait_generation` uses; an unclaimed `pending` row (the client's fire-and-forget invoke on member creation can be lost) uses a ~5-minute `created_at` grace. A version failing this check falls through to today's `NO_PORTRAITS` → `failed`, unchanged.
-- **Key-aware status reset:** a memory with **no** `illustration_key` resets to `illustration_status = 'pending'` with its attempt id cleared (parked, exactly like a fresh unillustrated memory — the shared client poll already treats `pending` as in-flight, never as `failed`). A memory with a **retained** `illustration_key` (e.g. regenerating after retagging to a member whose portrait is still generating) keeps its `'ready'` restore instead — the old illustration stays visible rather than showing an indefinite shimmer. Either way the response is `409 PORTRAITS_NOT_READY` so explicit-action callers can message the user; only the status reset differs.
-- **Self-retrigger on the deferring request's own exit.** While this invocation holds the CAS claim the memory reads `generating`, so a portrait that completes during that exact window would otherwise be missed by §4.1's retrigger (its candidate query only sees `illustration_status = 'pending'`) or bounce off a `409 GENERATION_IN_PROGRESS` — and since that's the portrait's *only* scheduled retrigger for this deferral, the memory would silently never retry. After the no-key status reset lands, this request re-reads the resolved members' portrait versions once; if any is now `ready` (or all went terminal), it fires one self-retrigger — same HTTP-invoke pattern as §4.1's, wrapped in `EdgeRuntime.waitUntil`, forwarding this request's own `Authorization` header — before/while returning the 409.
-- Concurrent/duplicate invocations stay safe under the existing CAS/attempt-id scheme: the memory row was CAS'd to `generating` at claim time, and the optimistic start-UPDATE rejects a second caller with `409` before any image-API call.
+**Illustration deferral (`PORTRAITS_NOT_READY`).** Portrait readiness remains entirely in the dispatcher. A keyless memory is parked at `pending` with a fresh server clock, while a retained image is restored to `ready`; neither path creates a job. The key-aware reset and post-reset self-retrigger remain required to close the portrait-completes-during-claim race.
 
 **Response**
 
 ```json
 {
   "success": true,
-  "illustrationKey": "userId/memories/memoryId/illustrations/generationId.webp",
-  "illustrationGenerationId": "uuid"
+  "queued": true,
+  "jobId": "uuid"
 }
 ```
 
-**Errors:** `MEMORY_NOT_FOUND`, `NO_PORTRAITS`, `GENERATION_IN_PROGRESS`, `GENERATION_SUPERSEDED`, `GENERATION_FAILED`, `MODERATION_BLOCKED`, `409 PORTRAITS_NOT_READY` (deferral — see above; not a failure)
+The legacy synchronous success response remains accepted during rollout.
 
-**Client handling:** `invokeEdgeFunction` (`src/services/ai.ts`) surfaces the response body's `code` as `error.code`. `runMemoryIllustrationPipeline` (`src/services/memories.ts`) treats `error.code === 'PORTRAITS_NOT_READY'` as success-shaped — returns `null`, no `console.warn` — for the fire-and-forget create/update pipeline and the existing stale-illustration recovery loop (`needsIllustrationRecovery` in `src/utils/memories.ts`, wired into `useMemories.ts`); that loop is the client backstop behind the server-side retrigger above, not a replacement for it (see [memories.md](./features/memories.md) "Illustration deferral"). Only the detail screen's explicit regenerate action (`regenerateMemoryIllustration`) surfaces the code distinctly, as a non-error notice ("Character portraits are still generating — the illustration will finish automatically."), not a failure/red-error state.
+**Errors:** `MEMORY_NOT_FOUND`, `NO_PORTRAITS`, `NO_USABLE_REFERENCES`, `GENERATION_IN_PROGRESS`, `GENERATION_SUPERSEDED`, `GENERATION_FAILED`, `MODERATION_BLOCKED`, `409 PORTRAITS_NOT_READY` (deferral — not a failure).
+
+**Client handling:** the client never writes `illustration_status` for retry/recovery/regenerate. It sends intent to the dispatcher and accepts both legacy synchronous and queued responses. `PORTRAITS_NOT_READY` remains success-shaped for automatic paths and a distinct non-error notice for explicit regenerate.
 
 ---
 
@@ -1306,8 +1322,8 @@ names, journal text, media keys, or URLs appear in a response or email.
 ```
 1. Client validates: content non-empty and unique tags; AI illustration remains available only with ≤6 tagged members
 2. INSERT memories + memory_family_members
-3. Invoke analyze-emotion(memoryId)
-4. Invoke generate-illustration(memoryId, colorPalette)
+3. Invoke generate-illustration(memoryId, requestIntent: 'initial')
+4. Dispatcher analyzes missing emotion/palette before the generation claim, then queues durable work
 5. Poll or subscribe to illustration_status until ready | failed
 6. Display illustration via get-media-url presigned GET
 ```
@@ -1526,11 +1542,28 @@ per family, not per user). No style picker UI.
 | `R2_SECRET_ACCESS_KEY` | R2 S3 API secret |
 | `R2_ENDPOINT` | R2 S3 endpoint URL |
 | `R2_PUBLIC_ASSETS_BASE_URL` | Public URL for style reference images |
+| `MEMORY_ILLUSTRATION_BACKEND` | `legacy`/unset for the existing Edge Function path; `cloudflare` to dispatch durable Workflow jobs |
+| `CLOUDFLARE_ILLUSTRATION_WORKFLOW_URL` | Authenticated Worker dispatch endpoint, used only when backend is `cloudflare` |
+| `CLOUDFLARE_ILLUSTRATION_DISPATCH_SECRET` | Shared secret for Supabase → Worker dispatch authentication |
+| `CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET` | HMAC secret for Worker ↔ `workflow-illustration-bridge` job input/publication calls |
 | `BENTO_SITE_UUID` | Bento site UUID — sent as the `site_uuid` query parameter of transactional email sends |
 | `BENTO_PUBLISHABLE_KEY` | Bento publishable key — HTTP Basic auth username |
 | `BENTO_SECRET_KEY` | Bento secret key — HTTP Basic auth password |
 | `BENTO_FROM_EMAIL` | Sender address; must be pre-registered as an author on the Bento site |
 | `CONTENT_REPORT_ALERT_EMAIL` | Optional safe operator recipient; defaults to `hello@usemomora.com` |
+
+### Cloudflare Worker configuration
+
+The `cloudflare/memory-illustration-worker` project owns durable memory
+illustration execution. Its non-secret configuration is `ENVIRONMENT` and
+`SUPABASE_BRIDGE_URL`. Its Worker secret store contains `OPENAI_API_KEY`,
+`DISPATCH_SIGNING_SECRET` (same value as
+`CLOUDFLARE_ILLUSTRATION_DISPATCH_SECRET`), and `SUPABASE_BRIDGE_HMAC_SECRET`
+(same value as `CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET`). Bind the private R2
+bucket as `MEMORY_ILLUSTRATIONS`, `CHARACTER_PORTRAITS`, and
+`PROFILE_PICTURES`, bind Cloudflare Images as `IMAGES`, and bind the Workflow
+as `MEMORY_ILLUSTRATION_WORKFLOW`. Do not put any of these values in Expo
+variables or commit `.dev.vars`.
 
 ### Database Vault secrets (read by pg_cron jobs)
 
@@ -1567,6 +1600,7 @@ Momora2/
 │       ├── delete-family-member/
 │       ├── analyze-emotion/
 │       ├── generate-illustration/
+│       ├── workflow-illustration-bridge/
 │       ├── process-voice-memory/
 │       ├── send-daily-reminder/
 │       ├── schedule-daily-reminders/
@@ -1579,6 +1613,8 @@ Momora2/
 │       ├── notify-memory-engagement/
 │       ├── send-content-report-alert/
 │       └── _shared/               # family-access.ts, storage-keys.ts, bento.ts, expo-push.ts, ...
+├── cloudflare/
+│   └── memory-illustration-worker/ # Worker + Workflow, bridge client, OpenAI/R2 execution
 ├── docs/
 │   ├── PRD.md
 │   ├── TECH_SPEC.md
@@ -1627,7 +1663,7 @@ All AI operations are **async** — client shows status and allows navigation aw
 
 | Item | Notes |
 |------|-------|
-| `gpt-image-2` API | Confirm edit endpoint, reference image count limits, fallback to `gpt-image-1` |
+| `gpt-image-2` API | Confirm edit endpoint, reference image count limits, fallback to `gpt-image-1.5` |
 | Full-text search | GIN index provided; may add `ilike` fallback for simpler MVP |
 | Realtime status updates | Supabase Realtime on `memories.illustration_status` vs. polling |
 | EXIF stripping | Strip metadata from uploaded profile photos before storage |

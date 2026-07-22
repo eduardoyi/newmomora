@@ -79,18 +79,38 @@ export async function fetchLinkPreviews(
   return invokeEdgeFunction('fetch-link-previews', { memoryId });
 }
 
+export type IllustrationRequestIntent = 'initial' | 'recovery' | 'manual_regenerate';
+
+export interface GenerateMemoryIllustrationResponse {
+  success?: boolean;
+  /** Present when the Cloudflare Workflow dispatcher accepted durable work. */
+  queued?: boolean;
+  jobId?: string;
+}
+
 export async function generateMemoryIllustration(
   memoryId: string,
   colorPalette?: string,
-  options?: { forceRegenerate?: boolean },
-): Promise<{ error: ServiceError | null }> {
-  const { error } = await invokeEdgeFunction('generate-illustration', {
+  options?: {
+    /** Legacy contract preserved while installed clients roll forward. */
+    forceRegenerate?: boolean;
+    requestIntent?: IllustrationRequestIntent;
+  },
+): Promise<{ data: GenerateMemoryIllustrationResponse | null; error: ServiceError | null }> {
+  const { data, error } = await invokeEdgeFunction<GenerateMemoryIllustrationResponse>(
+    'generate-illustration',
+    {
     memoryId,
     colorPalette,
     forceRegenerate: options?.forceRegenerate ?? false,
-  });
+      requestIntent: options?.requestIntent,
+    },
+  );
 
-  return { error };
+  // Legacy synchronous functions return { success: true }; the Workflow
+  // dispatcher returns 202 { success: true, queued: true, jobId }. Both are
+  // successful dispatches from the client's perspective.
+  return { data, error };
 }
 
 export interface VoiceFamilyMemberPayload {

@@ -1,17 +1,19 @@
-import { describeAgeAtDate } from '../_shared/age.ts';
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { stripUrls } from '../_shared/link-preview.ts';
+import { normalizeEmotionLabel } from '../_shared/media-emotion.ts';
 import { chatJson, editImageWithReferences } from '../_shared/openai.ts';
 import {
+  buildMemberIllustrationDescription,
   prepareIllustrationReferences,
   sortMembersByTagOrder,
 } from '../_shared/illustration-references.ts';
 import {
   buildIllustrationPrompt,
   buildSafetySystemPrompt,
+  buildEmotionSystemPrompt,
   EMOTION_PALETTES,
   normalizeEmotion,
   type SafetyPromptMember,
@@ -28,12 +30,14 @@ import {
   hasFreshInFlightPortraitVersion,
   type PortraitFreshnessCandidate,
 } from '../_shared/portrait-readiness.ts';
-import { createUserClient } from '../_shared/supabase-admin.ts';
+import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
 import { resolvePortraitVersionAtDate } from '../_shared/portrait-versions.ts';
 
 export interface GenerateIllustrationRequest {
   memoryId: string;
   colorPalette?: string;
+  /** Distinguishes user-initiated replacement from automatic recovery. */
+  requestIntent?: 'initial' | 'recovery' | 'manual_regenerate';
   /** When true, regenerate even if an illustration is already ready. */
   forceRegenerate?: boolean;
 }
@@ -42,6 +46,12 @@ export interface GenerateIllustrationResponse {
   success: true;
   illustrationKey: string;
   illustrationGenerationId: string;
+}
+
+export interface QueueIllustrationResponse {
+  success: true;
+  queued: true;
+  jobId: string;
 }
 
 const EMPTY_MEMBER_ID = '00000000-0000-4000-8000-000000000000';
@@ -67,10 +77,9 @@ export function getIllustrationImageRequestOptions(referenceCount: number) {
     // same format instead of storing default PNG bytes under that identity.
     outputFormat: 'webp' as const,
     outputCompression: 85,
-    // Do not cut off a healthy primary at a fixed point. For the slow
-    // multi-character tail, start the compatible fallback halfway through
-    // the pre-finalization budget and publish whichever edit completes.
-    fallbackHedgeDelayMs: isLargeReferenceSet ? 55_000 : undefined,
+    // Workflow retries are sequential. Parallel hedging sometimes pays twice
+    // for one memory, so it is deliberately disabled for this path.
+    fallbackHedgeDelayMs: undefined,
   };
 }
 
@@ -85,6 +94,9 @@ export interface GenerateIllustrationDependencies {
   /** Re-invokes this function for a deferred memory once portraits settle. */
   invokeGenerateIllustration: (memoryId: string, authHeader: string) => Promise<void>;
   waitUntil: (task: Promise<void>) => void;
+  createServiceClient: typeof createServiceClient;
+  fetch: typeof fetch;
+  delay: (ms: number) => Promise<void>;
 }
 
 export async function defaultInvokeGenerateIllustration(
@@ -102,7 +114,7 @@ export async function defaultInvokeGenerateIllustration(
       Authorization: authHeader,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ memoryId }),
+    body: JSON.stringify({ memoryId, requestIntent: 'recovery' }),
   });
   // Always drain the body -- an unconsumed response leaks the underlying
   // Deno resource even when we're about to discard the result.
@@ -135,7 +147,77 @@ const DEFAULT_DEPENDENCIES: GenerateIllustrationDependencies = {
         EdgeRuntime: { waitUntil: (task: Promise<void>) => void };
       }
     ).EdgeRuntime.waitUntil(task),
+  createServiceClient,
+  fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
+  delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
+
+const CLOUD_FLARE_LEASE_MS = 5 * 60_000;
+const CLOUD_FLARE_RECOVERY_GRACE_MS = 30_000;
+
+export function isFreshMatchingWorkflowJob(input: {
+  memoryAttemptId: string | null;
+  jobAttemptId: string;
+  startedAt: string;
+  now?: number;
+}): boolean {
+  const startedAt = Date.parse(input.startedAt);
+  return input.memoryAttemptId === input.jobAttemptId && Number.isFinite(startedAt) &&
+    (input.now ?? Date.now()) - startedAt < CLOUD_FLARE_LEASE_MS + CLOUD_FLARE_RECOVERY_GRACE_MS;
+}
+
+function getIllustrationBackend(): 'legacy' | 'cloudflare' {
+  // Keep rollback cheap while installed clients transition away from their
+  // old direct status writes. Invalid values intentionally fail closed to the
+  // established in-process implementation.
+  return Deno.env.get('MEMORY_ILLUSTRATION_BACKEND') === 'cloudflare'
+    ? 'cloudflare'
+    : 'legacy';
+}
+
+async function dispatchWorkflowJob(
+  fetchFn: typeof fetch,
+  jobId: string,
+): Promise<void> {
+  const endpoint = Deno.env.get('CLOUDFLARE_ILLUSTRATION_WORKFLOW_URL');
+  const dispatchSecret = Deno.env.get('CLOUDFLARE_ILLUSTRATION_DISPATCH_SECRET');
+  if (!endpoint || !dispatchSecret) {
+    throw new Error('Cloudflare illustration workflow is not configured');
+  }
+
+  const timestamp = String(Date.now());
+  const nonce = crypto.randomUUID();
+  const rawBody = JSON.stringify({ jobId });
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(dispatchSecret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signatureBytes = new Uint8Array(await crypto.subtle.sign(
+    'HMAC', key, new TextEncoder().encode(`${timestamp}.${nonce}.${rawBody}`),
+  ));
+  const signature = [...signatureBytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const response = await fetchFn(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-dispatch-timestamp': timestamp,
+      'x-dispatch-nonce': nonce,
+      'x-dispatch-signature': signature,
+    },
+    body: rawBody,
+  });
+  // Drain even 409 duplicate responses so the Edge runtime does not retain a
+  // network resource across the retry/recovery path.
+  await response.text().catch(() => '');
+  // A duplicate Workflow instance is success: the deterministic job ID is
+  // deliberately reused after a network-ambiguous dispatch response.
+  if (!response.ok && response.status !== 409) {
+    throw new Error(`Cloudflare workflow dispatch failed (${response.status})`);
+  }
+}
 
 interface CommitIllustrationGenerationInput {
   oldKey: string | null;
@@ -248,10 +330,14 @@ export async function handleGenerateIllustration(
     return errorResponse('Invalid JSON body', 400, 'invalid_json');
   }
 
-  const { memoryId, colorPalette, forceRegenerate = false } = body;
+  const { memoryId, colorPalette, forceRegenerate = false, requestIntent } = body;
 
   if (!memoryId || typeof memoryId !== 'string') {
     return errorResponse('memoryId is required', 400, 'validation_error');
+  }
+  if (requestIntent !== undefined &&
+    requestIntent !== 'initial' && requestIntent !== 'recovery' && requestIntent !== 'manual_regenerate') {
+    return errorResponse('Invalid request intent', 400, 'validation_error');
   }
 
   const authHeader = req.headers.get('Authorization');
@@ -261,10 +347,10 @@ export async function handleGenerateIllustration(
 
   const supabase = createUserClient(authHeader);
 
-  const { data: memory, error: memoryError } = await supabase
+  let { data: memory, error: memoryError } = await supabase
     .from('memories')
     .select(
-      'id, family_id, content, memory_date, emotion, illustration_key, illustration_generation_id, illustration_generation_attempt_id, illustration_status, updated_at, memory_type',
+      'id, family_id, content, memory_date, emotion, illustration_key, illustration_generation_id, illustration_generation_attempt_id, illustration_status, illustration_generation_started_at, updated_at, memory_type',
     )
     .eq('id', memoryId)
     .maybeSingle();
@@ -291,6 +377,83 @@ export async function handleGenerateIllustration(
     );
   }
 
+  const backend = getIllustrationBackend();
+  const isExplicitManualRegenerate = requestIntent === 'manual_regenerate';
+  if (backend === 'cloudflare' && !isExplicitManualRegenerate) {
+    const service = dependencies.createServiceClient();
+    const { data: activeJob, error: activeJobError } = await service
+      .from('memory_illustration_jobs')
+      .select('id, attempt_id, started_at')
+      .eq('memory_id', memoryId)
+      .in('status', ['queued', 'running'])
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (activeJobError) throw new Error('Failed to load active illustration workflow job');
+    if (activeJob && isFreshMatchingWorkflowJob({
+      memoryAttemptId: memory.illustration_generation_attempt_id,
+      jobAttemptId: activeJob.attempt_id,
+      startedAt: activeJob.started_at,
+    })) {
+      // A legacy app may have directly flipped generating -> pending. The
+      // attempt token, not that mutable display status, remains authoritative.
+      const { error: restoreError } = await service
+        .from('memories')
+        .update({ illustration_status: 'generating' })
+        .eq('id', memoryId)
+        .eq('illustration_generation_attempt_id', activeJob.attempt_id);
+      if (restoreError) throw new Error('Failed to restore active illustration status');
+      // Re-send the deterministic id on every reuse. A prior request can
+      // time out after the job insert but before Cloudflare acknowledged it.
+      await dispatchWorkflowJob(dependencies.fetch, activeJob.id);
+      return jsonResponse({ success: true, queued: true, jobId: activeJob.id } satisfies QueueIllustrationResponse, 202);
+    }
+  }
+
+  // New clients no longer run emotion analysis locally.  Do it before the
+  // attempt claim: an emotion write intentionally invalidates an in-flight
+  // attempt, so doing it after claim would immediately discard our token.
+  // Legacy force-regeneration deliberately retains the old behavior and does
+  // not reclassify an already analyzed memory.
+  let analyzedPalette: string | undefined;
+  const shouldAnalyzeMissingEmotion = !memory.emotion &&
+    (requestIntent === 'initial' || requestIntent === 'recovery' || !forceRegenerate);
+  if (shouldAnalyzeMissingEmotion) {
+    for (let analysisAttempt = 0; analysisAttempt < 2; analysisAttempt += 1) {
+      try {
+        const result = await dependencies.chatJson<{ emotion?: string; colorPalette?: string }>(
+          buildEmotionSystemPrompt(),
+          stripUrls(memory.content),
+        );
+        const normalized = normalizeEmotionLabel(result.emotion, EMOTION_PALETTES);
+        const emotion = normalized.emotion;
+        analyzedPalette = result.colorPalette ?? normalized.colorPalette;
+        const service = dependencies.createServiceClient();
+        const { data: updated } = await service
+          .from('memories')
+          .update({ emotion })
+          .eq('id', memoryId)
+          .eq('updated_at', memory.updated_at)
+          .select('id')
+          .maybeSingle();
+        if (!updated) break; // A real edit won; the normal claim CAS will re-read next time.
+        const { data: refreshed } = await supabase
+          .from('memories')
+          .select('id, family_id, content, memory_date, emotion, illustration_key, illustration_generation_id, illustration_generation_attempt_id, illustration_status, illustration_generation_started_at, updated_at, memory_type')
+          .eq('id', memoryId)
+          .maybeSingle();
+        if (refreshed) memory = refreshed;
+        break;
+      } catch (error) {
+        if (analysisAttempt === 1) {
+          console.error('generate-illustration emotion recovery failed', error instanceof Error ? error.message : 'unknown');
+          break;
+        }
+        await dependencies.delay(6_000);
+      }
+    }
+  }
+
   if (
     !forceRegenerate &&
     memory.illustration_status === 'ready' &&
@@ -308,7 +471,11 @@ export async function handleGenerateIllustration(
   if (
     !forceRegenerate &&
     memory.illustration_status === 'generating' &&
-    !isIllustrationGenerationStale(memory.illustration_status, memory.updated_at)
+    !isIllustrationGenerationStale(
+      memory.illustration_status,
+      memory.updated_at,
+      memory.illustration_generation_started_at,
+    )
   ) {
     return errorResponse('Illustration generation in progress', 409, 'GENERATION_IN_PROGRESS');
   }
@@ -318,6 +485,7 @@ export async function handleGenerateIllustration(
     .from('memories')
     .update({
       illustration_status: 'generating',
+      illustration_generation_started_at: new Date().toISOString(),
       illustration_generation_attempt_id: generationAttemptId,
     })
     .eq('id', memoryId)
@@ -367,6 +535,11 @@ export async function handleGenerateIllustration(
     });
   }, remainingPreFinalizationDeadlineMs(dependencies.generationTimeoutMs, requestStartedAt));
   let generationSucceeded = false;
+  let generationDispatched = false;
+  // Once this is true the durable row owns recovery. A network failure after
+  // insert is ambiguous: clearing the memory attempt here would make a later
+  // idempotently redispatched Workflow unable to publish.
+  let durableJobCreated = false;
   // Set only on the fresh-in-flight-portrait deferral path below; read in
   // `finally` (a different block scope from `try`, so it can't be a local
   // there) to decide the reset target and whether to schedule a retrigger.
@@ -585,6 +758,7 @@ export async function handleGenerateIllustration(
     const illustrationKey = buildMemoryIllustrationKey(user.id, memoryId, illustrationGenerationId);
     const normalizedEmotion = normalizeEmotion(memory.emotion);
     const resolvedPalette =
+      analyzedPalette ??
       colorPalette ??
       (normalizedEmotion ? EMOTION_PALETTES[normalizedEmotion] : undefined) ??
       EMOTION_PALETTES.tender;
@@ -605,6 +779,67 @@ export async function handleGenerateIllustration(
     const expressionStyle: ExpressionStyle = ALLOWED_EXPRESSION_STYLES.has(safety.expressionStyle ?? '')
       ? (safety.expressionStyle as ExpressionStyle)
       : 'neutral';
+
+    if (backend === 'cloudflare') {
+      // The Workflow event has only this job id. Prompt inputs remain in the
+      // private jobs table and are fetched within the paid Workflow step.
+      const jobId = generationAttemptId;
+      const illustrationKey = buildMemoryIllustrationKey(user.id, memoryId, jobId);
+      const referenceCandidates = readyMembers.map((member) => ({
+        memberId: member.id,
+        name: member.name,
+        description: buildMemberIllustrationDescription(member, memory.memory_date),
+        portraitKey: member.illustrated_profile_key,
+        profileKey: member.profile_picture_key,
+        portraitContentType: 'image/webp',
+        profileContentType: 'image/jpeg',
+      }));
+      const service = dependencies.createServiceClient();
+      // Reaching here means there is no fresh matching active job: this is a
+      // manual replacement, an expired lease, or an edit invalidated the old
+      // attempt. Supersede/scrub before insert so the one-active-job index
+      // cannot strand recovery behind a job that cannot publish.
+      if (backend === 'cloudflare') {
+        const { error: supersedeError } = await service
+          .from('memory_illustration_jobs')
+          .update({
+            status: 'superseded',
+            completed_at: new Date().toISOString(),
+            safe_scene_description: null,
+            reference_candidates: [],
+            illustration_prompt: null,
+          })
+          .eq('memory_id', memoryId)
+          .in('status', ['queued', 'running']);
+        if (supersedeError) throw new Error('Failed to supersede prior illustration workflow job');
+      }
+      const { error: jobError } = await service.from('memory_illustration_jobs').insert({
+        id: jobId,
+        workflow_instance_id: jobId,
+        memory_id: memoryId,
+        family_id: memory.family_id,
+        attempt_id: generationAttemptId,
+        request_intent: requestIntent ?? 'initial',
+        status: 'queued',
+        started_at: new Date().toISOString(),
+        provider_deadline_at: new Date(Date.now() + CLOUD_FLARE_LEASE_MS).toISOString(),
+        color_palette: resolvedPalette,
+        safe_scene_description: safeDescription,
+        expression_style: expressionStyle,
+        style_description: styleDescription,
+        memory_date: memory.memory_date,
+        emotion: memory.emotion,
+        reference_candidates: referenceCandidates,
+        output_key: illustrationKey,
+        old_illustration_key: memory.illustration_key,
+      });
+      if (jobError) throw new Error('Failed to create illustration workflow job');
+      durableJobCreated = true;
+      await dispatchWorkflowJob(dependencies.fetch, jobId);
+      generationDispatched = true;
+      return jsonResponse({ success: true, queued: true, jobId } satisfies QueueIllustrationResponse, 202);
+    }
+
     generationPhase = 'portrait-reference-preparation';
     const referencePhaseStartedAt = Date.now();
     const { characterReferences, referenceImages } = await prepareIllustrationReferences(
@@ -660,10 +895,10 @@ export async function handleGenerateIllustration(
             illustration_generation_attempt_id: null,
             illustration_prompt: prompt,
             illustration_status: 'ready',
+            illustration_generation_started_at: null,
           })
           .eq('id', memoryId)
           .eq('illustration_generation_attempt_id', generationAttemptId)
-          .eq('illustration_status', 'generating')
           .select('id')
           .maybeSingle();
 
@@ -710,7 +945,7 @@ export async function handleGenerateIllustration(
     return errorResponse('Illustration generation failed', 500, 'GENERATION_FAILED');
   } finally {
     clearTimeout(generationTimeoutId);
-    if (!generationSucceeded) {
+    if (!generationSucceeded && !generationDispatched && !durableJobCreated) {
       const hasRetainedIllustration = Boolean(
         memory.illustration_key && memory.illustration_generation_id,
       );
@@ -731,6 +966,7 @@ export async function handleGenerateIllustration(
               ? 'pending'
               : 'failed',
           illustration_generation_attempt_id: null,
+          illustration_generation_started_at: parkedPendingForPortraits ? new Date().toISOString() : null,
         })
         .eq('id', memoryId)
         .eq('illustration_generation_attempt_id', generationAttemptId)

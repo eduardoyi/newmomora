@@ -164,6 +164,24 @@ it('useMemories addMemory updates list on success', async () => {
 - Test failure paths: network error, 401, validation rejection, max tags exceeded.
 - Do not call production Supabase or OpenAI — use mocks or local `supabase start` in dedicated CI job only.
 
+### Durable illustration Workflow migration
+
+The illustration migration has a client/service contract test, Supabase Deno
+tests, and Worker tests. Cover both legacy `{ success: true }` and queued
+`{ success: true, queued: true, jobId }` dispatcher responses; the client must
+never write illustration status/timestamps during recovery. Unit coverage must
+exercise the recovery fallback clock (`started_at ?? updated_at ?? created_at`),
+pending recovery at 3 minutes, and generating recovery only at 5 minutes 30
+seconds. Worker/Deno coverage must exercise idempotent instance dispatch,
+deterministic-R2 replay, one combined OpenAI/upload step, attempt caps,
+moderation, total reference-load failure, stale publish rejection, and the
+4:59 publication versus 5:30 recovery boundary.
+
+Run a controlled staging smoke test for the `gpt-image-1.5` portrait fallback
+before production rollout. Do not use a real family memory, production API
+key, or account data as a test fixture; use a dedicated synthetic test family
+and remove its generated object afterward.
+
 ---
 
 ## Edge Function tests (Deno)

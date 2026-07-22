@@ -380,6 +380,12 @@ verify_jwt = false
 [functions.send-content-report-alert]
 verify_jwt = false
 
+# Cloudflare Workflows authenticates with a timestamped raw-body HMAC. JWT
+# verification must be disabled at the gateway so the bridge can verify that
+# signature itself before parsing or reading a job.
+[functions.workflow-illustration-bridge]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

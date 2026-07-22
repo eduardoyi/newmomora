@@ -404,6 +404,7 @@ Deno.test(
         );
         assertEquals(JSON.parse(call.body), {
           memoryId: candidates[index].id,
+          requestIntent: "recovery",
         });
       }
 

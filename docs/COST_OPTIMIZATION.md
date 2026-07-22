@@ -71,7 +71,7 @@ Image generation will likely be your **largest bill**.
 
 ### Model & quality
 
-- Use `gpt-image-2` with fallback to `gpt-image-1` — pick quality tier deliberately in prompts
+- Use `gpt-image-2` with fallback to `gpt-image-1.5` — pick quality tier deliberately in prompts
 - Emotion/voice: `gpt-4o-mini` + `gpt-4o-mini-transcribe` — keep on mini, not full models
 - Photo media emotion uses `gpt-4o-mini` vision on server-downscaled images (768px max edge) — cheap vs image generation
 

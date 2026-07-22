@@ -53,7 +53,7 @@ Deno.test('generateImage retries the fallback model after a non-abort provider f
   try {
     const bytes = await generateImage('A gentle scene');
     assertEquals(bytes, new Uint8Array([1, 2, 3]));
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1']);
+    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) {
@@ -230,7 +230,7 @@ Deno.test('multi-reference edit hedges a slow primary and returns the fallback r
       { fallbackHedgeDelayMs: 0 },
     );
     assertEquals(bytes, new Uint8Array([1, 2, 3]));
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1']);
+    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
@@ -317,7 +317,7 @@ Deno.test('editImageWithReferences retries the alternate edit model after a tran
       [{ bytes: new Uint8Array([1]), contentType: 'image/jpeg', filename: 'reference.jpg' }],
     );
     assertEquals(bytes, new Uint8Array([1, 2, 3]));
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1']);
+    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
@@ -333,7 +333,7 @@ Deno.test('reference edits never fall through to text-only image generation', as
         [{ bytes: new Uint8Array([1]), contentType: 'image/jpeg', filename: 'reference.jpg' }],
       ),
     );
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1']);
+    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
   });
 });
 
@@ -349,7 +349,7 @@ Deno.test('a hedged fallback policy rejection does not cancel a healthy primary 
     const model = String(body.get('model'));
     models.push(model);
 
-    if (model === 'gpt-image-1') {
+    if (model === 'gpt-image-1.5') {
       return new Response('policy refusal', { status: 400 });
     }
 
@@ -370,7 +370,7 @@ Deno.test('a hedged fallback policy rejection does not cancel a healthy primary 
       { fallbackHedgeDelayMs: 0 },
     );
     assertEquals(bytes, new Uint8Array([1, 2, 3]));
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1']);
+    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');

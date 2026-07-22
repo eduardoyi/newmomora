@@ -30,7 +30,7 @@ Memory journal for parents. Capture moments in text or voice; AI generates consi
 | Audio | `expo-audio` (not deprecated `expo-av`) |
 | Images (display) | `expo-image` |
 | Builds | EAS + development client (not Expo Go for SDK 56) |
-| AI | OpenAI: `gpt-4o-mini-transcribe`, `gpt-4o-mini`, `gpt-image-2` (fallback `gpt-image-1`) |
+| AI | OpenAI: `gpt-4o-mini-transcribe`, `gpt-4o-mini`, `gpt-image-2` (fallback `gpt-image-1.5`) |
 
 Install compatible versions: `npx expo install --fix`
 

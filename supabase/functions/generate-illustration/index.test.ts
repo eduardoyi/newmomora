@@ -5,6 +5,7 @@ import {
   getIllustrationImageRequestOptions,
   handleGenerateIllustration,
   ILLUSTRATION_GENERATION_TIMEOUT_MS,
+  isFreshMatchingWorkflowJob,
 } from './index.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -252,7 +253,33 @@ Deno.test('generate-illustration reserves 30 seconds after its 120-second pre-fi
   assertEquals(ILLUSTRATION_GENERATION_TIMEOUT_MS, 120_000);
 });
 
-Deno.test('generate-illustration applies the robust provider strategy only to three-or-more references', () => {
+Deno.test('workflow reuse requires a matching attempt and holds the lease through 5:30', () => {
+  const now = Date.parse('2026-07-21T12:00:00Z');
+  const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  assertEquals(isFreshMatchingWorkflowJob({
+    memoryAttemptId: attemptId,
+    jobAttemptId: attemptId,
+    startedAt: new Date(now - 5 * 60_000 - 29_000).toISOString(),
+    now,
+  }), true);
+  // A legacy status reset does not change the attempt token, so it reuses.
+  assertEquals(isFreshMatchingWorkflowJob({
+    memoryAttemptId: attemptId,
+    jobAttemptId: attemptId,
+    startedAt: new Date(now - 5 * 60_000 - 30_000).toISOString(),
+    now,
+  }), false);
+  // An edit/tag invalidation clears the attempt, so the old job is promptly
+  // superseded instead of being returned as a fake queued success.
+  assertEquals(isFreshMatchingWorkflowJob({
+    memoryAttemptId: null,
+    jobAttemptId: attemptId,
+    startedAt: new Date(now - 60_000).toISOString(),
+    now,
+  }), false);
+});
+
+Deno.test('generate-illustration uses medium only for three-or-more references and never hedges', () => {
   assertEquals(getIllustrationImageRequestOptions(1), {
     quality: undefined,
     outputFormat: 'webp',
@@ -263,7 +290,7 @@ Deno.test('generate-illustration applies the robust provider strategy only to th
     quality: 'medium',
     outputFormat: 'webp',
     outputCompression: 85,
-    fallbackHedgeDelayMs: 55_000,
+    fallbackHedgeDelayMs: undefined,
   });
 });
 

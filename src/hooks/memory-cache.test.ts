@@ -152,7 +152,7 @@ describe('patchMemoryInCaches', () => {
 });
 
 describe('setMemoryIllustrationPendingInCache / setMemoryEmotionInCache', () => {
-  it('patch illustration_status to pending with a fresh updated_at', () => {
+  it('patches illustration_status to pending without changing updated_at', () => {
     const queryClient = createQueryClient();
     const memory = buildMemory({ id: 'memory-1', illustration_status: 'failed', updated_at: '2020-01-01T00:00:00.000Z' });
     queryClient.setQueryData(
@@ -165,7 +165,10 @@ describe('setMemoryIllustrationPendingInCache / setMemoryEmotionInCache', () => 
     const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey(FAMILY_ID));
     const patched = list?.pages[0]?.memories[0];
     expect(patched?.illustration_status).toBe('pending');
-    expect(new Date(patched?.updated_at ?? 0).getTime()).toBeGreaterThan(Date.now() - 60_000);
+    expect(patched?.updated_at).toBe('2020-01-01T00:00:00.000Z');
+    expect(new Date(patched?.illustration_generation_started_at ?? 0).getTime()).toBeGreaterThan(
+      Date.now() - 60_000,
+    );
   });
 
   it('patches emotion', () => {

@@ -98,6 +98,7 @@ function applyStatusPatches(
       previous.illustration_status !== status.illustration_status ||
       previous.illustration_key !== status.illustration_key ||
       previous.illustration_generation_id !== status.illustration_generation_id ||
+      previous.illustration_generation_started_at !== status.illustration_generation_started_at ||
       previous.emotion !== status.emotion;
 
     if (!changed) {
@@ -108,6 +109,7 @@ function applyStatusPatches(
       illustration_status: status.illustration_status,
       illustration_key: status.illustration_key,
       illustration_generation_id: status.illustration_generation_id,
+      illustration_generation_started_at: status.illustration_generation_started_at,
       emotion: status.emotion,
       updated_at: status.updated_at,
     });

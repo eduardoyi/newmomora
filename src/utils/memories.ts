@@ -2,18 +2,23 @@ import { substituteLinkLabels, type LinkPreviewMap } from '@/utils/links';
 
 export const MAX_ILLUSTRATION_MEMBERS = 6;
 
+/** Pending rows can be recovered quickly when no durable job was ever dispatched. */
+export const ILLUSTRATION_PENDING_RECOVERY_MS = 3 * 60 * 1000;
+
 /**
- * Backstop for a worker that dies before its 120-second pre-finalization deadline can
- * clear the claim. Manager clients recover stale rows on their next load.
+ * Allows the Workflow its five-minute lease plus thirty seconds to publish a
+ * completed object before automatic recovery may supersede it.
  */
-export const ILLUSTRATION_GENERATION_STALE_MS = 3 * 60 * 1000;
+export const ILLUSTRATION_GENERATION_STALE_MS = 5 * 60 * 1000 + 30 * 1000;
 
 export type IllustrationStatus = 'none' | 'pending' | 'generating' | 'ready' | 'failed';
 
 export interface IllustrationRecoveryMemory {
   memory_type: string;
   illustration_status: string | null;
+  illustration_generation_started_at?: string | null;
   updated_at: string;
+  created_at?: string | null;
 }
 
 export type MemoryType = 'text_illustration' | 'text_only' | 'media';
@@ -155,35 +160,70 @@ export function validateMemoryMediaAssets(assets: MemoryMediaAssetInput[]): stri
 }
 
 export function isIllustrationGenerationStale(
-  memory: Pick<IllustrationRecoveryMemory, 'illustration_status' | 'updated_at'>,
+  memory: Pick<
+    IllustrationRecoveryMemory,
+    'illustration_status' | 'illustration_generation_started_at' | 'updated_at' | 'created_at'
+  >,
   now = Date.now(),
 ): boolean {
   if (memory.illustration_status !== 'generating') {
     return false;
   }
 
-  const updatedAt = new Date(memory.updated_at).getTime();
-  if (Number.isNaN(updatedAt)) {
+  const recoveryStartedAt = getIllustrationRecoveryStartedAt(memory);
+  if (recoveryStartedAt === null) {
     return false;
   }
 
-  return now - updatedAt >= ILLUSTRATION_GENERATION_STALE_MS;
+  return now - recoveryStartedAt >= ILLUSTRATION_GENERATION_STALE_MS;
 }
 
 export function isIllustrationPendingTooLong(
-  memory: Pick<IllustrationRecoveryMemory, 'illustration_status' | 'updated_at'>,
+  memory: Pick<
+    IllustrationRecoveryMemory,
+    'illustration_status' | 'illustration_generation_started_at' | 'updated_at' | 'created_at'
+  >,
   now = Date.now(),
 ): boolean {
   if (memory.illustration_status !== 'pending') {
     return false;
   }
 
-  const updatedAt = new Date(memory.updated_at).getTime();
-  if (Number.isNaN(updatedAt)) {
+  const recoveryStartedAt = getIllustrationRecoveryStartedAt(memory);
+  if (recoveryStartedAt === null) {
     return false;
   }
 
-  return now - updatedAt >= ILLUSTRATION_GENERATION_STALE_MS;
+  return now - recoveryStartedAt >= ILLUSTRATION_PENDING_RECOVERY_MS;
+}
+
+/**
+ * Older rows and a memory whose app died before dispatch may not have the
+ * dedicated server clock yet. `created_at` keeps those rows recoverable even
+ * when another asynchronous write changes `updated_at`.
+ */
+export function getIllustrationRecoveryStartedAt(
+  memory: Pick<
+    IllustrationRecoveryMemory,
+    'illustration_generation_started_at' | 'updated_at' | 'created_at'
+  >,
+): number | null {
+  for (const value of [
+    memory.illustration_generation_started_at,
+    memory.updated_at,
+    memory.created_at,
+  ]) {
+    if (!value) {
+      continue;
+    }
+
+    const parsed = new Date(value).getTime();
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
 }
 
 export function needsIllustrationRecovery(

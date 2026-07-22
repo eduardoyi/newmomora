@@ -119,13 +119,13 @@ export function setMemoryIllustrationPendingInCache(
   familyId: string | null | undefined,
   memoryId: string,
 ): void {
-  // Bump updated_at alongside the status (mirroring the server-side trigger)
-  // so needsIllustrationRecovery sees a fresh 'pending' -- without it the
-  // recovery effect would treat the patched row as stale-pending and retry
-  // in a loop.
+  // This is an optimistic UI-only patch, never a database write. Do not alter
+  // updated_at (which may reflect unrelated work); mirror the expected server
+  // generation clock so a successfully dispatched recovery does not loop
+  // before realtime/status polling observes the authoritative value.
   patchMemoryInCaches(queryClient, familyId, memoryId, {
     illustration_status: 'pending',
-    updated_at: new Date().toISOString(),
+    illustration_generation_started_at: new Date().toISOString(),
   });
 }
 

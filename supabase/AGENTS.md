@@ -39,16 +39,20 @@ Never commit `supabase/.env.local`, service role keys, or R2 credentials.
 
 ## R2 storage (not Supabase Storage)
 
-| R2 bucket | Purpose |
-|-----------|---------|
-| `momora-profile-pictures` | User-uploaded photos |
-| `momora-character-portraits` | AI portraits |
-| `momora-memory-illustrations` | AI memory art |
-| `momora-public-assets` | Style reference PNGs |
+Momora uses one **private** R2 bucket from `R2_BUCKET` (production:
+`momora-prod`) for all family-owned uploads. Object keys, not bucket names,
+distinguish profile photos, portrait versions, media, and memory
+illustrations. The three old `momora-profile-pictures`,
+`momora-character-portraits`, and `momora-memory-illustrations` buckets do
+not exist and must not be introduced in code or deployment bindings.
 
 - DB stores object **keys** (`profile_picture_key`, `illustration_key`, …).
-- `_shared/r2.ts` for S3 API; `get-upload-url` / `get-media-url` for client.
+- `_shared/r2.ts` uses the single `R2_BUCKET` S3 binding; `get-upload-url` /
+  `get-media-url` issue private presigned URLs.
 - Validate `{auth.uid()}/` prefix before presigning.
+- Style reference PNGs are a separate small public-assets concern, fetched
+  from `R2_PUBLIC_ASSETS_BASE_URL` as documented in TECH_SPEC; they are not
+  family content and are not served through the private bucket helper.
 - See [docs/COST_OPTIMIZATION.md](../docs/COST_OPTIMIZATION.md).
 
 ## Security

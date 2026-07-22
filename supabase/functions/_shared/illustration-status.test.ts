@@ -19,3 +19,14 @@ Deno.test('isIllustrationGenerationStale returns false for fresh generating stat
   assertEquals(isIllustrationGenerationStale('generating', freshUpdatedAt, now), false);
   assertEquals(isIllustrationGenerationStale('pending', freshUpdatedAt, now), false);
 });
+
+Deno.test('isIllustrationGenerationStale uses the dedicated clock over unrelated updated_at writes', () => {
+  const now = Date.parse('2026-05-28T12:00:00Z');
+  const oldStart = new Date(now - ILLUSTRATION_GENERATION_STALE_MS - 1).toISOString();
+  const recentUnrelatedUpdate = new Date(now - 1_000).toISOString();
+
+  assertEquals(
+    isIllustrationGenerationStale('generating', recentUnrelatedUpdate, oldStart, now),
+    true,
+  );
+});

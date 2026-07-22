@@ -2,7 +2,7 @@ module.exports = {
   preset: 'jest-expo',
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   testMatch: ['**/*.(test|integration.test).(ts|tsx)'],
-  testPathIgnorePatterns: ['/node_modules/', '/supabase/functions/', '/supabase/scripts/'],
+  testPathIgnorePatterns: ['/node_modules/', '/supabase/functions/', '/supabase/scripts/', '/cloudflare/memory-illustration-worker/test/'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
   },

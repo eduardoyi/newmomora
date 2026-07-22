@@ -696,10 +696,11 @@ describe('useMemories integration', () => {
       expect(mockedRetryMemoryIllustration).toHaveBeenCalledWith('memory-stale-1');
       expect(mockedRetryMemoryIllustration).toHaveBeenCalledTimes(1);
       expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
-      // The patched row must read as freshly pending, not stale-pending --
-      // otherwise the recovery effect would loop on it.
+      // The local cache mirrors the accepted dispatch clock rather than
+      // rewriting updated_at, so recovery cannot loop before polling sees the
+      // server-owned value.
       expect(
-        new Date(result.current.memories[0]?.updated_at ?? 0).getTime(),
+        new Date(result.current.memories[0]?.illustration_generation_started_at ?? 0).getTime(),
       ).toBeGreaterThan(Date.now() - 60_000);
     });
 
@@ -734,10 +735,11 @@ describe('useMemories integration', () => {
       });
       expect(mockedRetryMemoryIllustration).toHaveBeenCalledTimes(1);
       expect(result.current.memories[0]?.illustration_status).toBe('pending');
-      // Re-parked with a fresh updated_at, same as the 'generating' case --
+      // Re-parked with a fresh server-owned generation clock; pending uses
+      // its own recovery window rather than the generating threshold --
       // the next recovery attempt is >=3 minutes later, not a tight loop.
       expect(
-        new Date(result.current.memories[0]?.updated_at ?? 0).getTime(),
+        new Date(result.current.memories[0]?.illustration_generation_started_at ?? 0).getTime(),
       ).toBeGreaterThan(Date.now() - 60_000);
     });
   });

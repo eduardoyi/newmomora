@@ -154,6 +154,47 @@ describe('memories service integration', () => {
     expect(analyzeMemoryEmotion).toHaveBeenCalledWith('memory-1');
   });
 
+  it('dispatches an illustrated-memory create with initial intent and leaves emotion to the server', async () => {
+    const memoryRow = {
+      id: 'memory-initial-1',
+      user_id: 'user-1',
+      content: 'A sunny playground afternoon',
+      memory_date: '2026-05-24',
+      memory_type: 'text_illustration',
+      emotion: null,
+      illustration_key: null,
+      illustration_status: 'pending',
+      illustration_prompt: null,
+      media_key: null,
+      media_content_type: null,
+      created_at: '2026-05-24T00:00:00Z',
+      updated_at: '2026-05-24T00:00:00Z',
+    };
+    const memoriesBuilder = createQueryBuilder({ data: memoryRow, error: null });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') return memoriesBuilder;
+      if (table === 'memory_family_members') return tagsBuilder;
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await createMemory({
+      userId: 'user-1',
+      content: memoryRow.content,
+      memoryDate: memoryRow.memory_date,
+      taggedMemberIds: [],
+      memoryType: 'text_illustration',
+    });
+    await Promise.resolve();
+
+    expect(result.error).toBeNull();
+    expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
+    expect(generateMemoryIllustration).toHaveBeenCalledWith('memory-initial-1', undefined, {
+      forceRegenerate: false,
+      requestIntent: 'initial',
+    });
+  });
+
   it('creates media memories and rolls back storage on tag failure', async () => {
     const memoryRow = {
       id: 'memory-2',
@@ -755,7 +796,7 @@ describe('memories service integration', () => {
     );
   });
 
-  it('regenerates illustration for ready illustrated memories', async () => {
+  it('dispatches manual regeneration without directly resetting the illustration status', async () => {
     const fetchBuilder = createQueryBuilder({
       data: {
         memory_type: 'text_illustration',
@@ -764,13 +805,9 @@ describe('memories service integration', () => {
       },
       error: null,
     });
-    const updateBuilder = createQueryBuilder({ data: null, error: null });
-
-    let memoriesCall = 0;
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'memories') {
-        memoriesCall += 1;
-        return memoriesCall === 1 ? fetchBuilder : updateBuilder;
+        return fetchBuilder;
       }
 
       throw new Error(`Unexpected table ${table}`);
@@ -779,14 +816,15 @@ describe('memories service integration', () => {
     const result = await regenerateMemoryIllustration('memory-ready');
 
     expect(result.error).toBeNull();
-    expect(updateBuilder.update).toHaveBeenCalledWith({ illustration_status: 'pending' });
     expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
     expect(generateMemoryIllustration).toHaveBeenCalledWith('memory-ready', undefined, {
       forceRegenerate: true,
+      requestIntent: 'manual_regenerate',
     });
+    expect(fetchBuilder.update).not.toHaveBeenCalled();
   });
 
-  it('restarts illustration regeneration while generation is in progress', async () => {
+  it('allows a manual regeneration request while generation is in progress', async () => {
     const fetchBuilder = createQueryBuilder({
       data: {
         memory_type: 'text_illustration',
@@ -795,13 +833,9 @@ describe('memories service integration', () => {
       },
       error: null,
     });
-    const updateBuilder = createQueryBuilder({ data: null, error: null });
-
-    let memoriesCall = 0;
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'memories') {
-        memoriesCall += 1;
-        return memoriesCall === 1 ? fetchBuilder : updateBuilder;
+        return fetchBuilder;
       }
 
       throw new Error(`Unexpected table ${table}`);
@@ -810,11 +844,12 @@ describe('memories service integration', () => {
     const result = await regenerateMemoryIllustration('memory-busy');
 
     expect(result.error).toBeNull();
-    expect(updateBuilder.update).toHaveBeenCalledWith({ illustration_status: 'pending' });
     expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
     expect(generateMemoryIllustration).toHaveBeenCalledWith('memory-busy', undefined, {
       forceRegenerate: true,
+      requestIntent: 'manual_regenerate',
     });
+    expect(fetchBuilder.update).not.toHaveBeenCalled();
   });
 
   it('does not blindly change status when generate-illustration returns an error', async () => {
@@ -832,7 +867,9 @@ describe('memories service integration', () => {
       error: { message: 'Illustration generation timed out', code: 'generation_timeout' },
     });
 
-    const result = await runMemoryIllustrationPipeline('memory-timeout', { forceRegenerate: true });
+    const result = await runMemoryIllustrationPipeline('memory-timeout', {
+      requestIntent: 'manual_regenerate',
+    });
 
     expect(result?.code).toBe('generation_timeout');
     expect(updateBuilder.update).not.toHaveBeenCalled();
@@ -843,7 +880,9 @@ describe('memories service integration', () => {
     (supabase.from as jest.Mock).mockReturnValue(builder);
     (generateMemoryIllustration as jest.Mock).mockRejectedValueOnce(new Error('network lost'));
 
-    const result = await runMemoryIllustrationPipeline('memory-transport', { forceRegenerate: true });
+    const result = await runMemoryIllustrationPipeline('memory-transport', {
+      requestIntent: 'manual_regenerate',
+    });
 
     expect(result?.code).toBe('pipeline_failed');
     expect(builder.update).not.toHaveBeenCalled();
@@ -860,7 +899,9 @@ describe('memories service integration', () => {
       },
     });
 
-    const result = await runMemoryIllustrationPipeline('memory-deferred', { forceRegenerate: true });
+    const result = await runMemoryIllustrationPipeline('memory-deferred', {
+      requestIntent: 'manual_regenerate',
+    });
 
     // Deferral is not a failure -- the server already parked the memory at
     // pending/ready and will retrigger it; the fire-and-forget/recovery
@@ -928,7 +969,7 @@ describe('memories service integration', () => {
     expect(result.error?.code).toBe('invalid_memory_type');
   });
 
-  it('does not start the illustration pipeline when retry cannot mark the memory pending', async () => {
+  it('routes retry through the server without directly updating illustration status', async () => {
     const fetchBuilder = createQueryBuilder({
       data: {
         memory_type: 'text_illustration',
@@ -937,16 +978,9 @@ describe('memories service integration', () => {
       },
       error: null,
     });
-    const updateBuilder = createQueryBuilder({
-      data: null,
-      error: { message: 'memory update denied', code: '42501' },
-    });
-
-    let memoriesCall = 0;
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'memories') {
-        memoriesCall += 1;
-        return memoriesCall === 1 ? fetchBuilder : updateBuilder;
+        return fetchBuilder;
       }
 
       throw new Error(`Unexpected table ${table}`);
@@ -954,8 +988,12 @@ describe('memories service integration', () => {
 
     const result = await retryMemoryIllustration('memory-update-denied');
 
-    expect(result.error?.message).toBe('memory update denied');
-    expect(generateMemoryIllustration).not.toHaveBeenCalled();
+    expect(result.error).toBeNull();
+    expect(fetchBuilder.update).not.toHaveBeenCalled();
+    expect(generateMemoryIllustration).toHaveBeenCalledWith('memory-update-denied', undefined, {
+      forceRegenerate: false,
+      requestIntent: 'recovery',
+    });
   });
 
   it('switches an illustrated memory to text-only without clearing its illustration', async () => {
@@ -1064,7 +1102,11 @@ describe('memories service integration', () => {
       memory_type: 'text_illustration',
       illustration_status: 'pending',
     });
-    expect(analyzeMemoryEmotion).toHaveBeenCalledWith('memory-enable-ai');
+    expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
+    expect(generateMemoryIllustration).toHaveBeenCalledWith('memory-enable-ai', undefined, {
+      forceRegenerate: false,
+      requestIntent: 'initial',
+    });
   });
 
   it('reveals a retained illustration without generating a replacement', async () => {
@@ -1750,7 +1792,7 @@ describe('memories service integration', () => {
 
       expect(error).toBeNull();
       expect(memoriesBuilder.select).toHaveBeenCalledWith(
-        'id, illustration_status, illustration_key, illustration_generation_id, emotion, updated_at',
+        'id, illustration_status, illustration_key, illustration_generation_id, illustration_generation_started_at, emotion, updated_at',
       );
       expect(memoriesBuilder.in).toHaveBeenCalledWith('id', ['memory-1']);
       expect(data).toHaveLength(1);

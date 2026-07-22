@@ -4,6 +4,7 @@ import type { Database } from '@/types/database';
 import {
   analyzeMemoryEmotion,
   generateMemoryIllustration,
+  type IllustrationRequestIntent,
 } from '@/services/ai';
 import { deleteStorageObject } from '@/services/media';
 import type { FamilyMember } from '@/services/family-members';
@@ -463,6 +464,7 @@ export interface MemoryGenerationStatusRow {
   illustration_status: Memory['illustration_status'];
   illustration_key: string | null;
   illustration_generation_id: string | null;
+  illustration_generation_started_at: string | null;
   emotion: string | null;
   updated_at: string;
 }
@@ -477,7 +479,9 @@ export async function fetchMemoryGenerationStatuses(memoryIds: string[]): Promis
 
   const { data, error } = await supabase
     .from('memories')
-    .select('id, illustration_status, illustration_key, illustration_generation_id, emotion, updated_at')
+    .select(
+      'id, illustration_status, illustration_key, illustration_generation_id, illustration_generation_started_at, emotion, updated_at',
+    )
     .in('id', memoryIds);
 
   if (error) {
@@ -717,7 +721,7 @@ async function replaceMemoryTags(memoryId: string, taggedMemberIds: string[]): P
 }
 
 interface MemoryIllustrationPipelineOptions {
-  forceRegenerate?: boolean;
+  requestIntent?: IllustrationRequestIntent;
   /** Called when generate-illustration defers (PORTRAITS_NOT_READY) because a
    * tagged member's character portrait is still generating. The pipeline
    * itself always resolves this case as success (see below) -- only
@@ -760,27 +764,13 @@ export async function runMemoryIllustrationPipeline(
   options?: MemoryIllustrationPipelineOptions,
 ): Promise<ServiceError | null> {
   try {
-    let colorPalette: string | undefined;
-
-    if (options?.forceRegenerate) {
-      const { error: fetchError } = await supabase
-        .from('memories')
-        .select('emotion')
-        .eq('id', memoryId)
-        .maybeSingle();
-
-      if (fetchError) {
-        return mapSupabaseError(fetchError);
-      }
-    } else {
-      const { data: emotionData } = await analyzeEmotionWithRetry(memoryId);
-      colorPalette = emotionData?.colorPalette;
-    }
-
     const { error: illustrationError } = await generateMemoryIllustration(
       memoryId,
-      colorPalette,
-      { forceRegenerate: options?.forceRegenerate },
+      undefined,
+      {
+        requestIntent: options?.requestIntent ?? 'initial',
+        forceRegenerate: options?.requestIntent === 'manual_regenerate',
+      },
     );
 
     if (illustrationError) {
@@ -1245,7 +1235,9 @@ export async function deleteMemory(memoryId: string): Promise<{ error: ServiceEr
 export async function retryMemoryIllustration(memoryId: string): Promise<{ error: ServiceError | null }> {
   const { data: memory, error: fetchError } = await supabase
     .from('memories')
-    .select('memory_type, illustration_status, updated_at')
+    .select(
+      'memory_type, illustration_status, illustration_generation_started_at, updated_at, created_at',
+    )
     .eq('id', memoryId)
     .maybeSingle();
 
@@ -1270,8 +1262,6 @@ export async function retryMemoryIllustration(memoryId: string): Promise<{ error
     return { error: null };
   }
 
-  const forceRegenerate = memory.illustration_status === 'generating';
-
   if (
     memory.illustration_status === 'generating' &&
     !isIllustrationGenerationStale(memory)
@@ -1279,17 +1269,14 @@ export async function retryMemoryIllustration(memoryId: string): Promise<{ error
     return { error: null };
   }
 
-  const { error: updateError } = await supabase
-    .from('memories')
-    .update({ illustration_status: 'pending' })
-    .eq('id', memoryId);
-
-  if (updateError) {
-    return { error: mapSupabaseError(updateError) };
-  }
-
-  void runMemoryIllustrationPipeline(memoryId, { forceRegenerate });
-  return { error: null };
+  // The dispatcher owns state transitions. In particular, a legacy client
+  // resetting status must not be able to discard a Workflow's publish CAS.
+  // Await the dispatch response before the caller refreshes its local clock:
+  // a failed/never-accepted dispatch must remain immediately recoverable.
+  const pipelineError = await runMemoryIllustrationPipeline(memoryId, {
+    requestIntent: 'recovery',
+  });
+  return { error: pipelineError };
 }
 
 export async function regenerateMemoryIllustration(
@@ -1297,7 +1284,7 @@ export async function regenerateMemoryIllustration(
 ): Promise<{ error: ServiceError | null }> {
   const { data: memory, error: fetchError } = await supabase
     .from('memories')
-    .select('memory_type, illustration_status, updated_at')
+    .select('memory_type, illustration_status')
     .eq('id', memoryId)
     .maybeSingle();
 
@@ -1318,18 +1305,9 @@ export async function regenerateMemoryIllustration(
     };
   }
 
-  const { error: updateError } = await supabase
-    .from('memories')
-    .update({ illustration_status: 'pending' })
-    .eq('id', memoryId);
-
-  if (updateError) {
-    return { error: mapSupabaseError(updateError) };
-  }
-
   let deferredForPortraits = false;
   const pipelineError = await runMemoryIllustrationPipeline(memoryId, {
-    forceRegenerate: true,
+    requestIntent: 'manual_regenerate',
     onDeferred: () => {
       deferredForPortraits = true;
     },
