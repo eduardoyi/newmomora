@@ -103,6 +103,10 @@ Supabase service-role key: it receives only a job ID and fetches short-lived,
 signed job input from the Supabase bridge. Supabase remains the authority for
 claiming and publishing a memory illustration.
 
+See [durable-ai-generation-workflows.md](./durable-ai-generation-workflows.md)
+for the reusable trust-boundary, idempotency, retry, rollout, and
+portrait-migration lessons from this production cutover.
+
 ---
 
 ## 2. Database Schema
@@ -769,7 +773,7 @@ Generates or regenerates the character portrait for one immutable portrait versi
 5. Resolve style reference from R2 public assets (`momora-public-assets/_assets/styles/{token}.png`); fetch via `R2_PUBLIC_ASSETS_BASE_URL`
 6. Build prompt: age, gender, style description, identity/style reference instructions
 7. Call OpenAI image edit API with person photo + style reference (`gpt-image-2`, fallback `gpt-image-1.5`)
-8. Enforce one 90-second deadline across the primary/fallback image calls so the function still has time to persist a failed attempt before the Edge runtime shuts down
+8. Enforce one 120-second deadline across the primary/fallback image calls so the function still has time to persist a failed attempt before the Edge runtime shuts down
 9. Upload result under `/portrait/{attemptId}.webp`
 10. Publish only if the token still owns the claim. On regeneration failure, retain the previous ready output and status.
 11. **Retrigger dependent memory illustrations.** After the background task reaches any of its three exit points — the finish RPC's success path, the catch-path failure RPC, or a claim-lost bare return during finish-error reconciliation — it fires a best-effort `retriggerPendingIllustrations()`: query this family's `text_illustration` memories at `illustration_status = 'pending'` with `created_at` at least 30 seconds old (excludes a brand-new memory whose own client pipeline hasn't reached `generate-illustration` yet), ordered `created_at desc`, limited to 3; invoke `generate-illustration` for each via HTTP in parallel (`Promise.allSettled`), forwarding this request's own `Authorization` header. Errors are caught and logged, never thrown — this must not affect portrait commit/cleanup, which happens first. See §4.3 "Illustration deferral" for why a `pending` memory can be waiting on this portrait.

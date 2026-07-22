@@ -3,7 +3,7 @@
 Age-aware profile-photo and character-portrait history for each person in a family.
 
 **Status:** `done`
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-22
 **PRD reference:** [PRD §6.2 Family Profiles](../PRD.md)
 
 ## Overview
@@ -22,7 +22,7 @@ A family member can have many immutable source-photo/AI-portrait pairs over time
 - Library photos use trustworthy EXIF shutter/digitized dates when present. Otherwise the date starts at the acting user's local today and remains editable. Camera photos use today.
 - Portrait dates cannot predate the member's DOB or exceed the acting user's current local date. Multiple photos on the same date are allowed.
 - A failed or in-progress generation never displaces an older ready portrait. Regeneration keeps the previous output visible until a new attempt succeeds.
-- Image generation has a 90-second server deadline so ordinary OpenAI hangs persist `failed` before the Edge runtime shuts down. If the runtime is terminated too abruptly for cleanup, the client reclassifies the abandoned attempt as stalled after the existing 15-minute claim-reclaim window and exposes **Try again**.
+- Image generation has a 120-second server deadline so ordinary OpenAI hangs persist `failed` before the Edge runtime shuts down. If the runtime is terminated too abruptly for cleanup, the client reclassifies the abandoned attempt as stalled after the existing 15-minute claim-reclaim window and exposes **Try again**.
 - There is no automatic “better portrait available” prompt and no automatic regeneration of old memories when portrait history changes.
 - Viewers can see the timeline but cannot mutate it.
 
@@ -90,7 +90,7 @@ The same resolver is used for today's family avatar, portrait-timeline **Current
 |----------------|-------|-------------------------|------|
 | `create_family_member_portrait_version` | version id, member id, date/source, exact source key | Validates family, local date, DOB, and caller-owned key; inserts row | authenticated owner/manager |
 | `update_family_member_portrait_version_date` | version id, date | Validates local date/DOB and changes source to `manual` | authenticated owner/manager |
-| `generate-portrait-illustration` | `{ portraitVersionId }` | Claims an attempt, returns `{ success: true, queued: true }`, then generates in a background task within a 90-second image deadline; publishes by token and retains prior output on failure | JWT owner/manager |
+| `generate-portrait-illustration` | `{ portraitVersionId }` | Claims an attempt, returns `{ success: true, queued: true }`, then generates in a background task within a 120-second image deadline; publishes by token and retains prior output on failure | JWT owner/manager |
 | `delete-portrait-version` | `{ portraitVersionId }` | Claims deletion, removes all version objects, then deletes row | JWT owner/manager |
 | `delete-family-member` | `{ familyMemberId }` | Enumerates legacy and version objects before deleting the member | JWT owner/manager |
 | `get-upload-url` | version photo key, JPEG, family id | Presigns caller-owned source upload | JWT owner/manager |
@@ -129,6 +129,11 @@ The new client may fall back to legacy member columns only during controlled rol
 
 ## Extension guide
 
+- Before moving portrait generation to durable execution, follow
+  [Durable AI generation workflow playbook](../durable-ai-generation-workflows.md),
+  especially its portrait-specific blueprint. Reuse the proven execution and
+  signing patterns without flattening portrait claims, retained-output rules,
+  deletion races, or dependent-memory retriggers into the memory state machine.
 - Reuse `resolvePortraitVersion`; do not implement local “closest portrait” variants.
 - Add new visual consumers by loading versions in batches and resolving against that consumer's target date.
 - Preserve immutable source keys and unique output-attempt keys.
@@ -145,7 +150,7 @@ The new client may fall back to legacy member columns only during controlled rol
 - Multiple same-day versions are valid and deterministic.
 - A member cannot lose their only version or last usable portrait through version deletion. Whole-member deletion uses a dedicated path that performs storage cleanup before the FK cascade.
 - Generation and deletion claims are service-role-only DB operations after Edge Function JWT/role authorization.
-- A normal image timeout is caught at 90 seconds and persisted as failed. Abrupt runtime termination is the exceptional fallback: after 15 minutes the UI derives a stalled state from `generation_started_at` (or `updated_at` for a never-claimed pending row), stops polling, and offers retry without changing the database itself.
+- A normal image timeout is caught at 120 seconds and persisted as failed. Abrupt runtime termination is the exceptional fallback: after 15 minutes the UI derives a stalled state from `generation_started_at` (or `updated_at` for a never-claimed pending row), stops polling, and offers retry without changing the database itself.
 - Hard-delete account cleanup must retain version objects referenced by surviving shared families, even when those keys live under the deleted user's prefix.
 - Family/member deletion and account-retention sweeps fail closed when storage-reference enumeration fails; database cascades must never proceed from a partial reference set.
 

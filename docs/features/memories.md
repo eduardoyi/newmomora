@@ -1,7 +1,7 @@
 # Feature: Memories & illustrations
 
 **Status:** `done`
-**Last updated:** 2026-07-20
+**Last updated:** 2026-07-22
 **PRD reference:** §6.3 Memories, §6.4 Illustrations
 
 ## Overview
@@ -255,6 +255,10 @@ only a job ID, fetches private inputs during the generation step, calls OpenAI,
 and uploads bytes directly to the existing private R2 bucket. It publishes
 through a signed Supabase bridge whose attempt-ID CAS prevents stale work from
 overwriting an edit or a newer regeneration.
+
+See [Durable AI generation workflow playbook](../durable-ai-generation-workflows.md)
+for the design review findings, production-cutover lessons, and reusable
+portrait-migration blueprint behind this implementation.
 
 - New clients send `requestIntent: 'initial'`, `'recovery'`, or
   `'manual_regenerate'`; the latter may supersede immediately. The service
