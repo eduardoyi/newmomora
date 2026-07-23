@@ -7,9 +7,12 @@ export type BridgeOperation =
   | 'get_input'
   | 'reserve_attempt'
   | 'record_prompt'
+  | 'authorize_upload'
+  | 'record_upload_complete'
   | 'publish'
   | 'fail'
-  | 'reconcile';
+  | 'reconcile'
+  | 'retrigger_memories';
 
 export interface ReferenceCandidate {
   memberId: string;
@@ -56,6 +59,22 @@ export interface BridgeReserveAttemptResponse {
   reserved: boolean;
 }
 
+export interface BridgeAuthorizeUploadResponse {
+  authorized: boolean;
+  uploadToken: string | null;
+  existingLease: boolean;
+}
+
+export interface BridgeRecordUploadCompleteResponse {
+  completed: boolean;
+}
+
+export interface BridgeFailResponse {
+  failed: boolean;
+  outputKey: string | null;
+  deleteOutput: boolean;
+}
+
 export interface BridgePublishResponse {
   published: boolean;
   oldIllustrationKey: string | null;
@@ -70,4 +89,50 @@ export interface BridgeReconcileResponse {
 
 export interface WorkflowDispatchPayload {
   jobId: string;
+}
+
+/**
+ * Portrait input is frozen by the Supabase dispatcher. It is read only within
+ * the Workflow's sensitive image-generation step and must never be returned
+ * from a step or logged.
+ */
+export interface PortraitWorkflowJobInput {
+  jobId: string;
+  outputKey: string;
+  oldPortraitKey: string | null;
+  providerDeadlineAt: string;
+  prompt: string;
+  sourcePhotoKey: string;
+  styleReferenceKey: string;
+}
+
+export interface BridgePortraitGetInputResponse {
+  job: PortraitWorkflowJobInput;
+}
+
+export interface BridgePortraitReserveAttemptResponse {
+  reserved: boolean;
+}
+
+export interface BridgePortraitPublishResponse {
+  published: boolean;
+  oldPortraitKey: string | null;
+  deleteOutput: boolean;
+}
+
+export interface BridgePortraitReconcileResponse {
+  published: boolean;
+  oldPortraitKey: string | null;
+  deleteOutput: boolean;
+}
+
+export interface BridgePortraitFailResponse {
+  failed: boolean;
+  outputKey: string | null;
+  deleteOutput: boolean;
+}
+
+export interface PortraitLoadedReferences {
+  style: LoadedReference;
+  source: LoadedReference;
 }

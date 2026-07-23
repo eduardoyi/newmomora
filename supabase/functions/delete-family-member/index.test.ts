@@ -20,7 +20,12 @@ function request(): Request {
 function dependencies(
   role: 'owner' | 'manager' | 'viewer',
   calls: string[],
-  options: { portraitLookupError?: boolean } = {},
+  options: {
+    portraitLookupError?: boolean;
+    freshGeneration?: boolean;
+    storageError?: boolean;
+    fenceCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+  } = {},
 ) {
   const member = {
     id: MEMBER_ID,
@@ -29,6 +34,14 @@ function dependencies(
     illustrated_profile_key: LEGACY_PORTRAIT,
   };
   const client = {
+    rpc: async (name: string, args: Record<string, unknown>) => {
+      options.fenceCalls?.push({ name, args });
+      calls.push(`rpc:${name}`);
+      if (name === 'claim_family_member_deletion_fence' && options.freshGeneration) {
+        return { data: null, error: { message: 'Fresh portrait generation is still active' } };
+      }
+      return { data: true, error: null };
+    },
     from(table: string) {
       if (table === 'family_members') {
         return {
@@ -58,6 +71,7 @@ function dependencies(
     getCallerFamilyRole: async () => role,
     listObjectKeys: async (prefix: string) => {
       calls.push(`list:${prefix}`);
+      if (options.storageError) throw new Error('R2 unavailable');
       return [VERSION_PHOTO, `${prefix}portrait/55555555-5555-4555-8555-555555555555.webp`];
     },
     deleteObject: async (key: string) => {
@@ -97,6 +111,7 @@ Deno.test('delete-family-member removes legacy and every version-prefix object b
   const prefix = `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/`;
   assertEquals(response.status, 200);
   assertEquals(calls, [
+    'rpc:claim_family_member_deletion_fence',
     `list:${prefix}`,
     `delete:${LEGACY_PHOTO}`,
     `delete:${LEGACY_PORTRAIT}`,
@@ -114,5 +129,45 @@ Deno.test('delete-family-member keeps the row and storage when portrait enumerat
   );
 
   assertEquals(response.status, 500);
-  assertEquals(calls, []);
+  assertEquals(calls, [
+    'rpc:claim_family_member_deletion_fence',
+    'rpc:release_family_member_deletion_fence',
+  ]);
+});
+
+Deno.test('delete-family-member blocks a fresh portrait workflow before R2 listing', async () => {
+  const calls: string[] = [];
+  const response = await handleDeleteFamilyMember(
+    request(),
+    dependencies('manager', calls, { freshGeneration: true }),
+  );
+
+  const body = await response.json();
+  assertEquals(response.status, 409);
+  assertEquals(body.code, 'PORTRAIT_GENERATION_IN_PROGRESS');
+  assertEquals(calls, ['rpc:claim_family_member_deletion_fence']);
+});
+
+Deno.test('delete-family-member releases the exact fence when R2 cleanup fails', async () => {
+  const calls: string[] = [];
+  const fenceCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const response = await handleDeleteFamilyMember(
+    request(),
+    dependencies('manager', calls, { storageError: true, fenceCalls }),
+  );
+
+  assertEquals(response.status, 500);
+  assertEquals(calls, [
+    'rpc:claim_family_member_deletion_fence',
+    `list:${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/`,
+    'rpc:release_family_member_deletion_fence',
+  ]);
+  assertEquals(fenceCalls.map((call) => call.name), [
+    'claim_family_member_deletion_fence',
+    'release_family_member_deletion_fence',
+  ]);
+  assertEquals(
+    fenceCalls[1].args.p_delete_token,
+    fenceCalls[0].args.p_delete_token,
+  );
 });

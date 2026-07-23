@@ -8,13 +8,14 @@ export interface PortraitFreshnessCandidate extends PortraitVersionCandidate {
 
 const IN_FLIGHT_STATUSES = new Set(['pending', 'generating']);
 
-// Mirrors claim_family_member_portrait_generation's own reclaim window
-// (migration 20260715120000:251-252) so a dead claim isn't deferred forever.
-export const PORTRAIT_CLAIM_RECLAIM_WINDOW_MS = 15 * 60 * 1000;
+// Mirrors the Cloudflare portrait Workflow's five-minute application lease
+// plus 30 seconds for publication/recovery. A dead claim must not defer a
+// memory forever.
+export const PORTRAIT_CLAIM_RECLAIM_WINDOW_MS = 5 * 60 * 1000 + 30_000;
 
 // Covers a lost creation-time fire-and-forget invoke (useFamilyMembers.ts:
 // 31-43) without waiting indefinitely on a claim that may never arrive.
-export const PORTRAIT_UNCLAIMED_PENDING_GRACE_MS = 5 * 60 * 1000;
+export const PORTRAIT_UNCLAIMED_PENDING_GRACE_MS = 3 * 60 * 1000;
 
 /**
  * A portrait version counts as fresh in-flight only while a completion is

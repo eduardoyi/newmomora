@@ -22,24 +22,21 @@ function fakeServiceClient(options: {
   memberships: Record<string, Array<{ user_id: string }>>;
   profiles: Array<{ id: string; expo_push_token: string | null }>;
 }) {
-  const familyUpdates: Array<{ id: string; deleted_at: unknown }> = [];
+  const familyLookups: Array<{ ownerId: string; operationToken: string }> = [];
 
   return {
-    familyUpdates,
+    familyLookups,
     client: {
       from(table: string) {
         if (table === 'families') {
           return {
             select: () => ({
-              eq: () => ({
-                is: async () => ({ data: options.ownedFamilies, error: null }),
+              eq: (_column: string, ownerId: string) => ({
+                eq: async (_tokenColumn: string, operationToken: string) => {
+                  familyLookups.push({ ownerId, operationToken });
+                  return { data: options.ownedFamilies, error: null };
+                },
               }),
-            }),
-            update: (values: { deleted_at: unknown }) => ({
-              eq: async (_col: string, id: string) => {
-                familyUpdates.push({ id, deleted_at: values.deleted_at });
-                return { error: null };
-              },
             }),
           };
         }
@@ -74,8 +71,8 @@ function fakeServiceClient(options: {
   };
 }
 
-Deno.test('softDeleteOwnedFamiliesAndNotify soft-deletes every owned family and pushes only to other members with a token', async () => {
-  const { client, familyUpdates } = fakeServiceClient({
+Deno.test('softDeleteOwnedFamiliesAndNotify notifies only families marked by the exact schedule token', async () => {
+  const { client, familyLookups } = fakeServiceClient({
     ownedFamilies: [{ id: FAMILY_A }, { id: FAMILY_B }],
     memberships: {
       [FAMILY_A]: [{ user_id: MEMBER_WITH_TOKEN }, { user_id: MEMBER_WITHOUT_TOKEN }],
@@ -96,14 +93,15 @@ Deno.test('softDeleteOwnedFamiliesAndNotify soft-deletes every owned family and 
   };
 
   try {
-    await softDeleteOwnedFamiliesAndNotify(client as never, OWNER_ID);
+    await softDeleteOwnedFamiliesAndNotify(client as never, OWNER_ID, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
   } finally {
     globalThis.fetch = originalFetch;
   }
 
-  // Both owned families get soft-deleted.
-  assertEquals(familyUpdates.length, 2);
-  assertEquals(familyUpdates.every((update) => typeof update.deleted_at === 'string'), true);
+  assertEquals(familyLookups, [{
+    ownerId: OWNER_ID,
+    operationToken: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  }]);
 
   // Only the member WITH a push token gets notified; the tokenless member
   // and family B (no other members) are silently skipped.
@@ -111,14 +109,14 @@ Deno.test('softDeleteOwnedFamiliesAndNotify soft-deletes every owned family and 
   assertEquals((pushCalls[0] as { to: string }).to, 'ExponentPushToken[abc]');
 });
 
-Deno.test('softDeleteOwnedFamiliesAndNotify is a no-op when the caller owns no families', async () => {
-  const { client, familyUpdates } = fakeServiceClient({
+Deno.test('softDeleteOwnedFamiliesAndNotify is a no-op when the schedule owns no active family rows', async () => {
+  const { client, familyLookups } = fakeServiceClient({
     ownedFamilies: [],
     memberships: {},
     profiles: [],
   });
 
-  await softDeleteOwnedFamiliesAndNotify(client as never, OWNER_ID);
+  await softDeleteOwnedFamiliesAndNotify(client as never, OWNER_ID, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
 
-  assertEquals(familyUpdates.length, 0);
+  assertEquals(familyLookups.length, 1);
 });

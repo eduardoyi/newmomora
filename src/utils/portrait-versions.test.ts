@@ -1,9 +1,13 @@
 import {
   extractPortraitReferenceDateIso,
+  getPortraitGenerationRecoveryKey,
   isPortraitGenerationStalled,
+  PORTRAIT_PENDING_RECOVERY_MS,
   PORTRAIT_GENERATION_STALE_MS,
   resolveMemberPortraitFields,
   resolvePortraitVersion,
+  shouldPollPortraitVersions,
+  shouldRecoverPortraitGeneration,
   validatePortraitReferenceDate,
   type FamilyMemberPortraitVersion,
 } from '@/utils/portrait-versions';
@@ -49,7 +53,7 @@ describe('portrait generation recovery', () => {
     expect(isPortraitGenerationStalled(version('pending', '2026-01-01', {
       illustrated_profile_key: null,
       illustrated_profile_status: 'pending',
-      updated_at: staleStartedAt,
+      created_at: new Date(nowMs - PORTRAIT_PENDING_RECOVERY_MS).toISOString(),
     }), nowMs)).toBe(true);
   });
 
@@ -59,6 +63,74 @@ describe('portrait generation recovery', () => {
       generation_started_at: new Date(nowMs - 60_000).toISOString(),
     }), nowMs)).toBe(false);
     expect(isPortraitGenerationStalled(version('ready', '2026-01-01'), nowMs)).toBe(false);
+  });
+
+  it('uses the three-minute pending boundary and five-minute-thirty claim boundary', () => {
+    const pending = version('pending-boundary', '2026-01-01', {
+      illustrated_profile_key: null,
+      illustrated_profile_status: 'pending',
+      created_at: new Date(nowMs - PORTRAIT_PENDING_RECOVERY_MS).toISOString(),
+    });
+    const pendingFresh = {
+      ...pending,
+      created_at: new Date(nowMs - PORTRAIT_PENDING_RECOVERY_MS + 1).toISOString(),
+    };
+    const claimed = version('claimed-boundary', '2026-01-01', {
+      generation_token: 'attempt-boundary',
+      generation_started_at: new Date(nowMs - PORTRAIT_GENERATION_STALE_MS).toISOString(),
+    });
+
+    expect(shouldRecoverPortraitGeneration(pending, nowMs)).toBe(true);
+    expect(shouldRecoverPortraitGeneration(pendingFresh, nowMs)).toBe(false);
+    expect(shouldRecoverPortraitGeneration(claimed, nowMs)).toBe(true);
+  });
+
+  it('never automatically recovers a failed version and gives each attempt a stable key', () => {
+    const failed = version('failed', '2026-01-01', {
+      illustrated_profile_key: null,
+      illustrated_profile_status: 'failed',
+      updated_at: staleStartedAt,
+    });
+    const pending = version('pending-key', '2026-01-01', {
+      illustrated_profile_key: null,
+      illustrated_profile_status: 'pending',
+      created_at: staleStartedAt,
+    });
+    const claimed = {
+      ...pending,
+      generation_token: 'attempt-2',
+      generation_started_at: staleStartedAt,
+    };
+
+    expect(shouldRecoverPortraitGeneration(failed, nowMs)).toBe(false);
+    expect(getPortraitGenerationRecoveryKey(pending)).toBe(`pending-key:${staleStartedAt}`);
+    expect(getPortraitGenerationRecoveryKey(claimed)).toBe('pending-key:attempt-2');
+  });
+
+  it('keeps polling fresh work but stops polling once manual attention is required', () => {
+    const freshPending = version('fresh-pending', '2026-01-01', {
+      illustrated_profile_key: null,
+      illustrated_profile_status: 'pending',
+      created_at: new Date(nowMs - 60_000).toISOString(),
+    });
+    const stalledPending = {
+      ...freshPending,
+      created_at: new Date(nowMs - PORTRAIT_PENDING_RECOVERY_MS).toISOString(),
+    };
+
+    expect(shouldPollPortraitVersions([freshPending], nowMs)).toBe(true);
+    expect(shouldPollPortraitVersions([stalledPending], nowMs)).toBe(false);
+  });
+
+  it('does not let a newer unrelated update postpone never-dispatched pending recovery', () => {
+    const pending = version('pending-created-clock', '2026-01-01', {
+      illustrated_profile_key: null,
+      illustrated_profile_status: 'pending',
+      created_at: new Date(nowMs - PORTRAIT_PENDING_RECOVERY_MS).toISOString(),
+      updated_at: new Date(nowMs - 1_000).toISOString(),
+    });
+
+    expect(shouldRecoverPortraitGeneration(pending, nowMs)).toBe(true);
   });
 });
 

@@ -1,5 +1,10 @@
 import { assertEquals } from 'jsr:@std/assert@1';
-import { collectFamilyStorageKeys, handleHardDeleteExpiredAccounts, resolveReferencedKeys } from './index.ts';
+import {
+  collectFamilyStorageKeys,
+  deleteOwnedFamilies,
+  handleHardDeleteExpiredAccounts,
+  resolveReferencedKeys,
+} from './index.ts';
 
 Deno.test('hard-delete-expired-accounts rejects missing cron secret', async () => {
   const response = await handleHardDeleteExpiredAccounts(
@@ -11,8 +16,353 @@ Deno.test('hard-delete-expired-accounts rejects missing cron secret', async () =
   assertEquals(response.status, 401);
 });
 const FAMILY_ID = '55555555-5555-4555-8555-555555555555';
+const SECOND_FAMILY_ID = '66666666-6666-4666-8666-666666666666';
 const OWNER_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_MEMBER_ID = '22222222-2222-4222-8222-222222222222';
+
+function createMultiFamilyDeleteSupabase(calls: string[]) {
+  const claimedFences: Array<{ familyId: string; token: string }> = [];
+  const releasedFences: Array<{ familyId: string; token: string }> = [];
+  const finalizedFences: Array<{ familyId: string; token: string }> = [];
+  const familyIds = [FAMILY_ID, SECOND_FAMILY_ID];
+
+  return {
+    claimedFences,
+    releasedFences,
+    finalizedFences,
+    client: {
+      from(table: string) {
+        if (table === 'families') {
+          return {
+            select: () => ({
+              eq: async () => ({ data: familyIds.map((id) => ({ id })), error: null }),
+            }),
+          };
+        }
+
+        if (
+          table === 'memories' || table === 'family_members' ||
+          table === 'memory_illustration_jobs' || table === 'portrait_generation_jobs'
+        ) {
+          return {
+            select: () => ({
+              eq: async () => ({ data: [], error: null }),
+            }),
+          };
+        }
+
+        if (table === 'family_member_portrait_versions') {
+          return {
+            select: () => ({
+              eq: async (_column: string, familyId: string) => ({
+                data: [{
+                  profile_picture_key: `${familyId}/family/member/portraits/version/photo.jpg`,
+                  illustrated_profile_key: null,
+                  generation_output_key: null,
+                }],
+                error: null,
+              }),
+            }),
+          };
+        }
+
+        throw new Error(`Unexpected table ${table}`);
+      },
+      rpc: async (name: string, args: Record<string, unknown>) => {
+        if (name === 'claim_family_deletion_fence') {
+          const fence = {
+            familyId: args.p_family_id as string,
+            token: args.p_delete_token as string,
+          };
+          claimedFences.push(fence);
+          calls.push(`claim:${fence.familyId}`);
+          return { data: true, error: null };
+        }
+        if (name === 'release_family_deletion_fence') {
+          const fence = {
+            familyId: args.p_family_id as string,
+            token: args.p_delete_token as string,
+          };
+          releasedFences.push(fence);
+          calls.push(`release:${fence.familyId}`);
+          return { data: true, error: null };
+        }
+        if (name === 'finish_owned_family_deletion_fences') {
+          const fences = (args.p_fences as Array<{ family_id: string; delete_token: string }>).map((fence) => ({
+            familyId: fence.family_id,
+            token: fence.delete_token,
+          }));
+          finalizedFences.push(...fences);
+          calls.push('finalize');
+          return { data: true, error: null };
+        }
+        throw new Error(`Unexpected RPC ${name}`);
+      },
+    },
+  };
+}
+
+Deno.test('hard-delete preflights every owned family before deleting R2 and releases all exact fences on a later listing failure', async () => {
+  const calls: string[] = [];
+  const fixture = createMultiFamilyDeleteSupabase(calls);
+
+  const deleted = await deleteOwnedFamilies(fixture.client as never, OWNER_ID, {
+    listObjectKeys: async (prefix) => {
+      calls.push(`list:${prefix}`);
+      if (prefix.startsWith(`${SECOND_FAMILY_ID}/`)) throw new Error('second family listing failed');
+      return [`${prefix}generated.webp`];
+    },
+    deleteObject: async (key) => {
+      calls.push(`delete:${key}`);
+    },
+  });
+
+  assertEquals(deleted, false);
+  assertEquals(calls.some((call) => call.startsWith('delete:')), false);
+  assertEquals(calls.includes('finalize'), false);
+  assertEquals(
+    fixture.releasedFences.sort((a, b) => a.familyId.localeCompare(b.familyId)),
+    fixture.claimedFences.sort((a, b) => a.familyId.localeCompare(b.familyId)),
+  );
+});
+
+Deno.test('hard-delete lists every owned family before its first R2 deletion and finalizes all exact fences once', async () => {
+  const calls: string[] = [];
+  const fixture = createMultiFamilyDeleteSupabase(calls);
+
+  const deleted = await deleteOwnedFamilies(fixture.client as never, OWNER_ID, {
+    listObjectKeys: async (prefix) => {
+      calls.push(`list:${prefix}`);
+      return [`${prefix}generated.webp`];
+    },
+    deleteObject: async (key) => {
+      calls.push(`delete:${key}`);
+    },
+  });
+
+  assertEquals(deleted, true);
+  const lastListIndex = Math.max(...calls
+    .map((call, index) => call.startsWith('list:') ? index : -1));
+  const firstDeleteIndex = calls.findIndex((call) => call.startsWith('delete:'));
+  assertEquals(firstDeleteIndex > lastListIndex, true);
+  assertEquals(calls.filter((call) => call === 'finalize').length, 1);
+  assertEquals(
+    fixture.finalizedFences.sort((a, b) => a.familyId.localeCompare(b.familyId)),
+    fixture.claimedFences.sort((a, b) => a.familyId.localeCompare(b.familyId)),
+  );
+});
+
+Deno.test('hard-delete defers the whole account before R2 when an owned family has fresh generation work', async () => {
+  const calls: string[] = [];
+  const supabase = {
+    from(table: string) {
+      if (table === 'families') {
+        return {
+          select: () => ({
+            eq: async () => ({ data: [{ id: FAMILY_ID }], error: null }),
+          }),
+        };
+      }
+      throw new Error(`Unexpected table ${table}`);
+    },
+    rpc: async (name: string) => {
+      calls.push(`rpc:${name}`);
+      if (name === 'claim_family_deletion_fence') {
+        return { data: null, error: { message: 'Fresh illustration generation is still active' } };
+      }
+      return { data: true, error: null };
+    },
+  };
+
+  const deleted = await deleteOwnedFamilies(supabase as never, OWNER_ID, {
+    listObjectKeys: async () => {
+      calls.push('list');
+      return [];
+    },
+    deleteObject: async () => {
+      calls.push('delete');
+    },
+  });
+
+  assertEquals(deleted, false);
+  assertEquals(calls, ['rpc:claim_family_deletion_fence']);
+});
+
+Deno.test('hard-delete does not delete profile or auth when an owned family purge is deferred', async () => {
+  const calls: string[] = [];
+  const previousSecret = Deno.env.get('CRON_SECRET');
+  Deno.env.set('CRON_SECRET', 'test-cron-secret');
+  try {
+    const supabase = {
+      from(table: string) {
+        if (table === 'user_profiles') {
+          return {
+            select: () => ({
+              not: () => ({
+                lte: async () => ({ data: [{ id: OWNER_ID }], error: null }),
+              }),
+            }),
+            delete: () => ({
+              eq: async () => {
+                calls.push('delete-profile');
+                return { error: null };
+              },
+            }),
+          };
+        }
+        if (table === 'families') {
+          return {
+            select: () => ({
+              eq: async () => ({ data: [{ id: FAMILY_ID }], error: null }),
+            }),
+          };
+        }
+        throw new Error(`Unexpected table ${table}`);
+      },
+      rpc: async (name: string) => {
+        calls.push(`rpc:${name}`);
+        return name === 'claim_family_deletion_fence'
+          ? { data: null, error: { message: 'Fresh portrait generation is still active' } }
+          : { data: true, error: null };
+      },
+      auth: {
+        admin: {
+          deleteUser: async () => {
+            calls.push('delete-auth');
+            return { error: null };
+          },
+        },
+      },
+    };
+    const response = await handleHardDeleteExpiredAccounts(
+      new Request('http://localhost/hard-delete-expired-accounts', {
+        method: 'POST',
+        headers: { 'x-cron-secret': 'test-cron-secret' },
+      }),
+      {
+        createServiceClient: () => supabase as never,
+        listObjectKeys: async (prefix) => {
+          calls.push(`list:${prefix}`);
+          return [];
+        },
+      },
+    );
+
+    assertEquals(response.status, 200);
+    assertEquals(await response.json(), { success: true, deletedCount: 0 });
+    assertEquals(calls, [
+      'rpc:claim_account_hard_deletion',
+      `list:${OWNER_ID}/`,
+      'rpc:claim_family_deletion_fence',
+    ]);
+  } finally {
+    if (previousSecret === undefined) Deno.env.delete('CRON_SECRET');
+    else Deno.env.set('CRON_SECRET', previousSecret);
+  }
+});
+
+function createFinalizationSupabase(options: { refreshed: boolean; authError?: { message: string } | null }) {
+  const calls: string[] = [];
+  return {
+    calls,
+    client: {
+      from(table: string) {
+        if (table === 'user_profiles') {
+          return {
+            select: () => ({
+              not: () => ({
+                lte: async () => ({ data: [{ id: OWNER_ID }], error: null }),
+              }),
+            }),
+          };
+        }
+        if (table === 'families') {
+          return {
+            select: () => ({
+              eq: async () => ({ data: [], error: null }),
+            }),
+          };
+        }
+        throw new Error(`Unexpected table ${table}`);
+      },
+      rpc: async (name: string) => {
+        calls.push(`rpc:${name}`);
+        if (name === 'claim_account_hard_deletion') return { data: true, error: null };
+        if (name === 'finish_owned_family_deletion_fences') return { data: true, error: null };
+        if (name === 'refresh_account_hard_deletion_claim') return { data: options.refreshed, error: null };
+        if (name === 'release_account_hard_deletion_claim') return { data: true, error: null };
+        throw new Error(`Unexpected RPC ${name}`);
+      },
+      auth: {
+        admin: {
+          deleteUser: async () => {
+            calls.push('delete-auth');
+            return { error: options.authError ?? null };
+          },
+        },
+      },
+    },
+  };
+}
+
+Deno.test('hard-delete refuses to delete Auth after the exact finalization token is lost', async () => {
+  const previousSecret = Deno.env.get('CRON_SECRET');
+  Deno.env.set('CRON_SECRET', 'test-cron-secret');
+  try {
+    const fixture = createFinalizationSupabase({ refreshed: false });
+    const response = await handleHardDeleteExpiredAccounts(
+      new Request('http://localhost/hard-delete-expired-accounts', {
+        method: 'POST', headers: { 'x-cron-secret': 'test-cron-secret' },
+      }),
+      {
+        createServiceClient: () => fixture.client as never,
+        listObjectKeys: async () => [],
+      },
+    );
+
+    assertEquals(await response.json(), { success: true, deletedCount: 0 });
+    assertEquals(fixture.calls, [
+      'rpc:claim_account_hard_deletion',
+      'rpc:finish_owned_family_deletion_fences',
+      'rpc:refresh_account_hard_deletion_claim',
+    ]);
+  } finally {
+    if (previousSecret === undefined) Deno.env.delete('CRON_SECRET');
+    else Deno.env.set('CRON_SECRET', previousSecret);
+  }
+});
+
+Deno.test('hard-delete keeps the profile retryable and releases only its exact claim when Auth deletion fails', async () => {
+  const previousSecret = Deno.env.get('CRON_SECRET');
+  Deno.env.set('CRON_SECRET', 'test-cron-secret');
+  try {
+    const fixture = createFinalizationSupabase({
+      refreshed: true,
+      authError: { message: 'temporary GoTrue failure' },
+    });
+    const response = await handleHardDeleteExpiredAccounts(
+      new Request('http://localhost/hard-delete-expired-accounts', {
+        method: 'POST', headers: { 'x-cron-secret': 'test-cron-secret' },
+      }),
+      {
+        createServiceClient: () => fixture.client as never,
+        listObjectKeys: async () => [],
+      },
+    );
+
+    assertEquals(await response.json(), { success: true, deletedCount: 0 });
+    assertEquals(fixture.calls, [
+      'rpc:claim_account_hard_deletion',
+      'rpc:finish_owned_family_deletion_fences',
+      'rpc:refresh_account_hard_deletion_claim',
+      'delete-auth',
+      'rpc:release_account_hard_deletion_claim',
+    ]);
+  } finally {
+    if (previousSecret === undefined) Deno.env.delete('CRON_SECRET');
+    else Deno.env.set('CRON_SECRET', previousSecret);
+  }
+});
 
 function fakeSupabaseForCollect(options: {
   memories: Array<{ id: string; media_key: string | null; illustration_key: string | null }>;
@@ -23,6 +373,8 @@ function fakeSupabaseForCollect(options: {
     illustrated_profile_key: string | null;
     generation_output_key: string | null;
   }>;
+  memoryJobs?: Array<{ output_key: string | null }>;
+  portraitJobs?: Array<{ output_key: string | null }>;
   portraitVersionsError?: { message: string } | null;
 }) {
   return {
@@ -58,6 +410,22 @@ function fakeSupabaseForCollect(options: {
               data: options.portraitVersions ?? [],
               error: options.portraitVersionsError ?? null,
             }),
+          }),
+        };
+      }
+
+      if (table === 'memory_illustration_jobs') {
+        return {
+          select: () => ({
+            eq: async () => ({ data: options.memoryJobs ?? [], error: null }),
+          }),
+        };
+      }
+
+      if (table === 'portrait_generation_jobs') {
+        return {
+          select: () => ({
+            eq: async () => ({ data: options.portraitJobs ?? [], error: null }),
           }),
         };
       }
@@ -126,6 +494,22 @@ Deno.test('collectFamilyStorageKeys de-duplicates keys referenced from multiple 
   assertEquals(keys, [sharedKey]);
 });
 
+Deno.test('collectFamilyStorageKeys includes unpublished durable workflow output keys', async () => {
+  const supabase = fakeSupabaseForCollect({
+    memories: [],
+    mediaAssets: [],
+    members: [],
+    memoryJobs: [{ output_key: `${OWNER_ID}/memories/memory-1/illustration-attempt.webp` }],
+    portraitJobs: [{ output_key: `${OWNER_ID}/family/member-1/portraits/version-1/portrait/attempt.webp` }],
+  });
+
+  const keys = await collectFamilyStorageKeys(supabase as never, FAMILY_ID);
+  assertEquals(keys.sort(), [
+    `${OWNER_ID}/family/member-1/portraits/version-1/portrait/attempt.webp`,
+    `${OWNER_ID}/memories/memory-1/illustration-attempt.webp`,
+  ].sort());
+});
+
 Deno.test(
   'collectFamilyStorageKeys includes preview_object_key alongside object_key (Workstream C2)',
   async () => {
@@ -176,6 +560,8 @@ function fakeSupabaseForReferenced(referencedByTable: {
   version_profile_picture_key?: string[];
   version_illustrated_profile_key?: string[];
   generation_output_key?: string[];
+  memory_job_output_key?: string[];
+  portrait_job_output_key?: string[];
   errorTable?: string;
 }) {
   return {
@@ -264,6 +650,26 @@ function fakeSupabaseForReferenced(referencedByTable: {
         };
       }
 
+      if (table === 'memory_illustration_jobs' || table === 'portrait_generation_jobs') {
+        return {
+          select: () => ({
+            in: async (_col: string, keys: string[]) => {
+              const fixtureField = table === 'memory_illustration_jobs'
+                ? 'memory_job_output_key'
+                : 'portrait_job_output_key';
+              return {
+                data: keys
+                  .filter((key) => (referencedByTable[fixtureField] ?? []).includes(key))
+                  .map((key) => ({ output_key: key })),
+                error: referencedByTable.errorTable === `${table}.output_key`
+                  ? { message: 'lookup failed' }
+                  : null,
+              };
+            },
+          }),
+        };
+      }
+
       throw new Error(`Unexpected table ${table}`);
     },
   };
@@ -315,7 +721,7 @@ Deno.test(
   },
 );
 
-Deno.test('resolveReferencedKeys checks legacy, memory, and portrait-version reference columns', async () => {
+Deno.test('resolveReferencedKeys retains legacy, version, and durable job output keys', async () => {
   const mediaAssetKey = 'a/memories/1/media/x.jpg';
   const memoryMediaKey = 'a/memories/2/media.jpg';
   const illustrationKey = 'a/memories/3/illustration.webp';
@@ -324,6 +730,8 @@ Deno.test('resolveReferencedKeys checks legacy, memory, and portrait-version ref
   const versionPhotoKey = 'a/family/1/portraits/2/photo.jpg';
   const versionPortraitKey = 'a/family/1/portraits/2/portrait/3.webp';
   const activeAttemptKey = 'a/family/1/portraits/2/portrait/4.webp';
+  const activeMemoryJobKey = 'a/memories/4/illustration-attempt.webp';
+  const activePortraitJobKey = 'a/family/1/portraits/2/portrait/5.webp';
 
   const supabase = fakeSupabaseForReferenced({
     memory_media: [mediaAssetKey],
@@ -334,6 +742,8 @@ Deno.test('resolveReferencedKeys checks legacy, memory, and portrait-version ref
     version_profile_picture_key: [versionPhotoKey],
     version_illustrated_profile_key: [versionPortraitKey],
     generation_output_key: [activeAttemptKey],
+    memory_job_output_key: [activeMemoryJobKey],
+    portrait_job_output_key: [activePortraitJobKey],
   });
 
   const referenced = await resolveReferencedKeys(supabase as never, [
@@ -345,9 +755,11 @@ Deno.test('resolveReferencedKeys checks legacy, memory, and portrait-version ref
     versionPhotoKey,
     versionPortraitKey,
     activeAttemptKey,
+    activeMemoryJobKey,
+    activePortraitJobKey,
   ]);
 
-  assertEquals(referenced.size, 8);
+  assertEquals(referenced.size, 10);
 });
 
 Deno.test('resolveReferencedKeys returns an empty set for an empty key list without querying', async () => {

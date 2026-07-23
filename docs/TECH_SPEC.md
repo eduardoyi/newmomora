@@ -46,7 +46,7 @@ flowchart TB
     Edge --> R2Public
     Edge --> STT
     Edge --> LLM
-    Edge -->|portraits + legacy memory only| Image
+    Edge -->|legacy portrait + legacy memory only| Image
     Edge -->|dispatch, HMAC| Workflow
     Workflow -->|private bridge, HMAC| Edge
     Workflow --> Image
@@ -89,16 +89,17 @@ human must confirm them against the live project.
 | Auth & database | Supabase (Auth, PostgreSQL, RLS) |
 | **Object storage** | **Cloudflare R2** (S3-compatible) — all images |
 | Request/auth, DB and publication | Supabase Edge Functions (Deno) — JWT/RLS, prompt safety, job claims, presigned URLs, and compare-and-set publication |
-| Durable memory illustration execution | Cloudflare Workers + Workflows — bounded OpenAI generation/retry and direct R2 upload |
+| Durable image execution | Cloudflare Workers + Workflows — bounded memory-illustration and portrait generation/retry with direct R2 upload |
 | Scheduled jobs | Supabase cron or scheduled Edge Functions |
 
 **Why R2 instead of Supabase Storage:** Momora is image-heavy (profile photos, portraits, every memory illustration). Timeline/calendar views re-fetch images often. Supabase charges for **egress** beyond plan quotas (~$0.09/GB uncached); R2 has **$0 egress** and ~$0.015/GB-month storage. See [COST_OPTIMIZATION.md](./COST_OPTIMIZATION.md).
 
 **Supabase Storage is not used** in Momora2.
 
-The `MEMORY_ILLUSTRATION_BACKEND` Supabase secret controls the rollout.
-`legacy` (or an unset value) retains the existing in-function image path;
-`cloudflare` uses the durable Workflow path above. The Workflow never receives a
+`MEMORY_ILLUSTRATION_BACKEND` and `PORTRAIT_GENERATION_BACKEND` independently
+control the two durable rollouts. `legacy` (or an unset value) retains each
+existing in-function image path; `cloudflare` uses the durable Workflow path.
+The Workflow never receives a
 Supabase service-role key: it receives only a job ID and fetches short-lived,
 signed job input from the Supabase bridge. Supabase remains the authority for
 claiming and publishing a memory illustration.
@@ -126,7 +127,7 @@ tenancy model, roles, and RLS rewrite — this section only lists schema.
 ```sql
 -- Extends Supabase auth.users
 create table public.user_profiles (
-  id uuid references auth.users primary key,
+  id uuid references auth.users on delete cascade primary key,
   name text not null,
   timezone text not null default 'UTC',
   enable_daily_reminder boolean not null default false,
@@ -135,6 +136,9 @@ create table public.user_profiles (
   has_completed_onboarding boolean not null default false,
   deleted_at timestamptz,
   scheduled_hard_delete_at timestamptz,
+  account_deletion_token uuid,               -- exact soft-delete operation provenance
+  hard_delete_token uuid,                    -- exact cron finalization claim
+  hard_delete_started_at timestamptz,
   active_family_id uuid references public.families on delete set null,  -- which family the client shows
   notify_new_memories boolean not null default true,                    -- new-memory push opt-out
   notify_engagement boolean not null default true,                      -- like/comment push opt-out
@@ -183,6 +187,46 @@ create table public.family_member_portrait_versions (
     references public.family_members (id, family_id) on delete cascade
 );
 
+-- Private durable portrait execution state. RLS is enabled with no client
+-- policies; only authorized server code and the signed bridge access it.
+create table public.portrait_generation_jobs (
+  id uuid primary key,
+  workflow_instance_id text not null unique,
+  portrait_version_id uuid not null references public.family_member_portrait_versions (id) on delete cascade,
+  family_id uuid not null references public.families (id) on delete cascade,
+  actor_user_id uuid references auth.users (id) on delete set null,
+  attempt_id uuid not null unique,
+  request_intent text not null check (request_intent in ('initial', 'recovery', 'manual_regenerate')),
+  status text not null check (status in ('queued', 'running', 'succeeded', 'failed', 'superseded')),
+  started_at timestamptz not null,
+  provider_deadline_at timestamptz not null,
+  source_photo_key text,
+  style_reference_key text,
+  portrait_prompt text,
+  output_key text not null,
+  old_portrait_key text,
+  primary_attempts smallint not null default 0,
+  fallback_attempts smallint not null default 0,
+  model text,
+  error_code text,
+  upload_token uuid,                         -- exact pre-PUT R2 lease
+  upload_started_at timestamptz,
+  last_upload_completed_token uuid,
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index portrait_generation_jobs_one_active_per_version
+  on public.portrait_generation_jobs (portrait_version_id)
+  where status in ('queued', 'running');
+alter table public.portrait_generation_jobs enable row level security;
+
+create table public.portrait_generation_workflow_bridge_nonces (
+  nonce uuid primary key,
+  received_at timestamptz not null default now()
+);
+alter table public.portrait_generation_workflow_bridge_nonces enable row level security;
+
 create table public.memories (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users on delete set null,  -- creator attribution (nullable, was NOT NULL)
@@ -211,6 +255,9 @@ create table public.families (
   name text not null,
   illustration_style text not null default 'default',
   deleted_at timestamptz,                    -- owner soft-delete; owner-exempt from RLS invisibility
+  account_deletion_token uuid,               -- exact owner soft-delete operation
+  deletion_fence_token uuid,                 -- exact account-cleanup R2 fence
+  deletion_fence_started_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -600,6 +647,8 @@ Momora uses a **single private R2 bucket** (`R2_BUCKET`, e.g. `momora-prod`) wit
 |---------------------|--------|---------|
 | `{userId}/family/{memberId}/photo.webp` | Private (presigned) | User-uploaded family photos |
 | `{userId}/family/{memberId}/portrait.webp` | Private (presigned) | AI character portraits |
+| `{userId}/family/{memberId}/portraits/{versionId}/photo.jpg` | Private (presigned) | Immutable portrait-version source photo |
+| `{userId}/family/{memberId}/portraits/{versionId}/portrait/{attemptId}.webp` | Private (presigned) | Immutable durable portrait attempt/output |
 | `{userId}/memories/{memoryId}/illustrations/{generationId}.webp` | Private (presigned) | Immutable AI memory-illustration generation (`text_illustration` type) |
 | `{userId}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | Private (presigned) | Ordered user-uploaded memory photo/video assets (`media` type) |
 | `{userId}/memories/{memoryId}/media.{ext}` | Private (presigned) | Legacy single media object |
@@ -766,21 +815,17 @@ Generates or regenerates the character portrait for one immutable portrait versi
 
 **Logic**
 
-1. Fetch version + parent member; assert caller owner/manager of its family
-2. Atomically claim a unique generation token/output key (service-role-only RPC)
-3. Fetch `families.illustration_style`
-4. Fetch the immutable source photo from R2
-5. Resolve style reference from R2 public assets (`momora-public-assets/_assets/styles/{token}.png`); fetch via `R2_PUBLIC_ASSETS_BASE_URL`
-6. Build prompt: age, gender, style description, identity/style reference instructions
-7. Call OpenAI image edit API with person photo + style reference (`gpt-image-2`, fallback `gpt-image-1.5`)
-8. Enforce one 120-second deadline across the primary/fallback image calls so the function still has time to persist a failed attempt before the Edge runtime shuts down
-9. Upload result under `/portrait/{attemptId}.webp`
-10. Publish only if the token still owns the claim. On regeneration failure, retain the previous ready output and status.
-11. **Retrigger dependent memory illustrations.** After the background task reaches any of its three exit points — the finish RPC's success path, the catch-path failure RPC, or a claim-lost bare return during finish-error reconciliation — it fires a best-effort `retriggerPendingIllustrations()`: query this family's `text_illustration` memories at `illustration_status = 'pending'` with `created_at` at least 30 seconds old (excludes a brand-new memory whose own client pipeline hasn't reached `generate-illustration` yet), ordered `created_at desc`, limited to 3; invoke `generate-illustration` for each via HTTP in parallel (`Promise.allSettled`), forwarding this request's own `Authorization` header. Errors are caught and logged, never thrown — this must not affect portrait commit/cleanup, which happens first. See §4.3 "Illustration deferral" for why a `pending` memory can be waiting on this portrait.
+1. Validate the JWT and caller owner/manager role for the exact version family.
+2. Claim a UUID attempt token/output key through the service-only RPC. A ready regeneration retains its old public key/status while the new claim is active.
+3. Freeze the date-aware prompt, immutable source-photo key, and style-reference key into `portrait_generation_jobs`. The attempt UUID is also the job ID, Workflow instance ID, public claim token, and R2 output suffix.
+4. With `PORTRAIT_GENERATION_BACKEND=cloudflare`, HMAC-dispatch only `{ jobId }` to `/dispatch/portrait`; duplicate Workflow instance acceptance is a successful idempotent queue response. `legacy` keeps the bounded in-function `waitUntil` path for rollback.
+5. The Cloudflare Workflow fetches private input from `workflow-portrait-bridge` inside its sensitive generate-and-upload step, heads the deterministic output key before any paid call, loads both required R2 references, caps them at 1024px, and edits style first/source photo second.
+6. The Workflow makes at most one `gpt-image-2` attempt (up to 180s). Retryable provider failures may make one `gpt-image-1.5` attempt (up to 60s with `input_fidelity: high`). It requests 1024px WebP with compression 85 and never uses a text-only fallback. Moderation and deterministic validation failures do not fall back.
+7. OpenAI plus R2 upload stay in the same Workflow step; only `{ outputKey, model }` is returned. The deterministic output head plus atomic provider-attempt reservation make step replay fail closed rather than purchase a second image. R2 upload retries reuse the in-memory image bytes.
+8. The signed bridge publishes with the portrait generation-token/deletion CAS, reconciles ambiguous publication, deletes a superseded output, and deletes a replaced old portrait only after successful publication. Terminal private prompt/reference fields are scrubbed.
+9. On terminal success, failure, or supersession, the bridge rechecks up to three pending illustrated memories older than 30 seconds and asks the normal memory dispatcher to recover them via a separate timestamped HMAC request. The stored actor's current manager role is revalidated; no expiring user JWT crosses Cloudflare. Client memory recovery remains the backstop.
 
-After authorization and claim acquisition, the function immediately returns and finishes steps 3–11 in an `EdgeRuntime.waitUntil` background task. This keeps the portrait timeline interactive while the client polls the claimed row for its status.
-
-The client polls active portrait versions. If a `pending` version or active generation claim is still unresolved after the claim's 15-minute server reclaim window, the client stops treating it as live work and shows a stalled failure state with **Try again**. Retry still goes through this endpoint; the client never clears or overwrites generation claims directly. A retry after the reclaim window atomically replaces the abandoned claim, and the endpoint removes its prior attempt object when known.
+The durable application lease is five minutes. The client treats an unclaimed pending version as recoverable at three minutes (from immutable `created_at`) and claimed work at five minutes thirty seconds (from `generation_started_at`). Automatic recovery is owner/manager-only, once per version/attempt clock, and only re-invokes this endpoint; it never writes status or claim fields. Failed versions require manual retry. The active-version query polls every three seconds and always refetches on app foreground so an app killed before initial dispatch can recover.
 
 **Response**
 
@@ -788,13 +833,17 @@ The client polls active portrait versions. If a `pending` version or active gene
 { "success": true, "queued": true }
 ```
 
-**Synchronous errors:** `PORTRAIT_VERSION_NOT_FOUND`, `DATE_REQUIRED`, `GENERATION_IN_PROGRESS`. Failures after a successful queue response are persisted on the portrait version and surfaced by its status polling.
+**Synchronous errors:** `PORTRAIT_VERSION_NOT_FOUND`, `DATE_REQUIRED`, `GENERATION_IN_PROGRESS`, `GENERATION_DISPATCH_FAILED`. Failures after a successful queue response are persisted on the portrait version and surfaced by status polling.
 
-### 4.1a `delete-portrait-version`
+### 4.1a `workflow-portrait-bridge`
+
+This `verify_jwt = false` internal function is not a browser API. It verifies raw-body timestamped HMAC and nonce before parsing a request, then exposes only `get_input`, `reserve_attempt`, `authorize_upload`, `record_upload_complete`, `publish`, `reconcile`, `fail`, and `retrigger_memories` for a private job. It does not grant Cloudflare a Supabase service-role key or generic database access.
+
+### 4.1b `delete-portrait-version`
 
 **Request:** `{ "portraitVersionId": "uuid" }`. Owner/manager only. Atomically claims the row, rejects deletion of the member's only version or last usable portrait, lists/deletes every object under the version prefix, then removes the claimed row.
 
-### 4.1b `delete-family-member`
+### 4.1c `delete-family-member`
 
 **Request:** `{ "familyMemberId": "uuid" }`. Owner/manager only. Collects legacy and portrait-version object keys/prefixes before deleting storage, then deletes the member row and cascaded version rows.
 
@@ -1050,8 +1099,9 @@ Initiates account deletion (soft delete).
 
 **Logic**
 
-1. Set `deleted_at = now()`, `scheduled_hard_delete_at = now() + interval '15 days'`
-2. **(family-sharing Phase 3)** For each family the caller **owns**: set `families.deleted_at = now()` via the service-role client (the `enforce_families_restricted_columns` trigger allows this when `auth.uid()` is null, i.e. no user JWT), then push a heads-up notification ("This family journal's owner deleted their account...") to every other member with an `expo_push_token`. Best-effort — failures are logged, not thrown; the account-deletion response only depends on step 1 succeeding. Push helper shared with `send-daily-reminder` via `_shared/expo-push.ts`.
+1. After JWT validation, call the service-only `schedule_account_deletion` RPC with a new UUID operation token and a 15-day deadline. It locks the profile, rejects a fresh hard-delete claim, and atomically marks the profile plus only currently active owned families with that exact token.
+2. Read the stored deadline back so an idempotent retry returns the existing grace deadline rather than extending it.
+3. Best-effort notify only family rows carrying that exact token. A push failure never undoes the atomic schedule.
 
 **Response**
 
@@ -1067,8 +1117,11 @@ Initiates account deletion (soft delete).
 
 **Logic**
 
-1. Clear `deleted_at` and `scheduled_hard_delete_at` on the caller's `user_profiles` row
-2. **(family-sharing Phase 3)** Clear `families.deleted_at` for every family the caller owns, via the service-role client (same trigger exemption as above — this could also run on the caller's own JWT since they're the owner, but service-role is simplest)
+Call the service-only `cancel_account_deletion` RPC after JWT validation. It
+locks the profile and restores only owned families whose
+`account_deletion_token` matches the profile's exact scheduling operation.
+It returns a conflict once the grace deadline has passed or a fresh hard-delete
+claim exists; it never broadly restores every historical deleted family.
 
 ---
 
@@ -1088,10 +1141,21 @@ environment; failed runs are visible in `cron.job_run_details`.
 **Logic**
 
 1. Find users where `scheduled_hard_delete_at <= now()`
-2. For each user, **(family-sharing Phase 3, reworked)**:
-   - **Owner case:** for every family they own, collect R2 keys across *all creators* in that family (`memory_media.object_key`/`preview_object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key`) *before* deleting any rows, delete those R2 objects, then delete the `families` row (FK cascades remove `memories`/`family_members`/`family_memberships`/`family_invites` for free)
-   - **Non-owner case:** their created content in families they don't own must survive — no blanket delete of `memories`/`family_members` by `user_id` anymore. Enumerate objects under their own `{userId}/` prefix and delete only the ones no surviving row references (checked against `memory_media.object_key`/`preview_object_key`, `memories.media_key`/`illustration_key`, `family_members.profile_picture_key`/`illustrated_profile_key`) — **preview keys must be checked as their own reference column**, not just `object_key`: a live preview under a surviving `memory_media` row would otherwise look unreferenced and be deleted as orphan garbage on the first non-owner account hard-delete
-   - Delete the `user_profiles` row, then `auth.admin.deleteUser` — the FK `on delete set null` on `memories.user_id`/`family_members.user_id` fires here, nulling attribution on any surviving (non-owned-family) content
+2. Claim the exact profile `hard_delete_token`; another cron cannot steal a
+   fresh claim.
+3. Before deleting any database family row, preflight every owned family fence
+   and all R2 listings/reference checks. This includes durable job output
+   keys, portrait-version attempt keys, media previews, and all creators'
+   prefixes. A fresh generation or upload lease defers the account intact.
+4. Delete the preflighted R2 keys, then transactionally finalize the exact
+   owned-family fences. For non-owned surviving families, delete only objects
+   under the departing user's prefix which no surviving row or active durable
+   job references.
+5. Refresh and re-verify the exact hard-delete token immediately before
+   `auth.admin.deleteUser`. `user_profiles.id → auth.users.id` cascades only
+   after Auth succeeds, so an Auth failure leaves the profile retryable; the
+   cron releases only its own claim in that case. Surviving shared content
+   retains its row with creator attribution nulled by its existing FK.
 
 **Auth:** Service role + cron secret header
 
@@ -1358,7 +1422,7 @@ while the DB validates both tag insertion and the `memory_type` transition.
 3. Upload normalized JPEG directly to R2
 4. Call `create_family_member_portrait_version` with the exact key/date/source
 5. Invoke `generate-portrait-illustration(portraitVersionId)`
-6. Poll portrait-version status until ready, failed, or the 15-minute reclaim window identifies an abandoned attempt; stalled attempts expose manual retry
+6. Poll portrait-version status every 3s while live. On foreground, refetch; an owner/manager recovers an unclaimed pending version at 3:00 or claimed work at 5:30 by reinvoking the server endpoint once per attempt. Failed versions expose manual retry only.
 7. Resolve today's portrait and display it through `get-media-url`
 ```
 
@@ -1550,6 +1614,11 @@ per family, not per user). No style picker UI.
 | `CLOUDFLARE_ILLUSTRATION_WORKFLOW_URL` | Authenticated Worker dispatch endpoint, used only when backend is `cloudflare` |
 | `CLOUDFLARE_ILLUSTRATION_DISPATCH_SECRET` | Shared secret for Supabase → Worker dispatch authentication |
 | `CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET` | HMAC secret for Worker ↔ `workflow-illustration-bridge` job input/publication calls |
+| `PORTRAIT_GENERATION_BACKEND` | `legacy`/unset for the existing portrait Edge path; `cloudflare` to dispatch durable portrait jobs |
+| `CLOUDFLARE_PORTRAIT_WORKFLOW_URL` | Authenticated existing-Worker `/dispatch/portrait` endpoint, used only when portrait backend is `cloudflare` |
+| `CLOUDFLARE_PORTRAIT_DISPATCH_SECRET` | Shared secret for Supabase → Worker portrait dispatch authentication |
+| `CLOUDFLARE_PORTRAIT_BRIDGE_SECRET` | HMAC secret for Worker ↔ `workflow-portrait-bridge` job operations |
+| `PORTRAIT_MEMORY_RETRIGGER_SECRET` | Separate timestamp-HMAC secret for internal portrait-completion → memory recovery requests |
 | `BENTO_SITE_UUID` | Bento site UUID — sent as the `site_uuid` query parameter of transactional email sends |
 | `BENTO_PUBLISHABLE_KEY` | Bento publishable key — HTTP Basic auth username |
 | `BENTO_SECRET_KEY` | Bento secret key — HTTP Basic auth password |
@@ -1558,16 +1627,21 @@ per family, not per user). No style picker UI.
 
 ### Cloudflare Worker configuration
 
-The `cloudflare/memory-illustration-worker` project owns durable memory
-illustration execution. Its non-secret configuration is `ENVIRONMENT` and
-`SUPABASE_BRIDGE_URL`. Its Worker secret store contains `OPENAI_API_KEY`,
+The `cloudflare/memory-illustration-worker` project owns both durable memory
+illustration and portrait execution. Its non-secret configuration includes
+`ENVIRONMENT`, `SUPABASE_BRIDGE_URL`, and `PORTRAIT_SUPABASE_BRIDGE_URL`. Its
+Worker secret store contains `OPENAI_API_KEY`,
 `DISPATCH_SIGNING_SECRET` (same value as
 `CLOUDFLARE_ILLUSTRATION_DISPATCH_SECRET`), and `SUPABASE_BRIDGE_HMAC_SECRET`
-(same value as `CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET`). Bind the private R2
-bucket as `MEMORY_ILLUSTRATIONS`, `CHARACTER_PORTRAITS`, and
-`PROFILE_PICTURES`, bind Cloudflare Images as `IMAGES`, and bind the Workflow
-as `MEMORY_ILLUSTRATION_WORKFLOW`. Do not put any of these values in Expo
-variables or commit `.dev.vars`.
+(same value as `CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET`), plus
+`PORTRAIT_DISPATCH_SIGNING_SECRET` (same value as
+`CLOUDFLARE_PORTRAIT_DISPATCH_SECRET`) and
+`PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET` (same value as
+`CLOUDFLARE_PORTRAIT_BRIDGE_SECRET`). Bind the same private R2 bucket as
+`MEMORY_ILLUSTRATIONS`, `CHARACTER_PORTRAITS`, `PROFILE_PICTURES`, and
+`STYLE_REFERENCES`, bind Cloudflare Images as `IMAGES`, and bind Workflows as
+`MEMORY_ILLUSTRATION_WORKFLOW` and `PORTRAIT_GENERATION_WORKFLOW`. Do not put
+any of these values in Expo variables or commit `.dev.vars`.
 
 ### Database Vault secrets (read by pg_cron jobs)
 
@@ -1600,6 +1674,7 @@ Momora2/
 │       ├── get-upload-url/
 │       ├── get-media-url/
 │       ├── generate-portrait-illustration/
+│       ├── workflow-portrait-bridge/
 │       ├── delete-portrait-version/
 │       ├── delete-family-member/
 │       ├── analyze-emotion/

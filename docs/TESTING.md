@@ -164,7 +164,7 @@ it('useMemories addMemory updates list on success', async () => {
 - Test failure paths: network error, 401, validation rejection, max tags exceeded.
 - Do not call production Supabase or OpenAI — use mocks or local `supabase start` in dedicated CI job only.
 
-### Durable illustration Workflow migration
+### Durable image-generation Workflow migrations
 
 The illustration migration has a client/service contract test, Supabase Deno
 tests, and Worker tests. Cover both legacy `{ success: true }` and queued
@@ -177,10 +177,42 @@ deterministic-R2 replay, one combined OpenAI/upload step, attempt caps,
 moderation, total reference-load failure, stale publish rejection, and the
 4:59 publication versus 5:30 recovery boundary.
 
-Run a controlled staging smoke test for the `gpt-image-1.5` portrait fallback
-before production rollout. Do not use a real family memory, production API
-key, or account data as a test fixture; use a dedicated synthetic test family
-and remove its generated object afterward.
+Portrait migration coverage follows the same durable contract while preserving
+portrait-specific retained-output and deletion semantics. Test the public
+`{ portraitVersionId }` request against both legacy `{ success: true }` and
+durable `{ success: true, queued: true, jobId? }` responses; the client must
+never write portrait status/timestamps. Unit and hook integration coverage
+must lock the unclaimed-pending 3:00 boundary (from immutable `created_at`,
+not `updated_at`), the claimed 5:30 boundary (from
+`generation_started_at`), manager-only once-per-attempt recovery, failed
+manual retry, viewer observation, active polling, and the fresh-attempt
+Regenerate guard.
+
+Supabase/Worker tests must cover the private portrait job and nonce tables,
+HMAC bridge, deterministic R2 replay, one combined OpenAI/upload step,
+token/deletion CAS, retained prior portrait, missing source/style references,
+style-first reference order, explicit WebP output, one `gpt-image-2` attempt
+followed only by a retryable, reference-aware `gpt-image-1.5` fallback, and
+the prohibition on text-only fallback. Cross-pipeline tests must prove that a
+memory waiting on a portrait creates no memory job, then gets re-evaluated
+after portrait terminal state through the separate signed internal retrigger
+without forwarding a user JWT.
+
+The SQL fixture suites are a required counterpart to mocked Deno tests:
+`supabase/tests/memory_illustration_workflow.sql` covers exact provider and
+upload leases, `portrait_generation_workflow.sql` covers the same contract plus
+portrait/deletion fences, and `account_deletion_fences.sql` covers exact
+soft-delete provenance, expired-cancel rejection, and hard-delete claim
+serialization. Run them against a Supabase-compatible Postgres database with
+pgTAP; a plain PostgreSQL server without the pgTAP extension can still verify
+the migration in one transaction, but cannot replace those assertions.
+
+Before production cutover, run real-provider evaluation with the checked-in
+non-user profile fixture and style asset, then run one production synthetic
+fixture-only family member/version under the authorized test account. Verify
+only IDs, state transitions, model, duration, signed display, WebP, private
+input scrubbing, and deferred-memory retrigger; remove every synthetic DB row
+and R2 object afterward. Do not use an organic child photo or inspect/log PII.
 
 ---
 

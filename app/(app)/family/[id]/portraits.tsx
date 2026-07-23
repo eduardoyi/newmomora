@@ -94,7 +94,11 @@ export default function PortraitTimelineScreen() {
     portraitKey: version.illustrated_profile_key,
     createdAt: version.created_at,
     updatedAt: version.updated_at,
-    isGenerating: Boolean(version.generation_token) || portraitVersions.retryingVersionId === version.id || portraitVersions.regeneratingVersionId === version.id,
+    isGenerating:
+      Boolean(version.generation_token) ||
+      version.illustrated_profile_status === 'generating' ||
+      portraitVersions.retryingVersionId === version.id ||
+      portraitVersions.regeneratingVersionId === version.id,
     isGenerationStalled: isPortraitGenerationStalled(version),
     isDeleting: Boolean(version.deletion_token) || portraitVersions.deletingVersionId === version.id,
   }));

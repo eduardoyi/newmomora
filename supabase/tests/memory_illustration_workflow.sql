@@ -1,6 +1,6 @@
 begin;
 
-select plan(17);
+select plan(26);
 
 insert into auth.users (id, email)
 values ('12000000-0000-4000-8000-000000000001', 'workflow-db@example.test');
@@ -54,14 +54,61 @@ select is_empty(
 set local role postgres;
 
 select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'primary', 1::smallint), true, 'first primary reservation succeeds');
-select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'primary', 1::smallint), true, 'primary reservation replay is idempotent');
+select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'primary', 1::smallint), false, 'replayed primary reservation fails closed against a second paid call');
 select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'primary', 2::smallint), true, 'second primary reservation succeeds');
-select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'primary', 2::smallint), true, 'second primary reservation replay is idempotent');
+select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'primary', 2::smallint), false, 'replayed second primary reservation fails closed');
 select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'fallback', 1::smallint), true, 'one fallback reservation succeeds');
-select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'fallback', 1::smallint), true, 'fallback reservation replay is idempotent');
+select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'fallback', 1::smallint), false, 'replayed fallback reservation fails closed');
 select throws_ok(
   $$select public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', null, 1::smallint)$$,
   'P0001', 'invalid provider', 'reserve RPC rejects a null provider'
+);
+
+select throws_ok(
+  $$select public.publish_memory_illustration_workflow_job(
+    '52000000-0000-4000-8000-000000000001', 'gpt-image-2'
+  )$$,
+  '55000', 'illustration upload has not completed',
+  'publication cannot bypass the exact output upload lease'
+);
+
+create temporary table memory_upload_authorization as
+select * from public.authorize_memory_illustration_workflow_upload(
+  '52000000-0000-4000-8000-000000000001', 'test/new.webp'
+);
+select is((select authorized from memory_upload_authorization), true, 'memory upload authorization accepts the current deterministic output');
+select is((select existing_lease from memory_upload_authorization), false, 'first memory upload authorization creates a lease');
+select ok((select upload_token is not null from memory_upload_authorization), 'memory upload authorization returns an exact token');
+
+create temporary table memory_upload_replay as
+select * from public.authorize_memory_illustration_workflow_upload(
+  '52000000-0000-4000-8000-000000000001', 'test/new.webp'
+);
+select is((select upload_token from memory_upload_replay), (select upload_token from memory_upload_authorization), 'memory upload replay reuses the exact in-flight token');
+select is((select existing_lease from memory_upload_replay), true, 'memory upload replay reports the existing lease');
+select is(
+  public.record_memory_illustration_workflow_upload_complete(
+    '52000000-0000-4000-8000-000000000001', 'test/new.webp',
+    '62000000-0000-4000-8000-000000000001'
+  ),
+  false,
+  'memory upload completion rejects a different token'
+);
+select is(
+  public.record_memory_illustration_workflow_upload_complete(
+    '52000000-0000-4000-8000-000000000001', 'test/new.webp',
+    (select upload_token from memory_upload_authorization)
+  ),
+  true,
+  'memory upload completion records the exact token'
+);
+select is(
+  public.record_memory_illustration_workflow_upload_complete(
+    '52000000-0000-4000-8000-000000000001', 'test/new.webp',
+    (select upload_token from memory_upload_authorization)
+  ),
+  true,
+  'memory upload completion is idempotent for a lost bridge response'
 );
 
 -- A legacy client can set pending, but it must not discard the attempt token

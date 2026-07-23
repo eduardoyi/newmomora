@@ -430,7 +430,7 @@ export function PortraitTimeline({
   onDelete,
 }: PortraitTimelineProps) {
   const [sheet, setSheet] = useState<SheetName>(recoveredPhotoDraft ? 'date' : null);
-  const [focusedVersion, setFocusedVersion] = useState<PortraitTimelineVersion | null>(null);
+  const [focusedVersionId, setFocusedVersionId] = useState<string | null>(null);
   const [photoDraft, setPhotoDraft] = useState<PortraitTimelinePhotoDraft | null>(recoveredPhotoDraft ?? null);
   const [draftDate, setDraftDate] = useState(recoveredPhotoDraft?.referenceDate ?? '');
   const [isPicking, setIsPicking] = useState(false);
@@ -439,6 +439,12 @@ export function PortraitTimeline({
   const [viewer, setViewer] = useState<{ version: PortraitTimelineVersion; index: number } | null>(null);
   const [reportVersion, setReportVersion] = useState<PortraitTimelineVersion | null>(null);
   const contentSafety = useContentSafety();
+
+  // A Workflow claim can arrive while its action sheet is open. Resolve the
+  // selected id against current props so fresh work disables regeneration.
+  const focusedVersion = focusedVersionId
+    ? versions.find((version) => version.id === focusedVersionId) ?? null
+    : null;
 
   const timelineCount = versions.filter((version) => !version.isDeleting).length;
   const usablePortraitCount = versions.filter((version) => (
@@ -551,7 +557,7 @@ export function PortraitTimeline({
       isCurrent={item.id === currentVersionId}
       member={member}
       onActions={() => {
-        setFocusedVersion(item);
+        setFocusedVersionId(item.id);
         setLocalError('');
         setSheet('actions');
       }}

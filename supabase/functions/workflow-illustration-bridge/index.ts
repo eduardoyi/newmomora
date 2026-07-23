@@ -4,13 +4,22 @@ import { createServiceClient } from '../_shared/supabase-admin.ts';
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
 
 interface BridgeRequest {
-  operation: 'get_input' | 'reserve_attempt' | 'record_prompt' | 'publish' | 'fail' | 'reconcile';
+  operation:
+    | 'get_input'
+    | 'reserve_attempt'
+    | 'record_prompt'
+    | 'authorize_upload'
+    | 'record_upload_complete'
+    | 'publish'
+    | 'fail'
+    | 'reconcile';
   jobId: string;
   provider?: 'primary' | 'fallback';
   attemptNumber?: number;
   prompt?: string;
   model?: string;
   outputKey?: string;
+  uploadToken?: string;
   errorCode?: string;
 }
 
@@ -133,7 +142,16 @@ export async function handleWorkflowIllustrationBridge(req: Request): Promise<Re
   } catch {
     return errorResponse('Invalid JSON body', 400, 'invalid_json');
   }
-  const validOperations = new Set(['get_input', 'reserve_attempt', 'record_prompt', 'publish', 'fail', 'reconcile']);
+  const validOperations = new Set([
+    'get_input',
+    'reserve_attempt',
+    'record_prompt',
+    'authorize_upload',
+    'record_upload_complete',
+    'publish',
+    'fail',
+    'reconcile',
+  ]);
   if (typeof body.jobId !== 'string' ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.jobId) ||
     !validOperations.has(body.operation)) {
@@ -205,6 +223,44 @@ export async function handleWorkflowIllustrationBridge(req: Request): Promise<Re
         if (!data) return errorResponse('Job is no longer active', 409, 'JOB_SUPERSEDED');
         return jsonResponse({ ok: true });
       }
+      case 'authorize_upload': {
+        if (typeof body.outputKey !== 'string' || !body.outputKey) {
+          return errorResponse('outputKey is required', 400, 'validation_error');
+        }
+        const { data, error } = await supabase.rpc('authorize_memory_illustration_workflow_upload', {
+          p_job_id: body.jobId,
+          p_output_key: body.outputKey,
+        });
+        if (error) throw error;
+        const outcome = data?.[0] as {
+          authorized?: boolean;
+          upload_token?: string | null;
+          existing_lease?: boolean;
+        } | undefined;
+        const authorized = outcome?.authorized === true && typeof outcome.upload_token === 'string';
+        return jsonResponse({
+          authorized,
+          uploadToken: authorized ? outcome!.upload_token : null,
+          existingLease: authorized && outcome?.existing_lease === true,
+        });
+      }
+      case 'record_upload_complete': {
+        if (typeof body.outputKey !== 'string' || !body.outputKey ||
+          typeof body.uploadToken !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.uploadToken)) {
+          return errorResponse('outputKey and uploadToken are required', 400, 'validation_error');
+        }
+        const { data, error } = await supabase.rpc(
+          'record_memory_illustration_workflow_upload_complete',
+          {
+            p_job_id: body.jobId,
+            p_output_key: body.outputKey,
+            p_upload_token: body.uploadToken,
+          },
+        );
+        if (error) throw error;
+        return jsonResponse({ completed: Boolean(data) });
+      }
       case 'publish': {
         if (typeof body.model !== 'string' || typeof body.outputKey !== 'string' || !body.outputKey) return errorResponse('model and outputKey are required', 400, 'validation_error');
         if (body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') return errorResponse('Invalid model', 400, 'validation_error');
@@ -231,7 +287,23 @@ export async function handleWorkflowIllustrationBridge(req: Request): Promise<Re
           p_error_code: body.errorCode ?? 'GENERATION_FAILED',
         });
         if (error) throw error;
-        return jsonResponse(data?.[0] ?? { failed: false, output_key: null });
+        const { data: terminalJob, error: terminalError } = await supabase
+          .from('memory_illustration_jobs')
+          .select('status, output_key')
+          .eq('id', body.jobId)
+          .maybeSingle();
+        if (terminalError) throw terminalError;
+        const terminalStatus = terminalJob?.status === 'succeeded'
+          ? 'succeeded'
+          : terminalJob?.status === 'failed'
+          ? 'failed'
+          : 'superseded';
+        return jsonResponse({
+          failed: terminalStatus === 'failed',
+          outputKey: terminalJob?.output_key ?? data?.[0]?.output_key ?? null,
+          terminalStatus,
+          deleteOutput: terminalStatus !== 'succeeded',
+        });
       }
       case 'reconcile': {
         if (typeof body.outputKey !== 'string' ||

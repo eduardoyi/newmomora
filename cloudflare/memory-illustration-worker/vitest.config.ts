@@ -5,6 +5,8 @@ import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 // values so Wrangler can instantiate the local Worker without a .dev.vars file.
 process.env.DISPATCH_SIGNING_SECRET ??= 'test-dispatch-secret';
 process.env.SUPABASE_BRIDGE_HMAC_SECRET ??= 'test-bridge-secret';
+process.env.PORTRAIT_DISPATCH_SIGNING_SECRET ??= 'test-portrait-dispatch-secret';
+process.env.PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET ??= 'test-portrait-bridge-secret';
 process.env.OPENAI_API_KEY ??= 'test-openai-key';
 
 export default defineConfig({
@@ -16,6 +18,8 @@ export default defineConfig({
         bindings: {
           DISPATCH_SIGNING_SECRET: 'test-dispatch-secret',
           SUPABASE_BRIDGE_HMAC_SECRET: 'test-bridge-secret',
+          PORTRAIT_DISPATCH_SIGNING_SECRET: 'test-portrait-dispatch-secret',
+          PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET: 'test-portrait-bridge-secret',
           OPENAI_API_KEY: 'test-openai-key',
         },
       },

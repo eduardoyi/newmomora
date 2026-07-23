@@ -12,8 +12,11 @@ export const PORTRAIT_DATE_SOURCES = [
 export type PortraitDateSource = (typeof PORTRAIT_DATE_SOURCES)[number];
 export type PortraitGenerationStatus = 'pending' | 'generating' | 'ready' | 'failed';
 
-/** Must stay aligned with claim_family_member_portrait_generation's reclaim window. */
-export const PORTRAIT_GENERATION_STALE_MS = 15 * 60 * 1000;
+/** A pending row with no claim means the first client dispatch may never have run. */
+export const PORTRAIT_PENDING_RECOVERY_MS = 3 * 60 * 1000;
+
+/** Must stay aligned with the durable portrait Workflow lease plus publication margin. */
+export const PORTRAIT_GENERATION_STALE_MS = 5.5 * 60 * 1000;
 
 export interface FamilyMemberPortraitVersion {
   id: string;
@@ -34,24 +37,106 @@ export interface FamilyMemberPortraitVersion {
   updated_at: string;
 }
 
-export function isPortraitGenerationStalled(
+type PortraitGenerationRecoveryFields = Pick<
+  FamilyMemberPortraitVersion,
+  | 'illustrated_profile_status'
+  | 'generation_token'
+  | 'generation_started_at'
+  | 'created_at'
+>;
+
+/** Active work is server-owned. A ready version can still be regenerating. */
+export function isPortraitGenerationActive(
+  version: Pick<FamilyMemberPortraitVersion, 'illustrated_profile_status' | 'generation_token'>,
+): boolean {
+  return Boolean(version.generation_token) || version.illustrated_profile_status === 'generating';
+}
+
+/**
+ * `generation_started_at` is the public durable-attempt clock. A pending row
+ * that never acquired a claim ages from immutable `created_at`; unrelated
+ * profile/date writes must never postpone recovery by changing `updated_at`.
+ */
+export function getPortraitGenerationRecoveryStartedAt(
+  version: PortraitGenerationRecoveryFields,
+): string | null {
+  if (version.generation_token || version.illustrated_profile_status === 'generating') {
+    return version.generation_started_at;
+  }
+  return version.illustrated_profile_status === 'pending' ? version.created_at : null;
+}
+
+export function getPortraitGenerationRecoveryThreshold(
+  version: Pick<FamilyMemberPortraitVersion, 'illustrated_profile_status' | 'generation_token'>,
+): number | null {
+  if (version.generation_token || version.illustrated_profile_status === 'generating') {
+    return PORTRAIT_GENERATION_STALE_MS;
+  }
+  return version.illustrated_profile_status === 'pending' ? PORTRAIT_PENDING_RECOVERY_MS : null;
+}
+
+/**
+ * One automatic recovery is allowed for a stable server attempt. A new
+ * generation token, or a new pending-row clock, intentionally produces a new
+ * key. Failed versions have no automatic recovery path.
+ */
+export function getPortraitGenerationRecoveryKey(
   version: Pick<
+    FamilyMemberPortraitVersion,
+    | 'id'
+    | 'illustrated_profile_status'
+    | 'generation_token'
+    | 'generation_started_at'
+    | 'created_at'
+  >,
+): string | null {
+  const clock = getPortraitGenerationRecoveryStartedAt({
+    illustrated_profile_status: version.illustrated_profile_status,
+    generation_token: version.generation_token,
+    generation_started_at: version.generation_started_at,
+    created_at: version.created_at,
+  });
+  if (!clock) return null;
+  return `${version.id}:${version.generation_token ?? clock}`;
+}
+
+export function shouldRecoverPortraitGeneration(
+  version: PortraitGenerationRecoveryFields,
+  nowMs = Date.now(),
+): boolean {
+  const threshold = getPortraitGenerationRecoveryThreshold(version);
+  if (threshold === null) return false;
+
+  const startedAt = getPortraitGenerationRecoveryStartedAt(version);
+  const startedAtMs = startedAt ? Date.parse(startedAt) : Number.NaN;
+  return Number.isFinite(startedAtMs) && nowMs - startedAtMs >= threshold;
+}
+
+export function shouldPollPortraitVersions(
+  versions: readonly Pick<
     FamilyMemberPortraitVersion,
     | 'illustrated_profile_status'
     | 'generation_token'
     | 'generation_started_at'
-    | 'updated_at'
-  >,
+    | 'created_at'
+    | 'deletion_token'
+  >[],
   nowMs = Date.now(),
 ): boolean {
-  const hasActiveClaim = Boolean(version.generation_token);
-  const isWaitingWithoutClaim =
-    !hasActiveClaim && version.illustrated_profile_status === 'pending';
-  if (!hasActiveClaim && !isWaitingWithoutClaim) return false;
+  return versions.some((version) => (
+    (!shouldRecoverPortraitGeneration(version, nowMs) && (
+      version.illustrated_profile_status === 'pending' ||
+      isPortraitGenerationActive(version)
+    )) ||
+    Boolean(version.deletion_token)
+  ));
+}
 
-  const startedAt = version.generation_started_at ?? version.updated_at;
-  const startedAtMs = Date.parse(startedAt);
-  return Number.isFinite(startedAtMs) && nowMs - startedAtMs > PORTRAIT_GENERATION_STALE_MS;
+export function isPortraitGenerationStalled(
+  version: PortraitGenerationRecoveryFields,
+  nowMs = Date.now(),
+): boolean {
+  return shouldRecoverPortraitGeneration(version, nowMs);
 }
 
 interface DateTuple {

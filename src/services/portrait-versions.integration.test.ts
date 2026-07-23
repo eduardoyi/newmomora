@@ -115,13 +115,20 @@ describe('portrait versions service integration', () => {
     );
   });
 
-  it('uses the secured date, generation, and deletion contracts', async () => {
+  it('uses the secured date, generation, and deletion contracts with legacy and queued responses', async () => {
     (mockedSupabase.rpc as jest.Mock).mockResolvedValue({ data: [{ id: 'version-1' }], error: null });
-    mockedInvoke.mockResolvedValue({ data: { success: true }, error: null });
+    mockedInvoke
+      .mockResolvedValueOnce({ data: { success: true }, error: null })
+      .mockResolvedValueOnce({ data: { success: true, queued: true, jobId: 'job-1' }, error: null })
+      .mockResolvedValue({ data: { success: true }, error: null });
 
     await updatePortraitVersionDate('version-1', '2024-05-01');
-    await generatePortraitVersion('version-1');
+    const legacy = await generatePortraitVersion('version-1');
+    const queued = await generatePortraitVersion('version-2');
     await deletePortraitVersion('version-1');
+
+    expect(legacy).toEqual({ data: { success: true }, error: null });
+    expect(queued).toEqual({ data: { success: true, queued: true, jobId: 'job-1' }, error: null });
 
     expect(mockedSupabase.rpc).toHaveBeenCalledWith(
       'update_family_member_portrait_version_date',
@@ -129,6 +136,9 @@ describe('portrait versions service integration', () => {
     );
     expect(mockedInvoke).toHaveBeenCalledWith('generate-portrait-illustration', {
       portraitVersionId: 'version-1',
+    });
+    expect(mockedInvoke).toHaveBeenCalledWith('generate-portrait-illustration', {
+      portraitVersionId: 'version-2',
     });
     expect(mockedInvoke).toHaveBeenCalledWith('delete-portrait-version', {
       portraitVersionId: 'version-1',

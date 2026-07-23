@@ -59,12 +59,47 @@ export async function handleDeleteFamilyMember(
     return errorResponse('Not authorized', 403, 'forbidden');
   }
 
+  const memberId = member.id;
+  const deletionToken = crypto.randomUUID();
+  const { data: claimed, error: claimError } = await supabase.rpc(
+    'claim_family_member_deletion_fence',
+    {
+      p_family_member_id: memberId,
+      p_delete_token: deletionToken,
+    },
+  );
+  if (claimError || !claimed) {
+    if (claimError?.message === 'Fresh portrait generation is still active') {
+      return errorResponse(
+        'Portrait generation is still in progress',
+        409,
+        'PORTRAIT_GENERATION_IN_PROGRESS',
+      );
+    }
+    return errorResponse('Family member deletion already in progress', 409, 'DELETION_IN_PROGRESS');
+  }
+
+  let fenceHeld = true;
+  async function releaseFence(): Promise<void> {
+    if (!fenceHeld) return;
+    const { error: releaseError } = await supabase.rpc('release_family_member_deletion_fence', {
+      p_family_member_id: memberId,
+      p_delete_token: deletionToken,
+    });
+    if (releaseError) {
+      console.error('delete-family-member deletion fence release failed', memberId);
+      return;
+    }
+    fenceHeld = false;
+  }
+
   const { data: versions, error: versionsError } = await supabase
     .from('family_member_portrait_versions')
-    .select('profile_picture_key')
+    .select('profile_picture_key, illustrated_profile_key, generation_output_key')
     .eq('family_member_id', member.id);
   if (versionsError) {
     console.error('delete-family-member portrait lookup failed', member.id, versionsError.message);
+    await releaseFence();
     return errorResponse('Failed to load portrait versions', 500, 'internal_error');
   }
   const keys = [member.profile_picture_key, member.illustrated_profile_key].filter(
@@ -72,6 +107,8 @@ export async function handleDeleteFamilyMember(
   );
   try {
     for (const version of versions ?? []) {
+      if (version.illustrated_profile_key) keys.push(version.illustrated_profile_key);
+      if (version.generation_output_key) keys.push(version.generation_output_key);
       const prefix = version.profile_picture_key.slice(0, -'photo.jpg'.length);
       keys.push(...(await dependencies.listObjectKeys(prefix)));
     }
@@ -82,13 +119,16 @@ export async function handleDeleteFamilyMember(
       member.id,
       storageError instanceof Error ? storageError.message : 'unknown',
     );
+    await releaseFence();
     return errorResponse('Family member deletion interrupted', 500, 'DELETION_INTERRUPTED');
   }
 
   const { error: deleteError } = await supabase.from('family_members').delete().eq('id', member.id);
   if (deleteError) {
+    await releaseFence();
     return errorResponse('Failed to delete family member', 500, 'internal_error');
   }
+  fenceHeld = false; // the cascade removes the fence-bearing row atomically
   return jsonResponse({ success: true });
 }
 

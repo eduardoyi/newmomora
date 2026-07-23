@@ -210,6 +210,22 @@ describe('PortraitTimeline', () => {
     expect(getByText('Keep at least one finished portrait before removing this one')).toBeTruthy();
   });
 
+  it('disables regenerate immediately when a fresh server generation claim arrives', async () => {
+    const { getByTestId, rerender } = render(<PortraitTimeline {...baseProps} />);
+
+    fireEvent.press(getByTestId('portrait-version-ready-1-actions'));
+    rerender(
+      <PortraitTimeline
+        {...baseProps}
+        versions={[{ ...ready, isGenerating: true }, failed]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId('portrait-action-regenerate').props.accessibilityState.disabled).toBe(true);
+    });
+  });
+
   it('restores a recovered Android picker result into date confirmation', () => {
     const { getByTestId, getByText, queryByText, queryByTestId } = render(
       <PortraitTimeline

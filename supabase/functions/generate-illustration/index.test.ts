@@ -7,6 +7,7 @@ import {
   ILLUSTRATION_GENERATION_TIMEOUT_MS,
   isFreshMatchingWorkflowJob,
 } from './index.ts';
+import { signedPortraitMemoryRetriggerHeaders } from '../_shared/portrait-memory-retrigger.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const MEMORY_ID = '22222222-2222-4222-8222-222222222222';
@@ -33,6 +34,7 @@ interface MockNetworkResult {
 const TEST_ENV = {
   SUPABASE_URL: 'https://supabase.test',
   SUPABASE_ANON_KEY: 'test-anon-key',
+  SUPABASE_SERVICE_ROLE_KEY: 'test-service-role-key',
   OPENAI_API_KEY: 'test-openai-key',
 } as const;
 
@@ -47,6 +49,7 @@ async function withMockedIllustrationNetwork(
     // deferral path's initial check vs. the self-retrigger's post-reset
     // recheck.
     portraitVersions?: Record<string, unknown>[] | (() => Record<string, unknown>[]);
+    membershipRows?: Array<{ family_id: string; role: string }>;
   } = {},
 ): Promise<void> {
   const originalFetch = globalThis.fetch;
@@ -124,7 +127,7 @@ async function withMockedIllustrationNetwork(
       }
 
       if (table === 'family_memberships') {
-        return jsonResponse([{ family_id: FAMILY_ID, role: 'owner' }]);
+        return jsonResponse(options.membershipRows ?? [{ family_id: FAMILY_ID, role: 'owner' }]);
       }
 
       if (table === 'memory_family_members') {
@@ -234,6 +237,22 @@ function authenticatedRequest(): Request {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ memoryId: MEMORY_ID }),
+  });
+}
+
+async function internalPortraitRecoveryRequest(
+  input: { actorUserId?: string; familyId?: string } = {},
+): Promise<Request> {
+  const rawBody = JSON.stringify({
+    memoryId: MEMORY_ID,
+    requestIntent: 'recovery',
+    actorUserId: input.actorUserId ?? USER_ID,
+    familyId: input.familyId ?? FAMILY_ID,
+  });
+  return new Request('http://localhost/generate-illustration', {
+    method: 'POST',
+    headers: await signedPortraitMemoryRetriggerHeaders(rawBody),
+    body: rawBody,
   });
 }
 
@@ -671,7 +690,7 @@ function freshUnclaimedPendingPortraitRow(
     deletion_token: null,
     generation_token: null,
     generation_started_at: null,
-    // Well within the ~5-minute unclaimed-pending grace window.
+    // Well within the three-minute unclaimed-pending grace window.
     created_at: new Date(Date.now() - 60_000).toISOString(),
     ...overrides,
   };
@@ -832,8 +851,8 @@ Deno.test(
           freshUnclaimedPendingPortraitRow({
             illustrated_profile_status: 'generating',
             generation_token: 'stale-attempt-token',
-            // Past the RPC's own 15-minute reclaim window.
-            generation_started_at: new Date(Date.now() - 16 * 60 * 1000).toISOString(),
+            // Past the RPC's own 5:30 reclaim window.
+            generation_started_at: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
           }),
         ],
       },
@@ -921,6 +940,89 @@ Deno.test(
     );
   },
 );
+
+Deno.test('signed portrait memory recovery revalidates the initiating actor for the exact family', async () => {
+  const previous = Deno.env.get('PORTRAIT_MEMORY_RETRIGGER_SECRET');
+  Deno.env.set('PORTRAIT_MEMORY_RETRIGGER_SECRET', 'portrait-retrigger-test-secret');
+  try {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon drawing with crayons.',
+      async () => {
+        const response = await handleGenerateIllustration(
+          await internalPortraitRecoveryRequest({
+            actorUserId: '99999999-9999-4999-8999-999999999999',
+          }),
+        );
+        assertEquals(response.status, 403);
+        assertEquals((await response.json()).code, 'forbidden');
+      },
+      [MEMBER_ID],
+      {},
+      { membershipRows: [] },
+    );
+  } finally {
+    if (previous === undefined) Deno.env.delete('PORTRAIT_MEMORY_RETRIGGER_SECRET');
+    else Deno.env.set('PORTRAIT_MEMORY_RETRIGGER_SECRET', previous);
+  }
+});
+
+Deno.test('signed portrait memory recovery preserves the portrait-deferral self-retrigger race closer', async () => {
+  const previous = Deno.env.get('PORTRAIT_MEMORY_RETRIGGER_SECRET');
+  Deno.env.set('PORTRAIT_MEMORY_RETRIGGER_SECRET', 'portrait-retrigger-test-secret');
+  try {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon drawing with crayons.',
+      async (network) => {
+        let backgroundTask: Promise<void> | undefined;
+        const redispatches: Array<{ body: string; headers: HeadersInit }> = [];
+        const response = await handleGenerateIllustration(
+          await internalPortraitRecoveryRequest(),
+          {
+            waitUntil: (task) => { backgroundTask = task; },
+            fetch: (async (_input, init) => {
+              redispatches.push({ body: String(init?.body), headers: init?.headers ?? {} });
+              return new Response(null, { status: 202 });
+            }) as typeof fetch,
+          },
+        );
+        assertEquals(response.status, 409);
+        assertEquals((await response.json()).code, 'PORTRAITS_NOT_READY');
+        assertEquals(
+          network.memoryPatches.some(({ payload }) =>
+            payload.illustration_status === 'pending' && payload.illustration_generation_attempt_id === null
+          ),
+          true,
+        );
+        await backgroundTask;
+        assertEquals(redispatches.length, 1);
+        assertEquals(JSON.parse(redispatches[0].body), {
+          memoryId: MEMORY_ID,
+          requestIntent: 'recovery',
+          actorUserId: USER_ID,
+          familyId: FAMILY_ID,
+        });
+        assertEquals(
+          Boolean((redispatches[0].headers as Record<string, string>)['x-portrait-retrigger-signature']),
+          true,
+        );
+      },
+      [MEMBER_ID],
+      {},
+      {
+        portraitVersions: (() => {
+          let call = 0;
+          return () => {
+            call += 1;
+            return call === 1 ? [freshUnclaimedPendingPortraitRow()] : [readyPortraitRow()];
+          };
+        })(),
+      },
+    );
+  } finally {
+    if (previous === undefined) Deno.env.delete('PORTRAIT_MEMORY_RETRIGGER_SECRET');
+    else Deno.env.set('PORTRAIT_MEMORY_RETRIGGER_SECRET', previous);
+  }
+});
 
 Deno.test(
   'generate-illustration leaves NO_PORTRAITS/failed unchanged when no member has any portrait version',

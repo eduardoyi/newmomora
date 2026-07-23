@@ -1,6 +1,9 @@
 # Copy to .dev.vars. Never commit real values.
 ENVIRONMENT=development
 SUPABASE_BRIDGE_URL=http://127.0.0.1:54321/functions/v1/workflow-illustration-bridge
+PORTRAIT_SUPABASE_BRIDGE_URL=http://127.0.0.1:54321/functions/v1/workflow-portrait-bridge
 DISPATCH_SIGNING_SECRET=
 SUPABASE_BRIDGE_HMAC_SECRET=
+PORTRAIT_DISPATCH_SIGNING_SECRET=
+PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET=
 OPENAI_API_KEY=

@@ -91,6 +91,29 @@ export async function editImage(
   }
 }
 
+/**
+ * Portraits always edit from two references. Reference order is meaningful to
+ * the prompt contract: the canonical style comes first, then the source
+ * person. Do not add a text-only fallback here.
+ */
+export async function editPortraitImage(
+  env: Env,
+  model: IllustrationModel,
+  prompt: string,
+  styleReference: LoadedReference,
+  sourceReference: LoadedReference,
+  signal: AbortSignal,
+): Promise<ArrayBuffer> {
+  return await editImage(
+    env,
+    model,
+    prompt,
+    [styleReference, sourceReference],
+    undefined,
+    signal,
+  );
+}
+
 function decodeBase64(base64: string): ArrayBuffer {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);

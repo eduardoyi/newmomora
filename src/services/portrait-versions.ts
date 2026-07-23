@@ -14,6 +14,14 @@ export interface PortraitVersionServiceError {
   code?: string;
 }
 
+/** Both the legacy background function and durable dispatcher are successful. */
+export interface GeneratePortraitVersionResponse {
+  success?: boolean;
+  /** Present when the Cloudflare Workflow dispatcher accepted durable work. */
+  queued?: boolean;
+  jobId?: string;
+}
+
 export interface CreatePortraitVersionInput {
   userId: string;
   familyId: string;
@@ -132,11 +140,17 @@ export async function updatePortraitVersionDate(
 
 export async function generatePortraitVersion(
   portraitVersionId: string,
-): Promise<{ error: PortraitVersionServiceError | null }> {
-  const { error } = await invokeEdgeFunction('generate-portrait-illustration', {
+): Promise<{
+  data: GeneratePortraitVersionResponse | null;
+  error: PortraitVersionServiceError | null;
+}> {
+  const { data, error } = await invokeEdgeFunction<GeneratePortraitVersionResponse>('generate-portrait-illustration', {
     portraitVersionId,
   });
-  return { error };
+  // Legacy callers receive `{ success: true }`; the durable dispatcher adds
+  // `{ queued: true, jobId }`. Both mean the server accepted the same public
+  // request and owns all subsequent state changes.
+  return { data, error };
 }
 
 export async function deletePortraitVersion(

@@ -30,6 +30,13 @@ import {
   hasFreshInFlightPortraitVersion,
   type PortraitFreshnessCandidate,
 } from '../_shared/portrait-readiness.ts';
+import {
+  hasPortraitMemoryRetriggerHeaders,
+  isPortraitMemoryRetriggerRequest,
+  isSignedPortraitMemoryRetrigger,
+  signedPortraitMemoryRetriggerHeaders,
+  type PortraitMemoryRetriggerRequest,
+} from '../_shared/portrait-memory-retrigger.ts';
 import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
 import { resolvePortraitVersionAtDate } from '../_shared/portrait-versions.ts';
 
@@ -130,6 +137,36 @@ export async function defaultInvokeGenerateIllustration(
   if (!response.ok) {
     throw new Error(`Self-retrigger invoke failed with status ${response.status}`);
   }
+}
+
+async function invokeInternalPortraitMemoryRecovery(
+  fetchFn: typeof fetch,
+  memoryId: string,
+  actorUserId: string,
+  familyId: string,
+): Promise<void> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
+  if (!supabaseUrl || !anonKey) throw new Error('Missing Supabase recovery configuration');
+  const payload: PortraitMemoryRetriggerRequest = {
+    memoryId,
+    requestIntent: 'recovery',
+    actorUserId,
+    familyId,
+  };
+  const rawBody = JSON.stringify(payload);
+  const response = await fetchFn(`${supabaseUrl}/functions/v1/generate-illustration`, {
+    method: 'POST',
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${anonKey}`,
+      ...await signedPortraitMemoryRetriggerHeaders(rawBody),
+    },
+    body: rawBody,
+  });
+  await response.text().catch(() => '');
+  if (response.status === 409) return;
+  if (!response.ok) throw new Error(`Internal memory recovery failed (${response.status})`);
 }
 
 const DEFAULT_DEPENDENCIES: GenerateIllustrationDependencies = {
@@ -318,16 +355,38 @@ export async function handleGenerateIllustration(
 
   const requestStartedAt = Date.now();
 
-  const user = await getAuthenticatedUser(req);
-  if (!user) {
-    return errorResponse('Unauthorized', 401, 'unauthorized');
-  }
-
+  const rawBody = await req.text();
   let body: GenerateIllustrationRequest;
-  try {
-    body = await req.json();
-  } catch {
-    return errorResponse('Invalid JSON body', 400, 'invalid_json');
+  let internalPortraitRetrigger: PortraitMemoryRetriggerRequest | null = null;
+  let callerId: string;
+  let authHeader: string | null = null;
+
+  if (hasPortraitMemoryRetriggerHeaders(req)) {
+    if (!(await isSignedPortraitMemoryRetrigger(req, rawBody))) {
+      return errorResponse('Unauthorized', 401, 'unauthorized');
+    }
+    try {
+      const parsed = JSON.parse(rawBody) as unknown;
+      if (!isPortraitMemoryRetriggerRequest(parsed)) {
+        return errorResponse('Invalid portrait recovery request', 400, 'validation_error');
+      }
+      internalPortraitRetrigger = parsed;
+      body = parsed;
+      callerId = parsed.actorUserId;
+    } catch {
+      return errorResponse('Invalid JSON body', 400, 'invalid_json');
+    }
+  } else {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return errorResponse('Unauthorized', 401, 'unauthorized');
+    try {
+      body = JSON.parse(rawBody) as GenerateIllustrationRequest;
+    } catch {
+      return errorResponse('Invalid JSON body', 400, 'invalid_json');
+    }
+    callerId = user.id;
+    authHeader = req.headers.get('Authorization');
+    if (!authHeader) return errorResponse('Unauthorized', 401, 'unauthorized');
   }
 
   const { memoryId, colorPalette, forceRegenerate = false, requestIntent } = body;
@@ -340,12 +399,12 @@ export async function handleGenerateIllustration(
     return errorResponse('Invalid request intent', 400, 'validation_error');
   }
 
-  const authHeader = req.headers.get('Authorization');
-  if (!authHeader) {
-    return errorResponse('Unauthorized', 401, 'unauthorized');
-  }
-
-  const supabase = createUserClient(authHeader);
+  // A signed portrait terminal callback is server-to-server only. It uses a
+  // service client after HMAC validation, then still revalidates that the
+  // stored initiating actor remains manager of this exact memory family.
+  const supabase = internalPortraitRetrigger
+    ? dependencies.createServiceClient()
+    : createUserClient(authHeader!);
 
   let { data: memory, error: memoryError } = await supabase
     .from('memories')
@@ -364,7 +423,10 @@ export async function handleGenerateIllustration(
     return errorResponse('Memory not found', 404, 'MEMORY_NOT_FOUND');
   }
 
-  const callerRole = await getCallerFamilyRole(supabase, memory.family_id, user.id);
+  if (internalPortraitRetrigger && internalPortraitRetrigger.familyId !== memory.family_id) {
+    return errorResponse('Not authorized for this memory', 403, 'forbidden');
+  }
+  const callerRole = await getCallerFamilyRole(supabase, memory.family_id, callerId);
   if (!isManagerRole(callerRole)) {
     return errorResponse('Not authorized for this memory', 403, 'forbidden');
   }
@@ -481,41 +543,73 @@ export async function handleGenerateIllustration(
   }
 
   const generationAttemptId = dependencies.createId();
-  let startUpdate = supabase
-    .from('memories')
-    .update({
-      illustration_status: 'generating',
-      illustration_generation_started_at: new Date().toISOString(),
-      illustration_generation_attempt_id: generationAttemptId,
-    })
-    .eq('id', memoryId)
-    .eq('content', memory.content)
-    .eq('memory_date', memory.memory_date)
-    .eq('memory_type', memory.memory_type)
-    .eq('illustration_status', memory.illustration_status);
+  let generationClaimed = false;
+  if (backend === 'cloudflare') {
+    // Lock active jobs before the memory publication row. A simple client
+    // UPDATE would take the memory row first and could replace a job while
+    // its Worker is between upload authorization and immutable R2 PUT.
+    const { data, error } = await dependencies.createServiceClient().rpc(
+      'claim_memory_illustration_workflow_generation',
+      {
+        p_memory_id: memoryId,
+        p_attempt_id: generationAttemptId,
+        p_actor_user_id: callerId,
+        p_expected_content: memory.content,
+        p_expected_memory_date: memory.memory_date,
+        p_expected_memory_type: memory.memory_type,
+        p_expected_emotion: memory.emotion,
+        p_expected_status: memory.illustration_status,
+        p_expected_generation_id: memory.illustration_generation_id,
+        p_expected_prior_attempt_id: memory.illustration_generation_attempt_id,
+        p_expected_illustration_key: memory.illustration_key,
+      },
+    );
+    if (error) {
+      if (error.message === 'Illustration output upload is still active') {
+        return errorResponse('Illustration output upload is still in progress', 409, 'GENERATION_IN_PROGRESS');
+      }
+      console.error('generate-illustration workflow claim failed', error.message);
+      return errorResponse('Failed to start illustration generation', 500, 'internal_error');
+    }
+    generationClaimed = data === true;
+  } else {
+    let startUpdate = supabase
+      .from('memories')
+      .update({
+        illustration_status: 'generating',
+        illustration_generation_started_at: new Date().toISOString(),
+        illustration_generation_attempt_id: generationAttemptId,
+      })
+      .eq('id', memoryId)
+      .eq('content', memory.content)
+      .eq('memory_date', memory.memory_date)
+      .eq('memory_type', memory.memory_type)
+      .eq('illustration_status', memory.illustration_status);
 
-  startUpdate = memory.emotion
-    ? startUpdate.eq('emotion', memory.emotion)
-    : startUpdate.is('emotion', null);
-  startUpdate = memory.illustration_generation_id
-    ? startUpdate.eq('illustration_generation_id', memory.illustration_generation_id)
-    : startUpdate.is('illustration_generation_id', null);
-  startUpdate = memory.illustration_generation_attempt_id
-    ? startUpdate.eq('illustration_generation_attempt_id', memory.illustration_generation_attempt_id)
-    : startUpdate.is('illustration_generation_attempt_id', null);
-  startUpdate = memory.illustration_key
-    ? startUpdate.eq('illustration_key', memory.illustration_key)
-    : startUpdate.is('illustration_key', null);
+    startUpdate = memory.emotion
+      ? startUpdate.eq('emotion', memory.emotion)
+      : startUpdate.is('emotion', null);
+    startUpdate = memory.illustration_generation_id
+      ? startUpdate.eq('illustration_generation_id', memory.illustration_generation_id)
+      : startUpdate.is('illustration_generation_id', null);
+    startUpdate = memory.illustration_generation_attempt_id
+      ? startUpdate.eq('illustration_generation_attempt_id', memory.illustration_generation_attempt_id)
+      : startUpdate.is('illustration_generation_attempt_id', null);
+    startUpdate = memory.illustration_key
+      ? startUpdate.eq('illustration_key', memory.illustration_key)
+      : startUpdate.is('illustration_key', null);
 
-  const { data: startedMemory, error: startError } = await startUpdate
-    .select('id')
-    .maybeSingle();
-
-  if (startError) {
-    console.error('generate-illustration start update failed', startError.message);
-    return errorResponse('Failed to start illustration generation', 500, 'internal_error');
+    const { data: startedMemory, error: startError } = await startUpdate
+      .select('id')
+      .maybeSingle();
+    if (startError) {
+      console.error('generate-illustration start update failed', startError.message);
+      return errorResponse('Failed to start illustration generation', 500, 'internal_error');
+    }
+    generationClaimed = Boolean(startedMemory);
   }
-  if (!startedMemory) {
+
+  if (!generationClaimed) {
     return errorResponse('Illustration generation was superseded', 409, 'GENERATION_SUPERSEDED');
   }
 
@@ -550,7 +644,7 @@ export async function handleGenerateIllustration(
   // Narrowing from the earlier null checks above doesn't carry into a nested
   // function declaration, so alias the already-validated values here.
   const memoryDateForRetriggerRecheck = memory.memory_date;
-  const authHeaderForRetrigger = authHeader;
+  const authHeaderForRetrigger = authHeader ?? '';
 
   // Runs only for the no-key deferral path, after the `finally` reset below
   // lands. While this invocation held the CAS claim, the memory read
@@ -595,7 +689,16 @@ export async function handleGenerateIllustration(
         return;
       }
 
-      await dependencies.invokeGenerateIllustration(memoryId, authHeaderForRetrigger);
+      if (internalPortraitRetrigger) {
+        await invokeInternalPortraitMemoryRecovery(
+          dependencies.fetch,
+          memoryId,
+          internalPortraitRetrigger.actorUserId,
+          internalPortraitRetrigger.familyId,
+        );
+      } else {
+        await dependencies.invokeGenerateIllustration(memoryId, authHeaderForRetrigger);
+      }
     } catch (error) {
       console.error(
         'generate-illustration self-retrigger failed',
@@ -755,7 +858,7 @@ export async function handleGenerateIllustration(
     );
 
     const illustrationGenerationId = dependencies.createId();
-    const illustrationKey = buildMemoryIllustrationKey(user.id, memoryId, illustrationGenerationId);
+    const illustrationKey = buildMemoryIllustrationKey(callerId, memoryId, illustrationGenerationId);
     const normalizedEmotion = normalizeEmotion(memory.emotion);
     const resolvedPalette =
       analyzedPalette ??
@@ -784,7 +887,7 @@ export async function handleGenerateIllustration(
       // The Workflow event has only this job id. Prompt inputs remain in the
       // private jobs table and are fetched within the paid Workflow step.
       const jobId = generationAttemptId;
-      const illustrationKey = buildMemoryIllustrationKey(user.id, memoryId, jobId);
+      const illustrationKey = buildMemoryIllustrationKey(callerId, memoryId, jobId);
       const referenceCandidates = readyMembers.map((member) => ({
         memberId: member.id,
         name: member.name,
@@ -795,23 +898,23 @@ export async function handleGenerateIllustration(
         profileContentType: 'image/jpeg',
       }));
       const service = dependencies.createServiceClient();
-      // Reaching here means there is no fresh matching active job: this is a
-      // manual replacement, an expired lease, or an edit invalidated the old
-      // attempt. Supersede/scrub before insert so the one-active-job index
-      // cannot strand recovery behind a job that cannot publish.
-      if (backend === 'cloudflare') {
-        const { error: supersedeError } = await service
-          .from('memory_illustration_jobs')
-          .update({
-            status: 'superseded',
-            completed_at: new Date().toISOString(),
-            safe_scene_description: null,
-            reference_candidates: [],
-            illustration_prompt: null,
-          })
-          .eq('memory_id', memoryId)
-          .in('status', ['queued', 'running']);
-        if (supersedeError) throw new Error('Failed to supersede prior illustration workflow job');
+      // Supersede only after the DB claim has proved no fresh upload lease is
+      // in-flight. This keeps the unique active-job index and R2 cleanup
+      // coherent under manual regeneration/recovery.
+      const { data: supersedeRows, error: supersedeError } = await service.rpc(
+        'supersede_memory_illustration_workflow_jobs',
+        { p_memory_id: memoryId, p_current_attempt_id: generationAttemptId },
+      );
+      if (supersedeError) throw new Error('Failed to supersede prior illustration workflow job');
+      const supersedeOutcome = supersedeRows?.[0] as {
+        superseded?: boolean;
+        output_key?: string | null;
+      } | undefined;
+      if (!supersedeOutcome?.superseded) {
+        return errorResponse('Illustration output upload is still in progress', 409, 'GENERATION_IN_PROGRESS');
+      }
+      if (supersedeOutcome.output_key && supersedeOutcome.output_key !== memory.illustration_key) {
+        await dependencies.deleteObject(supersedeOutcome.output_key).catch(() => undefined);
       }
       const { error: jobError } = await service.from('memory_illustration_jobs').insert({
         id: jobId,

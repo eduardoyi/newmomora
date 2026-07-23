@@ -1,9 +1,21 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 
-import { callBridge, BridgeError } from './bridge';
+import {
+  authorizeMemoryUpload,
+  callBridge,
+  BridgeError,
+  failMemoryJob,
+  recordMemoryUploadComplete,
+} from './bridge';
 import { editImage, ImageProviderError } from './openai';
 import { loadIllustrationReferences } from './references';
+import {
+  confirmExistingUploadWithLease,
+  hasAmbiguousUploadOutput,
+  uploadWithLease,
+  UploadLeaseError,
+} from './upload-lease';
 import type {
   BridgeGetInputResponse,
   BridgePublishResponse,
@@ -26,7 +38,6 @@ const FALLBACK_ATTEMPT_WINDOW_MS = 60_000;
 const MINIMUM_PRIMARY_WINDOW_MS = 60_000;
 const BRIDGE_STEP_RETRIES = { limit: 3, delay: '2 seconds', backoff: 'exponential' } as const;
 const BRIDGE_OPERATION_ATTEMPTS = 3;
-const R2_UPLOAD_ATTEMPTS = 3;
 
 interface PublicationResult {
   published: boolean;
@@ -35,12 +46,12 @@ interface PublicationResult {
 }
 
 function errorCode(error: unknown): string {
-  if (error instanceof ImageProviderError || error instanceof BridgeError) {
+  if (error instanceof ImageProviderError || error instanceof BridgeError || error instanceof UploadLeaseError) {
     return error.code;
   }
   if (
     error instanceof Error &&
-    ['NO_USABLE_REFERENCES', 'GENERATION_TIMEOUT', 'ATTEMPT_CAP_EXHAUSTED', 'INVALID_JOB_INPUT', 'R2_UPLOAD_FAILED'].includes(error.message)
+    ['NO_USABLE_REFERENCES', 'GENERATION_TIMEOUT', 'ATTEMPT_CAP_EXHAUSTED', 'INVALID_JOB_INPUT'].includes(error.message)
   ) {
     return error.message;
   }
@@ -103,10 +114,14 @@ async function callBridgeWithRetry<T>(
   operation: Parameters<typeof callBridge>[1],
   payload: Record<string, unknown>,
 ): Promise<T> {
+  return await callTypedBridgeWithRetry(() => callBridge<T>(env, operation, payload));
+}
+
+async function callTypedBridgeWithRetry<T>(operation: () => Promise<T>): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt < BRIDGE_OPERATION_ATTEMPTS; attempt += 1) {
     try {
-      return await callBridge<T>(env, operation, payload);
+      return await operation();
     } catch (error) {
       lastError = error;
       if (!(error instanceof BridgeError) || !error.retryable || attempt === BRIDGE_OPERATION_ATTEMPTS - 1) {
@@ -118,25 +133,44 @@ async function callBridgeWithRetry<T>(
   throw lastError;
 }
 
-async function uploadOutputWithRetry(
+async function uploadOutputWithLease(
   env: Env,
+  jobId: string,
   outputKey: string,
   bytes: ArrayBuffer,
   model: IllustrationModel,
 ): Promise<void> {
-  for (let attempt = 0; attempt < R2_UPLOAD_ATTEMPTS; attempt += 1) {
-    try {
-      await env.MEMORY_ILLUSTRATIONS.put(outputKey, bytes, {
+  await uploadWithLease({
+    authorize: async () => await callTypedBridgeWithRetry(
+      () => authorizeMemoryUpload(env, jobId, outputKey),
+    ),
+    existingObject: async () => Boolean(await env.MEMORY_ILLUSTRATIONS.head(outputKey)),
+    put: async () => {
+      const stored = await env.MEMORY_ILLUSTRATIONS.put(outputKey, bytes, {
         httpMetadata: { contentType: 'image/webp' },
         customMetadata: { model },
       });
-      return;
-    } catch {
-      if (attempt === R2_UPLOAD_ATTEMPTS - 1) {
-        throw new NonRetryableError('R2_UPLOAD_FAILED');
-      }
-    }
-  }
+      if (!stored) throw new Error('R2_PUT_OUTCOME_AMBIGUOUS');
+    },
+    recordComplete: async (uploadToken) => await callTypedBridgeWithRetry(
+      () => recordMemoryUploadComplete(env, jobId, outputKey, uploadToken),
+    ),
+  });
+}
+
+async function confirmExistingOutputUpload(
+  env: Env,
+  jobId: string,
+  outputKey: string,
+): Promise<void> {
+  await confirmExistingUploadWithLease({
+    authorize: async () => await callTypedBridgeWithRetry(
+      () => authorizeMemoryUpload(env, jobId, outputKey),
+    ),
+    recordComplete: async (uploadToken) => await callTypedBridgeWithRetry(
+      () => recordMemoryUploadComplete(env, jobId, outputKey, uploadToken),
+    ),
+  });
 }
 
 async function runImageAttempt(
@@ -166,7 +200,7 @@ async function runImageAttempt(
       references.length >= 3 ? 'medium' : undefined,
       controller.signal,
     );
-    await uploadOutputWithRetry(env, job.outputKey, bytes, model);
+    await uploadOutputWithLease(env, job.jobId, job.outputKey, bytes, model);
     return { outputKey: job.outputKey, model };
   } finally {
     clearTimeout(timeout);
@@ -181,6 +215,9 @@ export async function generateAndUpload(env: Env, jobId: string): Promise<Genera
 
   const alreadyUploaded = await env.MEMORY_ILLUSTRATIONS.head(job.outputKey);
   if (alreadyUploaded) {
+    // A prior PUT may have succeeded while its completion response was lost.
+    // Confirm the exact upload fence before allowing publication.
+    await confirmExistingOutputUpload(env, job.jobId, job.outputKey);
     const model = alreadyUploaded.customMetadata?.model;
     return {
       outputKey: job.outputKey,
@@ -273,15 +310,23 @@ export class MemoryIllustrationWorkflow extends WorkflowEntrypoint<Env, Workflow
         async () => await generateAndUpload(this.env, jobId),
       );
     } catch (error) {
+      if (hasAmbiguousUploadOutput(error)) {
+        // The deterministic object may exist. Leave the job and upload lease
+        // for recovery rather than terminalizing and deleting a valid result.
+        throw error;
+      }
       const code = errorCode(error);
-      await step.do(
+      const terminal = await step.do(
         'record generation failure',
         { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds', sensitive: 'output' },
-        async () => {
-          await callBridge(this.env, 'fail', { jobId, errorCode: code });
-          return { jobId, code };
-        },
+        async () => await failMemoryJob(this.env, jobId, code),
       );
+      if (terminal.deleteOutput) {
+        await step.do('delete failed illustration output', { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds' }, async () => {
+          await deleteIfPresent(this.env, terminal.outputKey);
+          return { jobId, deleted: Boolean(terminal.outputKey) };
+        });
+      }
       return { jobId, status: 'failed', code };
     }
 

@@ -26,7 +26,7 @@ function version(overrides: Partial<PortraitFreshnessCandidate>): PortraitFreshn
   };
 }
 
-Deno.test('claimed row within the 15-minute reclaim window is fresh in-flight', () => {
+Deno.test('claimed row within the 5:30 reclaim window is fresh in-flight', () => {
   const claimed = version({
     illustrated_profile_status: 'generating',
     generation_token: 'attempt-1',
@@ -36,7 +36,7 @@ Deno.test('claimed row within the 15-minute reclaim window is fresh in-flight', 
   assertEquals(isFreshInFlightPortraitVersion(claimed, NOW), true);
 });
 
-Deno.test('claimed row past the 15-minute reclaim window is stale', () => {
+Deno.test('claimed row past the 5:30 reclaim window is stale', () => {
   const staleClaim = version({
     illustrated_profile_status: 'generating',
     generation_token: 'attempt-1',
@@ -46,7 +46,7 @@ Deno.test('claimed row past the 15-minute reclaim window is stale', () => {
   assertEquals(isFreshInFlightPortraitVersion(staleClaim, NOW), false);
 });
 
-Deno.test('unclaimed pending row within the 5-minute grace window is fresh in-flight', () => {
+Deno.test('unclaimed pending row within the 3-minute grace window is fresh in-flight', () => {
   const unclaimed = version({
     illustrated_profile_status: 'pending',
     generation_token: null,
@@ -57,7 +57,7 @@ Deno.test('unclaimed pending row within the 5-minute grace window is fresh in-fl
   assertEquals(isFreshInFlightPortraitVersion(unclaimed, NOW), true);
 });
 
-Deno.test('unclaimed pending row past the 5-minute grace window is stale', () => {
+Deno.test('unclaimed pending row past the 3-minute grace window is stale', () => {
   const staleUnclaimed = version({
     illustrated_profile_status: 'pending',
     generation_token: null,

@@ -9,12 +9,15 @@
   },
   "vars": {
     "ENVIRONMENT": "production",
-    "SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-illustration-bridge"
+    "SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-illustration-bridge",
+    "PORTRAIT_SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-portrait-bridge"
   },
   "secrets": {
     "required": [
       "DISPATCH_SIGNING_SECRET",
       "SUPABASE_BRIDGE_HMAC_SECRET",
+      "PORTRAIT_DISPATCH_SIGNING_SECRET",
+      "PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET",
       "OPENAI_API_KEY"
     ]
   },
@@ -30,6 +33,10 @@
     {
       "binding": "PROFILE_PICTURES",
       "bucket_name": "momora-prod"
+    },
+    {
+      "binding": "STYLE_REFERENCES",
+      "bucket_name": "momora-prod"
     }
   ],
   "images": {
@@ -40,6 +47,11 @@
       "binding": "MEMORY_ILLUSTRATION_WORKFLOW",
       "name": "momora-memory-illustration",
       "class_name": "MemoryIllustrationWorkflow"
+    },
+    {
+      "binding": "PORTRAIT_GENERATION_WORKFLOW",
+      "name": "momora-portrait-generation",
+      "class_name": "PortraitGenerationWorkflow"
     }
   ],
   "env": {
@@ -47,12 +59,15 @@
       "name": "momora-memory-illustration-worker-staging",
       "vars": {
         "ENVIRONMENT": "staging",
-        "SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.functions.supabase.co/workflow-illustration-bridge"
+        "SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/workflow-illustration-bridge",
+        "PORTRAIT_SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/workflow-portrait-bridge"
       },
       "secrets": {
         "required": [
           "DISPATCH_SIGNING_SECRET",
           "SUPABASE_BRIDGE_HMAC_SECRET",
+          "PORTRAIT_DISPATCH_SIGNING_SECRET",
+          "PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET",
           "OPENAI_API_KEY"
         ]
       },
@@ -68,6 +83,10 @@
         {
           "binding": "PROFILE_PICTURES",
           "bucket_name": "REPLACE_WITH_STAGING_PROFILE_PICTURES_BUCKET"
+        },
+        {
+          "binding": "STYLE_REFERENCES",
+          "bucket_name": "REPLACE_WITH_STAGING_MEMORY_ILLUSTRATIONS_BUCKET"
         }
       ],
       "images": {
@@ -78,6 +97,11 @@
           "binding": "MEMORY_ILLUSTRATION_WORKFLOW",
           "name": "momora-memory-illustration-staging",
           "class_name": "MemoryIllustrationWorkflow"
+        },
+        {
+          "binding": "PORTRAIT_GENERATION_WORKFLOW",
+          "name": "momora-portrait-generation-staging",
+          "class_name": "PortraitGenerationWorkflow"
         }
       ]
     }

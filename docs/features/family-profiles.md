@@ -3,7 +3,7 @@
 Create and manage family members with profile photos stored in Cloudflare R2. Onboarding nudges users to add a child first before journaling.
 
 **Status:** `done`
-**Last updated:** 2026-07-20
+**Last updated:** 2026-07-22
 **PRD reference:** [PRD §6.2 Family Profiles](../PRD.md)
 
 ## Overview
@@ -22,8 +22,8 @@ Family profiles power memory tagging and age-aware AI character portraits. Each 
 - **Portrait history:** the member-detail history icon opens paired photos/illustrations with date, age, status, and management actions.
 - **Portrait status:** a new generation can show pending/generating state while the previous ready portrait remains the current avatar. Unique output keys avoid stale cached regeneration results.
 - **Full-screen portrait:** tapping a ready illustrated portrait on the family-member detail page opens it in the same warm, dark full-screen viewer used by memory media. The original profile photo is not substituted when an illustrated portrait is unavailable.
-- **Timeout recovery:** if the portrait Edge Function returns a gateway timeout after moving the row to `generating`, the client conditionally changes an in-progress status to `failed`. This prevents indefinite polling and exposes the existing retry affordance. A concurrently completed `ready` portrait is never overwritten.
-- **Portrait-completion retrigger (cross-feature):** `generate-portrait-illustration`'s background task retriggers any memory illustrations that were waiting on this member's portrait — the onboarding-guaranteed case where the first memory is captured while the just-created member's portrait is still generating. On every background-task exit (finish success, catch-path failure, or a claim-lost bare return), it best-effort invokes `generate-illustration` for up to 3 of this family's `pending` `text_illustration` memories (`created_at` at least 30s old), forwarding the original request's `Authorization` header; failures are logged, never thrown, and never affect the portrait commit/cleanup that runs first. See [memories.md](./memories.md) "Illustration deferral" and [TECH_SPEC §4.1/§4.3](../TECH_SPEC.md#41-generate-portrait-illustration) for the full contract — this doc only notes that portrait generation has this side effect.
+- **Durable recovery:** the client never changes portrait status or claim fields. An owner/manager automatically re-invokes the server only once for an unclaimed pending row older than three minutes, or a claimed attempt older than five minutes thirty seconds; failed versions remain manual retry only. Viewers can observe/poll but cannot trigger recovery. A fresh active attempt disables Regenerate.
+- **Portrait-completion retrigger (cross-feature):** portrait publication or terminal failure retriggers up to three eligible pending illustrated memories that were waiting on this portrait. The durable bridge uses a separate signed internal request and rechecks the original actor's current family-manager access; it never forwards a user JWT through Cloudflare. The client memory recovery loop remains the backstop. See [memories.md](./memories.md) "Illustration deferral" and [TECH_SPEC §4.1/§4.3](../TECH_SPEC.md#41-generate-portrait-illustration) for the full contract.
 
 ## Architecture
 
@@ -40,8 +40,9 @@ flowchart LR
 1. Client inserts the `family_members` identity row.
 2. Client uploads a normalized source JPEG to an immutable version key.
 3. Authorized RPC creates `family_member_portrait_versions` with its date/source.
-4. Client invokes portrait generation asynchronously.
-5. Display resolves the correct version for today or a memory date and uses `get-media-url` (1h TTL).
+4. Client invokes portrait generation asynchronously; Supabase claims the public row and, when `PORTRAIT_GENERATION_BACKEND=cloudflare`, creates a private job and dispatches the existing Cloudflare Worker.
+5. Cloudflare receives only the job ID, loads the frozen source/style references from the same private R2 bucket, and returns publication intent to the signed Supabase bridge.
+6. Display resolves the correct version for today or a memory date and uses `get-media-url` (1h TTL).
 
 ## Data model
 
@@ -49,6 +50,8 @@ flowchart LR
 |-----------------|------|
 | `family_members` | Person identity/profile fields |
 | `family_member_portrait_versions` | Dated source-photo/AI-portrait history and attempt state |
+| `portrait_generation_jobs` | Private durable job state, frozen prompt/reference keys, provider counters, cleanup keys, and terminal result; no client policies |
+| `portrait_generation_workflow_bridge_nonces` | Private timestamped-HMAC replay ledger |
 | R2 `momora-prod` | Private immutable version objects under `{userId}/family/{memberId}/portraits/` |
 
 Key object layout (single bucket):
@@ -64,10 +67,13 @@ Key object layout (single bucket):
 |----------|-------|--------|------|
 | `get-upload-url` | `{ objectKey, contentType, familyId }` | `{ uploadUrl, objectKey, expiresIn }` | JWT + owner/manager of `familyId` |
 | `get-media-url` | `{ keys: string[] }` | `{ urls, expiresIn }` | JWT + member of the key's resolved family |
-| `generate-portrait-illustration` | `{ portraitVersionId }` | ready version key or generation error | JWT + owner/manager |
+| `generate-portrait-illustration` | `{ portraitVersionId }` | Compatible accepted response: legacy `{ success: true }` or durable `{ success: true, queued: true, jobId? }`; publication is asynchronous | JWT + owner/manager |
+| `workflow-portrait-bridge` | private HMAC job operation | Job input/reserve/publish/reconcile/fail/retrigger only; never a client endpoint | Cloudflare Worker |
 | `delete-family-member` | `{ familyMemberId }` | storage-clean member deletion | JWT + owner/manager |
 
 Bucket name comes from Edge Function secret `R2_BUCKET` — not from the client.
+
+The durable executor uses the same `momora-prod` bucket through semantic Worker bindings for profile photos, character portraits, and style references; it does not introduce a staging bucket or lifecycle policy at the current scale. Both source and style references are required. The Workflow performs one `gpt-image-2` edit attempt, then at most one reference-aware `gpt-image-1.5` fallback for retryable provider failures. It requests 1024px WebP output and never makes a text-only fallback call.
 
 ## Client integration
 
@@ -129,6 +135,8 @@ Library picker options request EXIF (never base64) only to read a trustworthy ca
 - Client resizes profile photos to max **2048px** edge and uploads JPEG before presigned PUT
 - R2 credentials never in client; only presigned URLs
 - Failed upload rolls back the new DB row
+- The legacy Edge implementation uses a 120-second provider deadline and remains an immediate rollback behind `PORTRAIT_GENERATION_BACKEND=legacy`. The durable path has a five-minute Workflow lease plus thirty seconds of client/server recovery margin; it is not constrained by the Supabase 150-second function lifetime.
+- Cloudflare has no Supabase service-role credential. It receives a deterministic job ID and calls only a timestamped, nonce-protected bridge. Prompt/reference fields are fetched in the sensitive generate-and-upload step and scrubbed once terminal.
 
 ## Dependencies
 
@@ -156,7 +164,9 @@ Library picker options request EXIF (never base64) only to read a trustworthy ca
 | File | Scenarios |
 |------|-----------|
 | `src/services/family-members.integration.test.ts` | Fetch, create+upload, rollback on failure |
-| `src/hooks/useFamilyMembers.integration.test.tsx` | Query load, create/update mutations, portrait timeout recovery |
+| `src/hooks/useFamilyMembers.integration.test.tsx` | Query load, create/update mutations, async portrait dispatch |
+| `src/services/portrait-versions.integration.test.ts` | Legacy and queued portrait-generation response compatibility |
+| `src/hooks/usePortraitVersions.integration.test.tsx` | Manager-only 3:00/5:30 recovery, once-per-attempt guard, failed/manual behavior, and fresh-attempt regenerate guard |
 | `src/components/full-screen-media-viewer.integration.test.tsx` | Direct portrait URI rendering and close affordance |
 
 ### E2E (Maestro)
@@ -186,6 +196,8 @@ The picker E2E flow exercises the library path only. Camera capture is manual QA
 | `supabase/functions/_shared/storage-keys.test.ts` | Key validation |
 | `supabase/functions/get-upload-url/index.test.ts` | Auth, method guards |
 | `supabase/functions/get-media-url/index.test.ts` | Auth, validation |
+| `supabase/functions/generate-portrait-illustration/index.test.ts`, `workflow-portrait-bridge/index.test.ts` | Dispatch, bridge auth, job CAS/reconcile/failure, and dependent-memory retrigger |
+| `cloudflare/memory-illustration-worker/test/portrait-*.test.ts` | Durable Workflow provider/reference/replay/cleanup policy |
 
 ### Run this feature's tests
 
@@ -200,6 +212,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
+| 2026-07-22 | Moved portrait execution to the existing Cloudflare Worker/Workflow with a Supabase publication bridge, 3:00/5:30 recovery, and signed dependent-memory retriggering |
 | 2026-07-20 | Portrait generation retriggers memory illustrations that deferred waiting on it (see memories.md "Illustration deferral") |
 | 2026-07-15 | Adopt native IME-inset-aware form scrolling for Android edge-to-edge layouts |
 | 2026-07-15 | Added dated portrait history and age-aware memory portrait selection |

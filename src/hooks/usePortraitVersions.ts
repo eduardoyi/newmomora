@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
@@ -18,9 +18,59 @@ import {
   type CreatePortraitVersionInput,
 } from '@/services/portrait-versions';
 import {
+  getPortraitGenerationRecoveryKey,
   isPortraitGenerationStalled,
+  isPortraitGenerationActive,
+  shouldPollPortraitVersions,
+  shouldRecoverPortraitGeneration,
   type PortraitDateSource,
 } from '@/utils/portrait-versions';
+import { canEditFamilyContent } from '@/utils/roles';
+
+// Family pages can mount several consumers of this shared query. Scope
+// automatic dispatch markers to their QueryClient so one stale portrait
+// attempt is recovered only once across all mounted consumers.
+const PORTRAIT_RECOVERY_RETRY_COOLDOWN_MS = 30_000;
+
+interface PortraitRecoveryAttempt {
+  retryTimer?: ReturnType<typeof setTimeout>;
+  state: 'in_flight' | 'succeeded' | 'cooling_down';
+}
+
+const portraitRecoveryAttemptsByQueryClient = new WeakMap<
+  QueryClient,
+  Map<string, PortraitRecoveryAttempt>
+>();
+
+function getPortraitRecoveryAttempts(queryClient: QueryClient): Map<string, PortraitRecoveryAttempt> {
+  const existing = portraitRecoveryAttemptsByQueryClient.get(queryClient);
+  if (existing) return existing;
+
+  const attempts = new Map<string, PortraitRecoveryAttempt>();
+  portraitRecoveryAttemptsByQueryClient.set(queryClient, attempts);
+  return attempts;
+}
+
+function schedulePortraitRecoveryRetry(
+  queryClient: QueryClient,
+  attemptKey: string,
+  attempt: PortraitRecoveryAttempt,
+): void {
+  attempt.state = 'cooling_down';
+  const retryTimer = setTimeout(() => {
+    const attempts = getPortraitRecoveryAttempts(queryClient);
+    // A newer marker must never be cleared by an earlier failed request.
+    if (attempts.get(attemptKey) !== attempt) return;
+
+    attempts.delete(attemptKey);
+    invalidatePortraitConsumers(queryClient);
+  }, PORTRAIT_RECOVERY_RETRY_COOLDOWN_MS);
+  attempt.retryTimer = retryTimer;
+
+  // Node's Jest process must not be kept alive by a retry backoff. React
+  // Native timers do not expose this method, so feature-detect it.
+  (retryTimer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+}
 
 function toError(error: unknown, fallback: string): Error {
   if (error instanceof Error) return error;
@@ -38,9 +88,10 @@ function invalidatePortraitConsumers(queryClient: ReturnType<typeof useQueryClie
 
 export function useFamilyPortraitVersions() {
   const { user } = useAuth();
-  const { familyId } = useFamily();
+  const { familyId, role } = useFamily();
+  const queryClient = useQueryClient();
 
-  return useQuery({
+  const query = useQuery({
     queryKey: portraitVersionsQueryKey(familyId),
     queryFn: async () => {
       if (!familyId) return [];
@@ -50,19 +101,53 @@ export function useFamilyPortraitVersions() {
     },
     enabled: Boolean(user && familyId),
     staleTime: 5 * 60 * 1000,
+    // The app provider wires React Native foreground events into TanStack
+    // Query focus. Always reconcile this small family-batched query there so
+    // a backgrounded app can recover a never-dispatched pending version.
+    refetchOnWindowFocus: 'always',
     refetchInterval: (queryState) => {
-      const hasActiveWork = (queryState.state.data ?? []).some(
-        (version) =>
-          (!isPortraitGenerationStalled(version) && (
-            version.illustrated_profile_status === 'pending' ||
-            version.illustrated_profile_status === 'generating' ||
-            Boolean(version.generation_token)
-          )) ||
-          Boolean(version.deletion_token),
-      );
-      return hasActiveWork ? 3000 : false;
+      return shouldPollPortraitVersions(queryState.state.data ?? []) ? 3000 : false;
     },
   });
+
+  useEffect(() => {
+    if (!user || !familyId || !canEditFamilyContent(role) || !query.data) {
+      return;
+    }
+
+    const attemptedRecoveryKeys = getPortraitRecoveryAttempts(queryClient);
+    const recoverableVersions = query.data.filter((version) => shouldRecoverPortraitGeneration(version));
+
+    for (const version of recoverableVersions) {
+      const recoveryKey = getPortraitGenerationRecoveryKey(version);
+      if (!recoveryKey) continue;
+
+      const attemptKey = `${user.id}:${familyId}:${recoveryKey}`;
+      if (attemptedRecoveryKeys.has(attemptKey)) continue;
+      const recoveryAttempt: PortraitRecoveryAttempt = { state: 'in_flight' };
+      attemptedRecoveryKeys.set(attemptKey, recoveryAttempt);
+
+      // This is a server request only. The client never resets a status,
+      // claim token, or timestamp; the dispatcher decides whether to reclaim
+      // or supersede the attempt.
+      void generatePortraitVersion(version.id)
+        .then(({ error }) => {
+          if (error) {
+            schedulePortraitRecoveryRetry(queryClient, attemptKey, recoveryAttempt);
+            return;
+          }
+          recoveryAttempt.state = 'succeeded';
+        })
+        .catch(() => {
+          schedulePortraitRecoveryRetry(queryClient, attemptKey, recoveryAttempt);
+        })
+        .finally(() => {
+          invalidatePortraitConsumers(queryClient);
+        });
+    }
+  }, [familyId, query.data, query.dataUpdatedAt, queryClient, role, user]);
+
+  return query;
 }
 
 export interface CreatePortraitVersionMutationInput {
@@ -130,6 +215,16 @@ export function usePortraitVersions(familyMemberId: string) {
     onSettled: () => invalidatePortraitConsumers(queryClient),
   });
 
+  const regenerateVersion = (portraitVersionId: string): Promise<void> => {
+    const version = versions.find((candidate) => candidate.id === portraitVersionId);
+    if (version && isPortraitGenerationActive(version) && !isPortraitGenerationStalled(version)) {
+      // The action control is disabled as well. Keep this guard at the hook
+      // boundary so a stale UI event cannot create a duplicate paid job.
+      return Promise.resolve();
+    }
+    return generationMutation.mutateAsync(portraitVersionId);
+  };
+
   const deleteMutation = useMutation({
     mutationFn: async (portraitVersionId: string) => {
       const { error } = await deletePortraitVersion(portraitVersionId);
@@ -148,7 +243,7 @@ export function usePortraitVersions(familyMemberId: string) {
     createVersion: createMutation.mutateAsync,
     editVersionDate: editMutation.mutateAsync,
     retryVersion: generationMutation.mutateAsync,
-    regenerateVersion: generationMutation.mutateAsync,
+    regenerateVersion,
     deleteVersion: deleteMutation.mutateAsync,
     isCreating: createMutation.isPending,
     editingVersionId: editMutation.isPending ? editMutation.variables?.portraitVersionId ?? null : null,

@@ -25,7 +25,7 @@ jest.mock('@/hooks/usePortraitVersions', () => ({
 }));
 
 jest.mock('@/services/portrait-versions', () => ({
-  generatePortraitVersion: jest.fn().mockResolvedValue({ error: null }),
+  generatePortraitVersion: jest.fn().mockResolvedValue({ data: null, error: null }),
 }));
 
 jest.mock('@/services/family-members', () => ({

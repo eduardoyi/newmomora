@@ -7,30 +7,10 @@ export type Json =
   | Json[]
 
 export type Database = {
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.5"
   }
   public: {
     Tables: {
@@ -175,8 +155,11 @@ export type Database = {
       }
       families: {
         Row: {
+          account_deletion_token: string | null
           created_at: string
           deleted_at: string | null
+          deletion_fence_started_at: string | null
+          deletion_fence_token: string | null
           id: string
           illustration_style: string
           name: string
@@ -184,8 +167,11 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          account_deletion_token?: string | null
           created_at?: string
           deleted_at?: string | null
+          deletion_fence_started_at?: string | null
+          deletion_fence_token?: string | null
           id?: string
           illustration_style?: string
           name: string
@@ -193,8 +179,11 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          account_deletion_token?: string | null
           created_at?: string
           deleted_at?: string | null
+          deletion_fence_started_at?: string | null
+          deletion_fence_token?: string | null
           id?: string
           illustration_style?: string
           name?: string
@@ -358,6 +347,8 @@ export type Database = {
           additional_info: string | null
           created_at: string
           date_of_birth: string | null
+          deletion_fence_started_at: string | null
+          deletion_fence_token: string | null
           family_id: string
           gender: string | null
           id: string
@@ -374,6 +365,8 @@ export type Database = {
           additional_info?: string | null
           created_at?: string
           date_of_birth?: string | null
+          deletion_fence_started_at?: string | null
+          deletion_fence_token?: string | null
           family_id: string
           gender?: string | null
           id?: string
@@ -390,6 +383,8 @@ export type Database = {
           additional_info?: string | null
           created_at?: string
           date_of_birth?: string | null
+          deletion_fence_started_at?: string | null
+          deletion_fence_token?: string | null
           family_id?: string
           gender?: string | null
           id?: string
@@ -623,6 +618,7 @@ export type Database = {
           family_id: string
           id: string
           illustration_prompt: string | null
+          last_upload_completed_token: string | null
           memory_date: string
           memory_id: string
           model: string | null
@@ -637,6 +633,8 @@ export type Database = {
           status: string
           style_description: string | null
           updated_at: string
+          upload_started_at: string | null
+          upload_token: string | null
           workflow_instance_id: string
         }
         Insert: {
@@ -651,6 +649,7 @@ export type Database = {
           family_id: string
           id: string
           illustration_prompt?: string | null
+          last_upload_completed_token?: string | null
           memory_date: string
           memory_id: string
           model?: string | null
@@ -665,6 +664,8 @@ export type Database = {
           status?: string
           style_description?: string | null
           updated_at?: string
+          upload_started_at?: string | null
+          upload_token?: string | null
           workflow_instance_id: string
         }
         Update: {
@@ -679,6 +680,7 @@ export type Database = {
           family_id?: string
           id?: string
           illustration_prompt?: string | null
+          last_upload_completed_token?: string | null
           memory_date?: string
           memory_id?: string
           model?: string | null
@@ -693,6 +695,8 @@ export type Database = {
           status?: string
           style_description?: string | null
           updated_at?: string
+          upload_started_at?: string | null
+          upload_token?: string | null
           workflow_instance_id?: string
         }
         Relationships: [
@@ -800,13 +804,130 @@ export type Database = {
           },
         ]
       }
+      portrait_generation_jobs: {
+        Row: {
+          actor_user_id: string | null
+          attempt_id: string
+          completed_at: string | null
+          created_at: string
+          error_code: string | null
+          fallback_attempts: number
+          family_id: string
+          id: string
+          last_upload_completed_token: string | null
+          model: string | null
+          old_portrait_key: string | null
+          output_key: string
+          portrait_prompt: string | null
+          portrait_version_id: string
+          primary_attempts: number
+          provider_deadline_at: string
+          request_intent: string
+          source_photo_key: string | null
+          started_at: string
+          status: string
+          style_reference_key: string | null
+          updated_at: string
+          upload_started_at: string | null
+          upload_token: string | null
+          workflow_instance_id: string
+        }
+        Insert: {
+          actor_user_id?: string | null
+          attempt_id: string
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          fallback_attempts?: number
+          family_id: string
+          id: string
+          last_upload_completed_token?: string | null
+          model?: string | null
+          old_portrait_key?: string | null
+          output_key: string
+          portrait_prompt?: string | null
+          portrait_version_id: string
+          primary_attempts?: number
+          provider_deadline_at: string
+          request_intent: string
+          source_photo_key?: string | null
+          started_at?: string
+          status?: string
+          style_reference_key?: string | null
+          updated_at?: string
+          upload_started_at?: string | null
+          upload_token?: string | null
+          workflow_instance_id: string
+        }
+        Update: {
+          actor_user_id?: string | null
+          attempt_id?: string
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          fallback_attempts?: number
+          family_id?: string
+          id?: string
+          last_upload_completed_token?: string | null
+          model?: string | null
+          old_portrait_key?: string | null
+          output_key?: string
+          portrait_prompt?: string | null
+          portrait_version_id?: string
+          primary_attempts?: number
+          provider_deadline_at?: string
+          request_intent?: string
+          source_photo_key?: string | null
+          started_at?: string
+          status?: string
+          style_reference_key?: string | null
+          updated_at?: string
+          upload_started_at?: string | null
+          upload_token?: string | null
+          workflow_instance_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portrait_generation_jobs_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portrait_generation_jobs_portrait_version_id_fkey"
+            columns: ["portrait_version_id"]
+            isOneToOne: false
+            referencedRelation: "family_member_portrait_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      portrait_generation_workflow_bridge_nonces: {
+        Row: {
+          nonce: string
+          received_at: string
+        }
+        Insert: {
+          nonce: string
+          received_at?: string
+        }
+        Update: {
+          nonce?: string
+          received_at?: string
+        }
+        Relationships: []
+      }
       user_profiles: {
         Row: {
+          account_deletion_token: string | null
           active_family_id: string | null
           created_at: string
           deleted_at: string | null
           enable_daily_reminder: boolean
           expo_push_token: string | null
+          hard_delete_started_at: string | null
+          hard_delete_token: string | null
           has_completed_onboarding: boolean
           id: string
           name: string
@@ -818,11 +939,14 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          account_deletion_token?: string | null
           active_family_id?: string | null
           created_at?: string
           deleted_at?: string | null
           enable_daily_reminder?: boolean
           expo_push_token?: string | null
+          hard_delete_started_at?: string | null
+          hard_delete_token?: string | null
           has_completed_onboarding?: boolean
           id: string
           name: string
@@ -834,11 +958,14 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          account_deletion_token?: string | null
           active_family_id?: string | null
           created_at?: string
           deleted_at?: string | null
           enable_daily_reminder?: boolean
           expo_push_token?: string | null
+          hard_delete_started_at?: string | null
+          hard_delete_token?: string | null
           has_completed_onboarding?: boolean
           id?: string
           name?: string
@@ -864,12 +991,44 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      authorize_memory_illustration_workflow_upload: {
+        Args: { p_job_id: string; p_output_key: string }
+        Returns: {
+          authorized: boolean
+          existing_lease: boolean
+          upload_token: string
+        }[]
+      }
+      authorize_portrait_generation_workflow_upload: {
+        Args: { p_job_id: string; p_output_key: string }
+        Returns: {
+          authorized: boolean
+          existing_lease: boolean
+          upload_token: string
+        }[]
+      }
+      cancel_account_deletion: {
+        Args: { p_owner_id: string }
+        Returns: boolean
+      }
+      claim_account_hard_deletion: {
+        Args: { p_hard_delete_token: string; p_owner_id: string }
+        Returns: boolean
+      }
       claim_content_report_email_alert: {
         Args: { p_report_id: string }
         Returns: {
           attempt_token: string
           report_id: string
         }[]
+      }
+      claim_family_deletion_fence: {
+        Args: { p_delete_token: string; p_family_id: string }
+        Returns: boolean
+      }
+      claim_family_member_deletion_fence: {
+        Args: { p_delete_token: string; p_family_member_id: string }
+        Returns: boolean
       }
       claim_family_member_portrait_deletion: {
         Args: {
@@ -934,6 +1093,22 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      claim_memory_illustration_workflow_generation: {
+        Args: {
+          p_actor_user_id: string
+          p_attempt_id: string
+          p_expected_content: string
+          p_expected_emotion: string
+          p_expected_generation_id: string
+          p_expected_illustration_key: string
+          p_expected_memory_date: string
+          p_expected_memory_type: string
+          p_expected_prior_attempt_id: string
+          p_expected_status: string
+          p_memory_id: string
+        }
+        Returns: boolean
+      }
       create_content_report: {
         Args: {
           p_note?: string
@@ -947,8 +1122,11 @@ export type Database = {
       create_family: {
         Args: { name: string }
         Returns: {
+          account_deletion_token: string | null
           created_at: string
           deleted_at: string | null
+          deletion_fence_started_at: string | null
+          deletion_fence_token: string | null
           id: string
           illustration_style: string
           name: string
@@ -1023,8 +1201,11 @@ export type Database = {
       delete_family: {
         Args: { fam: string }
         Returns: {
+          account_deletion_token: string | null
           created_at: string
           deleted_at: string | null
+          deletion_fence_started_at: string | null
+          deletion_fence_token: string | null
           id: string
           illustration_style: string
           name: string
@@ -1072,6 +1253,13 @@ export type Database = {
           output_key: string
         }[]
       }
+      fail_portrait_generation_workflow_job: {
+        Args: { p_error_code: string; p_job_id: string }
+        Returns: {
+          output_key: string
+          terminal_status: string
+        }[]
+      }
       finish_family_member_portrait_deletion: {
         Args: { delete_token: string; target_version_id: string }
         Returns: boolean
@@ -1106,6 +1294,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      finish_owned_family_deletion_fences: {
+        Args: { p_fences: Json; p_owner_id: string }
+        Returns: boolean
       }
       get_content_report_email_alert_redrive_candidates: {
         Args: { p_limit?: number }
@@ -1178,8 +1370,48 @@ export type Database = {
           published: boolean
         }[]
       }
+      publish_portrait_generation_workflow_job: {
+        Args: { p_job_id: string; p_model: string }
+        Returns: {
+          already_published: boolean
+          old_key: string
+          published: boolean
+        }[]
+      }
+      reconcile_portrait_generation_workflow_job: {
+        Args: { p_job_id: string; p_model: string }
+        Returns: {
+          already_published: boolean
+          old_key: string
+          published: boolean
+        }[]
+      }
+      record_memory_illustration_workflow_upload_complete: {
+        Args: { p_job_id: string; p_output_key: string; p_upload_token: string }
+        Returns: boolean
+      }
+      record_portrait_generation_workflow_upload_complete: {
+        Args: { p_job_id: string; p_output_key: string; p_upload_token: string }
+        Returns: boolean
+      }
+      refresh_account_hard_deletion_claim: {
+        Args: { p_hard_delete_token: string; p_owner_id: string }
+        Returns: boolean
+      }
+      release_account_hard_deletion_claim: {
+        Args: { p_hard_delete_token: string; p_owner_id: string }
+        Returns: boolean
+      }
       release_content_report_email_alert: {
         Args: { p_attempt_token: string; p_report_id: string }
+        Returns: boolean
+      }
+      release_family_deletion_fence: {
+        Args: { p_delete_token: string; p_family_id: string }
+        Returns: boolean
+      }
+      release_family_member_deletion_fence: {
+        Args: { p_delete_token: string; p_family_member_id: string }
         Returns: boolean
       }
       replace_memory_media_assets: {
@@ -1189,6 +1421,18 @@ export type Database = {
       reserve_memory_illustration_provider_attempt: {
         Args: { p_attempt_number: number; p_job_id: string; p_provider: string }
         Returns: boolean
+      }
+      reserve_portrait_generation_provider_attempt: {
+        Args: { p_attempt_number: number; p_job_id: string; p_provider: string }
+        Returns: boolean
+      }
+      schedule_account_deletion: {
+        Args: {
+          p_operation_token: string
+          p_owner_id: string
+          p_scheduled_hard_delete_at: string
+        }
+        Returns: string
       }
       set_family_account_block: {
         Args: {
@@ -1218,6 +1462,17 @@ export type Database = {
           like_count: number
           liked: boolean
         }[]
+      }
+      supersede_memory_illustration_workflow_jobs: {
+        Args: { p_current_attempt_id: string; p_memory_id: string }
+        Returns: {
+          output_key: string
+          superseded: boolean
+        }[]
+      }
+      supersede_portrait_generation_workflow_jobs: {
+        Args: { p_current_attempt_id: string; p_portrait_version_id: string }
+        Returns: number
       }
       update_family_member_portrait_version_date: {
         Args: { portrait_reference_date: string; target_version_id: string }
@@ -1374,9 +1629,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {},
   },

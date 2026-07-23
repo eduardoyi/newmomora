@@ -55,7 +55,8 @@ Copy [\_template.md](./_template.md) when adding a new feature doc.
 | [PRD.md](../PRD.md) | **What** we build and why (product) |
 | [TECH_SPEC.md](../TECH_SPEC.md) | **System** architecture, schema, API contracts |
 | [TESTING.md](../TESTING.md) | **Test** strategy — unit, integration, e2e requirements |
-| [durable-ai-generation-workflows.md](../durable-ai-generation-workflows.md) | **Migration playbook** for long-running AI generation, including the memory reference implementation and portrait blueprint |
+| [durable-ai-generation-workflows.md](../durable-ai-generation-workflows.md) | **Migration playbook** for long-running AI generation, including the memory and portrait reference implementations |
+| [cloudflare-illustration-workflows.md](../cloudflare-illustration-workflows.md) | **Deployment runbook** for the shared memory/portrait Worker, flags, secrets, proof, and rollback |
 | `docs/features/*.md` | **How** each feature works — flows, files, extension points, test inventory |
 
 TECH_SPEC holds canonical API shapes; feature docs explain behavior, integration, and how to build on top.

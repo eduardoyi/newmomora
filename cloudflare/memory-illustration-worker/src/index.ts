@@ -1,4 +1,5 @@
 import { verifySignedBody } from './crypto';
+import { PortraitGenerationWorkflow } from './portrait-workflow';
 import { MemoryIllustrationWorkflow } from './workflow';
 import { WORKFLOW_JOB_ID_PATTERN, type WorkflowDispatchPayload } from './types';
 
@@ -13,10 +14,18 @@ function isDuplicateWorkflowError(error: unknown): boolean {
   return /already exists|duplicate|unique/i.test(message);
 }
 
-async function handleDispatch(request: Request, env: Env): Promise<Response> {
+interface DispatchTarget {
+  workflow: Workflow<WorkflowDispatchPayload>;
+  signingSecret: string;
+}
+
+async function handleDispatch(
+  request: Request,
+  target: DispatchTarget,
+): Promise<Response> {
   const rawBody = await request.text();
   const verified = await verifySignedBody(
-    env.DISPATCH_SIGNING_SECRET,
+    target.signingSecret,
     request.headers.get('x-dispatch-timestamp'),
     request.headers.get('x-dispatch-nonce'),
     request.headers.get('x-dispatch-signature'),
@@ -37,7 +46,7 @@ async function handleDispatch(request: Request, env: Env): Promise<Response> {
   }
 
   try {
-    await env.MEMORY_ILLUSTRATION_WORKFLOW.create({
+    await target.workflow.create({
       id: payload.jobId,
       params: { jobId: payload.jobId },
       retention: { successRetention: '1 day', errorRetention: '1 day' },
@@ -51,13 +60,22 @@ async function handleDispatch(request: Request, env: Env): Promise<Response> {
   }
 }
 
-export { MemoryIllustrationWorkflow };
+export { MemoryIllustrationWorkflow, PortraitGenerationWorkflow };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === 'POST' && url.pathname === '/dispatch') {
-      return await handleDispatch(request, env);
+      return await handleDispatch(request, {
+        workflow: env.MEMORY_ILLUSTRATION_WORKFLOW,
+        signingSecret: env.DISPATCH_SIGNING_SECRET,
+      });
+    }
+    if (request.method === 'POST' && url.pathname === '/dispatch/portrait') {
+      return await handleDispatch(request, {
+        workflow: env.PORTRAIT_GENERATION_WORKFLOW,
+        signingSecret: env.PORTRAIT_DISPATCH_SIGNING_SECRET,
+      });
     }
     if (request.method === 'GET' && url.pathname === '/health') {
       return response({ ok: true });

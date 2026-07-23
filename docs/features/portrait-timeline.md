@@ -22,7 +22,8 @@ A family member can have many immutable source-photo/AI-portrait pairs over time
 - Library photos use trustworthy EXIF shutter/digitized dates when present. Otherwise the date starts at the acting user's local today and remains editable. Camera photos use today.
 - Portrait dates cannot predate the member's DOB or exceed the acting user's current local date. Multiple photos on the same date are allowed.
 - A failed or in-progress generation never displaces an older ready portrait. Regeneration keeps the previous output visible until a new attempt succeeds.
-- Image generation has a 120-second server deadline so ordinary OpenAI hangs persist `failed` before the Edge runtime shuts down. If the runtime is terminated too abruptly for cleanup, the client reclassifies the abandoned attempt as stalled after the existing 15-minute claim-reclaim window and exposes **Try again**.
+- Portrait generation is durable: the request queues a Cloudflare Workflow while Supabase continues to own authorization, the public status row, and compare-and-set publication. A prior ready portrait stays visible throughout regeneration and after failure.
+- Managers recover an unclaimed `pending` version after three minutes and a claimed attempt after five minutes thirty seconds. Recovery only re-invokes the server endpoint; it never writes a portrait status, claim token, or timestamp from the app. The recovery key is `(version id, generation token or immutable pending-row creation time)`, so it fires once per attempt. Viewers only observe and poll; failed versions require a manual retry.
 - There is no automatic “better portrait available” prompt and no automatic regeneration of old memories when portrait history changes.
 - Viewers can see the timeline but cannot mutate it.
 
@@ -33,16 +34,19 @@ flowchart LR
   Picker[Camera or library] --> Date[EXIF or confirmed local date]
   Date --> Upload[get-upload-url]
   Upload --> Source[(Immutable R2 source JPEG)]
-  Source --> Row[portrait version row]
-  Row --> Generate[generate-portrait-illustration]
-  Generate --> Attempt[(Unique R2 attempt object)]
-  Attempt -->|compare-and-swap success| Ready[Ready portrait version]
+  Source --> Row[portrait version row + server claim]
+  Row --> Dispatch[Supabase dispatcher]
+  Dispatch --> Job[Private portrait job]
+  Job --> Workflow[Cloudflare Portrait Workflow]
+  Workflow --> Attempt[(Unique R2 WebP attempt object)]
+  Workflow --> Bridge[Signed Supabase bridge]
+  Bridge -->|compare-and-swap success| Ready[Ready portrait version]
   Ready --> Resolver[Date-aware resolver]
   Resolver --> Current[Current profile avatar]
   Resolver --> Memory[Memory generation and tagged chips]
 ```
 
-Create order is upload source → create row through the authorized RPC → invoke generation. If row creation fails, the client requests rollback deletion of the unreferenced source. Generated attempts use a unique object key; the DB claim token ensures a stale attempt cannot overwrite a newer result.
+Create order is upload source → create row through the authorized RPC → invoke generation. If row creation fails, the client requests rollback deletion of the unreferenced source. The Supabase dispatcher freezes the prompt/source/style keys into a private job and sends only its deterministic job ID to Cloudflare. Generated attempts use a unique object key; the DB claim token ensures a stale attempt cannot overwrite a newer result.
 
 ## Data model
 
@@ -61,6 +65,10 @@ Create order is upload source → create row through the authorized RPC → invo
 | deletion claim fields | Token and start time for idempotent storage/row deletion |
 
 RLS permits family members to read rows. Only owner/manager operations exposed through narrowly authorized RPCs and Edge Functions can create, edit dates, generate, or delete.
+
+### `portrait_generation_jobs` and bridge nonces
+
+The private job row holds the Workflow/attempt identity, frozen prompt and references, provider counters/deadline, output and old-key cleanup data, and a sanitized terminal result. It has no client RLS policy and its private prompt/reference fields are scrubbed at terminal state. `portrait_generation_workflow_bridge_nonces` prevents replay of timestamped Worker-to-Supabase bridge messages. The app reads only `family_member_portrait_versions`.
 
 ### R2 layout
 
@@ -90,7 +98,8 @@ The same resolver is used for today's family avatar, portrait-timeline **Current
 |----------------|-------|-------------------------|------|
 | `create_family_member_portrait_version` | version id, member id, date/source, exact source key | Validates family, local date, DOB, and caller-owned key; inserts row | authenticated owner/manager |
 | `update_family_member_portrait_version_date` | version id, date | Validates local date/DOB and changes source to `manual` | authenticated owner/manager |
-| `generate-portrait-illustration` | `{ portraitVersionId }` | Claims an attempt, returns `{ success: true, queued: true }`, then generates in a background task within a 120-second image deadline; publishes by token and retains prior output on failure | JWT owner/manager |
+| `generate-portrait-illustration` | `{ portraitVersionId }` | Public request is unchanged. The client accepts either the legacy `{ success: true }` acknowledgment or the queued `{ success: true, queued: true, jobId? }` form. Cloudflare creates a private job and dispatches the durable Workflow. | JWT owner/manager |
+| `workflow-portrait-bridge` | HMAC-authenticated job operation | Private job input, provider reservation, publication/reconciliation/failure, and dependent-memory retriggering; no browser route or Supabase service-role key in Cloudflare | Worker HMAC + nonce |
 | `delete-portrait-version` | `{ portraitVersionId }` | Claims deletion, removes all version objects, then deletes row | JWT owner/manager |
 | `delete-family-member` | `{ familyMemberId }` | Enumerates legacy and version objects before deleting the member | JWT owner/manager |
 | `get-upload-url` | version photo key, JPEG, family id | Presigns caller-owned source upload | JWT owner/manager |
@@ -129,16 +138,12 @@ The new client may fall back to legacy member columns only during controlled rol
 
 ## Extension guide
 
-- Before moving portrait generation to durable execution, follow
-  [Durable AI generation workflow playbook](../durable-ai-generation-workflows.md),
-  especially its portrait-specific blueprint. Reuse the proven execution and
-  signing patterns without flattening portrait claims, retained-output rules,
-  deletion races, or dependent-memory retriggers into the memory state machine.
+- Follow the [Durable AI generation workflow playbook](../durable-ai-generation-workflows.md) when extending this executor. Do not flatten portrait claims, retained-output rules, deletion races, or dependent-memory retriggers into the memory state machine.
 - Reuse `resolvePortraitVersion`; do not implement local “closest portrait” variants.
 - Add new visual consumers by loading versions in batches and resolving against that consumer's target date.
 - Preserve immutable source keys and unique output-attempt keys.
 - Keep generation state server-owned. Client timeouts must only refetch; they must never mark attempts failed directly.
-- Keep the client stalled-state threshold aligned with the server claim-reclaim window. The stalled UI may offer retry, but retry must reclaim through `generate-portrait-illustration`; it must not mutate claim columns.
+- Keep the client recovery thresholds aligned with the server: unclaimed pending at three minutes; claimed work at five minutes thirty seconds. A stalled UI retry always goes through `generate-portrait-illustration`; it must not mutate claim columns.
 - Any new storage reference must be added to both owned-family deletion collection and the surviving-reference set used during non-owner account deletion.
 - Date rules belong in the DB/RPC as well as the UI. A client-only DOB or future-date check is insufficient.
 
@@ -150,7 +155,9 @@ The new client may fall back to legacy member columns only during controlled rol
 - Multiple same-day versions are valid and deterministic.
 - A member cannot lose their only version or last usable portrait through version deletion. Whole-member deletion uses a dedicated path that performs storage cleanup before the FK cascade.
 - Generation and deletion claims are service-role-only DB operations after Edge Function JWT/role authorization.
-- A normal image timeout is caught at 120 seconds and persisted as failed. Abrupt runtime termination is the exceptional fallback: after 15 minutes the UI derives a stalled state from `generation_started_at` (or `updated_at` for a never-claimed pending row), stops polling, and offers retry without changing the database itself.
+- The durable Workflow has a five-minute application lease and reserves thirty seconds for publication. The legacy Edge path remains behind `PORTRAIT_GENERATION_BACKEND=legacy` for rollback. Cloudflare receives only a job ID and has no Supabase service-role key.
+- Both the frozen source photo and style reference are mandatory; Cloudflare resizes each to 1024px, sends style first and source second, writes WebP, and never falls back to text-only generation. `gpt-image-2` gets one bounded attempt; retryable provider failures may use one reference-aware `gpt-image-1.5` attempt with high input fidelity.
+- Unclaimed pending recovery is derived from immutable `created_at`, never `updated_at`, so normal metadata edits cannot indefinitely postpone it. Claimed work uses `generation_started_at`.
 - Hard-delete account cleanup must retain version objects referenced by surviving shared families, even when those keys live under the deleted user's prefix.
 - Family/member deletion and account-retention sweeps fail closed when storage-reference enumeration fails; database cascades must never proceed from a partial reference set.
 
@@ -161,10 +168,12 @@ The new client may fall back to legacy member columns only during controlled rol
 | Unit | `src/utils/portrait-versions.test.ts`, `src/hooks/useMediaUrls.test.ts`, `src/components/portrait-timeline.test.tsx`, `src/components/cast-card.test.tsx` |
 | Integration | `src/services/portrait-versions.integration.test.ts`, `src/services/family-members.integration.test.ts`, `src/hooks/usePortraitVersions.integration.test.tsx`, `src/hooks/useFamilyMembers.integration.test.tsx`, `src/hooks/useMemories.integration.test.tsx`, `src/screen-tests/add-family-member-photo-date.integration.test.tsx`, `src/screen-tests/family-member-portrait-entry.integration.test.tsx`, `src/screen-tests/portrait-timeline.integration.test.tsx` |
 | E2E | `.maestro/flows/portraits/view-portrait-timeline.yaml` |
-| Deno | `supabase/functions/_shared/portrait-versions.test.ts`, `generate-portrait-illustration/index.test.ts` (including queued-background generation), `generate-illustration/index.test.ts`, `delete-portrait-version/index.test.ts`, `delete-family-member/index.test.ts`, `hard-delete-expired-accounts/index.test.ts`, `_shared/storage-keys.test.ts`, `_shared/family-access.test.ts` |
+| Deno | `supabase/functions/_shared/portrait-versions.test.ts`, `generate-portrait-illustration/index.test.ts`, `workflow-portrait-bridge/index.test.ts`, `generate-illustration/index.test.ts`, `delete-portrait-version/index.test.ts`, `delete-family-member/index.test.ts`, `hard-delete-expired-accounts/index.test.ts`, `_shared/storage-keys.test.ts`, `_shared/family-access.test.ts` |
+| Worker | `cloudflare/memory-illustration-worker/test/portrait-*.test.ts` — signed dispatch, reference loading/order, WebP/OpenAI policy, replay/reservation, publication reconciliation, cleanup, and dependent-memory retrigger |
+| Database | `supabase/tests/portrait_generation_workflow.sql` — private-job/bridge RLS, one-use reservations, exact upload-token replay/completion, retained-output publication, stale upload/deletion fencing, and family-memory fence behavior; `account_deletion_fences.sql` — exact soft-delete provenance, expiry, and hard-delete serialization |
 
 Additional unit coverage lives in `src/utils/family-profile-photo-picker.test.ts`, `src/utils/storage-keys.test.ts`, `src/utils/e2e-fixtures.test.ts`, and `src/components/family-profile-portrait-photo.test.tsx`.
 
-Stalled-generation regression coverage lives in `src/utils/portrait-versions.test.ts`, `src/components/portrait-timeline.test.tsx`, and `supabase/functions/generate-portrait-illustration/index.test.ts` (server deadline → failed claim plus client stalled → retry UX).
+Stalled-generation regression coverage lives in `src/utils/portrait-versions.test.ts`, `src/hooks/usePortraitVersions.integration.test.tsx`, `src/components/portrait-timeline.test.tsx`, and the Supabase/Worker portrait Workflow tests. It covers the 3:00/5:30 boundaries, manager-only once-per-attempt recovery, viewer/failed behavior, polling, and compatible legacy/queued service responses.
 
 Run focused client tests with `npm test -- --runInBand portrait`, Edge tests with `npm run test:edge`, and the device flow with `maestro test .maestro/flows/portraits/view-portrait-timeline.yaml`.

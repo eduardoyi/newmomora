@@ -2,7 +2,7 @@
 
 **Status:** production-proven for memory illustrations
 
-**Last updated:** 2026-07-22
+**Last updated:** 2026-07-23
 
 **Reference implementation:** `cloudflare/memory-illustration-worker/`
 
@@ -132,6 +132,10 @@ equivalents before implementation starts.
     limits, memory type, stripped URL-only content, safety preparation, and
     portrait readiness remain in Supabase; they do not consume a Workflow or
     paid image attempt.
+12. **Every generated-output PUT is fenced by a database upload lease.** The
+    Worker authorizes the exact job/key immediately before PUT, records the
+    exact UUID token only after definite storage success, and never deletes or
+    publishes across an active or ambiguous upload.
 
 ## State, identity, and clocks
 
@@ -221,7 +225,8 @@ retry" wastes money and can turn deterministic failures into long waits.
 | HTTP 408, 409, 429, or 5xx | Retryable; another primary may run if budget remains, then sequential fallback. |
 | Network error, malformed JSON/image, or empty result | Retryable within the same bounded policy. |
 | No usable references after per-reference fallbacks | Non-retryable; do not pay for a call that cannot satisfy the request. |
-| R2 upload failure after three attempts | Terminal generation failure. |
+| R2 PUT throws or returns `null` after three same-key/same-byte attempts | Ambiguous: retain the upload lease and deterministic key; do not fail or clean up the job. |
+| Upload-completion response is ambiguous | Retry completion with the exact UUID token; if still ambiguous, retain the lease and skip failure/cleanup. |
 | Publication response is ambiguous | Reconcile the same object/job; never generate another image merely to resolve publication. |
 | CAS lost because input changed or a newer attempt exists | Mark superseded and delete this attempt's object. |
 | Duplicate Workflow instance ID | Idempotent accepted 202, not dispatch failure. |
@@ -269,11 +274,16 @@ The production pattern is a single sensitive **generate and upload** step:
 4. Build the final prompt with the shared pure prompt builder.
 5. Record the prompt through the bridge so a successful publication can write
    it to the memory row.
-6. Check the deterministic output key.
+6. Check the deterministic output key. On a HEAD hit, authorize and record the
+   exact upload token before publication; never bypass an active lease.
 7. Reserve the provider attempt in Postgres.
 8. Call OpenAI and decode the response in memory.
-9. PUT the bytes directly to R2.
-10. Return only the output key and model.
+9. Immediately before storage, authorize the exact job/output key through the
+   bridge and receive a UUID upload token.
+10. PUT the bytes directly to R2. Bounded retries reuse the exact same bytes
+    and key under that one token; an R2 `null` result is not success.
+11. After definite success, record upload completion with the exact token.
+12. Return only the output key and model.
 
 The prompt builder is shared with the legacy path to prevent visual drift, but
 the safety rewrite and authoritative palette/reference resolution remain in
@@ -284,10 +294,38 @@ The deterministic object check and provider reservation protect different
 failure windows:
 
 - If OpenAI and R2 succeeded but the step result was lost, the object check
-  avoids another paid call.
+  avoids another paid call and completes the retained upload token before
+  publication.
 - If the reservation committed but its response was lost before OpenAI, the
-  reservation replay returns the same reservation rather than incrementing the
-  counter twice.
+  reservation retry with the same slot fails closed rather than making another
+  paid call.
+
+### Generated-output upload lease
+
+R2 is an external side effect: a PUT can finish after the database entity or
+job has been deleted, and a lost response cannot prove whether bytes exist.
+Both memory and portrait jobs therefore store a short upload fence in addition
+to the generation lease:
+
+- `authorize_upload` locks and validates the exact job, immutable output key,
+  and current entity/version fence, then returns a UUID token. An active token
+  is returned idempotently; a completed token can be reused for HEAD recovery.
+- If authorization reports an existing lease after an earlier HEAD miss, the
+  Worker rechecks R2. It completes the token without PUT when the object is now
+  visible, or stops as ambiguous when it is not. It never overwrites bytes that
+  another request may still be writing.
+- `record_upload_complete` is idempotent for the exact token. Publication is
+  allowed only after the completion marker exists and no active token remains.
+- Exhausted/ambiguous PUT or completion leaves the lease intact. The Workflow
+  deliberately skips terminal failure and object cleanup. Recovery owns the
+  deterministic key after the 5-minute-30-second fence window.
+- Deletion and stale recovery must treat a fresh upload token as in flight.
+  This is why a durable Workflow alone is insufficient; the external object
+  write needs its own database-visible fence.
+
+The provider and upload still live in one no-retry Workflow step. Only R2 PUT
+of the already-generated in-memory bytes and idempotent bridge calls retry
+inside it; Workflow replay never repeats the paid provider request.
 
 ## Publication, reconciliation, and object cleanup
 
@@ -323,11 +361,11 @@ bindings (`MEMORY_ILLUSTRATIONS`, `CHARACTER_PORTRAITS`, and
 `PROFILE_PICTURES`) are semantic aliases for that same bucket, not three
 physical buckets.
 
-For the current single-user phase, memory Workflow outputs go directly to a
+For the current single-user phase, Workflow outputs go directly to a
 deterministic immutable final key. There is no staging bucket, one-day
-lifecycle rule, or scheduled orphan sweep. The CAS and cleanup steps are
-adequate for the present scale without adding operations that have not yet
-earned their complexity.
+lifecycle rule, or scheduled orphan sweep. The upload lease, publication CAS,
+and guarded cleanup steps cover the observed deletion/recovery races without
+adding operations that have not yet earned their complexity.
 
 Reconsider lifecycle/orphan tooling when concurrency or user count grows,
 when object-cleanup telemetry shows leaks, or before a pipeline can create an
@@ -452,7 +490,7 @@ that can independently commit, time out, replay, or be superseded.
 |-------|----------------|
 | Dispatcher/Edge | JWT and family-role rejection; type/tag/content validation including URL-only text; backend flag default; palette or generator-specific input propagation; missing-analysis recovery; dependency deferral; initial/recovery/manual/legacy intent semantics; queued 202 and legacy response compatibility. |
 | Database | Client cannot read/write private jobs; dedicated/null recovery clock; legacy status reset cannot defeat valid CAS; content/date/tag change defeats stale CAS; provider reservation replay; publish replay; retained old output on failure; terminal sensitive-field scrubbing. |
-| Workflow | Invalid signature; duplicate instance accepted; deterministic object already exists; reservation response lost; retryable primary -> fallback; deterministic rejection with no fallback; all references unusable; R2 retry exhaustion; publish response lost -> reconcile; superseded/missing job -> delete output. |
+| Workflow | Invalid signature; duplicate instance accepted; deterministic HEAD with active/new lease completion; consumed/lost reservation with no provider replay; retryable primary -> fallback; deterministic rejection with no fallback; all references unusable; thrown or `null` R2 PUT remains leased; completion ambiguity skips cleanup; late object under an existing lease is not overwritten; publish response lost -> reconcile; superseded/missing job -> guarded output deletion. |
 | Client | Never-dispatched `pending` recovery; exact lease/grace boundaries; no direct database status write; automatic recovery and explicit regenerate; old and queued success response parsing. |
 | Lifecycle | Entity/account deletion while generation is in flight; regeneration while old output is visible; old/new object cleanup ownership; dependency completion retrigger. |
 | Runtime | A deliberately slow call that exceeds 150 seconds but remains within the new application lease, proving the migration rather than only the happy fast path. |
@@ -522,7 +560,10 @@ suggestions; each closes a concrete failure mode.
 | Commit CAS checked no input identity | Wider durable window lets stale image publish after edit. | Content/date/emotion/tag changes invalidate attempt ID. |
 | Missing emotion always became Tender | Killed client permanently loses intended palette. | Recovery reruns emotion analysis server-side before final Tender fallback. |
 | Prompt/reference data crossed Workflow state | Child/family data persists in another control plane. | Event contains only job ID; fetch inputs inside sensitive step; scrub terminal inputs. |
-| Retry could replay a paid call | Workflow replay charges multiple images. | Deterministic R2 check plus atomic provider-attempt reservations. |
+| Retry could replay a paid call | Workflow replay charges multiple images. | Deterministic R2 check plus atomic provider-attempt reservations that fail closed on a consumed slot. |
+| Deletion overtook an external R2 PUT | Valid bytes appeared after the job/entity was removed, or cleanup deleted an ambiguously successful output. | Authorize the exact PUT with a UUID upload lease; complete the exact token after definite success; make deletion/recovery honor the lease. |
+| HEAD replay bypassed the upload fence | An existing object could publish while its upload was still active or unconfirmed. | Every HEAD hit authorizes and records the exact token before publication. |
+| R2 `put()` returned `null` | Code treated a failed/preconditioned write as definite success. | Treat `null` and thrown PUT outcomes as ambiguous; retain the lease and skip cleanup. |
 | All references could fail open | Provider call cannot honor tagged people. | Per-reference portrait-to-photo fallback; zero usable references is a hard error. |
 | URL-only validation moved async | A known bad request spends dispatch time and becomes a delayed generic failure. | Strip URLs and return `EMPTY_CONTENT` synchronously in the dispatcher. |
 | Workflow retention used the paid-plan default | Sensitive execution metadata lives longer than needed. | Retain success/error instances for one day and keep PII out of event/step outputs. |
@@ -531,115 +572,63 @@ suggestions; each closes a concrete failure mode.
 | Moderation was documented but not classified | Policy errors collapse into a generic retry/failure path. | Detect provider moderation codes, emit `MODERATION_BLOCKED`, and never fall back. |
 | Cleanup function was absent from rollout | New versioned keys cannot be removed in production. | Deploy and test every shared key parser/cleanup consumer in the rollout set. |
 
-## Blueprint: moving portrait generation next
+## Portrait migration: implemented architecture
 
-Portrait generation is a strong candidate for the same durable executor, but
-it is not a text substitution of "memory" with "portrait." Its existing state
-machine protects different product behavior. Read
-[features/portrait-timeline.md](./features/portrait-timeline.md) and
-[features/family-profiles.md](./features/family-profiles.md) before planning it.
+Portrait execution now uses the same Worker deployment but a distinct
+`PortraitGenerationWorkflow`, `portrait_generation_jobs` table, bridge route,
+nonce ledger, secrets, and feature flag. It deliberately does not share the
+memory jobs table: portrait version/deletion tokens and retained-artwork rules
+are a separate state machine.
 
-### Reuse these proven components
+The public `generate-portrait-illustration({ portraitVersionId })` request is
+unchanged. Supabase validates the exact-family manager role, claims the public
+portrait version, freezes the prompt/source/style input into the private job,
+and dispatches only its deterministic UUID to `/dispatch/portrait`. That UUID
+is the job ID, Workflow instance ID, claim token, and R2 output suffix. An
+existing instance is accepted as idempotent success. `PORTRAIT_GENERATION_BACKEND`
+defaults to `legacy`; it is the immediate rollback switch.
 
-- HMAC dispatch and bridge signing, timestamp validation, nonce replay ledger,
-  and no Cloudflare service-role key.
-- Deterministic job/Workflow/output identity.
-- Atomic provider-attempt reservation.
-- One sensitive generate-and-upload step with an R2 existence check.
-- Sequential `gpt-image-2` -> `gpt-image-1.5` fallback and explicit failure
-  classification, after a portrait-specific latency/quality evaluation.
-- Supabase-side attempt-token CAS, reconcile path, and post-CAS old-object
-  deletion.
-- Server-owned public recovery clock and intent-based retry endpoint.
-- Backend feature flag that defaults to legacy during a mixed-client rollout.
-- PII-safe telemetry and terminal input scrubbing.
+Cloudflare has no Supabase service-role key. The Workflow fetches its private
+input through raw-body HMAC plus nonce validation, checks for the deterministic
+object before making a paid call, then keeps OpenAI and R2 upload in one
+sensitive step so image bytes cannot enter Workflow state. It loads both
+mandatory references from the existing `momora-prod` bucket, resizes them to
+1024px, passes canonical style first and source photo second, requests 1024px
+WebP/compression 85, and returns only `{ outputKey, model }`.
 
-### Preserve portrait-specific semantics
+One `gpt-image-2` call (maximum 180 seconds) is permitted. A retryable provider
+failure may make one `gpt-image-1.5` call (maximum 60 seconds with high input
+fidelity). Moderation, invalid input, missing source/style references, and
+other deterministic failures do not fall back. There is no text-only portrait
+fallback. Atomic provider reservations and the deterministic object check make
+ambiguous Workflow replay fail closed rather than charge twice; R2 upload
+retries reuse the bytes from that one provider call under an exact UUID upload
+lease. HEAD recovery confirms that lease before publication, and an ambiguous
+PUT/completion never enters failure cleanup.
 
-1. The entity is `family_member_portrait_versions`, not `family_members` and
-   not `memories`.
-2. Source photos and generated attempt objects are immutable and date-aware.
-3. A failed/in-flight regeneration retains the last successful portrait and
-   must not displace it.
-4. Generation and deletion claim tokens can race. A deleted or deleting
-   portrait version must prevent publication and must arrange cleanup of an
-   object produced after deletion began.
-5. Successful portrait publication retriggers eligible deferred memory
-   illustrations. Keep that dependency on the Supabase publication side; do
-   not hide it in a Cloudflare-only completion handler.
-6. Current stalled UX uses `generation_started_at` and a 15-minute reclaim
-   window. It must be deliberately replaced/aligned, not silently combined
-   with the memory five-minute lease.
-7. The current Edge path has a 120-second provider deadline inside the
-   150-second runtime. The durable path needs fresh portrait-specific latency
-   measurements before selecting its provider budget and client threshold.
-8. Portrait prompts use source/style references but have no memory emotion or
-   color-palette phase. The job input and validation should reflect that rather
-   than inheriting unused memory columns.
+Publication is still a Supabase compare-and-set on generation token and
+deletion state, with reconcile for an ambiguous response. The old ready
+portrait remains available until CAS succeeds; only then is it deleted. Late,
+superseded, or deleted-version outputs are removed. The Workflow has a
+five-minute lease and the client applies 30 seconds of publication grace:
+unclaimed pending rows recover at 3:00 from immutable `created_at`, claimed
+work at 5:30 from `generation_started_at`, once per version/attempt clock.
+Clients never update status/claims directly; viewers never recover; failed
+rows are manual retry only.
 
-### Prefer a separate first portrait job table
+Portrait terminal state also preserves the existing memory-portrait deferral
+contract. A memory with unavailable tagged portraits creates no memory job.
+The portrait bridge then rechecks up to three eligible pending memories through
+a separate Supabase-only signed request, revalidating the initiating actor's
+current family-manager role instead of forwarding an expiring user JWT. The
+normal client memory recovery path remains the backstop.
 
-Use a `portrait_generation_jobs` table for the first migration unless the
-implemented portrait shape proves a truly shared schema. A premature generic
-`generation_jobs` table tends to accumulate nullable memory-only and
-portrait-only columns while hiding domain-specific CAS and cleanup rules.
-
-Code can share signing, bridge-client, provider, reference-transform, retry,
-and Workflow helpers without sharing one database state machine. Consider a
-generic table only after the second production pipeline demonstrates stable
-common fields and operations.
-
-### Portrait migration checklist
-
-#### Discovery and measurements
-
-- Map current claim, retained-output, failure, deletion, and dependent-memory
-  retrigger transitions from `generate-portrait-illustration` and its tests.
-- Run representative one-person portrait calls on both models, including
-  corrupt/missing source and style-reference cases.
-- Measure provider, transform, upload, publish, and retrigger phases
-  independently.
-- Decide retryable errors, attempt caps, provider deadline, finalization
-  reserve, and client recovery threshold as one budget.
-
-#### Schema and contracts
-
-- Add a private jobs table, no client policies, attempt counters, deterministic
-  output/old keys, error code, deadline, and terminal scrubbing.
-- Reuse the existing `generation_token`/`generation_started_at` public claim if
-  it represents the right semantics; do not introduce a second client clock
-  without a reason.
-- Define how a pending version whose app died before dispatch recovers.
-- Define how regeneration of a ready version retains its old key/status.
-- Define how version deletion invalidates a job and how a late R2 object is
-  removed.
-- Add the migration, regenerated database types, TECH_SPEC updates, feature-doc
-  updates, and tests in one change.
-
-#### Executor and bridge
-
-- Add a portrait Workflow binding/class and a `PORTRAIT_GENERATION_BACKEND`
-  server flag defaulting to legacy.
-- Send only job ID in the event.
-- Fetch source/style inputs inside the sensitive generate-and-upload step.
-- Cap/normalize reference images before the provider call.
-- Check the deterministic attempt key before reserving/calling OpenAI.
-- Publish through a portrait-specific Supabase CAS/reconcile operation.
-- Trigger deferred memories only after confirmed portrait publication.
-- Delete the replaced portrait only after CAS; delete a superseded output.
-
-#### Compatibility, rollout, and proof
-
-- Ship the schema/server path first with the flag on legacy.
-- Release any client retry-clock/intent change before cutover.
-- Prove old clients cannot reset or overwrite a durable attempt.
-- Test edit/delete/regenerate while the Workflow is in flight.
-- Test publication response loss and Workflow replay after upload.
-- Test retained prior portrait on every failure path.
-- Run a production synthetic version, verify the dependent-memory retrigger,
-  then clean all synthetic DB/R2 data.
-- Keep a one-variable legacy rollback until a real portrait generation is
-  independently verified.
+Production proof must use a synthetic fixture-only family member/version under
+the authorized test account, never an organic child photo. Verify job,
+Workflow, CAS, WebP signed display, terminal scrubbing, retained regeneration,
+and dependent-memory retrigger by IDs/statuses/durations only; delete all
+synthetic DB/R2 data and confirm the test prefix is empty before observing an
+ordinary production portrait.
 
 ## What not to generalize yet
 
@@ -647,7 +636,8 @@ common fields and operations.
 - Do not put memory/profile text, names, prompt, reference keys, or bytes in the
   Workflow event or returned step state.
 - Do not use entity `updated_at` as a generation lease.
-- Do not copy the memory five-minute lease into every generator.
+- Do not copy the portrait/memory five-minute lease into another generator
+  without measuring its provider and publication budget first.
 - Do not add a staging bucket, lifecycle rule, scheduled sweep, or generic job
   framework solely for architectural symmetry. Add them when an observed scale
   or failure mode justifies them.
@@ -663,12 +653,19 @@ common fields and operations.
 | Dispatcher, compatibility, palette/safety, portrait deferral | `supabase/functions/generate-illustration/index.ts` |
 | Private jobs, clocks, attempt reservation, CAS/failure RPCs | `supabase/migrations/20260721120000_memory_illustration_workflow_jobs.sql` |
 | Signed bridge and reconciliation | `supabase/functions/workflow-illustration-bridge/index.ts` |
+| Portrait dispatcher and legacy rollback | `supabase/functions/generate-portrait-illustration/index.ts` |
+| Portrait jobs, clocks, CAS/failure RPCs, and nonce table | `supabase/migrations/20260722130000_portrait_generation_workflow_jobs.sql` |
+| Portrait signed bridge and internal memory retrigger | `supabase/functions/workflow-portrait-bridge/index.ts`, `supabase/functions/_shared/portrait-memory-retrigger.ts` |
 | Dispatch idempotency and Worker routing | `cloudflare/memory-illustration-worker/src/index.ts` |
 | Workflow budgets, retries, publication, cleanup | `cloudflare/memory-illustration-worker/src/workflow.ts` |
+| Portrait Workflow budgets, retries, publication, cleanup | `cloudflare/memory-illustration-worker/src/portrait-workflow.ts` |
 | Provider request and error classification | `cloudflare/memory-illustration-worker/src/openai.ts` |
 | R2 reference fallback and transforms | `cloudflare/memory-illustration-worker/src/references.ts` |
+| Mandatory portrait source/style transforms | `cloudflare/memory-illustration-worker/src/portrait-references.ts` |
 | Client recovery clocks | `src/utils/memories.ts`, `src/services/memories.ts` |
+| Portrait client recovery and compatible service | `src/utils/portrait-versions.ts`, `src/hooks/usePortraitVersions.ts`, `src/services/portrait-versions.ts` |
 | Database behavior | `supabase/tests/memory_illustration_workflow.sql` |
 | Edge contracts | `supabase/functions/generate-illustration/index.test.ts`, `supabase/functions/workflow-illustration-bridge/index.test.ts` |
 | Workflow replay/fallback policy | `cloudflare/memory-illustration-worker/test/workflow.integration.test.ts`, `workflow-policy.test.ts` |
 | Client compatibility/recovery | `src/utils/memories.test.ts`, `src/services/memories.integration.test.ts`, `src/hooks/useMemories.integration.test.tsx` |
+| Portrait compatibility/recovery | `src/utils/portrait-versions.test.ts`, `src/services/portrait-versions.integration.test.ts`, `src/hooks/usePortraitVersions.integration.test.tsx`, `cloudflare/memory-illustration-worker/test/portrait-*.test.ts` |

@@ -386,6 +386,11 @@ verify_jwt = false
 [functions.workflow-illustration-bridge]
 verify_jwt = false
 
+# The portrait bridge has the same raw-body HMAC boundary as memory
+# illustrations, with a separate secret and replay ledger.
+[functions.workflow-portrait-bridge]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

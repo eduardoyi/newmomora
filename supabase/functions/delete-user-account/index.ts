@@ -2,7 +2,7 @@ import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
-import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
+import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 export interface DeleteUserAccountResponse {
   success: true;
@@ -13,23 +13,22 @@ const OWNER_DELETED_PUSH_BODY =
   "This family journal's owner deleted their account. The journal will be removed in 15 days unless they restore it.";
 
 /**
- * Soft-deletes every family `ownerId` owns (the DB trigger allows this from
- * the service-role client, which runs without a user JWT -- see
- * `enforce_families_restricted_columns`) and sends a heads-up push to each
- * other member with a push token. Best-effort: failures are logged, not
- * thrown, so a family/push hiccup never blocks the account-deletion
- * response once the user_profiles row (source of truth for the 15-day
- * grace window) is already updated.
+ * The scheduling RPC atomically soft-deletes the owner and every currently
+ * active owned family. This function only sends heads-up pushes for the
+ * *exact* scheduling operation token. It must never perform the status write
+ * itself: a cancellation followed by a second schedule could otherwise
+ * notify or mutate families from the wrong operation.
  */
 export async function softDeleteOwnedFamiliesAndNotify(
   serviceClient: ReturnType<typeof createServiceClient>,
   ownerId: string,
+  operationToken: string,
 ): Promise<void> {
   const { data: ownedFamilies, error: ownedFamiliesError } = await serviceClient
     .from('families')
     .select('id')
     .eq('owner_id', ownerId)
-    .is('deleted_at', null);
+    .eq('account_deletion_token', operationToken);
 
   if (ownedFamiliesError) {
     console.error('delete-user-account owned-families lookup failed', ownedFamiliesError.message);
@@ -37,20 +36,6 @@ export async function softDeleteOwnedFamiliesAndNotify(
   }
 
   for (const family of ownedFamilies ?? []) {
-    const { error: softDeleteError } = await serviceClient
-      .from('families')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('id', family.id);
-
-    if (softDeleteError) {
-      console.error(
-        'delete-user-account family soft-delete failed',
-        family.id,
-        softDeleteError.message,
-      );
-      continue;
-    }
-
     try {
       const { data: memberships, error: membershipsError } = await serviceClient
         .from('family_memberships')
@@ -130,32 +115,43 @@ export async function handleDeleteUserAccount(req: Request): Promise<Response> {
     return errorResponse('Unauthorized', 401, 'unauthorized');
   }
 
-  const authHeader = req.headers.get('Authorization');
-  if (!authHeader) {
-    return errorResponse('Unauthorized', 401, 'unauthorized');
-  }
-
-  const supabase = createUserClient(authHeader);
-  const scheduledHardDeleteAt = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString();
-
-  const { error } = await supabase
-    .from('user_profiles')
-    .update({
-      deleted_at: new Date().toISOString(),
-      scheduled_hard_delete_at: scheduledHardDeleteAt,
-    })
-    .eq('id', user.id);
+  const serviceClient = createServiceClient();
+  const requestedScheduledHardDeleteAt = new Date(
+    Date.now() + 15 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const { data: operationToken, error } = await serviceClient.rpc('schedule_account_deletion', {
+    p_owner_id: user.id,
+    p_operation_token: crypto.randomUUID(),
+    p_scheduled_hard_delete_at: requestedScheduledHardDeleteAt,
+  });
 
   if (error) {
     console.error('delete-user-account failed', error.message);
+    if (error.code === '55000' || error.message === 'Hard account deletion is in progress') {
+      return errorResponse('Account deletion is already in progress', 409, 'account_deletion_in_progress');
+    }
     return errorResponse('Failed to schedule account deletion', 500, 'internal_error');
   }
 
-  await softDeleteOwnedFamiliesAndNotify(createServiceClient(), user.id);
+  if (!operationToken) {
+    return errorResponse('Failed to schedule account deletion', 500, 'internal_error');
+  }
+
+  const { data: profile, error: profileError } = await serviceClient
+    .from('user_profiles')
+    .select('scheduled_hard_delete_at')
+    .eq('id', user.id)
+    .single();
+  if (profileError || !profile?.scheduled_hard_delete_at) {
+    console.error('delete-user-account scheduled profile lookup failed', user.id);
+    return errorResponse('Failed to schedule account deletion', 500, 'internal_error');
+  }
+
+  await softDeleteOwnedFamiliesAndNotify(serviceClient, user.id, operationToken);
 
   const response: DeleteUserAccountResponse = {
     success: true,
-    scheduledHardDeleteAt,
+    scheduledHardDeleteAt: profile.scheduled_hard_delete_at,
   };
 
   return jsonResponse(response);

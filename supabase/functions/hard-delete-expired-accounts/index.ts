@@ -11,6 +11,18 @@ export interface HardDeleteResponse {
 
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
+export interface HardDeleteDependencies {
+  createServiceClient: typeof createServiceClient;
+  listObjectKeys: typeof listObjectKeys;
+  deleteObject: typeof deleteObject;
+}
+
+const DEFAULT_DEPENDENCIES: HardDeleteDependencies = {
+  createServiceClient,
+  listObjectKeys,
+  deleteObject,
+};
+
 /**
  * Collects every R2 key that belongs to a family, across ALL creators (not
  * just the owner) -- child photos/portraits and memory media/illustrations
@@ -77,6 +89,31 @@ export async function collectFamilyStorageKeys(
     if (version.generation_output_key) keys.push(version.generation_output_key);
   }
 
+  // A durable job can own bytes that are not yet pointed to by its memory or
+  // portrait version. Include those deterministic keys before the family
+  // cascade removes the jobs table and would otherwise strand an R2 object.
+  const { data: memoryJobs, error: memoryJobsError } = await supabase
+    .from('memory_illustration_jobs')
+    .select('output_key')
+    .eq('family_id', familyId);
+  if (memoryJobsError) {
+    throw new Error(`Memory generation job lookup failed: ${memoryJobsError.message}`);
+  }
+  for (const job of memoryJobs ?? []) {
+    if (job.output_key) keys.push(job.output_key);
+  }
+
+  const { data: portraitJobs, error: portraitJobsError } = await supabase
+    .from('portrait_generation_jobs')
+    .select('output_key')
+    .eq('family_id', familyId);
+  if (portraitJobsError) {
+    throw new Error(`Portrait generation job lookup failed: ${portraitJobsError.message}`);
+  }
+  for (const job of portraitJobs ?? []) {
+    if (job.output_key) keys.push(job.output_key);
+  }
+
   return [...new Set(keys)];
 }
 
@@ -87,7 +124,37 @@ export async function collectFamilyStorageKeys(
  * `memories` / `family_members` / `family_memberships` / `family_invites`
  * rows for free.
  */
-async function deleteOwnedFamilies(supabase: ServiceClient, ownerId: string): Promise<void> {
+interface FamilyDeletionFence {
+  familyId: string;
+  token: string;
+}
+
+async function releaseFamilyDeletionFences(
+  supabase: ServiceClient,
+  fences: FamilyDeletionFence[],
+): Promise<void> {
+  await Promise.allSettled(fences.map(async (fence) => {
+    const { error } = await supabase.rpc('release_family_deletion_fence', {
+      p_family_id: fence.familyId,
+      p_delete_token: fence.token,
+    });
+    if (error) {
+      console.error('hard-delete-expired-accounts family fence release failed', fence.familyId);
+    }
+  }));
+}
+
+/**
+ * Returns false when a family must be retried by a later cron run. No auth or
+ * profile deletion may follow that result: a live generation or failed R2
+ * cleanup must keep the account intact rather than cascade its durable jobs.
+ */
+export async function deleteOwnedFamilies(
+  supabase: ServiceClient,
+  ownerId: string,
+  dependencies: Pick<HardDeleteDependencies, 'listObjectKeys' | 'deleteObject'> = DEFAULT_DEPENDENCIES,
+  preflightedUserKeys: string[] = [],
+): Promise<boolean> {
   const { data: ownedFamilies, error } = await supabase
     .from('families')
     .select('id')
@@ -95,9 +162,30 @@ async function deleteOwnedFamilies(supabase: ServiceClient, ownerId: string): Pr
 
   if (error) {
     console.error('hard-delete-expired-accounts owned-families lookup failed', ownerId, error.message);
-    return;
+    return false;
   }
 
+  const fences: FamilyDeletionFence[] = [];
+  for (const family of ownedFamilies ?? []) {
+    const token = crypto.randomUUID();
+    const { data: claimed, error: claimError } = await supabase.rpc('claim_family_deletion_fence', {
+      p_family_id: family.id,
+      p_delete_token: token,
+    });
+    if (claimError || !claimed) {
+      if (claimError?.message === 'Fresh portrait generation is still active' ||
+        claimError?.message === 'Fresh illustration generation is still active') {
+        console.info('hard-delete-expired-accounts family purge deferred for generation', family.id);
+      } else {
+        console.error('hard-delete-expired-accounts family fence claim failed', family.id);
+      }
+      await releaseFamilyDeletionFences(supabase, fences);
+      return false;
+    }
+    fences.push({ familyId: family.id, token });
+  }
+
+  const storageByFamily: Array<{ familyId: string; keys: string[] }> = [];
   for (const family of ownedFamilies ?? []) {
     try {
       const keys = await collectFamilyStorageKeys(supabase, family.id);
@@ -105,28 +193,54 @@ async function deleteOwnedFamilies(supabase: ServiceClient, ownerId: string): Pr
         .filter((key) => key.endsWith('/photo.jpg') && key.includes('/portraits/'))
         .map((key) => key.slice(0, -'photo.jpg'.length));
       const prefixKeys = (
-        await Promise.all(versionPrefixes.map((prefix) => listObjectKeys(prefix)))
+        await Promise.all(versionPrefixes.map((prefix) => dependencies.listObjectKeys(prefix)))
       ).flat();
-      await Promise.all([...new Set([...keys, ...prefixKeys])].map((key) => deleteObject(key)));
+      storageByFamily.push({ familyId: family.id, keys: [...new Set([...keys, ...prefixKeys])] });
     } catch (storageError) {
       console.error(
         'hard-delete-expired-accounts owned-family storage cleanup failed',
         family.id,
         storageError instanceof Error ? storageError.message : 'unknown',
       );
-      continue;
-    }
-
-    const { error: deleteFamilyError } = await supabase.from('families').delete().eq('id', family.id);
-
-    if (deleteFamilyError) {
-      console.error(
-        'hard-delete-expired-accounts family row delete failed',
-        family.id,
-        deleteFamilyError.message,
-      );
+      await releaseFamilyDeletionFences(supabase, fences);
+      return false;
     }
   }
+
+  try {
+    // `preflightedUserKeys` are objects under the deleted owner's prefix
+    // which were proven unreferenced while the owned-family rows still
+    // existed. Delete them in the same all-storage phase, before any family
+    // fence is finalized. This prevents a later account-prefix lookup failure
+    // from leaving the profile alive after its owned families were cascaded.
+    const allKeys = new Set([
+      ...storageByFamily.flatMap(({ keys }) => keys),
+      ...preflightedUserKeys,
+    ]);
+    await Promise.all([...allKeys].map((key) => dependencies.deleteObject(key)));
+  } catch (storageError) {
+    console.error(
+      'hard-delete-expired-accounts owned-family storage cleanup failed',
+      ownerId,
+      storageError instanceof Error ? storageError.message : 'unknown',
+    );
+    await releaseFamilyDeletionFences(supabase, fences);
+    return false;
+  }
+
+  const { data: finalized, error: finalizeError } = await supabase.rpc(
+    'finish_owned_family_deletion_fences',
+    {
+      p_owner_id: ownerId,
+      p_fences: fences.map((fence) => ({ family_id: fence.familyId, delete_token: fence.token })),
+    },
+  );
+  if (finalizeError || !finalized) {
+    console.error('hard-delete-expired-accounts family fence finalization failed', ownerId);
+    await releaseFamilyDeletionFences(supabase, fences);
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -162,6 +276,8 @@ export async function resolveReferencedKeys(
     versionPhotoRows,
     versionPortraitRows,
     versionAttemptRows,
+    memoryJobOutputRows,
+    portraitJobOutputRows,
   ] = await Promise.all([
     supabase.from('memory_media').select('object_key').in('object_key', keys),
     supabase.from('memory_media').select('preview_object_key').in('preview_object_key', keys),
@@ -184,6 +300,14 @@ export async function resolveReferencedKeys(
       .from('family_member_portrait_versions')
       .select('generation_output_key')
       .in('generation_output_key', keys),
+    supabase
+      .from('memory_illustration_jobs')
+      .select('output_key')
+      .in('output_key', keys),
+    supabase
+      .from('portrait_generation_jobs')
+      .select('output_key')
+      .in('output_key', keys),
   ]);
 
   const lookupError = [
@@ -196,6 +320,8 @@ export async function resolveReferencedKeys(
     versionPhotoRows,
     versionPortraitRows,
     versionAttemptRows,
+    memoryJobOutputRows,
+    portraitJobOutputRows,
   ].find((result) => result.error)?.error;
   if (lookupError) {
     throw new Error(`Referenced storage lookup failed: ${lookupError.message}`);
@@ -228,6 +354,12 @@ export async function resolveReferencedKeys(
   for (const row of versionAttemptRows.data ?? []) {
     if (row.generation_output_key) referenced.add(row.generation_output_key);
   }
+  for (const row of memoryJobOutputRows.data ?? []) {
+    if (row.output_key) referenced.add(row.output_key);
+  }
+  for (const row of portraitJobOutputRows.data ?? []) {
+    if (row.output_key) referenced.add(row.output_key);
+  }
 
   return referenced;
 }
@@ -241,42 +373,53 @@ export async function resolveReferencedKeys(
  * Instead: enumerate objects under the prefix and delete only the ones no
  * surviving row references.
  */
-async function deleteUnreferencedUserObjects(
+/**
+ * Preflights the owner-prefix objects that survive neither an owned-family
+ * cascade nor a shared-family reference. It intentionally performs no R2
+ * deletion: callers must finish every listing/reference lookup before they
+ * remove a single owned-family row.
+ */
+export async function collectUnreferencedUserObjectKeys(
   supabase: ServiceClient,
   userId: string,
-): Promise<void> {
+  dependencies: Pick<HardDeleteDependencies, 'listObjectKeys'> = DEFAULT_DEPENDENCIES,
+): Promise<string[] | null> {
   let keys: string[];
 
   try {
-    keys = await listObjectKeys(`${userId}/`);
+    keys = await dependencies.listObjectKeys(`${userId}/`);
   } catch (listError) {
     console.error(
       'hard-delete-expired-accounts prefix listing failed',
       userId,
       listError instanceof Error ? listError.message : 'unknown',
     );
-    return;
+    return null;
   }
 
   if (keys.length === 0) {
-    return;
+    return [];
   }
 
-  const referenced = await resolveReferencedKeys(supabase, keys);
-  const unreferencedKeys = keys.filter((key) => !referenced.has(key));
-
+  let referenced: Set<string>;
   try {
-    await Promise.all(unreferencedKeys.map((key) => deleteObject(key)));
-  } catch (deleteError) {
+    referenced = await resolveReferencedKeys(supabase, keys);
+  } catch (lookupError) {
     console.error(
-      'hard-delete-expired-accounts unreferenced object cleanup failed',
+      'hard-delete-expired-accounts referenced object lookup failed',
       userId,
-      deleteError instanceof Error ? deleteError.message : 'unknown',
+      lookupError instanceof Error ? lookupError.message : 'unknown',
     );
+    return null;
   }
+  return keys.filter((key) => !referenced.has(key));
 }
 
-export async function handleHardDeleteExpiredAccounts(req: Request): Promise<Response> {
+export async function handleHardDeleteExpiredAccounts(
+  req: Request,
+  dependencyOverrides: Partial<HardDeleteDependencies> = {},
+): Promise<Response> {
+  const dependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   const corsResponse = handleCors(req);
   if (corsResponse) {
     return corsResponse;
@@ -290,7 +433,7 @@ export async function handleHardDeleteExpiredAccounts(req: Request): Promise<Res
     return errorResponse('Unauthorized', 401, 'unauthorized');
   }
 
-  const supabase = createServiceClient();
+  const supabase = dependencies.createServiceClient();
   const now = new Date().toISOString();
 
   const { data: profiles, error } = await supabase
@@ -308,29 +451,77 @@ export async function handleHardDeleteExpiredAccounts(req: Request): Promise<Res
 
   for (const profile of profiles ?? []) {
     const userId = profile.id;
+    const hardDeleteToken = crypto.randomUUID();
+
+    const { data: claimed, error: claimError } = await supabase.rpc(
+      'claim_account_hard_deletion',
+      {
+        p_owner_id: userId,
+        p_hard_delete_token: hardDeleteToken,
+      },
+    );
+    if (claimError || !claimed) {
+      if (claimError) {
+        console.error('hard-delete-expired-accounts account fence claim failed', userId);
+      }
+      continue;
+    }
 
     try {
-      await deleteOwnedFamilies(supabase, userId);
-      await deleteUnreferencedUserObjects(supabase, userId);
+      const unreferencedUserKeys = await collectUnreferencedUserObjectKeys(supabase, userId, dependencies);
+      if (unreferencedUserKeys === null) {
+        continue;
+      }
+
+      const deletedOwnedFamilies = await deleteOwnedFamilies(
+        supabase,
+        userId,
+        dependencies,
+        unreferencedUserKeys,
+      );
+      if (!deletedOwnedFamilies) {
+        continue;
+      }
     } catch (cleanupError) {
       console.error(
         'hard-delete-expired-accounts cleanup failed',
         userId,
         cleanupError instanceof Error ? cleanupError.message : 'unknown',
       );
+      continue;
     }
 
-    // No explicit deletes of `memories` / `family_members` by user_id here:
-    // rows in owned families are already gone via the families cascade
-    // above, and rows in families this user doesn't own must SURVIVE
-    // (user_id -> null automatically via `on delete set null` once
-    // auth.admin.deleteUser removes the auth.users row below).
-    await supabase.from('user_profiles').delete().eq('id', userId);
+    // Re-verify the exact ownership token *after* every external storage
+    // action. A PostgREST delete with zero matching rows still reports no
+    // error, so finalization must be an explicit locked RPC rather than an
+    // id-only/profile-row delete. The migration changes user_profiles ->
+    // auth.users to ON DELETE CASCADE: only a successful GoTrue deletion can
+    // remove the profile, leaving it retryable if GoTrue fails.
+    const { data: refreshed, error: refreshError } = await supabase.rpc(
+      'refresh_account_hard_deletion_claim',
+      {
+        p_owner_id: userId,
+        p_hard_delete_token: hardDeleteToken,
+      },
+    );
+    if (refreshError || !refreshed) {
+      if (refreshError) {
+        console.error('hard-delete-expired-accounts account fence refresh failed', userId);
+      }
+      continue;
+    }
 
     const { error: authDeleteError } = await supabase.auth.admin.deleteUser(userId);
 
     if (authDeleteError) {
       console.error('hard-delete-expired-accounts auth delete failed', userId, authDeleteError.message);
+      const { error: releaseError } = await supabase.rpc('release_account_hard_deletion_claim', {
+        p_owner_id: userId,
+        p_hard_delete_token: hardDeleteToken,
+      });
+      if (releaseError) {
+        console.error('hard-delete-expired-accounts account fence release failed', userId);
+      }
       continue;
     }
 
@@ -346,5 +537,5 @@ export async function handleHardDeleteExpiredAccounts(req: Request): Promise<Res
 }
 
 if (import.meta.main) {
-  Deno.serve(handleHardDeleteExpiredAccounts);
+  Deno.serve((request) => handleHardDeleteExpiredAccounts(request));
 }

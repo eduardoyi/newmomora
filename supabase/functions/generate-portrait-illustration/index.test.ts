@@ -1,6 +1,8 @@
 import { assertEquals, assertExists } from "jsr:@std/assert@1";
 import {
+  getPortraitGenerationRequestIntent,
   handleGeneratePortraitIllustration,
+  isFreshMatchingPortraitWorkflowJob,
   RETRIGGER_MAX_CANDIDATES,
   RETRIGGER_MIN_AGE_MS,
 } from "./index.ts";
@@ -65,6 +67,233 @@ Deno.test("generate-portrait-illustration rejects unauthenticated requests", asy
   );
 
   assertEquals(response.status, 401);
+});
+
+Deno.test("portrait workflow freshness expires exactly at the 5:30 recovery boundary", () => {
+  const now = Date.parse("2026-07-22T12:00:00Z");
+  const attemptId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  assertEquals(isFreshMatchingPortraitWorkflowJob({
+    versionAttemptId: attemptId,
+    versionStartedAt: new Date(now - 5 * 60_000 - 29_999).toISOString(),
+    jobAttemptId: attemptId,
+    jobStartedAt: new Date(now - 5 * 60_000 - 29_999).toISOString(),
+    now,
+  }), true);
+  assertEquals(isFreshMatchingPortraitWorkflowJob({
+    versionAttemptId: attemptId,
+    versionStartedAt: new Date(now - 5 * 60_000 - 30_000).toISOString(),
+    jobAttemptId: attemptId,
+    jobStartedAt: new Date(now - 5 * 60_000 - 30_000).toISOString(),
+    now,
+  }), false);
+});
+
+Deno.test("portrait workflow classifies initial, recovery, and manual-regenerate intent", () => {
+  const now = Date.parse("2026-07-22T12:00:00Z");
+  const base = {
+    illustratedProfileKey: null,
+    illustratedProfileStatus: "pending",
+    generationToken: null,
+    createdAt: new Date(now - 60_000).toISOString(),
+    now,
+  };
+  assertEquals(getPortraitGenerationRequestIntent(base), "initial");
+  assertEquals(getPortraitGenerationRequestIntent({
+    ...base,
+    createdAt: new Date(now - 3 * 60_000).toISOString(),
+  }), "recovery");
+  assertEquals(getPortraitGenerationRequestIntent({
+    ...base,
+    illustratedProfileStatus: "failed",
+  }), "recovery");
+  assertEquals(getPortraitGenerationRequestIntent({
+    ...base,
+    illustratedProfileKey: "retained.webp",
+    illustratedProfileStatus: "ready",
+  }), "manual_regenerate");
+});
+
+async function withCloudflarePortraitEnv(run: () => Promise<void>): Promise<void> {
+  const entries = [
+    ["PORTRAIT_GENERATION_BACKEND", "cloudflare"],
+    ["CLOUDFLARE_PORTRAIT_WORKFLOW_URL", "https://portrait-worker.test/dispatch/portrait"],
+    ["CLOUDFLARE_PORTRAIT_DISPATCH_SECRET", "portrait-dispatch-test-secret"],
+  ] as const;
+  const previous = new Map(entries.map(([key]) => [key, Deno.env.get(key)]));
+  for (const [key, value] of entries) Deno.env.set(key, value);
+  try {
+    await run();
+  } finally {
+    for (const [key] of entries) {
+      const value = previous.get(key);
+      if (value === undefined) Deno.env.delete(key);
+      else Deno.env.set(key, value);
+    }
+  }
+}
+
+function cloudflarePortraitClient(input: {
+  activeJob?: { id: string; attempt_id: string; started_at: string } | null;
+  version?: Record<string, unknown>;
+}) {
+  const sourceKey = `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/photo.jpg`;
+  const version = {
+    id: VERSION_ID,
+    family_id: FAMILY_ID,
+    family_member_id: MEMBER_ID,
+    reference_date: "2026-07-20",
+    profile_picture_key: sourceKey,
+    illustrated_profile_key: null,
+    illustrated_profile_status: "pending",
+    generation_token: null,
+    generation_started_at: null,
+    generation_output_key: null,
+    created_at: new Date().toISOString(),
+    ...input.version,
+  };
+  const inserted: Record<string, unknown>[] = [];
+  const rpcCalls: string[] = [];
+  const basicBuilder = (row: unknown) => {
+    const builder = {
+      select: () => builder,
+      eq: () => builder,
+      maybeSingle: async () => ({ data: row, error: null }),
+    };
+    return builder;
+  };
+  const client = {
+    from(table: string) {
+      if (table === "family_member_portrait_versions") return basicBuilder(version);
+      if (table === "family_members") {
+        return basicBuilder({
+          id: MEMBER_ID,
+          family_id: FAMILY_ID,
+          name: "Lila",
+          date_of_birth: "2024-01-01",
+          gender: null,
+          additional_info: null,
+        });
+      }
+      if (table === "families") return basicBuilder({ illustration_style: "default" });
+      if (table === "portrait_generation_jobs") {
+        const query = {
+          select: () => query,
+          eq: () => query,
+          in: () => query,
+          order: () => query,
+          limit: () => query,
+          maybeSingle: async () => ({ data: input.activeJob ?? null, error: null }),
+        };
+        return {
+          ...query,
+          insert: async (payload: Record<string, unknown>) => {
+            inserted.push(payload);
+            return { error: null };
+          },
+        };
+      }
+      throw new Error(`Unexpected table ${table}`);
+    },
+    rpc: async (name: string) => {
+      rpcCalls.push(name);
+      if (name === "claim_family_member_portrait_generation") return { data: version, error: null };
+      return { data: 1, error: null };
+    },
+  };
+  return { client, inserted, rpcCalls, version };
+}
+
+Deno.test("portrait Cloudflare dispatcher reuses and re-dispatches a fresh matching job", async () => {
+  await withCloudflarePortraitEnv(async () => {
+    const attemptId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const startedAt = new Date(Date.now() - 30_000).toISOString();
+    const mock = cloudflarePortraitClient({
+      activeJob: { id: attemptId, attempt_id: attemptId, started_at: startedAt },
+      version: { generation_token: attemptId, generation_started_at: startedAt },
+    });
+    const dispatchBodies: string[] = [];
+    const response = await handleGeneratePortraitIllustration(authenticatedRequest(), {
+      getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+      getCallerFamilyRole: async () => "manager",
+      createServiceClient: () => mock.client as never,
+      fetch: (async (_input, init) => {
+        dispatchBodies.push(String(init?.body));
+        return new Response(null, { status: 202 });
+      }) as typeof fetch,
+    });
+    assertEquals(response.status, 202);
+    assertEquals(await response.json(), { success: true, queued: true });
+    assertEquals(JSON.parse(dispatchBodies[0]), { jobId: attemptId });
+    assertEquals(mock.inserted.length, 0);
+    assertEquals(mock.rpcCalls.length, 0);
+  });
+});
+
+Deno.test("portrait Cloudflare dispatch ambiguity retains the durable job and a later recovery reuses its exact ID", async () => {
+  await withCloudflarePortraitEnv(async () => {
+    const initial = cloudflarePortraitClient({});
+    const firstResponse = await handleGeneratePortraitIllustration(authenticatedRequest(), {
+      getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+      getCallerFamilyRole: async () => "manager",
+      createServiceClient: () => initial.client as never,
+      fetch: (async () => new Response(null, { status: 503 })) as typeof fetch,
+    });
+
+    assertEquals(firstResponse.status, 202);
+    assertEquals(await firstResponse.json(), { success: true, queued: true });
+    assertEquals(initial.inserted.length, 1);
+    assertEquals(initial.rpcCalls, [
+      "claim_family_member_portrait_generation",
+      "supersede_portrait_generation_workflow_jobs",
+    ]);
+
+    const jobId = initial.inserted[0].id as string;
+    const startedAt = initial.inserted[0].started_at as string;
+    const recovery = cloudflarePortraitClient({
+      activeJob: { id: jobId, attempt_id: jobId, started_at: startedAt },
+      version: { generation_token: jobId, generation_started_at: startedAt },
+    });
+    const redispatchBodies: string[] = [];
+    const recoveryResponse = await handleGeneratePortraitIllustration(authenticatedRequest(), {
+      getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+      getCallerFamilyRole: async () => "manager",
+      createServiceClient: () => recovery.client as never,
+      fetch: (async (_input, init) => {
+        redispatchBodies.push(String(init?.body));
+        return new Response(null, { status: 202 });
+      }) as typeof fetch,
+    });
+
+    assertEquals(recoveryResponse.status, 202);
+    assertEquals(JSON.parse(redispatchBodies[0]), { jobId });
+    assertEquals(recovery.inserted.length, 0);
+    assertEquals(recovery.rpcCalls.length, 0);
+  });
+});
+
+Deno.test("portrait Cloudflare dispatcher classifies reclaimed work and cleans only its stale output", async () => {
+  await withCloudflarePortraitEnv(async () => {
+    const mock = cloudflarePortraitClient({
+      version: {
+        generation_token: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        generation_started_at: new Date(Date.now() - 6 * 60_000).toISOString(),
+        generation_output_key: "stale/attempt.webp",
+        created_at: new Date(Date.now() - 4 * 60_000).toISOString(),
+      },
+    });
+    const deleted: string[] = [];
+    const response = await handleGeneratePortraitIllustration(authenticatedRequest(), {
+      getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+      getCallerFamilyRole: async () => "manager",
+      createServiceClient: () => mock.client as never,
+      deleteObject: async (key) => { deleted.push(key); },
+      fetch: (async () => new Response(null, { status: 202 })) as typeof fetch,
+    });
+    assertEquals(response.status, 202);
+    assertEquals(mock.inserted[0].request_intent, "recovery");
+    assertEquals(deleted, ["stale/attempt.webp"]);
+    assertEquals(mock.inserted[0].old_portrait_key, null);
+  });
 });
 
 Deno.test("generate-portrait-illustration rejects unsupported methods", async () => {
@@ -164,10 +393,6 @@ Deno.test("generate-portrait-illustration fails the claimed attempt before its r
         });
         return new Uint8Array();
       },
-      generateImage: async (_prompt, options) => {
-        assertEquals(options?.signal?.aborted, true);
-        throw new DOMException("Aborted", "AbortError");
-      },
       putObjectBytes: async () => undefined,
       deleteObject: async () => undefined,
       generationTimeoutMs: 1,
@@ -221,6 +446,28 @@ function createMemoriesBuilder(
   return builder;
 }
 
+function createTaggedMemoryBuilder(
+  candidates: Array<{ id: string }>,
+  call: MemoriesQueryCall,
+) {
+  const builder = {
+    select: () => builder,
+    eq: (column: string, value: unknown) => {
+      call.eqCalls.push([column, value]);
+      return builder;
+    },
+    lt: (column: string, value: unknown) => {
+      call.ltCall = [column, value];
+      return builder;
+    },
+    limit: (count: number) => {
+      call.limitCall = count;
+      return { data: candidates.map((candidate) => ({ memory_id: candidate.id })), error: null };
+    },
+  };
+  return builder;
+}
+
 function retriggerRequest(): Request {
   return new Request("http://localhost/generate-portrait-illustration", {
     method: "POST",
@@ -267,6 +514,9 @@ function buildRetriggerClient(
 
   return {
     from(table: string) {
+      if (table === "memory_family_members") {
+        return createTaggedMemoryBuilder(memoriesCandidates, memoriesCall);
+      }
       if (table === "memories") {
         return createMemoriesBuilder(memoriesCandidates, memoriesCall);
       }
@@ -321,9 +571,11 @@ function baseRetriggerDependencies() {
       _maxEdge: number,
       contentType: string,
     ) => ({ bytes, contentType, extension: "jpg" }),
-    loadStyleReferenceBytes: async () => null,
+    loadStyleReferenceBytes: async () => ({
+      bytes: new Uint8Array([4, 5, 6]),
+      contentType: "image/png",
+    }),
     editImageWithReferences: async () => new Uint8Array([9, 9, 9]),
-    generateImage: async () => new Uint8Array([9, 9, 9]),
     putObjectBytes: async () => undefined,
     deleteObject: async () => undefined,
     generationTimeoutMs: 5_000,
@@ -410,34 +662,36 @@ Deno.test(
 
       assertEquals(
         memoriesCall.eqCalls.some(([column, value]) =>
-          column === "family_id" && value === FAMILY_ID
+          column === "family_member_id" && value === MEMBER_ID
         ),
         true,
       );
       assertEquals(
         memoriesCall.eqCalls.some(([column, value]) =>
-          column === "memory_type" && value === "text_illustration"
+          column === "memories.family_id" && value === FAMILY_ID
         ),
         true,
       );
       assertEquals(
         memoriesCall.eqCalls.some(([column, value]) =>
-          column === "illustration_status" && value === "pending"
+          column === "memories.memory_type" && value === "text_illustration"
+        ),
+        true,
+      );
+      assertEquals(
+        memoriesCall.eqCalls.some(([column, value]) =>
+          column === "memories.illustration_status" && value === "pending"
         ),
         true,
       );
 
       assertExists(memoriesCall.ltCall);
-      assertEquals(memoriesCall.ltCall?.[0], "created_at");
+      assertEquals(memoriesCall.ltCall?.[0], "memories.created_at");
       const threshold = new Date(String(memoriesCall.ltCall?.[1])).getTime();
       // The threshold must exclude memories younger than RETRIGGER_MIN_AGE_MS.
       const expectedThreshold = Date.now() - RETRIGGER_MIN_AGE_MS;
       assertEquals(Math.abs(threshold - expectedThreshold) < 5_000, true);
 
-      assertEquals(memoriesCall.orderCall, [
-        "created_at",
-        { ascending: false },
-      ]);
       assertEquals(memoriesCall.limitCall, RETRIGGER_MAX_CANDIDATES);
     });
   },
@@ -459,11 +713,8 @@ Deno.test(
         {
           ...baseRetriggerDependencies(),
           createServiceClient: () => client as never,
-          // Both providers fail with a non-abort error to exercise the catch path.
+          // The reference-aware provider fails to exercise the catch path.
           editImageWithReferences: async () => {
-            throw new Error("provider failed");
-          },
-          generateImage: async () => {
             throw new Error("provider failed");
           },
           fetch: (async (input) => {
@@ -566,7 +817,7 @@ Deno.test(
 );
 
 Deno.test(
-  "generate-portrait-illustration logs a fulfilled retrigger error status but not an expected 409",
+  "generate-portrait-illustration drains legacy retrigger responses without logging candidate details",
   async () => {
     await withRetriggerEnv(async () => {
       const memoriesCall: MemoriesQueryCall = { eqCalls: [] };
@@ -625,9 +876,7 @@ Deno.test(
       const retriggerStatusLogs = errorLogs.filter(([message]) =>
         message === "generate-portrait-illustration retrigger returned an error status"
       );
-      assertEquals(retriggerStatusLogs.length, 1);
-      assertEquals(retriggerStatusLogs[0][1], candidates[0].id);
-      assertEquals(retriggerStatusLogs[0][2], 500);
+      assertEquals(retriggerStatusLogs.length, 0);
     });
   },
 );
