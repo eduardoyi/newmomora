@@ -15,6 +15,7 @@
     "test:edge": "deno test --allow-env --allow-net --allow-ffi --allow-read=supabase/functions,supabase/scripts,src/utils --node-modules-dir=none supabase/functions/ supabase/scripts/",
     "eval:portrait": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-portrait.ts",
     "eval:illustration": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-illustration.ts",
+    "eval:image-cost": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-image-cost.ts",
     "regenerate:illustrations": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/regenerate-illustrations.ts",
     "backfill:previews": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-media-previews.ts",
     "backfill:video-posters": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-video-posters.ts",
