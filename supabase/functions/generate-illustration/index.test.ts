@@ -298,9 +298,9 @@ Deno.test('workflow reuse requires a matching attempt and holds the lease throug
   }), false);
 });
 
-Deno.test('generate-illustration uses medium only for three-or-more references and never hedges', () => {
+Deno.test('generate-illustration always sends medium quality and never hedges', () => {
   assertEquals(getIllustrationImageRequestOptions(1), {
-    quality: undefined,
+    quality: 'medium',
     outputFormat: 'webp',
     outputCompression: 85,
     fallbackHedgeDelayMs: undefined,

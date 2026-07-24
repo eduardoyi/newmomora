@@ -432,6 +432,7 @@ export async function handleGeneratePortraitIllustration(
         signal: controller.signal,
         outputFormat: 'webp',
         outputCompression: 85,
+        quality: 'medium',
       });
       await dependencies.putObjectBytes(portraitKey, portraitBytes, 'image/webp');
       uploadedAttempt = true;

@@ -109,7 +109,7 @@ export async function editPortraitImage(
     model,
     prompt,
     [styleReference, sourceReference],
-    undefined,
+    'medium',
     signal,
   );
 }

@@ -72,14 +72,15 @@ export const ILLUSTRATION_GENERATION_TIMEOUT_MS =
 const ALLOWED_EXPRESSION_STYLES = new Set(['comedic', 'tender', 'neutral']);
 type ExpressionStyle = 'comedic' | 'tender' | 'neutral';
 
-export function getIllustrationImageRequestOptions(referenceCount: number) {
-  const isLargeReferenceSet = referenceCount >= 3;
-
+// `referenceCount` is retained for call-site stability even though every
+// reference count now resolves to the same quality.
+export function getIllustrationImageRequestOptions(_referenceCount: number) {
   return {
-    // `auto` can choose a costly output for a multi-character edit. Medium
-    // keeps a polished final illustration while making that tail predictable;
-    // we deliberately do not trade family-image quality down to `low`.
-    quality: isLargeReferenceSet ? ('medium' as const) : undefined,
+    // `auto` can silently resolve to a ~4x more expensive high-quality
+    // output. Medium was validated in eval as visually equivalent, so it is
+    // always sent explicitly; we deliberately do not trade quality down to
+    // `low`.
+    quality: 'medium' as const,
     // Illustration keys and R2 metadata are .webp/image-webp. Request the
     // same format instead of storing default PNG bytes under that identity.
     outputFormat: 'webp' as const,

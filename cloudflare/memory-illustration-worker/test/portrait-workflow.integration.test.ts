@@ -232,7 +232,7 @@ describe('portrait Workflow', () => {
     expect(form.get('size')).toBe('1024x1024');
     expect(form.get('output_format')).toBe('webp');
     expect(form.get('output_compression')).toBe('85');
-    expect(form.get('quality')).toBeNull();
+    expect(form.get('quality')).toBe('medium');
     expect(form.get('input_fidelity')).toBeNull();
     const files = form.getAll('image[]') as File[];
     expect(files).toHaveLength(2);
@@ -277,7 +277,7 @@ describe('portrait Workflow', () => {
     ]);
     expect(imageForms).toHaveLength(2);
     expect(imageForms[1].get('input_fidelity')).toBe('high');
-    expect(imageForms[1].get('quality')).toBeNull();
+    expect(imageForms[1].get('quality')).toBe('medium');
     expect(imageForms[1].getAll('image[]')).toHaveLength(2);
   });
 

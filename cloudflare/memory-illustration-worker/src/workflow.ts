@@ -197,7 +197,7 @@ async function runImageAttempt(
       model,
       prompt,
       references,
-      references.length >= 3 ? 'medium' : undefined,
+      'medium',
       controller.signal,
     );
     await uploadOutputWithLease(env, job.jobId, job.outputKey, bytes, model);
