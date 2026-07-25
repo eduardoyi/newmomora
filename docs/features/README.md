@@ -31,6 +31,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Feature | Doc | Status |
 |---------|-----|--------|
 | Auth | [auth.md](./auth.md) | done |
+| Onboarding & paywall | [onboarding.md](./onboarding.md) | planned |
 | Family sharing | [family-sharing.md](./family-sharing.md) | done |
 | Family profiles | [family-profiles.md](./family-profiles.md) | done |
 | Portrait timeline | [portrait-timeline.md](./portrait-timeline.md) | done |
@@ -43,6 +44,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Voice journaling | [voice-journaling.md](./voice-journaling.md) | done |
 | Content reporting & account blocking | [content-reporting.md](./content-reporting.md) | done |
 | EAS Update delivery | [eas-update.md](./eas-update.md) | done |
+| Usage limits & AI cost observability | [usage-limits.md](./usage-limits.md) | planned |
 
 ## Template
 
