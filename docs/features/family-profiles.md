@@ -21,7 +21,7 @@ Family profiles power memory tagging and age-aware AI character portraits. Each 
 - **Timeline onboarding:** if no family members, CTA to add one before journaling
 - **Portrait history:** the member-detail history icon opens paired photos/illustrations with date, age, status, and management actions.
 - **Portrait status:** a new generation can show pending/generating state while the previous ready portrait remains the current avatar. Unique output keys avoid stale cached regeneration results.
-- **Full-screen portrait:** tapping a ready illustrated portrait on the family-member detail page opens it in the same warm, dark full-screen viewer used by memory media. The original profile photo is not substituted when an illustrated portrait is unavailable.
+- **Full-screen portrait:** tapping a ready illustrated portrait on the family-member detail page opens it in the same warm, dark full-screen viewer used by memory media — including its pinch/double-tap zoom (see [media-memories.md](./media-memories.md)). The original profile photo is not substituted when an illustrated portrait is unavailable.
 - **Durable recovery:** the client never changes portrait status or claim fields. An owner/manager automatically re-invokes the server only once for an unclaimed pending row older than three minutes, or a claimed attempt older than five minutes thirty seconds; failed versions remain manual retry only. Viewers can observe/poll but cannot trigger recovery. A fresh active attempt disables Regenerate.
 - **Portrait-completion retrigger (cross-feature):** portrait publication or terminal failure retriggers up to three eligible pending illustrated memories that were waiting on this portrait. The durable bridge uses a separate signed internal request and rechecks the original actor's current family-manager access; it never forwards a user JWT through Cloudflare. The client memory recovery loop remains the backstop. See [memories.md](./memories.md) "Illustration deferral" and [TECH_SPEC §4.1/§4.3](../TECH_SPEC.md#41-generate-portrait-illustration) for the full contract.
 
@@ -77,7 +77,7 @@ The durable executor uses the same `momora-prod` bucket through semantic Worker 
 
 ## Client integration
 
-`src/components/full-screen-media-viewer.tsx` is shared with memories for ready portrait viewing.
+`src/components/full-screen-media-viewer.tsx` is shared with memories for ready portrait viewing, and its pinch/double-tap zoom applies to portraits with no work on this feature's side.
 
 | Layer | Files |
 |-------|-------|

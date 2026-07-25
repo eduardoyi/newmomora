@@ -1,11 +1,12 @@
 import { useEventListener } from 'expo';
-import { Image } from 'expo-image';
+import { Image, type ImageLoadEventData } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
 import { SymbolView } from 'expo-symbols';
 import { createVideoPlayer, type VideoPlayer, VideoView } from 'expo-video';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  type LayoutChangeEvent,
   Modal,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -16,11 +17,30 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Animated, {
+  runOnJS,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
 import { isVideoContentType } from '@/utils/media-validation';
+
+// Illustrations are generated at 1024x1024 and photos are uploaded at their
+// original resolution, so 4x is past pixel-for-pixel on a phone screen --
+// zooming further only magnifies interpolation.
+const MAX_ZOOM_SCALE = 4;
+const DOUBLE_TAP_ZOOM_SCALE = 2;
+const ZOOM_ANIMATION_MS = 180;
+
+function clampValue(value: number, min: number, max: number) {
+  'worklet';
+  return Math.min(Math.max(value, min), max);
+}
 
 export interface FullScreenMediaItem {
   id: string;
@@ -143,6 +163,253 @@ function FullScreenVideo({ isActive, uri }: { isActive: boolean; uri: string }) 
   );
 }
 
+interface ZoomableImageProps {
+  accessibilityLabel: string;
+  cacheKey: string;
+  /** False for off-screen pages -- they drop any zoom instead of keeping it. */
+  isActive: boolean;
+  /**
+   * Single-finger panning may only claim the touch once the image is zoomed
+   * in; otherwise it would fight the paging ScrollView for horizontal drags.
+   * The viewer disables paging over the same flag, so exactly one of the two
+   * owns a drag at any moment.
+   */
+  isPanEnabled: boolean;
+  onError?: () => void;
+  onZoomedChange: (isZoomed: boolean) => void;
+  testID: string;
+  uri: string;
+}
+
+/**
+ * A pinch/double-tap zoomable page. Geometry convention for every gesture
+ * below: coordinates are relative to the frame centre, and a point `p` on the
+ * unscaled image lands at `translate + scale * p`. Anchoring a focal point is
+ * therefore just solving that for `translate`.
+ */
+function ZoomableImage({
+  accessibilityLabel,
+  cacheKey,
+  isActive,
+  isPanEnabled,
+  onError,
+  onZoomedChange,
+  testID,
+  uri,
+}: ZoomableImageProps) {
+  const scale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const startScale = useSharedValue(1);
+  const startTranslateX = useSharedValue(0);
+  const startTranslateY = useSharedValue(0);
+  // Unscaled image point pinned under the pinch focal for the whole gesture.
+  const pinchAnchorX = useSharedValue(0);
+  const pinchAnchorY = useSharedValue(0);
+  const frameWidth = useSharedValue(0);
+  const frameHeight = useSharedValue(0);
+  // Natural ratio of the loaded asset; 0 until expo-image reports it.
+  const contentRatio = useSharedValue(0);
+  const isZoomed = useSharedValue(false);
+
+  const handleLayout = useCallback((event: LayoutChangeEvent) => {
+    frameWidth.set(event.nativeEvent.layout.width);
+    frameHeight.set(event.nativeEvent.layout.height);
+  }, [frameHeight, frameWidth]);
+
+  const handleLoad = useCallback((event: ImageLoadEventData) => {
+    const height = event.source?.height ?? 0;
+    const width = event.source?.width ?? 0;
+    contentRatio.set(height > 0 && width > 0 ? width / height : 0);
+  }, [contentRatio]);
+
+  useEffect(() => {
+    if (isActive) {
+      return;
+    }
+
+    // Paging is blocked while zoomed, so this only fires for a programmatic
+    // page change -- reset anyway so a page is never restored mid-zoom.
+    scale.set(1);
+    translateX.set(0);
+    translateY.set(0);
+    if (isZoomed.get()) {
+      isZoomed.set(false);
+      onZoomedChange(false);
+    }
+  }, [isActive, isZoomed, onZoomedChange, scale, translateX, translateY]);
+
+  useEffect(() => {
+    // A zoomed page can disappear under the viewer -- a family member editing
+    // the memory's media refreshes `items` while it's open. Hand paging back on
+    // the way out; nobody is left to pinch this page out to fit.
+    return () => {
+      if (isZoomed.get()) {
+        onZoomedChange(false);
+      }
+    };
+  }, [isZoomed, onZoomedChange]);
+
+  // `contain` letterboxes the image inside the page frame, so the pannable
+  // range is bounded by the *content* box, not the frame -- clamping against
+  // the frame would let a portrait image be dragged past its own edge.
+  const panLimit = (nextScale: number) => {
+    'worklet';
+    const width = frameWidth.get();
+    const height = frameHeight.get();
+    if (width <= 0 || height <= 0) {
+      return { x: 0, y: 0 };
+    }
+
+    const frameRatio = width / height;
+    // Before onLoad lands, assume the asset fills the frame: a slightly loose
+    // clamp beats freezing the pan entirely.
+    const ratio = contentRatio.get() > 0 ? contentRatio.get() : frameRatio;
+    const contentWidth = ratio > frameRatio ? width : height * ratio;
+    const contentHeight = ratio > frameRatio ? width / ratio : height;
+
+    return {
+      x: Math.max(0, (contentWidth * nextScale - width) / 2),
+      y: Math.max(0, (contentHeight * nextScale - height) / 2),
+    };
+  };
+
+  const syncZoomed = (nextIsZoomed: boolean) => {
+    'worklet';
+    if (isZoomed.get() === nextIsZoomed) {
+      return;
+    }
+
+    isZoomed.set(nextIsZoomed);
+    runOnJS(onZoomedChange)(nextIsZoomed);
+  };
+
+  const settleToFit = () => {
+    'worklet';
+    scale.set(withTiming(1, { duration: ZOOM_ANIMATION_MS }));
+    translateX.set(withTiming(0, { duration: ZOOM_ANIMATION_MS }));
+    translateY.set(withTiming(0, { duration: ZOOM_ANIMATION_MS }));
+    syncZoomed(false);
+  };
+
+  const pinch = Gesture.Pinch()
+    .withTestId(`${testID}-pinch`)
+    .onStart((event) => {
+      startScale.set(scale.get());
+      const focalX = event.focalX - frameWidth.get() / 2;
+      const focalY = event.focalY - frameHeight.get() / 2;
+      pinchAnchorX.set((focalX - translateX.get()) / scale.get());
+      pinchAnchorY.set((focalY - translateY.get()) / scale.get());
+    })
+    .onUpdate((event) => {
+      // Clamped at 1 rather than allowed to overshoot, so pinching out always
+      // lands exactly back on the fitted image with no rubber-band to unwind.
+      const nextScale = clampValue(startScale.get() * event.scale, 1, MAX_ZOOM_SCALE);
+      const limit = panLimit(nextScale);
+      // Tracking the live focal (not just the start focal) keeps a two-finger
+      // drag panning the image mid-pinch.
+      const focalX = event.focalX - frameWidth.get() / 2;
+      const focalY = event.focalY - frameHeight.get() / 2;
+
+      scale.set(nextScale);
+      translateX.set(clampValue(focalX - nextScale * pinchAnchorX.get(), -limit.x, limit.x));
+      translateY.set(clampValue(focalY - nextScale * pinchAnchorY.get(), -limit.y, limit.y));
+      syncZoomed(nextScale > 1);
+    })
+    .onEnd(() => {
+      if (scale.get() <= 1) {
+        settleToFit();
+      }
+    });
+
+  const pan = Gesture.Pan()
+    .withTestId(`${testID}-pan`)
+    // Two-finger movement belongs to the pinch's focal tracking; letting pan
+    // see it too would apply the same translation twice.
+    .maxPointers(1)
+    .enabled(isPanEnabled)
+    .onStart(() => {
+      startTranslateX.set(translateX.get());
+      startTranslateY.set(translateY.get());
+    })
+    .onUpdate((event) => {
+      const limit = panLimit(scale.get());
+      translateX.set(clampValue(
+        startTranslateX.get() + event.translationX,
+        -limit.x,
+        limit.x,
+      ));
+      translateY.set(clampValue(
+        startTranslateY.get() + event.translationY,
+        -limit.y,
+        limit.y,
+      ));
+    });
+
+  const doubleTap = Gesture.Tap()
+    .withTestId(`${testID}-double-tap`)
+    .numberOfTaps(2)
+    .onEnd((event) => {
+      if (scale.get() > 1) {
+        settleToFit();
+        return;
+      }
+
+      // At rest (scale 1, no translation) the tapped screen point *is* the
+      // image point under it, so anchoring it reduces to focal - scale*focal.
+      const focalX = event.x - frameWidth.get() / 2;
+      const focalY = event.y - frameHeight.get() / 2;
+      const limit = panLimit(DOUBLE_TAP_ZOOM_SCALE);
+      const timing = { duration: ZOOM_ANIMATION_MS };
+
+      scale.set(withTiming(DOUBLE_TAP_ZOOM_SCALE, timing));
+      translateX.set(withTiming(
+        clampValue(focalX - DOUBLE_TAP_ZOOM_SCALE * focalX, -limit.x, limit.x),
+        timing,
+      ));
+      translateY.set(withTiming(
+        clampValue(focalY - DOUBLE_TAP_ZOOM_SCALE * focalY, -limit.y, limit.y),
+        timing,
+      ));
+      syncZoomed(true);
+    });
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.get() },
+      { translateY: translateY.get() },
+      { scale: scale.get() },
+    ],
+  }));
+
+  return (
+    <GestureDetector gesture={Gesture.Race(doubleTap, Gesture.Simultaneous(pinch, pan))}>
+      <View
+        collapsable={false}
+        onLayout={handleLayout}
+        style={styles.mediaPage}
+        testID={`${testID}-frame`}
+      >
+        <Animated.View
+          style={[styles.mediaPage, animatedStyle]}
+          testID={`${testID}-zoom-layer`}
+        >
+          <Image
+            accessibilityHint="Pinch or double tap to zoom"
+            accessibilityLabel={accessibilityLabel}
+            contentFit="contain"
+            onError={onError}
+            onLoad={handleLoad}
+            source={{ uri, cacheKey }}
+            style={styles.mediaPage}
+            testID={testID}
+          />
+        </Animated.View>
+      </View>
+    </GestureDetector>
+  );
+}
+
 export function FullScreenMediaViewer({
   items,
   initialIndex = 0,
@@ -154,6 +421,8 @@ export function FullScreenMediaViewer({
   const scrollRef = useRef<ScrollView>(null);
   const safeInitialIndex = Math.min(Math.max(initialIndex, 0), Math.max(items.length - 1, 0));
   const [activeIndex, setActiveIndex] = useState(safeInitialIndex);
+  // Zoom and paging are mutually exclusive owners of a horizontal drag.
+  const [isZoomed, setIsZoomed] = useState(false);
   const keys = items.flatMap((item) => item.objectKey ? [item.objectKey] : []);
   const { data: urls = {}, refetch: refetchMediaUrls } = useMediaUrls(keys, cacheVersion);
 
@@ -180,7 +449,9 @@ export function FullScreenMediaViewer({
     >
       <SafeAreaProvider testID="full-screen-media-safe-area-provider">
         <StatusBar style="light" />
-        <View
+        {/* A Modal is its own native window on Android, so it does not inherit
+            the app-level root view -- the zoom gestures below need their own. */}
+        <GestureHandlerRootView
           accessibilityLabel={accessibilityLabel}
           accessibilityViewIsModal
           style={styles.container}
@@ -193,7 +464,7 @@ export function FullScreenMediaViewer({
             onScrollEndDrag={handleScrollEnd}
             pagingEnabled
             ref={scrollRef}
-            scrollEnabled={items.length > 1}
+            scrollEnabled={items.length > 1 && !isZoomed}
             showsHorizontalScrollIndicator={false}
             testID="full-screen-media-scroll"
           >
@@ -210,16 +481,15 @@ export function FullScreenMediaViewer({
                       <View style={styles.mediaPage} />
                     )
                   ) : (
-                    <Image
+                    <ZoomableImage
                       accessibilityLabel={`Media ${index + 1} of ${items.length}`}
-                      contentFit="contain"
+                      cacheKey={`${item.objectKey ?? item.uri ?? item.id}:${cacheVersion ?? ''}`}
+                      isActive={index === activeIndex}
+                      isPanEnabled={isZoomed}
                       onError={item.objectKey ? () => void refetchMediaUrls() : undefined}
-                      source={{
-                        uri,
-                        cacheKey: `${item.objectKey ?? item.uri ?? item.id}:${cacheVersion ?? ''}`,
-                      }}
-                      style={styles.mediaPage}
+                      onZoomedChange={setIsZoomed}
                       testID={`full-screen-media-image-${item.id}`}
+                      uri={uri}
                     />
                   )}
                 </View>
@@ -263,7 +533,7 @@ export function FullScreenMediaViewer({
               </View>
             ) : null}
           </SafeAreaView>
-        </View>
+        </GestureHandlerRootView>
       </SafeAreaProvider>
     </Modal>
   );
