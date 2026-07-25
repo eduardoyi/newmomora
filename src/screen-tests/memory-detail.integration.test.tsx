@@ -1,6 +1,7 @@
 import { render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
@@ -8,9 +9,15 @@ import { useMediaUrl } from '@/hooks/useMediaUrls';
 
 import MemoryDetailScreen from '../../app/(app)/memory/[id]';
 
+// Mutable so a test can exercise the route params the screen reads (e.g. the
+// `mediaIndex` a timeline carousel tap passes through).
+const mockSearchParams: { id: string; comments?: string; mediaIndex?: string } = {
+  id: 'memory-1',
+};
+
 jest.mock('expo-router', () => ({
   router: { push: jest.fn() },
-  useLocalSearchParams: () => ({ id: 'memory-1' }),
+  useLocalSearchParams: () => mockSearchParams,
 }));
 
 jest.mock('expo-symbols', () => ({
@@ -38,7 +45,7 @@ jest.mock('@/components/memory-engagement-bar', () => ({
 }));
 
 jest.mock('@/components/memory-media-carousel', () => ({
-  MemoryMediaCarousel: () => null,
+  MemoryMediaCarousel: jest.fn(() => null),
 }));
 
 jest.mock('@/hooks/use-family', () => ({
@@ -114,6 +121,8 @@ describe('MemoryDetailScreen hierarchy', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
+    delete mockSearchParams.comments;
+    delete mockSearchParams.mediaIndex;
     mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'manager' });
     mockedUseFamilyMemberProfiles.mockReturnValue({
       profiles: [{ user_id: 'user-1', name: 'Eduardo' }],
@@ -169,4 +178,31 @@ describe('MemoryDetailScreen hierarchy', () => {
       });
     },
   );
+
+  it.each([
+    ['opens the media carousel on the page named by the route', '2', 2],
+    ['opens on the first asset when no page was passed', undefined, 0],
+    ['opens on the first asset when the page is unparseable', 'nope', 0],
+  ])('%s', (_label, routeMediaIndex, expectedInitialIndex) => {
+    const mockedCarousel = MemoryMediaCarousel as jest.Mock;
+    mockSearchParams.mediaIndex = routeMediaIndex;
+    mockedUseMemory.mockReturnValue({
+      data: {
+        ...baseMemory,
+        mediaAssets: [
+          { id: 'asset-1', object_key: 'photo-1.jpg', content_type: 'image/jpeg', position: 0 },
+          { id: 'asset-2', object_key: 'photo-2.jpg', content_type: 'image/jpeg', position: 1 },
+          { id: 'asset-3', object_key: 'photo-3.jpg', content_type: 'image/jpeg', position: 2 },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderScreen();
+
+    expect(mockedCarousel.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ initialIndex: expectedInitialIndex }),
+    );
+  });
 });

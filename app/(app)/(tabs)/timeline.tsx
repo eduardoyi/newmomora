@@ -158,8 +158,8 @@ export default function TimelineScreen() {
   // FlatList re-renders on every list-affecting state change (new page,
   // active-video swap, refetch), so these must not be recreated per render
   // or the memo comparison never bails out.
-  const handleCardPress = useCallback((memoryId: string) => {
-    router.push(memoryDetailRoute(memoryId));
+  const handleCardPress = useCallback((memoryId: string, mediaIndex?: number) => {
+    router.push(memoryDetailRoute(memoryId, mediaIndex));
   }, []);
   const handleOpenComments = useCallback((memoryId: string) => {
     router.push(memoryDetailCommentsRoute(memoryId));

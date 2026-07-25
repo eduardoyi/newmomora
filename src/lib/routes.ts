@@ -21,8 +21,19 @@ export function sharingWaitingRouteWithName(familyName: string): Href {
   return { pathname: '/(app)/sharing/waiting', params: { familyName } } as unknown as Href;
 }
 
-export function memoryDetailRoute(memoryId: string): Href {
-  return `/(app)/memory/${memoryId}` as Href;
+// `mediaIndex` opens the detail screen's media carousel on that page -- the
+// asset the user was already looking at in a list carousel. Omitted (or 0)
+// keeps the plain string route so existing callers and deep links are
+// unchanged.
+export function memoryDetailRoute(memoryId: string, mediaIndex?: number): Href {
+  if (!mediaIndex) {
+    return `/(app)/memory/${memoryId}` as Href;
+  }
+
+  return {
+    pathname: '/(app)/memory/[id]',
+    params: { id: memoryId, mediaIndex: String(mediaIndex) },
+  } as Href;
 }
 
 export function memoryDetailCommentsRoute(memoryId: string): Href {

@@ -121,6 +121,34 @@ describe('MemoryMediaCarousel', () => {
     expect(onPress).toHaveBeenCalledWith(1);
   });
 
+  it('opens on the requested initial page', () => {
+    const onPress = jest.fn();
+    const { getByTestId, getByText } = render(
+      <MemoryMediaCarousel assets={assets} initialIndex={1} onPress={onPress} />,
+    );
+
+    measureCarousel(getByTestId);
+    const scrollView = getByTestId('memory-media-carousel-scroll');
+    fireEvent(scrollView, 'contentSizeChange', 640, 480);
+
+    expect(getByText('2 / 2')).toBeTruthy();
+
+    // Tapping without swiping reopens the same page, not the first one.
+    fireEvent(scrollView, 'touchStart', { nativeEvent: { pageX: 20, pageY: 30 } });
+    fireEvent(scrollView, 'touchEnd', { nativeEvent: { pageX: 20, pageY: 30 } });
+    expect(onPress).toHaveBeenCalledWith(1);
+  });
+
+  it('clamps an initial page past the end of the asset list', () => {
+    const { getByTestId, getByText } = render(
+      <MemoryMediaCarousel assets={assets} initialIndex={7} />,
+    );
+
+    measureCarousel(getByTestId);
+
+    expect(getByText('2 / 2')).toBeTruthy();
+  });
+
   it('waits for a measured width before mounting media', () => {
     const { getByTestId, queryByTestId } = render(
       <MemoryMediaCarousel assets={[assets[0]]} stableLayout />,

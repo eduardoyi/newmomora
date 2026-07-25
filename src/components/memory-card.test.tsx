@@ -104,6 +104,48 @@ describe('MemoryCard media (Workstream C6)', () => {
       expect.objectContaining({ preferPreview: true }),
     );
   });
+
+  it('reports the tapped carousel page so the detail screen opens on it', () => {
+    const mockedCarousel = MemoryMediaCarousel as jest.Mock;
+    mockedCarousel.mockClear();
+
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'media',
+      mediaAssets: [
+        {
+          id: 'asset-1',
+          memory_id: 'memory-1',
+          object_key: 'user-1/memories/memory-1/media/asset-1.jpg',
+          content_type: 'image/jpeg',
+          position: 0,
+          created_at: '2026-07-14T00:00:00.000Z',
+        },
+        {
+          id: 'asset-2',
+          memory_id: 'memory-1',
+          object_key: 'user-1/memories/memory-1/media/asset-2.jpg',
+          content_type: 'image/jpeg',
+          position: 1,
+          created_at: '2026-07-14T00:00:00.000Z',
+        },
+      ],
+    } as MemoryWithTags;
+    const onPress = jest.fn();
+
+    const { getByTestId } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={onPress} />,
+    );
+
+    // Tapping the second carousel page carries its index up...
+    act(() => mockedCarousel.mock.calls[0]?.[0].onPress(1));
+    expect(onPress).toHaveBeenCalledWith('memory-1', 1);
+
+    // ...while the caption/footer below the carousel has no page context.
+    onPress.mockClear();
+    fireEvent.press(getByTestId('memory-card-content-memory-1'));
+    expect(onPress).toHaveBeenCalledWith('memory-1');
+  });
 });
 
 describe('MemoryCard failed illustration overlay', () => {

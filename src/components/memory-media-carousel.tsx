@@ -37,6 +37,12 @@ interface MemoryMediaCarouselProps {
   onPress?: (activeIndex: number) => void;
   style?: StyleProp<ViewStyle>;
   /**
+   * Page to open on. Lets a caller hand the carousel the item the user was
+   * already looking at (list card -> detail screen) instead of resetting to
+   * the first asset. Out-of-range values clamp into the asset list.
+   */
+  initialIndex?: number;
+  /**
    * List-view surfaces (Workstream C6) request the derived preview key when
    * present, falling back to the original. Detail/full-screen callers must
    * leave this false (default) to always render the untouched original.
@@ -45,6 +51,14 @@ interface MemoryMediaCarouselProps {
    * source always stays its own object_key. See resolveVideoPosterKey.
    */
   preferPreview?: boolean;
+}
+
+function clampIndex(index: number, assetCount: number) {
+  if (!Number.isFinite(index) || assetCount <= 0) {
+    return 0;
+  }
+
+  return Math.min(Math.max(Math.trunc(index), 0), assetCount - 1);
 }
 
 function setVideoPlayerMuted(player: VideoPlayer, isMuted: boolean) {
@@ -337,10 +351,17 @@ export function MemoryMediaCarousel({
   style,
   videoTapToToggle = false,
   preferPreview = false,
+  initialIndex = 0,
 }: MemoryMediaCarouselProps) {
-  const [activeIndex, setActiveIndex] = useState(0);
+  const startIndex = clampIndex(initialIndex, assets.length);
+  const [activeIndex, setActiveIndex] = useState(startIndex);
   const [width, setWidth] = useState(0);
   const [naturalRatios, setNaturalRatios] = useState<Record<string, number>>({});
+  const scrollRef = useRef<ScrollView>(null);
+  // Pages only mount once a width is measured, so the offset can't be applied
+  // on the first render -- it lands on the layout pass that gives the pages
+  // their width (see restoreInitialOffset below).
+  const hasRestoredInitialOffsetRef = useRef(startIndex === 0);
   const tapStartRef = useRef<{ x: number; y: number; timestamp: number } | null>(null);
   const hasMovedRef = useRef(false);
   // A video's display/playback source must always stay its own object_key
@@ -372,6 +393,27 @@ export function MemoryMediaCarousel({
     firstAsset && !stableLayout ? naturalRatios[firstAsset.object_key] : undefined
   );
   const containerRatio = firstRatio ?? DEFAULT_MEDIA_ASPECT_RATIO;
+
+  // Jump (without animation) to the requested page as soon as the pages have
+  // a real width. `onContentSizeChange` is the signal that they do -- calling
+  // scrollTo before the content is that wide is a no-op on both platforms.
+  const restoreInitialOffset = useCallback((contentWidth: number) => {
+    const targetOffset = startIndex * width;
+    // Bail (keeping the one-shot flag unset) until the pages are actually wide
+    // enough to hold the target offset -- scrolling early would silently clamp
+    // back to the first page.
+    if (
+      hasRestoredInitialOffsetRef.current ||
+      width <= 0 ||
+      contentWidth < targetOffset + width ||
+      !scrollRef.current
+    ) {
+      return;
+    }
+
+    hasRestoredInitialOffsetRef.current = true;
+    scrollRef.current.scrollTo({ x: targetOffset, y: 0, animated: false });
+  }, [startIndex, width]);
 
   const handleNaturalRatio = useCallback((objectKey: string, ratio: number) => {
     setNaturalRatios((prev) => (prev[objectKey] === ratio ? prev : { ...prev, [objectKey]: ratio }));
@@ -441,6 +483,7 @@ export function MemoryMediaCarousel({
       <ScrollView
         horizontal
         nestedScrollEnabled
+        onContentSizeChange={restoreInitialOffset}
         onMomentumScrollEnd={handleScrollEnd}
         onScrollEndDrag={handleScrollEnd}
         onTouchCancel={handleTouchCancel}
@@ -448,6 +491,7 @@ export function MemoryMediaCarousel({
         onTouchMove={handleTouchMove}
         onTouchStart={handleTouchStart}
         pagingEnabled
+        ref={scrollRef}
         scrollEnabled={assets.length > 1}
         showsHorizontalScrollIndicator={false}
         testID="memory-media-carousel-scroll"

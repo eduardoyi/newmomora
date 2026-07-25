@@ -200,6 +200,7 @@ function MemoryDetailFramed({
   memory,
   illustrationUrl,
   attributionName,
+  initialMediaIndex,
   canEdit,
   onBack,
   onRegenerateIllustration,
@@ -218,6 +219,7 @@ function MemoryDetailFramed({
   memory: NonNullable<ReturnType<typeof useMemory>['data']>;
   illustrationUrl: string | null | undefined;
   attributionName: string;
+  initialMediaIndex: number;
   canEdit: boolean;
   onBack: () => void;
   onRegenerateIllustration?: () => void;
@@ -278,6 +280,7 @@ function MemoryDetailFramed({
                 <MemoryMediaCarousel
                   assets={memory.mediaAssets}
                   cacheVersion={memory.updated_at}
+                  initialIndex={initialMediaIndex}
                   isActive={fullScreenIndex === null}
                   mutedVideos={false}
                   onPress={setFullScreenIndex}
@@ -455,8 +458,17 @@ function MemoryDetailEditorial({
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function MemoryDetailScreen() {
-  const { id, comments } = useLocalSearchParams<{ id: string; comments?: string }>();
+  const { id, comments, mediaIndex } = useLocalSearchParams<{
+    id: string;
+    comments?: string;
+    mediaIndex?: string;
+  }>();
   const { data: memory, isLoading, isError } = useMemory(id);
+  // Which carousel page the caller was looking at (see memoryDetailRoute).
+  // Anything unparseable falls back to the first asset; the carousel clamps
+  // an index past the end of the asset list.
+  const parsedMediaIndex = Number.parseInt(mediaIndex ?? '', 10);
+  const initialMediaIndex = Number.isNaN(parsedMediaIndex) ? 0 : parsedMediaIndex;
   const [commentsOpen, setCommentsOpen] = useState(comments === '1');
   const [actionsOpen, setActionsOpen] = useState(false);
   const [reportTarget, setReportTarget] = useState<{
@@ -743,6 +755,7 @@ export default function MemoryDetailScreen() {
         memory={memory}
         illustrationUrl={illustrationUrl}
         attributionName={attributionName}
+        initialMediaIndex={initialMediaIndex}
         canEdit={canEdit}
         onBack={leaveMemoryDetail}
         onRegenerateIllustration={

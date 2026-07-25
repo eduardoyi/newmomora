@@ -27,7 +27,9 @@ interface MemoryCardProps {
   // parents can pass a single stable callback (e.g. useCallback wrapping
   // router.push) instead of a fresh per-row closure -- required for
   // React.memo below to actually skip re-renders on unrelated list re-renders.
-  onPress: (memoryId: string) => void;
+  // `mediaIndex` is the carousel page the user tapped, so the detail screen
+  // can open on the asset they were looking at rather than the first one.
+  onPress: (memoryId: string, mediaIndex?: number) => void;
   onOpenComments: (memoryId: string) => void;
   isVideoActive?: boolean;
   isIllustrationHidden?: boolean;
@@ -181,7 +183,7 @@ function MediaVisual({
 }: {
   memory: MemoryWithTags;
   isActive: boolean;
-  onPress?: () => void;
+  onPress?: (mediaIndex: number) => void;
 }) {
   if (memory.mediaAssets.length > 0) {
     return (
@@ -218,6 +220,9 @@ function SpreadCard({
     : null;
   const handlePress = () => onPress(memory.id);
   const handleOpenComments = () => onOpenComments(memory.id);
+  // Tapping the carousel opens the detail screen on that same page; tapping
+  // the caption/footer below it has no page context, so it opens on the first.
+  const handleMediaPress = (mediaIndex: number) => onPress(memory.id, mediaIndex);
 
   if (memory.memory_type === 'media') {
     return (
@@ -225,7 +230,7 @@ function SpreadCard({
         style={styles.card}
         testID={`memory-card-${memory.id}`}
       >
-        <MediaVisual memory={memory} isActive={isVideoActive} onPress={handlePress} />
+        <MediaVisual memory={memory} isActive={isVideoActive} onPress={handleMediaPress} />
         <View style={styles.engagementWrap}>
           <MemoryEngagementBar memory={memory} onOpenComments={handleOpenComments} iconSize={23} />
         </View>
