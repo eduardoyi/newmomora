@@ -1,5 +1,4 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { KeyboardAvoidingView } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import PasswordScreen from '../../app/(auth)/password';
@@ -142,11 +141,9 @@ describe('reviewer password sign-in', () => {
   });
 
   it('is keyboard-safe, shows the selected email, masks the password, and disables an incomplete form', () => {
-    const { getByLabelText, getByTestId, getByText, UNSAFE_getByType } = renderScreen(
-      <PasswordScreen />,
-    );
+    const { getByLabelText, getByTestId, getByText } = renderScreen(<PasswordScreen />);
 
-    expect(UNSAFE_getByType(KeyboardAvoidingView)).toBeTruthy();
+    expect(getByTestId('auth-screen-scroll').props.mode).toBe('insets');
     expect(getByText(`Sign in as ${REVIEWER_EMAIL}.`)).toBeTruthy();
     expect(getByLabelText('Password').props.secureTextEntry).toBe(true);
     expect(getByTestId('password-submit-button').props.accessibilityState).toEqual({

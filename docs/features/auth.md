@@ -64,6 +64,7 @@ No Edge Functions for auth in MVP — client uses Supabase Auth directly with an
 | Auth deep-link fallback | `src/hooks/use-auth-url-handler.ts`, `src/lib/create-session-from-url.ts` |
 | Providers wrapper | `src/components/app-providers.tsx` |
 | Auth screens | `app/(auth)/login.tsx`, `password.tsx`, `signup.tsx`, `verify-otp.tsx` |
+| Shared auth shell | `src/components/auth-screen.tsx` — keyboard-safe layout + `AuthField`/`AuthInput`/`AuthButton` |
 | Reviewer-email guard | `src/services/reviewer-auth.ts` |
 | Route guards | `app/index.tsx`, `app/(auth)/_layout.tsx`, `app/(app)/_layout.tsx` |
 | Dev/E2E gate reused for the password toggle | `src/utils/e2e-fixtures.ts` (`isE2eFixturesEnabled`) |
@@ -82,6 +83,7 @@ Env vars (client):
 ## Constraints & gotchas
 
 - Never put service role or OpenAI keys in the client.
+- Keyboard safety: `AuthScreen` wraps every auth screen in `react-native-keyboard-controller`'s `KeyboardAwareScrollView` (`mode="insets"`), the same container as `KeyboardAwareFormScreen`. Its `bottomOffset` is deliberately larger than the form-screen default because each auth screen's submit CTA sits directly below the last field — with a smaller offset Android keeps "Continue" and the verify-OTP actions under the keyboard. Do not swap it back to `KeyboardAvoidingView`: with edge-to-edge Android layouts that component needs a `behavior` React Native does not provide, so Android gets no avoidance at all.
 - `signInWithPassword` is reachable in production only after an allowlisted fixture email is entered through the normal login field. The guarded password route must reject every other route email. Do not add a visible reviewer link, a normal-user password option, or a prefilled password.
 - The `__DEV__` password shortcut must stay compile-time gated. Follow the same pattern used for the family-member E2E photo fixture: a helper that returns `__DEV__`, used to conditionally render the shortcut and everything behind it.
 - Provisioning and seeding are manual release operations; follow [the reviewer-access runbook](../reviewer-access.md). The dedicated email is an intentionally committed, non-secret route classifier; never place the password or any other secrets in source, EAS public variables, docs, tests, screenshots, or logs.
@@ -109,7 +111,7 @@ Custom SMTP (Bento relay, `yubin.sentbybento.com:587` STARTTLS) delivers the OTP
 
 | Layer | File |
 |-------|------|
-| Unit | `src/services/auth.test.ts`, `src/services/reviewer-auth.test.ts` |
+| Unit | `src/services/auth.test.ts`, `src/services/reviewer-auth.test.ts`, `src/components/auth-screen.test.tsx` |
 | Integration | `src/hooks/use-auth.integration.test.tsx` |
 | Screen integration | `src/screen-tests/reviewer-password.integration.test.tsx` |
 | E2E | `.maestro/flows/auth/app-review-access.yaml`; `.maestro/flows/auth/login.yaml` (+ `.maestro/flows/auth/sign-in.yaml` for the `__DEV__` shortcut) |
@@ -124,6 +126,7 @@ maestro test .maestro/flows/auth/app-review-access.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-07-25 | Auth screens adopt the keyboard-controller scroll container so Android stops covering the submit buttons. |
 | 2026-07-18 | Added the screenshot demo account to the guarded production password allowlist. |
 | 2026-07-17 | Replaced the visible reviewer link with an email-triggered, route-guarded generic password step. |
 | 2026-07-16 | Added dedicated production reviewer-account provisioning and a runbook; OTP remains the default |

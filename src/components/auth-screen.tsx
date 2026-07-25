@@ -1,18 +1,21 @@
 import { ReactNode } from 'react';
 import {
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
   type TextInputProps,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, spacing } from '@/constants/theme';
+
+// The submit CTA sits directly under the last field on every auth screen, so the
+// focused input has to clear the keyboard by more than the usual gap — roughly a
+// button height (~60) plus breathing room — or Android hides "Continue".
+const KEYBOARD_BOTTOM_OFFSET = spacing.xxl * 2;
 
 interface AuthScreenProps {
   title: string;
@@ -24,25 +27,24 @@ interface AuthScreenProps {
 export function AuthScreen({ title, subtitle, children, footer }: AuthScreenProps) {
   return (
     <SafeAreaView style={styles.safeArea}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.flex}
+      <KeyboardAwareScrollView
+        bottomOffset={KEYBOARD_BOTTOM_OFFSET}
+        contentContainerStyle={styles.content}
+        disableScrollOnKeyboardHide
+        keyboardShouldPersistTaps="handled"
+        mode="insets"
+        testID="auth-screen-scroll"
       >
-        <ScrollView
-          contentContainerStyle={styles.content}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.header}>
-            <Text style={styles.brand}>Momora</Text>
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.subtitle}>{subtitle}</Text>
-          </View>
+        <View style={styles.header}>
+          <Text style={styles.brand}>Momora</Text>
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.subtitle}>{subtitle}</Text>
+        </View>
 
-          <View style={styles.form}>{children}</View>
+        <View style={styles.form}>{children}</View>
 
-          {footer ? <View style={styles.footer}>{footer}</View> : null}
-        </ScrollView>
-      </KeyboardAvoidingView>
+        {footer ? <View style={styles.footer}>{footer}</View> : null}
+      </KeyboardAwareScrollView>
     </SafeAreaView>
   );
 }
@@ -122,9 +124,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
-  },
-  flex: {
-    flex: 1,
   },
   content: {
     flexGrow: 1,
