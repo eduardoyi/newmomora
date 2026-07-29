@@ -5,11 +5,55 @@ const FALLBACK_IMAGE_MODEL = 'gpt-image-1.5';
 const MODELS_SUPPORTING_INPUT_FIDELITY = new Set([FALLBACK_IMAGE_MODEL]);
 import { normalizeOpenAiUsage, priceOpenAiUsage } from './ai-pricing.ts';
 
-export interface AiUsageContext {
+export type AiUsageOperation =
+  | 'illustration'
+  | 'portrait'
+  | 'safety_chat'
+  | 'emotion_chat'
+  | 'emotion_vision'
+  | 'transcription'
+  | 'voice_cleanup';
+
+export interface FamilyAiUsageContext {
+  attributionScope: 'family';
   familyId: string;
   actorUserId: string;
   usageRequestId?: string | null;
-  operation: 'illustration' | 'portrait' | 'safety_chat' | 'emotion_chat' | 'emotion_vision' | 'transcription' | 'voice_cleanup';
+  onboardingSessionId?: never;
+  operation: AiUsageOperation;
+}
+
+export interface OnboardingAiUsageContext {
+  attributionScope: 'onboarding';
+  familyId: null;
+  /** Server-issued request ID; SQL derives actor and opaque session from it. */
+  onboardingRequestId: string;
+  usageRequestId?: never;
+  operation: 'transcription' | 'voice_cleanup';
+}
+
+/**
+ * Attribution is intentionally a discriminated union. A provider caller
+ * cannot accidentally report an onboarding cost as family spend (or select a
+ * family for an anonymous onboarding request).
+ */
+export type AiUsageContext = FamilyAiUsageContext | OnboardingAiUsageContext;
+
+/** Maps the closed attribution union to the service-only ledger RPC shape. */
+export function buildAiUsageLedgerAttribution(context: AiUsageContext): {
+  p_family_id: string | null;
+  p_actor_user_id: string | null;
+  p_attribution_scope: 'family' | 'onboarding';
+  p_onboarding_request_id: string | null;
+} {
+  return {
+    p_family_id: context.familyId,
+    p_actor_user_id: context.attributionScope === 'family' ? context.actorUserId : null,
+    p_attribution_scope: context.attributionScope,
+    p_onboarding_request_id: context.attributionScope === 'onboarding'
+      ? context.onboardingRequestId
+      : null,
+  };
 }
 
 export interface OpenAiRequestOptions {
@@ -32,6 +76,14 @@ export function scheduleBestEffortUsageWrite(write: () => Promise<void>): void {
   else void task;
 }
 
+/** Supabase RPCs resolve provider/database failures in their result object. */
+export function assertAiUsageWriteSucceeded(result: { error: unknown }): void {
+  if (result.error) {
+    // Do not include RPC/provider details: those could contain request data.
+    throw new Error('AI usage ledger write failed');
+  }
+}
+
 /** Best-effort ledger write. It is intentionally detached from user work. */
 function recordUsage(context: AiUsageContext | undefined, input: {
   aiCallId: string; model: string; success: boolean; usage?: unknown; knownAudioSeconds?: number;
@@ -46,13 +98,13 @@ function recordUsage(context: AiUsageContext | undefined, input: {
     normalizeOpenAiUsage(input.usage, input.knownAudioSeconds),
     { audioDurationIsEstimate: input.knownAudioSeconds !== undefined && !hasProviderAudioDuration },
   );
+  const attribution = buildAiUsageLedgerAttribution(context);
   scheduleBestEffortUsageWrite(async () => {
       const { createServiceClient } = await import('./supabase-admin.ts');
-      await createServiceClient().rpc('record_ai_usage_event_detailed', {
+      const result = await createServiceClient().rpc('record_ai_usage_event_detailed', {
         p_ai_call_id: input.aiCallId,
         p_usage_request_id: context.usageRequestId ?? null,
-        p_family_id: context.familyId,
-        p_actor_user_id: context.actorUserId,
+        ...attribution,
         p_operation: context.operation,
         p_model: input.model,
         p_success: input.success,
@@ -63,6 +115,7 @@ function recordUsage(context: AiUsageContext | undefined, input: {
         p_billing_status: pricing.billingStatus,
         p_cost_is_complete: pricing.costIsComplete,
       });
+      assertAiUsageWriteSucceeded(result);
   });
 }
 

@@ -99,7 +99,9 @@ create table public.ai_usage_events (
   id uuid primary key default gen_random_uuid(),
   ai_call_id text not null unique,
   usage_request_id uuid references public.ai_image_generation_requests(id) on delete set null,
-  family_id uuid not null references public.families(id) on delete cascade,
+  attribution_scope text not null default 'family' check (attribution_scope in ('family', 'onboarding')),
+  family_id uuid references public.families(id) on delete cascade,
+  onboarding_request_id uuid,
   actor_user_id uuid references auth.users(id) on delete set null,
   operation text not null check (operation in ('illustration', 'portrait', 'safety_chat', 'emotion_chat', 'emotion_vision', 'transcription', 'voice_cleanup')),
   model text not null,
@@ -115,10 +117,40 @@ create table public.ai_usage_events (
   cost_is_complete boolean not null default false,
   estimated_cost_usd numeric(12,6),
   created_at timestamptz not null default transaction_timestamp(),
-  check (jsonb_typeof(provider_usage) = 'object')
+  check (jsonb_typeof(provider_usage) = 'object'),
+  -- Family attribution remains the default and is deliberately strict. Only
+  -- the two pre-auth voice operations may be Momora onboarding COGS.
+  check (
+    (attribution_scope = 'family' and family_id is not null and onboarding_request_id is null)
+    or
+    (attribution_scope = 'onboarding' and usage_request_id is null and family_id is null and onboarding_request_id is not null
+      and operation in ('transcription', 'voice_cleanup'))
+  )
 );
 create index ai_usage_events_family_month_idx on public.ai_usage_events (family_id, created_at desc);
+create index ai_usage_events_scope_month_idx on public.ai_usage_events (attribution_scope, created_at desc);
 create index ai_usage_events_request_idx on public.ai_usage_events (usage_request_id) where usage_request_id is not null;
+create unique index ai_usage_events_one_onboarding_operation
+  on public.ai_usage_events (onboarding_request_id, operation)
+  where onboarding_request_id is not null;
+
+-- One durable, server-issued request per pre-auth voice attempt. The actor is
+-- retained only while Auth retains the anonymous user; request ID is the sole
+-- opaque attempt correlation identifier.
+create table public.ai_onboarding_voice_requests (
+  id uuid primary key default gen_random_uuid(),
+  actor_user_id uuid references auth.users(id) on delete set null,
+  attempt_number smallint not null check (attempt_number between 1 and 2),
+  cleanup_expected boolean not null default false,
+  created_at timestamptz not null default transaction_timestamp(),
+  updated_at timestamptz not null default transaction_timestamp()
+);
+create unique index ai_onboarding_voice_requests_actor_attempt_idx
+  on public.ai_onboarding_voice_requests (actor_user_id, attempt_number)
+  where actor_user_id is not null;
+alter table public.ai_usage_events
+  add constraint ai_usage_events_onboarding_request_id_fkey
+  foreign key (onboarding_request_id) references public.ai_onboarding_voice_requests(id) on delete cascade;
 
 create table public.ai_usage_limit_notices (
   id uuid primary key default gen_random_uuid(),
@@ -146,12 +178,34 @@ create table public.ai_usage_monthly_rollups (
   primary key (family_id, month, operation, model)
 );
 
+-- System COGS rollups are separate from tenant rollups. They survive raw-event
+-- retention for the same 13-month reporting horizon without polluting family
+-- usage, family alerts, or fair-use limits.
+create table public.ai_system_usage_monthly_rollups (
+  attribution_scope text not null check (attribution_scope = 'onboarding'),
+  month date not null check (month = date_trunc('month', month)::date),
+  operation text not null check (operation in ('transcription', 'voice_cleanup')),
+  model text not null,
+  calls integer not null default 0,
+  failed_calls integer not null default 0,
+  estimated_cost_usd numeric(12,6) not null default 0,
+  unpriced_calls integer not null default 0,
+  updated_at timestamptz not null default now(),
+  primary key (attribution_scope, month, operation, model)
+);
+
 create or replace function public.rollup_ai_usage_event()
 returns trigger language plpgsql security definer set search_path=public as $$
 begin
-  insert into public.ai_usage_monthly_rollups(family_id,month,operation,model,calls,failed_calls,estimated_cost_usd,unpriced_calls)
-  values(new.family_id,date_trunc('month',new.created_at at time zone 'UTC')::date,new.operation,new.model,1,case when new.success then 0 else 1 end,coalesce(new.estimated_cost_usd,0),case when new.cost_basis='unpriced' then 1 else 0 end)
-  on conflict(family_id,month,operation,model) do update set calls=ai_usage_monthly_rollups.calls+1,failed_calls=ai_usage_monthly_rollups.failed_calls+excluded.failed_calls,estimated_cost_usd=ai_usage_monthly_rollups.estimated_cost_usd+excluded.estimated_cost_usd,unpriced_calls=ai_usage_monthly_rollups.unpriced_calls+excluded.unpriced_calls,updated_at=transaction_timestamp();
+  if new.attribution_scope = 'family' then
+    insert into public.ai_usage_monthly_rollups(family_id,month,operation,model,calls,failed_calls,estimated_cost_usd,unpriced_calls)
+    values(new.family_id,date_trunc('month',new.created_at at time zone 'UTC')::date,new.operation,new.model,1,case when new.success then 0 else 1 end,coalesce(new.estimated_cost_usd,0),case when new.cost_basis='unpriced' then 1 else 0 end)
+    on conflict(family_id,month,operation,model) do update set calls=ai_usage_monthly_rollups.calls+1,failed_calls=ai_usage_monthly_rollups.failed_calls+excluded.failed_calls,estimated_cost_usd=ai_usage_monthly_rollups.estimated_cost_usd+excluded.estimated_cost_usd,unpriced_calls=ai_usage_monthly_rollups.unpriced_calls+excluded.unpriced_calls,updated_at=transaction_timestamp();
+  else
+    insert into public.ai_system_usage_monthly_rollups(attribution_scope,month,operation,model,calls,failed_calls,estimated_cost_usd,unpriced_calls)
+    values(new.attribution_scope,date_trunc('month',new.created_at at time zone 'UTC')::date,new.operation,new.model,1,case when new.success then 0 else 1 end,coalesce(new.estimated_cost_usd,0),case when new.cost_basis='unpriced' then 1 else 0 end)
+    on conflict(attribution_scope,month,operation,model) do update set calls=ai_system_usage_monthly_rollups.calls+1,failed_calls=ai_system_usage_monthly_rollups.failed_calls+excluded.failed_calls,estimated_cost_usd=ai_system_usage_monthly_rollups.estimated_cost_usd+excluded.estimated_cost_usd,unpriced_calls=ai_system_usage_monthly_rollups.unpriced_calls+excluded.unpriced_calls,updated_at=transaction_timestamp();
+  end if;
   return new;
 end;
 $$;
@@ -838,11 +892,25 @@ $$;
 create or replace function public.record_ai_usage_event_detailed(
   p_ai_call_id text, p_usage_request_id uuid, p_family_id uuid, p_actor_user_id uuid,
   p_operation text, p_model text, p_success boolean, p_provider_usage jsonb default '{}'::jsonb,
-  p_estimated_cost_usd numeric default null, p_cost_basis text default 'unpriced', p_billing_status text default 'unknown', p_cost_is_complete boolean default false, p_pricing_version text default null
+  p_estimated_cost_usd numeric default null, p_cost_basis text default 'unpriced', p_billing_status text default 'unknown', p_cost_is_complete boolean default false, p_pricing_version text default null,
+  p_attribution_scope text default 'family', p_onboarding_request_id uuid default null
 ) returns boolean language plpgsql security definer set search_path=public as $$
-declare v_usage jsonb;
+declare v_usage jsonb; v_onboarding_request public.ai_onboarding_voice_requests%rowtype;
 begin
   if p_provider_usage is null or jsonb_typeof(p_provider_usage) <> 'object' then raise exception 'provider usage must be an object' using errcode='22023'; end if;
+  if p_attribution_scope not in ('family', 'onboarding') then raise exception 'invalid usage attribution scope' using errcode='22023'; end if;
+  if (p_attribution_scope = 'family' and (p_family_id is null or p_onboarding_request_id is not null))
+    or (p_attribution_scope = 'onboarding' and (p_usage_request_id is not null or p_family_id is not null or p_onboarding_request_id is null or p_operation not in ('transcription', 'voice_cleanup'))) then
+    raise exception 'invalid usage attribution' using errcode='22023';
+  end if;
+  if p_attribution_scope = 'onboarding' then
+    select * into v_onboarding_request from public.ai_onboarding_voice_requests
+    where id = p_onboarding_request_id for key share;
+    if not found or (p_actor_user_id is not null and p_actor_user_id is distinct from v_onboarding_request.actor_user_id) then
+      raise exception 'invalid onboarding usage request' using errcode='22023';
+    end if;
+    p_actor_user_id := v_onboarding_request.actor_user_id;
+  end if;
   -- Persist an exact numeric allowlist, never an opaque provider response.
   v_usage:=jsonb_strip_nulls(jsonb_build_object(
     'input_text_tokens',case when coalesce(p_provider_usage->>'input_text_tokens','') ~ '^[0-9]+$' then (p_provider_usage->>'input_text_tokens')::integer end,
@@ -853,11 +921,62 @@ begin
     'audio_seconds',case when coalesce(p_provider_usage->>'audio_seconds','') ~ '^[0-9]+(\\.[0-9]+)?$' then (p_provider_usage->>'audio_seconds')::numeric end,
     'provider',case when p_provider_usage->>'provider' in ('primary','fallback') then p_provider_usage->>'provider' end
   ));
-  insert into public.ai_usage_events(ai_call_id,usage_request_id,family_id,actor_user_id,operation,model,provider,success,provider_usage,input_text_tokens,input_image_tokens,cached_input_tokens,output_text_tokens,output_image_tokens,audio_seconds,estimated_cost_usd,cost_basis,billing_status,cost_is_complete,pricing_version)
-  values(p_ai_call_id,p_usage_request_id,p_family_id,p_actor_user_id,p_operation,p_model,nullif(v_usage->>'provider',''),p_success,v_usage,
+  if p_attribution_scope = 'onboarding' and p_operation = 'voice_cleanup' and not v_onboarding_request.cleanup_expected then
+    raise exception 'onboarding cleanup not expected' using errcode='22023';
+  end if;
+  insert into public.ai_usage_events(ai_call_id,usage_request_id,attribution_scope,family_id,onboarding_request_id,actor_user_id,operation,model,provider,success,provider_usage,input_text_tokens,input_image_tokens,cached_input_tokens,output_text_tokens,output_image_tokens,audio_seconds,estimated_cost_usd,cost_basis,billing_status,cost_is_complete,pricing_version)
+  values(p_ai_call_id,p_usage_request_id,p_attribution_scope,p_family_id,p_onboarding_request_id,p_actor_user_id,p_operation,p_model,nullif(v_usage->>'provider',''),p_success,v_usage,
     (v_usage->>'input_text_tokens')::integer,(v_usage->>'input_image_tokens')::integer,(v_usage->>'cached_input_tokens')::integer,(v_usage->>'output_text_tokens')::integer,(v_usage->>'output_image_tokens')::integer,(v_usage->>'audio_seconds')::numeric,p_estimated_cost_usd,p_cost_basis,p_billing_status,p_cost_is_complete,p_pricing_version)
   on conflict(ai_call_id) do nothing;
   return true;
+end;
+$$;
+
+-- This reservation is intentionally separate from family fair-use admission.
+-- A transaction advisory lock serializes the count-and-insert across the
+-- empty-row case. It also verifies server-side that the actor is a currently
+-- anonymous Auth user; permanent users and arbitrary UUIDs are denied.
+create or replace function public.reserve_onboarding_voice_attempt(p_actor_user_id uuid)
+returns table (reserved boolean, request_id uuid, attempts_used smallint)
+language plpgsql security definer set search_path=public as $$
+declare v_attempts smallint; v_is_anonymous boolean;
+begin
+  if p_actor_user_id is null then
+    raise exception 'actor user id required' using errcode='22023';
+  end if;
+  select is_anonymous into v_is_anonymous from auth.users where id = p_actor_user_id;
+  if not found or not coalesce(v_is_anonymous, false) then
+    return query select false, null::uuid, 0::smallint;
+    return;
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended(p_actor_user_id::text, 0));
+  select count(*)::smallint into v_attempts
+  from public.ai_onboarding_voice_requests where actor_user_id = p_actor_user_id;
+  if v_attempts >= 2 then
+    return query select false, null::uuid, v_attempts;
+    return;
+  end if;
+  insert into public.ai_onboarding_voice_requests(actor_user_id, attempt_number)
+  values (p_actor_user_id, v_attempts + 1)
+  returning id, attempt_number into request_id, attempts_used;
+  reserved := true;
+  return next;
+end;
+$$;
+
+-- The Edge Function calls this only after OpenAI transcription has returned
+-- successfully and immediately before starting cleanup. It binds the request
+-- to the same anonymous actor that reserved it, but intentionally does not
+-- wait for the best-effort detached ledger write: requiring that write would
+-- race normal cleanup and conceal a missing cleanup event. Failed
+-- transcription paths must never call this RPC.
+create or replace function public.mark_onboarding_voice_cleanup_expected(p_request_id uuid, p_actor_user_id uuid)
+returns boolean language plpgsql security definer set search_path=public as $$
+begin
+  update public.ai_onboarding_voice_requests r
+  set cleanup_expected = true, updated_at = transaction_timestamp()
+  where r.id = p_request_id and r.actor_user_id = p_actor_user_id;
+  return found;
 end;
 $$;
 
@@ -903,8 +1022,24 @@ select family_id, month, operation, model, calls, failed_calls,
   estimated_cost_usd, unpriced_calls
 from public.ai_usage_monthly_rollups;
 
+-- Owner/operator reporting reads both aggregate stores. The scope is explicit
+-- so a nullable family id can never silently erase onboarding COGS from a
+-- company total or be mistaken for family usage.
+create or replace view public.company_ai_costs_monthly as
+select 'family'::text as attribution_scope, month, operation, model,
+  sum(calls)::integer as calls, sum(failed_calls)::integer as failed_calls,
+  sum(estimated_cost_usd)::numeric(12,6) as estimated_cost_usd,
+  sum(unpriced_calls)::integer as unpriced_calls
+from public.ai_usage_monthly_rollups
+group by month, operation, model
+union all
+select attribution_scope, month, operation, model, calls, failed_calls,
+  estimated_cost_usd, unpriced_calls
+from public.ai_system_usage_monthly_rollups;
+
 create or replace view public.ai_usage_observability_gaps as
-select r.id as usage_request_id, r.family_id, r.target_kind, r.target_id, r.consumed_at
+select 'family'::text as attribution_scope, r.id as usage_request_id, null::uuid as onboarding_request_id,
+  r.family_id, r.target_kind, r.target_id, r.consumed_at, 'illustration_or_portrait'::text as expected_operation
 from public.ai_image_generation_requests r
 cross join public.ai_usage_settings s
 where s.singleton and r.state = 'consumed'
@@ -912,6 +1047,25 @@ where s.singleton and r.state = 'consumed'
   and not exists (
     select 1 from public.ai_usage_events e
     where e.usage_request_id = r.id and e.operation in ('illustration', 'portrait')
+  )
+union all
+select 'onboarding'::text, null::uuid, r.id, null::uuid, null::text, null::uuid, r.created_at, 'transcription'::text
+from public.ai_onboarding_voice_requests r
+cross join public.ai_usage_settings s
+where s.singleton and r.created_at < transaction_timestamp() - make_interval(mins => s.observability_gap_alert_minutes)
+  and not exists (
+    select 1 from public.ai_usage_events e
+    where e.onboarding_request_id = r.id and e.operation = 'transcription'
+  )
+union all
+select 'onboarding'::text, null::uuid, r.id, null::uuid, null::text, null::uuid, r.updated_at, 'voice_cleanup'::text
+from public.ai_onboarding_voice_requests r
+cross join public.ai_usage_settings s
+where s.singleton and r.cleanup_expected
+  and r.updated_at < transaction_timestamp() - make_interval(mins => s.observability_gap_alert_minutes)
+  and not exists (
+    select 1 from public.ai_usage_events e
+    where e.onboarding_request_id = r.id and e.operation = 'voice_cleanup'
   );
 
 -- Cloudflare bridge shape.  The request carries the attribution, so bridge
@@ -942,12 +1096,15 @@ returns setof public.ai_usage_limit_notices language sql security definer stable
   order by n.created_at desc
 $$;
 
--- Called by the scheduled maintenance path.  Retention is deliberately
--- family-scoped through cascading FKs; this routine never retains a cost
--- aggregate after full family deletion.
+-- Called by the scheduled maintenance path. Family events and rollups cascade
+-- with a family. Onboarding events retain no family PII and roll into company
+-- COGS, so their raw events expire at 90 days and their system rollups at 13
+-- months. Auth deletion nulls ledger and raw-request actor attribution while
+-- the 13-month company aggregate remains deidentified.
 create or replace function public.purge_expired_ai_usage_data(p_now timestamptz default transaction_timestamp())
 returns table (events_deleted integer, requests_deleted integer, notices_deleted integer, outbox_deleted integer, rollups_deleted integer)
 language plpgsql security definer set search_path=public as $$
+declare v_system_rollups_deleted integer;
 begin
   delete from public.ai_usage_events where created_at < p_now - interval '90 days';
   get diagnostics events_deleted = row_count;
@@ -955,6 +1112,13 @@ begin
     where created_at < p_now - interval '90 days'
       and state in ('consumed','cancelled');
   get diagnostics requests_deleted = row_count;
+  delete from public.ai_onboarding_voice_requests
+    where created_at < p_now - interval '90 days'
+      and not exists (
+        select 1 from public.ai_usage_events e
+        where e.onboarding_request_id = ai_onboarding_voice_requests.id
+          and e.created_at >= p_now - interval '90 days'
+      );
   delete from public.ai_usage_limit_notices
     where dismissed_at is not null and dismissed_at < p_now - interval '7 days'
        or (dismissed_at is null and retry_after < p_now - interval '7 days');
@@ -965,6 +1129,10 @@ begin
   delete from public.ai_usage_monthly_rollups
     where month < (date_trunc('month', p_now at time zone 'UTC') - interval '13 months')::date;
   get diagnostics rollups_deleted = row_count;
+  delete from public.ai_system_usage_monthly_rollups
+    where month < (date_trunc('month', p_now at time zone 'UTC') - interval '13 months')::date;
+  get diagnostics v_system_rollups_deleted = row_count;
+  rollups_deleted := rollups_deleted + v_system_rollups_deleted;
   return next;
 end;
 $$;
@@ -976,7 +1144,7 @@ returns setof public.ai_usage_alert_outbox
 language plpgsql security definer set search_path=public as $$
 declare s public.ai_usage_settings%rowtype; v_month date := date_trunc('month', p_now at time zone 'UTC')::date;
 declare f record; v_request_count integer; v_cost numeric; v_unpriced integer; v_threshold integer;
-declare v_fallback integer; v_images integer; v_global_unpriced integer;
+declare v_fallback integer; v_images integer; v_global_unpriced integer; v_global_calls integer; v_onboarding_gap_count integer;
 begin
   if p_environment_id is null or length(trim(p_environment_id)) = 0 then raise exception 'environment id required' using errcode='22023'; end if;
   select * into s from public.ai_usage_settings where singleton for share;
@@ -1012,19 +1180,34 @@ begin
         format('%s:gap:%s:%s:%s',p_environment_id,f.id,(p_now at time zone 'UTC')::date,s.alert_policy_version),jsonb_build_object('gapAfterMinutes',s.observability_gap_alert_minutes)) on conflict(idempotency_key) do nothing;
     end if;
   end loop;
-  select count(*) filter(where provider_usage->>'provider'='fallback'), count(*) filter(where cost_basis='unpriced'), count(*) into v_fallback,v_global_unpriced,v_images
-    from public.ai_usage_events where operation in ('illustration','portrait') and created_at >= p_now-interval '24 hours';
+  select count(*) into v_onboarding_gap_count
+  from public.ai_usage_observability_gaps
+  where attribution_scope = 'onboarding';
+  if v_onboarding_gap_count > 0 then
+    insert into public.ai_usage_alert_outbox(environment_id,kind,period_start,policy_version,idempotency_key,payload)
+    values(p_environment_id,'observability_gap',date_trunc('day',p_now),s.alert_policy_version,
+      format('%s:gap:onboarding:%s:%s',p_environment_id,(p_now at time zone 'UTC')::date,s.alert_policy_version),
+      jsonb_build_object('attributionScope','onboarding','gapAfterMinutes',s.observability_gap_alert_minutes,'missingLedgerEvents',v_onboarding_gap_count))
+    on conflict(idempotency_key) do nothing;
+  end if;
+  select
+    count(*) filter(where operation in ('illustration','portrait') and provider_usage->>'provider'='fallback'),
+    count(*) filter(where cost_basis='unpriced'),
+    count(*) filter(where operation in ('illustration','portrait')),
+    count(*)
+    into v_fallback,v_global_unpriced,v_images,v_global_calls
+  from public.ai_usage_events where created_at >= p_now-interval '24 hours';
   if v_images >= s.global_fallback_alert_min_calls and v_fallback::numeric / v_images > s.global_fallback_alert_fraction then
     insert into public.ai_usage_alert_outbox(environment_id,kind,period_start,policy_version,idempotency_key,payload)
     values(p_environment_id,'fallback',date_trunc('day',p_now),s.alert_policy_version,
       format('%s:fallback:%s:%s',p_environment_id,(p_now at time zone 'UTC')::date,s.alert_policy_version),jsonb_build_object('fallbackCalls',v_fallback,'imageCalls',v_images)) on conflict(idempotency_key) do nothing;
   end if;
-  if v_images >= s.global_unpriced_alert_min_calls
-    and v_global_unpriced::numeric / nullif(v_images,0) > s.global_unpriced_alert_fraction then
+  if v_global_calls >= s.global_unpriced_alert_min_calls
+    and v_global_unpriced::numeric / nullif(v_global_calls,0) > s.global_unpriced_alert_fraction then
     insert into public.ai_usage_alert_outbox(environment_id,kind,period_start,policy_version,idempotency_key,payload)
     values(p_environment_id,'unpriced',date_trunc('day',p_now),s.alert_policy_version,
       format('%s:unpriced-global:%s:%s',p_environment_id,(p_now at time zone 'UTC')::date,s.alert_policy_version),
-      jsonb_build_object('unpricedCalls',v_global_unpriced,'imageCalls',v_images,'threshold',s.global_unpriced_alert_fraction)) on conflict(idempotency_key) do nothing;
+      jsonb_build_object('unpricedCalls',v_global_unpriced,'aiCalls',v_global_calls,'imageCalls',v_images,'threshold',s.global_unpriced_alert_fraction)) on conflict(idempotency_key) do nothing;
   end if;
   return query select * from public.ai_usage_alert_outbox
     where environment_id=p_environment_id and (status='pending' or (status='failed' and attempts < s.max_alert_outbox_attempts))
@@ -1085,10 +1268,13 @@ alter table public.ai_image_generation_requests enable row level security;
 alter table public.ai_image_generation_admissions enable row level security;
 alter table public.ai_provider_attempts enable row level security;
 alter table public.ai_usage_events enable row level security;
+alter table public.ai_onboarding_voice_requests enable row level security;
 alter table public.ai_usage_limit_notices enable row level security;
 alter table public.ai_usage_monthly_rollups enable row level security;
+alter table public.ai_system_usage_monthly_rollups enable row level security;
 alter table public.ai_usage_alert_outbox enable row level security;
-revoke all on public.family_ai_costs_monthly, public.ai_usage_observability_gaps from public, anon, authenticated;
+revoke all on public.ai_onboarding_voice_requests from public, anon, authenticated;
+revoke all on public.family_ai_costs_monthly, public.company_ai_costs_monthly, public.ai_usage_observability_gaps from public, anon, authenticated;
 
 -- Existing tables keep their separately-declared grants; grant only the
 -- explicit client read surface added here.
@@ -1103,7 +1289,9 @@ revoke all on function public.reserve_legacy_ai_image_provider_attempt_v2(uuid,t
 revoke all on function public.release_ai_image_preparation(uuid,uuid,integer,timestamptz,text) from public,anon,authenticated;
 revoke all on function public.promote_ai_image_preparation(uuid,uuid,integer,timestamptz,uuid) from public,anon,authenticated;
 revoke all on function public.record_ai_memory_preparation_emotion(uuid,uuid,integer,timestamptz,text) from public,anon,authenticated;
-revoke all on function public.record_ai_usage_event_detailed(text,uuid,uuid,uuid,text,text,boolean,jsonb,numeric,text,text,boolean,text) from public,anon,authenticated;
+revoke all on function public.record_ai_usage_event_detailed(text,uuid,uuid,uuid,text,text,boolean,jsonb,numeric,text,text,boolean,text,text,uuid) from public,anon,authenticated;
+revoke all on function public.reserve_onboarding_voice_attempt(uuid) from public,anon,authenticated;
+revoke all on function public.mark_onboarding_voice_cleanup_expected(uuid,uuid) from public,anon,authenticated;
 revoke all on function public.record_ai_usage_event_legacy(uuid,uuid,text,text,jsonb,boolean,text) from public,anon,authenticated;
 revoke all on function public.record_ai_usage_event(text,uuid,text,uuid,text,smallint,text,text,jsonb,boolean,text,text,text,boolean,numeric,integer,integer,integer,integer,integer,numeric) from public,anon,authenticated;
 revoke all on function public.purge_expired_ai_usage_data(timestamptz) from public,anon,authenticated;
@@ -1112,6 +1300,6 @@ revoke all on function public.claim_ai_usage_alert_outbox(uuid) from public,anon
 revoke all on function public.mark_ai_usage_alert_outbox_sent(uuid,uuid) from public,anon,authenticated;
 revoke all on function public.mark_ai_usage_alert_outbox_delivery_unknown(uuid,uuid) from public,anon,authenticated;
 revoke all on function public.release_ai_usage_alert_outbox(uuid,uuid) from public,anon,authenticated;
-grant execute on function public.begin_memory_illustration_usage(uuid,text,uuid,uuid), public.begin_portrait_generation_usage(uuid,text,uuid,uuid), public.release_ai_image_preparation(uuid,uuid,text), public.release_ai_image_preparation(uuid,uuid,integer,timestamptz,text), public.promote_ai_image_preparation(uuid,uuid,uuid), public.promote_ai_image_preparation(uuid,uuid,integer,timestamptz,uuid), public.reserve_ai_image_provider_attempt_v2(uuid,text,smallint), public.reserve_ai_image_provider_attempt_v2(uuid,text,uuid,text,smallint), public.reserve_legacy_ai_image_provider_attempt_v2(uuid,text,uuid,uuid,integer,timestamptz,text,smallint), public.record_ai_memory_preparation_emotion(uuid,uuid,integer,timestamptz,text), public.record_ai_usage_event_detailed(text,uuid,uuid,uuid,text,text,boolean,jsonb,numeric,text,text,boolean,text), public.record_ai_usage_event_legacy(uuid,uuid,text,text,jsonb,boolean,text), public.record_ai_usage_event(text,uuid,text,uuid,text,smallint,text,text,jsonb,boolean,text,text,text,boolean,numeric,integer,integer,integer,integer,integer,numeric), public.purge_expired_ai_usage_data(timestamptz), public.enqueue_ai_usage_alerts(text,timestamptz), public.claim_ai_usage_alert_outbox(uuid), public.mark_ai_usage_alert_outbox_sent(uuid,uuid), public.mark_ai_usage_alert_outbox_delivery_unknown(uuid,uuid), public.release_ai_usage_alert_outbox(uuid,uuid) to service_role;
+grant execute on function public.begin_memory_illustration_usage(uuid,text,uuid,uuid), public.begin_portrait_generation_usage(uuid,text,uuid,uuid), public.release_ai_image_preparation(uuid,uuid,text), public.release_ai_image_preparation(uuid,uuid,integer,timestamptz,text), public.promote_ai_image_preparation(uuid,uuid,uuid), public.promote_ai_image_preparation(uuid,uuid,integer,timestamptz,uuid), public.reserve_ai_image_provider_attempt_v2(uuid,text,smallint), public.reserve_ai_image_provider_attempt_v2(uuid,text,uuid,text,smallint), public.reserve_legacy_ai_image_provider_attempt_v2(uuid,text,uuid,uuid,integer,timestamptz,text,smallint), public.record_ai_memory_preparation_emotion(uuid,uuid,integer,timestamptz,text), public.record_ai_usage_event_detailed(text,uuid,uuid,uuid,text,text,boolean,jsonb,numeric,text,text,boolean,text,text,uuid), public.reserve_onboarding_voice_attempt(uuid), public.mark_onboarding_voice_cleanup_expected(uuid,uuid), public.record_ai_usage_event_legacy(uuid,uuid,text,text,jsonb,boolean,text), public.record_ai_usage_event(text,uuid,text,uuid,text,smallint,text,text,jsonb,boolean,text,text,text,boolean,numeric,integer,integer,integer,integer,integer,numeric), public.purge_expired_ai_usage_data(timestamptz), public.enqueue_ai_usage_alerts(text,timestamptz), public.claim_ai_usage_alert_outbox(uuid), public.mark_ai_usage_alert_outbox_sent(uuid,uuid), public.mark_ai_usage_alert_outbox_delivery_unknown(uuid,uuid), public.release_ai_usage_alert_outbox(uuid,uuid) to service_role;
 revoke all on function public.get_my_ai_usage_limit_notices() from public,anon;
 grant execute on function public.get_my_ai_usage_limit_notices() to authenticated;

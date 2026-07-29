@@ -1,4 +1,4 @@
-import { generateMemoryIllustration } from '@/services/ai';
+import { generateMemoryIllustration, processOnboardingVoiceMemory, processVoiceMemory } from '@/services/ai';
 import { supabase } from '@/lib/supabase';
 
 jest.mock('@/lib/supabase', () => ({
@@ -56,6 +56,40 @@ describe('generateMemoryIllustration service contract', () => {
         forceRegenerate: false,
         requestIntent: 'recovery',
       },
+    });
+  });
+});
+
+describe('voice service contracts', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('keeps normal family voice capture family-scoped', async () => {
+    (supabase.functions.invoke as jest.Mock).mockResolvedValue({
+      data: { cleanedText: 'A memory', mentionedMemberIds: ['member-1'] }, error: null,
+    });
+
+    await processVoiceMemory('audio', [{ id: 'member-1', name: 'Maya' }], 'family-1');
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith('process-voice-memory', {
+      body: {
+        audioBase64: 'audio',
+        familyMembers: [{ id: 'member-1', name: 'Maya' }],
+        familyId: 'family-1',
+      },
+    });
+  });
+
+  it('uses the separate onboarding contract without family or member identifiers', async () => {
+    (supabase.functions.invoke as jest.Mock).mockResolvedValue({
+      data: { cleanedText: 'A memory', mentionedMemberIds: [] }, error: null,
+    });
+
+    await processOnboardingVoiceMemory('audio', ['Maya', 'Leo']);
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith('process-voice-memory', {
+      body: { mode: 'onboarding', audioBase64: 'audio', nameHints: ['Maya', 'Leo'] },
     });
   });
 });

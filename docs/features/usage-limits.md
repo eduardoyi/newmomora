@@ -1,13 +1,14 @@
 # Feature: Usage limits & AI cost observability
 
 **Status:** `implemented — staged rollout required`
-**Last updated:** 2026-07-27
+**Last updated:** 2026-07-29
 **PRD reference:** n/a (unit-economics protection; see [COST_OPTIMIZATION.md](../COST_OPTIMIZATION.md) and [PRICING_STRATEGY.md](../PRICING_STRATEGY.md))
 
 ## Overview
 
 Two coupled capabilities that protect margins without degrading the product: (1) a per-call
-**AI usage ledger** (`ai_usage_events`) attributing every OpenAI spend to a family, and (2)
+**AI usage ledger** (`ai_usage_events`) attributing every OpenAI spend to a family or to Momora's
+pre-auth onboarding COGS, and (2)
 **invisible fair-use limits** on image generation that bound worst-case cost per family. Design
 was decided 2026-07-24 and implemented 2026-07-27 behind a staged, disabled-by-default rollout.
 
@@ -25,6 +26,9 @@ was decided 2026-07-24 and implemented 2026-07-27 behind a staged, disabled-by-d
    limits only defer illustration. Copy when hit must reflect that: warm, "your memory is saved."
 4. **Enforcement must not depend on the ledger.** Admission/consumption is a durable server-side
    request and reservation protocol; ledger writes are best-effort observability and never block a user flow.
+5. **Onboarding voice is Momora cost, not family cost.** A user may transcribe before a real
+   family exists. Those two paid calls are recorded honestly as `onboarding`, never assigned to a
+   fake family and never charged against a later family's limits.
 
 ## Limits (defaults)
 
@@ -86,7 +90,8 @@ Service-role-only table (RLS enabled, no client policies), one row per external 
 | Column | Notes |
 |--------|-------|
 | `id`, `created_at` | |
-| `family_id`, `actor_user_id` (nullable) | attribution |
+| `attribution_scope` | `family` (default) or `onboarding` |
+| `family_id`, `onboarding_request_id`, `actor_user_id` | Exact attribution. Family events require a real `family_id` and no onboarding request. Onboarding events link to one server-issued opaque attempt request, have `family_id = null`, and actor attribution may become null after anonymous Auth cleanup. |
 | `operation` | `illustration` \| `portrait` \| `safety_chat` \| `emotion_chat` \| `emotion_vision` \| `transcription` \| `voice_cleanup` |
 | `usage_request_id`, `family_id`, `actor_user_id`, `operation`, `model`, `request_intent`, `provider` | durable attribution and request linkage |
 | `success` | boolean |
@@ -103,17 +108,64 @@ Cost math must split output tokens: gpt-image-1.5 bills text output at $10/1M vs
 output (see the corrected `computeCost` in `supabase/scripts/eval-image-cost.ts` — reuse its
 pricing constant shape).
 
+### Pre-auth onboarding voice contract
+
+Only `transcription` and `voice_cleanup` may use `attribution_scope = 'onboarding'`. The
+service-role-only ledger RPC is:
+
+```sql
+record_ai_usage_event_detailed(
+  p_ai_call_id text, p_usage_request_id uuid, p_family_id uuid,
+  p_actor_user_id uuid, p_operation text, p_model text, p_success boolean,
+  p_provider_usage jsonb default '{}', p_estimated_cost_usd numeric default null,
+  p_cost_basis text default 'unpriced', p_billing_status text default 'unknown',
+  p_cost_is_complete boolean default false, p_pricing_version text default null,
+  p_attribution_scope text default 'family', p_onboarding_request_id uuid default null
+) returns boolean
+```
+
+Existing family callers retain the default scope and their prior argument shape. An onboarding
+caller passes `family_id = null`, `attribution_scope = 'onboarding'`, and the reservation's
+`onboarding_request_id`. The ledger derives and validates actor attribution from that private
+request; it never accepts a caller-supplied session or persistent per-user identifier. Constraints
+and RPC validation reject every other combination.
+
+Before any provider work, `process-voice-memory` must call the service-role-only
+`reserve_onboarding_voice_attempt(p_actor_user_id uuid) returns table (reserved boolean,
+request_id uuid, attempts_used smallint)`. The RPC verifies `auth.users.is_anonymous` itself,
+generates the opaque request ID server-side, returns a request ID for the first two attempts, and
+returns `{ reserved: false, request_id: null }` thereafter (also for permanent or unknown users).
+An advisory transaction lock makes the count-and-insert atomic; attempts stay consumed when the
+provider fails or the response is ambiguous. The Edge Function must fail closed if this RPC errors
+or returns an unexpected shape.
+
+After transcription succeeds and immediately before cleanup starts, the Edge Function calls
+`mark_onboarding_voice_cleanup_expected(p_request_id uuid, p_actor_user_id uuid) returns boolean`.
+It atomically binds the marker to the reserving actor; a false/error/malformed result fails closed.
+The marker deliberately does not wait on a detached best-effort transcription ledger write. This
+lets observability flag (a) any reserved request missing transcription and (b) any marked request
+missing cleanup, without creating cleanup gaps for transcription failures. The ledger also rejects
+an onboarding `voice_cleanup` event unless this marker is already true.
+
+The request table is RLS-protected and unreadable to clients. Auth cleanup nulls request and event
+actor fields; the opaque request expires with raw data after 90 days and the deidentified company
+rollup remains for 13 months.
+
 ## Views & alerting
 
 - `family_ai_costs_monthly` view: family_id, month, calls, failed calls, est. cost, by operation.
+- `company_ai_costs_monthly` view: separate `family` and `onboarding` totals, including all
+  nullable-family onboarding COGS. It is operator-only, like the raw ledger.
 - Alert before enforcement ever fires: reuse the existing cron Edge Function pattern to send the
   owner a digest when any family crosses 60% of the monthly cap or >$5 estimated spend in a
   month, plus a global fallback-rate anomaly line (fallback usage spiking = primary model
   degradation = cost + quality signal).
 
 Retention defaults are 90 days for detailed requests/admissions/events and terminal alert outbox
-records, 7 days for inactive notices, and 13 completed months for family rollups. Family deletion
-cascades all such data; non-owner deletion nulls actor attribution only.
+records, 7 days for inactive notices, and 13 completed months for both family rollups and the
+separate onboarding-system rollup. Family deletion cascades family data. Anonymous Auth deletion
+removes only its live attempt counter and nulls raw-event actor attribution; onboarding cost
+rollups remain as company accounting data.
 
 ### Scheduled alert delivery
 
@@ -132,6 +184,13 @@ redelivered.
   limits for upgrade pressure; a paid product with fair use does not).
 - Hard per-dollar billing enforcement, proration, or purchasable top-ups.
 - Client-side enforcement (trivially bypassable; server is the only gate).
+- Per-IP or per-device onboarding voice limits, CAPTCHA/Turnstile, fraud scoring, and anonymous
+  account cleanup scheduling. The shipped minimum protection is only: a valid anonymous Auth JWT,
+  the two-attempt atomic anonymous-user reservation, existing server audio-size/duration
+  validation, and tightly bounded local spelling hints. The onboarding owner must enable
+  `enable_anonymous_sign_ins` only alongside this Edge integration; this migration deliberately
+  does **not** change anonymous-user RLS or Auth configuration. Add stronger controls before
+  raising the voice allowance or treating anonymous onboarding as a broad public API.
 
 ## Extension guide
 
@@ -180,6 +239,16 @@ caps), the no-visible-credits principle, ledger-independence of enforcement.
 
 - Deno/pgTAP: admission limits, UTC provider-time rebucketing, RLS, reservation lifecycle,
   v1/v2 bridge compatibility, and ledger failure isolation.
+- `supabase/tests/usage_limits_onboarding.sql`: two-success/third-denial atomic reservation
+  behavior, service-only permissions, allowed/forbidden attribution combinations, family-view
+  exclusion, company/global inclusion, 90-day raw versus 13-month system-rollup retention, and
+  anonymous Auth cleanup.
+- `supabase/scripts/onboarding-voice-reservation-concurrency.test.ts`: local-only real concurrency
+  regression. With `ONBOARDING_VOICE_CONCURRENCY_TEST=1` and loopback Supabase credentials, it
+  creates an anonymous Auth user and issues three simultaneous independent PostgREST reservation
+  RPC requests. It proves exactly two durable rows with ordinals 1/2 and one clean denial; the
+  test is intentionally ignored by ordinary `npm run test:edge` runs unless that explicit local
+  flag is set.
 - Worker: v2 fail-closed reservation responses, v1 grandfathered jobs, deterministic attempts,
   fallback/replay, usage parsing, and a never-resolving ledger call that cannot delay publication.
 - Client: typed 429 parsing, local retry rendering, actor-only AsyncStorage dedupe, voice `familyId`,
@@ -199,3 +268,4 @@ caps), the no-visible-credits principle, ledger-independence of enforcement.
 |------|--------|
 | 2026-07-24 | Initial design recorded. |
 | 2026-07-27 | Replaced job-row counting with request/admission/provider-slot protocol and staged v1/v2 rollout. |
+| 2026-07-29 | Added family-or-onboarding ledger attribution and the two-attempt pre-auth voice COGS lane. |

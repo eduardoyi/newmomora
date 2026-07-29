@@ -564,7 +564,7 @@ export async function handleGenerateIllustration(
         const result = await dependencies.chatJson<{ emotion?: string; colorPalette?: string }>(
           buildEmotionSystemPrompt(),
           stripUrls(memory.content),
-          { usageContext: { familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'emotion_chat' } },
+          { usageContext: { attributionScope: 'family', familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'emotion_chat' } },
         );
         const normalized = normalizeEmotionLabel(result.emotion, EMOTION_PALETTES);
         const emotion = normalized.emotion;
@@ -960,7 +960,7 @@ export async function handleGenerateIllustration(
       expressionStyle?: string;
     }>(buildSafetySystemPrompt(safetyMembers), strippedContent, {
       signal: generationController.signal,
-      usageContext: { familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'safety_chat' },
+      usageContext: { attributionScope: 'family', familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'safety_chat' },
     });
     throwIfAborted(generationController.signal);
     logGenerationPhase(memoryId, generationPhase, safetyPhaseStartedAt);
@@ -1111,7 +1111,7 @@ export async function handleGenerateIllustration(
           },
         }
         : {}),
-      usageContext: { familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'illustration' },
+      usageContext: { attributionScope: 'family', familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'illustration' },
     });
     throwIfAborted(generationController.signal);
     logGenerationPhase(memoryId, generationPhase, imagePhaseStartedAt);

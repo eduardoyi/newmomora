@@ -30,17 +30,17 @@ function escapeHtml(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
 }
 
-type SafeAlertMetric = number | 'global';
+type SafeAlertMetric = number | 'global' | 'onboarding';
 
 const SAFE_METRIC_KEYS_BY_KIND: Record<string, ReadonlySet<string>> = {
   request: new Set(['consumedRequests', 'threshold', 'monthlyCap']),
   spend: new Set(['estimatedCostUsd']),
   fallback: new Set(['fallbackCalls', 'imageCalls']),
-  observability_gap: new Set(['gapAfterMinutes']),
+  observability_gap: new Set(['gapAfterMinutes', 'missingLedgerEvents', 'attributionScope']),
   // `unpriced` is emitted both for a family count and a global anomaly. The
   // latter has no family id; `scope` is allowed only as the exact literal
   // below, never as arbitrary payload text.
-  unpriced: new Set(['unpricedCalls', 'scope', 'threshold', 'minCalls']),
+  unpriced: new Set(['unpricedCalls', 'scope', 'threshold', 'minCalls', 'aiCalls', 'imageCalls']),
   // Reserved for an operator-authored aggregate digest; it intentionally has
   // no broad payload pass-through until its exact schema is defined.
   digest: new Set(),
@@ -55,6 +55,9 @@ export function safeAlertMetrics(kind: string, payload: unknown): Record<string,
       result[key] = value;
     }
     if (kind === 'unpriced' && key === 'scope' && value === 'global') result[key] = 'global';
+    if (kind === 'observability_gap' && key === 'attributionScope' && value === 'onboarding') {
+      result[key] = 'onboarding';
+    }
   }
   return result;
 }

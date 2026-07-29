@@ -1,7 +1,35 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1';
-import { chatJson, editImageWithReferences, generateImage, scheduleBestEffortUsageWrite } from './openai.ts';
+import {
+  assertAiUsageWriteSucceeded,
+  buildAiUsageLedgerAttribution,
+  chatJson,
+  editImageWithReferences,
+  generateImage,
+  scheduleBestEffortUsageWrite,
+} from './openai.ts';
 
 const TEST_OPENAI_KEY = 'test-openai-key';
+
+Deno.test('usage ledger attribution keeps family and onboarding costs disjoint', () => {
+  assertEquals(
+    buildAiUsageLedgerAttribution({
+      attributionScope: 'family', familyId: 'family-id', actorUserId: 'user-id', operation: 'transcription',
+    }),
+    {
+      p_family_id: 'family-id', p_actor_user_id: 'user-id',
+      p_attribution_scope: 'family', p_onboarding_request_id: null,
+    },
+  );
+  assertEquals(
+    buildAiUsageLedgerAttribution({
+      attributionScope: 'onboarding', familyId: null, onboardingRequestId: 'request-id', operation: 'voice_cleanup',
+    }),
+    {
+      p_family_id: null, p_actor_user_id: null,
+      p_attribution_scope: 'onboarding', p_onboarding_request_id: 'request-id',
+    },
+  );
+});
 
 Deno.test('best-effort usage failures are observed without EdgeRuntime or provider details', async () => {
   const originalError = console.error;
@@ -19,6 +47,21 @@ Deno.test('best-effort usage failures are observed without EdgeRuntime or provid
     console.error = originalError;
     if (previousRuntime === undefined) delete (globalThis as { EdgeRuntime?: unknown }).EdgeRuntime;
     else (globalThis as { EdgeRuntime?: unknown }).EdgeRuntime = previousRuntime;
+  }
+});
+
+Deno.test('a resolved AI usage RPC error is observed without exposing its details or blocking provider work', async () => {
+  const originalError = console.error;
+  const logs: unknown[][] = [];
+  console.error = (...args: unknown[]) => logs.push(args);
+  try {
+    scheduleBestEffortUsageWrite(async () => {
+      assertAiUsageWriteSucceeded({ error: { message: 'provider transcript: private' } });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assertEquals(logs, [['ai usage recording failed']]);
+  } finally {
+    console.error = originalError;
   }
 });
 

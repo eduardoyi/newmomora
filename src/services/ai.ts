@@ -157,6 +157,25 @@ export async function processVoiceMemory(
   });
 }
 
+/**
+ * Pre-auth onboarding transcription is billed to Momora's onboarding cost
+ * bucket. It deliberately has a separate contract from family voice capture:
+ * callers can supply spelling hints, never a family ID or member IDs.
+ */
+export async function processOnboardingVoiceMemory(
+  audioBase64: string,
+  nameHints: string[],
+): Promise<{
+  data: { cleanedText: string; mentionedMemberIds: string[] } | null;
+  error: ServiceError | null;
+}> {
+  return invokeEdgeFunction('process-voice-memory', {
+    mode: 'onboarding',
+    audioBase64,
+    nameHints,
+  });
+}
+
 export function isUsageLimitError(error: ServiceError | null | undefined): error is ServiceError & {
   code: 'USAGE_LIMIT_REACHED'; scope: 'memory' | 'daily' | 'monthly'; retryAfterIso: string;
 } {

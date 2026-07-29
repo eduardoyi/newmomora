@@ -7,6 +7,31 @@ export type Json =
   | Json[]
 
 export type Database = {
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       ai_family_usage_locks: {
@@ -74,13 +99,6 @@ export type Database = {
             referencedRelation: "ai_image_generation_requests"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "ai_image_generation_admissions_request_id_fkey"
-            columns: ["request_id"]
-            isOneToOne: false
-            referencedRelation: "ai_usage_observability_gaps"
-            referencedColumns: ["usage_request_id"]
-          },
         ]
       }
       ai_image_generation_requests: {
@@ -142,6 +160,33 @@ export type Database = {
           },
         ]
       }
+      ai_onboarding_voice_requests: {
+        Row: {
+          actor_user_id: string | null
+          attempt_number: number
+          cleanup_expected: boolean
+          created_at: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          actor_user_id?: string | null
+          attempt_number: number
+          cleanup_expected?: boolean
+          created_at?: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          actor_user_id?: string | null
+          attempt_number?: number
+          cleanup_expected?: boolean
+          created_at?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       ai_provider_attempts: {
         Row: {
           attempt_number: number
@@ -172,14 +217,43 @@ export type Database = {
             referencedRelation: "ai_image_generation_requests"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "ai_provider_attempts_request_id_fkey"
-            columns: ["request_id"]
-            isOneToOne: false
-            referencedRelation: "ai_usage_observability_gaps"
-            referencedColumns: ["usage_request_id"]
-          },
         ]
+      }
+      ai_system_usage_monthly_rollups: {
+        Row: {
+          attribution_scope: string
+          calls: number
+          estimated_cost_usd: number
+          failed_calls: number
+          model: string
+          month: string
+          operation: string
+          unpriced_calls: number
+          updated_at: string
+        }
+        Insert: {
+          attribution_scope: string
+          calls?: number
+          estimated_cost_usd?: number
+          failed_calls?: number
+          model: string
+          month: string
+          operation: string
+          unpriced_calls?: number
+          updated_at?: string
+        }
+        Update: {
+          attribution_scope?: string
+          calls?: number
+          estimated_cost_usd?: number
+          failed_calls?: number
+          model?: string
+          month?: string
+          operation?: string
+          unpriced_calls?: number
+          updated_at?: string
+        }
+        Relationships: []
       }
       ai_usage_alert_outbox: {
         Row: {
@@ -247,6 +321,7 @@ export type Database = {
         Row: {
           actor_user_id: string | null
           ai_call_id: string
+          attribution_scope: string
           audio_seconds: number | null
           billing_status: string
           cached_input_tokens: number | null
@@ -254,11 +329,12 @@ export type Database = {
           cost_is_complete: boolean
           created_at: string
           estimated_cost_usd: number | null
-          family_id: string
+          family_id: string | null
           id: string
           input_image_tokens: number | null
           input_text_tokens: number | null
           model: string
+          onboarding_request_id: string | null
           operation: string
           output_image_tokens: number | null
           output_text_tokens: number | null
@@ -272,6 +348,7 @@ export type Database = {
         Insert: {
           actor_user_id?: string | null
           ai_call_id: string
+          attribution_scope?: string
           audio_seconds?: number | null
           billing_status?: string
           cached_input_tokens?: number | null
@@ -279,11 +356,12 @@ export type Database = {
           cost_is_complete?: boolean
           created_at?: string
           estimated_cost_usd?: number | null
-          family_id: string
+          family_id?: string | null
           id?: string
           input_image_tokens?: number | null
           input_text_tokens?: number | null
           model: string
+          onboarding_request_id?: string | null
           operation: string
           output_image_tokens?: number | null
           output_text_tokens?: number | null
@@ -297,6 +375,7 @@ export type Database = {
         Update: {
           actor_user_id?: string | null
           ai_call_id?: string
+          attribution_scope?: string
           audio_seconds?: number | null
           billing_status?: string
           cached_input_tokens?: number | null
@@ -304,11 +383,12 @@ export type Database = {
           cost_is_complete?: boolean
           created_at?: string
           estimated_cost_usd?: number | null
-          family_id?: string
+          family_id?: string | null
           id?: string
           input_image_tokens?: number | null
           input_text_tokens?: number | null
           model?: string
+          onboarding_request_id?: string | null
           operation?: string
           output_image_tokens?: number | null
           output_text_tokens?: number | null
@@ -328,18 +408,18 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "ai_usage_events_usage_request_id_fkey"
-            columns: ["usage_request_id"]
+            foreignKeyName: "ai_usage_events_onboarding_request_id_fkey"
+            columns: ["onboarding_request_id"]
             isOneToOne: false
-            referencedRelation: "ai_image_generation_requests"
+            referencedRelation: "ai_onboarding_voice_requests"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "ai_usage_events_usage_request_id_fkey"
             columns: ["usage_request_id"]
             isOneToOne: false
-            referencedRelation: "ai_usage_observability_gaps"
-            referencedColumns: ["usage_request_id"]
+            referencedRelation: "ai_image_generation_requests"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -851,13 +931,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "family_member_portrait_versio_usage_preparation_request_id_fkey"
-            columns: ["usage_preparation_request_id"]
-            isOneToOne: false
-            referencedRelation: "ai_usage_observability_gaps"
-            referencedColumns: ["usage_request_id"]
-          },
-          {
             foreignKeyName: "family_member_portrait_versions_member_family_fkey"
             columns: ["family_member_id", "family_id"]
             isOneToOne: false
@@ -1096,13 +1169,6 @@ export type Database = {
             referencedRelation: "ai_image_generation_requests"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "memories_usage_preparation_request_id_fkey"
-            columns: ["usage_preparation_request_id"]
-            isOneToOne: false
-            referencedRelation: "ai_usage_observability_gaps"
-            referencedColumns: ["usage_request_id"]
-          },
         ]
       }
       memory_comments: {
@@ -1294,13 +1360,6 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "ai_image_generation_requests"
             referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "memory_illustration_jobs_usage_request_id_fkey"
-            columns: ["usage_request_id"]
-            isOneToOne: false
-            referencedRelation: "ai_usage_observability_gaps"
-            referencedColumns: ["usage_request_id"]
           },
         ]
       }
@@ -1508,13 +1567,6 @@ export type Database = {
             referencedRelation: "ai_image_generation_requests"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "portrait_generation_jobs_usage_request_id_fkey"
-            columns: ["usage_request_id"]
-            isOneToOne: false
-            referencedRelation: "ai_usage_observability_gaps"
-            referencedColumns: ["usage_request_id"]
-          },
         ]
       }
       portrait_generation_workflow_bridge_nonces: {
@@ -1604,21 +1656,29 @@ export type Database = {
     Views: {
       ai_usage_observability_gaps: {
         Row: {
+          attribution_scope: string | null
           consumed_at: string | null
+          expected_operation: string | null
           family_id: string | null
+          onboarding_request_id: string | null
           target_id: string | null
           target_kind: string | null
           usage_request_id: string | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "ai_image_generation_requests_family_id_fkey"
-            columns: ["family_id"]
-            isOneToOne: false
-            referencedRelation: "families"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
+      }
+      company_ai_costs_monthly: {
+        Row: {
+          attribution_scope: string | null
+          calls: number | null
+          estimated_cost_usd: number | null
+          failed_calls: number | null
+          model: string | null
+          month: string | null
+          operation: string | null
+          unpriced_calls: number | null
+        }
+        Relationships: []
       }
       family_ai_costs_monthly: {
         Row: {
@@ -2208,6 +2268,10 @@ export type Database = {
         Args: { p_attempt_token: string; p_report_id: string }
         Returns: boolean
       }
+      mark_onboarding_voice_cleanup_expected: {
+        Args: { p_actor_user_id: string; p_request_id: string }
+        Returns: boolean
+      }
       promote_ai_image_preparation:
         | {
             Args: {
@@ -2301,12 +2365,14 @@ export type Database = {
         Args: {
           p_actor_user_id: string
           p_ai_call_id: string
+          p_attribution_scope?: string
           p_billing_status?: string
           p_cost_basis?: string
           p_cost_is_complete?: boolean
           p_estimated_cost_usd?: number
           p_family_id: string
           p_model: string
+          p_onboarding_request_id?: string
           p_operation: string
           p_pricing_version?: string
           p_provider_usage?: Json
@@ -2432,6 +2498,14 @@ export type Database = {
       reserve_memory_illustration_provider_attempt: {
         Args: { p_attempt_number: number; p_job_id: string; p_provider: string }
         Returns: boolean
+      }
+      reserve_onboarding_voice_attempt: {
+        Args: { p_actor_user_id: string }
+        Returns: {
+          attempts_used: number
+          request_id: string
+          reserved: boolean
+        }[]
       }
       reserve_portrait_generation_provider_attempt: {
         Args: { p_attempt_number: number; p_job_id: string; p_provider: string }
@@ -2648,6 +2722,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {},
   },

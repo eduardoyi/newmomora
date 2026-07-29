@@ -540,7 +540,7 @@ export async function handleGeneratePortraitIllustration(
             },
           }
           : {}),
-        usageContext: { familyId: version.family_id, actorUserId: user.id, usageRequestId, operation: 'portrait' },
+        usageContext: { attributionScope: 'family', familyId: version.family_id, actorUserId: user.id, usageRequestId, operation: 'portrait' },
       });
       await dependencies.putObjectBytes(portraitKey, portraitBytes, 'image/webp');
       uploadedAttempt = true;

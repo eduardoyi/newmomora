@@ -1004,7 +1004,38 @@ exactly one authorized family membership; otherwise the function returns
 `FAMILY_CONTEXT_REQUIRED`. The client can never select the roster by sending
 member data.
 
+Pre-auth onboarding uses a separate, discriminated request. It is accepted
+only for a verified Supabase user whose server-returned `is_anonymous` field
+is exactly `true`; the client cannot opt into it by setting `mode` alone.
+
+```json
+{
+  "mode": "onboarding",
+  "audioBase64": "base64-encoded-audio",
+  "nameHints": ["Emma", "Theo"]
+}
+```
+
+`nameHints` is an optional spelling-hint list (0–6 trimmed, non-empty strings,
+maximum 50 characters each). Hints are prompt-only: they are not family-member
+IDs, do not authorize access to a family, and the onboarding response always
+has `mentionedMemberIds: []`. Before any OpenAI request, the function consumes
+one of two server-side onboarding voice attempts for that anonymous user via
+`reserve_onboarding_voice_attempt`; false returns HTTP 429
+`ONBOARDING_VOICE_LIMIT_REACHED`, while RPC errors or malformed results fail
+closed with `ONBOARDING_VOICE_RESERVATION_FAILED`. A successful reservation
+returns a private server-issued onboarding request ID; it is the only
+identifier sent to the usage ledger, which validates and derives the anonymous
+actor server-side. No onboarding session identifier is retained. The consumed
+attempt is not released when transcription or cleanup fails. After
+transcription returns, the function
+marks cleanup as expected with that request ID and verified actor before the
+cleanup call; a failed/malformed mark fails closed before that second provider
+call and drives observability-gap reporting without blocking transcription.
+
 **Logic**
+
+Family mode:
 
 1. Verify the caller has a role in the requested family, then load its
    canonical family-member roster server-side.
@@ -1014,6 +1045,11 @@ member data.
 5. Call `gpt-4o-mini` for cleanup + self-reference detection.
 6. If `mentionedUserSelf`, append the canonical user-profile member ID.
 7. Return result; audio is discarded and never stored.
+
+Onboarding mode follows the same two-minute/audio validation and OpenAI
+transcription + cleanup sequence, but uses only the supplied spelling hints,
+does not query a family roster, and records both provider calls as Momora
+system onboarding cost rather than family cost.
 
 **Response**
 
@@ -1025,7 +1061,9 @@ member data.
 ```
 
 **Errors:** `TRANSCRIPTION_FAILED`, `EMPTY_AUDIO`, `AUDIO_TOO_LONG`,
-`FAMILY_CONTEXT_REQUIRED`, `forbidden`
+`FAMILY_CONTEXT_REQUIRED`, `forbidden`, `ONBOARDING_ANONYMOUS_REQUIRED`,
+`ONBOARDING_VOICE_LIMIT_REACHED`, `ONBOARDING_VOICE_RESERVATION_FAILED`,
+`ONBOARDING_VOICE_CLEANUP_RESERVATION_FAILED`
 
 **Validation:** Reject audio representing > 2 minutes of recording
 
@@ -1780,7 +1818,7 @@ All AI operations are **async** — client shows status and allows navigation aw
 - Image generation is admitted server-side through a family-scoped logical request, admission, and provider-attempt protocol. The client must never calculate eligibility.
 - New jobs use bridge protocol v2 (`usageRequestId`, `providerProtocolVersion: 2`) and only `reserved_now` may call the provider. Existing queued v1 jobs retain their legacy reservation response during staged rollout.
 - Limit rejections use HTTP 429 with `code: USAGE_LIMIT_REACHED`, `scope`, and `retryAfterIso`. The app renders retry time locally and obtains cold-start notices only through `get_my_ai_usage_limit_notices` for the current actor.
-- `process-voice-memory` receives `familyId`; compatibility inference is server-owned and never client-selected.
+- Family `process-voice-memory` receives `familyId`; compatibility inference is server-owned and never client-selected. The separate `mode: 'onboarding'` contract is anonymous-only and attributes its two provider calls to Momora onboarding cost, never to a family.
 
 ## 12. Open Implementation Items
 

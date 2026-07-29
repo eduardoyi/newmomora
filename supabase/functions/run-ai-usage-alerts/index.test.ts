@@ -14,8 +14,19 @@ Deno.test('AI usage alerts apply an exact metric allowlist for each alert kind',
   }), { consumedRequests: 12, threshold: 10, monthlyCap: 20 });
   assertEquals(safeAlertMetrics('spend', { estimatedCostUsd: 5, fallbackCalls: 4 }), { estimatedCostUsd: 5 });
   assertEquals(safeAlertMetrics('unpriced', {
-    scope: 'global', threshold: 0.2, minCalls: 20, prompt: 'private text', scopeHint: 'untrusted',
-  }), { scope: 'global', threshold: 0.2, minCalls: 20 });
+    scope: 'global', threshold: 0.2, minCalls: 20, aiCalls: 31, imageCalls: 20,
+    prompt: 'private text', scopeHint: 'untrusted',
+  }), { scope: 'global', threshold: 0.2, minCalls: 20, aiCalls: 31, imageCalls: 20 });
+  assertEquals(safeAlertMetrics('observability_gap', {
+    attributionScope: 'onboarding', missingLedgerEvents: 2, gapAfterMinutes: 10,
+    transcript: 'private text', familyName: 'Ada', extra: 1,
+  }), { attributionScope: 'onboarding', missingLedgerEvents: 2, gapAfterMinutes: 10 });
+  assertEquals(safeAlertMetrics('observability_gap', {
+    attributionScope: 'family', missingLedgerEvents: -1, gapAfterMinutes: '10', extra: 1,
+  }), {});
+  assertEquals(safeAlertMetrics('unpriced', {
+    aiCalls: '31', imageCalls: -1, scope: 'other', extra: 1,
+  }), {});
   assertEquals(safeAlertMetrics('unknown', { total: 1 }), {});
 });
 
