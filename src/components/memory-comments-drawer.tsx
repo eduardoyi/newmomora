@@ -15,6 +15,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
@@ -37,6 +39,9 @@ interface MemoryCommentsDrawerProps {
   onClose: () => void;
 }
 
+const COMMENTS_DRAWER_DISMISS_DISTANCE = 120;
+const COMMENTS_DRAWER_DISMISS_VELOCITY = 900;
+
 export function getCommentsKeyboardAvoidingBehavior(
   platform: string,
   isKeyboardVisible: boolean,
@@ -53,6 +58,11 @@ export function getCommentsDrawerBottomPadding(
   return isKeyboardVisible ? 0 : Math.max(bottomInset, spacing.md);
 }
 
+export function shouldDismissCommentsDrawer(translationY: number, velocityY: number) {
+  'worklet';
+  return translationY >= COMMENTS_DRAWER_DISMISS_DISTANCE || velocityY >= COMMENTS_DRAWER_DISMISS_VELOCITY;
+}
+
 export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryCommentsDrawerProps) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
@@ -66,6 +76,8 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
   const [reportComment, setReportComment] = useState<MemoryComment | null>(null);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const listRef = useRef<FlatList<MemoryComment>>(null);
+  const isClosingRef = useRef(false);
+  const drawerTranslateY = useSharedValue(0);
   const canModerate = canEditFamilyContent(role);
   const currentName = profile?.name ?? 'You';
 
@@ -83,12 +95,60 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
     };
   }, []);
 
+  useEffect(() => {
+    if (visible) {
+      isClosingRef.current = false;
+    }
+
+    drawerTranslateY.set(0);
+  }, [drawerTranslateY, visible]);
+
   const handleClose = () => {
+    if (isClosingRef.current) return;
+    isClosingRef.current = true;
     Keyboard.dismiss();
     setIsKeyboardVisible(false);
     setText('');
     onClose();
   };
+
+  const handleDrawerDragStart = () => {
+    Keyboard.dismiss();
+  };
+
+  const drawerDrag = Gesture.Pan()
+    .withTestId('comments-drawer-dismiss-pan')
+    // Keep intentional upward and horizontal drags from ever claiming the
+    // gesture; comments continue to own their own vertical scrolling below.
+    .activeOffsetY(8)
+    .failOffsetX([-30, 30])
+    .failOffsetY([-4, Number.MAX_SAFE_INTEGER])
+    .maxPointers(1)
+    .onStart(() => {
+      runOnJS(handleDrawerDragStart)();
+    })
+    .onUpdate((event) => {
+      drawerTranslateY.set(Math.max(0, event.translationY));
+    })
+    // `handleClose` deliberately gates concurrent close sources with a ref.
+    // eslint-disable-next-line react-hooks/refs
+    .onEnd((event) => {
+      if (shouldDismissCommentsDrawer(event.translationY, event.velocityY)) {
+        runOnJS(handleClose)();
+        return;
+      }
+
+      drawerTranslateY.set(withSpring(0));
+    })
+    .onFinalize((_event, success) => {
+      if (!success) {
+        drawerTranslateY.set(withSpring(0));
+      }
+    });
+
+  const animatedSheetStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: drawerTranslateY.get() }],
+  }));
 
   const authorName = (comment: MemoryComment) => {
     if (comment.user_id === user?.id) return currentName;
@@ -133,38 +193,63 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
       transparent
       visible={visible}
     >
-      <KeyboardAvoidingView
-        behavior={getCommentsKeyboardAvoidingBehavior(Platform.OS, isKeyboardVisible)}
-        style={styles.root}
-        testID="comments-keyboard-avoiding-view"
-      >
-        <Pressable
-          accessibilityLabel="Close comments"
-          accessibilityRole="button"
-          onPress={handleClose}
-          style={styles.backdrop}
-          testID="comments-drawer-backdrop"
-        />
-        <View
-          accessibilityViewIsModal
-          style={[
-            styles.sheet,
-            {
-              paddingBottom: getCommentsDrawerBottomPadding(
-                insets.bottom,
-                isKeyboardVisible,
-              ),
-            },
-          ]}
-          testID="comments-drawer"
+      {/* A Modal is a separate Android native window, so it needs its own
+          gesture root rather than relying on the app-level root. */}
+      <GestureHandlerRootView style={styles.root}>
+        <KeyboardAvoidingView
+          behavior={getCommentsKeyboardAvoidingBehavior(Platform.OS, isKeyboardVisible)}
+          style={styles.root}
+          testID="comments-keyboard-avoiding-view"
         >
-          <View style={styles.handle} />
-          <View style={styles.header}>
-            <Text style={styles.title}>Comments</Text>
-            {engagement.commentCount > 0 ? (
-              <Text style={styles.headerCount}>{engagement.commentCount}</Text>
-            ) : null}
-          </View>
+          <Pressable
+            accessibilityLabel="Close comments"
+            accessibilityRole="button"
+            onPress={handleClose}
+            style={styles.backdrop}
+            testID="comments-drawer-backdrop"
+          />
+          <Animated.View
+            accessibilityViewIsModal
+            style={[
+              styles.sheet,
+              animatedSheetStyle,
+              {
+                paddingBottom: getCommentsDrawerBottomPadding(
+                  insets.bottom,
+                  isKeyboardVisible,
+                ),
+              },
+            ]}
+            testID="comments-drawer"
+          >
+            <GestureDetector gesture={drawerDrag}>
+              <View collapsable={false} style={styles.dragRegion} testID="comments-drawer-drag-region">
+                <View style={styles.handle} />
+                <View style={styles.header}>
+                  <Text style={styles.title}>Comments</Text>
+                  <View style={styles.headerActions}>
+                    {engagement.commentCount > 0 ? (
+                      <Text style={styles.headerCount}>{engagement.commentCount}</Text>
+                    ) : null}
+                    <Pressable
+                      accessibilityLabel="Close comments"
+                      accessibilityRole="button"
+                      hitSlop={8}
+                      onPress={handleClose}
+                      style={styles.closeButton}
+                      testID="comments-drawer-close"
+                    >
+                      <SymbolView
+                        fallback={<Text style={styles.closeButtonFallback}>×</Text>}
+                        name={{ ios: 'xmark', android: 'close' }}
+                        size={18}
+                        tintColor={colors.ink2}
+                      />
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            </GestureDetector>
 
           {contentSafety.isLoading || engagement.areCommentsLoading ? (
             <View style={styles.centered}>
@@ -294,45 +379,46 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
           {engagement.addCommentError ? (
             <Text style={styles.composerError}>Could not post comment. Please try again.</Text>
           ) : null}
-        </View>
-        <ContentActionSheet
-          actions={actionComment ? [
-            ...(canDeleteComment(actionComment) ? [{
-              danger: true,
-              label: 'Delete comment',
-              onPress: () => confirmDelete(actionComment),
-              testID: 'comment-action-delete',
-            }] : []),
-            ...(!contentSafety.hasActiveReport('comment', actionComment.id) ? [{
-              danger: true,
-              label: 'Report comment',
-              onPress: () => setReportComment(actionComment),
-              testID: 'comment-action-report',
-            }] : []),
-          ] : []}
-          onClose={() => setActionComment(null)}
-          testID="comment-actions-sheet"
-          visible={Boolean(
-            actionComment &&
-            (canDeleteComment(actionComment) || !contentSafety.hasActiveReport('comment', actionComment.id))
-          )}
-        />
-        {reportComment ? (
-          <ReportSheet
-            isSubmitting={contentSafety.isReporting}
-            onClose={() => setReportComment(null)}
-            onSubmit={(reason, note) => contentSafety.report({
-              targetType: 'comment',
-              targetId: reportComment.id,
-              reason,
-              note,
-            }).then(() => undefined)}
-            targetLabel="comment"
-            targetType="comment"
-            visible
+          </Animated.View>
+          <ContentActionSheet
+            actions={actionComment ? [
+              ...(canDeleteComment(actionComment) ? [{
+                danger: true,
+                label: 'Delete comment',
+                onPress: () => confirmDelete(actionComment),
+                testID: 'comment-action-delete',
+              }] : []),
+              ...(!contentSafety.hasActiveReport('comment', actionComment.id) ? [{
+                danger: true,
+                label: 'Report comment',
+                onPress: () => setReportComment(actionComment),
+                testID: 'comment-action-report',
+              }] : []),
+            ] : []}
+            onClose={() => setActionComment(null)}
+            testID="comment-actions-sheet"
+            visible={Boolean(
+              actionComment &&
+              (canDeleteComment(actionComment) || !contentSafety.hasActiveReport('comment', actionComment.id))
+            )}
           />
-        ) : null}
-      </KeyboardAvoidingView>
+          {reportComment ? (
+            <ReportSheet
+              isSubmitting={contentSafety.isReporting}
+              onClose={() => setReportComment(null)}
+              onSubmit={(reason, note) => contentSafety.report({
+                targetType: 'comment',
+                targetId: reportComment.id,
+                reason,
+                note,
+              }).then(() => undefined)}
+              targetLabel="comment"
+              targetType="comment"
+              visible
+            />
+          ) : null}
+        </KeyboardAvoidingView>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -359,6 +445,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     width: 40,
   },
+  dragRegion: { minHeight: 44 },
   header: {
     alignItems: 'center',
     borderBottomColor: colors.border,
@@ -369,7 +456,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   title: { color: colors.ink, fontFamily: fonts.displayMedium, fontSize: 18 },
+  headerActions: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
   headerCount: { color: colors.ink3, fontFamily: fonts.sansBold, fontSize: 13 },
+  closeButton: { alignItems: 'center', height: 36, justifyContent: 'center', width: 36 },
+  closeButtonFallback: { color: colors.ink2, fontSize: 20, lineHeight: 20 },
   centered: { alignItems: 'center', flex: 1, gap: spacing.sm, justifyContent: 'center' },
   errorText: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 14 },
   retryText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 14 },
