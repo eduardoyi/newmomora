@@ -18,7 +18,8 @@ type BridgeOperation =
   | 'publish'
   | 'fail'
   | 'reconcile'
-  | 'retrigger_memories';
+  | 'retrigger_memories'
+  | 'record_usage';
 
 interface BridgeRequest {
   operation: BridgeOperation;
@@ -29,6 +30,17 @@ interface BridgeRequest {
   outputKey?: string;
   uploadToken?: string;
   errorCode?: string;
+  aiCallId?: string;
+  usageRequestId?: string;
+  usage?: unknown;
+  success?: boolean;
+  billingStatus?: 'known' | 'unknown';
+  protocolVersion?: number;
+  pricingVersion?: string;
+  costBasis?: 'provider_usage' | 'unpriced';
+  costIsComplete?: boolean;
+  estimatedCostUsd?: number;
+  aiOperation?: 'image_generation';
 }
 
 interface PortraitWorkflowJobInputRow {
@@ -39,6 +51,8 @@ interface PortraitWorkflowJobInputRow {
   source_photo_key: string | null;
   style_reference_key: string | null;
   portrait_prompt: string | null;
+  usage_request_id?: string | null;
+  usage_protocol_version?: number | null;
 }
 
 interface PublishOutcome {
@@ -122,8 +136,64 @@ export function toPortraitWorkflowJobInput(data: PortraitWorkflowJobInputRow) {
       sourcePhotoKey: data.source_photo_key,
       styleReferenceKey: data.style_reference_key,
       prompt: data.portrait_prompt,
+      usageRequestId: data.usage_request_id ?? null,
+      providerProtocolVersion: data.usage_protocol_version ?? null,
     },
   };
+}
+
+export function toPortraitProviderReservationResult(data: unknown): {
+  outcome: 'reserved_now' | 'already_reserved' | 'denied';
+  protocolVersion: 2;
+} {
+  if (Array.isArray(data)) return toPortraitProviderReservationResult(data[0]);
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const value = data as Record<string, unknown>;
+    if (value.outcome === 'reserved_now' || value.outcome === 'already_reserved' || value.outcome === 'denied') {
+      return { outcome: value.outcome, protocolVersion: 2 };
+    }
+  }
+  return { outcome: data === true ? 'reserved_now' : 'already_reserved', protocolVersion: 2 };
+}
+
+function allowlistedUsage(value: unknown): Record<string, number> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const allowed = ['inputTextTokens', 'inputImageTokens', 'inputCachedTokens', 'outputTextTokens', 'outputImageTokens'];
+  const result: Record<string, number> = {};
+  for (const key of allowed) {
+    const candidate = source[key];
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0) result[key] = candidate;
+  }
+  return result;
+}
+
+function detailedProviderUsage(body: BridgeRequest): Record<string, number | string> {
+  const usage = allowlistedUsage(body.usage);
+  return {
+    provider: body.provider!,
+    ...(usage?.inputTextTokens !== undefined ? { input_text_tokens: usage.inputTextTokens } : {}),
+    ...(usage?.inputImageTokens !== undefined ? { input_image_tokens: usage.inputImageTokens } : {}),
+    ...(usage?.inputCachedTokens !== undefined ? { cached_input_tokens: usage.inputCachedTokens } : {}),
+    ...(usage?.outputTextTokens !== undefined ? { output_text_tokens: usage.outputTextTokens } : {}),
+    ...(usage?.outputImageTokens !== undefined ? { output_image_tokens: usage.outputImageTokens } : {}),
+  };
+}
+
+function isValidUsageEvent(body: BridgeRequest): boolean {
+  const expectedModel = body.provider === 'primary' ? 'gpt-image-2' : 'gpt-image-1.5';
+  return (body.provider === 'primary' || body.provider === 'fallback') && body.model === expectedModel &&
+    body.attemptNumber === 1 && typeof body.aiCallId === 'string' && body.aiCallId.length <= 200 &&
+    typeof body.success === 'boolean' && (body.billingStatus === undefined || body.billingStatus === 'known' || body.billingStatus === 'unknown') &&
+    body.aiOperation === 'image_generation' &&
+    (body.pricingVersion === undefined || (typeof body.pricingVersion === 'string' && body.pricingVersion.length <= 100)) &&
+    (body.costBasis === undefined || body.costBasis === 'provider_usage' || body.costBasis === 'unpriced') &&
+    (body.costIsComplete === undefined || typeof body.costIsComplete === 'boolean') &&
+    (body.estimatedCostUsd === undefined || body.estimatedCostUsd === null || isNonNegativeNumber(body.estimatedCostUsd));
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 export function mapPortraitPublishOutcome(outcome: PublishOutcome | undefined) {
@@ -240,7 +310,7 @@ export async function handleWorkflowPortraitBridge(
   }
   const operations = new Set<BridgeOperation>([
     'get_input', 'reserve_attempt', 'authorize_upload', 'record_upload_complete',
-    'publish', 'fail', 'reconcile', 'retrigger_memories',
+    'publish', 'fail', 'reconcile', 'retrigger_memories', 'record_usage',
   ]);
   if (!body || typeof body.jobId !== 'string' || !UUID_PATTERN.test(body.jobId) ||
     !operations.has(body.operation)) {
@@ -266,7 +336,7 @@ export async function handleWorkflowPortraitBridge(
       case 'get_input': {
         const { data, error } = await supabase
           .from('portrait_generation_jobs')
-          .select('id, status, output_key, old_portrait_key, provider_deadline_at, source_photo_key, style_reference_key, portrait_prompt')
+          .select('id, status, output_key, old_portrait_key, provider_deadline_at, source_photo_key, style_reference_key, portrait_prompt, usage_request_id, usage_protocol_version')
           .eq('id', body.jobId)
           .maybeSingle();
         if (error) throw error;
@@ -291,13 +361,67 @@ export async function handleWorkflowPortraitBridge(
           body.model !== expectedModel || body.attemptNumber !== 1) {
           return errorResponse('Invalid provider', 400, 'validation_error');
         }
-        const { data, error } = await supabase.rpc('reserve_portrait_generation_provider_attempt', {
-          p_job_id: body.jobId,
-          p_provider: body.provider,
-          p_attempt_number: 1,
-        });
+        const { data: job, error: jobError } = await supabase
+          .from('portrait_generation_jobs')
+          .select('usage_request_id, usage_protocol_version')
+          .eq('id', body.jobId)
+          .maybeSingle();
+        if (jobError || !job) throw jobError ?? new Error('Job not found');
+        const isV2 = job.usage_protocol_version === 2;
+        if (isV2 && (!body.usageRequestId || !UUID_PATTERN.test(body.usageRequestId) || body.usageRequestId !== job.usage_request_id || body.protocolVersion !== 2)) {
+          return jsonResponse({ outcome: 'denied', protocolVersion: 2 });
+        }
+        const { data, error } = isV2
+          ? await supabase.rpc('reserve_ai_image_provider_attempt_v2', {
+            p_request_id: job.usage_request_id,
+            p_job_kind: 'portrait',
+            p_job_id: body.jobId,
+            p_provider: body.provider,
+            p_attempt_number: body.attemptNumber,
+          })
+          : await supabase.rpc('reserve_portrait_generation_provider_attempt', {
+            p_job_id: body.jobId,
+            p_provider: body.provider,
+            p_attempt_number: 1,
+          });
         if (error) throw error;
-        return jsonResponse({ reserved: Boolean(data) });
+        return jsonResponse(toPortraitProviderReservationResult(data));
+      }
+      case 'record_usage': {
+        if (!isValidUsageEvent(body)) {
+          return errorResponse('Invalid usage event', 400, 'validation_error');
+        }
+        const isV2 = Boolean(body.usageRequestId && UUID_PATTERN.test(body.usageRequestId) && body.protocolVersion === 2);
+        if (isV2 && body.aiCallId !== `${body.usageRequestId}:${body.provider}:${body.attemptNumber}`) return errorResponse('Invalid usage event', 400, 'validation_error');
+        if (!isV2 && (body.usageRequestId !== null && body.usageRequestId !== undefined ||
+          (body.protocolVersion !== undefined && body.protocolVersion !== 1) || body.aiCallId !== `${body.jobId}:${body.provider}:${body.attemptNumber}`)) {
+          return errorResponse('Invalid usage event', 400, 'validation_error');
+        }
+        let error: { message?: string } | null = null;
+        if (isV2) {
+          ({ error } = await supabase.rpc('record_ai_usage_event', {
+            p_ai_call_id: body.aiCallId, p_usage_request_id: body.usageRequestId, p_job_kind: 'portrait', p_job_id: body.jobId,
+            p_provider: body.provider, p_attempt_number: body.attemptNumber, p_operation: 'portrait', p_model: body.model,
+            p_provider_usage: allowlistedUsage(body.usage), p_success: body.success, p_billing_status: body.billingStatus ?? 'unknown',
+            p_pricing_version: body.pricingVersion ?? null, p_cost_basis: body.costBasis ?? 'unpriced', p_cost_is_complete: body.costIsComplete ?? false,
+            p_estimated_cost_usd: body.estimatedCostUsd ?? null, p_input_text_tokens: allowlistedUsage(body.usage)?.inputTextTokens ?? null,
+            p_input_image_tokens: allowlistedUsage(body.usage)?.inputImageTokens ?? null, p_cached_input_tokens: allowlistedUsage(body.usage)?.inputCachedTokens ?? null,
+            p_output_text_tokens: allowlistedUsage(body.usage)?.outputTextTokens ?? null, p_output_image_tokens: allowlistedUsage(body.usage)?.outputImageTokens ?? null,
+            p_audio_seconds: null,
+          }));
+        } else {
+          const { data: job, error: jobError } = await supabase.from('portrait_generation_jobs')
+            .select('family_id, actor_user_id, usage_request_id, usage_protocol_version').eq('id', body.jobId).maybeSingle();
+          if (jobError || !job || job.usage_protocol_version === 2 || job.usage_request_id) return errorResponse('Invalid usage event', 400, 'validation_error');
+          ({ error } = await supabase.rpc('record_ai_usage_event_detailed', {
+            p_ai_call_id: body.aiCallId, p_usage_request_id: null, p_family_id: job.family_id, p_actor_user_id: job.actor_user_id,
+            p_operation: 'portrait', p_model: body.model, p_success: body.success, p_provider_usage: detailedProviderUsage(body),
+            p_estimated_cost_usd: body.estimatedCostUsd ?? null, p_cost_basis: body.costBasis ?? 'unpriced',
+            p_billing_status: body.billingStatus ?? 'unknown', p_cost_is_complete: body.costIsComplete ?? false, p_pricing_version: body.pricingVersion ?? null,
+          }));
+        }
+        if (error) throw error;
+        return jsonResponse({ recorded: true });
       }
       case 'authorize_upload': {
         if (typeof body.outputKey !== 'string' || !body.outputKey) {

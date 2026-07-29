@@ -5,11 +5,13 @@ import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useNotificationResponseRouting } from '@/hooks/useNotifications';
+import { useAiUsageLimitNotices } from '@/hooks/useAiUsageLimitNotices';
 import { noFamilyRoute } from '@/lib/routes';
 
 export default function AppLayout() {
   const { session, isLoading: isAuthLoading } = useAuth();
   const { familyId, isLoading: isFamilyLoading } = useFamily();
+  useAiUsageLimitNotices();
   // Deep-link routing for tapped push notifications (plan §10) -- lives at
   // the app root so it's active for the whole authenticated session
   // regardless of which screen is focused. `ready` gates the cold-start

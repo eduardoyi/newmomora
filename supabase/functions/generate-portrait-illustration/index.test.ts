@@ -135,6 +135,7 @@ async function withCloudflarePortraitEnv(run: () => Promise<void>): Promise<void
 function cloudflarePortraitClient(input: {
   activeJob?: { id: string; attempt_id: string; started_at: string } | null;
   version?: Record<string, unknown>;
+  beginOutcome?: Record<string, unknown>;
 }) {
   const sourceKey = `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/photo.jpg`;
   const version = {
@@ -196,6 +197,7 @@ function cloudflarePortraitClient(input: {
     },
     rpc: async (name: string) => {
       rpcCalls.push(name);
+      if (name === "begin_portrait_generation_usage" && input.beginOutcome) return { data: input.beginOutcome, error: null };
       if (name === "claim_family_member_portrait_generation") return { data: version, error: null };
       return { data: 1, error: null };
     },
@@ -229,6 +231,30 @@ Deno.test("portrait Cloudflare dispatcher reuses and re-dispatches a fresh match
   });
 });
 
+Deno.test("portrait already_queued admission returns the durable v1 job without creating or dispatching work", async () => {
+  await withCloudflarePortraitEnv(async () => {
+    const existingJobId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const mock = cloudflarePortraitClient({
+      // Make the initial pre-admission reuse check miss, then let the
+      // transactional usage gate report the canonical durable winner.
+      activeJob: { id: existingJobId, attempt_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", started_at: new Date(Date.now() - 6 * 60_000).toISOString() },
+      beginOutcome: { outcome: "already_queued", request_id: null, existing_job_id: existingJobId },
+    });
+    let dispatched = false;
+    const response = await handleGeneratePortraitIllustration(authenticatedRequest(), {
+      getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+      getCallerFamilyRole: async () => "manager",
+      createServiceClient: () => mock.client as never,
+      fetch: (async () => { dispatched = true; return new Response(null, { status: 202 }); }) as typeof fetch,
+    });
+    assertEquals(response.status, 202);
+    assertEquals(await response.json(), { success: true, queued: true });
+    assertEquals(mock.inserted.length, 0);
+    assertEquals(mock.rpcCalls, ["begin_portrait_generation_usage"]);
+    assertEquals(dispatched, false);
+  });
+});
+
 Deno.test("portrait Cloudflare dispatch ambiguity retains the durable job and a later recovery reuses its exact ID", async () => {
   await withCloudflarePortraitEnv(async () => {
     const initial = cloudflarePortraitClient({});
@@ -243,6 +269,7 @@ Deno.test("portrait Cloudflare dispatch ambiguity retains the durable job and a 
     assertEquals(await firstResponse.json(), { success: true, queued: true });
     assertEquals(initial.inserted.length, 1);
     assertEquals(initial.rpcCalls, [
+      "begin_portrait_generation_usage",
       "claim_family_member_portrait_generation",
       "supersede_portrait_generation_workflow_jobs",
     ]);
@@ -406,6 +433,7 @@ Deno.test("generate-portrait-illustration fails the claimed attempt before its r
   assertEquals(await response.json(), { success: true, queued: true });
   await backgroundTask;
   assertEquals(rpcCalls, [
+    "begin_portrait_generation_usage",
     "claim_family_member_portrait_generation",
     "fail_family_member_portrait_generation",
   ]);
@@ -545,6 +573,9 @@ function buildRetriggerClient(
       return builder;
     },
     rpc: async (name: string) => {
+      if (name === "begin_portrait_generation_usage") {
+        return { data: { outcome: "enforcement_bypassed" }, error: null };
+      }
       if (name === "claim_family_member_portrait_generation") {
         return { data: version, error: null };
       }

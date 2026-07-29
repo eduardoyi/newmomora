@@ -32,6 +32,31 @@ export interface GeneratePortraitResponse {
   queued: true;
 }
 
+interface UsageBeginResult {
+  outcome: 'admitted_new' | 'admitted_recovered' | 'already_preparing' | 'already_queued' | 'limit_rejected' | 'enforcement_bypassed';
+  request_id: string | null;
+  preparation_token: string | null;
+  preparation_ordinal: number | null;
+  preparation_input_updated_at: string | null;
+  existing_job_id: string | null;
+  scope: 'memory' | 'daily' | 'monthly' | null;
+  retry_after_iso: string | null;
+}
+
+function firstUsageBeginResult(data: unknown): UsageBeginResult | null {
+  const value = Array.isArray(data) ? data[0] : data;
+  return value && typeof value === 'object' ? value as UsageBeginResult : null;
+}
+
+function usageLimitResponse(result: UsageBeginResult): Response {
+  const retryAt = result.retry_after_iso ? Date.parse(result.retry_after_iso) : Number.NaN;
+  const seconds = Number.isFinite(retryAt) ? Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)) : 1;
+  return new Response(JSON.stringify({ error: 'Usage limit reached', code: 'USAGE_LIMIT_REACHED', scope: result.scope, retryAfterIso: result.retry_after_iso }), {
+    status: 429,
+    headers: { 'Content-Type': 'application/json', 'Retry-After': String(seconds) },
+  });
+}
+
 export interface GeneratePortraitDependencies {
   getAuthenticatedUser: typeof getAuthenticatedUser;
   createServiceClient: typeof createServiceClient;
@@ -282,7 +307,42 @@ export async function handleGeneratePortraitIllustration(
     }
   }
 
-  const attemptId = crypto.randomUUID();
+  const usageIntent = getPortraitGenerationRequestIntent({
+    illustratedProfileKey: version.illustrated_profile_key,
+    illustratedProfileStatus: version.illustrated_profile_status,
+    generationToken: version.generation_token,
+    createdAt: version.created_at,
+  });
+  const requestedUsageId = crypto.randomUUID();
+  const { data: usageBeginData, error: usageBeginError } = await supabase.rpc(
+    'begin_portrait_generation_usage',
+    { p_portrait_version_id: version.id, p_request_intent: usageIntent, p_request_id: requestedUsageId, p_actor_user_id: user.id },
+  );
+  if (usageBeginError) {
+    console.error('generate-portrait-illustration usage admission failed', usageBeginError.code ?? 'unknown');
+    return errorResponse('Failed to start portrait generation', 500, 'internal_error');
+  }
+  const usageBegin = firstUsageBeginResult(usageBeginData);
+  if (usageBegin?.outcome === 'limit_rejected') return usageLimitResponse(usageBegin);
+  if (usageBegin?.outcome === 'already_preparing') {
+    return backend === 'cloudflare'
+      ? jsonResponse({ success: true, queued: true } satisfies GeneratePortraitResponse, 202)
+      : errorResponse('Portrait generation already in progress', 409, 'GENERATION_IN_PROGRESS');
+  }
+  if (usageBegin?.outcome === 'already_queued') {
+    // `existing_job_id` is authoritative from the admission transaction and
+    // works for grandfathered v1 jobs whose usage request id is null.
+    // Never prepare, claim, insert, or dispatch from this branch.
+    if (backend === 'cloudflare' && usageBegin.existing_job_id) {
+      return jsonResponse({ success: true, queued: true } satisfies GeneratePortraitResponse, 202);
+    }
+    return errorResponse('Portrait generation already in progress', 409, 'GENERATION_IN_PROGRESS');
+  }
+  const usageRequestId = usageBegin?.request_id ?? null;
+  const preparationToken = usageBegin?.preparation_token ?? null;
+  const preparationOrdinal = usageBegin?.preparation_ordinal ?? null;
+  const preparationInputUpdatedAt = usageBegin?.preparation_input_updated_at ?? version.updated_at;
+  const attemptId = usageRequestId ?? crypto.randomUUID();
   const portraitKey = buildPortraitVersionAttemptKey(
     parsedPhotoKey.ownerUserId,
     member.id,
@@ -325,12 +385,7 @@ export async function handleGeneratePortraitIllustration(
         family_id: version.family_id,
         actor_user_id: user.id,
         attempt_id: attemptId,
-        request_intent: getPortraitGenerationRequestIntent({
-          illustratedProfileKey: version.illustrated_profile_key,
-          illustratedProfileStatus: version.illustrated_profile_status,
-          generationToken: version.generation_token,
-          createdAt: version.created_at,
-        }),
+        request_intent: usageIntent,
         status: 'queued',
         started_at: new Date().toISOString(),
         provider_deadline_at: new Date(Date.now() + PORTRAIT_WORKFLOW_LEASE_MS).toISOString(),
@@ -339,9 +394,20 @@ export async function handleGeneratePortraitIllustration(
         portrait_prompt: prompt,
         output_key: portraitKey,
         old_portrait_key: version.illustrated_profile_key,
+        ...(usageRequestId ? { usage_request_id: usageRequestId, usage_protocol_version: 2 } : {}),
       });
       if (jobError) throw jobError;
       jobCreated = true;
+      if (usageRequestId && preparationToken) {
+        const { data: promoted, error: promotionError } = await supabase.rpc('promote_ai_image_preparation', {
+          p_request_id: usageRequestId,
+          p_preparation_token: preparationToken,
+          p_preparation_ordinal: preparationOrdinal,
+          p_preparation_input_updated_at: preparationInputUpdatedAt,
+          p_job_id: attemptId,
+        });
+        if (promotionError || !promoted) throw new Error('Failed to promote portrait usage preparation');
+      }
       await dispatchPortraitWorkflow(dependencies.fetch, attemptId);
       return jsonResponse({ success: true, queued: true } satisfies GeneratePortraitResponse, 202);
     } catch (error) {
@@ -361,6 +427,15 @@ export async function handleGeneratePortraitIllustration(
         target_version_id: version.id,
         attempt_token: attemptId,
       });
+      if (usageRequestId && preparationToken) {
+        await supabase.rpc('release_ai_image_preparation', {
+          p_request_id: usageRequestId,
+          p_preparation_token: preparationToken,
+          p_preparation_ordinal: preparationOrdinal,
+          p_preparation_input_updated_at: preparationInputUpdatedAt,
+          p_reason: 'dispatch_failed',
+        });
+      }
       return errorResponse('Failed to queue portrait generation', 500, 'GENERATION_DISPATCH_FAILED');
     }
   }
@@ -425,6 +500,16 @@ export async function handleGeneratePortraitIllustration(
         MAX_PORTRAIT_REFERENCE_EDGE,
         styleReference.contentType,
       );
+      if (usageRequestId && preparationToken) {
+        const { data: promoted, error: promotionError } = await supabase.rpc('promote_ai_image_preparation', {
+          p_request_id: usageRequestId,
+          p_preparation_token: preparationToken,
+          p_preparation_ordinal: preparationOrdinal,
+          p_preparation_input_updated_at: preparationInputUpdatedAt,
+          p_job_id: null,
+        });
+        if (promotionError || !promoted) throw new Error('Failed to promote portrait usage preparation');
+      }
       const portraitBytes = await dependencies.editImageWithReferences(prompt, [
         { bytes: cappedStyle.bytes, contentType: cappedStyle.contentType, filename: 'reference-1-style.png' },
         { bytes: cappedPhoto.bytes, contentType: cappedPhoto.contentType, filename: 'reference-2-person-photo.jpg' },
@@ -433,6 +518,29 @@ export async function handleGeneratePortraitIllustration(
         outputFormat: 'webp',
         outputCompression: 85,
         quality: 'medium',
+        ...(usageRequestId
+          ? {
+            beforeProviderAttempt: async (attempt: {
+              provider: 'primary' | 'fallback'; model: string; attemptNumber: number;
+            }) => {
+              const { data, error } = await supabase.rpc('reserve_legacy_ai_image_provider_attempt_v2', {
+                p_request_id: usageRequestId,
+                p_target_kind: 'portrait_version',
+                p_target_id: version.id,
+                p_preparation_token: preparationToken,
+                p_preparation_ordinal: preparationOrdinal,
+                p_preparation_input_updated_at: preparationInputUpdatedAt,
+                p_provider: attempt.provider,
+                p_attempt_number: attempt.attemptNumber,
+              });
+              const outcome = Array.isArray(data) ? data[0] : data;
+              if (error || outcome?.outcome !== 'reserved_now') {
+                throw new Error('Portrait provider attempt was not authorized');
+              }
+            },
+          }
+          : {}),
+        usageContext: { familyId: version.family_id, actorUserId: user.id, usageRequestId, operation: 'portrait' },
       });
       await dependencies.putObjectBytes(portraitKey, portraitBytes, 'image/webp');
       uploadedAttempt = true;
@@ -464,6 +572,15 @@ export async function handleGeneratePortraitIllustration(
         target_version_id: version.id,
         attempt_token: attemptId,
       });
+      if (usageRequestId && preparationToken) {
+        await supabase.rpc('release_ai_image_preparation', {
+          p_request_id: usageRequestId,
+          p_preparation_token: preparationToken,
+          p_preparation_ordinal: preparationOrdinal,
+          p_preparation_input_updated_at: preparationInputUpdatedAt,
+          p_reason: 'preparation_failed',
+        });
+      }
       if (uploadedAttempt) await dependencies.deleteObject(portraitKey).catch(() => undefined);
       await retriggerPendingIllustrations();
     } finally {

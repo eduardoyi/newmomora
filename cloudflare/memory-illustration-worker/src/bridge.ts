@@ -3,6 +3,7 @@ import type {
   BridgeAuthorizeUploadResponse,
   BridgeFailResponse,
   BridgeOperation,
+  BridgeReserveAttemptResponse,
   BridgeRecordUploadCompleteResponse,
 } from './types';
 
@@ -21,7 +22,9 @@ export async function callBridgeAt<T>(
   operation: BridgeOperation,
   payload: Record<string, unknown>,
 ): Promise<T> {
-  const rawBody = JSON.stringify({ operation, ...payload });
+  // The signed bridge action is authoritative. Payload fields must never be
+  // able to replace it (for example a ledger's AI operation classification).
+  const rawBody = JSON.stringify({ ...payload, operation });
   const timestamp = String(Date.now());
   const nonce = crypto.randomUUID();
   const signature = await hmacSha256Hex(
@@ -63,6 +66,43 @@ export async function callBridge<T>(
     operation,
     payload,
   );
+}
+
+export async function reserveMemoryProviderAttempt(
+  env: Env,
+  payload: {
+    jobId: string;
+    usageRequestId: string;
+    provider: 'primary' | 'fallback';
+    model: 'gpt-image-2' | 'gpt-image-1.5';
+    attemptNumber: number;
+    aiCallId: string;
+  },
+): Promise<BridgeReserveAttemptResponse> {
+  const response = await callBridge<unknown>(env, 'reserve_attempt', { ...payload, protocolVersion: 2 });
+  if (!isRecord(response) || response.protocolVersion !== 2 ||
+    (response.outcome !== 'reserved_now' && response.outcome !== 'already_reserved' && response.outcome !== 'denied')) {
+    return invalidBridgeResponse();
+  }
+  return { outcome: response.outcome, protocolVersion: 2 };
+}
+
+export async function reserveMemoryProviderAttemptV1(
+  env: Env,
+  payload: {
+    jobId: string;
+    provider: 'primary' | 'fallback';
+    model: 'gpt-image-2' | 'gpt-image-1.5';
+    attemptNumber: number;
+  },
+): Promise<boolean> {
+  const response = await callBridge<unknown>(env, 'reserve_attempt', payload);
+  if (!isRecord(response) || typeof response.reserved !== 'boolean') return invalidBridgeResponse();
+  return response.reserved;
+}
+
+export async function recordMemoryUsage(env: Env, payload: Record<string, unknown>): Promise<void> {
+  await callBridge<unknown>(env, 'record_usage', payload);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

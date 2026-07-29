@@ -6,9 +6,13 @@ import {
   callBridge,
   BridgeError,
   failMemoryJob,
+  recordMemoryUsage,
   recordMemoryUploadComplete,
+  reserveMemoryProviderAttempt,
+  reserveMemoryProviderAttemptV1,
 } from './bridge';
-import { editImage, ImageProviderError } from './openai';
+import { editImageWithUsage, ImageProviderError } from './openai';
+import { IMAGE_PRICING_VERSION, priceImageUsage } from './pricing';
 import { loadIllustrationReferences } from './references';
 import {
   confirmExistingUploadWithLease,
@@ -20,11 +24,11 @@ import type {
   BridgeGetInputResponse,
   BridgePublishResponse,
   BridgeReconcileResponse,
-  BridgeReserveAttemptResponse,
   GenerationStepResult,
   IllustrationModel,
   WorkflowDispatchPayload,
   WorkflowJobInput,
+  WorkflowJobInputV2,
 } from './types';
 // This module is deliberately pure and is shared with the Supabase dispatcher
 // so both runtimes produce the exact same illustration prompt.
@@ -51,7 +55,8 @@ function errorCode(error: unknown): string {
   }
   if (
     error instanceof Error &&
-    ['NO_USABLE_REFERENCES', 'GENERATION_TIMEOUT', 'ATTEMPT_CAP_EXHAUSTED', 'INVALID_JOB_INPUT'].includes(error.message)
+    ['NO_USABLE_REFERENCES', 'GENERATION_TIMEOUT', 'ATTEMPT_CAP_EXHAUSTED', 'INVALID_JOB_INPUT',
+      'UNSUPPORTED_PROVIDER_PROTOCOL', 'PROVIDER_ATTEMPT_ALREADY_RESERVED', 'PROVIDER_ATTEMPT_DENIED'].includes(error.message)
   ) {
     return error.message;
   }
@@ -91,22 +96,67 @@ function assertDeadline(job: WorkflowJobInput): number {
   return deadlineMs;
 }
 
+function isV2Job(job: WorkflowJobInput): job is WorkflowJobInputV2 {
+  return job.providerProtocolVersion === 2 && typeof job.usageRequestId === 'string';
+}
+
 async function reserveProviderAttempt(
   env: Env,
-  jobId: string,
+  job: WorkflowJobInput,
   provider: 'primary' | 'fallback',
   model: IllustrationModel,
   attemptNumber: number,
 ): Promise<void> {
-  const reservation = await callBridgeWithRetry<BridgeReserveAttemptResponse>(env, 'reserve_attempt', {
-    jobId,
-    provider,
-    model,
-    attemptNumber,
-  });
-  if (!reservation.reserved) {
-    throw new NonRetryableError('ATTEMPT_CAP_EXHAUSTED');
+  if (isV2Job(job)) {
+    const reservation = await callTypedBridgeWithRetry(() => reserveMemoryProviderAttempt(env, {
+      jobId: job.jobId,
+      usageRequestId: job.usageRequestId,
+      provider,
+      model,
+      attemptNumber,
+      aiCallId: `${job.usageRequestId}:${provider}:${attemptNumber}`,
+    }));
+    if (reservation.outcome !== 'reserved_now') {
+      throw new NonRetryableError(reservation.outcome === 'already_reserved'
+        ? 'PROVIDER_ATTEMPT_ALREADY_RESERVED'
+        : 'PROVIDER_ATTEMPT_DENIED');
+    }
+    return;
   }
+  const reserved = await callTypedBridgeWithRetry(() => reserveMemoryProviderAttemptV1(env, {
+    jobId: job.jobId, provider, model, attemptNumber,
+  }));
+  if (!reserved) throw new NonRetryableError('ATTEMPT_CAP_EXHAUSTED');
+}
+
+function queueImageUsageBestEffort(
+  env: Env,
+  job: WorkflowJobInput,
+  provider: 'primary' | 'fallback',
+  model: IllustrationModel,
+  attemptNumber: number,
+  usage: import('./types').ImageUsage | null,
+  success: boolean,
+): void {
+  const pricing = priceImageUsage(model, usage);
+  const usageRequestId = isV2Job(job) ? job.usageRequestId : null;
+  const aiCallId = `${usageRequestId ?? job.jobId}:${provider}:${attemptNumber}`;
+  void recordMemoryUsage(env, {
+      jobId: job.jobId,
+      usageRequestId,
+      protocolVersion: isV2Job(job) ? 2 : 1,
+      aiCallId,
+      provider,
+      model,
+      attemptNumber,
+      aiOperation: 'image_generation',
+      success,
+      usage,
+      pricingVersion: IMAGE_PRICING_VERSION,
+      ...pricing,
+    }).catch(() => {
+    // Observability is intentionally best effort; never alter publication.
+  });
 }
 
 async function callBridgeWithRetry<T>(
@@ -183,7 +233,7 @@ async function runImageAttempt(
   attemptNumber: number,
   deadlineMs: number,
 ): Promise<GenerationStepResult> {
-  await reserveProviderAttempt(env, job.jobId, provider, model, attemptNumber);
+  await reserveProviderAttempt(env, job, provider, model, attemptNumber);
   const remainingMs = providerAttemptTimeoutMs(provider, deadlineMs);
   if (remainingMs <= 0) {
     throw new NonRetryableError('GENERATION_TIMEOUT');
@@ -192,15 +242,22 @@ async function runImageAttempt(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), remainingMs);
   try {
-    const bytes = await editImage(
-      env,
-      model,
-      prompt,
-      references,
-      'medium',
-      controller.signal,
-    );
-    await uploadOutputWithLease(env, job.jobId, job.outputKey, bytes, model);
+    let result: Awaited<ReturnType<typeof editImageWithUsage>>;
+    try {
+      result = await editImageWithUsage(
+        env,
+        model,
+        prompt,
+        references,
+        'medium',
+        controller.signal,
+      );
+    } catch (error) {
+      queueImageUsageBestEffort(env, job, provider, model, attemptNumber, null, false);
+      throw error;
+    }
+    queueImageUsageBestEffort(env, job, provider, model, attemptNumber, result.usage, true);
+    await uploadOutputWithLease(env, job.jobId, job.outputKey, result.bytes, model);
     return { outputKey: job.outputKey, model };
   } finally {
     clearTimeout(timeout);
@@ -209,7 +266,8 @@ async function runImageAttempt(
 
 export async function generateAndUpload(env: Env, jobId: string): Promise<GenerationStepResult> {
   const { job } = await callBridgeWithRetry<BridgeGetInputResponse>(env, 'get_input', { jobId });
-  if (job.jobId !== jobId || !job.outputKey) {
+  if (job.jobId !== jobId || !job.outputKey ||
+    (job.providerProtocolVersion !== undefined && job.providerProtocolVersion !== 1 && !isV2Job(job))) {
     throw new NonRetryableError('INVALID_JOB_INPUT');
   }
 

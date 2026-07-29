@@ -136,10 +136,10 @@ describe('portrait versions service integration', () => {
     );
     expect(mockedInvoke).toHaveBeenCalledWith('generate-portrait-illustration', {
       portraitVersionId: 'version-1',
-    });
+    }, 'portrait_version');
     expect(mockedInvoke).toHaveBeenCalledWith('generate-portrait-illustration', {
       portraitVersionId: 'version-2',
-    });
+    }, 'portrait_version');
     expect(mockedInvoke).toHaveBeenCalledWith('delete-portrait-version', {
       portraitVersionId: 'version-1',
     });

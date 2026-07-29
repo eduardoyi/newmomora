@@ -3,9 +3,67 @@ const DEFAULT_TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe';
 const PRIMARY_IMAGE_MODEL = 'gpt-image-2';
 const FALLBACK_IMAGE_MODEL = 'gpt-image-1.5';
 const MODELS_SUPPORTING_INPUT_FIDELITY = new Set([FALLBACK_IMAGE_MODEL]);
+import { normalizeOpenAiUsage, priceOpenAiUsage } from './ai-pricing.ts';
+
+export interface AiUsageContext {
+  familyId: string;
+  actorUserId: string;
+  usageRequestId?: string | null;
+  operation: 'illustration' | 'portrait' | 'safety_chat' | 'emotion_chat' | 'emotion_vision' | 'transcription' | 'voice_cleanup';
+}
 
 export interface OpenAiRequestOptions {
   signal?: AbortSignal;
+  usageContext?: AiUsageContext;
+}
+
+/**
+ * A rejected telemetry write is deliberately observed before it is detached.
+ * This keeps non-EdgeRuntime environments (tests and local serving) from
+ * producing an unhandled rejection while preserving user-visible work.
+ */
+export function scheduleBestEffortUsageWrite(write: () => Promise<void>): void {
+  const task = Promise.resolve().then(write).catch(() => {
+    // Do not include provider errors or request content in this log.
+    console.error('ai usage recording failed');
+  });
+  const edgeRuntime = (globalThis as unknown as { EdgeRuntime?: { waitUntil(task: Promise<void>): void } }).EdgeRuntime;
+  if (edgeRuntime) edgeRuntime.waitUntil(task);
+  else void task;
+}
+
+/** Best-effort ledger write. It is intentionally detached from user work. */
+function recordUsage(context: AiUsageContext | undefined, input: {
+  aiCallId: string; model: string; success: boolean; usage?: unknown; knownAudioSeconds?: number;
+}): void {
+  if (!context) return;
+  const rawUsage = input.usage && typeof input.usage === 'object' && !Array.isArray(input.usage)
+    ? input.usage as Record<string, unknown>
+    : {};
+  const hasProviderAudioDuration = typeof rawUsage.audio_seconds === 'number' || typeof rawUsage.duration === 'number';
+  const pricing = priceOpenAiUsage(
+    input.model,
+    normalizeOpenAiUsage(input.usage, input.knownAudioSeconds),
+    { audioDurationIsEstimate: input.knownAudioSeconds !== undefined && !hasProviderAudioDuration },
+  );
+  scheduleBestEffortUsageWrite(async () => {
+      const { createServiceClient } = await import('./supabase-admin.ts');
+      await createServiceClient().rpc('record_ai_usage_event_detailed', {
+        p_ai_call_id: input.aiCallId,
+        p_usage_request_id: context.usageRequestId ?? null,
+        p_family_id: context.familyId,
+        p_actor_user_id: context.actorUserId,
+        p_operation: context.operation,
+        p_model: input.model,
+        p_success: input.success,
+        p_provider_usage: pricing.dimensions,
+        p_estimated_cost_usd: pricing.estimatedCostUsd,
+        p_pricing_version: pricing.pricingVersion,
+        p_cost_basis: pricing.costBasis,
+        p_billing_status: pricing.billingStatus,
+        p_cost_is_complete: pricing.costIsComplete,
+      });
+  });
 }
 
 export type OpenAiImageQuality = 'low' | 'medium' | 'high' | 'auto';
@@ -28,6 +86,15 @@ export interface OpenAiImageRequestOptions extends OpenAiRequestOptions {
    * request budget. The first successful image wins and aborts the loser.
    */
   fallbackHedgeDelayMs?: number;
+  /**
+   * Durable provider-slot gate. It runs immediately before every actual
+   * provider fetch (including a fallback); throwing prevents that fetch.
+   */
+  beforeProviderAttempt?: (input: {
+    provider: 'primary' | 'fallback';
+    model: string;
+    attemptNumber: number;
+  }) => Promise<void>;
 }
 
 export { FALLBACK_IMAGE_MODEL, PRIMARY_IMAGE_MODEL };
@@ -76,6 +143,7 @@ export async function chatJson<T>(
   userPrompt: string,
   options: OpenAiRequestOptions = {},
 ): Promise<T> {
+  const aiCallId = crypto.randomUUID();
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -95,10 +163,12 @@ export async function chatJson<T>(
   });
 
   if (!response.ok) {
+    recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: false });
     throw new Error(`OpenAI chat failed (${response.status})`);
   }
 
   const payload = await response.json();
+  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: true, usage: payload.usage });
   const content = payload.choices?.[0]?.message?.content;
 
   if (!content || typeof content !== 'string') {
@@ -117,7 +187,9 @@ export async function chatJsonWithVision<T>(
   systemPrompt: string,
   userText: string | null,
   image: VisionImageInput,
+  options: OpenAiRequestOptions = {},
 ): Promise<T> {
+  const aiCallId = crypto.randomUUID();
   const userContent: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
 
   if (userText?.trim()) {
@@ -149,10 +221,12 @@ export async function chatJsonWithVision<T>(
   });
 
   if (!response.ok) {
+    recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: false });
     throw new Error(`OpenAI vision chat failed (${response.status})`);
   }
 
   const payload = await response.json();
+  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: true, usage: payload.usage });
   const content = payload.choices?.[0]?.message?.content;
 
   if (!content || typeof content !== 'string') {
@@ -165,7 +239,10 @@ export async function chatJsonWithVision<T>(
 export async function transcribeAudio(
   audioBase64: string,
   prompt: string,
+  options: OpenAiRequestOptions = {},
 ): Promise<string> {
+  const aiCallId = crypto.randomUUID();
+  const knownAudioSeconds = estimateAudioDurationSeconds(audioBase64);
   const audioBytes = base64ToBytes(audioBase64);
   const formData = new FormData();
   formData.append('file', new Blob([audioBytes], { type: 'audio/m4a' }), 'recording.m4a');
@@ -182,11 +259,13 @@ export async function transcribeAudio(
   });
 
   if (!response.ok) {
+    recordUsage(options.usageContext, { aiCallId, model: DEFAULT_TRANSCRIBE_MODEL, success: false, knownAudioSeconds });
     const errorBody = await response.text();
     throw new Error(`OpenAI transcription failed (${response.status}): ${errorBody.slice(0, 240)}`);
   }
 
   const payload = await response.json();
+  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_TRANSCRIBE_MODEL, success: true, usage: payload.usage, knownAudioSeconds });
   const text = payload.text;
 
   if (!text || typeof text !== 'string') {
@@ -201,6 +280,12 @@ async function generateImageWithModel(
   model: string,
   options: OpenAiImageRequestOptions = {},
 ): Promise<Uint8Array> {
+  const aiCallId = crypto.randomUUID();
+  await options.beforeProviderAttempt?.({
+    provider: model === PRIMARY_IMAGE_MODEL ? 'primary' : 'fallback',
+    model,
+    attemptNumber: 1,
+  });
   const response = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST',
     headers: {
@@ -221,6 +306,7 @@ async function generateImageWithModel(
   });
 
   if (!response.ok) {
+    recordUsage(options.usageContext, { aiCallId, model, success: false });
     console.error('OpenAI image generation failed', { model, status: response.status });
     // A second model cannot fix an invalid request, an authentication error,
     // or a policy refusal. Do not turn those into duplicate paid requests.
@@ -233,6 +319,7 @@ async function generateImageWithModel(
   }
 
   const payload = await response.json();
+  recordUsage(options.usageContext, { aiCallId, model, success: true, usage: payload.usage });
   const base64 = payload.data?.[0]?.b64_json;
 
   if (!base64 || typeof base64 !== 'string') {
@@ -282,6 +369,7 @@ async function editImagesWithModel(
   model: string,
   options: OpenAiImageRequestOptions = {},
 ): Promise<Uint8Array | null> {
+  const aiCallId = crypto.randomUUID();
   const formData = new FormData();
   formData.append('model', model);
   formData.append('prompt', prompt);
@@ -310,6 +398,11 @@ async function editImagesWithModel(
     );
   }
 
+  await options.beforeProviderAttempt?.({
+    provider: model === PRIMARY_IMAGE_MODEL ? 'primary' : 'fallback',
+    model,
+    attemptNumber: 1,
+  });
   const response = await fetch('https://api.openai.com/v1/images/edits', {
     method: 'POST',
     headers: {
@@ -320,6 +413,7 @@ async function editImagesWithModel(
   });
 
   if (!response.ok) {
+    recordUsage(options.usageContext, { aiCallId, model, success: false });
     console.error('OpenAI image edit failed', { model, status: response.status });
     // A second model cannot fix an invalid request, an authentication error,
     // or a policy refusal. Do not turn those into duplicate paid requests.
@@ -332,6 +426,7 @@ async function editImagesWithModel(
   }
 
   const payload = await response.json();
+  recordUsage(options.usageContext, { aiCallId, model, success: true, usage: payload.usage });
   const base64 = payload.data?.[0]?.b64_json;
 
   if (!base64 || typeof base64 !== 'string') {

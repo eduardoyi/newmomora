@@ -1,5 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert@1';
-import { handleProcessVoiceMemory } from './index.ts';
+import { handleProcessVoiceMemory, resolveVoiceFamilyId } from './index.ts';
 
 Deno.test('process-voice-memory rejects unauthenticated requests', async () => {
   const response = await handleProcessVoiceMemory(
@@ -36,4 +36,47 @@ Deno.test('process-voice-memory rejects empty audio', async () => {
     Deno.env.delete('SUPABASE_URL');
     Deno.env.delete('SUPABASE_ANON_KEY');
   }
+});
+
+Deno.test('legacy voice family resolution falls back from a stale active family to exactly one authorized membership', async () => {
+  const calls: string[] = [];
+  const result = await resolveVoiceFamilyId({
+    supabase: {
+      from(table) {
+        return {
+          select: () => ({
+            eq: () => table === 'user_profiles'
+              ? { maybeSingle: async () => ({ data: { active_family_id: 'stale-family' }, error: null }) }
+              : { limit: async () => ({ data: [{ family_id: 'remaining-family' }], error: null }) },
+          }),
+        };
+      },
+    },
+    userId: 'user-id',
+    getFamilyRole: async (familyId) => {
+      calls.push(familyId);
+      return familyId === 'remaining-family' ? 'editor' : null;
+    },
+  });
+  assertEquals(result, { familyId: 'remaining-family' });
+  assertEquals(calls, ['stale-family', 'remaining-family']);
+});
+
+Deno.test('legacy voice family resolution refuses ambiguous memberships after a stale active family', async () => {
+  const result = await resolveVoiceFamilyId({
+    supabase: {
+      from(table) {
+        return {
+          select: () => ({
+            eq: () => table === 'user_profiles'
+              ? { maybeSingle: async () => ({ data: { active_family_id: 'stale-family' }, error: null }) }
+              : { limit: async () => ({ data: [{ family_id: 'family-a' }, { family_id: 'family-b' }], error: null }) },
+          }),
+        };
+      },
+    },
+    userId: 'user-id',
+    getFamilyRole: async () => null,
+  });
+  assertEquals(result, { code: 'FAMILY_CONTEXT_REQUIRED' });
 });

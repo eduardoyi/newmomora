@@ -5,6 +5,7 @@ import {
   handleWorkflowPortraitBridge,
   isSignedPortraitWorkflowRequest,
   mapPortraitPublishOutcome,
+  toPortraitProviderReservationResult,
   toPortraitWorkflowJobInput,
 } from './index.ts';
 
@@ -82,7 +83,7 @@ function createHandlerClient(input: {
   portraitMemberId?: string;
   taggedMemoryIds?: string[];
 }) {
-  const calls = { rpc: [] as string[], memberIds: [] as string[] };
+  const calls = { rpc: [] as string[], rpcArgs: [] as Array<{ name: string; args: Record<string, unknown> }>, memberIds: [] as string[] };
   const job = {
     id: JOB_ID,
     status: input.status ?? 'queued',
@@ -141,8 +142,9 @@ function createHandlerClient(input: {
         }
         throw new Error(`Unexpected table ${table}`);
       },
-      rpc: async (name: string) => {
+      rpc: async (name: string, args: Record<string, unknown> = {}) => {
         calls.rpc.push(name);
+        calls.rpcArgs.push({ name, args });
         if (name === 'reserve_portrait_generation_provider_attempt') return { data: true, error: null };
         if (name === 'fail_portrait_generation_workflow_job') {
           return { data: [{ terminal_status: input.terminalStatus ?? 'failed', output_key: job.output_key }], error: null };
@@ -150,6 +152,7 @@ function createHandlerClient(input: {
         if (name === 'publish_portrait_generation_workflow_job' || name === 'reconcile_portrait_generation_workflow_job') {
           return { data: [input.publishOutcome ?? { published: true, already_published: false, old_key: job.old_portrait_key }], error: null };
         }
+        if (name === 'record_ai_usage_event' || name === 'record_ai_usage_event_detailed') return { data: true, error: null };
         throw new Error(`Unexpected RPC ${name}`);
       },
     },
@@ -236,7 +239,7 @@ Deno.test('portrait bridge handler validates narrow get, reserve, publish, fail,
       await signedRequest({ operation: 'reserve_attempt', jobId: JOB_ID, provider: 'primary', model: 'gpt-image-2', attemptNumber: 1 }, '33333333-3333-4333-8333-333333333335'),
       { createServiceClient: () => reserve.client as never },
     );
-    assertEquals(await reserveResponse.json(), { reserved: true });
+    assertEquals(await reserveResponse.json(), { outcome: 'reserved_now', protocolVersion: 2 });
     assertEquals(reserve.calls.rpc, ['reserve_portrait_generation_provider_attempt']);
 
     const alreadyPublished = createHandlerClient({ publishOutcome: { published: false, already_published: true, old_key: 'portraits/old.webp' } });
@@ -273,6 +276,103 @@ Deno.test('portrait bridge handler validates narrow get, reserve, publish, fail,
       { createServiceClient: () => superseded.client as never },
     );
     assertEquals(await reconcileResponse.json(), { published: false, oldPortraitKey: null, deleteOutput: true });
+  });
+});
+
+Deno.test('portrait bridge never lets an existing provider attempt enter OpenAI again', () => {
+  assertEquals(toPortraitProviderReservationResult(true), { outcome: 'reserved_now', protocolVersion: 2 });
+  assertEquals(toPortraitProviderReservationResult(false), { outcome: 'already_reserved', protocolVersion: 2 });
+  assertEquals(toPortraitProviderReservationResult({ outcome: 'denied' }), { outcome: 'denied', protocolVersion: 2 });
+});
+
+Deno.test('portrait bridge records a real Worker-shaped v2 usage event with durable cost dimensions', async () => {
+  await withBridgeEnv(async () => {
+    const usageRequestId = '99999999-9999-4999-8999-999999999999';
+    const handler = createHandlerClient({});
+    const response = await handleWorkflowPortraitBridge(
+      await signedRequest({
+        operation: 'record_usage',
+        jobId: JOB_ID,
+        usageRequestId,
+        protocolVersion: 2,
+        provider: 'primary',
+        attemptNumber: 1,
+        aiCallId: `${usageRequestId}:primary:1`,
+        aiOperation: 'image_generation',
+        model: 'gpt-image-2',
+        success: true,
+        billingStatus: 'known',
+        pricingVersion: 'openai-image-2026-07-23',
+        costBasis: 'provider_usage',
+        costIsComplete: true,
+        estimatedCostUsd: 0.0123,
+        usage: {
+          inputTextTokens: 10,
+          inputImageTokens: 20,
+          inputCachedTokens: 3,
+          outputTextTokens: 4,
+          outputImageTokens: 50,
+          prompt: 'must not cross the bridge',
+        },
+      }, '33333333-3333-4333-8333-333333333343'),
+      { createServiceClient: () => handler.client as never },
+    );
+    assertEquals(await response.json(), { recorded: true });
+    const call = handler.calls.rpcArgs.find((entry) => entry.name === 'record_ai_usage_event');
+    assertEquals(call?.args, {
+      p_ai_call_id: `${usageRequestId}:primary:1`, p_usage_request_id: usageRequestId,
+      p_job_kind: 'portrait', p_job_id: JOB_ID, p_provider: 'primary', p_attempt_number: 1,
+      p_operation: 'portrait', p_model: 'gpt-image-2',
+      p_provider_usage: { inputTextTokens: 10, inputImageTokens: 20, inputCachedTokens: 3, outputTextTokens: 4, outputImageTokens: 50 },
+      p_success: true, p_billing_status: 'known', p_pricing_version: 'openai-image-2026-07-23',
+      p_cost_basis: 'provider_usage', p_cost_is_complete: true, p_estimated_cost_usd: 0.0123,
+      p_input_text_tokens: 10, p_input_image_tokens: 20, p_cached_input_tokens: 3,
+      p_output_text_tokens: 4, p_output_image_tokens: 50, p_audio_seconds: null,
+    });
+  });
+});
+
+Deno.test('portrait bridge records a grandfathered v1 Worker usage event with server-bound attribution only', async () => {
+  await withBridgeEnv(async () => {
+    const handler = createHandlerClient({});
+    const response = await handleWorkflowPortraitBridge(
+      await signedRequest({
+        operation: 'record_usage', jobId: JOB_ID, usageRequestId: null, protocolVersion: 1,
+        provider: 'primary', attemptNumber: 1, aiCallId: `${JOB_ID}:primary:1`, aiOperation: 'image_generation',
+        model: 'gpt-image-2', success: true, billingStatus: 'known', pricingVersion: 'openai-image-2026-07-23',
+        costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: 0.0123,
+        // These hostile fields are intentionally absent from the detailed RPC.
+        familyId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', actorUserId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        usage: { inputTextTokens: 10, inputImageTokens: 20, inputCachedTokens: 3, outputTextTokens: 4, outputImageTokens: 50 },
+      }, '33333333-3333-4333-8333-333333333344'),
+      { createServiceClient: () => handler.client as never },
+    );
+    assertEquals(await response.json(), { recorded: true });
+    const call = handler.calls.rpcArgs.find((entry) => entry.name === 'record_ai_usage_event_detailed');
+    assertEquals(call?.args, {
+      p_ai_call_id: `${JOB_ID}:primary:1`, p_usage_request_id: null,
+      p_family_id: '44444444-4444-4444-8444-444444444444', p_actor_user_id: '55555555-5555-4555-8555-555555555555',
+      p_operation: 'portrait', p_model: 'gpt-image-2', p_success: true,
+      p_provider_usage: { provider: 'primary', input_text_tokens: 10, input_image_tokens: 20, cached_input_tokens: 3, output_text_tokens: 4, output_image_tokens: 50 },
+      p_estimated_cost_usd: 0.0123, p_cost_basis: 'provider_usage', p_billing_status: 'known',
+      p_cost_is_complete: true, p_pricing_version: 'openai-image-2026-07-23',
+    });
+  });
+});
+
+Deno.test('portrait bridge refuses a v1 usage event that tries to select a request or non-job call id', async () => {
+  await withBridgeEnv(async () => {
+    const handler = createHandlerClient({});
+    const response = await handleWorkflowPortraitBridge(
+      await signedRequest({
+        operation: 'record_usage', jobId: JOB_ID, usageRequestId: '99999999-9999-4999-8999-999999999999', protocolVersion: 1,
+        provider: 'primary', attemptNumber: 1, aiCallId: '99999999-9999-4999-8999-999999999999:primary:1', aiOperation: 'image_generation',
+        model: 'gpt-image-2', success: true,
+      }, '33333333-3333-4333-8333-333333333345'),
+      { createServiceClient: () => handler.client as never },
+    );
+    assertEquals(response.status, 400);
+    assertEquals(handler.calls.rpc.includes('record_ai_usage_event_detailed'), false);
   });
 });
 
@@ -333,6 +433,8 @@ Deno.test('portrait bridge exposes only frozen input and normalizes already-publ
       sourcePhotoKey: 'private/source.jpg',
       styleReferenceKey: '_assets/styles/default.png',
       prompt: 'private prompt',
+      usageRequestId: null,
+      providerProtocolVersion: null,
     },
   });
   assertEquals(mapPortraitPublishOutcome({ published: false, already_published: true, old_key: 'portraits/old.webp' }), {

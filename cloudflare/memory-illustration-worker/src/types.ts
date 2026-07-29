@@ -6,6 +6,7 @@ export type IllustrationModel = 'gpt-image-2' | 'gpt-image-1.5';
 export type BridgeOperation =
   | 'get_input'
   | 'reserve_attempt'
+  | 'record_usage'
   | 'record_prompt'
   | 'authorize_upload'
   | 'record_upload_complete'
@@ -27,7 +28,7 @@ export interface ReferenceCandidate {
  * The only sensitive payload crosses the bridge inside the generating step.
  * This object must never be returned from a Workflow step or logged.
  */
-export interface WorkflowJobInput {
+interface WorkflowJobInputBase {
   jobId: string;
   outputKey: string;
   oldIllustrationKey: string | null;
@@ -40,6 +41,20 @@ export interface WorkflowJobInput {
   memoryDate: string;
   referenceCandidates: ReferenceCandidate[];
 }
+
+/** Grandfathered jobs created before fair-use enforcement. */
+export interface WorkflowJobInputV1 extends WorkflowJobInputBase {
+  providerProtocolVersion?: 1;
+  usageRequestId?: never;
+}
+
+/** Jobs created after activation. These must use the strict v2 bridge contract. */
+export interface WorkflowJobInputV2 extends WorkflowJobInputBase {
+  providerProtocolVersion: 2;
+  usageRequestId: string;
+}
+
+export type WorkflowJobInput = WorkflowJobInputV1 | WorkflowJobInputV2;
 
 export interface LoadedReference {
   description: string;
@@ -56,7 +71,21 @@ export interface BridgeGetInputResponse {
 }
 
 export interface BridgeReserveAttemptResponse {
-  reserved: boolean;
+  outcome: 'reserved_now' | 'already_reserved' | 'denied';
+  protocolVersion: 2;
+}
+
+export interface ImageUsage {
+  inputTextTokens: number | null;
+  inputImageTokens: number | null;
+  inputCachedTokens: number | null;
+  outputTextTokens: number | null;
+  outputImageTokens: number | null;
+}
+
+export interface ImageProviderResult {
+  bytes: ArrayBuffer;
+  usage: ImageUsage | null;
 }
 
 export interface BridgeAuthorizeUploadResponse {
@@ -96,7 +125,7 @@ export interface WorkflowDispatchPayload {
  * the Workflow's sensitive image-generation step and must never be returned
  * from a step or logged.
  */
-export interface PortraitWorkflowJobInput {
+interface PortraitWorkflowJobInputBase {
   jobId: string;
   outputKey: string;
   oldPortraitKey: string | null;
@@ -106,12 +135,25 @@ export interface PortraitWorkflowJobInput {
   styleReferenceKey: string;
 }
 
+export interface PortraitWorkflowJobInputV1 extends PortraitWorkflowJobInputBase {
+  providerProtocolVersion?: 1;
+  usageRequestId?: never;
+}
+
+export interface PortraitWorkflowJobInputV2 extends PortraitWorkflowJobInputBase {
+  providerProtocolVersion: 2;
+  usageRequestId: string;
+}
+
+export type PortraitWorkflowJobInput = PortraitWorkflowJobInputV1 | PortraitWorkflowJobInputV2;
+
 export interface BridgePortraitGetInputResponse {
   job: PortraitWorkflowJobInput;
 }
 
 export interface BridgePortraitReserveAttemptResponse {
-  reserved: boolean;
+  outcome: 'reserved_now' | 'already_reserved' | 'denied';
+  protocolVersion: 2;
 }
 
 export interface BridgePortraitPublishResponse {

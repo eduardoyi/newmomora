@@ -992,25 +992,28 @@ Transcribes audio and returns cleaned text with suggested family tags.
 ```json
 {
   "audioBase64": "base64-encoded-audio",
-  "familyMembers": [
-    {
-      "id": "uuid",
-      "name": "Emma",
-      "nicknames": ["Em", "Emmy"],
-      "is_user_profile": false
-    }
-  ]
+  "familyId": "uuid"
 }
 ```
 
+`familyId` is required for current clients. The former `familyMembers` field
+may be accepted only for wire compatibility and is ignored for authorization
+and prompt construction. A legacy caller without `familyId` is resolved
+server-side only when its authorized active family is valid, or when it has
+exactly one authorized family membership; otherwise the function returns
+`FAMILY_CONTEXT_REQUIRED`. The client can never select the roster by sending
+member data.
+
 **Logic**
 
-1. Build transcription prompt from all names + nicknames
-2. Call OpenAI `/v1/audio/transcriptions` (`gpt-4o-mini-transcribe`)
-3. Parse raw transcript for name/nickname matches → `mentionedMemberIds`
-4. Call `gpt-4o-mini` for cleanup + self-reference detection
-5. If `mentionedUserSelf`: append user profile family member ID
-6. Return result (audio discarded, not stored)
+1. Verify the caller has a role in the requested family, then load its
+   canonical family-member roster server-side.
+2. Build transcription prompt from the canonical names + nicknames.
+3. Call OpenAI `/v1/audio/transcriptions` (`gpt-4o-mini-transcribe`).
+4. Parse raw transcript for name/nickname matches → `mentionedMemberIds`.
+5. Call `gpt-4o-mini` for cleanup + self-reference detection.
+6. If `mentionedUserSelf`, append the canonical user-profile member ID.
+7. Return result; audio is discarded and never stored.
 
 **Response**
 
@@ -1021,13 +1024,45 @@ Transcribes audio and returns cleaned text with suggested family tags.
 }
 ```
 
-**Errors:** `TRANSCRIPTION_FAILED`, `EMPTY_AUDIO`, `AUDIO_TOO_LONG`
+**Errors:** `TRANSCRIPTION_FAILED`, `EMPTY_AUDIO`, `AUDIO_TOO_LONG`,
+`FAMILY_CONTEXT_REQUIRED`, `forbidden`
 
 **Validation:** Reject audio representing > 2 minutes of recording
 
 ---
 
-### 4.5 `send-daily-reminder`
+### 4.5 `run-ai-usage-alerts`
+
+Service-only daily AI-usage alert and retention endpoint.
+
+**Trigger:** Scheduler POST at 06:00 UTC. `verify_jwt = false` is required
+because the scheduler has no user JWT; the endpoint instead requires the
+server-only `x-cron-secret` header containing `CRON_SECRET`.
+
+**Request:** `POST` with the cron-secret header and no body.
+
+**Logic**
+
+1. Enqueue threshold/anomaly alerts through the idempotent SQL outbox.
+2. Claim each row before delivery and email aggregate-only metrics to
+   `AI_USAGE_ALERT_EMAIL` (default `hello@usemomora.com`).
+3. Mark a confirmed send complete; a definite provider rejection is released
+   for bounded SQL retry; an unknown outcome is terminal to prevent duplicates.
+4. Purge expired AI-usage records. A retention-purge error is logged but does
+   not turn an otherwise completed alert run into a failed response.
+
+**Response**
+
+```json
+{ "success": true, "queued": 2, "sent": 2, "environment": "prod" }
+```
+
+The outbox payload and email contain only family IDs and aggregate metrics:
+never names, prompts, transcripts, audio, or memory content.
+
+---
+
+### 4.6 `send-daily-reminder`
 
 Sends a push notification to a single user.
 
@@ -1059,7 +1094,7 @@ Sends a push notification to a single user.
 
 ---
 
-### 4.6 `schedule-daily-reminders`
+### 4.7 `schedule-daily-reminders`
 
 Cron function run hourly.
 
@@ -1409,7 +1444,8 @@ while the DB validates both tag insertion and the `memory_type` transition.
 
 ```
 1. Record audio via expo-audio (tap start/stop, max 2 min)
-2. Invoke process-voice-memory(audioBase64, familyMembers)
+2. Invoke process-voice-memory(audioBase64, familyId); the server loads the
+   authorized canonical roster
 3. Populate form with cleanedText + suggested tags
 4. User edits → Save → same flow as 5.1
 ```
@@ -1681,6 +1717,7 @@ Momora2/
 │       ├── generate-illustration/
 │       ├── workflow-illustration-bridge/
 │       ├── process-voice-memory/
+│       ├── run-ai-usage-alerts/
 │       ├── send-daily-reminder/
 │       ├── schedule-daily-reminders/
 │       ├── delete-user-account/
@@ -1738,7 +1775,14 @@ All AI operations are **async** — client shows status and allows navigation aw
 
 ---
 
-## 11. Open Implementation Items
+## 11. Usage-limit rollout contract
+
+- Image generation is admitted server-side through a family-scoped logical request, admission, and provider-attempt protocol. The client must never calculate eligibility.
+- New jobs use bridge protocol v2 (`usageRequestId`, `providerProtocolVersion: 2`) and only `reserved_now` may call the provider. Existing queued v1 jobs retain their legacy reservation response during staged rollout.
+- Limit rejections use HTTP 429 with `code: USAGE_LIMIT_REACHED`, `scope`, and `retryAfterIso`. The app renders retry time locally and obtains cold-start notices only through `get_my_ai_usage_limit_notices` for the current actor.
+- `process-voice-memory` receives `familyId`; compatibility inference is server-owned and never client-selected.
+
+## 12. Open Implementation Items
 
 | Item | Notes |
 |------|-------|

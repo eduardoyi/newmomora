@@ -20,7 +20,10 @@
     "backfill:previews": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-media-previews.ts",
     "backfill:video-posters": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-video-posters.ts",
     "test:e2e:family-fixture": "maestro test .maestro/flows/onboarding/add-family-member-with-fixture.yaml",
-    "test:e2e:family-picker": "maestro test .maestro/flows/onboarding/add-family-member-with-picker.yaml"
+    "test:e2e:family-picker": "maestro test .maestro/flows/onboarding/add-family-member-with-picker.yaml",
+    "test:e2e:usage-limits:seed": "deno run --allow-env --allow-net supabase/scripts/usage-limits-e2e-fixture.ts",
+    "test:e2e:usage-limits:clean": "deno run --allow-env --allow-net supabase/scripts/usage-limits-e2e-fixture.ts --cleanup",
+    "test:e2e:usage-limits": "npm run test:e2e:usage-limits:seed && (maestro test .maestro/flows/usage-limits/memory-limit.yaml; status=$?; npm run test:e2e:usage-limits:clean; exit $status)"
   },
   "dependencies": {
     "@expo-google-fonts/caveat": "^0.4.2",

@@ -5,19 +5,40 @@ import { supabase } from '@/lib/supabase';
 export interface ServiceError {
   message: string;
   code?: string;
+  scope?: 'memory' | 'daily' | 'monthly';
+  retryAfterIso?: string;
 }
 
 interface EdgeFunctionErrorBody {
   error?: string;
   code?: string;
+  scope?: 'memory' | 'daily' | 'monthly';
+  retryAfterIso?: string;
 }
 
-async function mapFunctionError(error: unknown): Promise<ServiceError> {
+async function mapFunctionError(error: unknown, usageTarget: 'memory' | 'portrait_version' = 'memory'): Promise<ServiceError> {
   if (error instanceof FunctionsHttpError) {
     try {
       const body = (await error.context.clone().json()) as EdgeFunctionErrorBody;
       if (body.error) {
-        return { message: body.error, code: body.code ?? String(error.context.status) };
+        if (body.code === 'USAGE_LIMIT_REACHED' && body.retryAfterIso) {
+          const retryAt = new Date(body.retryAfterIso);
+          const retryLabel = Number.isNaN(retryAt.getTime()) ? 'a little later' : retryAt.toLocaleString();
+          return {
+            message: usageTarget === 'memory'
+              ? `Your memory is safely saved. We’ll be ready to make another illustration after ${retryLabel}.`
+              : `Your portrait update is safely saved. We’ll be ready to make another illustration after ${retryLabel}.`,
+            code: body.code,
+            scope: body.scope,
+            retryAfterIso: body.retryAfterIso,
+          };
+        }
+        return {
+          message: body.error,
+          code: body.code ?? String(error.context.status),
+          scope: body.scope,
+          retryAfterIso: body.retryAfterIso,
+        };
       }
     } catch {
       // Fall through to generic message.
@@ -47,11 +68,12 @@ async function mapFunctionError(error: unknown): Promise<ServiceError> {
 export async function invokeEdgeFunction<TResponse>(
   functionName: string,
   body: Record<string, unknown>,
+  usageTarget: 'memory' | 'portrait_version' = 'memory',
 ): Promise<{ data: TResponse | null; error: ServiceError | null }> {
   const { data, error } = await supabase.functions.invoke<TResponse>(functionName, { body });
 
   if (error) {
-    return { data: null, error: await mapFunctionError(error) };
+    return { data: null, error: await mapFunctionError(error, usageTarget) };
   }
 
   return { data: data ?? null, error: null };
@@ -123,6 +145,7 @@ export interface VoiceFamilyMemberPayload {
 export async function processVoiceMemory(
   audioBase64: string,
   familyMembers: VoiceFamilyMemberPayload[],
+  familyId: string,
 ): Promise<{
   data: { cleanedText: string; mentionedMemberIds: string[] } | null;
   error: ServiceError | null;
@@ -130,7 +153,14 @@ export async function processVoiceMemory(
   return invokeEdgeFunction('process-voice-memory', {
     audioBase64,
     familyMembers,
+    familyId,
   });
+}
+
+export function isUsageLimitError(error: ServiceError | null | undefined): error is ServiceError & {
+  code: 'USAGE_LIMIT_REACHED'; scope: 'memory' | 'daily' | 'monthly'; retryAfterIso: string;
+} {
+  return error?.code === 'USAGE_LIMIT_REACHED' && Boolean(error.scope) && Boolean(error.retryAfterIso);
 }
 
 export interface NotifyFamilyActivityResponse {

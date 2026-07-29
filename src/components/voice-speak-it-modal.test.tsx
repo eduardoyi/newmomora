@@ -8,6 +8,10 @@ jest.mock('@/hooks/useVoiceInput', () => ({
   useVoiceInput: jest.fn(),
 }));
 
+jest.mock('@/hooks/use-family', () => ({
+  useFamily: () => ({ familyId: 'family-1' }),
+}));
+
 const mockedUseVoiceInput = useVoiceInput as jest.MockedFunction<typeof useVoiceInput>;
 
 describe('VoiceSpeakItModal', () => {
@@ -32,6 +36,7 @@ describe('VoiceSpeakItModal', () => {
     );
 
     expect(startRecording).not.toHaveBeenCalled();
+    expect(mockedUseVoiceInput).toHaveBeenCalledWith([], 'family-1');
     fireEvent(screen.getByTestId('voice-speak-it-modal'), 'show');
 
     await waitFor(() => expect(startRecording).toHaveBeenCalledTimes(1));

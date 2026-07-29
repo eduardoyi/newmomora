@@ -21,7 +21,7 @@ export interface VoiceProcessingResult {
   mentionedMemberIds: string[];
 }
 
-export function useVoiceInput(familyMembers: VoiceFamilyMemberPayload[]) {
+export function useVoiceInput(familyMembers: VoiceFamilyMemberPayload[], familyId: string | null) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 500);
   const [errorMessage, setErrorMessage] = useState('');
@@ -91,7 +91,11 @@ export function useVoiceInput(familyMembers: VoiceFamilyMemberPayload[]) {
 
       const base64 = await readLocalFileAsBase64(uri);
 
-      const { data, error } = await processVoiceMemory(base64, familyMembers);
+      if (!familyId) {
+        setErrorMessage('Choose a family before recording a memory.');
+        return null;
+      }
+      const { data, error } = await processVoiceMemory(base64, familyMembers, familyId);
 
       if (error || !data) {
         setErrorMessage(error?.message ?? 'Voice processing failed');
@@ -105,7 +109,7 @@ export function useVoiceInput(familyMembers: VoiceFamilyMemberPayload[]) {
     } finally {
       setIsProcessing(false);
     }
-  }, [familyMembers, recorder, recorderState.isRecording]);
+  }, [familyId, familyMembers, recorder, recorderState.isRecording]);
 
   const durationLabel = useMemo(() => {
     const totalSeconds = Math.floor(recorderState.durationMillis / 1000);

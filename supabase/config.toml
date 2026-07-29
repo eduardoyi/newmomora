@@ -380,6 +380,11 @@ verify_jwt = false
 [functions.send-content-report-alert]
 verify_jwt = false
 
+# This scheduled maintenance endpoint authenticates with x-cron-secret. It
+# cannot require a user JWT because pg_cron/pg_net invokes it directly.
+[functions.run-ai-usage-alerts]
+verify_jwt = false
+
 # Cloudflare Workflows authenticates with a timestamped raw-body HMAC. JWT
 # verification must be disabled at the gateway so the bridge can verify that
 # signature itself before parsing or reading a job.

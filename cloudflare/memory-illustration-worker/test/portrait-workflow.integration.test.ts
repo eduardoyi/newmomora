@@ -4,7 +4,7 @@ import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
 import worker from '../src/index';
 import { hmacSha256Hex } from '../src/crypto';
 import { PortraitGenerationWorkflow } from '../src/portrait-workflow';
-import type { PortraitWorkflowJobInput } from '../src/types';
+import type { PortraitWorkflowJobInput, PortraitWorkflowJobInputV2 } from '../src/types';
 
 const JOB_ID = '50abcc52-5c0d-4b7b-86d4-1b3a0a661222';
 const UPLOAD_TOKEN = '50abcc52-5c0d-4b7b-86d4-1b3a0a661199';
@@ -47,9 +47,11 @@ function createBucket(initial: Record<string, StoredObject> = {}) {
   };
 }
 
-function job(overrides: Partial<PortraitWorkflowJobInput> = {}): PortraitWorkflowJobInput {
+function job(overrides: Partial<PortraitWorkflowJobInputV2> = {}): PortraitWorkflowJobInputV2 {
   return {
     jobId: JOB_ID,
+    usageRequestId: '50abcc52-5c0d-4b7b-86d4-1b3a0a661223',
+    providerProtocolVersion: 2,
     outputKey: 'owner/family/member/portraits/version/portrait/attempt.webp',
     oldPortraitKey: 'owner/family/member/portraits/version/portrait/old.webp',
     providerDeadlineAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
@@ -60,7 +62,7 @@ function job(overrides: Partial<PortraitWorkflowJobInput> = {}): PortraitWorkflo
   };
 }
 
-function createEnvironment(workflowJob = job(), outputInitial: Record<string, StoredObject> = {}) {
+function createEnvironment(workflowJob: PortraitWorkflowJobInput = job(), outputInitial: Record<string, StoredObject> = {}) {
   const portraits = createBucket(outputInitial);
   const profiles = createBucket({ [workflowJob.sourcePhotoKey]: { bytes: new Uint8Array([9, 8, 7]).buffer } });
   const styles = createBucket({ [workflowJob.styleReferenceKey]: { bytes: new Uint8Array([6, 5, 4]).buffer } });
@@ -130,7 +132,8 @@ function bridgeAndOpenAiFetch(
     if (queuedResponse) return queuedResponse;
     switch (request.operation) {
       case 'get_input': return Response.json({ job: input });
-      case 'reserve_attempt': return Response.json({ reserved: true });
+      case 'reserve_attempt': return Response.json({ outcome: 'reserved_now', protocolVersion: 2 });
+      case 'record_usage': return Response.json({ recorded: true });
       case 'authorize_upload': return Response.json({
         authorized: true,
         uploadToken: UPLOAD_TOKEN,
@@ -212,6 +215,63 @@ describe('portrait dispatch authentication', () => {
 });
 
 describe('portrait Workflow', () => {
+  it('completes a grandfathered v1 portrait job with the unchanged reservation contract', async () => {
+    const current = job();
+    const { usageRequestId: _usageRequestId, providerProtocolVersion: _providerProtocolVersion, ...legacyJob } = current;
+    const setup = createEnvironment(legacyJob);
+    const { fetchMock, operations } = bridgeAndOpenAiFetch(legacyJob, {
+      bridgeResponses: { reserve_attempt: [Response.json({ reserved: true })] },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(workflowWithEnv(setup.env).run(
+      { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, fakeStep(),
+    )).resolves.toMatchObject({ status: 'ready' });
+    expect(operations.find((operation) => operation.operation === 'reserve_attempt')).not.toHaveProperty('protocolVersion');
+    expect(operations.find((operation) => operation.operation === 'record_usage')).toMatchObject({
+      usageRequestId: null, protocolVersion: 1, aiCallId: `${JOB_ID}:primary:1`,
+    });
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(1);
+  });
+
+  it('fails safely before OpenAI when the portrait bridge returns an old provider protocol', async () => {
+    const setup = createEnvironment();
+    const { fetchMock } = bridgeAndOpenAiFetch(setup.workflowJob, {
+      bridgeResponses: { reserve_attempt: [Response.json({ reserved: true })] },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await workflowWithEnv(setup.env).run(
+      { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, fakeStep());
+
+    expect(result).toMatchObject({ status: 'failed', code: 'BRIDGE_INVALID_RESPONSE' });
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(0);
+  });
+
+  it('continues portrait publication when best-effort usage recording fails', async () => {
+    const setup = createEnvironment();
+    const { fetchMock } = bridgeAndOpenAiFetch(setup.workflowJob, {
+      bridgeResponses: { record_usage: [new Response('unavailable', { status: 503 })] },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(workflowWithEnv(setup.env).run(
+      { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, fakeStep(),
+    )).resolves.toMatchObject({ status: 'ready' });
+  });
+
+  it('publishes a portrait when record_usage never resolves', async () => {
+    const setup = createEnvironment();
+    const { fetchMock } = bridgeAndOpenAiFetch(setup.workflowJob, {
+      bridgeResponses: { record_usage: [new Promise<Response>(() => {}) as unknown as Response] },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(workflowWithEnv(setup.env).run(
+      { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, fakeStep(),
+    )).resolves.toMatchObject({ status: 'ready' });
+    expect(setup.portraits.put).toHaveBeenCalledTimes(1);
+  });
   it('uses style then source references, sends canonical WebP options, publishes, then deletes the previous portrait', async () => {
     const setup = createEnvironment();
     const { fetchMock, imageForms, operations } = bridgeAndOpenAiFetch(setup.workflowJob);
@@ -245,8 +305,12 @@ describe('portrait Workflow', () => {
     );
     expect(setup.portraits.delete).toHaveBeenCalledWith(setup.workflowJob.oldPortraitKey);
     expect(operations.map((operation) => operation.operation)).toEqual([
-      'get_input', 'reserve_attempt', 'authorize_upload', 'record_upload_complete', 'publish', 'retrigger_memories',
+      'get_input', 'reserve_attempt', 'record_usage', 'authorize_upload', 'record_upload_complete', 'publish', 'retrigger_memories',
     ]);
+    expect(operations.find((operation) => operation.operation === 'record_usage')).toMatchObject({
+      usageRequestId: setup.workflowJob.usageRequestId, protocolVersion: 2,
+      aiCallId: `${setup.workflowJob.usageRequestId}:primary:1`,
+    });
     expect(operations).toContainEqual(expect.objectContaining({
       operation: 'record_upload_complete',
       jobId: JOB_ID,
@@ -442,7 +506,7 @@ describe('portrait Workflow', () => {
   it('does not call OpenAI again when a repeated one-shot reservation rejects a replay', async () => {
     const setup = createEnvironment();
     const { fetchMock, operations } = bridgeAndOpenAiFetch(setup.workflowJob, {
-      bridgeResponses: { reserve_attempt: [Response.json({ reserved: false })] },
+      bridgeResponses: { reserve_attempt: [Response.json({ outcome: 'already_reserved', protocolVersion: 2 })] },
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -451,7 +515,7 @@ describe('portrait Workflow', () => {
       fakeStep(),
     );
 
-    expect(result).toMatchObject({ status: 'failed', code: 'ATTEMPT_CAP_EXHAUSTED' });
+    expect(result).toMatchObject({ status: 'failed', code: 'PROVIDER_ATTEMPT_ALREADY_RESERVED' });
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(0);
     expect(operations).toContainEqual(expect.objectContaining({ operation: 'reserve_attempt' }));
   });
@@ -462,7 +526,7 @@ describe('portrait Workflow', () => {
       bridgeResponses: {
         reserve_attempt: [
           new Response('committed but response lost', { status: 503 }),
-          Response.json({ reserved: false }),
+          Response.json({ outcome: 'already_reserved', protocolVersion: 2 }),
         ],
       },
     });
@@ -471,7 +535,7 @@ describe('portrait Workflow', () => {
     const result = await workflowWithEnv(setup.env).run(
       { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, fakeStep());
 
-    expect(result).toMatchObject({ status: 'failed', code: 'ATTEMPT_CAP_EXHAUSTED' });
+    expect(result).toMatchObject({ status: 'failed', code: 'PROVIDER_ATTEMPT_ALREADY_RESERVED' });
     expect(operations.filter((operation) => operation.operation === 'reserve_attempt')).toHaveLength(2);
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(0);
   });
