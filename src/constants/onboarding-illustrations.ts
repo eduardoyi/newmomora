@@ -2,8 +2,14 @@
 // WP0 §0.2). Every slot the design handoff calls out via an `image-slot`
 // element gets one entry here -- `OnbIllustration` (src/components/onboarding/
 // onb-illustration.tsx) renders the real `asset` once art exists, otherwise
-// the watercolor-wash placeholder driven by `emotion` + `scene`. Dropping
-// real art in later touches only this file, never a screen.
+// the watercolor-wash placeholder driven by `emotion` + `scene`. Real art now
+// exists for every slot below (assets/onboarding/*.webp) -- dropping more/
+// different art still only touches this file, never a screen.
+//
+// The former `paywall-page-1/3/4` generic "illustrated page" slots are gone:
+// S5's artifact.tsx and S15's paywall.tsx now render real, specific memory
+// content from src/constants/onboarding-memories.ts (artifactMemories /
+// paywallBackdropMemories) instead of sharing anonymous placeholder slots.
 //
 // `description` is verbatim from the handoff's `placeholder` text (source:
 // /project/src/screens/onboarding-story.jsx, onboarding-trust.jsx,
@@ -25,9 +31,6 @@ export type OnboardingIllustrationSlotId =
   | 'founders'
   | 'kids-doodle'
   | 'family-nest'
-  | 'paywall-page-1'
-  | 'paywall-page-3'
-  | 'paywall-page-4'
   | 'portrait-sample'
   | 'join-door';
 
@@ -46,60 +49,54 @@ export const onboardingIllustrations: Record<OnboardingIllustrationSlotId, Onboa
     description: 'Warm illustration: parent + child reading in lamplight',
     emotion: 'tender',
     scene: 'bedroom',
+    asset: require('../../assets/onboarding/welcome.webp'),
   },
   'story-night': {
     description: "Dark illustration: phone glow on a parent's face at 2 a.m.",
     emotion: 'weary',
     scene: 'bedroom',
+    asset: require('../../assets/onboarding/story-night.webp'),
   },
   'story-book': {
     description: 'Soft illustration: baby book shut on a closet shelf, sock on top',
     emotion: 'bittersweet',
     scene: 'bedroom',
+    asset: require('../../assets/onboarding/story-book.webp'),
   },
   'story-babble': {
     description: 'Bright illustration: toddler mid-babble, invented words floating',
     emotion: 'joy',
     scene: 'garden',
+    asset: require('../../assets/onboarding/story-babble.webp'),
   },
   founders: {
     description: 'Illustrated portrait: Eduardo & Adriana, Momora style',
     emotion: 'tender',
     scene: 'window',
+    asset: require('../../assets/onboarding/founders.webp'),
   },
   'kids-doodle': {
     description: 'Small warm doodle',
     emotion: 'joy',
     scene: 'garden',
+    asset: require('../../assets/onboarding/kids-doodle.webp'),
   },
   'family-nest': {
     description: 'Nest / house motif',
     emotion: 'calm',
     scene: 'window',
-  },
-  'paywall-page-1': {
-    description: 'Illustrated page',
-    emotion: 'joy',
-    scene: 'park',
-  },
-  'paywall-page-3': {
-    description: 'Illustrated page',
-    emotion: 'wonder',
-    scene: 'garden',
-  },
-  'paywall-page-4': {
-    description: 'Illustrated page',
-    emotion: 'tender',
-    scene: 'kitchen',
+    asset: require('../../assets/onboarding/family-nest.webp'),
   },
   'portrait-sample': {
     description: 'Sample portrait',
     emotion: 'tender',
     scene: 'bedroom',
+    asset: require('../../assets/onboarding/portrait-sample.webp'),
   },
   'join-door': {
     description: 'Illustration: a door with warm light under it',
     emotion: 'calm',
     scene: 'window',
+    asset: require('../../assets/onboarding/join-door.webp'),
   },
 };

@@ -3,17 +3,21 @@ import { render } from '@testing-library/react-native';
 import { OnbIllustration, kidTint } from '@/components/onboarding/onb-illustration';
 import { onboardingIllustrations } from '@/constants/onboarding-illustrations';
 
-// Real art doesn't exist yet (WP0 §0.2 ships every slot with no `asset`),
-// so this override is the only way to exercise the "renders the real
-// asset" branch -- every other slot in this file still falls through to
-// the watercolor-wash fallback, which is the behavior WP0 actually ships.
+// Real art now exists for every remaining slot (src/constants/
+// onboarding-illustrations.ts -- the paywall-page-1/3/4 slots that never
+// got art were removed instead), so there is no naturally assetless slot
+// left to exercise the wash-fallback branch. This override manufactures
+// one: 'join-door' keeps its real description/emotion/scene but loses its
+// `asset` for this test file only, so OnbIllustration's fallback branch
+// stays covered without asserting on a slot that could grow real art later
+// and silently stop testing the branch at all.
 jest.mock('@/constants/onboarding-illustrations', () => {
   const actual = jest.requireActual('@/constants/onboarding-illustrations') as typeof import('@/constants/onboarding-illustrations');
   return {
     ...actual,
     onboardingIllustrations: {
       ...actual.onboardingIllustrations,
-      welcome: { ...actual.onboardingIllustrations.welcome, asset: 1 },
+      'join-door': { ...actual.onboardingIllustrations['join-door'], asset: undefined },
     },
   };
 });
@@ -28,9 +32,9 @@ describe('OnbIllustration', () => {
   });
 
   it('exposes the slot description as the accessibility label for the wash fallback', () => {
-    const { getByTestId } = render(<OnbIllustration slot="founders" testID="onb-illo-founders" />);
-    expect(getByTestId('onb-illo-founders').props.accessibilityLabel).toBe(
-      onboardingIllustrations.founders.description,
+    const { getByTestId } = render(<OnbIllustration slot="join-door" testID="onb-illo-2" />);
+    expect(getByTestId('onb-illo-2').props.accessibilityLabel).toBe(
+      onboardingIllustrations['join-door'].description,
     );
   });
 

@@ -17,17 +17,17 @@
 // The close-confirm sheet's "Leave" button is likewise inert by design (see
 // its own comment below) -- do not wire it to a real "abandon onboarding"
 // action without re-reading that comment first.
+import { Image } from 'expo-image';
 import { Link, router } from 'expo-router';
 import { Check, X } from 'lucide-react-native';
 import { useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { OnbButton } from '@/components/onboarding/onb-button';
-import { OnbIllustration } from '@/components/onboarding/onb-illustration';
 import { OnbBody, OnbDisplay, OnbTitle } from '@/components/onboarding/onb-typography';
 import { OnbShell } from '@/components/onboarding/onb-shell';
 import { colors, emotionColors, fonts, radius } from '@/constants/theme';
-import type { OnboardingIllustrationSlotId } from '@/constants/onboarding-illustrations';
+import { paywallBackdropMemories, type OnboardingSampleMemory } from '@/constants/onboarding-memories';
 import { useOnboardingKidPossessive } from '@/hooks/use-onboarding-kid-possessive';
 import { onboardingPortraitRoute } from '@/lib/onboarding-routes';
 
@@ -38,21 +38,20 @@ const TRUST_BULLETS = [
   'Your memories export free, forever',
 ];
 
-interface BackdropPage {
-  key: string;
-  slot: OnboardingIllustrationSlotId;
+interface BackdropLayout {
   rotateDeg: number;
   offsetX: number;
   zIndex: number;
 }
 
-// Same three "illustrated page" slots artifact.tsx (S5) originates -- the
-// design brief explicitly has the paywall reuse those assets as its backdrop
-// (see artifact.tsx's file comment).
-const BACKDROP_PAGES: readonly BackdropPage[] = [
-  { key: 'page-1', slot: 'paywall-page-1', rotateDeg: -6, offsetX: -104, zIndex: 1 },
-  { key: 'page-3', slot: 'paywall-page-3', rotateDeg: 2, offsetX: 0, zIndex: 2 },
-  { key: 'page-4', slot: 'paywall-page-4', rotateDeg: 7, offsetX: 104, zIndex: 1 },
+// Real memory pages (src/constants/onboarding-memories.ts's
+// paywallBackdropMemories -- the same three yearMemories entries the design
+// brief calls out for this backdrop) fill the same three fanned positions
+// the old generic "paywall-page-1/3/4" illustration slots used to occupy.
+const BACKDROP_LAYOUTS: readonly BackdropLayout[] = [
+  { rotateDeg: -6, offsetX: -104, zIndex: 1 },
+  { rotateDeg: 2, offsetX: 0, zIndex: 2 },
+  { rotateDeg: 7, offsetX: 104, zIndex: 1 },
 ];
 
 const PAGE_WIDTH = 132;
@@ -129,21 +128,30 @@ export default function PaywallScreen() {
           </Pressable>
 
           <View style={styles.backdrop}>
-            {BACKDROP_PAGES.map((page) => (
-              <View
-                key={page.key}
-                style={[
-                  styles.backdropPage,
-                  {
-                    marginLeft: page.offsetX - PAGE_WIDTH / 2,
-                    transform: [{ rotate: `${page.rotateDeg}deg` }],
-                    zIndex: page.zIndex,
-                  },
-                ]}
-              >
-                <OnbIllustration slot={page.slot} style={styles.backdropPageImage} testID={`onb-paywall-${page.key}`} />
-              </View>
-            ))}
+            {paywallBackdropMemories.map((memory: OnboardingSampleMemory, index) => {
+              const layout = BACKDROP_LAYOUTS[index];
+              return (
+                <View
+                  key={memory.key}
+                  style={[
+                    styles.backdropPage,
+                    {
+                      marginLeft: layout.offsetX - PAGE_WIDTH / 2,
+                      transform: [{ rotate: `${layout.rotateDeg}deg` }],
+                      zIndex: layout.zIndex,
+                    },
+                  ]}
+                >
+                  <Image
+                    accessibilityLabel={memory.text}
+                    contentFit="cover"
+                    source={memory.asset}
+                    style={styles.backdropPageImage}
+                    testID={`onb-paywall-page-${memory.key}`}
+                  />
+                </View>
+              );
+            })}
           </View>
 
           <OnbDisplay size={27} style={styles.headline}>

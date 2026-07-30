@@ -1,62 +1,153 @@
 // S10b -- "A year of these": the memory-types showcase (docs/plans/
 // onboarding-design-brief.md S10b, docs/plans/onboarding-implementation.md
-// WP2). The user's real first card (from the device-local draft, same as
-// S10 -- nothing is saved server-side yet) anchors a mocked timeline of
-// example cards using founder-family sample content from the design
-// handoff. Self-scrolls slowly and stops for reduce-motion or when the
-// screen loses focus (the Stack keeps this screen mounted underneath later
-// steps, so a plain unmount-only cleanup would leave the loop running).
+// WP2's S10b bullet). The user's real first card (from the device-local
+// draft, same as S10 -- nothing is saved server-side yet) anchors a mocked
+// timeline of 20 REAL example cards from src/constants/onboarding-memories.ts
+// (yearMemories) -- illustrated pages, photos, videos, and one-line quotes
+// from the founders' own kids, current-pipeline quality, replacing the
+// original 4-card wash/placeholder mock.
+//
+// The timeline drifts upward at a CONSTANT speed (DRIFT_SPEED_PX_PER_SECOND)
+// rather than a fixed duration, so 21 real cards move at the same visual
+// pace a shorter mock once did. It loops SEAMLESSLY: the card list renders
+// twice back-to-back, the first copy's measured height is the exact
+// translateY distance, and Animated.loop's reset-to-start lands pixel-for-
+// pixel on the same frame the animation just reached -- there is no visible
+// "snap back" the old alternate/reverse ping-pong had. The second copy is
+// hidden from accessibility (it's a visual duplicate, not new content) and
+// omits testIDs so nothing in the tree is ambiguously duplicated.
+//
+// Self-scrolls slowly and stops for reduce-motion or when the screen loses
+// focus (the Stack keeps this screen mounted underneath later steps, so a
+// plain unmount-only cleanup would leave the loop running).
+import { Image } from 'expo-image';
 import { router, useFocusEffect } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { Play } from 'lucide-react-native';
+import { useCallback, useMemo, useState, useRef } from 'react';
 import { AccessibilityInfo, Animated, Easing, StyleSheet, Text, View } from 'react-native';
 
 import { OnbButton } from '@/components/onboarding/onb-button';
 import { OnbShell } from '@/components/onboarding/onb-shell';
 import { OnbBody, OnbDisplay, OnbScript } from '@/components/onboarding/onb-typography';
 import { colors, emotionColors, fonts, radius, spacing, type EmotionName } from '@/constants/theme';
+import { formatMemoryDayLabel, yearMemories, type OnboardingSampleMemory } from '@/constants/onboarding-memories';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { onboardingNotificationsRoute } from '@/lib/onboarding-routes';
+import type { OnboardingDraftCapture } from '@/utils/onboarding-progress';
 import { possessive } from '@/utils/onboarding-copy';
 
-// One full forward pass of the drift (docs/plans/onboarding-design-brief.md
-// S10b "~38s" note) -- the loop then plays the same distance back up before
-// repeating, matching the handoff's `alternate infinite` CSS animation.
-const DRIFT_DURATION_MS = 38000;
+// Constant visual speed (docs/plans/onboarding-implementation.md WP-follow-up
+// "replace DRIFT_DURATION_MS with DRIFT_SPEED_PX_PER_SECOND"): the loop's
+// duration is derived from the measured content height below, so 21 real
+// cards drift at the same pace 5 mock cards once did rather than covering
+// more distance in the same fixed time (which would look sped up).
+const DRIFT_SPEED_PX_PER_SECOND = 40;
 
-function YearCardFooter({ day, tint }: { day: string; tint: EmotionName }) {
-  const emo = emotionColors[tint];
+function YearCardFooter({ day, tint }: { day: string; tint?: EmotionName }) {
+  const emo = tint ? emotionColors[tint] : null;
   return (
     <View style={styles.cardFooter}>
       <Text style={styles.cardFooterDay}>{day}</Text>
       <View style={styles.footerSpacer} />
-      <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
-        <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
-        <Text style={[styles.emotionLabel, { color: emo.ink }]}>{tint}</Text>
+      {emo ? (
+        <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
+          <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
+          <Text style={[styles.emotionLabel, { color: emo.ink }]}>{tint}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// The user's own captured memory, anchored at the top of the mock timeline --
+// same content as S10, no animation here (it already had its moment). Reads
+// straight from the draft, unchanged in spirit from before this rewrite.
+// `hidden` is true only for the seamless loop's second (a11y-hidden) copy,
+// where the testID must not be duplicated.
+function RealCaptureCard({ capture, hidden }: { capture: OnboardingDraftCapture | null; hidden?: boolean }) {
+  return (
+    <View style={styles.cardBlock}>
+      <View style={[styles.card, styles.realCard]} testID={hidden ? undefined : 'onboarding-year-real-card'}>
+        {capture?.mediaUri ? (
+          <>
+            <View style={styles.mediaPreviewWrap}>
+              <Image contentFit="cover" source={{ uri: capture.mediaUri }} style={styles.mediaImage} />
+            </View>
+            {capture.text ? (
+              <View style={styles.captionWrap}>
+                <Text numberOfLines={2} style={styles.caption}>{capture.text}</Text>
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <View style={styles.quoteBody}>
+            <Text numberOfLines={3} style={styles.quoteText}>{capture?.text ?? ''}</Text>
+          </View>
+        )}
+        <YearCardFooter day="Tonight" tint="joy" />
       </View>
+      <OnbScript color={colors.ink3} size={16} style={styles.annotation}>
+        your 20 seconds, tonight
+      </OnbScript>
     </View>
   );
 }
 
-function ExampleWash({ tint }: { tint: EmotionName }) {
-  const emo = emotionColors[tint];
+// One real example card from yearMemories, rendered per its type. `hidden`
+// suppresses the testID for the loop's duplicate copy (see file header).
+function ExampleMemoryCard({ hidden, memory }: { hidden?: boolean; memory: OnboardingSampleMemory }) {
+  const day = formatMemoryDayLabel(memory.isoDate);
+  const testID = hidden ? undefined : `onboarding-year-card-${memory.key}`;
+
   return (
-    <View style={styles.exampleWash}>
-      <LinearGradient
-        colors={[emo.soft, `${emo.c}55`]}
-        end={{ x: 1, y: 1 }}
-        start={{ x: 0, y: 0 }}
-        style={StyleSheet.absoluteFill}
-      />
+    <View style={styles.cardBlock}>
+      <View style={styles.card} testID={testID}>
+        {memory.type === 'text' ? (
+          <View style={styles.quoteBody}>
+            <Text style={styles.quoteText}>{memory.text}</Text>
+          </View>
+        ) : (
+          <>
+            <View style={styles.mediaPreviewWrap}>
+              <Image contentFit="cover" source={memory.asset} style={styles.mediaImage} />
+              {memory.type === 'video' ? (
+                <>
+                  <View style={styles.durationChip}>
+                    <Text style={styles.durationChipText}>{memory.durationLabel}</Text>
+                  </View>
+                  <View style={styles.playButton}>
+                    <Play color={colors.white} fill={colors.white} size={13} />
+                  </View>
+                </>
+              ) : null}
+            </View>
+            <View style={styles.captionWrap}>
+              <Text style={styles.caption}>{memory.text}</Text>
+            </View>
+          </>
+        )}
+        <YearCardFooter day={day} tint={memory.emotion} />
+      </View>
+      {memory.annotation ? (
+        <OnbScript color={colors.ink3} size={16} style={styles.annotation}>
+          {memory.annotation}
+        </OnbScript>
+      ) : null}
     </View>
   );
 }
 
-function PlaceholderMedia({ label, color }: { label: string; color: string }) {
+// The full card sequence (real card first, then all of yearMemories) --
+// shared by both copies in the seamless loop below.
+function TimelineCards({ capture, hidden }: { capture: OnboardingDraftCapture | null; hidden?: boolean }) {
   return (
-    <View style={[styles.exampleWash, { backgroundColor: color }]}>
-      <Text style={styles.placeholderMediaLabel}>{label}</Text>
-    </View>
+    <>
+      <RealCaptureCard capture={capture} hidden={hidden} />
+      {yearMemories.map((memory) => (
+        <ExampleMemoryCard hidden={hidden} key={memory.key} memory={memory} />
+      ))}
+    </>
   );
 }
 
@@ -69,39 +160,33 @@ export default function OnboardingYearScreen() {
     .filter((name): name is string => Boolean(name));
   const journalOwner = taggedNames.length === 1 ? possessive(taggedNames[0]) : 'their';
 
-  const [contentHeight, setContentHeight] = useState(0);
+  const [firstListHeight, setFirstListHeight] = useState(0);
   const [stageHeight, setStageHeight] = useState(0);
   const [driftAnim] = useState(() => new Animated.Value(0));
   const loopRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  const driftDistance = Math.max(contentHeight - stageHeight, 0);
-
   const startDrift = useCallback(() => {
     loopRef.current?.stop();
 
-    if (driftDistance <= 0) {
+    if (firstListHeight <= stageHeight) {
       return;
     }
 
+    driftAnim.setValue(0);
+
+    const duration = (firstListHeight / DRIFT_SPEED_PX_PER_SECOND) * 1000;
+
     const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(driftAnim, {
-          toValue: -driftDistance,
-          duration: DRIFT_DURATION_MS,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(driftAnim, {
-          toValue: 0,
-          duration: DRIFT_DURATION_MS,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ]),
+      Animated.timing(driftAnim, {
+        toValue: -firstListHeight,
+        duration,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
     );
     loopRef.current = loop;
     loop.start();
-  }, [driftAnim, driftDistance]);
+  }, [driftAnim, firstListHeight, stageHeight]);
 
   const stopDrift = useCallback(() => {
     loopRef.current?.stop();
@@ -112,7 +197,8 @@ export default function OnboardingYearScreen() {
   // (docs/plans/onboarding-implementation.md WP2 "S10b must ... respect
   // AccessibilityInfo.isReduceMotionEnabled()"), and stop entirely once this
   // screen isn't the focused route -- the Stack keeps it mounted underneath
-  // S11/S12, so an unmount-only cleanup would never fire.
+  // S11/S12, so an unmount-only cleanup would never fire. Unchanged by the
+  // seamless-loop rewrite above -- only what startDrift/stopDrift DO changed.
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -168,94 +254,19 @@ export default function OnboardingYearScreen() {
         style={styles.stage}
         testID="onboarding-year-stage"
       >
-        <Animated.View
-          onLayout={(event) => setContentHeight(event.nativeEvent.layout.height)}
-          style={[styles.timeline, { transform: [{ translateY: driftAnim }] }]}
-        >
-          {/* The user's real card, anchored at the start -- same content as
-              S10, no animation here (it already had its moment). */}
-          <View style={styles.cardBlock}>
-            <View style={[styles.card, styles.realCard]} testID="onboarding-year-real-card">
-              {capture?.mediaUri ? (
-                <>
-                  <View style={styles.mediaPreviewWrap}>
-                    <PlaceholderMedia color="#ddc9a8" label="Photo" />
-                  </View>
-                  {capture.text ? (
-                    <View style={styles.captionWrap}>
-                      <Text style={styles.caption} numberOfLines={2}>{capture.text}</Text>
-                    </View>
-                  ) : null}
-                </>
-              ) : (
-                <View style={styles.quoteBody}>
-                  <Text style={styles.quoteText} numberOfLines={3}>{capture?.text ?? ''}</Text>
-                </View>
-              )}
-              <YearCardFooter day="Tonight" tint="joy" />
-            </View>
-            <OnbScript color={colors.ink3} size={16} style={styles.annotation}>
-              your 20 seconds, tonight
-            </OnbScript>
+        <Animated.View style={[styles.timelineTrack, { transform: [{ translateY: driftAnim }] }]}>
+          <View onLayout={(event) => setFirstListHeight(event.nativeEvent.layout.height)} style={styles.timelineList}>
+            <TimelineCards capture={capture} />
           </View>
-
-          {/* Illustrated example -- no real art yet (decision 5: styled
-              placeholders), left without a Caveat annotation (the brief
-              gives 4 annotations for 5 cards). */}
-          <View style={styles.cardBlock}>
-            <View style={styles.card}>
-              <ExampleWash tint="mischief" />
-              <View style={styles.captionWrap}>
-                <Text style={styles.caption}>Declared the hose &ldquo;broken&rdquo; right after soaking the dog on purpose.</Text>
-              </View>
-              <YearCardFooter day="Sat, Aug 9" tint="mischief" />
-            </View>
-          </View>
-
-          {/* Photo example */}
-          <View style={styles.cardBlock}>
-            <View style={styles.card}>
-              <PlaceholderMedia color="#d8c39c" label="Photo" />
-              <View style={styles.captionWrap}>
-                <Text style={styles.caption}>Two hours at the zoo. Favourite animal: a pigeon.</Text>
-              </View>
-              <YearCardFooter day="Sun, Oct 12" tint="wonder" />
-            </View>
-            <OnbScript color={colors.ink3} size={16} style={styles.annotation}>
-              a blurry zoo photo, still counts
-            </OnbScript>
-          </View>
-
-          {/* Video example */}
-          <View style={styles.cardBlock}>
-            <View style={styles.card}>
-              <View style={styles.mediaPreviewWrap}>
-                <PlaceholderMedia color="#c9d4bd" label="Video" />
-                <View style={styles.durationChip}>
-                  <Text style={styles.durationChipText}>0:12</Text>
-                </View>
-              </View>
-              <View style={styles.captionWrap}>
-                <Text style={styles.caption}>The laugh that only happens when Dad drops something.</Text>
-              </View>
-              <YearCardFooter day="Thu, Jan 22" tint="calm" />
-            </View>
-            <OnbScript color={colors.ink3} size={16} style={styles.annotation}>
-              12 seconds of the belly laugh
-            </OnbScript>
-          </View>
-
-          {/* One-line text quote example */}
-          <View style={styles.cardBlock}>
-            <View style={styles.card}>
-              <View style={styles.quoteBody}>
-                <Text style={styles.quoteText}>&ldquo;More bastetti please.&rdquo;</Text>
-              </View>
-              <YearCardFooter day="Tue, Mar 3" tint="tender" />
-            </View>
-            <OnbScript color={colors.ink3} size={16} style={styles.annotation}>
-              the word he invented for spaghetti
-            </OnbScript>
+          {/* Seamless-loop duplicate: a visual repeat of the same content,
+              not new information -- hidden from accessibility on both
+              platforms and given no testIDs (TimelineCards' `hidden` prop). */}
+          <View
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            style={styles.timelineList}
+          >
+            <TimelineCards capture={capture} hidden />
           </View>
         </Animated.View>
 
@@ -289,10 +300,17 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
-  timeline: {
-    gap: 20,
+  timelineTrack: {
     paddingHorizontal: 24,
     paddingTop: 4,
+  },
+  // Both loop copies share this: `gap` spaces cards within a copy, and
+  // `paddingBottom` (the same value as `gap`) is the seam between this
+  // copy's last card and the next copy's first -- keeping every transition,
+  // including the loop's wrap point, visually identical.
+  timelineList: {
+    gap: 20,
+    paddingBottom: 20,
   },
   cardBlock: {
     gap: 6,
@@ -323,18 +341,22 @@ const styles = StyleSheet.create({
     position: 'relative',
     width: '100%',
   },
-  exampleWash: {
-    alignItems: 'center',
-    aspectRatio: 4 / 3,
-    justifyContent: 'center',
+  mediaImage: {
     width: '100%',
+    height: '100%',
   },
-  placeholderMediaLabel: {
-    color: 'rgba(44,36,24,0.45)',
-    fontFamily: fonts.sansBold,
-    fontSize: 12,
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
+  playButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(44,36,24,0.5)',
+    borderRadius: 17,
+    height: 34,
+    justifyContent: 'center',
+    left: '50%',
+    marginLeft: -17,
+    marginTop: -17,
+    position: 'absolute',
+    top: '50%',
+    width: 34,
   },
   durationChip: {
     backgroundColor: 'rgba(44,36,24,0.62)',

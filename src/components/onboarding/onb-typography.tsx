@@ -4,7 +4,7 @@
 // visual output. Every full-screen onboarding step composes these instead
 // of raw `<Text>`.
 import type { ReactNode } from 'react';
-import { StyleSheet, Text, type StyleProp, type TextStyle } from 'react-native';
+import { StyleSheet, Text, type StyleProp, type TextProps, type TextStyle } from 'react-native';
 
 import { colors, fonts } from '@/constants/theme';
 
@@ -13,6 +13,8 @@ interface OnbTextProps {
   style?: StyleProp<TextStyle>;
   testID?: string;
   numberOfLines?: number;
+  /** Forwarded to the underlying Text -- e.g. 'tail' when pairing with numberOfLines so a long caption truncates instead of overflowing its frame. */
+  ellipsizeMode?: TextProps['ellipsizeMode'];
 }
 
 interface OnbDisplayProps extends OnbTextProps {
@@ -77,9 +79,10 @@ interface OnbBodyProps extends OnbTextProps {
 }
 
 /** Plus Jakarta Sans body copy. */
-export function OnbBody({ children, muted = false, size = 16, style, testID, numberOfLines }: OnbBodyProps) {
+export function OnbBody({ children, ellipsizeMode, muted = false, size = 16, style, testID, numberOfLines }: OnbBodyProps) {
   return (
     <Text
+      ellipsizeMode={ellipsizeMode}
       numberOfLines={numberOfLines}
       style={[
         {
