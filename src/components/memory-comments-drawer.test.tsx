@@ -1,11 +1,14 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Alert, Keyboard, StyleSheet } from 'react-native';
+import { State } from 'react-native-gesture-handler';
+import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import {
   getCommentsDrawerBottomPadding,
   getCommentsKeyboardAvoidingBehavior,
   MemoryCommentsDrawer,
+  shouldDismissCommentsDrawer,
 } from './memory-comments-drawer';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
@@ -81,8 +84,8 @@ describe('MemoryCommentsDrawer', () => {
     } as never);
   });
 
-  function renderDrawer() {
-    return render(
+  function renderDrawer(onClose = jest.fn()) {
+    const drawer = (visible: boolean) => (
       <SafeAreaProvider
         initialMetrics={{
           frame: { height: 844, width: 390, x: 0, y: 0 },
@@ -91,11 +94,23 @@ describe('MemoryCommentsDrawer', () => {
       >
         <MemoryCommentsDrawer
           memory={{ id: 'memory-1' } as never}
-          onClose={jest.fn()}
-          visible
+          onClose={onClose}
+          visible={visible}
         />
-      </SafeAreaProvider>,
+      </SafeAreaProvider>
     );
+    const view = render(drawer(true));
+
+    return {
+      ...view,
+      onClose,
+      rerenderDrawer: (visible: boolean) => view.rerender(drawer(visible)),
+    };
+  }
+
+  function drawerTranslateY(style: unknown) {
+    const transform = StyleSheet.flatten(style)?.transform as { translateY?: number }[] | undefined;
+    return transform?.find((entry) => entry.translateY !== undefined)?.translateY;
   }
 
   it('shows account attribution and posts from the fixed composer', async () => {
@@ -151,5 +166,96 @@ describe('MemoryCommentsDrawer', () => {
     expect(StyleSheet.flatten(getByTestId('comments-drawer').props.style).paddingBottom).toBe(34);
 
     addListenerSpy.mockRestore();
+  });
+
+  it('dismisses from a deliberate downward handle drag exactly once', async () => {
+    const dismissKeyboardSpy = jest.spyOn(Keyboard, 'dismiss');
+    const onClose = jest.fn();
+    const { getByTestId } = renderDrawer(onClose);
+
+    await act(async () => {
+      fireGestureHandler(getByGestureTestId('comments-drawer-dismiss-pan'), [
+        { state: State.BEGAN, translationY: 0, velocityY: 0 },
+        { state: State.ACTIVE, translationY: 128, velocityY: 0 },
+        { state: State.END, translationY: 128, velocityY: 0 },
+      ]);
+    });
+
+    expect(dismissKeyboardSpy).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.press(getByTestId('comments-drawer-backdrop', { includeHiddenElements: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    dismissKeyboardSpy.mockRestore();
+  });
+
+  it('snaps a short, slow handle drag back instead of dismissing', async () => {
+    const onClose = jest.fn();
+    const { getByTestId, rerenderDrawer } = renderDrawer(onClose);
+
+    await act(async () => {
+      fireGestureHandler(getByGestureTestId('comments-drawer-dismiss-pan'), [
+        { state: State.BEGAN, translationY: 0, velocityY: 0 },
+        { state: State.ACTIVE, translationY: 48, velocityY: 0 },
+        { state: State.END, translationY: 48, velocityY: 0 },
+      ]);
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    rerenderDrawer(true);
+    expect(drawerTranslateY(getByTestId('comments-drawer').props.style)).toBe(0);
+  });
+
+  it('snaps a cancelled handle drag back instead of leaving the drawer displaced', async () => {
+    const onClose = jest.fn();
+    const { getByTestId, rerenderDrawer } = renderDrawer(onClose);
+
+    await act(async () => {
+      fireGestureHandler(getByGestureTestId('comments-drawer-dismiss-pan'), [
+        { state: State.BEGAN, translationY: 0, velocityY: 0 },
+        { state: State.ACTIVE, translationY: 72, velocityY: 0 },
+        { state: State.CANCELLED, translationY: 72, velocityY: 0 },
+      ]);
+    });
+
+    rerenderDrawer(true);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(drawerTranslateY(getByTestId('comments-drawer').props.style)).toBe(0);
+  });
+
+  it('clamps an upward handle drag, allows a fast downward flick, and resets for reopening', async () => {
+    const onClose = jest.fn();
+    const { getByTestId, rerenderDrawer } = renderDrawer(onClose);
+
+    await act(async () => {
+      fireGestureHandler(getByGestureTestId('comments-drawer-dismiss-pan'), [
+        { state: State.BEGAN, translationY: 0, velocityY: 0 },
+        { state: State.ACTIVE, translationY: -48, velocityY: 0 },
+        { state: State.END, translationY: -48, velocityY: 0 },
+      ]);
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireGestureHandler(getByGestureTestId('comments-drawer-dismiss-pan'), [
+        { state: State.BEGAN, translationY: 0, velocityY: 0 },
+        { state: State.ACTIVE, translationY: 12, velocityY: 950 },
+        { state: State.END, translationY: 12, velocityY: 950 },
+      ]);
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(shouldDismissCommentsDrawer(119, 899)).toBe(false);
+
+    await act(async () => {
+      rerenderDrawer(false);
+    });
+    await act(async () => {
+      rerenderDrawer(true);
+    });
+
+    expect(drawerTranslateY(getByTestId('comments-drawer').props.style)).toBe(0);
+    fireEvent.press(getByTestId('comments-drawer-close'));
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 });

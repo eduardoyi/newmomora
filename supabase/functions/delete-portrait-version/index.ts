@@ -1,4 +1,4 @@
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedNonAnonymousUser, getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
@@ -18,8 +18,10 @@ export interface DeletePortraitVersionDependencies {
   deleteObject: typeof deleteObject;
 }
 
-const DEFAULT_DEPENDENCIES: DeletePortraitVersionDependencies = {
-  getAuthenticatedUser,
+// WP-SEC: the default dependency rejects an anonymous Auth session -- see
+// _shared/auth.ts and delete-family-member/index.ts for the same pattern.
+export const DEFAULT_DEPENDENCIES: DeletePortraitVersionDependencies = {
+  getAuthenticatedUser: getAuthenticatedNonAnonymousUser,
   createServiceClient,
   getCallerFamilyRole,
   listObjectKeys,

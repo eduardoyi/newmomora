@@ -1,0 +1,186 @@
+appId: com.memora.app
+---
+# Owner happy path: S0 (welcome) through the full story/capture/trust/paywall
+# arc to S16 and into the real journal (docs/plans/onboarding-implementation.md
+# WP5 -- the front door now lands an unauthenticated launch on
+# app/(onboarding)/welcome.tsx instead of app/(auth)/login.tsx, per spec
+# decision 2). Depends on every S0-S16 screen (WP0-WP3) already landed.
+#
+# NOT executed -- no simulator/device was available while authoring this
+# (same caveat as .maestro/flows/sharing/*, see that directory's README).
+# Written lint-by-eye against the testIDs declared in the screens under
+# app/(onboarding)/ (grepped, not invented) -- treat as a first draft to run
+# and fix up against a real EAS dev build before trusting it in CI.
+#
+# Gaps intentionally left open rather than faked:
+# - S12 is real email-OTP with no dev/password shortcut (that toggle only
+#   exists on app/(auth)/login.tsx, via login-dev-toggle-button) -- Maestro
+#   cannot read a real inbox, so ${TEST_ONBOARDING_OWNER_OTP} below is a
+#   placeholder that must be filled in by hand (or a test-inbox integration)
+#   before this flow can run past S12B. Add TEST_ONBOARDING_OWNER_EMAIL and
+#   TEST_ONBOARDING_OWNER_OTP to .maestro/.env.example before running (same
+#   "not defined yet, add before running" note the sharing suite's README
+#   carries for TEST_EMAIL_2/TEST_PASSWORD_2).
+# - TEST_ONBOARDING_OWNER_EMAIL must be an account that has never completed
+#   onboarding before: commitOnboarding (src/services/onboarding.ts)
+#   permanently creates that email's family on first success, so rerunning
+#   this flow against the same address takes the "returning owner" branch
+#   (docs/features/onboarding.md decision 18) straight to the journal instead
+#   of exercising S13-S16 a second time. Use a fresh address each run, same
+#   rerun caveat .maestro/flows/sharing/README.md documents for its own
+#   two-account loop.
+# - S16's portrait step has no __DEV__ fixture shortcut (unlike
+#   add-family-member.tsx's add-family-member-photo-fixture button) --
+#   app/(onboarding)/portrait.tsx only exposes the real system photo picker,
+#   so this drives it the same way
+#   .maestro/flows/onboarding/add-family-member-with-picker.yaml does
+#   (addMedia + shared/pick-first-image.yaml). "Choose a photo" is disabled
+#   until useFamilyMembers resolves the just-created child row -- pad the
+#   wait before tapping it if this flakes on a real run.
+# - The notification step (S11) picks "No reminders"
+#   (onboarding-notifications-option-none) specifically to avoid the native
+#   OS permission dialog, which is non-deterministic to script -- the other
+#   three options are equally valid choices, just not scripted here.
+- addMedia:
+    - ../../assets/profile-fixture.jpg
+- launchApp:
+    appId: com.memora.app
+    clearState: true
+    arguments:
+      EXDevMenuIsOnboardingFinished: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: onb-welcome-screen
+    timeout: 90000
+
+# S0 -> S1-S3 (story beats) -> founders -> artifact
+- tapOn:
+    id: onb-welcome-start-button
+- tapOn:
+    id: onb-story-0-cta-button
+- tapOn:
+    id: onb-story-1-cta-button
+- tapOn:
+    id: onb-story-2-cta-button
+- tapOn:
+    id: onb-founders-cta-button
+- tapOn:
+    id: onb-artifact-cta-button
+
+# S6 -- kids: a single typed-but-never-"+ Add another"-tapped name must still
+# unblock Continue (plan WP1 note; kids.tsx's own canContinue check).
+- tapOn:
+    id: onb-kids-input
+- inputText: "Lila"
+- tapOn:
+    id: onb-kids-continue-button
+
+# S7 -- accept the auto-suggested family name as-is.
+- tapOn:
+    id: onb-family-name-continue-button
+
+# S8 -- bridge to capture.
+- tapOn:
+    id: onb-bridge-cta-button
+
+# S9 -- typed capture path. Voice needs mic hardware/permissions this happy
+# path deliberately avoids; "I'd rather type" is itself a first-class
+# fallback, not a workaround.
+- tapOn:
+    id: onboarding-capture-type-instead
+- tapOn:
+    id: onboarding-capture-textarea
+- inputText: "Colored outside every single line today and was very proud of it."
+- tapOn:
+    id: onboarding-capture-keep
+
+# S10 (aha) -> S10b (year showcase)
+- tapOn:
+    id: onboarding-aha-continue
+- tapOn:
+    id: onboarding-year-continue
+
+# S11 -- notification question (see header note on why "none").
+- tapOn:
+    id: onboarding-notifications-option-none
+
+# S12A -- name + email (WP6 added the owner's display name field above the
+# email input; both must be non-empty before the CTA enables), then
+# S12B -- OTP code (auto-verifies once 6 digits are entered; see
+# app/(onboarding)/code.tsx's handleChangeCode).
+- tapOn:
+    id: onboarding-email-name-input
+- inputText: "Rosa"
+- tapOn:
+    id: onboarding-email-input
+- inputText: ${TEST_ONBOARDING_OWNER_EMAIL}
+- tapOn:
+    id: onboarding-email-send
+
+- extendedWaitUntil:
+    visible:
+      id: onboarding-code-input
+    timeout: 15000
+- tapOn:
+    id: onboarding-code-input
+- inputText: ${TEST_ONBOARDING_OWNER_OTP}
+
+# commitOnboarding runs here (creates the family, the kid, the first memory)
+# before S13 renders -- give it real network round-trip time.
+- extendedWaitUntil:
+    visible:
+      id: onb-trial-screen
+    timeout: 20000
+
+# S13 -> S14 -> S15 (placeholder paywall -- "Start my free week" advances
+# with zero billing, per that screen's own TODO(paywall) block).
+- tapOn:
+    id: onb-trial-cta-button
+- tapOn:
+    id: onb-included-cta-button
+- tapOn:
+    id: onb-paywall-cta-button
+
+# S16 -- real photo -> portrait kickoff, via the system picker (see header
+# note -- no dev fixture shortcut exists on this screen).
+- extendedWaitUntil:
+    visible:
+      id: onb-portrait-choose-photo-button
+    timeout: 15000
+- tapOn:
+    id: onb-portrait-choose-photo-button
+- tapOn:
+    text: "Allow Full Access"
+    optional: true
+- tapOn:
+    text: "Allow Access to All Photos"
+    optional: true
+- runFlow: ../shared/pick-first-image.yaml
+- tapOn:
+    text: "Choose"
+    optional: true
+
+- extendedWaitUntil:
+    visible:
+      id: onb-portrait-journal-button
+    timeout: 15000
+- tapOn:
+    id: onb-portrait-journal-button
+
+- extendedWaitUntil:
+    visible: "Timeline"
+    timeout: 20000

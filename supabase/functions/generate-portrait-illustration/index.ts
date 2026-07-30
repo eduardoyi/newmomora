@@ -1,5 +1,5 @@
 import { describeAgeAtDate, isAdultAtDate } from '../_shared/age.ts';
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedNonAnonymousUser, getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
@@ -81,8 +81,10 @@ export const PORTRAIT_WORKFLOW_LEASE_MS = 5 * 60_000;
 export const PORTRAIT_WORKFLOW_RECOVERY_GRACE_MS = 30_000;
 export const PORTRAIT_UNCLAIMED_RECOVERY_MS = 3 * 60_000;
 
-const DEFAULT_DEPENDENCIES: GeneratePortraitDependencies = {
-  getAuthenticatedUser,
+// WP-SEC: the default dependency rejects an anonymous Auth session -- see
+// _shared/auth.ts.
+export const DEFAULT_DEPENDENCIES: GeneratePortraitDependencies = {
+  getAuthenticatedUser: getAuthenticatedNonAnonymousUser,
   createServiceClient,
   getCallerFamilyRole,
   getObjectBytes,

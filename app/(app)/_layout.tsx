@@ -1,4 +1,5 @@
 import { Redirect, Stack, useSegments } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { colors } from '@/constants/theme';
@@ -10,7 +11,7 @@ import { noFamilyRoute } from '@/lib/routes';
 
 export default function AppLayout() {
   const { session, isLoading: isAuthLoading } = useAuth();
-  const { familyId, isLoading: isFamilyLoading } = useFamily();
+  const { familyId, isLoading: isFamilyLoading, refetchMemberships } = useFamily();
   useAiUsageLimitNotices();
   // Deep-link routing for tapped push notifications (plan §10) -- lives at
   // the app root so it's active for the whole authenticated session
@@ -30,6 +31,59 @@ export default function AppLayout() {
   // group is exempt from the no-family redirect. Manager-only sharing
   // screens guard themselves on role.
   const isOnSharingRoute = (segments as string[]).includes('sharing');
+
+  // Onboarding's commit step (commitOnboarding, src/services/onboarding.ts,
+  // run from app/(onboarding)/code.tsx) creates a brand-new family through
+  // direct service calls, not a query-invalidating mutation, and the
+  // screens between there and here (S13-S16, e.g.
+  // app/(onboarding)/portrait.tsx's "Take me to the journal") never
+  // explicitly refetch memberships before handing off to the journal.
+  // FamilyProvider's cached membership list (use-family.tsx) can therefore
+  // still read empty for a session even though a family now genuinely
+  // exists -- nothing else refetches it (no AppState/focus event fires
+  // during a single continuous foreground session). Confirm with one fresh
+  // refetch before trusting an empty result enough to bounce the user to
+  // the create-a-family screen: this keeps the guard from fighting a user
+  // who just finished onboarding, without weakening it for a real
+  // zero-family account (which still lands on no-family once this refetch
+  // also comes back empty).
+  const hasStartedNoFamilyConfirmationRef = useRef(false);
+  const [isConfirmingNoFamily, setIsConfirmingNoFamily] = useState(false);
+
+  useEffect(() => {
+    if (
+      isAuthLoading ||
+      isFamilyLoading ||
+      !session ||
+      familyId ||
+      isOnNoFamilyRoute ||
+      isOnSharingRoute ||
+      hasStartedNoFamilyConfirmationRef.current
+    ) {
+      return;
+    }
+
+    hasStartedNoFamilyConfirmationRef.current = true;
+    setIsConfirmingNoFamily(true);
+    void refetchMemberships().finally(() => setIsConfirmingNoFamily(false));
+  }, [
+    isAuthLoading,
+    isFamilyLoading,
+    session,
+    familyId,
+    isOnNoFamilyRoute,
+    isOnSharingRoute,
+    refetchMemberships,
+  ]);
+
+  useEffect(() => {
+    // Reset the one-shot guard once a family is present (e.g. sign-out and
+    // back in as someone else later) so a later legitimate no-family state
+    // still gets its own confirming refetch.
+    if (familyId) {
+      hasStartedNoFamilyConfirmationRef.current = false;
+    }
+  }, [familyId]);
 
   if (isAuthLoading) {
     return (
@@ -56,7 +110,17 @@ export default function AppLayout() {
   // through the Stack below so the user can act on it (create a family or
   // redeem an invite code carried in AsyncStorage), and the sharing group
   // (redeem/waiting) must not be clobbered while a redemption is in flight.
+  // `isConfirmingNoFamily` (see the effect above) holds this redirect one
+  // beat for the one-shot confirming refetch -- a real zero-family account
+  // still lands here the moment that refetch also comes back empty.
   if (!familyId && !isOnNoFamilyRoute && !isOnSharingRoute) {
+    if (isConfirmingNoFamily) {
+      return (
+        <View style={styles.loading}>
+          <ActivityIndicator color={colors.primary} size="large" />
+        </View>
+      );
+    }
     return <Redirect href={noFamilyRoute} />;
   }
 

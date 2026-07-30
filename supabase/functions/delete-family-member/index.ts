@@ -1,4 +1,4 @@
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedNonAnonymousUser, getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
@@ -13,8 +13,12 @@ export interface DeleteFamilyMemberDependencies {
   deleteObject: typeof deleteObject;
 }
 
-const DEFAULT_DEPENDENCIES: DeleteFamilyMemberDependencies = {
-  getAuthenticatedUser,
+// WP-SEC: the default dependency rejects an anonymous Auth session (returns
+// null, same as no/invalid auth), same as every other normal Edge Function --
+// see _shared/auth.ts. Tests may still inject any `getAuthenticatedUser`
+// fake directly to exercise this function's own logic in isolation.
+export const DEFAULT_DEPENDENCIES: DeleteFamilyMemberDependencies = {
+  getAuthenticatedUser: getAuthenticatedNonAnonymousUser,
   createServiceClient,
   getCallerFamilyRole,
   listObjectKeys,

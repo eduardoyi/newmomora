@@ -164,7 +164,25 @@ refresh_token_reuse_interval = 10
 # Allow/disallow new user signups to your project.
 enable_signup = true
 # Allow/disallow anonymous sign-ins to your project.
-enable_anonymous_sign_ins = false
+# Flipped to true by WP-SEC (docs/plans/onboarding-implementation.md --
+# "WP-SEC -- Anonymous authorization lockdown"), in the same change as
+# supabase/migrations/20260729130000_onboarding_anonymous_lockdown.sql and
+# 20260729150000_abandoned_anonymous_cleanup.sql. All of the following are
+# this flag's enumerated pre-conditions and must land, apply cleanly, and
+# pass BEFORE it is ever true in a real environment: both migrations above,
+# supabase/tests/onboarding_anonymous_lockdown.sql,
+# supabase/functions/_shared/auth.test.ts, and
+# supabase/functions/cleanup-abandoned-anonymous-users (scheduled via
+# pg_cron by 20260730120000_schedule_abandoned_anonymous_cleanup_cron.sql --
+# see that function's TECH_SPEC entry, §4.17). An anonymous
+# Auth user gets the normal `authenticated` Postgres role, and pre-lockdown
+# that role could reach `create_family` (SECURITY DEFINER) and become a real
+# family owner; without the cleanup cron scheduled, every abandoned
+# onboarding session also leaves a permanent, never-reaped auth.users row.
+# Onboarding's two pre-auth calls (S9 voice transcription, J2 invite preview
+# via `preview-family-invite`) depend on this flag; do not disable it
+# without also reverting those two client paths to fail closed.
+enable_anonymous_sign_ins = true
 # Allow/disallow testing manual linking of accounts
 enable_manual_linking = false
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
@@ -383,6 +401,18 @@ verify_jwt = false
 # This scheduled maintenance endpoint authenticates with x-cron-secret. It
 # cannot require a user JWT because pg_cron/pg_net invokes it directly.
 [functions.run-ai-usage-alerts]
+verify_jwt = false
+
+# WP-SEC item 5 (docs/plans/onboarding-implementation.md). Same shape as
+# run-ai-usage-alerts above: the scheduler has no user JWT, only
+# x-cron-secret, so gateway JWT verification must be off or every invocation
+# 401s before this function's own check ever runs. Scheduled via pg_cron by
+# 20260730120000_schedule_abandoned_anonymous_cleanup_cron.sql (daily,
+# 04:00 UTC -- sufficient given the 7-day ABANDONED_ANONYMOUS_USER_TTL_DAYS).
+# That job reads the same project_url/cron_secret Vault secrets as the other
+# pg_cron jobs in this repo; until both exist per environment, it fails
+# visibly in cron.job_run_details without affecting anything else.
+[functions.cleanup-abandoned-anonymous-users]
 verify_jwt = false
 
 # Cloudflare Workflows authenticates with a timestamped raw-body HMAC. JWT

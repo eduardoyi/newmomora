@@ -18,6 +18,17 @@ appId: com.memora.app
     text: "Momora"
     below: "DEVELOPMENT SERVERS"
     optional: true
+# A session-less launch now lands on app/(onboarding)/welcome.tsx (S0), not
+# "Welcome back" directly -- the front door change in
+# docs/plans/onboarding-implementation.md WP5 (spec decision 2: "the new
+# flow is the front door"). Tap S0's quiet "Log in" link to reach the login
+# screen; optional so this is a no-op when a session already exists (the
+# "Welcome back" conditional below then just never fires). Do not remove
+# this tap even if it looks redundant -- without it the conditional below
+# silently never matches on a clean install.
+- tapOn:
+    id: onb-welcome-login-link
+    optional: true
 - runFlow:
     when:
       visible: "Welcome back"

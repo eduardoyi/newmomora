@@ -4,7 +4,12 @@ export interface CreateFamilyMemberInput {
   userId: string;
   familyId: string;
   name: string;
-  dateOfBirth: string;
+  // Widened for onboarding's name-only child profiles (WP0 §0.9,
+  // docs/plans/onboarding-implementation.md) -- `date_of_birth` is
+  // nullable in the DB already. Existing callers (add-family-member.tsx)
+  // pass a validated string via `validateDateOfBirth`, which keeps its
+  // current required-behavior; only this input type widened.
+  dateOfBirth: string | null;
   gender?: string;
   additionalInfo?: string;
   nicknames?: string[] | null;
@@ -189,6 +194,21 @@ export function getPortraitImageCacheKey(
   updatedAt: string,
 ): string | undefined {
   return imageKey ? `${imageKey}-${updatedAt}` : undefined;
+}
+
+/**
+ * A member with zero portrait versions ever created -- distinct from
+ * `pending`/`generating` (which mean a photo WAS picked and a portrait is
+ * already in flight). Onboarding's S16 (app/(onboarding)/portrait.tsx) and
+ * S17 (app/(onboarding)/reveal.tsx) both need the exact same definition of
+ * "still needs their photo picked" -- S16 to fall back to a target once the
+ * pre-auth draft is empty, S17 to find the next kid in the sibling chain --
+ * so it lives here once rather than risking the two screens drifting apart.
+ * Duck-typed (not `FamilyMember`) to avoid a circular import: this file is
+ * imported BY src/services/family-members.ts, not the other way around.
+ */
+export function hasNoPortraitYet(member: { portraitVersions?: unknown[] }): boolean {
+  return (member.portraitVersions?.length ?? 0) === 0;
 }
 
 export function getPortraitStatusLabel(status: IllustratedProfileStatus): string {

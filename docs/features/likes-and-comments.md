@@ -1,7 +1,7 @@
 # Feature: Likes & comments
 
 **Status:** `done`
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-29
 **PRD reference:** §6.8 Likes & Comments
 
 ## Overview
@@ -19,7 +19,10 @@ Every active role, including viewer, may participate.
 - Counts are passive and appear only when greater than zero. There is no liker
   list.
 - Timeline comment taps navigate to memory detail with `?comments=1`; detail
-  comment taps open an 80%-height bottom drawer directly.
+  comment taps open an 80%-height bottom drawer directly. A deliberate
+  downward drag on its handle/header dismisses it; short, slow drags spring
+  back without competing with comment-list scrolling. An explicit header close
+  button keeps dismissal available to assistive-technology users.
 - Comments render oldest-to-newest with the household account name, avatar
   initial, and compact timestamp (`now`, minutes, hours, days, then date).
 - The fixed plain-text composer stays above the keyboard on iOS and Android.
@@ -144,6 +147,10 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
   from leaving the drawer floating above the bottom of the screen. Do not
   reintroduce a fixed pixel height from `useWindowDimensions`; that combination
   causes top overflow and a delayed jump when the keyboard closes.
+- React Native `Modal`s are separate Android windows, so the drawer's gesture
+  region must remain inside its own `GestureHandlerRootView`. Keep the pan
+  target to the handle/header; the `FlatList` must retain ownership of list
+  scrolling.
 
 ## Dependencies
 
@@ -158,7 +165,7 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 |------|--------|
 | `src/utils/engagement.test.ts` | Relative/calendar timestamp boundaries |
 | `src/components/memory-engagement-bar.test.tsx` | Hidden zero counts, selected state, action wiring |
-| `src/components/memory-comments-drawer.test.tsx` | Drawer/composer behavior, keyboard avoidance, posting and moderation affordances |
+| `src/components/memory-comments-drawer.test.tsx` | Drawer/composer behavior, keyboard avoidance, handle drag dismissal/snapback, posting and moderation affordances |
 
 ### Integration tests
 
@@ -173,7 +180,7 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 
 | Flow | Scenario |
 |------|----------|
-| `.maestro/flows/engagement/like-and-comment.yaml` | Create a memory, like it from Timeline, open comments via detail, post a comment |
+| `.maestro/flows/engagement/like-and-comment.yaml` | Create a memory, like it from Timeline, open comments via detail, post a comment, and pull the drawer down to dismiss |
 
 ### Edge Function tests (Deno)
 
@@ -199,6 +206,7 @@ maestro test .maestro/flows/engagement/like-and-comment.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-07-29 | Added reliable handle/header pull-down dismissal with Android modal gesture support and snapback coverage |
 | 2026-07-15 | Keep the comment composer above the Android keyboard and restore bottom docking after keyboard close |
 | 2026-07-14 | Fixed keyboard spacing, visible-viewport overflow, first-comment visibility, and Android drawer reposition flicker |
 | 2026-07-13 | Initial likes, comments, moderation, optimistic UI, notification preference/delivery, and tests |

@@ -97,28 +97,30 @@
 
 ---
 
-### S6 — Child's name
+### S6 — Kid name(s)
 
-**Job:** personalization + the highest-value commitment (spec decision 8). The ONLY typed field before capture.
-**Layout:** single centered input, big Newsreader entry text. Keyboard opens immediately. Small warm illustration behind, not competing with the input.
+**Job:** personalization + the highest-value commitment (spec decision 8). The ONLY typing before capture. Supports multiple kids without adding friction for single-kid parents: one field by default, a quiet add affordance below it.
+**Layout:** single centered input, big Newsreader entry text, keyboard open immediately. Below the field, a quiet text affordance "+ Add another kiddo". Tapping it turns the entered name into a small chip (reuse the family-profiles avatar-chip style, initial-letter avatar in an emotion color) and opens a fresh field. Chips are deletable. No DOB, no photos, no per-kid anything: names only.
 
 > **Headline:** Who's this journal for?
 > **Input placeholder:** Their first name
-> **Helper (small):** Nicknames welcome. Siblings can pile in later.
+> **Quiet affordance below field:** ＋ Add another kiddo
+> **Helper (small):** Nicknames welcome. No favorites here, add them all.
 >
 > **CTA:** Continue
 
-**Note:** from here on, every headline that can carry `{name}` should.
+**Note:** from here on, every headline that can carry `{name}` should. **Multi-kid copy rule for all downstream screens:** single kid → use `{name}`; multiple kids → use the kid selected on S9's chips, or neutral "their / the kids" phrasing when several are tagged. Never invent an order of preference.
 
 ---
 
 ### S7 — Family name
 
 **Job:** light commitment; needed for tenancy. One tap, zero typing.
-**Layout:** pre-filled editable field. Default is **"{name}'s Family"** (we don't know a surname yet; auth comes later). Small illustrated nest/house motif.
+**Layout:** pre-filled editable field (we don't know a surname yet; auth comes later). Small illustrated nest/house motif. Prefill rule: 1 kid → "{name}'s Family" · 2 kids → "{name1} & {name2}'s Family" · 3+ kids → "{name1}, {name2} & {name3}'s Family" (editable if unwieldy).
 
-> **Headline:** {name}'s stories need a home.
-> **Pre-filled input:** {name}'s Family *(editable, e.g. to "The Rivera Family")*
+> **Headline (single kid):** {name}'s stories need a home.
+> **Headline (multiple kids):** Their stories need a home.
+> **Pre-filled input:** per prefill rule above *(editable, e.g. to "The Rivera Family")*
 >
 > **CTA (affirmation):** That's us
 
@@ -148,7 +150,9 @@
 > **Tertiary:** ＋ Add a photo or video *(optional)*
 > **Reassurance (small):** Twenty seconds of rambling is plenty. Grammar optional.
 
-**States to design:** recording (soft waveform, no countdown timer), transcribing (brief), typed-entry variant, photo-attached variant.
+**Multi-kid variant:** when 2+ kids were entered on S6, their avatar chips appear above the prompt, first-entered kid pre-selected, multi-select allowed (sibling moments are valid, and lovely). The prompt personalizes to the selection: one kid selected → their name; several → "What's something small the two of them did this week that made you smile?" (or "the three of them", etc.). Selection tags the memory and drives `{name}` on later screens.
+
+**States to design:** recording (soft waveform, no countdown timer), transcribing (brief), typed-entry variant, photo-attached variant, multi-kid chips variant.
 
 ---
 
@@ -159,9 +163,24 @@
 **Animation:** page settles in (laying down on a desk), then the like-heart on the card fills with the same pop animation used in the app's likes feature. One beat of delight, not a fireworks show.
 
 > **Eyebrow (small, above the page):** That cost you about 20 seconds of your evening.
-> **Below the page:** {name}'s first page. Imagine a year of these.
+> **Below the page (single kid, or one kid tagged):** {name}'s first page. Imagine a year of these.
+> **Below the page (several kids tagged):** Their first page. Imagine a year of these.
 >
 > **CTA:** Keep it going
+
+---
+
+### S10b — "A year of these": the memory-types showcase
+
+**Job:** teach the breadth (talk, type, photo, video, illustrated) by SHOWING a future journal, not listing features. Placed at peak investment, right after the aha. Also quietly previews the illustrated type that the paywall sells. One screen only; this must not become a feature tour.
+**Layout:** the user's real first card sits at the top of a mocked journal timeline (reuse the timeline screen + `memory-card.tsx` styles), followed by 3 or 4 example cards of the other types: an illustrated page, a photo SpreadCard, a video card (play affordance, duration chip like `0:12`), a one-line text QuoteCard. Example cards use founder-family assets (same pool as S5) so the quality is real. Small Caveat annotations hang off the example cards.
+**Animation:** the timeline scrolls upward slowly on its own (gentle parallax), the year accumulating, with the user's card anchored visible at the start. No interaction required.
+
+> **Headline:** A year of these looks like this.
+> **Caveat annotations on example cards:** *your 20 seconds, tonight* · *a blurry zoo photo, still counts* · *12 seconds of the belly laugh* · *the word he invented for spaghetti*
+> **Body (short, under the mock):** Talk, type, photos, video. Some become illustrated pages. All of it lands in {name}'s journal.
+>
+> **CTA (affirmation):** I could actually do this
 
 ---
 
@@ -260,7 +279,29 @@
 > **CTA:** Choose a photo
 > **After selection:** We're painting. It takes a few minutes, so go do literally anything else. It'll be here when you get back.
 
+**Multi-kid note:** one portrait at a time, starting with the kid tagged in the first memory (or the first-entered name). Siblings chain through S17 below, never batched into one photo-picking chore. If several kids exist, add a small line under the CTA: *The others get their turn next, promise.*
+
 *(then the user lands in the journal, memory #1 already there)*
+
+---
+
+### S17 — Portrait reveal + the sibling chain *(in-trial, fires when a portrait finishes)*
+
+**Job:** the trial's recurring delight moment, and the mechanism that gets every kid painted. The reveal is the highest-motivation moment in the trial (the user just saw the promised quality on their own kid), so the ask for the next sibling lives here, not on a schedule.
+**Layout:** full-screen reveal of the finished portrait, same restraint as S10: the portrait settles in, one beat, maybe the heart pop. If unpainted siblings remain, the chain CTA sits under the portrait and re-enters the S16 component for the next kid. If none remain, a simple continue.
+
+> **Headline:** Meet {name}.
+> **Body (small):** Painted from the photo you picked. This is how {name} shows up in the journal from now on.
+>
+> **Chain CTA (siblings remain):** {next-name}'s turn. Pick a photo
+> **Quiet link under it:** Later
+> **CTA (no siblings left):** Take me to the journal
+
+**Fallback state (they tap Later or never open the reveal):** in the family tab ("The cast"), unpainted kids show as soft waiting states: sketch-outline avatar, Caveat label *waiting to be painted*, tap to start S16 for that kid. No badges, no counters, no red anything. An invitation, not a task.
+
+**No push:** portrait nudges are in-app only. The notification permission was granted for capture reminders; spending it on setup chores is the pattern we exist to avoid.
+
+**Adults are out of scope for this sequence.** Kids only during the trial. Two separate future moments, not in this design pass: the owner's own portrait (the photographer-parent is never in the pictures, strong hook, but it's a retention moment), and joiners getting "drawn into the family" post-approval (adds a step to a flow whose virtue is having none).
 
 ---
 
@@ -328,9 +369,12 @@ Same component as S12, different framing:
 4. Small motifs: nest/house (S7), door with light (J5), option glyphs (S11)
 5. The rendered first-page templates (S10): QuoteCard and SpreadCard variants already exist in `memory-card.tsx`
 6. Like-heart fill/pop animation (S10): already exists in the likes feature, reuse the exact curve
+7. S10b example cards from founder-family assets: one illustrated page, one photo SpreadCard, one video card with duration chip, one text QuoteCard
+8. Kid avatar chips (S6, S9): initial-letter avatars in emotion colors, reuse the family-profiles chip style
 
 ## Open items (don't block design)
 
 - Final annual price (paywall shows `$XX.99` placeholder)
 - Whether S11's OS prompt needs a pre-prompt interstitial on Android (design iOS-first)
 - Lapsed-owner resubscribe screen: separate mini-brief later; reuses S15 minus trial framing, archive stays visible behind it
+- Owner's own portrait moment (post-kids, "the photographer parent is never in the pictures") and joiner "get drawn in" portrait: future briefs, not this pass

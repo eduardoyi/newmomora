@@ -308,6 +308,21 @@ Every RLS policy on shared tables (`families`, `family_memberships`,
 `family_memberships` join in the policy body (that would recurse through
 the RLS it's supposed to gate; `security definer` sidesteps it).
 
+- **`is_anonymous_user() → boolean`** — true only for a currently-anonymous
+  Auth session (`20260729130000_onboarding_anonymous_lockdown.sql`, WP-SEC).
+  Every one of the tables above (plus `user_profiles`, `memory_likes`,
+  `memory_comments`, `family_member_portrait_versions`,
+  `blocked_family_accounts`, `content_reports`) carries a RESTRICTIVE
+  `"<Table>: deny anonymous"` policy built on it, so a new PERMISSIVE policy
+  never has to account for anonymous sessions itself — the restrictive layer
+  ANDs on top regardless. Adding a new family-owned table? Give it the same
+  restrictive policy alongside its `is_family_member`/`has_family_role`
+  permissive ones. This does **not** protect SECURITY DEFINER RPCs (they
+  bypass RLS entirely) — those need their own explicit
+  `if public.is_anonymous_user() then raise ... end if;` guard; see the
+  migration's own audit comments for which existing RPCs already have one
+  and which are documented as anon-safe some other way.
+
 ### Definer RPCs (client-callable via `supabase.rpc(...)`)
 
 | RPC | Callable by | Purpose |
@@ -326,6 +341,7 @@ the RLS it's supposed to gate; `security definer` sidesteps it).
 |---|---|---|---|
 | `redeem-family-invite` | `{ code: string }` | `{ familyName: string, role: string }` | JWT |
 | `resolve-family-invite` | `{ inviteId: string, action: 'approve'\|'reject' }` | `{ success: true, status: 'approved'\|'rejected' }` | JWT, manager+ of the invite's family |
+| `preview-family-invite` | `{ code: string }` | `{ familyName: string, inviterName: string }` | JWT -- anonymous OR permanent (onboarding join path's pre-auth carve-out; see [usage-limits.md](./usage-limits.md) and the WP-SEC package in [docs/plans/onboarding-implementation.md](../plans/onboarding-implementation.md)). Never leaks a membership list, email, role, or family id; rate-limited by code, not by caller. |
 | `notify-family-activity` | `{ memoryId: string }` | `{ sent: boolean, reason?: 'debounced' }` | JWT, caller must be both the memory's creator and manager+ of its family |
 
 See [TECH_SPEC.md §4.10–4.12](../TECH_SPEC.md) for the canonical contracts
@@ -693,6 +709,9 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 |---|---|
 | `supabase/functions/redeem-family-invite/index.test.ts` | Happy path, expired, revoked, reused, rate-limited (user + IP), already-member, family soft-deleted |
 | `supabase/functions/resolve-family-invite/index.test.ts` | Approve/reject, non-manager rejection, duplicate-membership idempotency, 50-cap `family_full`, missing redeemer, Bento email success/skip/failure |
+| `supabase/functions/preview-family-invite/index.test.ts` | Happy path returns only `familyName`/`inviterName`, generic `invalid_code` for expired/revoked/redeemed/soft-deleted/unknown, rate-limited by code (not caller), and an end-to-end proof that an anonymous JWT is accepted (never 401) |
+| `supabase/functions/_shared/auth.test.ts`, `supabase/tests/onboarding_anonymous_lockdown.sql` | WP-SEC anonymous lockdown: `getAuthenticatedNonAnonymousUser` chokepoint, RESTRICTIVE anonymous-deny RLS, and every guarded SECURITY DEFINER RPC |
+| `supabase/functions/cleanup-abandoned-anonymous-users/index.test.ts` | TTL cutoff, the dangerous-failure-mode proof (a permanent user in the candidate list is never deleted), a candidate that unexpectedly owns real content is skipped (not deleted), already-gone/race and per-candidate-delete-failure handling |
 | `supabase/functions/notify-family-activity/index.test.ts` | Debounce window, non-creator rejection, viewer/non-manager rejection, recipient filtering on `notify_new_memories` |
 | `supabase/functions/notify-memory-engagement/index.test.ts` | Viewer participation, creator-only/no-self delivery, preference filtering, verified engagement ownership, debounce |
 | `supabase/functions/get-upload-url/index.test.ts`, `get-media-url/index.test.ts`, `delete-storage-object/index.test.ts` | Family-role-based authorization (member vs. manager+ vs. non-member) |
@@ -721,3 +740,4 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 | 2026-07-12 | Viewer Settings and calendar are further trimmed: viewers cannot see the calendar create FAB, daily journal reminder, or the Settings entry for Family members. They retain read-only timeline/calendar/family-roster access. |
 | 2026-07-13 | Likes/comments add a deliberate viewer-write exception: all active roles may engage, authors may delete their own comments, manager+ may moderate, and engagement notifications deep-link to memory detail. |
 | 2026-07-20 | Multi-family correctness + management: timeline/calendar/children-roster reads now filter by the active `family_id` client-side (previously RLS-only, which mixed families for multi-family users); joining a family now reliably sets it active (waiting-screen invalidation-order race fixed); new "Manage families" screen (create additional families in-app, owner soft-delete via new `delete_family` RPC); "Switch" link next to the family name; invite share message rewritten to walk fresh installs through signup → "I have an invite code" → code entry, and the no-family screen's invite button promoted to an equal-weight CTA with that exact label. |
+| 2026-07-29 | WP-SEC anonymous authorization lockdown (`20260729130000_onboarding_anonymous_lockdown.sql`), landing alongside onboarding's pre-auth anonymous sessions: `handle_new_user` no longer provisions a profile for an anonymous Auth user; a new RESTRICTIVE `is_anonymous_user()`-based "deny anonymous" policy sits on every shared table; every mutating SECURITY DEFINER RPC (`create_family`, `create_family_invite`, `delete_family`, `replace_memory_media_assets`, `set_memory_like`, `create_content_report`, `set_family_account_block`, the portrait-version RPCs) gained an explicit anonymous guard plus a tightened execute grant; new `preview-family-invite` Edge Function (J2's pre-auth dependency, rate-limited by code); every other normal Edge Function now goes through the new `getAuthenticatedNonAnonymousUser` chokepoint in `_shared/auth.ts`. Also closed, found during the RPC audit rather than anticipated by the plan: five portrait-generation-attempt RPCs in `20260715120000_portrait_timeline.sql` had a narrow `revoke ... from public;` that left them callable by the fully unauthenticated `anon` role directly. Same package, `20260729150000_abandoned_anonymous_cleanup.sql` + new scheduled `cleanup-abandoned-anonymous-users` Edge Function: deletes an abandoned anonymous Auth user (>7 days old) only after re-verifying, immediately before each delete, that it is still anonymous and still owns no real family/membership row. |

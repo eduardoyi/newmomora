@@ -19,3 +19,13 @@ appId: com.memora.app
 - extendedWaitUntil:
     visible: "I love this moment."
     timeout: 10000
+- hideKeyboard
+- waitForAnimationToEnd
+- swipe:
+    start: "50%, 25%"
+    end: "50%, 70%"
+    duration: 300
+- extendedWaitUntil:
+    notVisible:
+      id: comments-drawer
+    timeout: 5000

@@ -1,13 +1,59 @@
 import { Redirect, Stack } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { useFamily } from '@/hooks/use-family';
+import {
+  onboardingJoinCodeRoute,
+  onboardingJoinFoundRoute,
+  onboardingStepRoute,
+} from '@/lib/onboarding-routes';
+import { resolvePostAuthDestination } from '@/lib/onboarding-routing';
+import { timelineRoute } from '@/lib/routes';
+import { getOnboardingDraft, type OnboardingDraft } from '@/utils/onboarding-progress';
+import { getPendingInviteCode } from '@/utils/pending-invite-code';
 
+/**
+ * (auth)/login, signup, and verify-otp stay as the quiet "Log in" branch
+ * (spec decision 2) -- this layout only guards against a session landing
+ * here at all. It used to hard-redirect any session straight to the
+ * timeline, which would strand a user mid-onboarding (e.g. a stray nav back
+ * to /(auth)/login while an anonymous or freshly-verified session already
+ * has a resume point). Route through the same resolvePostAuthDestination
+ * front door as app/index.tsx instead -- see that file's comment for why
+ * `intent: 'login'` is correct here too (this is never a fork-button tap).
+ */
 export default function AuthLayout() {
-  const { session, isLoading } = useAuth();
+  const { session, isLoading: isAuthLoading } = useAuth();
+  const { memberships, isLoading: isFamilyLoading } = useFamily();
+  const [deviceState, setDeviceState] = useState<{
+    isHydrated: boolean;
+    draft: OnboardingDraft | null;
+    hasPendingInviteCode: boolean;
+  }>({ isHydrated: false, draft: null, hasPendingInviteCode: false });
 
-  if (isLoading) {
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+
+    let isMounted = true;
+
+    void Promise.all([getOnboardingDraft(), getPendingInviteCode()]).then(([draft, pendingCode]) => {
+      if (!isMounted) {
+        return;
+      }
+      setDeviceState({ isHydrated: true, draft, hasPendingInviteCode: Boolean(pendingCode) });
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [session]);
+
+  if (isAuthLoading) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator color={colors.primary} size="large" />
@@ -16,7 +62,35 @@ export default function AuthLayout() {
   }
 
   if (session) {
-    return <Redirect href="/(app)/(tabs)/timeline" />;
+    if (isFamilyLoading || !deviceState.isHydrated) {
+      return (
+        <View style={styles.loading}>
+          <ActivityIndicator color={colors.primary} size="large" />
+        </View>
+      );
+    }
+
+    const destination = resolvePostAuthDestination({
+      memberships: memberships.map((membership) => ({ familyId: membership.familyId })),
+      hasPendingInviteCode: deviceState.hasPendingInviteCode,
+      draft: deviceState.draft,
+      intent: 'login',
+    });
+
+    switch (destination.kind) {
+      case 'journal':
+        return <Redirect href={timelineRoute} />;
+      case 'resume-onboarding':
+        return <Redirect href={onboardingStepRoute(destination.step)} />;
+      case 'finish-join':
+        return <Redirect href={onboardingJoinFoundRoute} />;
+      case 'ask-invite-code':
+        return <Redirect href={onboardingJoinCodeRoute} />;
+      default: {
+        const exhaustive: never = destination;
+        return exhaustive;
+      }
+    }
   }
 
   return (

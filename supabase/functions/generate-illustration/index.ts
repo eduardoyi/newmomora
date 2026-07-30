@@ -1,4 +1,4 @@
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
@@ -410,7 +410,7 @@ export async function handleGenerateIllustration(
       return errorResponse('Invalid JSON body', 400, 'invalid_json');
     }
   } else {
-    const user = await getAuthenticatedUser(req);
+    const user = await getAuthenticatedNonAnonymousUser(req);
     if (!user) return errorResponse('Unauthorized', 401, 'unauthorized');
     try {
       body = JSON.parse(rawBody) as GenerateIllustrationRequest;

@@ -275,6 +275,33 @@ describe('Family members screen', () => {
     alertSpy.mockRestore();
   });
 
+  it('falls back to "This family member" for a blank name, in both the row label and the removal confirm copy (WP6 safety net)', () => {
+    setFamily('owner', 'user-1');
+    mockedUseFamilyMemberProfiles.mockReturnValue({
+      profiles: [ownerProfile, { ...viewerProfile, user_id: 'user-4', name: '' }],
+      isLoading: false,
+      isError: false,
+      error: null,
+    });
+
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+
+    const { getByTestId, getByText } = renderScreen();
+
+    expect(getByText('This family member')).toBeTruthy();
+
+    fireEvent.press(getByTestId('member-row-user-4'));
+    fireEvent.press(getByTestId('member-action-remove'));
+
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Remove from family',
+      'This family member will no longer be able to see the family journal. Memories and photos they added will stay.',
+      expect.anything(),
+    );
+
+    alertSpy.mockRestore();
+  });
+
   it('refreshes the list with a non-scary message when the member was already changed elsewhere', async () => {
     setFamily('owner', 'user-1');
     mockedUpdateMemberRole.mockResolvedValue({ data: [], error: null });

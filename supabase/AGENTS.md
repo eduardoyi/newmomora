@@ -24,8 +24,10 @@ Parent instructions: [../AGENTS.md](../AGENTS.md) · Contracts: [../docs/TECH_SP
 |-----|----------|---------|
 | `schedule-daily-reminders` | Hourly | Match user local time → push |
 | `hard-delete-expired-accounts` | Daily | Purge past 15-day grace |
+| `send-content-report-alert` (redrive) | Every 5 minutes | Redrive unsent content-report email alerts |
+| `cleanup-abandoned-anonymous-users` | Daily | Delete anonymous Auth users past 7-day TTL |
 
-Both require `CRON_SECRET` header validation.
+All four require `CRON_SECRET` header validation.
 
 ## Local dev
 

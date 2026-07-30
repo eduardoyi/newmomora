@@ -1,5 +1,7 @@
-import { assertEquals, assertExists } from "jsr:@std/assert@1";
+import { assertEquals, assertExists, assertStrictEquals } from "jsr:@std/assert@1";
+import { getAuthenticatedNonAnonymousUser } from "../_shared/auth.ts";
 import {
+  DEFAULT_DEPENDENCIES,
   getPortraitGenerationRequestIntent,
   handleGeneratePortraitIllustration,
   isFreshMatchingPortraitWorkflowJob,
@@ -911,3 +913,7 @@ Deno.test(
     });
   },
 );
+
+Deno.test('WP-SEC: the real default wiring uses the anonymous-rejecting auth chokepoint, not the permissive one', () => {
+  assertStrictEquals(DEFAULT_DEPENDENCIES.getAuthenticatedUser, getAuthenticatedNonAnonymousUser);
+});

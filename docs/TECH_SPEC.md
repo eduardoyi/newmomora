@@ -1456,6 +1456,80 @@ names, journal text, media keys, or URLs appear in a response or email.
 
 ---
 
+### 4.16 `preview-family-invite`
+
+Previews a 3-word invite code before the caller has an account -- J2's
+dependency in the onboarding join path. One of exactly two Edge Function
+carve-outs (with `process-voice-memory`'s `mode: 'onboarding'` branch) that
+accept an anonymous Auth session; see §10 and
+[docs/plans/onboarding-implementation.md](../plans/onboarding-implementation.md)
+WP-SEC.
+
+**Request**
+
+```json
+{ "code": "sunny-tiger-lake" }
+```
+
+**Response**
+
+```json
+{ "familyName": "Rivera family", "inviterName": "Rosa" }
+```
+
+Never returns a membership list, email, the invite's role, or a family id.
+
+**Auth:** JWT -- accepts both an anonymous Auth session and a permanent one
+(the one normal-facing endpoint that deliberately accepts both). Rate-limited
+by CODE (not by caller): 20 previews/hour per normalized code, logged
+before the code is checked, same fail-closed convention as
+`redeem-family-invite`.
+
+**Errors:** `validation_error` (missing code), `invalid_code` (400 --
+not-found, expired, revoked, already-redeemed, and family-soft-deleted all
+collapse to this, same oracle-avoidance convention as
+`redeem-family-invite`), `rate_limited` (429), `internal_error` (500)
+
+---
+
+### 4.17 `cleanup-abandoned-anonymous-users`
+
+Scheduled maintenance endpoint -- WP-SEC item 5
+([docs/plans/onboarding-implementation.md](../plans/onboarding-implementation.md)).
+Deletes an anonymous Auth user (`ensureAnonymousSession()`, S9/J2) once it is
+older than `ABANDONED_ANONYMOUS_USER_TTL_DAYS` (7) and never holds a real
+`family_memberships` row or owns a `families` row -- both structurally
+impossible after the anonymous lockdown
+(`20260729130000_onboarding_anonymous_lockdown.sql`), and re-verified fresh
+immediately before every delete rather than trusted. No storage or family
+cascade to run: an anonymous user never has a `user_profiles` row, so there
+is nothing else to clean up. Deleting the `auth.users` row runs exactly the
+cascade [usage-limits.md](./features/usage-limits.md) documents (nulls
+`ai_onboarding_voice_requests`/`ai_usage_events` actor attribution via their
+own `on delete set null` FKs; the deidentified company COGS rollup is
+unaffected).
+
+**Trigger:** Scheduler POST. `verify_jwt = false` is required, same reason
+as `run-ai-usage-alerts` -- the scheduler has no user JWT. **Scheduled by
+`20260730120000_schedule_abandoned_anonymous_cleanup_cron.sql`**, which
+wires a daily 04:00 UTC pg_cron job (sufficient given the 7-day TTL) via
+`net.http_post`. That job reads its `project_url` and `cron_secret` Vault
+secrets at run time -- the same per-environment prerequisite the other
+pg_cron jobs in this spec already document -- and fails visibly in
+`cron.job_run_details` without side effects until both exist.
+
+**Request:** `POST` with the cron-secret header and no body.
+
+**Response**
+
+```json
+{ "success": true, "deletedCount": 2 }
+```
+
+**Auth:** `x-cron-secret` header containing `CRON_SECRET`.
+
+---
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)
@@ -1763,10 +1837,12 @@ Momora2/
 │       ├── hard-delete-expired-accounts/
 │       ├── redeem-family-invite/
 │       ├── resolve-family-invite/
+│       ├── preview-family-invite/ # anonymous-or-permanent carve-out (WP-SEC)
+│       ├── cleanup-abandoned-anonymous-users/ # scheduled (WP-SEC item 5)
 │       ├── notify-family-activity/
 │       ├── notify-memory-engagement/
 │       ├── send-content-report-alert/
-│       └── _shared/               # family-access.ts, storage-keys.ts, bento.ts, expo-push.ts, ...
+│       └── _shared/               # family-access.ts, storage-keys.ts, bento.ts, expo-push.ts, auth.ts (getAuthenticatedNonAnonymousUser chokepoint), ...
 ├── cloudflare/
 │   └── memory-illustration-worker/ # Worker + Workflow, bridge client, OpenAI/R2 execution
 ├── docs/
@@ -1807,9 +1883,11 @@ All AI operations are **async** — client shows status and allows navigation aw
 - [ ] Illustrated-memory max of 6 family member tags enforced server-side; text-only/media tags remain unlimited
 - [ ] Family-scoped RLS goes through `is_family_member`/`has_family_role`, never a hand-rolled join
 - [ ] Role/family checks are bound to one specific `family_id`, never "has this role somewhere"
-- [ ] Invite codes are rate-limited (user + IP) and never logged in plaintext
+- [ ] Invite codes are rate-limited (user + IP for redemption; by code for preview) and never logged in plaintext
 - [ ] Engagement RLS permits active viewers only for their own likes/comments; moderation is family-scoped
 - [ ] Push/log payloads never contain memory or comment content
+- [ ] An anonymous Auth session (`ensureAnonymousSession()`) is rejected by every normal Edge Function via `getAuthenticatedNonAnonymousUser` (`_shared/auth.ts`), with exactly two carve-outs: `process-voice-memory`'s `mode: 'onboarding'` branch and `preview-family-invite`; it is also rejected by a RESTRICTIVE RLS policy on every normal application table and an explicit guard inside every mutating normal SECURITY DEFINER RPC (`20260729130000_onboarding_anonymous_lockdown.sql`)
+- [ ] `cleanup-abandoned-anonymous-users` runs daily via pg_cron (`20260730120000_schedule_abandoned_anonymous_cleanup_cron.sql`) so abandoned anonymous Auth users don't accumulate forever
 
 ---
 

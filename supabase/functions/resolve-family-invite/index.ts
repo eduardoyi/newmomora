@@ -5,7 +5,7 @@
 // approved, and pushes to the redeemer. Reject just marks the invite.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { sendTransactionalEmail } from '../_shared/bento.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
@@ -224,7 +224,7 @@ export async function handleResolveFamilyInvite(req: Request): Promise<Response>
     return errorResponse('Method not allowed', 405, 'method_not_allowed');
   }
 
-  const user = await getAuthenticatedUser(req);
+  const user = await getAuthenticatedNonAnonymousUser(req);
   if (!user) {
     return errorResponse('Unauthorized', 401, 'unauthorized');
   }
