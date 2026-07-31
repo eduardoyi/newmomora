@@ -79,10 +79,10 @@ Enter the reusable values in App Review Information's sign-in fields. Use this
 in **Notes**, replacing only the placeholders in the secure console:
 
 > Momora normally uses an email one-time code. For review, enter
-> `<REVIEWER_EMAIL>` on the Welcome back screen, tap **Continue**, then enter
-> `<REVIEWER_PASSWORD>` and tap **Sign in**. No OTP or account creation is
-> required. The account opens a pre-populated family journal with synthetic
-> data. Please contact `<SUPPORT_EMAIL>` if access needs to be reset.
+> `<REVIEWER_EMAIL>` on the Welcome back screen, tap **Sign in**, then enter
+> `<REVIEWER_PASSWORD>` and tap **Sign in** again. No OTP or account creation
+> is required. The account opens a pre-populated family journal with
+> synthetic data. Please contact `<SUPPORT_EMAIL>` if access needs to be reset.
 
 ## Google Play Console wording
 
@@ -90,11 +90,11 @@ Create an **App access** instruction named `Momora reviewer access`. Mark that
 all functionality is available with the supplied instructions, add the reusable
 credentials to the console's credential fields, and use:
 
-> On the Welcome back screen, enter `<REVIEWER_EMAIL>` and tap **Continue**.
-> Enter `<REVIEWER_PASSWORD>` on the next screen and tap **Sign in**. Do not use
-> another email address or create a new account. No OTP is required. The account
-> opens a pre-populated family journal with synthetic data. Contact
-> `<SUPPORT_EMAIL>` if access needs to be reset.
+> On the Welcome back screen, enter `<REVIEWER_EMAIL>` and tap **Sign in**.
+> Enter `<REVIEWER_PASSWORD>` on the next screen and tap **Sign in** again. Do
+> not use another email address or create a new account. No OTP is required.
+> The account opens a pre-populated family journal with synthetic data.
+> Contact `<SUPPORT_EMAIL>` if access needs to be reset.
 
 ## Troubleshooting
 

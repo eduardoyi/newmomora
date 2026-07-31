@@ -18,12 +18,8 @@ import { OnbBody, OnbEyebrow, OnbScript } from '@/components/onboarding/onb-typo
 import { colors, emotionColors, fonts, radius, spacing } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { onboardingYearRoute } from '@/lib/onboarding-routes';
+import { aspectRatioFromDimensions, clampMediaAspectRatio, DEFAULT_MEDIA_ASPECT_RATIO } from '@/utils/media-aspect';
 import { firstPageCaption, possessive } from '@/utils/onboarding-copy';
-
-// No emotion analysis has run yet at this point in the flow (it's a
-// fire-and-forget kicked off by commitOnboarding's createMemory, post-auth)
-// -- the handoff hardcodes 'joy' for this card and this mirrors that.
-const AHA_EMOTION = emotionColors.joy;
 
 function TaggedAvatars({ names }: { names: string[] }) {
   return (
@@ -60,10 +56,12 @@ function CardFooter({
       <Text style={styles.footerDay}>Tonight</Text>
       {names.length > 0 ? <TaggedAvatars names={names} /> : null}
       <View style={styles.footerSpacer} />
-      <View style={[styles.emotionChip, { backgroundColor: AHA_EMOTION.soft }]}>
-        <View style={[styles.emotionDot, { backgroundColor: AHA_EMOTION.c }]} />
-        <Text style={[styles.emotionLabel, { color: AHA_EMOTION.ink }]}>joy</Text>
-      </View>
+      {/* No emotion chip here: emotion analysis is a fire-and-forget kicked
+          off by commitOnboarding's createMemory, post-auth -- nothing has
+          run yet at this point in the flow, so there is no real emotion to
+          show (see docs/features/onboarding.md decision 10). This mirrors
+          src/components/memory-card.tsx's real CardFooter, which likewise
+          renders no chip when `memory.emotion` is null. */}
       {/* Same animation composition as the real like button
           (src/components/memory-engagement-bar.tsx): a scale pop
           (1 -> 1.32 -> spring back to 1, friction 4/tension 180) timed to
@@ -96,6 +94,17 @@ export default function OnboardingAhaScreen() {
   const [liked, setLiked] = useState(false);
   const [heartScale] = useState(() => new Animated.Value(1));
   const previousLikedRef = useRef(false);
+
+  // Mirrors app/(app)/memory/[id]/index.tsx's framed-detail illustration
+  // measurement (and memory-card.tsx's IllustrationVisual): the real natural
+  // ratio isn't known until the image reports its own dimensions on load, so
+  // start from the same neutral 4:3 placeholder those screens fall back to
+  // and swap in the measured, clamped ratio once it's available. capture.mediaUri
+  // is a local device file (not a signed R2 URL), but expo-image's onLoad
+  // reports natural width/height for local sources the same way -- no
+  // network round trip needed, so this settles essentially immediately and
+  // there is no empty/blank frame while waiting.
+  const [mediaAspectRatio, setMediaAspectRatio] = useState(DEFAULT_MEDIA_ASPECT_RATIO);
 
   useEffect(() => {
     Animated.timing(settleAnim, {
@@ -165,12 +174,18 @@ export default function OnboardingAhaScreen() {
           <View style={styles.card} testID="onboarding-aha-card">
             {capture?.mediaUri ? (
               <>
-                <View style={[styles.quoteAccent, { backgroundColor: AHA_EMOTION.soft }]} />
                 <Image
                   accessibilityLabel="Your captured photo"
                   contentFit="cover"
+                  onLoad={(event) => {
+                    const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
+                    if (ratio) {
+                      setMediaAspectRatio(clampMediaAspectRatio(ratio));
+                    }
+                  }}
                   source={{ uri: capture.mediaUri }}
-                  style={styles.cardImage}
+                  style={[styles.cardImage, { aspectRatio: mediaAspectRatio }]}
+                  testID="onboarding-aha-media-image"
                 />
                 {capture.text ? (
                   <View style={styles.captionWrap}>
@@ -181,9 +196,8 @@ export default function OnboardingAhaScreen() {
               </>
             ) : (
               <>
-                <View style={[styles.quoteAccent, { backgroundColor: AHA_EMOTION.soft }]} />
                 <View style={styles.quoteBody}>
-                  <Text style={styles.quoteMark}>&ldquo;</Text>
+                  <Text style={styles.quoteMark} testID="onboarding-aha-quote-mark">&ldquo;</Text>
                   <Text style={styles.quoteText}>{capture?.text ?? ''}</Text>
                 </View>
                 <CardFooter heartScale={heartScale} liked={liked} names={taggedNames} />
@@ -229,24 +243,26 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.12,
     shadowRadius: 44,
   },
-  quoteAccent: {
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
-    borderRadius: radius.lg,
-    height: 3,
-  },
   quoteBody: {
     padding: 18,
     paddingBottom: 4,
   },
+  // Matches app/(app)/memory/[id]/index.tsx's MemoryDetailEditorial
+  // treatment (editorialQuote/editorialText): a normal-flow watermark glyph
+  // sized and clipped (fixed height, negative marginBottom) to sit above the
+  // quote text and pull it in close, not absolutely positioned behind it.
+  // src/components/memory-card.tsx's QuoteCard (the timeline card) has no
+  // such glyph at all -- this is the one place in the app the mark exists,
+  // so it's the treatment to converge on. Color falls back to the same
+  // neutral colors.ink3 that screen uses when there's no emotion to tint it.
   quoteMark: {
-    color: AHA_EMOTION.c,
+    color: colors.ink3,
     fontFamily: fonts.display,
-    fontSize: 64,
-    left: 12,
+    fontSize: 56,
+    height: 34,
+    lineHeight: 56,
+    marginBottom: -6,
     opacity: 0.18,
-    position: 'absolute',
-    top: 2,
   },
   quoteText: {
     color: colors.ink,
@@ -255,7 +271,6 @@ const styles = StyleSheet.create({
     lineHeight: 1.28 * 22,
   },
   cardImage: {
-    aspectRatio: 4 / 3,
     width: '100%',
   },
   captionWrap: {
@@ -300,24 +315,6 @@ const styles = StyleSheet.create({
   avatarInitial: {
     fontFamily: fonts.sansBold,
     fontSize: 10,
-  },
-  emotionChip: {
-    alignItems: 'center',
-    borderRadius: 999,
-    flexDirection: 'row',
-    gap: 5,
-    paddingLeft: 7,
-    paddingRight: 9,
-    paddingVertical: 3,
-  },
-  emotionDot: {
-    borderRadius: 999,
-    height: 5,
-    width: 5,
-  },
-  emotionLabel: {
-    fontFamily: fonts.sansBold,
-    fontSize: 10.5,
   },
   savedCaption: {
     marginTop: 8,

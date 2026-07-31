@@ -141,7 +141,10 @@ function resolveTargetMember(
   return members.find(hasNoPortraitYet) ?? members[0];
 }
 
-export const PORTRAIT_ROTATION_INTERVAL_MS = 4000;
+// Halved after device testing: at 4s a viewer only ever saw two of the eight
+// pairs before moving on, which read as a static illustration rather than a
+// demonstration of the photo -> portrait transformation.
+export const PORTRAIT_ROTATION_INTERVAL_MS = 2000;
 export const PORTRAIT_CROSSFADE_DURATION_MS = 500;
 
 /**
@@ -467,7 +470,7 @@ export default function PortraitScreen() {
                 {"We're painting."}
               </OnbTitle>
               <OnbBody muted size={14.5} style={styles.paintingBody}>
-                {"It takes a few minutes, so go do literally anything else. It'll be here when you get back."}
+                {"This takes less than a minute. Stick around and watch, or wander off and it'll be waiting."}
               </OnbBody>
             </>
           )}

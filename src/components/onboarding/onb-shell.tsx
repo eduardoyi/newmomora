@@ -10,8 +10,21 @@
 // frame. The scroll view only adds keyboard space when its measured content is
 // actually taller than its viewport; short centered steps must never expose
 // that implementation space as an empty page.
+//
+// `useKeyboardState`'s `isVisible` is backed by a single app-wide module
+// singleton (see `react-native-keyboard-controller`'s `KeyboardController`),
+// not anything scoped to a screen, and it only flips to `false` once
+// `keyboardDidHide` fires -- after the close animation finishes. Continuing
+// from a screen with a focused input, the next screen's `OnbShell` can mount
+// mid-animation and read that shared `isVisible: true` even though nothing on
+// the new screen is focused, which collapses the footer to the compact
+// keyboard-open padding and lets the CTA land under the Android nav bar. This
+// shell never trusts that value on its own first commit -- only keyboard
+// events observed after mounting -- so a freshly mounted screen always starts
+// with the safe padding and only tightens it once its own keyboard state
+// genuinely changes.
 import type { ReactNode } from 'react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Platform,
   StyleSheet,
@@ -71,7 +84,24 @@ export function OnbShell({
   keyboardBottomOffset = FOOTER_KEYBOARD_CLEARANCE,
   testID,
 }: OnbShellProps) {
-  const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
+  const liveIsKeyboardVisible = useKeyboardState((state) => state.isVisible);
+  const hasObservedInitialKeyboardStateRef = useRef(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    // Ignore whatever `liveIsKeyboardVisible` reads on this instance's first
+    // effect flush -- that value came from the shared singleton and may
+    // describe the previous screen's still-closing keyboard, not this one.
+    // Only a later change (a real event observed while this screen is
+    // mounted) is trustworthy.
+    if (!hasObservedInitialKeyboardStateRef.current) {
+      hasObservedInitialKeyboardStateRef.current = true;
+      return;
+    }
+
+    setIsKeyboardVisible(liveIsKeyboardVisible);
+  }, [liveIsKeyboardVisible]);
+
   const { bottom: bottomInset } = useSafeAreaInsets();
   const footerBottomPadding = getFooterBottomPadding(bottomInset, isKeyboardVisible);
   const viewportHeight = useRef(0);

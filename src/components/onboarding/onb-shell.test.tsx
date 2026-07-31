@@ -99,7 +99,60 @@ describe('OnbShell', () => {
     expect(getByTestId('onb-shell-scroll').props.bottomOffset).toBe(spacing.lg);
   });
 
-  it('drops the redundant safe-area footer gap while the keyboard is open', () => {
+  it('drops the redundant safe-area footer gap once the keyboard opens while the screen is showing', () => {
+    const { getByTestId, rerender } = renderShell(
+      <OnbShell footer={<Pressable testID="onb-primary-action" />}>
+        <TextInput testID="onb-lower-input" />
+      </OnbShell>,
+    );
+
+    // Mounts with the keyboard closed -- the safe-area padding applies.
+    expect(getByTestId('onb-shell-footer').props.style).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ paddingBottom: 48 + spacing.sm }),
+      ]),
+    );
+
+    // A real keyboard-visible transition observed *after* mount (e.g. the
+    // user focuses this screen's own input) still drops the redundant gap.
+    // A fresh element (not the one captured above) forces React to actually
+    // reconcile OnbShell again instead of bailing out on an identical
+    // element reference.
+    mockedUseKeyboardState.mockReturnValue(true);
+    rerender(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 800, width: 360, x: 0, y: 0 },
+          insets: { bottom: 48, left: 0, right: 0, top: 24 },
+        }}
+      >
+        <OnbShell footer={<Pressable testID="onb-primary-action" />}>
+          <TextInput testID="onb-lower-input" />
+        </OnbShell>
+      </SafeAreaProvider>,
+    );
+
+    expect(getByTestId('onb-shell-footer').props.style).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ paddingBottom: spacing.sm }),
+      ]),
+    );
+
+    // Restore the default (keyboard-hidden) mock so it doesn't leak into
+    // later tests -- this test is the only one that sets a persistent
+    // (non-Once) return value.
+    mockedUseKeyboardState.mockReturnValue(false);
+  });
+
+  it('ignores a keyboard-visible reading inherited from the previous screen on its very first commit', () => {
+    // `useKeyboardState` is backed by an app-wide singleton in
+    // react-native-keyboard-controller: navigating away from a screen with a
+    // focused input can leave it reporting `isVisible: true` while the
+    // keyboard is still mid dismiss-animation, even on a freshly mounted
+    // screen with no focused input of its own (see e.g. S6 kids -> S7
+    // family-name, or S7 family-name -> S8 bridge, which has no input at
+    // all). `mockReturnValueOnce` simulates exactly that stale snapshot
+    // being present for this instance's first render.
     mockedUseKeyboardState.mockReturnValueOnce(true);
 
     const { getByTestId } = renderShell(
@@ -108,9 +161,11 @@ describe('OnbShell', () => {
       </OnbShell>,
     );
 
+    // The CTA must clear the Android nav bar immediately -- not just once a
+    // later `keyboardDidHide` event happens to correct the stale reading.
     expect(getByTestId('onb-shell-footer').props.style).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ paddingBottom: spacing.sm }),
+        expect.objectContaining({ paddingBottom: 48 + spacing.sm }),
       ]),
     );
   });

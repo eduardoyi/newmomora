@@ -10,7 +10,7 @@
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { Mic, Square, Type, X } from 'lucide-react-native';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -33,10 +33,12 @@ import { KidChip } from '@/components/onboarding/kid-chip';
 import { OnbShell } from '@/components/onboarding/onb-shell';
 import { OnbBody, OnbDisplay, OnbScript } from '@/components/onboarding/onb-typography';
 import { colors, fonts, radius } from '@/constants/theme';
+import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { ensureAnonymousSession } from '@/lib/anonymous-session';
 import { onboardingAhaRoute } from '@/lib/onboarding-routes';
 import { processOnboardingVoiceMemory } from '@/services/ai';
+import type { MemberWithNames } from '@/utils/member-mentions';
 import { capturePrompt } from '@/utils/onboarding-copy';
 import { readLocalFileAsBase64 } from '@/utils/local-files';
 import {
@@ -113,6 +115,21 @@ function WaveformBars() {
   );
 }
 
+// Draft kids have no real `family_members` row yet (no family exists until
+// commitOnboarding runs post-auth) -- these synthetic ids exist only to
+// drive useAutoMemoryTags's matching/suppression logic locally in this
+// screen and are the string form of the kid's index into `draft.kidNames`.
+// They're mapped back to indexes for `selectedKidIndexes` and never leave
+// this component (never sent to a server call; onboarding-routing's
+// `taggedKidIndexes` stays index-based, same as before this change).
+function kidMemberId(index: number): string {
+  return String(index);
+}
+
+function kidIndexFromMemberId(id: string): number {
+  return Number(id);
+}
+
 export default function OnboardingCaptureScreen() {
   const { draft, patch } = useOnboardingFlow();
   const kidNames = draft.kidNames;
@@ -123,7 +140,45 @@ export default function OnboardingCaptureScreen() {
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment | null>(null);
   const [fallbackNote, setFallbackNote] = useState('');
   const [mediaError, setMediaError] = useState('');
-  const [selectedKidIndexes, setSelectedKidIndexes] = useState<number[]>([0]);
+
+  // Reuses the app's mention-matching/suppression logic (useAutoMemoryTags,
+  // used by app/(app)/new-memory.tsx) so typing or speaking a kid's name
+  // tags them automatically, the same way it works in the real app --
+  // without ever needing a real family_members id pre-auth.
+  const tagMembers = useMemo<MemberWithNames[]>(
+    () => kidNames.map((name, index) => ({ id: kidMemberId(index), name })),
+    [kidNames],
+  );
+  const { selectedMemberIds, initializeTags, applyForContent, toggleMember } = useAutoMemoryTags({
+    members: tagMembers,
+    enabled: true,
+  });
+
+  // Default preselection: every kid, not just the first-entered one (the
+  // design brief's "first-entered kid pre-selected" produced an
+  // uncomfortably narrow prompt for multi-kid families -- see
+  // docs/plans/onboarding-design-brief.md S9 "Multi-kid variant"). Selecting
+  // everyone lets capturePrompt's existing ladder ("the two of them" / "all
+  // of them") do the phrasing instead of naming every child. Runs once,
+  // as soon as the draft's kid names are available (hydration may still be
+  // in flight on first render).
+  const hasInitializedTagsRef = useRef(false);
+  useEffect(() => {
+    if (hasInitializedTagsRef.current || kidNames.length === 0) {
+      return;
+    }
+    hasInitializedTagsRef.current = true;
+    initializeTags(kidNames.map((_, index) => kidMemberId(index)));
+  }, [kidNames, initializeTags]);
+
+  const selectedKidIndexes = useMemo(
+    () =>
+      selectedMemberIds
+        .map(kidIndexFromMemberId)
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < kidNames.length)
+        .sort((a, b) => a - b),
+    [selectedMemberIds, kidNames.length],
+  );
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 500);
@@ -145,16 +200,18 @@ export default function OnboardingCaptureScreen() {
   const prompt = capturePrompt(kidNames, selectedKidIndexes);
   const canKeep = text.trim().length > 0 || attachedMedia !== null;
 
+  // Manual chip taps always win over auto-tagging: toggleMember records a
+  // deselect in useAutoMemoryTags's suppressedMemberIds, so later typing or
+  // a transcribed mention of that kid's name won't silently re-select them
+  // (same contract as new-memory.tsx). Deselecting the sole remaining
+  // selected kid is a no-op -- a memory can never end up tagged to nobody.
   const toggleKid = (index: number) => {
-    setSelectedKidIndexes((current) => {
-      if (current.includes(index)) {
-        if (current.length === 1) {
-          return current;
-        }
-        return current.filter((value) => value !== index);
-      }
-      return [...current, index].sort((a, b) => a - b);
-    });
+    const id = kidMemberId(index);
+    const isSelected = selectedMemberIds.includes(id);
+    if (isSelected && selectedMemberIds.length === 1) {
+      return;
+    }
+    toggleMember(id);
   };
 
   const fallBackToTyping = (note: string = TYPING_FALLBACK_NOTE) => {
@@ -217,6 +274,14 @@ export default function OnboardingCaptureScreen() {
         }
 
         setText(data.cleanedText);
+        // The onboarding voice endpoint deliberately always returns
+        // mentionedMemberIds: [] (docs/TECH_SPEC.md process-voice-memory --
+        // nameHints are spelling hints only, never member ids, since no
+        // family/member rows exist pre-auth). Run the same local
+        // mention-matching applyForContent uses for typed text against the
+        // transcript instead of trusting a server-provided match list, so a
+        // kid mentioned by voice still gets auto-tagged.
+        applyForContent(data.cleanedText);
         setFallbackNote('');
         setMode('compose');
       } catch {
@@ -247,6 +312,11 @@ export default function OnboardingCaptureScreen() {
 
   const handleRemoveMedia = () => {
     setAttachedMedia(null);
+  };
+
+  const handleTextChange = (value: string) => {
+    setText(value);
+    applyForContent(value);
   };
 
   const handleKeep = () => {
@@ -295,19 +365,16 @@ export default function OnboardingCaptureScreen() {
             />
           </View>
         ) : mode === 'idle' ? (
+          // Media attachment deliberately isn't offered here -- this screen's
+          // job is capturing the moment, and the very next state (compose,
+          // just above) already has a media button (see
+          // docs/plans/onboarding-design-brief.md S9: "Tertiary: Add a photo
+          // or video" moved off the idle/recording state per owner decision).
           <View style={styles.idleFooter}>
-            <View style={styles.idlePillsRow}>
-              <Pressable onPress={handleTypeInstead} style={styles.secondaryPill} testID="onboarding-capture-type-instead">
-                <Type color={colors.ink} size={15} />
-                <OnbBody size={13.5}>I&rsquo;d rather type</OnbBody>
-              </Pressable>
-              <MemoryMediaPicker
-                compact={false}
-                onError={setMediaError}
-                onSelect={handleAddMedia}
-                remainingSlots={1}
-              />
-            </View>
+            <Pressable onPress={handleTypeInstead} style={styles.secondaryPill} testID="onboarding-capture-type-instead">
+              <Type color={colors.ink} size={15} />
+              <OnbBody size={13.5}>I&rsquo;d rather type</OnbBody>
+            </Pressable>
             <OnbBody muted size={12.5} style={styles.reassurance}>
               Twenty seconds of rambling is plenty. Grammar optional.
             </OnbBody>
@@ -370,7 +437,7 @@ export default function OnboardingCaptureScreen() {
 
           <TextInput
             multiline
-            onChangeText={setText}
+            onChangeText={handleTextChange}
             placeholder={attachedMedia ? 'Add a caption (optional)' : 'Type it out…'}
             placeholderTextColor={colors.ink3}
             style={[styles.textarea, attachedMedia ? styles.textareaWithMedia : null]}
@@ -579,10 +646,6 @@ const styles = StyleSheet.create({
   idleFooter: {
     alignItems: 'center',
     gap: 12,
-  },
-  idlePillsRow: {
-    flexDirection: 'row',
-    gap: 10,
   },
   secondaryPill: {
     alignItems: 'center',

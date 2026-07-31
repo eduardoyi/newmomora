@@ -160,31 +160,76 @@ describe('OnboardingCaptureScreen (S9) -- typed path', () => {
     expect(router.push).not.toHaveBeenCalled();
   });
 
-  it('shows selectable kid chips for a multi-kid family and tags the memory to the selection made', () => {
-    const patch = mockDraft({ kidNames: ['Lila', 'Miguel'] });
-    const screen = renderScreen();
-
-    expect(screen.getByTestId('onboarding-capture-kid-chips')).toBeTruthy();
-    // First kid is pre-selected by default.
-    expect(screen.getByTestId('onboarding-capture-kid-chip-0').props.accessibilityState.selected).toBe(true);
-    expect(screen.getByTestId('onboarding-capture-kid-chip-1').props.accessibilityState.selected).toBe(false);
-
-    fireEvent.press(screen.getByTestId('onboarding-capture-kid-chip-1'));
-    fireEvent.press(screen.getByTestId('onboarding-capture-type-instead'));
-    fireEvent.changeText(screen.getByTestId('onboarding-capture-textarea'), 'Sibling moment.');
-    fireEvent.press(screen.getByTestId('onboarding-capture-keep'));
-
-    expect(patch).toHaveBeenCalledWith(
-      expect.objectContaining({ capture: expect.objectContaining({ taggedKidIndexes: [0, 1] }) }),
-    );
-  });
-
-  it('never lets the selection empty out -- tapping the sole selected chip again keeps it selected', () => {
+  it('pre-selects every kid by default for a multi-kid family (not just the first-entered one)', () => {
     mockDraft({ kidNames: ['Lila', 'Miguel'] });
     const screen = renderScreen();
 
-    fireEvent.press(screen.getByTestId('onboarding-capture-kid-chip-0'));
+    expect(screen.getByTestId('onboarding-capture-kid-chips')).toBeTruthy();
+    expect(screen.getByTestId('onboarding-capture-kid-chip-0').props.accessibilityState.selected).toBe(true);
+    expect(screen.getByTestId('onboarding-capture-kid-chip-1').props.accessibilityState.selected).toBe(true);
+    // capturePrompt's "two of them" ladder rung, driven by both being selected.
+    expect(screen.getByText("What's something small the two of them did this week that made you smile?")).toBeTruthy();
+  });
 
+  it('pre-selects all kids for 3 and 5-kid families, leaning on the "all of them" copy ladder rung instead of naming everyone', () => {
+    const threeKids = mockDraft({ kidNames: ['Lila', 'Miguel', 'Teo'] });
+    const threeScreen = renderScreen();
+    expect(threeScreen.getByTestId('onboarding-capture-kid-chip-0').props.accessibilityState.selected).toBe(true);
+    expect(threeScreen.getByTestId('onboarding-capture-kid-chip-1').props.accessibilityState.selected).toBe(true);
+    expect(threeScreen.getByTestId('onboarding-capture-kid-chip-2').props.accessibilityState.selected).toBe(true);
+    expect(
+      threeScreen.getByText("What's something small all of them did this week that made you smile?"),
+    ).toBeTruthy();
+    void threeKids;
+
+    mockDraft({ kidNames: ['Lila', 'Miguel', 'Teo', 'Ana', 'Sam'] });
+    const fiveScreen = renderScreen();
+    for (let index = 0; index < 5; index += 1) {
+      expect(
+        fiveScreen.getByTestId(`onboarding-capture-kid-chip-${index}`).props.accessibilityState.selected,
+      ).toBe(true);
+    }
+    expect(
+      fiveScreen.getByText("What's something small all of them did this week that made you smile?"),
+    ).toBeTruthy();
+  });
+
+  it('deselecting a chip down to the last one tags only that kid, and tapping it again keeps it selected', () => {
+    const patch = mockDraft({ kidNames: ['Lila', 'Miguel'] });
+    const screen = renderScreen();
+
+    // Both start selected; deselect Miguel to narrow the tag to Lila alone.
+    fireEvent.press(screen.getByTestId('onboarding-capture-kid-chip-1'));
+    expect(screen.getByTestId('onboarding-capture-kid-chip-0').props.accessibilityState.selected).toBe(true);
+    expect(screen.getByTestId('onboarding-capture-kid-chip-1').props.accessibilityState.selected).toBe(false);
+
+    // Never lets the selection empty out -- tapping the sole remaining chip is a no-op.
+    fireEvent.press(screen.getByTestId('onboarding-capture-kid-chip-0'));
+    expect(screen.getByTestId('onboarding-capture-kid-chip-0').props.accessibilityState.selected).toBe(true);
+
+    fireEvent.press(screen.getByTestId('onboarding-capture-type-instead'));
+    fireEvent.changeText(screen.getByTestId('onboarding-capture-textarea'), 'Lila moment.');
+    fireEvent.press(screen.getByTestId('onboarding-capture-keep'));
+
+    expect(patch).toHaveBeenCalledWith(
+      expect.objectContaining({ capture: expect.objectContaining({ taggedKidIndexes: [0] }) }),
+    );
+  });
+
+  it('a manual deselect wins over auto-tagging -- typing the deselected kid’s name does not silently re-select them', () => {
+    mockDraft({ kidNames: ['Lila', 'Miguel'] });
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByTestId('onboarding-capture-kid-chip-1'));
+    expect(screen.getByTestId('onboarding-capture-kid-chip-1').props.accessibilityState.selected).toBe(false);
+
+    fireEvent.press(screen.getByTestId('onboarding-capture-type-instead'));
+    fireEvent.changeText(
+      screen.getByTestId('onboarding-capture-textarea'),
+      'Miguel built a blanket fort in the living room.',
+    );
+
+    expect(screen.getByTestId('onboarding-capture-kid-chip-1').props.accessibilityState.selected).toBe(false);
     expect(screen.getByTestId('onboarding-capture-kid-chip-0').props.accessibilityState.selected).toBe(true);
   });
 

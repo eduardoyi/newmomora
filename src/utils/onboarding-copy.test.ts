@@ -120,6 +120,12 @@ describe('capturePrompt', () => {
       "What's something small all of them did this week that made you smile?",
     );
   });
+
+  it('still uses "all of them" for a larger family (five kids selected)', () => {
+    expect(capturePrompt(['Lila', 'Miguel', 'Teo', 'Ana', 'Sam'], [0, 1, 2, 3, 4])).toBe(
+      "What's something small all of them did this week that made you smile?",
+    );
+  });
 });
 
 describe('firstPageCaption', () => {

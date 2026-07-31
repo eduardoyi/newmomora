@@ -1,14 +1,33 @@
 // S10b -- "A year of these": the memory-types showcase (docs/plans/
 // onboarding-design-brief.md S10b, docs/plans/onboarding-implementation.md
-// WP2's S10b bullet). The user's real first card (from the device-local
-// draft, same as S10 -- nothing is saved server-side yet) anchors a mocked
-// timeline of 20 REAL example cards from src/constants/onboarding-memories.ts
-// (yearMemories) -- illustrated pages, photos, videos, and one-line quotes
-// from the founders' own kids, current-pipeline quality, replacing the
-// original 4-card wash/placeholder mock.
+// WP2's S10b bullet). A calm, NON-INTERACTIVE showcase of 20 REAL example
+// cards from src/constants/onboarding-memories.ts (yearMemories) --
+// illustrated pages, photos, videos, and one-line quotes from the founders'
+// own kids, current-pipeline quality. The user watches; they don't touch.
+//
+// Device-testing fix (2026-07-31): the user's own captured memory used to
+// anchor the top of the mock timeline, mixed in among the demo-family
+// cards. Owner feedback: odd for their one real memory to sit among a
+// stranger's year. Removed -- this screen now shows only the demo
+// memories. The headline was rewritten to match (it used to lean on "these"
+// pointing at that now-removed card).
+//
+// Layout fix (2026-07-31): this screen has no text input and needs no
+// keyboard handling, but it was rendering inside `OnbShell`, whose body is
+// a `KeyboardAwareScrollView` -- so on real devices the whole
+// headline+timeline+body content was user-scrollable, and only the CTA was
+// actually pinned. That's backwards for a screen whose entire point is a
+// fixed headline/body around a self-scrolling, non-interactive timeline.
+// This screen deliberately does NOT use `OnbShell` (its scrolling body
+// isn't right for this screen, and `onb-shell.tsx` is being edited by
+// another agent concurrently) -- it builds its own small fixed layout
+// instead: `SafeAreaView` > pinned header > flexed animated stage > pinned
+// footer (body copy directly above the CTA), reusing OnbShell's exported
+// `getFooterBottomPadding` helper so the footer still gets the same
+// Android-nav-bar-safe bottom padding every other onboarding screen does.
 //
 // The timeline drifts upward at a CONSTANT speed (DRIFT_SPEED_PX_PER_SECOND)
-// rather than a fixed duration, so 21 real cards move at the same visual
+// rather than a fixed duration, so 20 real cards move at the same visual
 // pace a shorter mock once did. It loops SEAMLESSLY: the card list renders
 // twice back-to-back, the first copy's measured height is the exact
 // translateY distance, and Animated.loop's reset-to-start lands pixel-for-
@@ -26,23 +45,29 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Play } from 'lucide-react-native';
 import { useCallback, useMemo, useState, useRef } from 'react';
 import { AccessibilityInfo, Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { OnbButton } from '@/components/onboarding/onb-button';
-import { OnbShell } from '@/components/onboarding/onb-shell';
+import { getFooterBottomPadding } from '@/components/onboarding/onb-shell';
 import { OnbBody, OnbDisplay, OnbScript } from '@/components/onboarding/onb-typography';
 import { colors, emotionColors, fonts, radius, spacing, type EmotionName } from '@/constants/theme';
 import { formatMemoryDayLabel, yearMemories, type OnboardingSampleMemory } from '@/constants/onboarding-memories';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { onboardingNotificationsRoute } from '@/lib/onboarding-routes';
-import type { OnboardingDraftCapture } from '@/utils/onboarding-progress';
 import { possessive } from '@/utils/onboarding-copy';
 
 // Constant visual speed (docs/plans/onboarding-implementation.md WP-follow-up
 // "replace DRIFT_DURATION_MS with DRIFT_SPEED_PX_PER_SECOND"): the loop's
-// duration is derived from the measured content height below, so 21 real
+// duration is derived from the measured content height below, so 20 real
 // cards drift at the same pace 5 mock cards once did rather than covering
 // more distance in the same fixed time (which would look sped up).
 const DRIFT_SPEED_PX_PER_SECOND = 40;
+
+// "the little things" is straight from the VoC copy rules
+// (docs/voice-of-customer.md §6); this headline no longer needs to point at
+// anything specific on screen (there's no more real card to anchor "these"
+// to), so it just names what the demo timeline below it is made of.
+const HEADLINE = 'A year of little memories adds up.';
 
 function YearCardFooter({ day, tint }: { day: string; tint?: EmotionName }) {
   const emo = tint ? emotionColors[tint] : null;
@@ -60,41 +85,7 @@ function YearCardFooter({ day, tint }: { day: string; tint?: EmotionName }) {
   );
 }
 
-// The user's own captured memory, anchored at the top of the mock timeline --
-// same content as S10, no animation here (it already had its moment). Reads
-// straight from the draft, unchanged in spirit from before this rewrite.
-// `hidden` is true only for the seamless loop's second (a11y-hidden) copy,
-// where the testID must not be duplicated.
-function RealCaptureCard({ capture, hidden }: { capture: OnboardingDraftCapture | null; hidden?: boolean }) {
-  return (
-    <View style={styles.cardBlock}>
-      <View style={[styles.card, styles.realCard]} testID={hidden ? undefined : 'onboarding-year-real-card'}>
-        {capture?.mediaUri ? (
-          <>
-            <View style={styles.mediaPreviewWrap}>
-              <Image contentFit="cover" source={{ uri: capture.mediaUri }} style={styles.mediaImage} />
-            </View>
-            {capture.text ? (
-              <View style={styles.captionWrap}>
-                <Text numberOfLines={2} style={styles.caption}>{capture.text}</Text>
-              </View>
-            ) : null}
-          </>
-        ) : (
-          <View style={styles.quoteBody}>
-            <Text numberOfLines={3} style={styles.quoteText}>{capture?.text ?? ''}</Text>
-          </View>
-        )}
-        <YearCardFooter day="Tonight" tint="joy" />
-      </View>
-      <OnbScript color={colors.ink3} size={16} style={styles.annotation}>
-        your 20 seconds, tonight
-      </OnbScript>
-    </View>
-  );
-}
-
-// One real example card from yearMemories, rendered per its type. `hidden`
+// One example card from yearMemories, rendered per its type. `hidden`
 // suppresses the testID for the loop's duplicate copy (see file header).
 function ExampleMemoryCard({ hidden, memory }: { hidden?: boolean; memory: OnboardingSampleMemory }) {
   const day = formatMemoryDayLabel(memory.isoDate);
@@ -138,12 +129,11 @@ function ExampleMemoryCard({ hidden, memory }: { hidden?: boolean; memory: Onboa
   );
 }
 
-// The full card sequence (real card first, then all of yearMemories) --
-// shared by both copies in the seamless loop below.
-function TimelineCards({ capture, hidden }: { capture: OnboardingDraftCapture | null; hidden?: boolean }) {
+// The full card sequence (all of yearMemories) -- shared by both copies in
+// the seamless loop below.
+function TimelineCards({ hidden }: { hidden?: boolean }) {
   return (
     <>
-      <RealCaptureCard capture={capture} hidden={hidden} />
       {yearMemories.map((memory) => (
         <ExampleMemoryCard hidden={hidden} key={memory.key} memory={memory} />
       ))}
@@ -153,9 +143,9 @@ function TimelineCards({ capture, hidden }: { capture: OnboardingDraftCapture | 
 
 export default function OnboardingYearScreen() {
   const { draft } = useOnboardingFlow();
-  const capture = draft.capture;
+  const { bottom: bottomInset } = useSafeAreaInsets();
 
-  const taggedNames = (capture?.taggedKidIndexes ?? [])
+  const taggedNames = (draft.capture?.taggedKidIndexes ?? [])
     .map((index) => draft.kidNames[index])
     .filter((name): name is string => Boolean(name));
   const journalOwner = taggedNames.length === 1 ? possessive(taggedNames[0]) : 'their';
@@ -197,8 +187,7 @@ export default function OnboardingYearScreen() {
   // (docs/plans/onboarding-implementation.md WP2 "S10b must ... respect
   // AccessibilityInfo.isReduceMotionEnabled()"), and stop entirely once this
   // screen isn't the focused route -- the Stack keeps it mounted underneath
-  // S11/S12, so an unmount-only cleanup would never fire. Unchanged by the
-  // seamless-loop rewrite above -- only what startDrift/stopDrift DO changed.
+  // S11/S12, so an unmount-only cleanup would never fire.
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -230,23 +219,21 @@ export default function OnboardingYearScreen() {
   };
 
   const bodyText = useMemo(
-    () => `Talk, type, photos, video. Some become illustrated pages. All of it lands in ${journalOwner}'s journal.`,
+    () => `Talk, type, photos, video. Some become illustrated pages. All of it lands in ${journalOwner} journal.`,
     [journalOwner],
   );
 
+  // No keyboard is ever open on this screen (no TextInput), so the shell's
+  // keyboard-aware footer padding always resolves to its closed-keyboard
+  // branch -- reused here (rather than re-derived) so this screen keeps the
+  // exact same Android-nav-bar overlap protection every other onboarding
+  // footer has.
+  const footerBottomPadding = getFooterBottomPadding(bottomInset, false);
+
   return (
-    <OnbShell
-      footer={
-        <OnbButton
-          label="I could actually do this"
-          onPress={handleContinue}
-          style={styles.fullWidthButton}
-          testID="onboarding-year-continue"
-        />
-      }
-    >
-      <View style={styles.header}>
-        <OnbDisplay size={30}>A year of these looks like this.</OnbDisplay>
+    <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea} testID="onboarding-year-screen">
+      <View style={styles.header} testID="onboarding-year-header">
+        <OnbDisplay size={30}>{HEADLINE}</OnbDisplay>
       </View>
 
       <View
@@ -256,7 +243,7 @@ export default function OnboardingYearScreen() {
       >
         <Animated.View style={[styles.timelineTrack, { transform: [{ translateY: driftAnim }] }]}>
           <View onLayout={(event) => setFirstListHeight(event.nativeEvent.layout.height)} style={styles.timelineList}>
-            <TimelineCards capture={capture} />
+            <TimelineCards />
           </View>
           {/* Seamless-loop duplicate: a visual repeat of the same content,
               not new information -- hidden from accessibility on both
@@ -266,7 +253,7 @@ export default function OnboardingYearScreen() {
             importantForAccessibility="no-hide-descendants"
             style={styles.timelineList}
           >
-            <TimelineCards capture={capture} hidden />
+            <TimelineCards hidden />
           </View>
         </Animated.View>
 
@@ -282,14 +269,26 @@ export default function OnboardingYearScreen() {
         />
       </View>
 
-      <OnbBody muted size={14} style={styles.belowMockCaption}>
-        {bodyText}
-      </OnbBody>
-    </OnbShell>
+      <View style={[styles.footer, { paddingBottom: footerBottomPadding }]} testID="onboarding-year-footer">
+        <OnbBody muted size={14} style={styles.belowMockCaption}>
+          {bodyText}
+        </OnbBody>
+        <OnbButton
+          label="I could actually do this"
+          onPress={handleContinue}
+          style={styles.fullWidthButton}
+          testID="onboarding-year-continue"
+        />
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    backgroundColor: colors.bg,
+    flex: 1,
+  },
   header: {
     paddingHorizontal: 26,
     paddingTop: 20,
@@ -321,10 +320,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     borderWidth: 1,
     overflow: 'hidden',
-  },
-  realCard: {
-    borderColor: colors.primary,
-    borderWidth: 1.5,
   },
   quoteBody: {
     padding: 16,
@@ -436,10 +431,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
   },
+  footer: {
+    gap: 14,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
   belowMockCaption: {
-    paddingBottom: 18,
-    paddingHorizontal: 26,
-    paddingTop: 8,
     textAlign: 'center',
   },
   fullWidthButton: {
