@@ -19,6 +19,8 @@ import { useAuth } from '@/hooks/use-auth';
 import { discardAnonymousSession } from '@/lib/anonymous-session';
 import { possessive } from '@/utils/onboarding-copy';
 
+export const EMAIL_KEYBOARD_BOTTOM_OFFSET = spacing.xxl * 3;
+
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
@@ -71,7 +73,7 @@ export default function OnboardingEmailScreen() {
 
   return (
     <OnbShell
-      keyboardBottomOffset={spacing.xxl * 5 + spacing.md}
+      keyboardBottomOffset={EMAIL_KEYBOARD_BOTTOM_OFFSET}
       footer={
         <>
           <OnbButton

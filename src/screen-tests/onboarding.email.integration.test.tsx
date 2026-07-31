@@ -12,12 +12,11 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { router } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import OnboardingEmailScreen from '../../app/(onboarding)/email';
+import OnboardingEmailScreen, { EMAIL_KEYBOARD_BOTTOM_OFFSET } from '../../app/(onboarding)/email';
 import { useAuth } from '@/hooks/use-auth';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { discardAnonymousSession } from '@/lib/anonymous-session';
 import { createEmptyOnboardingDraft } from '@/utils/onboarding-progress';
-import { spacing } from '@/constants/theme';
 
 jest.mock('expo-router', () => ({
   router: { replace: jest.fn(), push: jest.fn(), back: jest.fn() },
@@ -120,9 +119,7 @@ describe('OnboardingEmailScreen (S12A) -- owner display name', () => {
     fireEvent(getByTestId('onboarding-email-name-input'), 'focus');
 
     expect(getByTestId('onb-shell-keyboard-frame').props.behavior).toBe('height');
-    expect(getByTestId('onb-shell-scroll').props.bottomOffset).toBe(
-      spacing.xxl * 5 + spacing.md,
-    );
+    expect(getByTestId('onb-shell-scroll').props.bottomOffset).toBe(EMAIL_KEYBOARD_BOTTOM_OFFSET);
   });
 
   it('trims the name and threads it through to requestSignUpOtp, then navigates to the code screen', async () => {

@@ -223,7 +223,7 @@ describe('OnboardingCaptureScreen (S9) -- keyboard avoidance', () => {
       keepButtonAncestor = keepButtonAncestor.parent;
     }
     expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
-    expect(scrollView.props.disableScrollOnKeyboardHide).toBe(true);
+    expect(scrollView.props.disableScrollOnKeyboardHide).toBe(false);
     expect(scrollView.props.keyboardShouldPersistTaps).toBe('handled');
     expect(scrollView.props.mode).toBe('insets');
   });

@@ -28,11 +28,14 @@ app/
 | Illustration | Status badge on cards; detail view retry button on `failed` |
 | Tags | Multi-select with no global cap; AI illustrations support max 6 tagged members |
 | Keyboard | Any screen/modal/drawer with `TextInput` must keep the focused input and primary actions visible above the keyboard on iOS and Android |
+| Bottom actions | Pinned actions/links must add the live bottom safe-area inset when the keyboard is closed; test with a non-zero Android navigation-bar inset |
+| Keyboard movement | One layout primitive owns keyboard-height compensation; use only a small measured caret/footer offset and restore scroll position when the keyboard closes |
 
 ## Testing
 
 - Add `testID` to interactive elements for Maestro e2e.
 - Colocate unit + `.integration.test.tsx` with hooks/components you build.
+- For bottom-action or keyboard bugs, test both keyboard states and inject Android-style bottom safe-area metrics; iOS-only snapshots are insufficient.
 - See [docs/TESTING.md](../docs/TESTING.md).
 
 ## Don't

@@ -20,15 +20,29 @@ import {
   KeyboardAwareScrollView,
   useKeyboardState,
 } from 'react-native-keyboard-controller';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, spacing } from '@/constants/theme';
 
-// Reserve one large CTA/footer (~96 pt) plus enough room for the controls
-// immediately after a focused field (the kids' add/helper controls or the
-// account screen's second input). A smaller offset kept the caret visible but
-// still put those tappable siblings underneath the footer.
-export const FOOTER_KEYBOARD_CLEARANCE = spacing.xxl * 3 + spacing.md;
+// The sticky footer already shrinks the available scroll viewport. This value
+// is only the remaining footer/caret clearance; treating it as a second full
+// keyboard height makes KeyboardAwareScrollView needlessly throw centered
+// content off the top of short screens.
+export const FOOTER_KEYBOARD_CLEARANCE = spacing.xxl + spacing.lg;
+export const KEYBOARD_VERTICAL_OFFSET = spacing.sm;
+
+const MIN_FOOTER_BOTTOM_PADDING = spacing.xl + spacing.sm;
+
+export function getFooterBottomPadding(bottomInset: number, isKeyboardVisible: boolean) {
+  if (isKeyboardVisible) {
+    // The open keyboard already includes the system navigation region.
+    return spacing.sm;
+  }
+
+  // Keep the visual gap that the design expects while guaranteeing that an
+  // edge-to-edge Android navigation bar can never cover the CTA.
+  return Math.max(MIN_FOOTER_BOTTOM_PADDING, bottomInset + spacing.sm);
+}
 
 interface OnbShellProps {
   /** Illustration + headline/body content. Give it `flex: 1` internally to fill the screen. */
@@ -48,20 +62,22 @@ export function OnbShell({
   testID,
 }: OnbShellProps) {
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
+  const { bottom: bottomInset } = useSafeAreaInsets();
+  const footerBottomPadding = getFooterBottomPadding(bottomInset, isKeyboardVisible);
 
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea} testID={testID}>
       <KeyboardAvoidingView
         automaticOffset
         behavior="height"
-        keyboardVerticalOffset={spacing.xl}
+        keyboardVerticalOffset={KEYBOARD_VERTICAL_OFFSET}
         style={styles.frame}
         testID="onb-shell-keyboard-frame"
       >
         <KeyboardAwareScrollView
           bottomOffset={footer ? keyboardBottomOffset : spacing.lg}
           contentContainerStyle={[styles.scrollContent, contentContainerStyle]}
-          disableScrollOnKeyboardHide
+          disableScrollOnKeyboardHide={false}
           keyboardShouldPersistTaps="handled"
           mode="insets"
           style={styles.scrollView}
@@ -72,7 +88,7 @@ export function OnbShell({
 
         {footer ? (
           <View
-            style={[styles.footer, isKeyboardVisible && styles.footerKeyboardOpen]}
+            style={[styles.footer, { paddingBottom: footerBottomPadding }]}
             testID="onb-shell-footer"
           >
             {footer}
@@ -102,10 +118,6 @@ const styles = StyleSheet.create({
   },
   footer: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xl + spacing.sm,
     gap: 10,
-  },
-  footerKeyboardOpen: {
-    paddingBottom: spacing.sm,
   },
 });

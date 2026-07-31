@@ -35,6 +35,26 @@ Tests are built **alongside features**, not after. Every major feature PR includ
 
 ---
 
+### Keyboard and safe-area regression contract
+
+Any screen with a `TextInput`, pinned CTA, footer, link, sheet action, or
+absolute bottom control must be verified as an edge-to-edge layout on both
+iOS and Android. The focused test must provide a non-zero bottom inset (use
+Android-style gesture or three-button navigation metrics), assert the
+keyboard-closed footer/action position, and assert the keyboard-open position
+separately. This catches actions that are technically inside the app view but
+still covered by Android system navigation.
+
+Use one layout primitive to own keyboard-height compensation. Tests should
+also cover a lower or multiline focused input and the transition back to a
+closed keyboard: the field and primary action stay reachable, content is not
+translated farther than necessary, and the previous scroll position is
+restored. Do not treat `adjustResize`, extra bottom padding, or an iOS-only
+snapshot as proof of keyboard safety. The implementation must use the live
+safe-area inset (or an equivalent safe-area edge wrapper) when the keyboard is
+closed and must not add the navigation-bar inset a second time when the
+keyboard already owns that region.
+
 ## Directory layout
 
 ```

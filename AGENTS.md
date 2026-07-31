@@ -101,9 +101,11 @@ Verify commands exist before running. Do not invent scripts.
 - **TanStack Query** for server state — no Redux unless already established.
 - Colocate hooks with domain (`useMemories`, not `useData`).
 - Use `Pressable`, not deprecated Touchables.
-- Safe areas via `react-native-safe-area-context` — no hardcoded notch padding.
+- Safe areas via `react-native-safe-area-context` — no hardcoded notch padding. Every bottom-pinned CTA, link, footer, sheet action, or absolute control must include the live bottom inset; protecting only the scroll body or only the top edge does not protect it from Android gesture/three-button navigation.
 - **Keyboard avoidance is required** for every screen, modal, bottom sheet, or drawer with `TextInput`/search fields. Use `KeyboardAvoidingView`, keyboard-aware scroll/content insets, or the existing local pattern so focused inputs and action buttons stay visible above the keyboard on iOS and Android.
-- On Android, verify lower-page and multiline inputs actually auto-scroll above the IME; `adjustResize` or extra bottom padding alone is not proof that the focused field remains visible. Keyboard regressions require a focused unit/integration test.
+- Use one component as the owner of keyboard-height compensation. Do not stack full-height `KeyboardAvoidingView`, keyboard-aware inset, and large manual offsets; any additional offset must represent only a measured footer/caret gap. Centered form content must not be re-centered or scrolled farther than needed when the keyboard opens.
+- When the keyboard is closed, bottom action padding must be at least `bottomSafeAreaInset + visualGap`. When it is open, do not add the navigation-bar inset again if the keyboard already contains that region.
+- On Android, verify lower-page and multiline inputs actually auto-scroll above the IME; `adjustResize` or extra bottom padding alone is not proof that the focused field remains visible. Keyboard/safe-area regressions require focused tests with a non-zero Android bottom inset, keyboard open/closed assertions, and a current-device release check using gesture or three-button navigation.
 - Lists: virtualize timeline/calendar (`FlashList` or `FlatList` with stable keys).
 - Images: `expo-image` with explicit dimensions; signed URLs for private buckets.
 - Never `{count && <Text>}` when count can be `0` — use ternary or `count > 0`.

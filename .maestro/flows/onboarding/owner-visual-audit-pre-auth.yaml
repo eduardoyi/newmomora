@@ -58,8 +58,17 @@ appId: com.memora.app
 
 - waitForAnimationToEnd
 - takeScreenshot: 00-welcome
+# Exercise the returning-login detour before rejoining the same owner story
+# route as "Start your family's journal". This guards against accidentally
+# resurrecting the retired `(auth)/signup` onboarding path.
 - tapOn:
-    id: onb-welcome-start-button
+    id: onb-welcome-login-link
+- extendedWaitUntil:
+    visible:
+      id: login-email-input
+    timeout: 10000
+- tapOn:
+    id: login-create-account-link
 - extendedWaitUntil:
     visible:
       id: onb-story-0-cta-button

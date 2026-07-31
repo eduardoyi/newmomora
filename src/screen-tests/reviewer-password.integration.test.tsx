@@ -4,10 +4,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import PasswordScreen from '../../app/(auth)/password';
 import LoginScreen from '../../app/(auth)/login';
 import { useAuth } from '@/hooks/use-auth';
+import { onboardingStoryRoute } from '@/lib/onboarding-routes';
 import { DEMO_EMAIL, REVIEWER_EMAIL } from '@/services/reviewer-auth';
 
 jest.mock('expo-router', () => ({
-  Link: ({ children }: { children: React.ReactNode }) => children,
+  Link: jest.fn(({ children }: { children: React.ReactNode }) => children),
   Redirect: jest.fn(() => null),
   router: {
     push: jest.fn(),
@@ -20,7 +21,8 @@ jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
 }));
 
-const { Redirect: mockRedirect, router, useLocalSearchParams: mockUseLocalSearchParams } = jest.requireMock('expo-router') as {
+const { Link: mockLink, Redirect: mockRedirect, router, useLocalSearchParams: mockUseLocalSearchParams } = jest.requireMock('expo-router') as {
+  Link: jest.Mock;
   Redirect: jest.Mock;
   router: { push: jest.Mock; replace: jest.Mock };
   useLocalSearchParams: jest.Mock;
@@ -109,6 +111,15 @@ describe('reviewer password sign-in', () => {
         params: { email: 'parent@example.com', mode: 'signin' },
       });
     });
+  });
+
+  it('routes Create an account into the new owner onboarding story', () => {
+    renderScreen(<LoginScreen />);
+
+    expect(mockLink).toHaveBeenCalledWith(
+      expect.objectContaining({ href: onboardingStoryRoute(0) }),
+      undefined,
+    );
   });
 
   it('redirects direct password-route access with another email before rendering the form', () => {
