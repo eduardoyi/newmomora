@@ -18,6 +18,7 @@ import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import {
   KeyboardAvoidingView,
   KeyboardAwareScrollView,
+  useKeyboardState,
 } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -46,8 +47,10 @@ export function OnbShell({
   keyboardBottomOffset = FOOTER_KEYBOARD_CLEARANCE,
   testID,
 }: OnbShellProps) {
+  const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
+
   return (
-    <SafeAreaView style={styles.safeArea} testID={testID}>
+    <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea} testID={testID}>
       <KeyboardAvoidingView
         automaticOffset
         behavior="height"
@@ -68,7 +71,10 @@ export function OnbShell({
         </KeyboardAwareScrollView>
 
         {footer ? (
-          <View style={styles.footer} testID="onb-shell-footer">
+          <View
+            style={[styles.footer, isKeyboardVisible && styles.footerKeyboardOpen]}
+            testID="onb-shell-footer"
+          >
             {footer}
           </View>
         ) : null}
@@ -96,7 +102,10 @@ const styles = StyleSheet.create({
   },
   footer: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: 40,
+    paddingBottom: spacing.xl + spacing.sm,
     gap: 10,
+  },
+  footerKeyboardOpen: {
+    paddingBottom: spacing.sm,
   },
 });
