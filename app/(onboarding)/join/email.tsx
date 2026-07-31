@@ -440,6 +440,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     color: 'transparent',
     left: 0,
+    opacity: 0,
     position: 'absolute',
     right: 0,
     top: 0,

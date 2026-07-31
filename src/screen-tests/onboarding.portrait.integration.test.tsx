@@ -13,12 +13,13 @@
 // of a purely decorative pulse -- `ready` hands off to S17's reveal, `failed`
 // surfaces a retry.
 import * as ImagePicker from 'expo-image-picker';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { router } from 'expo-router';
-import { Platform } from 'react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { AccessibilityInfo, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import PortraitScreen from '../../app/(onboarding)/portrait';
+import PortraitScreen, { PORTRAIT_ROTATION_INTERVAL_MS } from '../../app/(onboarding)/portrait';
+import { onboardingPortraitPairs } from '@/constants/onboarding-portrait-pairs';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
@@ -33,6 +34,12 @@ import {
 jest.mock('expo-router', () => ({
   router: { replace: jest.fn(), push: jest.fn(), back: jest.fn() },
   useLocalSearchParams: jest.fn(() => ({})),
+  // Default: a no-op, same as onboarding.year.integration.test.tsx -- most
+  // cases in this file don't exercise the pick-state rotation this drives,
+  // so leaving it inert keeps them from racing a real interval. The
+  // rotation-specific tests below override this per-test to actually invoke
+  // (and later clean up) the effect.
+  useFocusEffect: jest.fn(),
 }));
 
 jest.mock('@/hooks/use-onboarding-flow', () => ({
@@ -68,6 +75,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 const mockedUseOnboardingFlow = useOnboardingFlow as jest.MockedFunction<typeof useOnboardingFlow>;
 const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof useFamilyMembers>;
 const mockedUsePortraitVersions = usePortraitVersions as jest.MockedFunction<typeof usePortraitVersions>;
+const mockedUseFocusEffect = useFocusEffect as jest.MockedFunction<typeof useFocusEffect>;
 const mockedPickFromLibrary = pickFamilyProfilePhotoFromLibrary as jest.MockedFunction<typeof pickFamilyProfilePhotoFromLibrary>;
 const mockedParsePendingPickerResult = parsePendingPickerResult as jest.MockedFunction<typeof parsePendingPickerResult>;
 const mockedGetPendingResultAsync = ImagePicker.getPendingResultAsync as jest.MockedFunction<typeof ImagePicker.getPendingResultAsync>;
@@ -136,6 +144,11 @@ describe('PortraitScreen (S16)', () => {
 
   afterEach(() => {
     Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
+    // jest.clearAllMocks() (above) only clears call history, not a custom
+    // implementation a test installed via mockImplementation -- reset back
+    // to the inert default so a rotation test's real callback-invoking
+    // implementation can never leak into an unrelated test.
+    mockedUseFocusEffect.mockImplementation(() => undefined);
   });
 
   it('starts with the kid tagged in the first memory, calls createPortraitVersion for that member, and transitions to painting', async () => {
@@ -342,6 +355,117 @@ describe('PortraitScreen (S16)', () => {
 
     await waitFor(() => {
       expect(mockRetryVersion).toHaveBeenCalledWith('version-1');
+    });
+  });
+
+  describe('pick-state before/after rotation (PROBLEM 1 fix)', () => {
+    // These tests need useFocusEffect to actually run its effect (and later
+    // its cleanup) -- unlike every other test above, which relies on the
+    // inert default so an unrelated test can't race a real interval. This
+    // local override is undone by the outer afterEach.
+    function focusAndCaptureCleanup() {
+      let cleanup: (() => void) | undefined;
+      mockedUseFocusEffect.mockImplementation((callback) => {
+        cleanup = (callback() ?? undefined) as (() => void) | undefined;
+      });
+      return () => cleanup?.();
+    }
+
+    beforeEach(() => {
+      mockedUseFamilyMembers.mockReturnValue({
+        members: [LILA_MEMBER],
+        isLoading: false,
+      } as unknown as ReturnType<typeof useFamilyMembers>);
+      mockDraft({ kidNames: ['Lila'], capture: null });
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('shows the first bundled demo pair (not a placeholder + fixed finished portrait) and cross-fades on advance', async () => {
+      jest.useFakeTimers();
+      const stopFocus = focusAndCaptureCleanup();
+      jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+      const removeListener = jest.fn();
+      jest.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({ remove: removeListener } as never);
+
+      const { getByTestId } = renderScreen();
+
+      const before = () => getByTestId('onb-portrait-before-image');
+      const after = () => getByTestId('onb-portrait-after-image');
+
+      // Real photo on the left, its illustrated portrait on the right --
+      // never the old empty-placeholder + fixed portrait-sample pairing.
+      expect(before().props.source[0]).toBe(onboardingPortraitPairs[0].photo);
+      expect(after().props.source[0]).toBe(onboardingPortraitPairs[0].portrait);
+      // Cross-fade, not a hard cut: both images carry a positive transition duration
+      // (expo-image normalizes a numeric `transition` prop into { duration } internally).
+      expect(before().props.transition?.duration).toBeGreaterThan(0);
+      expect(after().props.transition?.duration).toBeGreaterThan(0);
+
+      // Let the isReduceMotionEnabled() microtask resolve and start the interval.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(PORTRAIT_ROTATION_INTERVAL_MS);
+      });
+
+      expect(before().props.source[0]).toBe(onboardingPortraitPairs[1].photo);
+      expect(after().props.source[0]).toBe(onboardingPortraitPairs[1].portrait);
+
+      stopFocus();
+    });
+
+    it('holds on one pair when reduce motion is enabled, instead of rotating', async () => {
+      jest.useFakeTimers();
+      const stopFocus = focusAndCaptureCleanup();
+      jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(true);
+      jest.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({ remove: jest.fn() } as never);
+
+      const { getByTestId } = renderScreen();
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(PORTRAIT_ROTATION_INTERVAL_MS * 3);
+      });
+
+      expect(getByTestId('onb-portrait-before-image').props.source[0]).toBe(onboardingPortraitPairs[0].photo);
+      expect(getByTestId('onb-portrait-after-image').props.source[0]).toBe(onboardingPortraitPairs[0].portrait);
+
+      stopFocus();
+    });
+
+    it('stops advancing once the screen loses focus, so the Stack keeping S16 mounted underneath S17 cannot leak a running timer', async () => {
+      jest.useFakeTimers();
+      const stopFocus = focusAndCaptureCleanup();
+      jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+      jest.spyOn(AccessibilityInfo, 'addEventListener').mockReturnValue({ remove: jest.fn() } as never);
+
+      const { getByTestId } = renderScreen();
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Simulate the screen losing focus (S17's sibling chain, "Take me to
+      // the journal", etc.) -- the Stack keeps this screen mounted, so only
+      // the focus-effect cleanup (not unmount) stops the timer in practice.
+      stopFocus();
+
+      await act(async () => {
+        jest.advanceTimersByTime(PORTRAIT_ROTATION_INTERVAL_MS * 3);
+      });
+
+      expect(getByTestId('onb-portrait-before-image').props.source[0]).toBe(onboardingPortraitPairs[0].photo);
     });
   });
 });

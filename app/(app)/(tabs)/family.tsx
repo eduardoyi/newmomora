@@ -8,8 +8,25 @@ import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useContentSafety } from '@/hooks/useContentSafety';
-import { addFamilyMemberRoute, familyMemberRoute } from '@/lib/routes';
+import { addFamilyMemberRoute, editFamilyMemberRoute, familyMemberRoute } from '@/lib/routes';
+import { isFamilyMemberProfileIncomplete } from '@/utils/family-members';
 import { canEditFamilyContent } from '@/utils/roles';
+import type { FamilyMember } from '@/services/family-members';
+
+/**
+ * Incomplete members (onboarding-created, name-only kids -- see
+ * isFamilyMemberProfileIncomplete in src/utils/family-members.ts) route to
+ * the edit screen instead of the normal detail screen, so tapping the card
+ * is how you complete the profile. Viewers can't edit (canEditFamilyContent,
+ * src/utils/roles.ts) and must never land on a screen they'll bounce out
+ * of, so they always get the normal detail route regardless of completeness.
+ */
+function resolveMemberDestination(member: FamilyMember, canEdit: boolean) {
+  if (canEdit && isFamilyMemberProfileIncomplete(member)) {
+    return editFamilyMemberRoute(member.id);
+  }
+  return familyMemberRoute(member.id);
+}
 
 export default function FamilyScreen() {
   const { role } = useFamily();
@@ -71,13 +88,15 @@ export default function FamilyScreen() {
                 />
               );
             }
+            const destination = resolveMemberDestination(member, canEdit);
             return (
               <View key={member.id} testID={`family-cast-card-${member.id}`}>
                 <CastCard
+                  canEdit={canEdit}
                   isPortraitHidden={isPortraitHidden}
                   member={member}
-                  onPress={() => router.push(familyMemberRoute(member.id))}
-                  onPortraitPress={() => router.push(familyMemberRoute(member.id))}
+                  onPress={() => router.push(destination)}
+                  onPortraitPress={() => router.push(destination)}
                   onShowPortrait={portraitId
                     ? () => contentSafety.revealTarget('family_member_portrait', portraitId)
                     : undefined}

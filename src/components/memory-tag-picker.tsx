@@ -12,6 +12,7 @@ import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { FamilyRosterSheet } from '@/components/family-roster-sheet';
 import { colors, fonts, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
+import { isFamilyMemberProfileIncomplete } from '@/utils/family-members';
 import { calculateInlineTagCount, formatMoreTagLabel } from '@/utils/memory-tag-layout';
 
 const CHIP_GAP = spacing.sm;
@@ -34,6 +35,12 @@ interface MemberChipProps {
 }
 
 function MemberChip({ member, isSelected, isDisabled, onPress, testID }: MemberChipProps) {
+  // Same signal as the family card (src/components/cast-card.tsx), much
+  // lighter here: a name-only kid is still perfectly taggable, so this is a
+  // visual hint only -- the chip never disables or loses tap behavior for
+  // an incomplete member.
+  const isIncomplete = isFamilyMemberProfileIncomplete(member);
+
   return (
     <Pressable
       accessibilityRole="button"
@@ -48,7 +55,12 @@ function MemberChip({ member, isSelected, isDisabled, onPress, testID }: MemberC
       ]}
       testID={testID}
     >
-      <FamilyMemberAvatar member={member} size={22} />
+      <View
+        style={[styles.avatarWrap, isIncomplete && styles.avatarWrapIncomplete]}
+        testID={isIncomplete && testID ? `${testID}-incomplete-hint` : undefined}
+      >
+        <FamilyMemberAvatar member={member} size={22} />
+      </View>
       <Text style={[styles.chipText, isSelected && styles.chipTextSelected]}>
         {member.name}
       </Text>
@@ -283,6 +295,21 @@ const styles = StyleSheet.create({
   },
   chipPressed: {
     opacity: 0.82,
+  },
+  avatarWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Much lighter than the family card's dashed ring: a thin neutral outline
+  // hint, no text, no color change, no disabling -- the chip stays fully
+  // taggable (docs/plans/onboarding-design-brief.md's "invitation, not
+  // nagging" rule, applied at the lightest weight this surface allows).
+  avatarWrapIncomplete: {
+    borderColor: colors.borderStrong,
+    borderRadius: 13,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    padding: 1,
   },
   chipText: {
     color: colors.ink,

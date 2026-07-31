@@ -137,7 +137,7 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     mockedGetPendingInviteCode.mockResolvedValue(null);
   });
 
-  it('exposes the auto-focused OTP field to device automation without visually duplicating the six boxes', () => {
+  it('hides the OTP field with opacity as well as color -- color alone does not reliably hide TextInput text on Android', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const screen = renderScreen(queryClient);
     const input = screen.getByTestId('onboarding-code-input');
@@ -146,13 +146,12 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     expect(input.props.accessibilityHint).toBe('Enter the six digits from your email.');
     expect(input.props.caretHidden).toBe(true);
     expect(input.props.cursorColor).toBe('transparent');
-    expect(input.props.style).toEqual(expect.objectContaining({ color: 'transparent' }));
-    expect(input.props.style.opacity).toBeUndefined();
+    expect(input.props.style).toEqual(expect.objectContaining({ color: 'transparent', opacity: 0 }));
   });
 
   it('invalidates the memberships query before navigating a brand-new owner into S13', async () => {
     mockedCommitOnboarding.mockResolvedValue({
-      data: { familyId: 'family-1', memoryId: 'memory-1', isNewFamily: true },
+      data: { familyId: 'family-1', memoryId: 'memory-1', isNewFamily: true, pendingMediaUpload: null },
       error: null,
     });
 
@@ -178,7 +177,7 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
 
   it('invalidates the memberships query for a returning owner too, before routing via resolvePostAuthDestination', async () => {
     mockedCommitOnboarding.mockResolvedValue({
-      data: { familyId: 'family-existing', memoryId: 'memory-1', isNewFamily: false },
+      data: { familyId: 'family-existing', memoryId: 'memory-1', isNewFamily: false, pendingMediaUpload: null },
       error: null,
     });
     refetchMemberships.mockResolvedValue([
@@ -221,5 +220,74 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
     expect(router.replace).not.toHaveBeenCalledWith(onboardingTrialRoute);
     expect(router.replace).not.toHaveBeenCalledWith(timelineRoute);
+  });
+
+  // Bug fix: commitOnboarding can fail *after* it has already confirmed the
+  // signed-in user owns a real, existing family (the returning-owner
+  // branch, decision 18) -- e.g. the memory failed to save. Previously this
+  // showed the same dead-end red error + "Try again" as a genuinely new
+  // owner's failure, stranding an already-verified returning owner on this
+  // screen. The account and family are real, so this must route them into
+  // their journal instead.
+  it('routes a returning owner straight to their journal, with no red error, when commitOnboarding fails after finding their existing family', async () => {
+    mockedCommitOnboarding.mockResolvedValue({
+      data: null,
+      error: { message: 'Could not save your memory. Please try again.' },
+      existingFamilyId: 'family-existing',
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    const screen = renderScreen(queryClient);
+    fireEvent.changeText(screen.getByTestId('onboarding-code-input'), '123456');
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith(timelineRoute);
+    });
+
+    expect(clear).toHaveBeenCalled();
+    expect(screen.queryByTestId('onboarding-code-error')).toBeNull();
+    expect(screen.queryByTestId('onboarding-code-retry')).toBeNull();
+  });
+
+  // Bug fix (the closure-staleness half): finishAfterCommit's async chain
+  // is created on the render right before the code is submitted --
+  // necessarily pre-auth, so a plain destructured `enqueue` closure stays
+  // bound to that stale (pre-auth) snapshot for the whole call. Asserting
+  // the *current* `enqueue` mock is invoked (not some earlier throwaway
+  // closure) proves the screen reads it fresh via a ref rather than
+  // capturing it once at the top of the render. Ordering also matters: the
+  // enqueue call must come after the membership invalidation, since
+  // usePendingMemoryUploads().enqueue's own user/family guard reads
+  // FamilyProvider's React state, which has no way to know about a
+  // brand-new family until that invalidation resolves.
+  it('enqueues a pending media capture only after the membership invalidation resolves', async () => {
+    const pendingMediaUpload = {
+      memoryId: 'memory-1',
+      mediaAssets: [{ fileUri: 'file:///photo.jpg', contentType: 'image/jpeg' }],
+      content: 'Garbage truck fan club.',
+      memoryDate: '2026-07-30',
+      taggedMemberIds: ['member-lila'],
+    };
+    mockedCommitOnboarding.mockResolvedValue({
+      data: { familyId: 'family-1', memoryId: 'memory-1', isNewFamily: true, pendingMediaUpload },
+      error: null,
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const screen = renderScreen(queryClient);
+    fireEvent.changeText(screen.getByTestId('onboarding-code-input'), '123456');
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith(onboardingTrialRoute);
+    });
+
+    expect(enqueue).toHaveBeenCalledWith(pendingMediaUpload);
+
+    const invalidateOrder = invalidateSpy.mock.invocationCallOrder[0];
+    const enqueueOrder = enqueue.mock.invocationCallOrder[0];
+    expect(invalidateOrder).toBeLessThan(enqueueOrder);
   });
 });

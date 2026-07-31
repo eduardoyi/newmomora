@@ -26,17 +26,19 @@
 // `usePortraitVersions` call and the ready-effect below are both keyed off
 // whatever `targetMember` resolves to on that render. See
 // `resolveTargetMember`'s doc comment for the fixed priority order.
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ArrowRight, Image as ImageIcon } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, Platform, StyleSheet, View } from 'react-native';
 
+import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
 import { OnbButton } from '@/components/onboarding/onb-button';
-import { OnbIllustration } from '@/components/onboarding/onb-illustration';
 import { OnbBody, OnbDisplay, OnbScript, OnbTitle } from '@/components/onboarding/onb-typography';
 import { OnbShell } from '@/components/onboarding/onb-shell';
 import { colors } from '@/constants/theme';
+import { onboardingPortraitPairs } from '@/constants/onboarding-portrait-pairs';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
@@ -139,53 +141,124 @@ function resolveTargetMember(
   return members.find(hasNoPortraitYet) ?? members[0];
 }
 
-function PulsingFrame({ accessibilityLabel }: { accessibilityLabel: string }) {
-  const pulse = useRef(new Animated.Value(0)).current;
+export const PORTRAIT_ROTATION_INTERVAL_MS = 4000;
+export const PORTRAIT_CROSSFADE_DURATION_MS = 500;
 
-  useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 1000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0,
-          duration: 1000,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [pulse]);
+/**
+ * S16's "pick a photo" before/after demo (task brief PROBLEM 1 /
+ * docs/features/onboarding.md). Rotates through real photo -> illustrated
+ * portrait pairs from the demo account instead of pairing an empty
+ * placeholder with one fixed finished portrait, which read as "this is
+ * what YOUR child's illustration will look like" (or worse, "is") rather
+ * than demonstrating the transformation in general --
+ * src/constants/onboarding-portrait-pairs.ts has the full rationale and how
+ * to re-extract the bundled assets.
+ *
+ * Cross-fades on every advance via expo-image's own `transition` (not a
+ * hard cut), and mirrors year.tsx's reduce-motion + focus gating exactly:
+ * hold on one pair when AccessibilityInfo.isReduceMotionEnabled(), and stop
+ * the interval whenever this screen isn't the focused route -- the
+ * onboarding Stack keeps S16 mounted underneath S17/the journal, so an
+ * unmount-only cleanup would leak a running timer.
+ */
+function PortraitPairShowcase() {
+  const [pairIndex, setPairIndex] = useState(0);
+  const [reduceMotionEnabled, setReduceMotionEnabled] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.04] });
+  const stopRotation = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  }, []);
+
+  const startRotation = useCallback(() => {
+    stopRotation();
+    if (onboardingPortraitPairs.length <= 1) {
+      return;
+    }
+    intervalRef.current = setInterval(() => {
+      setPairIndex((index) => (index + 1) % onboardingPortraitPairs.length);
+    }, PORTRAIT_ROTATION_INTERVAL_MS);
+  }, [stopRotation]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+
+      void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+        if (cancelled) return;
+        setReduceMotionEnabled(enabled);
+        if (!enabled) {
+          startRotation();
+        }
+      });
+
+      const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', (enabled) => {
+        setReduceMotionEnabled(enabled);
+        if (enabled) {
+          stopRotation();
+        } else {
+          startRotation();
+        }
+      });
+
+      return () => {
+        cancelled = true;
+        subscription.remove();
+        stopRotation();
+      };
+    }, [startRotation, stopRotation]),
+  );
+
+  const pair = onboardingPortraitPairs[pairIndex % onboardingPortraitPairs.length];
+  const transition = reduceMotionEnabled ? null : PORTRAIT_CROSSFADE_DURATION_MS;
 
   return (
-    <Animated.View
-      accessibilityLabel={accessibilityLabel}
-      accessible
-      style={[styles.paintingFrame, { transform: [{ scale }] }]}
-      testID="onb-portrait-painting-frame"
-    >
-      <OnbIllustration slot="portrait-sample" style={styles.paintingFrameImage} testID="onb-portrait-painting-illustration" />
-    </Animated.View>
+    <View style={styles.cardsRow}>
+      <View style={[styles.photoCard, styles.beforeCard]} testID="onb-portrait-before-card">
+        <Image
+          accessibilityLabel="A real photo, before illustration"
+          contentFit="cover"
+          source={pair.photo}
+          style={styles.cardImage}
+          testID="onb-portrait-before-image"
+          transition={transition}
+        />
+      </View>
+      <ArrowRight color={colors.ink3} size={20} style={styles.arrow} />
+      <View style={[styles.photoCard, styles.afterCard]} testID="onb-portrait-after-card">
+        <Image
+          accessibilityLabel="The same photo, illustrated in Momora's style"
+          contentFit="cover"
+          source={pair.portrait}
+          style={styles.cardImage}
+          testID="onb-portrait-after-image"
+          transition={transition}
+        />
+      </View>
+    </View>
   );
 }
 
-/** Same frame as `PulsingFrame`, just not pulsing -- used for the `failed`
- * state so it reads as "paused", not "still working". Both frames report
- * the real status (`getPortraitStatusLabel`) to screen readers as a single
- * accessible node, replacing the illustration's own generic "sample
- * portrait" label with something that's actually true right now. */
+/** Static "paused" frame for the `failed` state -- deliberately not
+ * animated, so it reads as "paused," not "still working" (the generating
+ * sub-state above uses `GeneratingVisualOverlay` instead, task brief
+ * PROBLEM 2). Deliberately does NOT render any finished illustration --
+ * pairing a real child's finished portrait with "That one didn't come out
+ * right" would contradict the copy (it visibly *did* come out) and repeats
+ * the exact identity-confusion problem this task removed from the pick
+ * state, arguably worse here. Reuses the pick state's neutral "before card"
+ * empty-placeholder treatment (a bare icon in the same bordered frame) so
+ * the visual language stays consistent across all three of this screen's
+ * sub-states without asserting any result. Reports the real status
+ * (`getPortraitStatusLabel`) to screen readers as a single accessible
+ * node. */
 function StillFrame({ accessibilityLabel }: { accessibilityLabel: string }) {
   return (
     <View accessibilityLabel={accessibilityLabel} accessible style={styles.paintingFrame} testID="onb-portrait-failed-frame">
-      <OnbIllustration slot="portrait-sample" style={styles.paintingFrameImage} testID="onb-portrait-failed-illustration" />
+      <ImageIcon color={colors.ink3} size={32} strokeWidth={1.5} />
     </View>
   );
 }
@@ -384,7 +457,9 @@ export default function PortraitScreen() {
             </>
           ) : (
             <>
-              <PulsingFrame accessibilityLabel={getPortraitStatusLabel(portraitStatus)} />
+              <View style={styles.paintingFrame} testID="onb-portrait-painting-frame">
+                <GeneratingVisualOverlay label={getPortraitStatusLabel(portraitStatus)} variant="inline" />
+              </View>
               <OnbScript size={22} style={styles.paintingScript}>
                 painting…
               </OnbScript>
@@ -436,15 +511,7 @@ export default function PortraitScreen() {
       testID="onb-portrait-screen"
     >
       <View style={styles.pickContainer}>
-        <View style={styles.cardsRow}>
-          <View style={[styles.photoCard, styles.beforeCard]} testID="onb-portrait-before-card">
-            <ImageIcon color={colors.ink3} size={30} strokeWidth={1.5} />
-          </View>
-          <ArrowRight color={colors.ink3} size={20} style={styles.arrow} />
-          <View style={[styles.photoCard, styles.afterCard]} testID="onb-portrait-after-card">
-            <OnbIllustration slot="portrait-sample" style={styles.afterCardImage} testID="onb-portrait-sample-illustration" />
-          </View>
-        </View>
+        <PortraitPairShowcase />
         <OnbDisplay size={32}>{`Let's make ${possessive(targetName)} portrait.`}</OnbDisplay>
         <OnbBody muted size={15} style={styles.pickBody}>
           {`Pick a photo you love. We'll illustrate ${targetName} in Momora's style.`}
@@ -488,7 +555,7 @@ const styles = StyleSheet.create({
   afterCard: {
     transform: [{ rotate: '3deg' }],
   },
-  afterCardImage: {
+  cardImage: {
     width: '100%',
     height: '100%',
   },
@@ -524,16 +591,14 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 14,
     padding: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
     transform: [{ rotate: '-2deg' }],
     shadowColor: colors.ink,
     shadowOpacity: 0.1,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 12 },
     elevation: 4,
-  },
-  paintingFrameImage: {
-    width: '100%',
-    height: '100%',
   },
   paintingScript: {
     marginTop: 16,

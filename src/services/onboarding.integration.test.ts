@@ -99,7 +99,12 @@ describe('commitOnboarding', () => {
     const result = await commitOnboarding(buildDraft());
 
     expect(result.error).toBeNull();
-    expect(result.data).toEqual({ familyId: 'family-1', memoryId: 'memory-1', isNewFamily: true });
+    expect(result.data).toEqual({
+      familyId: 'family-1',
+      memoryId: 'memory-1',
+      isNewFamily: true,
+      pendingMediaUpload: null,
+    });
 
     expect(mockedCreateFamily).toHaveBeenCalledWith("Lila & Miguel's Family");
     expect(mockedCreateFamilyMember).toHaveBeenNthCalledWith(1, {
@@ -145,10 +150,9 @@ describe('commitOnboarding', () => {
     );
   });
 
-  it('enqueues the media path instead of calling createMemory directly', async () => {
+  it('builds a pendingMediaUpload payload for the media path instead of calling createMemory or enqueueing anything itself', async () => {
     mockedCreateFamily.mockResolvedValue({ data: { id: 'family-1' } as never, error: null });
     mockedCreateFamilyMember.mockResolvedValueOnce({ data: { id: 'member-lila' } as never, error: null });
-    const enqueueMediaUpload = jest.fn();
 
     const result = await commitOnboarding(
       buildDraft({
@@ -160,21 +164,24 @@ describe('commitOnboarding', () => {
           taggedKidIndexes: [0],
         },
       }),
-      { enqueueMediaUpload },
     );
 
+    // commitOnboarding no longer calls the pending-upload queue itself (see
+    // CommitOnboardingResult.pendingMediaUpload's doc comment) -- it hands
+    // the caller (code.tsx) everything needed to enqueue it later, once
+    // FamilyProvider's membership cache actually knows about the family.
     expect(mockedCreateMemory).not.toHaveBeenCalled();
-    expect(enqueueMediaUpload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: 'Garbage truck fan club.',
-        taggedMemberIds: ['member-lila'],
-        mediaAssets: [{ fileUri: 'file:///photo.jpg', contentType: 'image/jpeg' }],
-      }),
-    );
     expect(result.error).toBeNull();
     expect(result.data?.familyId).toBe('family-1');
     expect(result.data?.isNewFamily).toBe(true);
     expect(typeof result.data?.memoryId).toBe('string');
+    expect(result.data?.pendingMediaUpload).toEqual({
+      memoryId: result.data?.memoryId,
+      content: 'Garbage truck fan club.',
+      memoryDate: expect.any(String),
+      taggedMemberIds: ['member-lila'],
+      mediaAssets: [{ fileUri: 'file:///photo.jpg', contentType: 'image/jpeg' }],
+    });
   });
 
   it('rolls back the newly created family and returns a retryable error when a kid profile fails to create', async () => {
@@ -204,7 +211,12 @@ describe('commitOnboarding', () => {
     expect(mockedCreateMemory).not.toHaveBeenCalled();
     expect(mockedPatchOnboardingDraft).not.toHaveBeenCalled();
     expect(result.error).toBeNull();
-    expect(result.data).toEqual({ familyId: 'family-1', memoryId: null, isNewFamily: false });
+    expect(result.data).toEqual({
+      familyId: 'family-1',
+      memoryId: null,
+      isNewFamily: false,
+      pendingMediaUpload: null,
+    });
     // Notification prefs still apply -- harmless and cheap to redo.
     expect(mockedUpdateUserProfile).toHaveBeenCalledWith({
       enableDailyReminder: true,
@@ -223,6 +235,67 @@ describe('commitOnboarding', () => {
     expect(result.data).toBeNull();
     expect(result.error).not.toBeNull();
     expect(mockedCreateFamily).not.toHaveBeenCalled();
+  });
+
+  // Bug fix: fetchMyFamilyMemberships/fetchUserProfile both return
+  // `{ data, error }`, and a transient network failure surfaces as
+  // `data: null` -- indistinguishable from a genuine "no rows" result
+  // unless `error` is checked. Silently reading that as "no existing
+  // family" would make commitOnboarding create a *second* family for a
+  // real returning owner (docs/features/onboarding.md decision 18), which
+  // is worse than the error it replaces because nothing would surface it
+  // happening. Both lookup failures must abort instead of guessing.
+  describe('cannot tell whether an existing family exists (lookup failure, must never guess "none")', () => {
+    it('aborts with a retryable error, and creates nothing, when the membership lookup itself fails', async () => {
+      mockedFetchMyFamilyMemberships.mockResolvedValue({
+        data: null,
+        error: { message: 'Network request failed' },
+      } as never);
+
+      const result = await commitOnboarding(buildDraft());
+
+      expect(result.data).toBeNull();
+      expect(result.error?.message).toBe('Could not check your existing family. Please try again.');
+      // No existingFamilyId either -- we genuinely don't know one exists,
+      // so the caller must not route this like a confirmed returning owner.
+      expect(result.existingFamilyId).toBeUndefined();
+
+      expect(mockedCreateFamily).not.toHaveBeenCalled();
+      expect(mockedCreateFamilyMember).not.toHaveBeenCalled();
+      expect(mockedCreateMemory).not.toHaveBeenCalled();
+      expect(mockedPatchOnboardingDraft).not.toHaveBeenCalled();
+    });
+
+    it('aborts with a retryable error, and creates nothing, when membership rows exist but the profile lookup (picking which is active) fails', async () => {
+      mockedFetchMyFamilyMemberships.mockResolvedValue({
+        data: [
+          {
+            id: 'membership-1',
+            family_id: 'family-existing',
+            role: 'owner',
+            family: { id: 'family-existing', name: 'The Riveras', illustration_style: 'default', deleted_at: null },
+          },
+        ],
+        error: null,
+      } as never);
+      mockedFetchUserProfile.mockResolvedValue({
+        data: null,
+        error: { message: 'Network request failed' },
+      });
+
+      const result = await commitOnboarding(buildDraft());
+
+      expect(result.data).toBeNull();
+      expect(result.error?.message).toBe('Could not check your existing family. Please try again.');
+      expect(result.existingFamilyId).toBeUndefined();
+
+      // Not just "no second family" -- no write of any kind, since we
+      // don't actually know an existing family was confirmed.
+      expect(mockedCreateFamily).not.toHaveBeenCalled();
+      expect(mockedCreateFamilyMember).not.toHaveBeenCalled();
+      expect(mockedCreateMemory).not.toHaveBeenCalled();
+      expect(mockedPatchOnboardingDraft).not.toHaveBeenCalled();
+    });
   });
 
   describe('returning owner who already has a family (docs/features/onboarding.md decision 18)', () => {
@@ -255,6 +328,7 @@ describe('commitOnboarding', () => {
         familyId: 'family-existing',
         memoryId: 'memory-existing-1',
         isNewFamily: false,
+        pendingMediaUpload: null,
       });
       expect(mockedCreateFamily).not.toHaveBeenCalled();
       expect(mockedCreateFamilyMember).not.toHaveBeenCalled();
@@ -289,6 +363,49 @@ describe('commitOnboarding', () => {
       await commitOnboarding(buildDraft());
 
       expect(mockedCreateMemory).toHaveBeenCalledWith(expect.objectContaining({ taggedMemberIds: [] }));
+    });
+
+    // Bug fix (docs/features/onboarding.md decision 18): a failure in this
+    // branch happens *after* commitOnboarding has already confirmed the
+    // signed-in user owns this real family -- the caller (code.tsx) must be
+    // told that, so it can route the user into their journal instead of a
+    // dead-end "must be signed in" error + retry loop. This is a regression
+    // test at the service layer for the fix; see
+    // onboarding.code.integration.test.tsx for the screen-level assertion
+    // that code.tsx actually acts on it.
+    it('returns existingFamilyId when saving the memory into the existing family fails, so the caller never treats this like a brand-new owner', async () => {
+      mockedFetchMyFamilyMemberships.mockResolvedValue({
+        data: [
+          {
+            id: 'membership-1',
+            family_id: 'family-existing',
+            role: 'owner',
+            family: { id: 'family-existing', name: 'The Riveras', illustration_style: 'default', deleted_at: null },
+          },
+        ],
+        error: null,
+      } as never);
+      mockedFetchUserProfile.mockResolvedValue({
+        data: { active_family_id: 'family-existing' } as never,
+        error: null,
+      });
+      mockedFetchFamilyMembers.mockResolvedValue({
+        data: [{ id: 'member-real-lila', name: 'Lila' } as never],
+        error: null,
+      });
+      mockedCreateMemory.mockResolvedValue({
+        data: null,
+        error: { message: 'Network request failed' },
+      });
+
+      const result = await commitOnboarding(buildDraft());
+
+      expect(result.data).toBeNull();
+      expect(result.error?.message).toBe('Network request failed');
+      expect(result.existingFamilyId).toBe('family-existing');
+      // Never marked committed -- a retry (or the caller's graceful
+      // fallback) must not skip re-attempting the memory.
+      expect(mockedPatchOnboardingDraft).not.toHaveBeenCalled();
     });
 
     it('never resolves a soft-deleted family as "existing"', async () => {

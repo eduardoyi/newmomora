@@ -91,6 +91,13 @@ jest.mock('expo-router', () => {
   return {
     router: { replace: jest.fn(), push: jest.fn(), back: jest.fn() },
     useLocalSearchParams: jest.fn(() => ({})),
+    // portrait.tsx's pick-state before/after rotation uses this -- a no-op
+    // here (same as onboarding.year.integration.test.tsx and
+    // onboarding.portrait.integration.test.tsx's default) is correct: this
+    // suite's S16 assertions are about target-member resolution and status
+    // transitions, not the decorative rotation, so nothing needs the effect
+    // to actually run.
+    useFocusEffect: jest.fn(),
     // paywall.tsx's Terms/Privacy links -- not billing, stubbed the same way
     // onboarding.paywall.integration.test.tsx already does.
     Link: ({ href, style, testID, children }: {
@@ -379,11 +386,16 @@ describe('Post-commit onboarding screens read real server data, not the cleared 
 
     let commitResult: Awaited<ReturnType<typeof commitOnboarding>> | undefined;
     await act(async () => {
-      commitResult = await commitOnboarding(seededDraft, {});
+      commitResult = await commitOnboarding(seededDraft);
     });
 
     expect(commitResult?.error).toBeNull();
-    expect(commitResult?.data).toEqual({ familyId: 'family-1', memoryId: 'memory-1', isNewFamily: true });
+    expect(commitResult?.data).toEqual({
+      familyId: 'family-1',
+      memoryId: 'memory-1',
+      isNewFamily: true,
+      pendingMediaUpload: null,
+    });
 
     // ---- The world now has a real family -- point the server mocks at it. ----
     mockedFetchFamilyMembers.mockResolvedValue({ data: POST_COMMIT_MEMBERS, error: null });
