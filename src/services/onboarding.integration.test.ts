@@ -184,6 +184,61 @@ describe('commitOnboarding', () => {
     });
   });
 
+  // Regression test for the media-sizing bug: a draft's captured aspect
+  // ratio/duration (populated by app/(onboarding)/capture.tsx from
+  // MediaAttachment, the same source new-memory.tsx reads) must reach the
+  // enqueue payload untouched -- its absence is what let onboarding photos
+  // ship pillarboxed at DEFAULT_MEDIA_ASPECT_RATIO instead of sized to the
+  // photo (see OnboardingDraftCapture's doc comment).
+  it('carries the captured aspect ratio and duration through to the pendingMediaUpload mediaAssets payload', async () => {
+    mockedCreateFamily.mockResolvedValue({ data: { id: 'family-1' } as never, error: null });
+    mockedCreateFamilyMember.mockResolvedValueOnce({ data: { id: 'member-lila' } as never, error: null });
+
+    const result = await commitOnboarding(
+      buildDraft({
+        kidNames: ['Lila'],
+        capture: {
+          text: 'Garbage truck fan club.',
+          mediaUri: 'file:///video.mov',
+          mediaContentType: 'video/quicktime',
+          mediaAspectRatio: 0.5625,
+          mediaDurationMs: 4200,
+          taggedKidIndexes: [0],
+        },
+      }),
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.data?.pendingMediaUpload?.mediaAssets).toEqual([
+      {
+        fileUri: 'file:///video.mov',
+        contentType: 'video/quicktime',
+        aspectRatio: 0.5625,
+        durationMs: 4200,
+      },
+    ]);
+  });
+
+  it('leaves aspectRatio/durationMs undefined on the payload when the draft never captured them (pre-fix on-disk draft)', async () => {
+    mockedCreateFamily.mockResolvedValue({ data: { id: 'family-1' } as never, error: null });
+    mockedCreateFamilyMember.mockResolvedValueOnce({ data: { id: 'member-lila' } as never, error: null });
+
+    const result = await commitOnboarding(
+      buildDraft({
+        kidNames: ['Lila'],
+        capture: {
+          text: 'Garbage truck fan club.',
+          mediaUri: 'file:///photo.jpg',
+          mediaContentType: 'image/jpeg',
+          taggedKidIndexes: [0],
+        },
+      }),
+    );
+
+    expect(result.data?.pendingMediaUpload?.mediaAssets[0]?.aspectRatio).toBeUndefined();
+    expect(result.data?.pendingMediaUpload?.mediaAssets[0]?.durationMs).toBeUndefined();
+  });
+
   it('rolls back the newly created family and returns a retryable error when a kid profile fails to create', async () => {
     mockedCreateFamily.mockResolvedValue({ data: { id: 'family-1' } as never, error: null });
     mockedCreateFamilyMember

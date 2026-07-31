@@ -1,26 +1,22 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 import { Pressable, TextInput } from 'react-native';
-import { useKeyboardState } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import {
   FOOTER_KEYBOARD_CLEARANCE,
   getFooterBottomPadding,
   isOnboardingContentOverflowing,
-  KEYBOARD_VERTICAL_OFFSET,
   OnbShell,
 } from '@/components/onboarding/onb-shell';
 import { spacing } from '@/constants/theme';
 
-const mockedUseKeyboardState = jest.mocked(useKeyboardState);
-
-function renderShell(element: ReactElement) {
+function renderShell(element: ReactElement, bottomInset = 48) {
   return render(
     <SafeAreaProvider
       initialMetrics={{
         frame: { height: 800, width: 360, x: 0, y: 0 },
-        insets: { bottom: 48, left: 0, right: 0, top: 24 },
+        insets: { bottom: bottomInset, left: 0, right: 0, top: 24 },
       }}
     >
       {element}
@@ -29,35 +25,38 @@ function renderShell(element: ReactElement) {
 }
 
 describe('OnbShell', () => {
-  it('keeps the footer outside the scroll body and resizes the shared frame for the keyboard', () => {
+  it('keeps the footer outside the scroll body, in a footer that sticks to the keyboard', () => {
     const { getByTestId } = renderShell(
       <OnbShell footer={<Pressable testID="onb-primary-action" />}>
         <TextInput testID="onb-lower-input" />
       </OnbShell>,
     );
 
-    fireEvent(getByTestId('onb-lower-input'), 'focus');
-
     const scrollView = getByTestId('onb-shell-scroll');
-    const keyboardFrame = getByTestId('onb-shell-keyboard-frame');
+    const stickyFooter = getByTestId('onb-shell-sticky-footer');
     const footer = getByTestId('onb-shell-footer');
 
-    // The same height-resized frame is used on both platforms, so the CTA
-    // remains in layout above the IME instead of translating over the form.
-    expect(keyboardFrame.props.behavior).toBe('height');
-    expect(keyboardFrame.props.enabled).toBe(true);
-    expect(keyboardFrame.props.automaticOffset).toBe(true);
-    expect(keyboardFrame.props.keyboardVerticalOffset).toBe(KEYBOARD_VERTICAL_OFFSET);
+    // `KeyboardStickyView` reads the keyboard controller's continuously
+    // running animated value directly, so the footer stays correctly
+    // positioned even when a screen mounts mid keyboard-animation (see file
+    // header, cause A) -- unlike the `KeyboardAvoidingView`-based frame this
+    // replaced, there's no separate `enabled`/`behavior` layout mode to
+    // assert on here.
+    expect(stickyFooter.props.offset).toEqual({ closed: 0, opened: 48 });
+
     let footerAncestor = footer.parent;
     while (footerAncestor) {
       expect(footerAncestor).not.toBe(scrollView);
       footerAncestor = footerAncestor.parent;
     }
     expect(scrollView.props.children).not.toContain(footer);
+
+    // The native `SafeAreaView edges={['bottom']}` between the sticky view
+    // and the footer is the single owner of nav-bar/home-indicator
+    // clearance now (cause B/C); the footer's own JS padding just tops up
+    // the design's usual gap when that native inset is smaller than it.
     expect(footer.props.style).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ paddingBottom: 48 + spacing.sm }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ paddingBottom: spacing.sm })]),
     );
     expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
     expect(FOOTER_KEYBOARD_CLEARANCE).toBeLessThan(spacing.xxl * 2);
@@ -96,87 +95,48 @@ describe('OnbShell', () => {
     );
 
     expect(queryByTestId('onb-shell-footer')).toBeNull();
+    expect(queryByTestId('onb-shell-sticky-footer')).toBeNull();
     expect(getByTestId('onb-shell-scroll').props.bottomOffset).toBe(spacing.lg);
   });
 
-  it('drops the redundant safe-area footer gap once the keyboard opens while the screen is showing', () => {
-    const { getByTestId, rerender } = renderShell(
-      <OnbShell footer={<Pressable testID="onb-primary-action" />}>
-        <TextInput testID="onb-lower-input" />
-      </OnbShell>,
-    );
-
-    // Mounts with the keyboard closed -- the safe-area padding applies.
-    expect(getByTestId('onb-shell-footer').props.style).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ paddingBottom: 48 + spacing.sm }),
-      ]),
-    );
-
-    // A real keyboard-visible transition observed *after* mount (e.g. the
-    // user focuses this screen's own input) still drops the redundant gap.
-    // A fresh element (not the one captured above) forces React to actually
-    // reconcile OnbShell again instead of bailing out on an identical
-    // element reference.
-    mockedUseKeyboardState.mockReturnValue(true);
-    rerender(
-      <SafeAreaProvider
-        initialMetrics={{
-          frame: { height: 800, width: 360, x: 0, y: 0 },
-          insets: { bottom: 48, left: 0, right: 0, top: 24 },
-        }}
-      >
-        <OnbShell footer={<Pressable testID="onb-primary-action" />}>
-          <TextInput testID="onb-lower-input" />
-        </OnbShell>
-      </SafeAreaProvider>,
-    );
-
-    expect(getByTestId('onb-shell-footer').props.style).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ paddingBottom: spacing.sm }),
-      ]),
-    );
-
-    // Restore the default (keyboard-hidden) mock so it doesn't leak into
-    // later tests -- this test is the only one that sets a persistent
-    // (non-Once) return value.
-    mockedUseKeyboardState.mockReturnValue(false);
-  });
-
-  it('ignores a keyboard-visible reading inherited from the previous screen on its very first commit', () => {
-    // `useKeyboardState` is backed by an app-wide singleton in
-    // react-native-keyboard-controller: navigating away from a screen with a
-    // focused input can leave it reporting `isVisible: true` while the
-    // keyboard is still mid dismiss-animation, even on a freshly mounted
-    // screen with no focused input of its own (see e.g. S6 kids -> S7
-    // family-name, or S7 family-name -> S8 bridge, which has no input at
-    // all). `mockReturnValueOnce` simulates exactly that stale snapshot
-    // being present for this instance's first render.
-    mockedUseKeyboardState.mockReturnValueOnce(true);
-
+  it('tops the footer gap up to the design floor when the native bottom inset is smaller than it', () => {
+    // Inset-less device (e.g. Android hardware nav buttons): the native
+    // `SafeAreaView edges={['bottom']}` contributes ~0, so the footer's own
+    // padding should supply the full design gap instead of leaving the CTA
+    // flush with the screen edge.
     const { getByTestId } = renderShell(
       <OnbShell footer={<Pressable testID="onb-primary-action" />}>
         <TextInput testID="onb-lower-input" />
       </OnbShell>,
+      0,
     );
 
-    // The CTA must clear the Android nav bar immediately -- not just once a
-    // later `keyboardDidHide` event happens to correct the stale reading.
     expect(getByTestId('onb-shell-footer').props.style).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ paddingBottom: 48 + spacing.sm }),
+        expect.objectContaining({ paddingBottom: spacing.xl + spacing.sm }),
       ]),
     );
+    expect(getByTestId('onb-shell-sticky-footer').props.offset).toEqual({ closed: 0, opened: 0 });
   });
 
-  it('adds the Android navigation-bar inset to the footer instead of letting it cover the action', () => {
+  it('exposes getFooterBottomPadding for year.tsx, which owns its own bottom clearance in JS', () => {
+    // app/(onboarding)/year.tsx deliberately doesn't use OnbShell (see its
+    // header comment) and calls this helper directly with its own
+    // `bottomInset`, with no native `SafeAreaView edges={['bottom']}`
+    // wrapping its footer -- so, unlike OnbShell's own footer padding, this
+    // must keep returning the full clearance amount unchanged.
     expect(getFooterBottomPadding(48, false)).toBe(48 + spacing.sm);
     expect(getFooterBottomPadding(0, false)).toBe(spacing.xl + spacing.sm);
   });
 
-  it('does not stack the navigation-bar inset on top of an open keyboard', () => {
-    expect(getFooterBottomPadding(48, true)).toBe(spacing.sm);
+  it('ignores the isKeyboardVisible parameter (OnbShell no longer tracks keyboard state)', () => {
+    // The parameter is kept only so year.tsx's existing call site --
+    // `getFooterBottomPadding(bottomInset, false)` -- keeps compiling;
+    // changing this signature would mean editing year.tsx, which is out of
+    // scope here. Confirm it's truly inert rather than silently reviving
+    // the old compact-padding branch.
+    expect(getFooterBottomPadding(48, true)).toBe(getFooterBottomPadding(48, false));
+    expect(getFooterBottomPadding(0, true)).toBe(getFooterBottomPadding(0, false));
   });
 
   it('identifies only content beyond the viewport as scrollable', () => {

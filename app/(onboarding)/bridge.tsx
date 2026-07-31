@@ -1,7 +1,17 @@
 // S8 -- Bridge to action (docs/plans/onboarding-design-brief.md, WP1). The
 // reframe, minimal and airy, setting up the guided first capture (S9). Body
-// personalizes on the first-entered kid regardless of how many kids were
-// named (design brief S8: "body personalized on the first kid").
+// personalizes on the kid's name for a single-kid family; for more than one
+// kid it uses the journal-flavored "Your" (see journalPossessive's doc
+// comment in onboarding-copy.ts) rather than singling out whichever kid was
+// entered first.
+//
+// Device-reported bug (2026-07-31): this used to read only
+// `draft.kidNames[0]`, so a two-kid family's body always named the
+// first-entered kid ("Enzo's journal...") regardless of how many kids
+// existed -- exactly the "picking a favorite" disparity naming this feature
+// exists to avoid (docs/features/onboarding.md decision 8). S8 runs before
+// S9's capture/tagging exists, so this resolves off the full kid list, not
+// a tagged subset.
 import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -12,7 +22,7 @@ import { OnbShell } from '@/components/onboarding/onb-shell';
 import { colors } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { onboardingCaptureRoute } from '@/lib/onboarding-routes';
-import { possessive } from '@/utils/onboarding-copy';
+import { capitalizeFragment, journalPossessive, kidsPossessive } from '@/utils/onboarding-copy';
 
 const ACCENT = 'no blank pages here';
 const HEADLINE = "You're not behind. There is no behind.";
@@ -25,10 +35,7 @@ export default function BridgeScreen() {
     patch({ step: 'bridge' });
   }, [patch]);
 
-  const firstKidName = draft.kidNames[0]?.trim();
-  // Defensive fallback only -- S6 requires at least one kid name to reach
-  // this screen at all, so the empty case is unreachable in practice.
-  const possessiveFirstName = firstKidName ? possessive(firstKidName) : 'Their';
+  const possessiveFirstName = capitalizeFragment(journalPossessive(kidsPossessive(draft.kidNames)));
 
   return (
     <OnbShell

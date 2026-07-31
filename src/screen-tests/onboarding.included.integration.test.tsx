@@ -95,12 +95,30 @@ describe('IncludedScreen (S14)', () => {
     expect(getByText('Eduardo & Adriana')).toBeTruthy();
   });
 
-  it('uses the neutral "their" phrasing when several kids are tagged on the first memory', () => {
+  it('uses "your journal" (not "their") in the headline when two kids are tagged, but keeps "their" on the portrait bullet', () => {
     mockDraft({ kidNames: ['Lila', 'Miguel'], capture: { text: 'x', taggedKidIndexes: [0, 1] } });
+
+    const { getByText, queryByText } = renderScreen();
+
+    // Device-reported bug (2026-07-31): this headline used to read "Everything
+    // their journal comes with:" -- journalPossessive flavors the neutral
+    // multi-kid case "your" specifically for this "journal" phrase. The
+    // bullet item just below is NOT "journal" phrasing, so it keeps the
+    // existing neutral third-person "their" unchanged.
+    expect(getByText('Everything your journal comes with:')).toBeTruthy();
+    expect(queryByText('Everything their journal comes with:')).toBeNull();
+    expect(getByText('their illustrated portrait and storybook pages')).toBeTruthy();
+  });
+
+  it('uses "your journal" in the headline when three or more kids are tagged', () => {
+    mockDraft({
+      kidNames: ['Lila', 'Miguel', 'Teo'],
+      capture: { text: 'x', taggedKidIndexes: [0, 1, 2] },
+    });
 
     const { getByText } = renderScreen();
 
-    expect(getByText("Everything their journal comes with:")).toBeTruthy();
+    expect(getByText('Everything your journal comes with:')).toBeTruthy();
     expect(getByText('their illustrated portrait and storybook pages')).toBeTruthy();
   });
 

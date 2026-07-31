@@ -19,7 +19,7 @@ import { colors, emotionColors, fonts, radius, spacing } from '@/constants/theme
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { onboardingYearRoute } from '@/lib/onboarding-routes';
 import { aspectRatioFromDimensions, clampMediaAspectRatio, DEFAULT_MEDIA_ASPECT_RATIO } from '@/utils/media-aspect';
-import { firstPageCaption, possessive } from '@/utils/onboarding-copy';
+import { capitalizeFragment, firstPageCaption, journalPossessive, kidsPossessive } from '@/utils/onboarding-copy';
 
 function TaggedAvatars({ names }: { names: string[] }) {
   return (
@@ -152,7 +152,11 @@ export default function OnboardingAhaScreen() {
     router.push(onboardingYearRoute);
   };
 
-  const journalOwner = taggedNames.length === 1 ? `${possessive(taggedNames[0])}` : "Their";
+  // Device-reported bug (2026-07-31): several-tagged-kids used to render
+  // "saved · Their journal" here -- correct pronoun choice, wrong pronoun
+  // *person*. journalPossessive flavors the neutral case "Your" instead
+  // (see its doc comment in onboarding-copy.ts for the full reconciliation).
+  const journalOwner = capitalizeFragment(journalPossessive(kidsPossessive(taggedNames)));
 
   return (
     <OnbShell

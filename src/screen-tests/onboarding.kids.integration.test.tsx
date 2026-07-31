@@ -126,11 +126,17 @@ describe('KidsScreen (S6)', () => {
     fireEvent(getByTestId('onb-kids-input'), 'focus');
 
     const scrollView = getByTestId('onb-shell-scroll');
-    const keyboardFrame = getByTestId('onb-shell-keyboard-frame');
+    // Device-testing fix (2026-07-31, onb-shell.tsx): the shell no longer
+    // wraps its frame in a `KeyboardAvoidingView` (that layout-capture bug
+    // is what put the CTA under the Android nav bar on device -- see
+    // onb-shell.tsx's header comment) -- `onb-shell-sticky-footer`
+    // (`KeyboardStickyView`) is what keeps the footer above the keyboard
+    // now.
+    const stickyFooter = getByTestId('onb-shell-sticky-footer');
     let ancestor = getByTestId('onb-kids-continue-button').parent;
 
     expect(getByTestId('onb-shell-footer')).toBeTruthy();
-    expect(keyboardFrame.props.behavior).toBe('height');
+    expect(stickyFooter).toBeTruthy();
     expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
     while (ancestor) {
       expect(ancestor).not.toBe(scrollView);

@@ -112,3 +112,73 @@ export function possessiveHeadline(names: string[]): string {
 
   return 'Their stories need a home.';
 }
+
+/**
+ * Possessive fragment ("Enzo's" | "their") for a set of kid names, without
+ * composing a full sentence around it -- the same single-vs-several split
+ * `possessiveHeadline`/`firstPageCaption` already encode, exposed here as a
+ * bare fragment for call sites that build their own copy around it (S8
+ * bridge.tsx's body, which runs before S9's capture/tagging exists so it
+ * resolves off the full kid list rather than a tagged subset; S10 aha.tsx
+ * and S10b year.tsx, which already narrow to the tagged subset before
+ * calling this). Trims/filters blanks the same way `kidsPhrase` does, so a
+ * stray blank entry can't slip through as a false "single kid" match.
+ * Always the lowercase neutral 'their' -- capitalize at the call site (via
+ * `capitalizeFragment`) for sentence-initial use; named possessives are
+ * already capitalized as proper nouns, so that capitalization is always a
+ * safe no-op for them too.
+ */
+export function kidsPossessive(names: string[]): string {
+  const trimmed = names.map((name) => name.trim()).filter(Boolean);
+  return trimmed.length === 1 ? possessive(trimmed[0]) : 'their';
+}
+
+/**
+ * Journal-flavored possessive: converts a resolved possessive fragment
+ * ("Enzo's" | "their"/"Their") into the flavor used specifically where a
+ * screen builds the phrase "{X} journal" -- second-person "your" for
+ * several kids, instead of the neutral third-person "their" this module
+ * uses everywhere else multi-kid copy neutralizes (`possessiveHeadline`'s
+ * "Their stories need a home.", `firstPageCaption`'s "Their first page.").
+ *
+ * Reported from a live build, 2026-07-31: two screens (S8 bridge.tsx, S14
+ * included.tsx) leaked a single kid's name into "{name}'s journal" for
+ * families with more than one child -- re-enacting the disparity wound
+ * naming this feature exists to avoid (docs/features/onboarding.md decision
+ * 8). The reconciliation applied consistently everywhere this module builds
+ * a "journal" phrase (also S10 aha.tsx's saved caption and S10b year.tsx's
+ * body, both already correctly neutral but with the *other* pronoun):
+ * "their journal" reads as belonging to the kids, and even when correctly
+ * neutralized it undersells that this is the parent's own journal to write
+ * in. "Your" is warmer, unambiguous, and never requires singling out one
+ * kid over another (owner decision). Every other multi-kid screen in this
+ * module keeps the third-person "their" unchanged -- this transform is
+ * deliberately scoped to the literal word "journal", not a general
+ * their-to-your swap.
+ *
+ * Named possessives pass through unchanged; the casing of a neutral input
+ * ('their' vs 'Their') is preserved in the output.
+ */
+export function journalPossessive(resolvedPossessive: string): string {
+  if (resolvedPossessive === 'their') {
+    return 'your';
+  }
+  if (resolvedPossessive === 'Their') {
+    return 'Your';
+  }
+  return resolvedPossessive;
+}
+
+/**
+ * Capitalizes the first character of an already-resolved possessive
+ * fragment for sentence-initial use (S8 bridge.tsx's body, S10 aha.tsx's
+ * "saved · {X} journal" caption). A no-op for named possessives, which are
+ * already capitalized as proper nouns -- this only ever changes anything
+ * for the lowercase neutral 'their'/'your' case.
+ */
+export function capitalizeFragment(fragment: string): string {
+  if (!fragment) {
+    return fragment;
+  }
+  return fragment.charAt(0).toUpperCase() + fragment.slice(1);
+}

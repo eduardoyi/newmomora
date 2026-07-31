@@ -73,6 +73,64 @@ describe('onboarding draft storage', () => {
     expect(draft?.capture).toEqual({ text: 'Said something funny.', taggedKidIndexes: [0] });
   });
 
+  // Regression coverage for the media-sizing bug: the aspect ratio (and, for
+  // video, duration) captured alongside the media uri must round-trip
+  // through the device-local draft the same as every other capture field.
+  it('round-trips the captured media aspect ratio and duration', async () => {
+    await patchOnboardingDraft({
+      step: 'capture',
+      capture: {
+        text: 'Look at this.',
+        mediaUri: 'file:///video.mov',
+        mediaContentType: 'video/quicktime',
+        mediaAspectRatio: 0.5625,
+        mediaDurationMs: 4200,
+        taggedKidIndexes: [0],
+      },
+    });
+    const draft = await getOnboardingDraft();
+
+    expect(draft?.capture).toEqual({
+      text: 'Look at this.',
+      mediaUri: 'file:///video.mov',
+      mediaContentType: 'video/quicktime',
+      mediaAspectRatio: 0.5625,
+      mediaDurationMs: 4200,
+      taggedKidIndexes: [0],
+    });
+  });
+
+  // Backward-compat guarantee for the persisted, versioned draft shape:
+  // ONBOARDING_DRAFT_VERSION did NOT bump when mediaAspectRatio/
+  // mediaDurationMs were added, because isOnboardingDraftShape only
+  // validates the draft's top-level fields (version/step/kidNames/
+  // familyName) -- it never inspects `capture`'s internal shape. A draft
+  // written by the shipped pre-fix version (capture with no aspect-ratio/
+  // duration fields at all) must still load cleanly after the upgrade,
+  // rather than being treated as a version mismatch and silently discarded.
+  it('loads a pre-fix on-disk draft (capture missing mediaAspectRatio/mediaDurationMs) without discarding it', async () => {
+    const preFixDraft = {
+      version: 1,
+      step: 'aha',
+      kidNames: ['Lila'],
+      familyName: "Lila's Family",
+      capture: {
+        text: 'Said something funny.',
+        mediaUri: 'file:///photo.jpg',
+        mediaContentType: 'image/jpeg',
+        taggedKidIndexes: [0],
+      },
+      notificationChoice: null,
+    };
+    await AsyncStorage.setItem(ONBOARDING_DRAFT_STORAGE_KEY, JSON.stringify(preFixDraft));
+
+    const draft = await getOnboardingDraft();
+
+    expect(draft).toEqual(preFixDraft);
+    expect(draft?.capture?.mediaAspectRatio).toBeUndefined();
+    expect(draft?.capture?.mediaDurationMs).toBeUndefined();
+  });
+
   it('clears the stored draft', async () => {
     await patchOnboardingDraft({ step: 'kids' });
     await clearOnboardingDraft();

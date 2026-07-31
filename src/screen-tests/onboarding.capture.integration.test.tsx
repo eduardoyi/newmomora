@@ -74,12 +74,47 @@ jest.mock('expo-audio', () => ({
   RecordingPresets: { HIGH_QUALITY: {} },
 }));
 
-// Photo/video attachment is MemoryMediaPicker's own concern (tested
-// elsewhere) -- stubbed out here the same way new-memory.integration.test.tsx
-// stubs VoiceSpeakItModal, keeping this suite focused on the typed path.
-jest.mock('@/components/memory-media-picker', () => ({
-  MemoryMediaPicker: () => null,
-}));
+// Photo/video attachment picking itself (permissions, library/camera
+// launch) is MemoryMediaPicker's own concern (tested elsewhere) -- stubbed
+// out here the same way new-memory.integration.test.tsx stubs
+// VoiceSpeakItModal, keeping this suite focused on capture.tsx's own logic.
+// Unlike a bare `() => null`, this exposes the real `onSelect` callback
+// behind a pressable test hook so the media-sizing regression test below
+// can drive capture.tsx's handleAddMedia with a picked MediaAttachment
+// (including aspectRatio/durationMs) exactly as the real picker would.
+jest.mock('@/components/memory-media-picker', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- jest.mock factories cannot use ESM imports
+  const { Pressable } = require('react-native') as typeof import('react-native');
+  return {
+    MemoryMediaPicker: ({
+      onSelect,
+    }: {
+      onSelect: (attachments: Array<{
+        id: string;
+        uri: string;
+        contentType: string;
+        aspectRatio?: number;
+        durationMs?: number;
+        sizeBytes: number;
+      }>) => void;
+    }) => (
+      <Pressable
+        onPress={() =>
+          onSelect([
+            {
+              id: 'attachment-1',
+              uri: 'file:///photo.jpg',
+              contentType: 'image/jpeg',
+              aspectRatio: 0.75,
+              sizeBytes: 1000,
+            },
+          ])
+        }
+        testID="onboarding-capture-media-picker-mock"
+      />
+    ),
+  };
+});
 
 // lucide-react-native (Mic, Square, Type, X) is stubbed globally in
 // jest.setup.ts -- no per-file mock needed here.
@@ -147,6 +182,33 @@ describe('OnboardingCaptureScreen (S9) -- typed path', () => {
       step: 'aha',
     });
     expect(router.push).toHaveBeenCalledWith(onboardingAhaRoute);
+  });
+
+  // Regression test for the media-sizing bug (docs high-risk note: onboarding
+  // photos rendered pillarboxed in the timeline because the captured
+  // aspect ratio never left this screen). MemoryMediaPicker already computes
+  // aspectRatio via aspectRatioFromDimensions before handing back the
+  // MediaAttachment (see the mock above) -- this asserts capture.tsx
+  // threads that value into the patched draft instead of dropping it.
+  it('threads the picked media’s aspect ratio through to the patched draft capture', () => {
+    const patch = mockDraft({ kidNames: ['Lila'] });
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByTestId('onboarding-capture-type-instead'));
+    fireEvent.press(screen.getByTestId('onboarding-capture-media-picker-mock'));
+    fireEvent.press(screen.getByTestId('onboarding-capture-keep'));
+
+    expect(patch).toHaveBeenCalledWith({
+      capture: {
+        text: '',
+        mediaUri: 'file:///photo.jpg',
+        mediaContentType: 'image/jpeg',
+        mediaAspectRatio: 0.75,
+        mediaDurationMs: undefined,
+        taggedKidIndexes: [0],
+      },
+      step: 'aha',
+    });
   });
 
   it('does not advance when the textarea is only whitespace', () => {

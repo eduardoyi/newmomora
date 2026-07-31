@@ -329,6 +329,10 @@ export default function OnboardingCaptureScreen() {
         text: text.trim(),
         mediaUri: attachedMedia?.uri,
         mediaContentType: attachedMedia?.contentType,
+        // Same values new-memory.tsx stores from MediaAttachment -- see
+        // OnboardingDraftCapture's doc comment for why this matters.
+        mediaAspectRatio: attachedMedia?.aspectRatio,
+        mediaDurationMs: attachedMedia?.durationMs,
         taggedKidIndexes: selectedKidIndexes,
       },
       step: 'aha',

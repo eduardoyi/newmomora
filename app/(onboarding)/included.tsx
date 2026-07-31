@@ -15,6 +15,7 @@ import { colors, radius } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useOnboardingKidPossessive } from '@/hooks/use-onboarding-kid-possessive';
 import { onboardingPaywallRoute } from '@/lib/onboarding-routes';
+import { journalPossessive } from '@/utils/onboarding-copy';
 
 const PROMISE_TITLE = 'Your memories are always yours.';
 const PROMISE_BODY = "Export everything, free, whenever you want, even if you cancel someday. We've been burned by those apps too.";
@@ -32,6 +33,14 @@ export default function IncludedScreen() {
   // src/hooks/use-onboarding-kid-possessive.ts for the full story -- WP6
   // fixed the identical bug on S16's target-member resolution).
   const resolvedPossessive = useOnboardingKidPossessive();
+  // Device-reported bug (2026-07-31): the headline used to render "Everything
+  // their journal comes with:" for several tagged kids. journalPossessive
+  // flavors that neutral case "your" instead, scoped to this literal
+  // "journal" headline only -- the bullet item just below keeps the
+  // unflavored `resolvedPossessive` ("their illustrated portrait..."), since
+  // it isn't "journal" phrasing (see journalPossessive's doc comment in
+  // onboarding-copy.ts for the full reconciliation).
+  const journalHeadlinePossessive = journalPossessive(resolvedPossessive);
 
   const items = useMemo(
     () => [
@@ -56,7 +65,7 @@ export default function IncludedScreen() {
       testID="onb-included-screen"
     >
       <View style={styles.container}>
-        <OnbDisplay size={30}>{`Everything ${resolvedPossessive} journal comes with:`}</OnbDisplay>
+        <OnbDisplay size={30}>{`Everything ${journalHeadlinePossessive} journal comes with:`}</OnbDisplay>
         <View style={styles.list}>
           {items.map((item, index) => (
             <View key={item} style={styles.listRow} testID={`onb-included-item-${index}`}>

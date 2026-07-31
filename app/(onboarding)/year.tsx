@@ -54,7 +54,7 @@ import { colors, emotionColors, fonts, radius, spacing, type EmotionName } from 
 import { formatMemoryDayLabel, yearMemories, type OnboardingSampleMemory } from '@/constants/onboarding-memories';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { onboardingNotificationsRoute } from '@/lib/onboarding-routes';
-import { possessive } from '@/utils/onboarding-copy';
+import { journalPossessive, kidsPossessive } from '@/utils/onboarding-copy';
 
 // Constant visual speed (docs/plans/onboarding-implementation.md WP-follow-up
 // "replace DRIFT_DURATION_MS with DRIFT_SPEED_PX_PER_SECOND"): the loop's
@@ -148,7 +148,10 @@ export default function OnboardingYearScreen() {
   const taggedNames = (draft.capture?.taggedKidIndexes ?? [])
     .map((index) => draft.kidNames[index])
     .filter((name): name is string => Boolean(name));
-  const journalOwner = taggedNames.length === 1 ? possessive(taggedNames[0]) : 'their';
+  // Device-reported bug (2026-07-31): several-tagged-kids used to render
+  // "...lands in their journal." -- journalPossessive flavors the neutral
+  // case "your" instead (see its doc comment in onboarding-copy.ts).
+  const journalOwner = journalPossessive(kidsPossessive(taggedNames));
 
   const [firstListHeight, setFirstListHeight] = useState(0);
   const [stageHeight, setStageHeight] = useState(0);

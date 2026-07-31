@@ -118,7 +118,13 @@ describe('OnboardingEmailScreen (S12A) -- owner display name', () => {
 
     fireEvent(getByTestId('onboarding-email-name-input'), 'focus');
 
-    expect(getByTestId('onb-shell-keyboard-frame').props.behavior).toBe('height');
+    // Device-testing fix (2026-07-31, onb-shell.tsx): the shell no longer
+    // wraps its frame in a `KeyboardAvoidingView` (that layout-capture bug
+    // is what put the CTA under the Android nav bar on device -- see
+    // onb-shell.tsx's header comment) -- `KeyboardStickyView` handles
+    // keeping the footer above the keyboard now, and the field-clearance
+    // guarantee this test cares about is still fully expressed by
+    // `onb-shell-scroll`'s `bottomOffset`.
     expect(getByTestId('onb-shell-scroll').props.bottomOffset).toBe(EMAIL_KEYBOARD_BOTTOM_OFFSET);
   });
 

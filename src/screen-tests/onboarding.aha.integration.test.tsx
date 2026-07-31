@@ -157,3 +157,59 @@ describe('OnboardingAhaScreen (S10) -- media card', () => {
     expect(getByTestId('onboarding-aha-media-image')).toHaveStyle({ aspectRatio: 1 });
   });
 });
+
+// Device-reported bug (2026-07-31): the "saved · {X} journal" caption used
+// to render "saved · Their journal" for several tagged kids -- correct
+// pronoun choice, wrong pronoun *person*. journalPossessive flavors the
+// neutral multi-kid case "Your" instead (see its doc comment in
+// onboarding-copy.ts for the full reconciliation).
+describe('OnboardingAhaScreen (S10) -- saved caption journal wording', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('names the single tagged kid', () => {
+    mockDraft({
+      kidNames: ['Lila'],
+      capture: { text: 'Bath time giggles.', taggedKidIndexes: [0] },
+    });
+
+    const { getByText } = renderScreen();
+
+    expect(getByText("saved · Lila's journal")).toBeTruthy();
+  });
+
+  it('applies the s-ending possessive rule for the single tagged kid', () => {
+    mockDraft({
+      kidNames: ['Chris'],
+      capture: { text: 'Bath time giggles.', taggedKidIndexes: [0] },
+    });
+
+    const { getByText } = renderScreen();
+
+    expect(getByText("saved · Chris' journal")).toBeTruthy();
+  });
+
+  it('uses "Your" (not "Their") when two kids are tagged', () => {
+    mockDraft({
+      kidNames: ['Lila', 'Miguel'],
+      capture: { text: 'Bath time giggles.', taggedKidIndexes: [0, 1] },
+    });
+
+    const { getByText, queryByText } = renderScreen();
+
+    expect(getByText('saved · Your journal')).toBeTruthy();
+    expect(queryByText('saved · Their journal')).toBeNull();
+  });
+
+  it('uses "Your" when three or more kids are tagged', () => {
+    mockDraft({
+      kidNames: ['Lila', 'Miguel', 'Teo'],
+      capture: { text: 'Bath time giggles.', taggedKidIndexes: [0, 1, 2] },
+    });
+
+    const { getByText } = renderScreen();
+
+    expect(getByText('saved · Your journal')).toBeTruthy();
+  });
+});

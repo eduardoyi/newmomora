@@ -95,7 +95,7 @@ describe('OnboardingYearScreen (S10b)', () => {
 
     const footer = getByTestId('onboarding-year-footer');
     const cta = getByTestId('onboarding-year-continue');
-    const body = getByText('Talk, type, photos, video. Some become illustrated pages. All of it lands in their journal.');
+    const body = getByText('Talk, type, photos, video. Some become illustrated pages. All of it lands in your journal.');
 
     // Both the body copy and the CTA live inside the same fixed footer.
     let bodyAncestor = body.parent;
@@ -158,6 +158,45 @@ describe('OnboardingYearScreen (S10b)', () => {
 
     expect(
       getByText("Talk, type, photos, video. Some become illustrated pages. All of it lands in Nora's journal."),
+    ).toBeTruthy();
+  });
+
+  it('personalizes the fixed body copy to "your journal" (not "their") when two kids are tagged', () => {
+    mockedUseOnboardingFlow.mockReturnValue({
+      draft: {
+        ...createEmptyOnboardingDraft('year'),
+        kidNames: ['Nora', 'Sam'],
+        capture: { text: 'They built a blanket fort.', taggedKidIndexes: [0, 1] },
+      },
+      isHydrated: true,
+      patch: jest.fn(),
+      clear: jest.fn(),
+    });
+
+    const { getByText, queryByText } = renderScreen();
+
+    expect(
+      getByText('Talk, type, photos, video. Some become illustrated pages. All of it lands in your journal.'),
+    ).toBeTruthy();
+    expect(queryByText(/lands in their journal/)).toBeNull();
+  });
+
+  it('personalizes the fixed body copy to "your journal" when three or more kids are tagged', () => {
+    mockedUseOnboardingFlow.mockReturnValue({
+      draft: {
+        ...createEmptyOnboardingDraft('year'),
+        kidNames: ['Nora', 'Sam', 'Ana'],
+        capture: { text: 'They built a blanket fort.', taggedKidIndexes: [0, 1, 2] },
+      },
+      isHydrated: true,
+      patch: jest.fn(),
+      clear: jest.fn(),
+    });
+
+    const { getByText } = renderScreen();
+
+    expect(
+      getByText('Talk, type, photos, video. Some become illustrated pages. All of it lands in your journal.'),
     ).toBeTruthy();
   });
 });

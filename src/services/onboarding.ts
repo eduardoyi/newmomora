@@ -192,6 +192,13 @@ async function createFirstMemory(
           {
             fileUri: capture.mediaUri,
             contentType: capture.mediaContentType ?? 'image/jpeg',
+            // Same fields new-memory.tsx passes from MediaAttachment -- an
+            // undefined aspectRatio here reproduces the bug where onboarding
+            // media renders pillarboxed at DEFAULT_MEDIA_ASPECT_RATIO instead
+            // of sized to the photo (see OnboardingDraftCapture's doc
+            // comment in src/utils/onboarding-progress.ts).
+            durationMs: capture.mediaDurationMs,
+            aspectRatio: capture.mediaAspectRatio,
           },
         ],
         content: text || undefined,

@@ -46,6 +46,23 @@ export interface OnboardingDraftCapture {
   text: string;
   mediaUri?: string;
   mediaContentType?: string;
+  /**
+   * Natural width/height ratio for the attached photo/video, from the same
+   * `MediaAttachment.aspectRatio` (src/components/memory-media-picker.tsx,
+   * `aspectRatioFromDimensions`) the app's own new-memory composer stores --
+   * without it the timeline has nothing to size the media container from
+   * and falls back to DEFAULT_MEDIA_ASPECT_RATIO (src/utils/media-aspect.ts),
+   * pillarboxing portrait photos. Added after the fields below it, so it's
+   * absent (`undefined`) on a draft written before this field existed; that
+   * is a normal, handled state (see mediaContentType's own optionality), not
+   * a shape violation -- `isOnboardingDraftShape` below never inspects
+   * `capture`'s internal fields, so an old on-disk draft round-trips through
+   * `patchOnboardingDraft` unchanged and this field just stays `undefined`
+   * until the next capture.
+   */
+  mediaAspectRatio?: number;
+  /** Same rationale as `mediaAspectRatio`, for attached videos only -- mirrors `MediaAttachment.durationMs`. */
+  mediaDurationMs?: number;
   taggedKidIndexes: number[];
 }
 

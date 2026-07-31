@@ -1,8 +1,11 @@
 import {
+  capitalizeFragment,
   capturePrompt,
   defaultFamilyName,
   firstPageCaption,
+  journalPossessive,
   kidsPhrase,
+  kidsPossessive,
   possessive,
   possessiveHeadline,
 } from '@/utils/onboarding-copy';
@@ -149,5 +152,63 @@ describe('possessiveHeadline', () => {
 
   it('uses "Their" for more than one kid', () => {
     expect(possessiveHeadline(['Lila', 'Miguel'])).toBe('Their stories need a home.');
+  });
+});
+
+describe('kidsPossessive', () => {
+  it('names the single kid', () => {
+    expect(kidsPossessive(['Lila'])).toBe("Lila's");
+  });
+
+  it('applies the s-ending possessive rule', () => {
+    expect(kidsPossessive(['Chris'])).toBe("Chris'");
+  });
+
+  it('returns the neutral lowercase "their" for two kids', () => {
+    expect(kidsPossessive(['Lila', 'Miguel'])).toBe('their');
+  });
+
+  it('returns the neutral lowercase "their" for three or more kids', () => {
+    expect(kidsPossessive(['Lila', 'Miguel', 'Teo'])).toBe('their');
+  });
+
+  it('drops blank/whitespace-only entries before counting', () => {
+    expect(kidsPossessive(['Lila', '  '])).toBe("Lila's");
+  });
+
+  it('returns "their" for no names at all', () => {
+    expect(kidsPossessive([])).toBe('their');
+  });
+});
+
+describe('journalPossessive', () => {
+  it('converts the lowercase neutral fragment "their" to "your"', () => {
+    expect(journalPossessive('their')).toBe('your');
+  });
+
+  it('converts the capitalized neutral fragment "Their" to "Your"', () => {
+    expect(journalPossessive('Their')).toBe('Your');
+  });
+
+  it('passes a named possessive through unchanged', () => {
+    expect(journalPossessive("Lila's")).toBe("Lila's");
+  });
+
+  it('passes the s-ending named possessive through unchanged', () => {
+    expect(journalPossessive("Chris'")).toBe("Chris'");
+  });
+});
+
+describe('capitalizeFragment', () => {
+  it('capitalizes the first character of the neutral fragment', () => {
+    expect(capitalizeFragment('your')).toBe('Your');
+  });
+
+  it('is a no-op for an already-capitalized named possessive', () => {
+    expect(capitalizeFragment("Lila's")).toBe("Lila's");
+  });
+
+  it('returns an empty string unchanged', () => {
+    expect(capitalizeFragment('')).toBe('');
   });
 });
