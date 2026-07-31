@@ -49,7 +49,9 @@ function parseJob(value: unknown): PortraitWorkflowJobInput {
   if (value.providerProtocolVersion === 2 && typeof value.usageRequestId === 'string') {
     return { ...base, providerProtocolVersion: 2, usageRequestId: value.usageRequestId };
   }
-  if (value.providerProtocolVersion === undefined || value.providerProtocolVersion === 1) return base;
+  if ((value.providerProtocolVersion === undefined || value.providerProtocolVersion === null ||
+    value.providerProtocolVersion === 1) &&
+    (value.usageRequestId === undefined || value.usageRequestId === null)) return base;
   return invalidBridgeResponse();
 }
 
@@ -109,8 +111,13 @@ export async function reservePortraitAttemptV1(
   attemptNumber: number,
 ): Promise<boolean> {
   const response = await callPortraitBridge<unknown>(env, 'reserve_attempt', { jobId, provider, model, attemptNumber });
-  if (!isRecord(response) || typeof response.reserved !== 'boolean') return invalidBridgeResponse();
-  return response.reserved;
+  if (!isRecord(response)) return invalidBridgeResponse();
+  if (typeof response.reserved === 'boolean') return response.reserved;
+  if (response.protocolVersion === 2 &&
+    (response.outcome === 'reserved_now' || response.outcome === 'already_reserved' || response.outcome === 'denied')) {
+    return response.outcome === 'reserved_now';
+  }
+  return invalidBridgeResponse();
 }
 
 export async function recordPortraitUsage(env: Env, payload: Record<string, unknown>): Promise<void> {

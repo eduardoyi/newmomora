@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert@1';
+import { assertEquals, assertThrows } from 'jsr:@std/assert@1';
 import {
   classifyNonceInsertError,
   getReconcileAction,
@@ -85,7 +85,7 @@ Deno.test('workflow bridge maps publication and reconciliation outcomes to the W
   assertEquals(getReconcileAction({ status: 'superseded', outputKey: 'new.webp', expectedOutputKey: 'new.webp' }), 'delete');
 });
 
-Deno.test('workflow bridge classifies nonce failures and nests get_input without prompt data', () => {
+Deno.test('workflow bridge classifies nonce failures and omits legacy usage protocol fields', () => {
   assertEquals(classifyNonceInsertError(null), 'ok');
   assertEquals(classifyNonceInsertError({ code: '23505' }), 'replay');
   assertEquals(classifyNonceInsertError({ code: '08006' }), 'error');
@@ -99,15 +99,69 @@ Deno.test('workflow bridge classifies nonce failures and nests get_input without
       jobId: '22222222-2222-4222-8222-222222222222', outputKey: 'new.webp', oldIllustrationKey: 'old.webp',
       providerDeadlineAt: '2026-07-21T12:05:00Z', styleDescription: 'storybook', safeSceneDescription: 'safe scene',
       expressionStyle: 'tender', colorPalette: 'rose', emotion: 'tender', memoryDate: '2026-07-21', referenceCandidates: [],
-      usageRequestId: null, providerProtocolVersion: null,
     },
   });
+});
+
+Deno.test('workflow bridge emits only complete v2 usage protocol fields', () => {
+  const base = {
+    id: '22222222-2222-4222-8222-222222222222',
+    output_key: 'new.webp', old_illustration_key: null, provider_deadline_at: '2026-07-21T12:05:00Z',
+    style_description: 'storybook', safe_scene_description: 'safe scene', expression_style: null,
+    color_palette: 'rose', emotion: null, memory_date: '2026-07-21', reference_candidates: [],
+  };
+  const usageRequestId = '99999999-9999-4999-8999-999999999999';
+  assertEquals(toWorkflowJobInput({
+    ...base, usage_request_id: usageRequestId, usage_protocol_version: 2,
+  }).job, {
+    jobId: base.id, outputKey: 'new.webp', oldIllustrationKey: null,
+    providerDeadlineAt: base.provider_deadline_at, styleDescription: 'storybook', safeSceneDescription: 'safe scene',
+    expressionStyle: null, colorPalette: 'rose', emotion: null, memoryDate: '2026-07-21', referenceCandidates: [],
+    usageRequestId, providerProtocolVersion: 2,
+  });
+  assertThrows(() => toWorkflowJobInput({
+    ...base, usage_request_id: null, usage_protocol_version: 2,
+  }), TypeError, 'requires a usage request id');
+  assertThrows(() => toWorkflowJobInput({
+    ...base, usage_request_id: null, usage_protocol_version: 3,
+  }), TypeError, 'Unsupported workflow usage protocol version');
 });
 
 Deno.test('workflow bridge reserves only a new provider slot and fails replays closed', () => {
   assertEquals(toProviderReservationResult(true), { outcome: 'reserved_now', protocolVersion: 2 });
   assertEquals(toProviderReservationResult(false), { outcome: 'already_reserved', protocolVersion: 2 });
   assertEquals(toProviderReservationResult({ outcome: 'denied' }), { outcome: 'denied', protocolVersion: 2 });
+});
+
+Deno.test('illustration bridge preserves the v1 reservation response contract', async () => {
+  const previous = Deno.env.get('CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET');
+  Deno.env.set('CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET', 'bridge-test-secret');
+  try {
+    const response = await handleWorkflowIllustrationBridge(await signedRequest({
+      operation: 'reserve_attempt', jobId: '22222222-2222-4222-8222-222222222222',
+      provider: 'primary', model: 'gpt-image-2', attemptNumber: 1,
+    }), {
+      createServiceClient: () => ({
+        from(table: string) {
+          if (table === 'memory_illustration_workflow_bridge_nonces') return {
+            insert: async () => ({ error: null }), delete: () => ({ lt: async () => ({ error: null }) }),
+          };
+          const query = {
+            select: () => query, eq: () => query,
+            maybeSingle: async () => ({
+              data: { usage_request_id: null, usage_protocol_version: 1 }, error: null,
+            }),
+          };
+          return query;
+        },
+        rpc: async () => ({ data: true, error: null }),
+      }) as never,
+    });
+    assertEquals(await response.json(), { reserved: true });
+  } finally {
+    if (previous === undefined) Deno.env.delete('CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET');
+    else Deno.env.set('CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET', previous);
+  }
 });
 
 Deno.test('illustration bridge records grandfathered v1 Worker usage with server-bound family and creator metadata', async () => {

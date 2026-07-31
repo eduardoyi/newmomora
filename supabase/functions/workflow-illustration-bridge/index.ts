@@ -88,6 +88,10 @@ export function classifyNonceInsertError(error: { code?: string } | null): 'ok' 
 }
 
 export function toWorkflowJobInput(data: WorkflowJobInputRow) {
+  const usageProtocol = toWorkflowUsageProtocol(
+    data.usage_request_id,
+    data.usage_protocol_version,
+  );
   return { job: {
     jobId: data.id,
     outputKey: data.output_key,
@@ -100,9 +104,28 @@ export function toWorkflowJobInput(data: WorkflowJobInputRow) {
     emotion: data.emotion,
     memoryDate: data.memory_date,
     referenceCandidates: data.reference_candidates,
-    usageRequestId: data.usage_request_id ?? null,
-    providerProtocolVersion: data.usage_protocol_version ?? null,
+    ...usageProtocol,
   } };
+}
+
+function toWorkflowUsageProtocol(
+  usageRequestId: string | null | undefined,
+  providerProtocolVersion: number | null | undefined,
+) {
+  if (providerProtocolVersion === 2) {
+    if (!isUuid(usageRequestId)) {
+      throw new TypeError('A v2 workflow job requires a usage request id');
+    }
+    return { usageRequestId, providerProtocolVersion: 2 as const };
+  }
+  if (providerProtocolVersion !== null && providerProtocolVersion !== undefined &&
+    providerProtocolVersion !== 1) {
+    throw new TypeError('Unsupported workflow usage protocol version');
+  }
+  if (usageRequestId !== null && usageRequestId !== undefined) {
+    throw new TypeError('A legacy workflow job cannot carry a usage request id');
+  }
+  return {};
 }
 
 interface ProviderReservationResult {
@@ -331,7 +354,9 @@ export async function handleWorkflowIllustrationBridge(
             p_attempt_number: body.attemptNumber,
           });
         if (error) throw error;
-        return jsonResponse(toProviderReservationResult(data));
+        return isV2
+          ? jsonResponse(toProviderReservationResult(data))
+          : jsonResponse({ reserved: Boolean(data) });
       }
       case 'record_usage': {
         if (!isValidUsageEvent(body, 2)) {

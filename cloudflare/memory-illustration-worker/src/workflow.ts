@@ -100,6 +100,13 @@ function isV2Job(job: WorkflowJobInput): job is WorkflowJobInputV2 {
   return job.providerProtocolVersion === 2 && typeof job.usageRequestId === 'string';
 }
 
+function isV1Job(job: WorkflowJobInput): boolean {
+  const value = job as unknown as Record<string, unknown>;
+  return (value.providerProtocolVersion === undefined || value.providerProtocolVersion === null ||
+    value.providerProtocolVersion === 1) &&
+    (value.usageRequestId === undefined || value.usageRequestId === null);
+}
+
 async function reserveProviderAttempt(
   env: Env,
   job: WorkflowJobInput,
@@ -267,7 +274,7 @@ async function runImageAttempt(
 export async function generateAndUpload(env: Env, jobId: string): Promise<GenerationStepResult> {
   const { job } = await callBridgeWithRetry<BridgeGetInputResponse>(env, 'get_input', { jobId });
   if (job.jobId !== jobId || !job.outputKey ||
-    (job.providerProtocolVersion !== undefined && job.providerProtocolVersion !== 1 && !isV2Job(job))) {
+    (!isV2Job(job) && !isV1Job(job))) {
     throw new NonRetryableError('INVALID_JOB_INPUT');
   }
 

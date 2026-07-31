@@ -107,6 +107,13 @@ function isV2PortraitJob(job: PortraitWorkflowJobInput): job is PortraitWorkflow
   return job.providerProtocolVersion === 2 && typeof job.usageRequestId === 'string';
 }
 
+function isV1PortraitJob(job: PortraitWorkflowJobInput): boolean {
+  const value = job as unknown as Record<string, unknown>;
+  return (value.providerProtocolVersion === undefined || value.providerProtocolVersion === null ||
+    value.providerProtocolVersion === 1) &&
+    (value.usageRequestId === undefined || value.usageRequestId === null);
+}
+
 async function callBridgeWithRetry<T>(operation: () => Promise<T>): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt < BRIDGE_OPERATION_ATTEMPTS; attempt += 1) {
@@ -263,7 +270,7 @@ export async function generatePortraitAndUpload(env: Env, jobId: string): Promis
     !job.prompt ||
     !job.sourcePhotoKey ||
     !job.styleReferenceKey ||
-    (job.providerProtocolVersion !== undefined && job.providerProtocolVersion !== 1 && !isV2PortraitJob(job))
+    (!isV2PortraitJob(job) && !isV1PortraitJob(job))
   ) {
     throw new NonRetryableError('INVALID_JOB_INPUT');
   }

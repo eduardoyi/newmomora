@@ -1894,7 +1894,7 @@ All AI operations are **async** — client shows status and allows navigation aw
 ## 11. Usage-limit rollout contract
 
 - Image generation is admitted server-side through a family-scoped logical request, admission, and provider-attempt protocol. The client must never calculate eligibility.
-- New jobs use bridge protocol v2 (`usageRequestId`, `providerProtocolVersion: 2`) and only `reserved_now` may call the provider. Existing queued v1 jobs retain their legacy reservation response during staged rollout.
+- New jobs use bridge protocol v2 (`usageRequestId`, `providerProtocolVersion: 2`) and only `reserved_now` may call the provider. Existing queued v1 jobs retain their `{ reserved: boolean }` response during staged rollout. Bridge writers omit both usage-protocol fields for v1; Workers accept historical `null`/`null` JSON and the exact v2 reservation outcome during rolling deploys, but reject protocol 2 without a request ID.
 - Limit rejections use HTTP 429 with `code: USAGE_LIMIT_REACHED`, `scope`, and `retryAfterIso`. The app renders retry time locally and obtains cold-start notices only through `get_my_ai_usage_limit_notices` for the current actor.
 - Family `process-voice-memory` receives `familyId`; compatibility inference is server-owned and never client-selected. The separate `mode: 'onboarding'` contract is anonymous-only and attributes its two provider calls to Momora onboarding cost, never to a family.
 

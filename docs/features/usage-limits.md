@@ -53,10 +53,14 @@ atomically consumes one fair-use unit. UTC daily/monthly buckets are rechecked a
 - v2 Cloudflare jobs carry `usageRequestId` and `providerProtocolVersion: 2`; only bridge outcome
   `reserved_now` may call OpenAI. `already_reserved`, `denied`, malformed responses, and replayed
   slots fail closed.
+- Bridge writers omit both protocol fields for v1 jobs. Workers tolerate historical JSON with both
+  fields explicitly `null`, but a job claiming protocol 2 without a valid request id always fails closed.
 - Old queued v1 jobs retain `{ reserved: boolean }` bridge behavior. A v1 preparation already
   underway at the scheduled activation boundary has one five-minute handoff (the promoted-lease
   duration) to stamp its durable service-only job; after that, v2 linkage is mandatory. V2 jobs
-  never downgrade to v1.
+  never downgrade to v1. During a rolling deployment, Workers also understand the exact v2
+  reservation outcome shape if a bridge temporarily returns it for a v1 job; only `reserved_now`
+  permits the provider call.
 - Primary retries and fallback attempts get separate deterministic `aiCallId`s but share the one
   logical request unit. Provider/network ambiguity after commitment remains consumed.
 - The client never calculates eligibility. It receives HTTP 429 `USAGE_LIMIT_REACHED` with
@@ -257,8 +261,9 @@ caps), the no-visible-credits principle, ledger-independence of enforcement.
   RPC requests. It proves exactly two durable rows with ordinals 1/2 and one clean denial; the
   test is intentionally ignored by ordinary `npm run test:edge` runs unless that explicit local
   flag is set.
-- Worker: v2 fail-closed reservation responses, v1 grandfathered jobs, deterministic attempts,
-  fallback/replay, usage parsing, and a never-resolving ledger call that cannot delay publication.
+- Worker: JSON-round-tripped legacy nulls, complete v2 jobs, malformed v2/null-request rejection,
+  v2 fail-closed reservation responses, deterministic attempts, fallback/replay, usage parsing, and
+  a never-resolving ledger call that cannot delay publication.
 - Client: typed 429 parsing, local retry rendering, actor-only AsyncStorage dedupe, voice `familyId`,
   and recovery suppression only while canonical server metadata is active.
 - Maestro setup is local-only, refuses non-local Supabase URLs, seeds/deletes only known fixture rows,
@@ -277,3 +282,4 @@ caps), the no-visible-credits principle, ledger-independence of enforcement.
 | 2026-07-24 | Initial design recorded. |
 | 2026-07-27 | Replaced job-row counting with request/admission/provider-slot protocol and staged v1/v2 rollout. |
 | 2026-07-29 | Added family-or-onboarding ledger attribution and the two-attempt pre-auth voice COGS lane. |
+| 2026-07-31 | Hardened the v1/v2 bridge JSON contract: preserved the v1 reservation response, omitted legacy protocol fields, tolerated explicit legacy nulls, and kept incomplete v2 jobs fail-closed. |
