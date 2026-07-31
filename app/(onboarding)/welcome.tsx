@@ -20,7 +20,12 @@ import { onboardingJoinCodeRoute, onboardingStoryRoute } from '@/lib/onboarding-
 // routes it doesn't otherwise export.
 const LOGIN_ROUTE = '/(auth)/login' as Href;
 
-const ILLUSTRATION_HEIGHT_RATIO = 0.46;
+const ILLUSTRATION_HEIGHT_RATIO = 0.39;
+const MAX_ILLUSTRATION_HEIGHT = 340;
+
+export function getWelcomeIllustrationHeight(windowHeight: number) {
+  return Math.min(windowHeight * ILLUSTRATION_HEIGHT_RATIO, MAX_ILLUSTRATION_HEIGHT);
+}
 
 export default function WelcomeScreen() {
   const { patch } = useOnboardingFlow();
@@ -33,7 +38,7 @@ export default function WelcomeScreen() {
   return (
     <OnbShell
       footer={
-        <>
+        <View style={styles.actions} testID="onb-welcome-actions">
           <OnbButton
             label="Start your family's journal"
             onPress={() => router.push(onboardingStoryRoute(0))}
@@ -57,11 +62,11 @@ export default function WelcomeScreen() {
               I already have an account · <Text style={styles.loginLinkAccent}>Log in</Text>
             </Text>
           </Pressable>
-        </>
+        </View>
       }
       testID="onb-welcome-screen"
     >
-      <View style={[styles.illustrationWrap, { height: windowHeight * ILLUSTRATION_HEIGHT_RATIO }]}>
+      <View style={[styles.illustrationWrap, { height: getWelcomeIllustrationHeight(windowHeight) }]}>
         <OnbIllustration slot="welcome" style={StyleSheet.absoluteFill} testID="onb-welcome-illustration" />
         <View pointerEvents="none" style={styles.wordmarkWrap}>
           <Text style={styles.wordmark}>
@@ -107,6 +112,10 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     marginTop: 14,
+  },
+  actions: {
+    paddingTop: spacing.md,
+    gap: 10,
   },
   fullWidthButton: {
     width: '100%',

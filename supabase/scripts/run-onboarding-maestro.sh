@@ -13,6 +13,12 @@ cd "$project_root"
 
 fixture_script="supabase/scripts/onboarding-maestro-fixture.ts"
 deno_cmd=(deno run --allow-env --allow-net "$fixture_script")
+run_mode="${ONBOARDING_MAESTRO_MODE:-happy}"
+
+if [[ "$run_mode" != "happy" && "$run_mode" != "visual-audit" ]]; then
+  echo "ONBOARDING_MAESTRO_MODE must be happy or visual-audit." >&2
+  exit 1
+fi
 
 if ! command -v maestro >/dev/null 2>&1; then
   echo "Maestro CLI is required. Install it, start a simulator/device, and rerun." >&2
@@ -21,6 +27,11 @@ fi
 
 if [[ -z "${MAESTRO_DEVICE_ID:-}" ]]; then
   echo "MAESTRO_DEVICE_ID is required so every staged flow uses the same simulator/device." >&2
+  exit 1
+fi
+
+if [[ "$run_mode" == "visual-audit" && "$MAESTRO_DEVICE_ID" == *,* ]]; then
+  echo "Visual-audit mode accepts exactly one MAESTRO_DEVICE_ID so every capture has the same device geometry." >&2
   exit 1
 fi
 
@@ -125,6 +136,11 @@ validate_local_client_env_file
 validate_local_function_env_file
 validate_local_worker_env_file
 
+if [[ "$run_mode" == "visual-audit" && ! "${EXPO_PUBLIC_SUPABASE_URL:-}" =~ ^http://127\.0\.0\.1:[0-9]+/?$ ]]; then
+  echo "Visual-audit mode requires EXPO_PUBLIC_SUPABASE_URL to be an explicit http://127.0.0.1:<port> local URL." >&2
+  exit 1
+fi
+
 run_id="${ONBOARDING_E2E_RUN_ID:-local-$(date +%Y%m%d%H%M%S)-$RANDOM}"
 setup_output="$("${deno_cmd[@]}" setup --run-id "$run_id")"
 
@@ -155,14 +171,32 @@ trap 'cleanup $?' EXIT
 export MAESTRO_CLI_NO_ANALYTICS=true
 maestro_cmd=(maestro test --udid "$MAESTRO_DEVICE_ID")
 
+if [[ "$run_mode" == "visual-audit" ]]; then
+  if [[ -z "${ONBOARDING_MAESTRO_TEST_OUTPUT_DIR:-}" ]]; then
+    echo "ONBOARDING_MAESTRO_TEST_OUTPUT_DIR is required for visual-audit mode." >&2
+    exit 1
+  fi
+  maestro_cmd+=(--test-output-dir "$ONBOARDING_MAESTRO_TEST_OUTPUT_DIR")
+  owner_pre_otp_flow=".maestro/flows/onboarding/owner-visual-audit-pre-otp.yaml"
+  owner_post_otp_flow=".maestro/flows/onboarding/owner-visual-audit-post-otp.yaml"
+else
+  owner_pre_otp_flow=".maestro/flows/onboarding/owner-happy-path-pre-otp.yaml"
+  owner_post_otp_flow=".maestro/flows/onboarding/owner-happy-path-post-otp.yaml"
+fi
+
 "${maestro_cmd[@]}" \
   -e TEST_ONBOARDING_OWNER_EMAIL="$owner_email" \
-  .maestro/flows/onboarding/owner-happy-path-pre-otp.yaml
+  "$owner_pre_otp_flow"
 
 owner_otp="$("${deno_cmd[@]}" otp --email "$owner_email")"
 "${maestro_cmd[@]}" \
   -e TEST_ONBOARDING_OWNER_OTP="$owner_otp" \
-  .maestro/flows/onboarding/owner-happy-path-post-otp.yaml
+  "$owner_post_otp_flow"
+
+if [[ "$run_mode" == "visual-audit" ]]; then
+  echo "Local owner onboarding visual-audit journey completed."
+  exit 0
+fi
 
 invite_code="$("${deno_cmd[@]}" invite --owner-email "$owner_email")"
 "${maestro_cmd[@]}" \

@@ -10,6 +10,7 @@ import KidsScreen from '../../app/(onboarding)/kids';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { onboardingFamilyNameRoute } from '@/lib/onboarding-routes';
 import { createEmptyOnboardingDraft } from '@/utils/onboarding-progress';
+import { FOOTER_KEYBOARD_CLEARANCE } from '@/components/onboarding/onb-shell';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -125,9 +126,12 @@ describe('KidsScreen (S6)', () => {
     fireEvent(getByTestId('onb-kids-input'), 'focus');
 
     const scrollView = getByTestId('onb-shell-scroll');
+    const keyboardFrame = getByTestId('onb-shell-keyboard-frame');
     let ancestor = getByTestId('onb-kids-continue-button').parent;
 
     expect(getByTestId('onb-shell-footer')).toBeTruthy();
+    expect(keyboardFrame.props.behavior).toBe('height');
+    expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
     while (ancestor) {
       expect(ancestor).not.toBe(scrollView);
       ancestor = ancestor.parent;

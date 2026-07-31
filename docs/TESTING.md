@@ -305,6 +305,8 @@ npm run db:reset         # apply all migrations to the local database only
 npm run test:db          # pgTAP suites in supabase/tests against local only
 npm run test:e2e:family-fixture   # Maestro: family upload (fixture)
 npm run test:e2e:family-picker    # Maestro: family upload (system picker)
+npm run test:e2e:onboarding:owner-visual-audit:pre-auth # Maestro: safe owner S0-S12A screenshots
+npm run test:e2e:onboarding:owner-visual-audit          # Maestro: guarded local owner S0-S17 screenshots
 ```
 
 The repository pins the Supabase CLI in `devDependencies`; use `npm exec supabase -- …` or
@@ -317,6 +319,34 @@ shut down while still reporting JavaScript handles. Do not replace it with `--fo
 force-exiting would hide leaks. `npm run test:watch` intentionally stays plain Jest watch mode.
 
 Until CI exists, run `npm test` before marking work complete.
+
+### Onboarding visual review captures
+
+The visual-audit flows are an AI-assisted design-review input, not a visual
+snapshot assertion. They require one (not a comma-separated list of)
+`MAESTRO_DEVICE_ID` and use synthetic names and memory text. Every capture name
+starts with its screen order so an agent can review the output in sequence
+without guessing the route.
+
+`npm run test:e2e:onboarding:owner-visual-audit:pre-auth` stops at the empty
+owner email screen (S12A). It requires `.env.local` to name exactly
+`http://127.0.0.1:<port>` and never enters an email, requests an OTP, commits
+onboarding data, or starts image generation. It captures keyboard-open kids,
+family-name, typed-capture, and account-email states as separate named images.
+
+`npm run test:e2e:onboarding:owner-visual-audit` continues through S17 only
+by delegating to the guarded isolated-local onboarding runner. It requires the
+same `ONBOARDING_E2E_IMAGE_STACK=isolated-local`, local Worker/R2/Edge Function
+configuration, and `MAESTRO_DEVICE_ID` as `test:e2e:onboarding`; it creates a
+synthetic local account and removes it through the normal hard-delete path.
+It also requires `ONBOARDING_VISUAL_AUDIT_ALLOW_REAL_IMAGE_COSTS=1`: the local
+Worker/R2 setup is isolated, but the portrait request still reaches the
+configured OpenAI provider and has a real provider cost. Both commands print
+their ignored output directory under `.maestro/report/`. An in-repository
+`ONBOARDING_VISUAL_AUDIT_OUTPUT` is accepted only when ignored by git; an
+external output path must be absolute. Do not run either audit with hosted or
+production configuration. This audit is owner-only; join-flow visual review is
+separate future work.
 
 ---
 

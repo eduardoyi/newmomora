@@ -13,7 +13,7 @@ import { StyleSheet, TextInput, View } from 'react-native';
 import { OnbButton } from '@/components/onboarding/onb-button';
 import { OnbShell } from '@/components/onboarding/onb-shell';
 import { OnbBody, OnbDisplay, OnbScript } from '@/components/onboarding/onb-typography';
-import { colors, emotionColors, fonts, radius } from '@/constants/theme';
+import { colors, emotionColors, fonts, radius, spacing } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useAuth } from '@/hooks/use-auth';
 import { discardAnonymousSession } from '@/lib/anonymous-session';
@@ -71,6 +71,7 @@ export default function OnboardingEmailScreen() {
 
   return (
     <OnbShell
+      keyboardBottomOffset={spacing.xxl * 5 + spacing.md}
       footer={
         <>
           <OnbButton

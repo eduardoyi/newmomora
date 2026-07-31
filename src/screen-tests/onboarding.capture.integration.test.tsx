@@ -18,7 +18,7 @@ import { ensureAnonymousSession } from '@/lib/anonymous-session';
 import { onboardingAhaRoute } from '@/lib/onboarding-routes';
 import { processOnboardingVoiceMemory } from '@/services/ai';
 import { createEmptyOnboardingDraft, type OnboardingDraft } from '@/utils/onboarding-progress';
-import { spacing } from '@/constants/theme';
+import { FOOTER_KEYBOARD_CLEARANCE } from '@/components/onboarding/onb-shell';
 
 jest.mock('expo-router', () => ({
   router: { replace: jest.fn(), push: jest.fn(), back: jest.fn() },
@@ -222,7 +222,7 @@ describe('OnboardingCaptureScreen (S9) -- keyboard avoidance', () => {
       expect(keepButtonAncestor).not.toBe(scrollView);
       keepButtonAncestor = keepButtonAncestor.parent;
     }
-    expect(scrollView.props.bottomOffset).toBe(spacing.xxl * 2);
+    expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
     expect(scrollView.props.disableScrollOnKeyboardHide).toBe(true);
     expect(scrollView.props.keyboardShouldPersistTaps).toBe('handled');
     expect(scrollView.props.mode).toBe('insets');

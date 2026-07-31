@@ -6,19 +6,28 @@
 // Keyboard-avoidance is built in here rather than left to each of the ~20
 // onboarding screens to reinvent -- consistent with `auth-screen.tsx` and
 // `keyboard-aware-form-screen.tsx`'s `KeyboardAwareScrollView` pattern.
-// The footer is a `KeyboardStickyView`, not part of the scroll content. This
-// matters for the kid-name and first-capture fields: scrolling the focused
-// input into view alone cannot guarantee that the CTA below it remains
-// tappable. The sticky footer follows the IME on both platforms, while the
-// scroll view keeps the focused input above that footer.
+// The footer stays outside the scroll content, inside a keyboard-avoiding
+// frame. This matters for the kid-name, family-name, account, and first-
+// capture fields: translating a footer over an unchanged scroll viewport
+// makes the CTA tappable but lets it intercept taps on inputs and controls
+// underneath. Shrinking the frame instead keeps the footer in layout above
+// the IME on both platforms, while the scroll view keeps focused fields and
+// the controls immediately after them above that footer.
 import type { ReactNode } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { KeyboardAwareScrollView, KeyboardStickyView } from 'react-native-keyboard-controller';
+import {
+  KeyboardAvoidingView,
+  KeyboardAwareScrollView,
+} from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, spacing } from '@/constants/theme';
 
-const FOOTER_KEYBOARD_CLEARANCE = spacing.xxl * 2;
+// Reserve one large CTA/footer (~96 pt) plus enough room for the controls
+// immediately after a focused field (the kids' add/helper controls or the
+// account screen's second input). A smaller offset kept the caret visible but
+// still put those tappable siblings underneath the footer.
+export const FOOTER_KEYBOARD_CLEARANCE = spacing.xxl * 3 + spacing.md;
 
 interface OnbShellProps {
   /** Illustration + headline/body content. Give it `flex: 1` internally to fill the screen. */
@@ -26,15 +35,28 @@ interface OnbShellProps {
   /** Pinned CTA stack (`padding: 0 24 40`, `gap: 10`), rendered after `children`. */
   footer?: ReactNode;
   contentContainerStyle?: StyleProp<ViewStyle>;
+  keyboardBottomOffset?: number;
   testID?: string;
 }
 
-export function OnbShell({ children, footer, contentContainerStyle, testID }: OnbShellProps) {
+export function OnbShell({
+  children,
+  footer,
+  contentContainerStyle,
+  keyboardBottomOffset = FOOTER_KEYBOARD_CLEARANCE,
+  testID,
+}: OnbShellProps) {
   return (
     <SafeAreaView style={styles.safeArea} testID={testID}>
-      <View style={styles.frame}>
+      <KeyboardAvoidingView
+        automaticOffset
+        behavior="height"
+        keyboardVerticalOffset={spacing.xl}
+        style={styles.frame}
+        testID="onb-shell-keyboard-frame"
+      >
         <KeyboardAwareScrollView
-          bottomOffset={footer ? FOOTER_KEYBOARD_CLEARANCE : spacing.lg}
+          bottomOffset={footer ? keyboardBottomOffset : spacing.lg}
           contentContainerStyle={[styles.scrollContent, contentContainerStyle]}
           disableScrollOnKeyboardHide
           keyboardShouldPersistTaps="handled"
@@ -46,11 +68,11 @@ export function OnbShell({ children, footer, contentContainerStyle, testID }: On
         </KeyboardAwareScrollView>
 
         {footer ? (
-          <KeyboardStickyView testID="onb-shell-footer">
-            <View style={styles.footer}>{footer}</View>
-          </KeyboardStickyView>
+          <View style={styles.footer} testID="onb-shell-footer">
+            {footer}
+          </View>
         ) : null}
-      </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

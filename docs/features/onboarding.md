@@ -243,7 +243,8 @@ sign-ins for a hosted project.
 
 | File | Scenarios |
 |------|-----------|
-| `src/screen-tests/onboarding.kids.integration.test.tsx` | Add/remove kid chips; continuing with an un-added typed name |
+| `src/screen-tests/onboarding.kids.integration.test.tsx` | Add/remove kid chips; continuing with an un-added typed name; shared keyboard-frame clearance |
+| `src/screen-tests/onboarding.welcome.integration.test.tsx` | Welcome actions retain screen-specific breathing room below the opening copy |
 | `src/screen-tests/onboarding.family-name.integration.test.tsx` | Prefill for 1/2/3 kids; edits persist to the draft |
 | `src/screen-tests/onboarding.capture.integration.test.tsx` | Typed path saves to draft; keyboard-open assertions |
 | `src/screen-tests/onboarding.notifications.integration.test.tsx` | The fourth option never calls `requestRegistration` |
@@ -252,7 +253,7 @@ sign-ins for a hosted project.
 | `src/screen-tests/onboarding.paywall.integration.test.tsx` | Close-confirm sheet opens/dismisses; CTA advances without touching any billing service |
 | `src/screen-tests/onboarding.portrait.integration.test.tsx` | Picking a photo calls `createPortraitVersion` for the right member and transitions to `painting`; (WP6) `ready` navigates to S17's reveal for that member, `failed` surfaces the retry state and calls `retryVersion`, the journal escape stays available in every sub-state |
 | `src/screen-tests/onboarding.reveal.integration.test.tsx` | (WP6) S17's two CTA branches — sibling-remaining vs. none — including that a sibling with a portrait version already in progress doesn't count as "unpainted"; "Later" routes to `familyRosterRoute`; an unresolvable `memberId` bounces to the journal |
-| `src/screen-tests/onboarding.email.integration.test.tsx` | (WP6) S12A's name field: "Send my code" stays disabled until both name and email are filled; the trimmed name reaches `requestSignUpOtp` |
+| `src/screen-tests/onboarding.email.integration.test.tsx` | (WP6) S12A's name field: "Send my code" stays disabled until both name and email are filled; the trimmed name reaches `requestSignUpOtp`; two-field keyboard clearance keeps email tappable below the focused name |
 | `src/screen-tests/onboarding.join.integration.test.tsx` | Code → found → name flow; an invalid code surfaces an error and does not advance |
 | `src/screen-tests/onboarding.post-commit-real-data.integration.test.tsx` | **(WP7-A, the blind-spot test)** Drives the real `OnboardingFlowProvider`/`FamilyProvider`/`useFamilyMembers()`/`usePortraitVersions()`/`useMediaUrl()` (mocked only at the Supabase-backed service boundary, plus `useAuth`/`useMemoriesRealtime`) through the actual sequence: seed a populated draft → real `commitOnboarding` → the same membership-query invalidation `code.tsx` awaits (verifying the freshness assumption) → real `clear()` → render S13→S17 against the now-empty draft. Asserts S14/S15 render the real kid's name (not the neutral fallback) and S16's "Choose a photo" CTA is enabled and resolves the correct member — all against server data, since that's the only source that survives the clear. Continues the same two-kid, no-`memberId`-param S16 flow through to a real "ready" transition and asserts the reveal route names the kid who was actually painted (not the untouched sibling) — the regression test for decision 10's pin fix, verified to fail without it. Existing screen tests all mock `useOnboardingFlow()`/`useFamilyMembers()` directly, which is exactly what hid both bugs; this file deliberately does not. |
 
@@ -262,6 +263,8 @@ sign-ins for a hosted project.
 |------|----------|
 | `.maestro/flows/onboarding/owner-happy-path.yaml` | S0 → story → founders → artifact → kids → family-name → bridge → capture (typed) → aha → year → notifications → account (OTP) → trial → included → paywall (placeholder) → fixture-photo portrait → painting → S17 reveal with the signed image actually loaded → journal. The staged local harness uses synthetic accounts, local Mailpit, an explicitly matched local client/Edge Function/Worker/R2 stack, and the normal deletion-fence cleanup; it refuses a database that already has a due account deletion, so start from an isolated/reset local database. It does **not** exercise a hosted or production image stack. Current-device execution remains a release check. |
 | `.maestro/flows/onboarding/join-happy-path.yaml` | Owner creates an invite → fresh device → J1 (code) → J2 (found) → J3 (name) → J4 (OTP) → J5 (waiting). It ends at the approval-wait state by design; the owner approval/timeline continuation remains in the sharing flows. Current-device execution is a release check. |
+| `.maestro/flows/onboarding/owner-visual-audit-pre-auth.yaml` | Deterministic, synthetic **owner** S0–S12A visual-review capture set: welcome through the empty email screen, including the kids, family-name, typed-capture, and account-email keyboard-open states. It stops before email entry, therefore cannot create an account, commit onboarding data, or generate images. The runner accepts only an explicit `http://127.0.0.1:<port>` client configuration. |
+| `.maestro/flows/onboarding/owner-visual-audit-{pre,post}-otp.yaml` | Full **owner** S0–S17 visual-review capture set. These staged flows run only through the existing isolated-local harness, use its local Mailpit OTP and fixture photo, wait for the signed portrait to decode, and clean up the synthetic account through the deletion fence. The Worker/R2 path is local, but the synthetic portrait still uses the configured OpenAI provider and incurs a real cost; the command requires an explicit acknowledgement. Capture filenames use screen-order prefixes (`00-…` through `27-…`) for later AI review. Join-flow visual audit is not included. |
 
 ### Run this feature's tests
 
@@ -273,6 +276,10 @@ npm run test:db
 ONBOARDING_VOICE_CONCURRENCY_TEST=1 npm run test:edge
 # Requires MAESTRO_DEVICE_ID and the isolated-local image stack described above.
 npm run test:e2e:onboarding
+# Safe visual review of owner S0-S12A only; requires http://127.0.0.1:<port> local config.
+npm run test:e2e:onboarding:owner-visual-audit:pre-auth
+# Full owner visual review of S0-S17; requires the isolated-local image stack above and incurs one real OpenAI portrait cost.
+ONBOARDING_VISUAL_AUDIT_ALLOW_REAL_IMAGE_COSTS=1 npm run test:e2e:onboarding:owner-visual-audit
 ```
 
 ## Changelog

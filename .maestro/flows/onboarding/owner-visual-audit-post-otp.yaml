@@ -1,0 +1,70 @@
+appId: com.memora.app
+---
+# Isolated-local visual-audit stage, resumed after the local Mailpit OTP.
+# The surrounding runner requires an explicit local Supabase/Worker/R2 stack
+# and cleans up the synthetic account through the normal hard-delete path.
+- tapOn:
+    id: onboarding-code-input
+- inputText: ${TEST_ONBOARDING_OWNER_OTP}
+- extendedWaitUntil:
+    visible:
+      id: onb-trial-screen
+    timeout: 20000
+- waitForAnimationToEnd
+- takeScreenshot: 22-trial
+- tapOn:
+    id: onb-trial-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-included-screen
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 23-whats-included
+- tapOn:
+    id: onb-included-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-paywall-screen
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 24-paywall
+- tapOn:
+    id: onb-paywall-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-portrait-choose-photo-button
+    timeout: 15000
+- waitForAnimationToEnd
+- takeScreenshot: 25-portrait-photo-choice
+- tapOn:
+    id: onb-portrait-choose-photo-button
+- tapOn:
+    text: "Allow Full Access"
+    optional: true
+- tapOn:
+    text: "Allow Access to All Photos"
+    optional: true
+- runFlow: ../shared/pick-first-image.yaml
+- tapOn:
+    text: "Choose"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: onb-portrait-painting-frame
+    timeout: 15000
+- takeScreenshot: 26-portrait-painting
+- extendedWaitUntil:
+    visible:
+      id: onb-reveal-screen
+    timeout: 240000
+- extendedWaitUntil:
+    visible:
+      id: onb-reveal-portrait-image-loaded
+    timeout: 30000
+- waitForAnimationToEnd
+- takeScreenshot: 27-portrait-reveal
+- tapOn:
+    id: onb-reveal-done-button
+- extendedWaitUntil:
+    visible: "Timeline"
+    timeout: 20000

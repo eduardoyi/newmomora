@@ -1,11 +1,14 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import { Pressable, TextInput } from 'react-native';
 
-import { OnbShell } from '@/components/onboarding/onb-shell';
+import {
+  FOOTER_KEYBOARD_CLEARANCE,
+  OnbShell,
+} from '@/components/onboarding/onb-shell';
 import { spacing } from '@/constants/theme';
 
 describe('OnbShell', () => {
-  it('keeps the footer outside the scrollable input body and attaches it to keyboard movement', () => {
+  it('shrinks the shared frame around the sticky footer instead of translating the footer over form controls', () => {
     const { getByTestId } = render(
       <OnbShell footer={<Pressable testID="onb-primary-action" />}>
         <TextInput testID="onb-lower-input" />
@@ -15,21 +18,25 @@ describe('OnbShell', () => {
     fireEvent(getByTestId('onb-lower-input'), 'focus');
 
     const scrollView = getByTestId('onb-shell-scroll');
-    const stickyFooter = getByTestId('onb-shell-footer');
+    const keyboardFrame = getByTestId('onb-shell-keyboard-frame');
+    const footer = getByTestId('onb-shell-footer');
 
-    // This is a structural contract, not just a keyboard-controller prop:
-    // the action is a sibling of the scroll view, so it cannot be scrolled
-    // under the IME with the rest of the page.
-    let footerAncestor = stickyFooter.parent;
+    // This structural contract prevents the observed iOS regression: a
+    // translated footer floated over the kids/family/account inputs and
+    // intercepted taps. The whole frame now loses keyboard height, while the
+    // footer remains a normal sibling below the scroll viewport.
+    expect(keyboardFrame.props.behavior).toBe('height');
+    expect(keyboardFrame.props.automaticOffset).toBe(true);
+    expect(keyboardFrame.props.keyboardVerticalOffset).toBe(spacing.xl);
+    let footerAncestor = footer.parent;
     while (footerAncestor) {
       expect(footerAncestor).not.toBe(scrollView);
       footerAncestor = footerAncestor.parent;
     }
-    expect(scrollView.props.children).not.toContain(stickyFooter);
-    expect(stickyFooter.props.children.props.style).toEqual(
-      expect.objectContaining({ paddingBottom: 40 }),
-    );
-    expect(scrollView.props.bottomOffset).toBe(spacing.xxl * 2);
+    expect(scrollView.props.children).not.toContain(footer);
+    expect(footer.props.style).toEqual(expect.objectContaining({ paddingBottom: 40 }));
+    expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
+    expect(FOOTER_KEYBOARD_CLEARANCE).toBeGreaterThan(spacing.xxl * 2);
     expect(scrollView.props.mode).toBe('insets');
   });
 

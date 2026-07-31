@@ -17,6 +17,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { discardAnonymousSession } from '@/lib/anonymous-session';
 import { createEmptyOnboardingDraft } from '@/utils/onboarding-progress';
+import { spacing } from '@/constants/theme';
 
 jest.mock('expo-router', () => ({
   router: { replace: jest.fn(), push: jest.fn(), back: jest.fn() },
@@ -111,6 +112,17 @@ describe('OnboardingEmailScreen (S12A) -- owner display name', () => {
     await waitFor(() => {
       expect(requestSignUpOtp).toHaveBeenCalledWith({ name: 'Rosa', email: 'rosa@rivera.family' });
     });
+  });
+
+  it('reserves enough keyboard clearance to keep the email field below the focused name tappable', () => {
+    const { getByTestId } = renderScreen();
+
+    fireEvent(getByTestId('onboarding-email-name-input'), 'focus');
+
+    expect(getByTestId('onb-shell-keyboard-frame').props.behavior).toBe('height');
+    expect(getByTestId('onb-shell-scroll').props.bottomOffset).toBe(
+      spacing.xxl * 5 + spacing.md,
+    );
   });
 
   it('trims the name and threads it through to requestSignUpOtp, then navigates to the code screen', async () => {
