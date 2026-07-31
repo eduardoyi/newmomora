@@ -312,10 +312,15 @@ export default function JoinEmailScreen() {
             </View>
 
             <TextInput
+              accessibilityHint="Enter the six digits from your email."
+              accessibilityLabel="Verification code"
               autoFocus
+              caretHidden
+              cursorColor="transparent"
               keyboardType="number-pad"
               maxLength={CODE_LENGTH}
               onChangeText={handleChangeCode}
+              selectionColor="transparent"
               style={styles.hiddenInput}
               testID="onb-join-email-code-input"
               textContentType="oneTimeCode"
@@ -433,8 +438,8 @@ const styles = StyleSheet.create({
   },
   hiddenInput: {
     bottom: 0,
+    color: 'transparent',
     left: 0,
-    opacity: 0,
     position: 'absolute',
     right: 0,
     top: 0,

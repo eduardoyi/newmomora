@@ -1,13 +1,13 @@
 # Feature: Onboarding & Paywall
 
 **Status:** `done` (S0–S17 owner path, J1–J5 join path — see "Not yet shipped" below for what's deliberately deferred)
-**Last updated:** 2026-07-30
+**Last updated:** 2026-07-31
 **PRD reference:** PRD §onboarding (update when implemented)
 **Research inputs:** [docs/voice-of-customer.md](../voice-of-customer.md) (VoC) · tasu conversion brain (tasu.ai/library, queried 2026-07-23)
 **Design brief:** [docs/plans/onboarding-design-brief.md](../plans/onboarding-design-brief.md) — screen-by-screen layout + copy for design handoff
 **Implementation plan:** [docs/plans/onboarding-implementation.md](../plans/onboarding-implementation.md) — work packages, decisions, execution log
 
-Design spec agreed 2026-07-23; implemented in WP0–WP5, then closed out by WP6 (see the implementation plan's Execution log for package-by-package detail). Real illustration art and real billing remain `planned` — see "Not yet shipped."
+Design spec agreed 2026-07-23; implemented in WP0–WP7-A (see the implementation plan's Execution log for package-by-package detail). Real onboarding illustration art shipped in `8555064`; real billing remains deliberately out of scope — see "Not yet shipped."
 
 ## Overview
 
@@ -128,7 +128,7 @@ No new tables. Onboarding writes to existing tables at commit time and otherwise
 | Utils | `src/utils/onboarding-copy.ts` (copy generators), `src/utils/pending-invite-code.ts` (shared with family-sharing) | Pure copy logic; invite-code storage |
 | Hooks | `src/hooks/use-onboarding-kid-possessive.ts` (`useOnboardingKidPossessive`) | S14/S15's shared kid-name personalization resolver — draft first, real `useFamilyMembers()` data once the draft is empty (WP7-A) |
 | Components | `src/components/onboarding/*` (`OnbShell`, `OnbButton`, `OnbTypography` family, `OnbDots`, `OnbIllustration`, `KidChip`) | Shared onboarding primitives, styled from `src/constants/theme.ts` tokens |
-| Illustrations | `src/constants/onboarding-illustrations.ts` | One asset map — every slot's description/tint/optional real asset. Dropping in real art touches only this file. |
+| Illustrations | `src/constants/onboarding-illustrations.ts`, `assets/onboarding/` | One asset map for the shipped bundled WebP artwork and its accessibility descriptions. |
 
 ## Implementation decisions (WP0–WP7-A)
 
@@ -151,9 +151,7 @@ Deliberately out of scope (see the implementation plan's Scope table and Follow-
 
 - **The design brief's `CastWaitingState` unpainted-kid family-tab card** — deliberately dropped by owner decision (see implementation decision 7 above), not deferred; the existing family tab covers the same job.
 - **Real billing** — RevenueCat-or-equivalent, entitlement enforcement, family-scoped subscriptions (product decision 6). S15 is the placeholder described above.
-- **Real illustration assets** — every onboarding illustration slot renders a styled watercolor-wash placeholder (`OnbIllustration`) via `src/constants/onboarding-illustrations.ts`; dropping in real art touches only that file.
 - **Per-IP/per-device onboarding voice limits, CAPTCHA/Turnstile, fraud scoring** on the anonymous-session surfaces (explicit WP-SEC backlog per usage-limits.md).
-- **Cleanup cron for abandoned anonymous Auth users** (WP-SEC scope; deleting an anonymous user removes its live attempt counter and nulls raw-event actor attribution while onboarding cost rollups survive as company accounting data).
 - **Lapsed-owner resubscribe screen** and the **attribution screen** (spec six-jobs table — deliberately deferred).
 
 ## Six-jobs coverage check
@@ -200,6 +198,27 @@ Retention gate (VoC §8): if 30-day retention tracks the Qeepsake/Tinybeans chur
 - Depends on: family-profiles, family-sharing (join path), memories (first capture), voice-journaling (voice input), portrait-timeline + cloudflare-illustration-workflows (background generation at trial start), RevenueCat-or-equivalent subscription infra (not yet chosen/implemented).
 - Used by: everything — this is the front door.
 
+### Anonymous onboarding production checklist
+
+S9 voice transcription and J2 invite preview require anonymous Supabase Auth. In each deployed
+project, enable **Anonymous sign-ins** only after the anonymous-lockdown migration and its tests
+are present. The shipped cleanup function (`cleanup-abandoned-anonymous-users`) and daily 04:00
+UTC pg_cron invocation remove anonymous users abandoned for seven days; Auth deletion nulls only
+their raw ledger attribution and preserves deidentified onboarding COGS rollups.
+
+Before enabling this path in a production project, verify all of the following without exposing a
+secret in a client or repository:
+
+1. Supabase Auth has **Anonymous sign-ins** enabled for the target project.
+2. `cleanup-abandoned-anonymous-users` is deployed with `CRON_SECRET` configured.
+3. Vault contains `project_url` and `cron_secret`, and the cron job named
+   `invoke-cleanup-abandoned-anonymous-users` exists at `0 4 * * *` UTC.
+4. Invoke the cleanup endpoint once with its real `x-cron-secret` header, then inspect
+   `cron.job_run_details` after the next scheduled run. A successful empty cleanup is valid.
+
+`supabase/config.toml` supplies the local-development setting; it does not turn on anonymous
+sign-ins for a hosted project.
+
 ## Extension guide
 
 **Safe to extend:** story-beat copy, founder-intro content, trust-screen wording, test-backlog variants.
@@ -241,13 +260,19 @@ Retention gate (VoC §8): if 30-day retention tracks the Qeepsake/Tinybeans chur
 
 | Flow | Scenario |
 |------|----------|
-| `.maestro/flows/onboarding/owner-happy-path.yaml` | S0 → story → founders → artifact → kids → family-name → bridge → capture (typed) → aha → year → notifications → account (OTP) → trial → included → paywall (placeholder) → portrait (real photo pick) → journal. **Not executed** (no device available while authoring) — see the flow's header comment for the OTP-retrieval and rerun-idempotency gaps. |
-| `.maestro/flows/onboarding/join-happy-path.yaml` | Owner creates an invite (reuses `sharing/01-owner-create-invite.yaml`) → fresh device → J1 (code) → J2 (found) → J3 (name) → J4 (OTP) → J5 (waiting). **Not executed** — same OTP-retrieval gap; ends at the approval-wait state by design (owner-approval itself is covered by the existing `sharing/03-04` flows). |
+| `.maestro/flows/onboarding/owner-happy-path.yaml` | S0 → story → founders → artifact → kids → family-name → bridge → capture (typed) → aha → year → notifications → account (OTP) → trial → included → paywall (placeholder) → fixture-photo portrait → painting → S17 reveal with the signed image actually loaded → journal. The staged local harness uses synthetic accounts, local Mailpit, an explicitly matched local client/Edge Function/Worker/R2 stack, and the normal deletion-fence cleanup; it refuses a database that already has a due account deletion, so start from an isolated/reset local database. It does **not** exercise a hosted or production image stack. Current-device execution remains a release check. |
+| `.maestro/flows/onboarding/join-happy-path.yaml` | Owner creates an invite → fresh device → J1 (code) → J2 (found) → J3 (name) → J4 (OTP) → J5 (waiting). It ends at the approval-wait state by design; the owner approval/timeline continuation remains in the sharing flows. Current-device execution is a release check. |
 
 ### Run this feature's tests
 
 ```bash
-npm test -- --testPathPattern=onboarding
+npm test -- --runInBand --testPathPattern=onboarding
+npm exec supabase -- start
+npm run db:reset
+npm run test:db
+ONBOARDING_VOICE_CONCURRENCY_TEST=1 npm run test:edge
+# Requires MAESTRO_DEVICE_ID and the isolated-local image stack described above.
+npm run test:e2e:onboarding
 ```
 
 ## Changelog
@@ -258,3 +283,4 @@ npm test -- --testPathPattern=onboarding
 | 2026-07-29 | WP0–WP5 implemented: S0–S16 owner path, J1–J5 join path, front door wired (`app/index.tsx`, `app/(auth)/_layout.tsx`, `app/invite.tsx`), status flipped to `done`. S17, real billing, and real illustration assets remain `planned`. |
 | 2026-07-30 | WP6 implemented: S12A now collects the owner's display name (`app/(onboarding)/email.tsx`, plus a blank-name safety net in `app/(app)/sharing/members.tsx`); S16 (`portrait.tsx`) reads the real portrait status instead of a decorative pulse and hands off to the new S17 `reveal.tsx` on `ready`, with a warm retry on `failed`; S17 ships with the sibling chain, and the design brief's `CastWaitingState` cast card is deliberately dropped by owner decision in favour of the existing family tab. Real billing and real illustration assets remain `planned`. |
 | 2026-07-30 | WP7-A implemented: closed the testing blind spot that let two post-commit-draft bugs ship (WP6's S16 fix being one; S14/S15 losing kid-name personalization being the other, fixed here). `app/(onboarding)/included.tsx` and `app/(onboarding)/paywall.tsx` now resolve personalization through a new shared hook, `useOnboardingKidPossessive()` (`src/hooks/use-onboarding-kid-possessive.ts`), instead of a duplicated local resolver that only ever read the (post-commit, empty) draft. New `onboarding.post-commit-real-data.integration.test.tsx` drives the real post-commit sequence (`commitOnboarding` → the membership invalidation → `clear()` → S13–S17) with unmocked draft/hook state — the regression test this bug always needed. S14 also gained its first-ever screen test coverage (`onboarding.included.integration.test.tsx`). A separate defect in S16's target-member pinning, found while building this coverage, was also fixed in this pass (pulled into scope on coordinator review) — see implementation decision 10. |
+| 2026-07-31 | Corrected release documentation: bundled real onboarding art (`8555064`) and abandoned-anonymous-user cleanup + its daily cron are shipped. Added the hosted-project anonymous Auth/cron verification checklist and repo-pinned local Supabase commands. |

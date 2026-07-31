@@ -32,9 +32,9 @@ All four require `CRON_SECRET` header validation.
 ## Local dev
 
 ```bash
-supabase start
-supabase functions serve --env-file supabase/.env.local
-supabase db reset   # applies migrations
+npm exec supabase -- start
+npm exec supabase -- functions serve --env-file supabase/.env.local
+npm run db:reset   # applies migrations to the local database with the repo-pinned CLI
 ```
 
 Never commit `supabase/.env.local`, service role keys, or R2 credentials.

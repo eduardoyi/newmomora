@@ -38,6 +38,36 @@ import { onboardingPortraitRouteForMember } from '@/lib/onboarding-routes';
 import { familyRosterRoute, timelineRoute } from '@/lib/routes';
 import { hasNoPortraitYet } from '@/utils/family-members';
 
+interface LoadedPortraitImageProps {
+  name: string;
+  portraitUrl: string;
+}
+
+/**
+ * Keyed by its signed URL at the call site so each replacement starts in the
+ * loading state. Keeping this local avoids a reset-effect on the screen and
+ * gives Maestro a selector only after Expo Image has decoded the current
+ * portrait.
+ */
+function LoadedPortraitImage({ name, portraitUrl }: LoadedPortraitImageProps) {
+  const [hasLoaded, setHasLoaded] = useState(false);
+
+  return (
+    <Image
+      accessibilityLabel={`${name}'s finished portrait`}
+      contentFit="cover"
+      onLoad={() => setHasLoaded(true)}
+      source={{ uri: portraitUrl }}
+      style={styles.cardImage}
+      testID={
+        hasLoaded
+          ? 'onb-reveal-portrait-image-loaded'
+          : 'onb-reveal-portrait-image-loading'
+      }
+    />
+  );
+}
+
 export default function OnboardingRevealScreen() {
   const { memberId } = useLocalSearchParams<{ memberId?: string }>();
   const { members, isLoading } = useFamilyMembers();
@@ -183,14 +213,16 @@ export default function OnboardingRevealScreen() {
         <Animated.View style={[styles.cardWrap, cardStyle]}>
           <View style={styles.card} testID="onb-reveal-card">
             {portraitUrl ? (
-              <Image
-                accessibilityLabel={`${name}'s finished portrait`}
-                contentFit="cover"
-                source={{ uri: portraitUrl }}
-                style={styles.cardImage}
+              <LoadedPortraitImage
+                key={portraitUrl}
+                name={name}
+                portraitUrl={portraitUrl}
               />
             ) : (
-              <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
+              <View
+                style={[styles.cardImage, styles.cardImagePlaceholder]}
+                testID="onb-reveal-portrait-image-unavailable"
+              >
                 <ActivityIndicator color={colors.ink3} size="small" />
               </View>
             )}

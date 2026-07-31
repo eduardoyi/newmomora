@@ -137,6 +137,19 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     mockedGetPendingInviteCode.mockResolvedValue(null);
   });
 
+  it('exposes the auto-focused OTP field to device automation without visually duplicating the six boxes', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = renderScreen(queryClient);
+    const input = screen.getByTestId('onboarding-code-input');
+
+    expect(input.props.accessibilityLabel).toBe('Verification code');
+    expect(input.props.accessibilityHint).toBe('Enter the six digits from your email.');
+    expect(input.props.caretHidden).toBe(true);
+    expect(input.props.cursorColor).toBe('transparent');
+    expect(input.props.style).toEqual(expect.objectContaining({ color: 'transparent' }));
+    expect(input.props.style.opacity).toBeUndefined();
+  });
+
   it('invalidates the memberships query before navigating a brand-new owner into S13', async () => {
     mockedCommitOnboarding.mockResolvedValue({
       data: { familyId: 'family-1', memoryId: 'memory-1', isNewFamily: true },

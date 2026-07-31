@@ -10,7 +10,9 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
-    "test": "jest",
+    "db:reset": "supabase db reset --local",
+    "test:db": "supabase test db --local supabase/tests",
+    "test": "jest --detectOpenHandles",
     "test:watch": "jest --watch",
     "test:edge": "deno test --allow-env --allow-net --allow-ffi --allow-read=supabase/functions,supabase/scripts,src/utils --node-modules-dir=none supabase/functions/ supabase/scripts/",
     "eval:portrait": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-portrait.ts",
@@ -23,6 +25,8 @@
     "backfill:video-posters": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-video-posters.ts",
     "test:e2e:family-fixture": "maestro test .maestro/flows/onboarding/add-family-member-with-fixture.yaml",
     "test:e2e:family-picker": "maestro test .maestro/flows/onboarding/add-family-member-with-picker.yaml",
+    "test:e2e:onboarding": "bash supabase/scripts/run-onboarding-maestro.sh",
+    "test:e2e:onboarding:fixture": "deno run --allow-env --allow-net supabase/scripts/onboarding-maestro-fixture.ts",
     "test:e2e:usage-limits:seed": "deno run --allow-env --allow-net supabase/scripts/usage-limits-e2e-fixture.ts",
     "test:e2e:usage-limits:clean": "deno run --allow-env --allow-net supabase/scripts/usage-limits-e2e-fixture.ts --cleanup",
     "test:e2e:usage-limits": "npm run test:e2e:usage-limits:seed && (maestro test .maestro/flows/usage-limits/memory-limit.yaml; status=$?; npm run test:e2e:usage-limits:clean; exit $status)"
@@ -85,6 +89,7 @@
     "jest": "^29.7.0",
     "jest-expo": "~56.0.5",
     "react-test-renderer": "19.2.3",
+    "supabase": "2.110.0",
     "typescript": "~6.0.3"
   }
 }

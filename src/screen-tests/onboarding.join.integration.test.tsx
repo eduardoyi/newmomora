@@ -305,6 +305,12 @@ describe('JoinEmailScreen (J4)', () => {
 
     await findByTestId('onb-join-email-code-input');
 
+    const codeInput = getByTestId('onb-join-email-code-input');
+    expect(codeInput.props.accessibilityLabel).toBe('Verification code');
+    expect(codeInput.props.cursorColor).toBe('transparent');
+    expect(codeInput.props.style).toEqual(expect.objectContaining({ color: 'transparent' }));
+    expect(codeInput.props.style.opacity).toBeUndefined();
+
     expect(requestSignUpOtp).toHaveBeenCalledWith({ name: 'Grandma Ana', email: 'ana@example.com' });
     expect(mockedDiscardAnonymousSession).toHaveBeenCalled();
   });

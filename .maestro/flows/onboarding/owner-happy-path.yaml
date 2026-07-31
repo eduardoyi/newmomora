@@ -6,37 +6,15 @@ appId: com.memora.app
 # app/(onboarding)/welcome.tsx instead of app/(auth)/login.tsx, per spec
 # decision 2). Depends on every S0-S16 screen (WP0-WP3) already landed.
 #
-# NOT executed -- no simulator/device was available while authoring this
-# (same caveat as .maestro/flows/sharing/*, see that directory's README).
-# Written lint-by-eye against the testIDs declared in the screens under
-# app/(onboarding)/ (grepped, not invented) -- treat as a first draft to run
-# and fix up against a real EAS dev build before trusting it in CI.
+# The full local runner is `npm run test:e2e:onboarding`. It uses the staged
+# owner-happy-path-{pre,post}-otp.yaml files so it can read the OTP from
+# local Mailpit between Maestro invocations, then removes the fresh fixture.
+# This standalone version is retained for targeted debugging when both
+# TEST_ONBOARDING_OWNER_EMAIL and TEST_ONBOARDING_OWNER_OTP are supplied.
+# It must only point at a local Supabase project and local image stack.
 #
-# Gaps intentionally left open rather than faked:
-# - S12 is real email-OTP with no dev/password shortcut (that toggle only
-#   exists on app/(auth)/login.tsx, via login-dev-toggle-button) -- Maestro
-#   cannot read a real inbox, so ${TEST_ONBOARDING_OWNER_OTP} below is a
-#   placeholder that must be filled in by hand (or a test-inbox integration)
-#   before this flow can run past S12B. Add TEST_ONBOARDING_OWNER_EMAIL and
-#   TEST_ONBOARDING_OWNER_OTP to .maestro/.env.example before running (same
-#   "not defined yet, add before running" note the sharing suite's README
-#   carries for TEST_EMAIL_2/TEST_PASSWORD_2).
-# - TEST_ONBOARDING_OWNER_EMAIL must be an account that has never completed
-#   onboarding before: commitOnboarding (src/services/onboarding.ts)
-#   permanently creates that email's family on first success, so rerunning
-#   this flow against the same address takes the "returning owner" branch
-#   (docs/features/onboarding.md decision 18) straight to the journal instead
-#   of exercising S13-S16 a second time. Use a fresh address each run, same
-#   rerun caveat .maestro/flows/sharing/README.md documents for its own
-#   two-account loop.
-# - S16's portrait step has no __DEV__ fixture shortcut (unlike
-#   add-family-member.tsx's add-family-member-photo-fixture button) --
-#   app/(onboarding)/portrait.tsx only exposes the real system photo picker,
-#   so this drives it the same way
-#   .maestro/flows/onboarding/add-family-member-with-picker.yaml does
-#   (addMedia + shared/pick-first-image.yaml). "Choose a photo" is disabled
-#   until useFamilyMembers resolves the just-created child row -- pad the
-#   wait before tapping it if this flakes on a real run.
+# S16 intentionally drives the real system photo picker using the bundled
+# profile fixture, exactly as add-family-member-with-picker.yaml does.
 # - The notification step (S11) picks "No reminders"
 #   (onboarding-notifications-option-none) specifically to avoid the native
 #   OS permission dialog, which is non-deterministic to script -- the other
@@ -173,13 +151,20 @@ appId: com.memora.app
 - tapOn:
     text: "Choose"
     optional: true
-
 - extendedWaitUntil:
     visible:
-      id: onb-portrait-journal-button
+      id: onb-portrait-painting-frame
     timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: onb-reveal-screen
+    timeout: 240000
+- extendedWaitUntil:
+    visible:
+      id: onb-reveal-portrait-image-loaded
+    timeout: 30000
 - tapOn:
-    id: onb-portrait-journal-button
+    id: onb-reveal-done-button
 
 - extendedWaitUntil:
     visible: "Timeline"

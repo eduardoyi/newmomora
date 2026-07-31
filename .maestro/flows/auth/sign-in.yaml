@@ -6,11 +6,63 @@ appId: com.memora.app
     id: login-email-input
 - eraseText
 - inputText: ${TEST_EMAIL}
+- runFlow:
+    when:
+      visible: "Speed up your typing by sliding your finger across the letters to compose a word."
+    commands:
+      - tapOn:
+          text: "Continue"
+          below: "Speed up your typing by sliding your finger across the letters to compose a word."
+- swipe:
+    start: "50%, 60%"
+    end: "50%, 30%"
+    duration: 500
 - tapOn:
     id: login-password-input
 - eraseText
 - inputText: ${TEST_PASSWORD}
+- assertVisible:
+    id: login-email-input
+    text: ${TEST_EMAIL}
+- swipe:
+    start: "50%, 60%"
+    end: "50%, 30%"
+    duration: 500
 - tapOn:
     id: login-dev-submit-button
 - assertNotVisible:
     text: "Invalid login credentials"
+- extendedWaitUntil:
+    visible:
+      text: "Save Password\\?|Timeline|A little pause for illustrations"
+    timeout: 90000
+- runFlow:
+    when:
+      visible: "Save Password\\?"
+    commands:
+      - tapOn:
+          text: "Not Now"
+      - waitForAnimationToEnd
+# iOS 26 can expose the password prompt to accessibility while a just-opened
+# app alert is visually stacked above it. Retry the left action by position if
+# the text tap did not dismiss that system prompt.
+- runFlow:
+    when:
+      visible: "Save Password\\?"
+    commands:
+      - tapOn:
+          point: "32%, 63%"
+      - waitForAnimationToEnd
+# Last-resort iOS 26 simulator fallback: accept saving the synthetic E2E
+# credential if the system prompt still ignores its left action.
+- runFlow:
+    when:
+      visible: "Save Password\\?"
+    commands:
+      - tapOn:
+          point: "68%, 63%"
+      - waitForAnimationToEnd
+- extendedWaitUntil:
+    visible:
+      text: "Timeline|A little pause for illustrations"
+    timeout: 90000

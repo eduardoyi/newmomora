@@ -64,13 +64,13 @@ npx expo start --dev-client
 npm run typecheck
 npm run lint
 
-# Supabase local
-supabase start
-supabase db reset
-supabase functions serve
+# Supabase local (repo-pinned CLI)
+npm exec supabase -- start
+npm run db:reset # local only
+npm exec supabase -- functions serve
 
 # Generate types after schema change
-npx supabase gen types typescript --local > src/types/database.ts
+npm exec supabase -- gen types typescript --local > src/types/database.ts
 ```
 
 Verify commands exist before running. Do not invent scripts.

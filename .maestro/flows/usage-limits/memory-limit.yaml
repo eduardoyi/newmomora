@@ -3,7 +3,7 @@ appId: com.memora.app
 # Cold-start actor-notice flow; server 429/capture-first is covered by Deno/client integration.
 - runFlow: ../auth/login.yaml
 - assertVisible: "A little pause for illustrations"
-- assertVisible: "Your memory is safely saved"
+- assertVisible: "Your memory is safely saved.*"
 - tapOn: "Okay"
 - assertVisible:
     id: timeline-memory-list

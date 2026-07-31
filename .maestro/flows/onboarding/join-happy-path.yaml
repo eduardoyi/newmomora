@@ -9,11 +9,12 @@ appId: com.memora.app
 # package's brief -- phases are marked with comments instead of split into
 # numbered files.
 #
-# NOT executed -- no simulator/device was available while authoring this
-# (same caveat as .maestro/flows/sharing/*, see that directory's README).
-# Written lint-by-eye against the testIDs declared in app/(onboarding)/join/*
-# (grepped, not invented) -- treat as a first draft to run and fix up against
-# a real EAS dev build before trusting it in CI.
+# The full local runner is `npm run test:e2e:onboarding`. It creates the owner
+# and viewer invite through the app, reads each real OTP from local Mailpit,
+# then removes only the synthetic fixture accounts. It uses the staged
+# join-happy-path-{pre,post}-otp.yaml files because Maestro cannot fetch an
+# OTP while a flow is running. This standalone version remains useful for
+# targeted debugging when its explicit test credentials/OTP are supplied.
 #
 # Scope: this flow ends at J5's approval-wait state
 # (onb-join-waiting-screen / onb-join-waiting-title), which is a fully
@@ -24,8 +25,7 @@ appId: com.memora.app
 # already covered by .maestro/flows/sharing/03-owner-approve.yaml +
 # 04-second-account-sees-timeline.yaml; not duplicated here.
 #
-# Requires (add to .maestro/.env.example before running, same "not defined
-# yet" note the sharing suite's README carries for TEST_EMAIL_2/TEST_PASSWORD_2):
+# Requires for standalone debugging (the local runner supplies these itself):
 # - TEST_EMAIL / TEST_PASSWORD -- an existing owner account (phase 1 reuses
 #   the sharing suite's own invite-creation step, so it needs the same
 #   credentials that step already requires).

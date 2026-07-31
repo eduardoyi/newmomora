@@ -184,8 +184,8 @@ redelivered.
   limits for upgrade pressure; a paid product with fair use does not).
 - Hard per-dollar billing enforcement, proration, or purchasable top-ups.
 - Client-side enforcement (trivially bypassable; server is the only gate).
-- Per-IP or per-device onboarding voice limits, CAPTCHA/Turnstile, fraud scoring, and anonymous
-  account cleanup scheduling. The shipped minimum protection is only: a valid anonymous Auth JWT,
+- Per-IP or per-device onboarding voice limits, CAPTCHA/Turnstile, and fraud scoring. The shipped
+  minimum protection is only: a valid anonymous Auth JWT,
   the two-attempt atomic anonymous-user reservation, existing server audio-size/duration
   validation, and tightly bounded local spelling hints. The onboarding owner must enable
   `enable_anonymous_sign_ins` only alongside this Edge integration; this migration deliberately
@@ -208,8 +208,11 @@ its epoch; changing any alert setting increments only `alert_policy_version` so 
 
 ## Local and production procedure
 
-Local: start Supabase, run `supabase db reset`, then run `npm run test:edge` and the Worker test
-suite from `cloudflare/memory-illustration-worker`. For the optional Maestro notice flow, use the
+Local: start Supabase with the repo-pinned CLI (`npm exec supabase -- start`), run `npm run db:reset`
+and `npm run test:db`, then run `npm run test:edge` and the Worker test suite from
+`cloudflare/memory-illustration-worker`. Also run the real local anonymous reservation race with
+`ONBOARDING_VOICE_CONCURRENCY_TEST=1 npm run test:edge`; it refuses non-loopback credentials. For
+the optional Maestro notice flow, use the
 documented `npm run test:e2e:usage-limits` wrapper with explicit local fixture IDs; it refuses any
 non-loopback project and does not enable enforcement.
 
@@ -219,6 +222,11 @@ required request links, and protocol stamps; set a future activation timestamp o
 clean. After that boundary, wait the five-minute activation handoff plus the maximum old-job lease,
 then verify v1 work has drained. Roll back by disabling enforcement first, then roll back
 producers; do not delete ledger data or backfill requests.
+
+For pre-auth onboarding voice, the production checklist in [onboarding.md](./onboarding.md)
+also applies: anonymous Auth must be enabled in the hosted Supabase project, and the deployed
+`cleanup-abandoned-anonymous-users` function must have a verified daily pg_cron invocation. The
+cleanup preserves company COGS rollups while removing abandoned anonymous Auth identities.
 
 Run these read-only preflight checks in the target database before activation: `select count(*)
 from public.families f left join public.ai_family_usage_locks l on l.family_id=f.id where l.family_id

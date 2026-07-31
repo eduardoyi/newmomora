@@ -119,6 +119,21 @@ describe('KidsScreen (S6)', () => {
     expect(getByTestId('onb-kids-continue-button').props.accessibilityState.disabled).toBe(false);
   });
 
+  it('keeps its primary action in the shell’s keyboard-sticky region when the name field is focused', () => {
+    const { getByTestId } = renderScreen();
+
+    fireEvent(getByTestId('onb-kids-input'), 'focus');
+
+    const scrollView = getByTestId('onb-shell-scroll');
+    let ancestor = getByTestId('onb-kids-continue-button').parent;
+
+    expect(getByTestId('onb-shell-footer')).toBeTruthy();
+    while (ancestor) {
+      expect(ancestor).not.toBe(scrollView);
+      ancestor = ancestor.parent;
+    }
+  });
+
   it('ignores the add affordance while the field is empty', () => {
     const { getByTestId, queryByText } = renderScreen();
 

@@ -77,6 +77,8 @@ describe('OnboardingRevealScreen (S17)', () => {
     const { getByText, getByTestId, queryByTestId } = renderScreen();
 
     expect(getByText('Meet Lila.')).toBeTruthy();
+    expect(getByTestId('onb-reveal-portrait-image-loading')).toBeTruthy();
+    expect(queryByTestId('onb-reveal-portrait-image-unavailable')).toBeNull();
     expect(getByText("Miguel's turn. Pick a photo")).toBeTruthy();
     expect(queryByTestId('onb-reveal-done-button')).toBeNull();
 
@@ -134,5 +136,33 @@ describe('OnboardingRevealScreen (S17)', () => {
     await waitFor(() => {
       expect(router.replace).toHaveBeenCalledWith(timelineRoute);
     });
+  });
+
+  it('labels the portrait as unavailable until its signed URL is available', () => {
+    mockedUseFamilyMembers.mockReturnValue({
+      members: [LILA_MEMBER],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useFamilyMembers>);
+    mockedUseMediaUrl.mockReturnValue({ url: null, isLoading: true, isError: false });
+
+    const { getByTestId, queryByTestId } = renderScreen();
+
+    expect(getByTestId('onb-reveal-portrait-image-unavailable')).toBeTruthy();
+    expect(queryByTestId('onb-reveal-portrait-image-loading')).toBeNull();
+  });
+
+  it('exposes a ready selector only after the signed portrait image loads', async () => {
+    mockedUseFamilyMembers.mockReturnValue({
+      members: [LILA_MEMBER],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useFamilyMembers>);
+
+    const { getByTestId, findByTestId } = renderScreen();
+
+    fireEvent(getByTestId('onb-reveal-portrait-image-loading'), 'load', {
+      nativeEvent: {},
+    });
+
+    expect(await findByTestId('onb-reveal-portrait-image-loaded')).toBeTruthy();
   });
 });

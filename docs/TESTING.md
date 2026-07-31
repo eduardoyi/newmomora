@@ -297,12 +297,24 @@ maestro test .maestro/flows/
 ## Commands
 
 ```bash
-npm test                 # unit + integration (CI: --ci --coverage)
+npm test                 # unit + integration; detects and reports JS open handles
 npm run test:watch       # local development
 npm run test:edge        # Deno Edge Function tests
+npm exec supabase -- start # repo-pinned Supabase CLI
+npm run db:reset         # apply all migrations to the local database only
+npm run test:db          # pgTAP suites in supabase/tests against local only
 npm run test:e2e:family-fixture   # Maestro: family upload (fixture)
 npm run test:e2e:family-picker    # Maestro: family upload (system picker)
 ```
+
+The repository pins the Supabase CLI in `devDependencies`; use `npm exec supabase -- …` or
+the `db:reset`/`test:db` scripts rather than a globally installed CLI. This avoids local Auth
+and migration behavior drifting with an older global binary.
+
+The default Jest command includes `--detectOpenHandles`. On macOS, the Expo native test stack can
+leave an opaque `fsevents` handle after an otherwise-complete full run; this detector lets Jest
+shut down while still reporting JavaScript handles. Do not replace it with `--forceExit`:
+force-exiting would hide leaks. `npm run test:watch` intentionally stays plain Jest watch mode.
 
 Until CI exists, run `npm test` before marking work complete.
 

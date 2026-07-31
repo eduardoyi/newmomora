@@ -207,7 +207,7 @@ describe('OnboardingCaptureScreen (S9) -- typed path', () => {
 });
 
 describe('OnboardingCaptureScreen (S9) -- keyboard avoidance', () => {
-  it('composes inside the keyboard-aware scroll view with the project keyboard-avoidance contract', () => {
+  it('keeps the focused composer in the scroll view while its primary action lives in the keyboard-sticky region', () => {
     mockDraft({ kidNames: ['Lila'] });
     const screen = renderScreen();
 
@@ -215,6 +215,13 @@ describe('OnboardingCaptureScreen (S9) -- keyboard avoidance', () => {
     fireEvent(screen.getByTestId('onboarding-capture-textarea'), 'focus');
 
     const scrollView = screen.getByTestId('onb-shell-scroll');
+    let keepButtonAncestor = screen.getByTestId('onboarding-capture-keep').parent;
+
+    expect(screen.getByTestId('onb-shell-footer')).toBeTruthy();
+    while (keepButtonAncestor) {
+      expect(keepButtonAncestor).not.toBe(scrollView);
+      keepButtonAncestor = keepButtonAncestor.parent;
+    }
     expect(scrollView.props.bottomOffset).toBe(spacing.xxl * 2);
     expect(scrollView.props.disableScrollOnKeyboardHide).toBe(true);
     expect(scrollView.props.keyboardShouldPersistTaps).toBe('handled');

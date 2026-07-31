@@ -1,0 +1,10 @@
+appId: com.memora.app
+---
+# Local staged join journey, verifies the real local OTP and reaches J5.
+- tapOn:
+    id: onb-join-email-code-input
+- inputText: ${TEST_ONBOARDING_JOINER_OTP}
+- extendedWaitUntil:
+    visible:
+      id: onb-join-waiting-title
+    timeout: 20000
