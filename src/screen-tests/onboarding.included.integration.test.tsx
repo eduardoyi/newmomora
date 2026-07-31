@@ -107,7 +107,7 @@ describe('IncludedScreen (S14)', () => {
     // existing neutral third-person "their" unchanged.
     expect(getByText('Everything your journal comes with:')).toBeTruthy();
     expect(queryByText('Everything their journal comes with:')).toBeNull();
-    expect(getByText('their illustrated portrait and storybook pages')).toBeTruthy();
+    expect(getByText('Their illustrated portrait and storybook pages')).toBeTruthy();
   });
 
   it('uses "your journal" in the headline when three or more kids are tagged', () => {
@@ -119,7 +119,7 @@ describe('IncludedScreen (S14)', () => {
     const { getByText } = renderScreen();
 
     expect(getByText('Everything your journal comes with:')).toBeTruthy();
-    expect(getByText('their illustrated portrait and storybook pages')).toBeTruthy();
+    expect(getByText('Their illustrated portrait and storybook pages')).toBeTruthy();
   });
 
   it('advances "Almost done" to the paywall route', () => {

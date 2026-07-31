@@ -106,7 +106,14 @@ export function useOnboardingKidPossessive(): string {
       return fromDraft;
     }
 
-    if (members.length === 0) {
+    // More than one child in the family: never single one of them out.
+    // Device testing (2026-07-31) showed the previous `members[0]` fallback
+    // rendering "Everything Enzo's journal comes with:" to a parent who had
+    // entered both Enzo and Mara -- exactly the pick-a-favorite wound spec
+    // decision 8 exists to avoid. The tag-count sort makes `members[0]`
+    // *a* reasonable kid, but on these screens there is no reason to choose
+    // at all: the neutral phrase reads correctly for any family size.
+    if (members.length !== 1) {
       return NEUTRAL_POSSESSIVE;
     }
 

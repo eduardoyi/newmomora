@@ -450,21 +450,36 @@ describe('Post-commit onboarding screens read real server data, not the cleared 
     // fallback -- because included.tsx read draft.kidNames/draft.capture
     // directly, and both are now empty. It must resolve Lila from real
     // server data instead. ----
+    // This fixture is a TWO-child family (Lila & Miguel), so the correct
+    // output is the neutral form, not either kid's name. It used to assert
+    // "Everything Lila's journal comes with:" -- which was the device-
+    // reported bug (2026-07-31): singling out one child of two is the
+    // pick-a-favorite wound spec decision 8 exists to avoid.
+    //
+    // Note this assertion can no longer distinguish "resolved correctly
+    // from server data" from "fell through to the last-resort neutral",
+    // since both produce the same string. The single-child server-data
+    // path is covered at the unit level instead, by
+    // use-onboarding-kid-possessive.test.tsx's "resolves a single real
+    // family member unambiguously once the draft is empty".
     utils = renderTree(<IncludedScreen />, utils);
     await waitFor(() => {
-      expect(utils.getByText("Everything Lila's journal comes with:")).toBeTruthy();
+      expect(utils.getByText('Everything your journal comes with:')).toBeTruthy();
     });
-    expect(utils.queryByText(/Everything their journal comes with/)).toBeNull();
-    expect(utils.getByText("Lila's illustrated portrait and storybook pages")).toBeTruthy();
+    expect(utils.queryByText(/Everything Lila's journal comes with/)).toBeNull();
+    expect(utils.getByText('Their illustrated portrait and storybook pages')).toBeTruthy();
 
-    // ---- S15: identical bug, same fix. ----
+    // ---- S15: identical bug, same fix, and the same two-child correction
+    // as S14 above. The paywall builds "Turn {X} little moments ..." rather
+    // than an "{X} journal" phrase, so it keeps the neutral "their" here
+    // instead of journalPossessive's "your" flavor. ----
     utils = renderTree(<PaywallScreen />, utils);
     await waitFor(() => {
       expect(
-        utils.getByText("Turn Lila's little moments into something you'll hold forever."),
+        utils.getByText("Turn their little moments into something you'll hold forever."),
       ).toBeTruthy();
     });
-    expect(utils.queryByText(/Turn their little moments/)).toBeNull();
+    expect(utils.queryByText(/Turn Lila's little moments/)).toBeNull();
 
     // ---- S16 (WP6's target resolution, extended by WP7-A's pin below):
     // the CTA must be enabled and must resolve Lila (the kid tagged on the

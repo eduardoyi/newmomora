@@ -15,7 +15,7 @@ import { colors, radius } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useOnboardingKidPossessive } from '@/hooks/use-onboarding-kid-possessive';
 import { onboardingPaywallRoute } from '@/lib/onboarding-routes';
-import { journalPossessive } from '@/utils/onboarding-copy';
+import { capitalizeFragment, journalPossessive } from '@/utils/onboarding-copy';
 
 const PROMISE_TITLE = 'Your memories are always yours.';
 const PROMISE_BODY = "Export everything, free, whenever you want, even if you cancel someday. We've been burned by those apps too.";
@@ -45,7 +45,11 @@ export default function IncludedScreen() {
   const items = useMemo(
     () => [
       'Unlimited memories: talk, type, photos, video',
-      `${resolvedPossessive} illustrated portrait and storybook pages`,
+      // Sentence-initial in a bullet, so it needs capitalizing: this used to
+      // always be a proper name ("Lila's") and read correctly by accident.
+      // Multi-child families now resolve to the neutral fragment, which is
+      // lowercase by design (see kidsPossessive's doc comment).
+      `${capitalizeFragment(resolvedPossessive)} illustrated portrait and storybook pages`,
       'The whole family can join, grandparents included, free',
       'Every memory searchable, finally out of the camera roll',
     ],

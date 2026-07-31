@@ -78,15 +78,20 @@ describe('useOnboardingKidPossessive', () => {
     expect(result.current).toBe('their');
   });
 
-  it('falls back to real family-member data once the draft is empty (post-commit)', () => {
+  it('stays neutral for a multi-child family once the draft is empty (post-commit)', () => {
     mockDraft({ kidNames: [], capture: null });
     mockMembers([{ id: 'm-lila', name: 'Lila' }, { id: 'm-miguel', name: 'Miguel' }]);
 
     const { result } = renderHook(() => useOnboardingKidPossessive());
 
-    // fetchFamilyMembers sorts by tag count -- the first entry is the kid
-    // tagged on the first memory (or, absent any tag, the first-created).
-    expect(result.current).toBe("Lila's");
+    // Device testing (2026-07-31): this used to return the first entry of
+    // the tag-count-sorted list ("Lila's"), which rendered "Everything
+    // Lila's journal comes with:" to a parent who had entered both kids --
+    // the pick-a-favorite wound spec decision 8 exists to avoid. There is
+    // no need to choose on these screens: the neutral phrase reads
+    // correctly at any family size (and journalPossessive flavors it
+    // "your" where a screen builds "{X} journal").
+    expect(result.current).toBe('their');
   });
 
   it('resolves a single real family member unambiguously once the draft is empty', () => {

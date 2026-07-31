@@ -64,12 +64,42 @@ describe('OnbShell', () => {
     expect(scrollView.props.mode).toBe('insets');
     expect(scrollView.props.bounces).toBe(false);
     expect(scrollView.props.overScrollMode).toBe('never');
-    expect(scrollView.props.enabled).toBe(false);
-    expect(scrollView.props.onContentSizeChange).toEqual(expect.any(Function));
-    expect(scrollView.props.onLayout).toEqual(expect.any(Function));
+    // Regression (2026-07-31, later same day, file header cause D): this
+    // used to be `enabled={isContentOverflowing}`, which permanently
+    // disabled KeyboardAwareScrollView's own keyboard-avoidance on short,
+    // centered steps (S6/S7) once `KeyboardAvoidingView` stopped resizing
+    // the measured viewport on keyboard-open. `enabled` must stay `true`
+    // regardless of measured content size -- see the next test.
+    expect(scrollView.props.enabled).toBe(true);
   });
 
-  it('only enables keyboard spacer scrolling after content exceeds the measured viewport', () => {
+  it('keeps keyboard-avoidance enabled even when content does not overflow the viewport (regression: footer covering the focused input on S6/S7)', () => {
+    const { getByTestId } = renderShell(
+      <OnbShell footer={<Pressable testID="onb-primary-action" />}>
+        <TextInput testID="onb-lower-input" />
+      </OnbShell>,
+    );
+
+    // Nothing in this shell measures content vs. viewport anymore to gate
+    // `enabled` -- it's simply always on (see file header, cause D, and
+    // `isOnboardingContentOverflowing`'s doc comment for why that measured
+    // signal is kept exported but no longer consulted here). A short,
+    // well-under-viewport content size like S6/S7's must not flip this
+    // back off.
+    expect(getByTestId('onb-shell-scroll').props.enabled).toBe(true);
+    expect(isOnboardingContentOverflowing(300, 800)).toBe(false);
+  });
+
+  it('folds the rendered footer height into bottomOffset, so a scrolled input clears the footer as well as the keyboard', () => {
+    // Regression (file header cause E): `bottomOffset` used to be a fixed
+    // caret-to-footer gap sized for a footer that sat *below* the scroll
+    // viewport in normal flow. Now that `KeyboardStickyView` translates the
+    // footer *over* the viewport instead, KeyboardAwareScrollView's own
+    // "am I visible above the keyboard" math has no idea the footer is
+    // there unless the footer's rendered height is folded into
+    // `bottomOffset` too -- otherwise a focused input (or anything just
+    // below it, like S6's "+ Add another kiddo" affordance or a helper
+    // text) can clear the keyboard and still end up under the footer.
     const { getByTestId } = renderShell(
       <OnbShell footer={<Pressable testID="onb-primary-action" />}>
         <TextInput testID="onb-lower-input" />
@@ -77,14 +107,17 @@ describe('OnbShell', () => {
     );
 
     const scrollView = getByTestId('onb-shell-scroll');
-    expect(scrollView.props.enabled).toBe(false);
+    const footer = getByTestId('onb-shell-footer');
+    // `onLayout` is registered one level up, on the native `SafeAreaView`
+    // `KeyboardStickyView` translates -- the same box whose rendered size
+    // is what actually overlaps content once it's moved on screen.
+    const footerSafeArea = footer.parent;
 
-    fireEvent(scrollView, 'layout', { nativeEvent: { layout: { height: 480 } } });
-    fireEvent(scrollView, 'contentSizeChange', 360, 480);
-    expect(getByTestId('onb-shell-scroll').props.enabled).toBe(false);
+    expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
 
-    fireEvent(scrollView, 'contentSizeChange', 360, 800);
-    expect(getByTestId('onb-shell-scroll').props.enabled).toBe(true);
+    fireEvent(footerSafeArea, 'layout', { nativeEvent: { layout: { height: 140 } } });
+
+    expect(getByTestId('onb-shell-scroll').props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE + 140);
   });
 
   it('does not reserve a phantom action area on steps without a footer', () => {
