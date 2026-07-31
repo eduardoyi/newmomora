@@ -10,7 +10,7 @@
 // already saved into their existing family.
 import { useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { OnbShell } from '@/components/onboarding/onb-shell';
@@ -29,11 +29,63 @@ import {
 } from '@/lib/onboarding-routes';
 import { resolvePostAuthDestination } from '@/lib/onboarding-routing';
 import { timelineRoute } from '@/lib/routes';
+import type { PostMediaMemoryInput } from '@/services/memory-posting';
 import { commitOnboarding } from '@/services/onboarding';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 60;
+
+const ENQUEUE_MEDIA_UPLOAD_ATTEMPTS = 5;
+const ENQUEUE_MEDIA_UPLOAD_RETRY_DELAY_MS = 50;
+
+/**
+ * Hands a captured photo/video off to usePendingMemoryUploads().enqueue(),
+ * tolerating the brief window where its own user/family guard hasn't
+ * caught up to the membership invalidation the caller just awaited.
+ * TanStack Query's notifyManager can take more than one setTimeout(0)
+ * macrotask hop to turn that invalidation into a re-render (batched
+ * notifications can reschedule themselves once more before actually
+ * firing -- see @tanstack/query-core's notifyManager), so a single yield
+ * is not reliably enough: running this screen's real-hooks regression test
+ * concurrently with sibling suites (parallel jest workers, matching real
+ * device contention better than a solo run) reproduced "You must have a
+ * family to save a memory" for a fresh, correctly-authenticated returning
+ * owner roughly 1 run in 5 with a single yield. A short, bounded retry
+ * survives that without gambling on a fixed tick count, and without
+ * reaching into usePendingMemoryUploads()'s internals (out of this file's
+ * scope) -- see src/services/onboarding.ts's
+ * CommitOnboardingResult.pendingMediaUpload doc comment for why this can't
+ * just run immediately inside commitOnboarding instead.
+ */
+async function enqueuePendingMediaUpload(
+  pendingMediaUpload: PostMediaMemoryInput,
+  enqueueRef: { current: (input: PostMediaMemoryInput) => void },
+): Promise<void> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < ENQUEUE_MEDIA_UPLOAD_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, ENQUEUE_MEDIA_UPLOAD_RETRY_DELAY_MS));
+    }
+
+    try {
+      enqueueRef.current(pendingMediaUpload);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  // The family/kids/text are already safely committed at this point --
+  // losing just the photo/video attachment in this unlikely case isn't
+  // worth a hard onboarding error; same tolerance commitOnboarding already
+  // applies to a failed notification-preference write.
+  console.warn(
+    'Failed to enqueue onboarding photo upload',
+    lastError instanceof Error ? lastError.message : 'unknown',
+  );
+}
 
 export default function OnboardingCodeScreen() {
   const params = useLocalSearchParams<{ email?: string }>();
@@ -44,6 +96,23 @@ export default function OnboardingCodeScreen() {
   const { enqueue } = usePendingMemoryUploads();
   const { refetchMemberships } = useFamily();
   const queryClient = useQueryClient();
+
+  // finishAfterCommit's async chain starts on the render right before the
+  // code is submitted -- necessarily pre-auth, since submitting is what
+  // triggers verifyOtp. A plain destructured `enqueue` would stay bound to
+  // that pre-auth snapshot (user: null) for the rest of THIS call no matter
+  // how many renders happen afterward while awaiting verifyOtp/
+  // commitOnboarding -- that stale closure is what threw "You must be
+  // signed in to save a memory" for an already-verified returning owner
+  // (docs/features/onboarding.md decision 18). Keeping the latest `enqueue`
+  // in a ref (updated every render) and reading `.current` at call time
+  // fixes that; see src/services/onboarding.ts's
+  // CommitOnboardingResult.pendingMediaUpload doc comment for the other
+  // half of this fix (also waiting for the membership invalidation below
+  // before calling it, so its own user/family guard sees a family React
+  // actually knows about).
+  const enqueueRef = useRef(enqueue);
+  enqueueRef.current = enqueue;
 
   const [code, setCode] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -73,9 +142,22 @@ export default function OnboardingCodeScreen() {
   const finishAfterCommit = async () => {
     setProcessingLabel('Setting up your journal…');
 
-    const { data, error } = await commitOnboarding(draft, { enqueueMediaUpload: enqueue });
+    const { data, error, existingFamilyId } = await commitOnboarding(draft);
 
     if (error || !data) {
+      if (existingFamilyId) {
+        // This failure happened after commitOnboarding had already
+        // confirmed the signed-in user owns a real, existing family
+        // (decision 18) -- their account is real even though this
+        // attempt's memory failed to save. Never strand a returning owner
+        // on this screen with a dead-end retry: the capture was already
+        // saved locally on this device, so land them in their journal
+        // instead of a red error.
+        await clear();
+        router.replace(timelineRoute);
+        return;
+      }
+
       setIsProcessing(false);
       setErrorMessage(error?.message ?? 'Could not finish setting up your journal. Please try again.');
       return;
@@ -92,6 +174,17 @@ export default function OnboardingCodeScreen() {
     // branches below: a new family and a resolved existing one both produce
     // a real `familyId` above.
     await queryClient.invalidateQueries({ queryKey: familyMembershipsQueryKey });
+
+    // Only now -- after FamilyProvider's membership cache is guaranteed to
+    // know about `data.familyId` -- is it safe to hand a media capture to
+    // usePendingMemoryUploads().enqueue(): its own user/family guard reads
+    // that same React state, which (for a brand-new family especially) has
+    // no way to know about it any earlier. See
+    // src/services/onboarding.ts's CommitOnboardingResult.pendingMediaUpload
+    // doc comment.
+    if (data.pendingMediaUpload) {
+      await enqueuePendingMediaUpload(data.pendingMediaUpload, enqueueRef);
+    }
 
     if (data.isNewFamily) {
       // A genuinely new owner continues the trust/paywall/portrait arc --
@@ -318,6 +411,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     color: 'transparent',
     left: 0,
+    opacity: 0,
     position: 'absolute',
     right: 0,
     top: 0,

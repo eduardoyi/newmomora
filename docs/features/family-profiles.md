@@ -24,6 +24,7 @@ Family profiles power memory tagging and age-aware AI character portraits. Each 
 - **Full-screen portrait:** tapping a ready illustrated portrait on the family-member detail page opens it in the same warm, dark full-screen viewer used by memory media — including its pinch/double-tap zoom (see [media-memories.md](./media-memories.md)). The original profile photo is not substituted when an illustrated portrait is unavailable.
 - **Durable recovery:** the client never changes portrait status or claim fields. An owner/manager automatically re-invokes the server only once for an unclaimed pending row older than three minutes, or a claimed attempt older than five minutes thirty seconds; failed versions remain manual retry only. Viewers can observe/poll but cannot trigger recovery. A fresh active attempt disables Regenerate.
 - **Portrait-completion retrigger (cross-feature):** portrait publication or terminal failure retriggers up to three eligible pending illustrated memories that were waiting on this portrait. The durable bridge uses a separate signed internal request and rechecks the original actor's current family-manager access; it never forwards a user JWT through Cloudflare. The client memory recovery loop remains the backstop. See [memories.md](./memories.md) "Illustration deferral" and [TECH_SPEC §4.1/§4.3](../TECH_SPEC.md#41-generate-portrait-illustration) for the full contract.
+- **Incomplete profile state:** a member is "complete" once it has name + DOB + a photo (`isFamilyMemberProfileIncomplete`, `src/utils/family-members.ts` — the single shared definition; a `pending`/`generating` portrait still counts as having a photo). Onboarding's name-only kids (see [onboarding.md](./onboarding.md) decision 8) start incomplete. The family tab's `CastCard` (`src/components/cast-card.tsx`) shows a dashed sketch-outline ring on the portrait slot for every viewer of an incomplete profile (a neutral status signal, not an instruction), plus a quiet Caveat-script prompt ("Tap to add {name}'s birthday & photo") in place of the normal age/nickname line -- but only when its `canEdit` prop is true (defaults to `false`, fail closed). `app/(app)/(tabs)/family.tsx` passes `canEdit={canEditFamilyContent(role)}`, so owners/managers see the actionable prompt and tapping the card routes to the edit screen (`resolveMemberDestination`); viewers see the ring but not the prompt, and always get the normal (read-only) detail route -- the prompt is never shown promising an action a viewer's tap can't reach. No red, no badges, no counters (per `docs/plans/onboarding-design-brief.md`'s tone rule). The memory tag picker's `MemberChip` (`src/components/memory-tag-picker.tsx`) shows the same underlying signal much lighter and for every role — a thin dashed ring on the avatar only, no text, chip stays fully selectable/taggable. No role-gating needed here: `new-memory.tsx`/`memory/[id]/edit.tsx` already redirect non-editors before the picker ever renders, so anyone who can see a chip can already act on it.
 
 ## Architecture
 
@@ -149,14 +150,14 @@ Library picker options request EXIF (never base64) only to read a trustworthy ca
 
 | File | Covers |
 |------|--------|
-| `src/utils/family-members.test.ts` | Validation, age formatting |
+| `src/utils/family-members.test.ts` | Validation, age formatting, `isFamilyMemberProfileIncomplete` |
 | `src/utils/profile-photo.test.ts` | Profile photo resize before R2 upload |
 | `src/utils/family-profile-photo-picker.test.ts` | Camera/library picker permissions, options, content types, pending-result parsing |
 | `src/utils/native-permissions.test.ts` | Existing grants, request gating, permanent denial, presentation settling |
 | `src/utils/storage-keys.test.ts` | Key builder |
 | `src/utils/e2e-fixtures.test.ts` | E2E profile fixture loader |
 | `src/services/media.test.ts` | Presigned upload (native FileSystem path) |
-| `src/components/cast-card.test.tsx` | Family-member detail portrait tap affordance |
+| `src/components/cast-card.test.tsx` | Family-member detail portrait tap affordance, incomplete-profile prompt/routing affordance, viewer prompt suppression |
 | `src/components/keyboard-aware-form-screen.test.tsx` | Edge-to-edge keyboard-aware form configuration and focused-input offset |
 
 ### Integration tests
@@ -212,6 +213,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
+| 2026-07-31 | Added an inline "incomplete profile" state (name-only onboarding kids missing DOB and/or photo): a shared `isFamilyMemberProfileIncomplete` predicate, a dashed sketch-outline ring (shown to every role) plus a quiet Caveat-script prompt gated on a new `CastCard` `canEdit` prop (defaults `false`; only owners/managers see the actionable text, so a viewer is never told to do something their tap can't reach), edit-screen routing for owners/managers via `resolveMemberDestination` (viewers always land on the normal detail screen), and a much lighter dashed-avatar hint on the memory tag picker's chips (never disabled, shown to every role since tagging itself isn't role-gated) |
 | 2026-07-22 | Moved portrait execution to the existing Cloudflare Worker/Workflow with a Supabase publication bridge, 3:00/5:30 recovery, and signed dependent-memory retriggering |
 | 2026-07-20 | Portrait generation retriggers memory illustrations that deferred waiting on it (see memories.md "Illustration deferral") |
 | 2026-07-15 | Adopt native IME-inset-aware form scrolling for Android edge-to-edge layouts |

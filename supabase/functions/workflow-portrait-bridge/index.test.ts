@@ -1,4 +1,4 @@
-import { assertEquals } from 'jsr:@std/assert@1';
+import { assertEquals, assertThrows } from 'jsr:@std/assert@1';
 import {
   classifyPortraitNonceInsertError,
   getPortraitReconcileAction,
@@ -239,7 +239,7 @@ Deno.test('portrait bridge handler validates narrow get, reserve, publish, fail,
       await signedRequest({ operation: 'reserve_attempt', jobId: JOB_ID, provider: 'primary', model: 'gpt-image-2', attemptNumber: 1 }, '33333333-3333-4333-8333-333333333335'),
       { createServiceClient: () => reserve.client as never },
     );
-    assertEquals(await reserveResponse.json(), { outcome: 'reserved_now', protocolVersion: 2 });
+    assertEquals(await reserveResponse.json(), { reserved: true });
     assertEquals(reserve.calls.rpc, ['reserve_portrait_generation_provider_attempt']);
 
     const alreadyPublished = createHandlerClient({ publishOutcome: { published: false, already_published: true, old_key: 'portraits/old.webp' } });
@@ -415,7 +415,7 @@ Deno.test('portrait bridge retriggers only memories tagged with the resolved por
   });
 });
 
-Deno.test('portrait bridge exposes only frozen input and normalizes already-published cleanup', async () => {
+Deno.test('portrait bridge exposes frozen input without legacy usage protocol fields', async () => {
   assertEquals(toPortraitWorkflowJobInput({
     id: JOB_ID,
     output_key: 'portraits/new.webp',
@@ -433,8 +433,6 @@ Deno.test('portrait bridge exposes only frozen input and normalizes already-publ
       sourcePhotoKey: 'private/source.jpg',
       styleReferenceKey: '_assets/styles/default.png',
       prompt: 'private prompt',
-      usageRequestId: null,
-      providerProtocolVersion: null,
     },
   });
   assertEquals(mapPortraitPublishOutcome({ published: false, already_published: true, old_key: 'portraits/old.webp' }), {
@@ -449,4 +447,28 @@ Deno.test('portrait bridge exposes only frozen input and normalizes already-publ
     status: 'superseded', outputKey: 'portraits/new.webp', expectedOutputKey: 'portraits/new.webp',
   }), 'delete');
   assertEquals(classifyPortraitNonceInsertError({ code: '23505' }), 'replay');
+});
+
+Deno.test('portrait bridge emits only complete v2 usage protocol fields', () => {
+  const base = {
+    id: JOB_ID,
+    output_key: 'portraits/new.webp', old_portrait_key: null,
+    provider_deadline_at: '2026-07-22T12:05:00.000Z', source_photo_key: 'private/source.jpg',
+    style_reference_key: '_assets/styles/default.png', portrait_prompt: 'private prompt',
+  };
+  const usageRequestId = '99999999-9999-4999-8999-999999999999';
+  assertEquals(toPortraitWorkflowJobInput({
+    ...base, usage_request_id: usageRequestId, usage_protocol_version: 2,
+  }).job, {
+    jobId: JOB_ID, outputKey: 'portraits/new.webp', oldPortraitKey: null,
+    providerDeadlineAt: base.provider_deadline_at, sourcePhotoKey: base.source_photo_key,
+    styleReferenceKey: base.style_reference_key, prompt: base.portrait_prompt,
+    usageRequestId, providerProtocolVersion: 2,
+  });
+  assertThrows(() => toPortraitWorkflowJobInput({
+    ...base, usage_request_id: null, usage_protocol_version: 2,
+  }), TypeError, 'requires a usage request id');
+  assertThrows(() => toPortraitWorkflowJobInput({
+    ...base, usage_request_id: null, usage_protocol_version: 3,
+  }), TypeError, 'Unsupported portrait workflow usage protocol version');
 });

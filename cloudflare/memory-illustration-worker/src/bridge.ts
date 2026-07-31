@@ -97,8 +97,13 @@ export async function reserveMemoryProviderAttemptV1(
   },
 ): Promise<boolean> {
   const response = await callBridge<unknown>(env, 'reserve_attempt', payload);
-  if (!isRecord(response) || typeof response.reserved !== 'boolean') return invalidBridgeResponse();
-  return response.reserved;
+  if (!isRecord(response)) return invalidBridgeResponse();
+  if (typeof response.reserved === 'boolean') return response.reserved;
+  if (response.protocolVersion === 2 &&
+    (response.outcome === 'reserved_now' || response.outcome === 'already_reserved' || response.outcome === 'denied')) {
+    return response.outcome === 'reserved_now';
+  }
+  return invalidBridgeResponse();
 }
 
 export async function recordMemoryUsage(env: Env, payload: Record<string, unknown>): Promise<void> {

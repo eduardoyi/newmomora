@@ -308,8 +308,10 @@ describe('JoinEmailScreen (J4)', () => {
     const codeInput = getByTestId('onb-join-email-code-input');
     expect(codeInput.props.accessibilityLabel).toBe('Verification code');
     expect(codeInput.props.cursorColor).toBe('transparent');
-    expect(codeInput.props.style).toEqual(expect.objectContaining({ color: 'transparent' }));
-    expect(codeInput.props.style.opacity).toBeUndefined();
+    // opacity: 0 alongside color: 'transparent' -- color alone does not
+    // reliably hide TextInput text on Android (a stray duplicate of the
+    // typed code was visible next to the boxes on a real device).
+    expect(codeInput.props.style).toEqual(expect.objectContaining({ color: 'transparent', opacity: 0 }));
 
     expect(requestSignUpOtp).toHaveBeenCalledWith({ name: 'Grandma Ana', email: 'ana@example.com' });
     expect(mockedDiscardAnonymousSession).toHaveBeenCalled();

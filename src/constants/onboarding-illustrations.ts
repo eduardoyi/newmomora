@@ -11,6 +11,17 @@
 // content from src/constants/onboarding-memories.ts (artifactMemories /
 // paywallBackdropMemories) instead of sharing anonymous placeholder slots.
 //
+// `portrait-sample` is also gone (S16 bugfix pass, see
+// app/(onboarding)/portrait.tsx and src/constants/onboarding-portrait-pairs.ts):
+// it held a real generated portrait of one of the founders' own children,
+// used as a fixed "this is what your child's illustration will look like"
+// stand-in on S16's pick state and as a decorative frame on its
+// painting/failed states -- both read as implying a specific child's
+// identity. S16 now rotates through real demo-account before/after pairs
+// on the pick state and shows a neutral empty frame on painting/failed
+// instead. Removed here (registry + type) and its asset deleted once this
+// was confirmed to be the slot's last consumer.
+//
 // `description` is verbatim from the handoff's `placeholder` text (source:
 // /project/src/screens/onboarding-story.jsx, onboarding-trust.jsx,
 // onboarding-join.jsx) and doubles as the accessibility label and the dev
@@ -31,7 +42,6 @@ export type OnboardingIllustrationSlotId =
   | 'founders'
   | 'kids-doodle'
   | 'family-nest'
-  | 'portrait-sample'
   | 'join-door';
 
 export interface OnboardingIllustrationSlot {
@@ -86,12 +96,6 @@ export const onboardingIllustrations: Record<OnboardingIllustrationSlotId, Onboa
     emotion: 'calm',
     scene: 'window',
     asset: require('../../assets/onboarding/family-nest.webp'),
-  },
-  'portrait-sample': {
-    description: 'Sample portrait',
-    emotion: 'tender',
-    scene: 'bedroom',
-    asset: require('../../assets/onboarding/portrait-sample.webp'),
   },
   'join-door': {
     description: 'Illustration: a door with warm light under it',

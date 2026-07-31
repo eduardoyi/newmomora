@@ -1,0 +1,66 @@
+[
+  {
+    "memberId": "667b1438-1cb9-5db1-8096-dc71c2cacdee",
+    "name": "Lucía",
+    "slug": "lucia",
+    "photoFile": "lucia-photo.webp",
+    "portraitFile": "lucia-portrait.webp",
+    "referenceDate": "2026-04-18"
+  },
+  {
+    "memberId": "140f7b05-c294-5c43-b0b0-b4552cd4bcb9",
+    "name": "Rafael",
+    "slug": "rafael",
+    "photoFile": "rafael-photo.webp",
+    "portraitFile": "rafael-portrait.webp",
+    "referenceDate": "2026-04-18"
+  },
+  {
+    "memberId": "12bacbc4-9927-5f55-9a56-c76a59798da6",
+    "name": "Eunji",
+    "slug": "eunji",
+    "photoFile": "eunji-photo.webp",
+    "portraitFile": "eunji-portrait.webp",
+    "referenceDate": "2026-04-18"
+  },
+  {
+    "memberId": "841ad9c0-e6dc-56a9-a2f5-da5f8f4c5033",
+    "name": "Ari",
+    "slug": "ari",
+    "photoFile": "ari-photo.webp",
+    "portraitFile": "ari-portrait.webp",
+    "referenceDate": "2026-04-18"
+  },
+  {
+    "memberId": "813118f5-7321-5879-8efe-b4ed4a1b44e7",
+    "name": "Theo",
+    "slug": "theo",
+    "photoFile": "theo-photo.webp",
+    "portraitFile": "theo-portrait.webp",
+    "referenceDate": "2026-04-18"
+  },
+  {
+    "memberId": "6428a115-e6a1-579f-a3ff-1daaad27a4a4",
+    "name": "Maya",
+    "slug": "maya",
+    "photoFile": "maya-photo.webp",
+    "portraitFile": "maya-portrait.webp",
+    "referenceDate": "2026-04-18"
+  },
+  {
+    "memberId": "41b86694-8d6e-5199-bf16-fabcc077ca83",
+    "name": "Gabriel",
+    "slug": "gabriel",
+    "photoFile": "gabriel-photo.webp",
+    "portraitFile": "gabriel-portrait.webp",
+    "referenceDate": "2026-04-18"
+  },
+  {
+    "memberId": "c5b6352f-166f-54b3-b309-47428e6ea13a",
+    "name": "Nora",
+    "slug": "nora",
+    "photoFile": "nora-photo.webp",
+    "portraitFile": "nora-portrait.webp",
+    "referenceDate": "2026-04-18"
+  }
+]

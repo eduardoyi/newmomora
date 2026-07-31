@@ -127,6 +127,10 @@ export function classifyPortraitNonceInsertError(error: { code?: string } | null
 }
 
 export function toPortraitWorkflowJobInput(data: PortraitWorkflowJobInputRow) {
+  const usageProtocol = toPortraitWorkflowUsageProtocol(
+    data.usage_request_id,
+    data.usage_protocol_version,
+  );
   return {
     job: {
       jobId: data.id,
@@ -136,10 +140,29 @@ export function toPortraitWorkflowJobInput(data: PortraitWorkflowJobInputRow) {
       sourcePhotoKey: data.source_photo_key,
       styleReferenceKey: data.style_reference_key,
       prompt: data.portrait_prompt,
-      usageRequestId: data.usage_request_id ?? null,
-      providerProtocolVersion: data.usage_protocol_version ?? null,
+      ...usageProtocol,
     },
   };
+}
+
+function toPortraitWorkflowUsageProtocol(
+  usageRequestId: string | null | undefined,
+  providerProtocolVersion: number | null | undefined,
+) {
+  if (providerProtocolVersion === 2) {
+    if (typeof usageRequestId !== 'string' || !UUID_PATTERN.test(usageRequestId)) {
+      throw new TypeError('A v2 portrait workflow job requires a usage request id');
+    }
+    return { usageRequestId, providerProtocolVersion: 2 as const };
+  }
+  if (providerProtocolVersion !== null && providerProtocolVersion !== undefined &&
+    providerProtocolVersion !== 1) {
+    throw new TypeError('Unsupported portrait workflow usage protocol version');
+  }
+  if (usageRequestId !== null && usageRequestId !== undefined) {
+    throw new TypeError('A legacy portrait workflow job cannot carry a usage request id');
+  }
+  return {};
 }
 
 export function toPortraitProviderReservationResult(data: unknown): {
@@ -385,7 +408,9 @@ export async function handleWorkflowPortraitBridge(
             p_attempt_number: 1,
           });
         if (error) throw error;
-        return jsonResponse(toPortraitProviderReservationResult(data));
+        return isV2
+          ? jsonResponse(toPortraitProviderReservationResult(data))
+          : jsonResponse({ reserved: Boolean(data) });
       }
       case 'record_usage': {
         if (!isValidUsageEvent(body)) {

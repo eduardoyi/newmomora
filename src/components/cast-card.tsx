@@ -5,12 +5,42 @@ import { FamilyProfilePortraitPhoto } from '@/components/family-profile-portrait
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { colors, emotionColors, fonts, radius, type EmotionName } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
-import { formatAgeFromDob } from '@/utils/family-members';
+import {
+  formatAgeFromDob,
+  getProfilePortraitPhotoKey,
+  isFamilyMemberProfileIncomplete,
+} from '@/utils/family-members';
 
 const PORTRAIT_TINTS: EmotionName[] = ['tender', 'joy', 'wonder', 'calm', 'mischief'];
 
 export function memberTint(member: FamilyMember): EmotionName {
   return PORTRAIT_TINTS[member.name.charCodeAt(0) % PORTRAIT_TINTS.length];
+}
+
+/**
+ * A quiet, warm invitation rather than a nagging checklist item -- see
+ * docs/plans/onboarding-design-brief.md's "no red, no badges, no counters,
+ * no warning icons" rule. Names exactly what is still missing so the
+ * different tap destination (edit, not detail -- see family.tsx routing)
+ * isn't a surprise.
+ *
+ * Only ever shown when `canEdit` is true (see `CastCard`'s `showIncompletePrompt`)
+ * -- a viewer who can't edit would read this as an instruction the app then
+ * can't carry out, since a viewer's tap always lands on the read-only detail
+ * screen (app/(app)/(tabs)/family.tsx's `resolveMemberDestination`), never
+ * the edit screen this prompt is describing.
+ */
+function incompleteProfilePrompt(member: FamilyMember): string {
+  const hasDob = Boolean(member.date_of_birth);
+  const hasPhoto = Boolean(getProfilePortraitPhotoKey(member));
+
+  if (!hasDob && !hasPhoto) {
+    return `Tap to add ${member.name}'s birthday & photo`;
+  }
+  if (!hasDob) {
+    return `Tap to add ${member.name}'s birthday`;
+  }
+  return `Tap to add ${member.name}'s photo`;
 }
 
 interface CastCardProps {
@@ -21,6 +51,14 @@ interface CastCardProps {
   isPortraitHidden?: boolean;
   onShowPortrait?: () => void;
   onPress?: () => void;
+  /**
+   * Whether the viewer can act on the incomplete-profile prompt (owner/manager
+   * -- `canEditFamilyContent`, src/utils/roles.ts). Defaults to `false` (fail
+   * closed): omitting this prop must never risk showing an instruction a
+   * viewer can't follow through on, since tapping never reaches the edit
+   * screen for them.
+   */
+  canEdit?: boolean;
 }
 
 export function CastCard({
@@ -31,12 +69,25 @@ export function CastCard({
   isPortraitHidden = false,
   onShowPortrait,
   onPress,
+  canEdit = false,
 }: CastCardProps) {
   const emo = emotionColors[memberTint(member)];
   const age = member.date_of_birth ? formatAgeFromDob(member.date_of_birth) : null;
+  const isIncomplete = isFamilyMemberProfileIncomplete(member);
+  // The dashed ring stays for every viewer -- it's a neutral status signal
+  // ("this profile isn't fully filled in"), not an instruction, so it makes
+  // no promise the app can't keep. The script-text CTA is the part that
+  // asserts something actionable ("Tap to add..."), so that alone is gated
+  // on whether tapping can actually get there.
+  const showIncompletePrompt = isIncomplete && canEdit;
   return (
     <View style={styles.castCard}>
-      <View style={styles.castPortraitSlot}>
+      <View
+        style={[
+          styles.castPortraitSlot,
+          isIncomplete && !isPortraitHidden && styles.castPortraitSlotIncomplete,
+        ]}
+      >
         {isPortraitHidden && onShowPortrait ? (
           <ContentHiddenNotice
             label="AI portrait hidden"
@@ -85,11 +136,20 @@ export function CastCard({
         disabled={!onPress}
         onPress={onPress}
         style={({ pressed }) => [styles.castInfo, pressed && styles.portraitPressed]}
+        testID={`family-member-card-info-${member.id}`}
       >
         <Text style={styles.castName}>{member.name}</Text>
-        {age && <Text style={styles.castAge}>{age}</Text>}
-        {member.nicknames && member.nicknames.length > 0 && (
-          <Text style={styles.castNicknames}>“{member.nicknames.join(', ')}”</Text>
+        {showIncompletePrompt ? (
+          <Text style={styles.incompletePrompt} testID={`family-member-incomplete-${member.id}`}>
+            {incompleteProfilePrompt(member)}
+          </Text>
+        ) : (
+          <>
+            {age && <Text style={styles.castAge}>{age}</Text>}
+            {member.nicknames && member.nicknames.length > 0 && (
+              <Text style={styles.castNicknames}>“{member.nicknames.join(', ')}”</Text>
+            )}
+          </>
         )}
       </Pressable>
     </View>
@@ -116,6 +176,14 @@ const styles = StyleSheet.create({
   castPortraitPressable: {
     height: 120,
     width: 120,
+  },
+  // Sketch-outline spirit from the Claude Design handoff's unpainted-kid
+  // avatar (docs/plans/onboarding-design-brief.md's dropped CastWaitingState)
+  // -- a dashed neutral ring, not a red/warning treatment.
+  castPortraitSlotIncomplete: {
+    borderColor: colors.borderStrong,
+    borderStyle: 'dashed',
+    borderWidth: 2,
   },
   hiddenPortrait: {
     borderRadius: 0,
@@ -149,6 +217,12 @@ const styles = StyleSheet.create({
     fontFamily: fonts.script,
     fontSize: 16,
     color: colors.ink2,
+    marginTop: 2,
+  },
+  incompletePrompt: {
+    fontFamily: fonts.script,
+    fontSize: 18,
+    color: colors.primaryDark,
     marginTop: 2,
   },
   historyButton: {

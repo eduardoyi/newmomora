@@ -215,6 +215,40 @@ describe('portrait dispatch authentication', () => {
 });
 
 describe('portrait Workflow', () => {
+  it('accepts serialized legacy portrait bridge nulls as a v1 job', async () => {
+    const current = job();
+    const { usageRequestId: _usageRequestId, providerProtocolVersion: _providerProtocolVersion, ...base } = current;
+    const legacyJob = JSON.parse(JSON.stringify({
+      ...base, usageRequestId: null, providerProtocolVersion: null,
+    })) as PortraitWorkflowJobInput;
+    const setup = createEnvironment(legacyJob);
+    const { fetchMock, operations } = bridgeAndOpenAiFetch(legacyJob, {
+      bridgeResponses: { reserve_attempt: [Response.json({ outcome: 'reserved_now', protocolVersion: 2 })] },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(workflowWithEnv(setup.env).run(
+      { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, fakeStep(),
+    )).resolves.toMatchObject({ status: 'ready' });
+    expect(operations.find((operation) => operation.operation === 'reserve_attempt')).not.toHaveProperty('protocolVersion');
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(1);
+  });
+
+  it('rejects a serialized v2 portrait job with a null usage request before OpenAI', async () => {
+    const malformedJob = JSON.parse(JSON.stringify({
+      ...job(), usageRequestId: null, providerProtocolVersion: 2,
+    })) as PortraitWorkflowJobInput;
+    const setup = createEnvironment(malformedJob);
+    const { fetchMock } = bridgeAndOpenAiFetch(malformedJob);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await workflowWithEnv(setup.env).run(
+      { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, fakeStep());
+
+    expect(result).toMatchObject({ status: 'failed', code: 'BRIDGE_INVALID_RESPONSE' });
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(0);
+  });
+
   it('completes a grandfathered v1 portrait job with the unchanged reservation contract', async () => {
     const current = job();
     const { usageRequestId: _usageRequestId, providerProtocolVersion: _providerProtocolVersion, ...legacyJob } = current;

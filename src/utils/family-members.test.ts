@@ -4,6 +4,7 @@ import {
   formatTaggedMemberAge,
   getMemberAvatarImageKey,
   getProfilePortraitPhotoKey,
+  isFamilyMemberProfileIncomplete,
   isPortraitInProgress,
   validateDateOfBirth,
   validateFamilyMemberName,
@@ -150,5 +151,79 @@ describe('portrait generation helpers', () => {
         profile_picture_key: 'user/family/mara/photo.jpg',
       }),
     ).toBe('user/family/mara/portrait.webp');
+  });
+});
+
+describe('isFamilyMemberProfileIncomplete', () => {
+  it('flags an onboarding-created, name-only kid as incomplete', () => {
+    expect(
+      isFamilyMemberProfileIncomplete({
+        date_of_birth: null,
+        illustrated_profile_key: null,
+        illustrated_profile_status: 'pending',
+        is_user_profile: false,
+        profile_picture_key: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('flags a member missing only a photo as incomplete', () => {
+    expect(
+      isFamilyMemberProfileIncomplete({
+        date_of_birth: '2022-01-01',
+        illustrated_profile_key: null,
+        illustrated_profile_status: 'pending',
+        is_user_profile: false,
+        profile_picture_key: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('flags a member missing only a date of birth as incomplete', () => {
+    expect(
+      isFamilyMemberProfileIncomplete({
+        date_of_birth: null,
+        illustrated_profile_key: null,
+        illustrated_profile_status: 'ready',
+        is_user_profile: false,
+        profile_picture_key: 'user/family/mara/photo.jpg',
+      }),
+    ).toBe(true);
+  });
+
+  it('treats a member with a DOB and a ready portrait as complete', () => {
+    expect(
+      isFamilyMemberProfileIncomplete({
+        date_of_birth: '2022-01-01',
+        illustrated_profile_key: 'user/family/mara/portrait.webp',
+        illustrated_profile_status: 'ready',
+        is_user_profile: false,
+        profile_picture_key: 'user/family/mara/photo.jpg',
+      }),
+    ).toBe(false);
+  });
+
+  it('treats a member with a DOB and an in-progress portrait as complete (source photo already exists)', () => {
+    expect(
+      isFamilyMemberProfileIncomplete({
+        date_of_birth: '2022-01-01',
+        illustrated_profile_key: null,
+        illustrated_profile_status: 'generating',
+        is_user_profile: false,
+        profile_picture_key: 'user/family/mara/photo.jpg',
+      }),
+    ).toBe(false);
+  });
+
+  it('never flags the signed-in owner\'s own profile, even with no DOB or photo', () => {
+    expect(
+      isFamilyMemberProfileIncomplete({
+        date_of_birth: null,
+        illustrated_profile_key: null,
+        illustrated_profile_status: 'pending',
+        is_user_profile: true,
+        profile_picture_key: null,
+      }),
+    ).toBe(false);
   });
 });

@@ -47,17 +47,26 @@ export interface CommitOnboardingResult {
    * `committedFamilyId` backstop redirect for the cross-relaunch case).
    */
   isNewFamily: boolean;
-}
-
-export interface CommitOnboardingDeps {
   /**
-   * The pending-upload queue (src/hooks/use-pending-memory-uploads.tsx) is a
-   * React context, which this plain service module cannot call directly --
-   * the caller screen supplies its `enqueue` here so the media path still
-   * goes through the same queue every other media memory in the app uses,
-   * instead of a bespoke onboarding-only upload path.
+   * Set only when the captured memory included a photo/video -- the caller
+   * MUST hand this to the same pending-upload queue every other media
+   * memory in the app uses (usePendingMemoryUploads().enqueue), but only
+   * *after* the caller's own family-membership query invalidation has
+   * resolved (code.tsx already awaits one post-commit). This function
+   * deliberately does not call that queue itself: enqueue()'s own
+   * user/family guard reads live React context (useAuth()/useFamily()),
+   * not the user/family this function already validated server-side
+   * directly. Calling it any earlier -- as an injected
+   * `enqueueMediaUpload` dependency used to, from inside this function --
+   * could see a family React hadn't learned about yet: guaranteed stale for
+   * a brand-new family (nothing tells useFamily() about it until that
+   * invalidation runs) and racy for a returning owner's already-existing
+   * one, which is what produced "You must be signed in to save a memory"
+   * for an already-verified returning owner (docs/features/onboarding.md
+   * decision 18). Null whenever the capture was text-only, empty, or the
+   * idempotent short-circuit path was taken.
    */
-  enqueueMediaUpload?: (input: PostMediaMemoryInput) => void;
+  pendingMediaUpload: PostMediaMemoryInput | null;
 }
 
 function createUuid(): string {
@@ -143,52 +152,57 @@ async function createKidMembers(
   return members;
 }
 
+interface FirstMemoryResult {
+  memoryId: string | null;
+  /** See CommitOnboardingResult.pendingMediaUpload's doc comment -- the
+   * caller, not this function, hands this to the pending-upload queue. */
+  pendingMediaUpload: PostMediaMemoryInput | null;
+}
+
 /**
- * Creates the first memory from the draft's capture. Media path enqueues
- * through the existing pending-upload queue (same as every other media
- * memory in the app -- see use-pending-memory-uploads.tsx) instead of
- * uploading inline; the text-only path is created and awaited directly since
- * there's nothing to upload. `null` capture (defensive -- S9 always
- * completes before S12 in the real flow) skips memory creation entirely.
+ * Creates the first memory from the draft's capture. The media path builds
+ * (but deliberately does not enqueue -- see CommitOnboardingResult's doc
+ * comment) the same payload the pending-upload queue every other media
+ * memory in the app uses expects; the text-only path is created and awaited
+ * directly since there's nothing to upload. `null` capture (defensive -- S9
+ * always completes before S12 in the real flow) skips memory creation
+ * entirely.
  */
 async function createFirstMemory(
   userId: string,
   familyId: string,
   capture: OnboardingDraft['capture'],
   taggedMemberIds: string[],
-  enqueueMediaUpload: CommitOnboardingDeps['enqueueMediaUpload'],
-): Promise<string | null> {
+): Promise<FirstMemoryResult> {
   if (!capture) {
-    return null;
+    return { memoryId: null, pendingMediaUpload: null };
   }
 
   const text = capture.text.trim();
   const memoryDate = getLocalTodayIso();
 
   if (capture.mediaUri) {
-    if (!enqueueMediaUpload) {
-      throw new Error('Could not save your photo. Please try again.');
-    }
-
     const memoryId = createUuid();
-    enqueueMediaUpload({
-      memoryId,
-      mediaAssets: [
-        {
-          fileUri: capture.mediaUri,
-          contentType: capture.mediaContentType ?? 'image/jpeg',
-        },
-      ],
-      content: text || undefined,
-      memoryDate,
-      taggedMemberIds,
-    });
 
-    return memoryId;
+    return {
+      memoryId,
+      pendingMediaUpload: {
+        memoryId,
+        mediaAssets: [
+          {
+            fileUri: capture.mediaUri,
+            contentType: capture.mediaContentType ?? 'image/jpeg',
+          },
+        ],
+        content: text || undefined,
+        memoryDate,
+        taggedMemberIds,
+      },
+    };
   }
 
   if (!text) {
-    return null;
+    return { memoryId: null, pendingMediaUpload: null };
   }
 
   const { data, error } = await createMemory({
@@ -204,7 +218,7 @@ async function createFirstMemory(
     throw new Error(error?.message ?? 'Could not save your first memory');
   }
 
-  return data.id;
+  return { memoryId: data.id, pendingMediaUpload: null };
 }
 
 /**
@@ -226,6 +240,17 @@ async function rollbackFamily(familyId: string): Promise<void> {
 }
 
 /**
+ * `resolveExistingFamilyId`'s result. Three states, deliberately not
+ * collapsed to `string | null`: a lookup failure must never be treated the
+ * same as "definitely no existing family" -- see that function's doc
+ * comment and commitOnboarding's handling of `unknown` below.
+ */
+type ExistingFamilyLookup =
+  | { kind: 'found'; familyId: string }
+  | { kind: 'none' }
+  | { kind: 'unknown'; error: ServiceError };
+
+/**
  * The "returning owner who habit-tapped through onboarding again" check
  * (docs/features/onboarding.md decision 18: "a returning user who taps
  * 'Start your family's journal' out of habit but already owns a family...
@@ -234,22 +259,49 @@ async function rollbackFamily(familyId: string): Promise<void> {
  * family creation"). Mirrors FamilyProvider's own membership resolution
  * (use-family.tsx): skips RLS-invisible/soft-deleted rows, then prefers the
  * profile's `active_family_id` and falls back to the first membership.
- * Returns `null` for a genuinely new owner (no visible membership at all).
+ *
+ * Both underlying calls return a `{ data, error }` pair, and a transient
+ * network failure surfaces as `data: null` -- indistinguishable from a
+ * genuine "no rows" result unless `error` is checked explicitly. Silently
+ * treating a failed lookup as "no existing family" is worse than the
+ * original bug this file fixed: it would make commitOnboarding create a
+ * *second* family for a real returning owner, exactly what decision 18
+ * forbids, with nothing surfaced to notice it happened. So a failure on
+ * either call reports `unknown`, never `none` -- only a lookup that
+ * genuinely completed and found zero visible rows is safe to report as
+ * "this is a new owner."
  */
-async function resolveExistingFamilyId(userId: string): Promise<string | null> {
-  const { data: memberships } = await fetchMyFamilyMemberships(userId);
+async function resolveExistingFamilyId(userId: string): Promise<ExistingFamilyLookup> {
+  const { data: memberships, error: membershipsError } = await fetchMyFamilyMemberships(userId);
+
+  if (membershipsError) {
+    return { kind: 'unknown', error: membershipsError };
+  }
+
   const visible = (memberships ?? []).filter((row) => row.family && !row.family.deleted_at);
 
   if (visible.length === 0) {
-    return null;
+    return { kind: 'none' };
   }
 
-  const { data: profile } = await fetchUserProfile();
+  const { data: profile, error: profileError } = await fetchUserProfile();
+
+  if (profileError) {
+    // We already know >=1 family exists (visible.length > 0) -- what's
+    // uncertain here is only *which* one is active, not whether one
+    // exists. Reporting `unknown` rather than guessing (e.g. falling back
+    // to visible[0]) keeps this function's contract simple and matches the
+    // same "surface it, don't guess" rule as the membership-fetch failure
+    // above; the caller's retry path (existingFamilyId-less error) is the
+    // same safe fallback either way.
+    return { kind: 'unknown', error: profileError };
+  }
+
   const activeMatch = profile?.active_family_id
     ? visible.find((row) => row.family_id === profile.active_family_id)
     : undefined;
 
-  return (activeMatch ?? visible[0]).family_id;
+  return { kind: 'found', familyId: (activeMatch ?? visible[0]).family_id };
 }
 
 /**
@@ -292,10 +344,17 @@ async function resolveExistingTaggedMemberIds(
  *    this path -- see CommitOnboardingResult's doc comment.)
  * 2. Check whether the now-authenticated user already owns/belongs to a
  *    family (docs/features/onboarding.md decision 18's habit-tap edge
- *    case). If so: never create a second family -- save the captured
- *    memory into the existing one (best-effort name-matched tags) and
- *    report `isNewFamily: false` so the caller routes via
- *    resolvePostAuthDestination instead of continuing the trust/paywall arc.
+ *    case) via resolveExistingFamilyId. Three outcomes: `found` -- never
+ *    create a second family, save the captured memory into the existing
+ *    one instead (best-effort name-matched tags) and report
+ *    `isNewFamily: false` so the caller routes via
+ *    resolvePostAuthDestination instead of continuing the trust/paywall
+ *    arc; `none` -- proceed to 3, a genuinely new owner; `unknown` -- the
+ *    lookup itself failed (network error on the membership or profile
+ *    fetch), so this returns a plain retryable error instead of guessing
+ *    either way. Guessing `none` on a failed lookup would silently create
+ *    a second family for a real returning owner -- worse than the error it
+ *    replaces, because nothing would surface it happening.
  * 3. Otherwise, a genuinely new owner: `createFamily(draft.familyName)`,
  *    one name-only `family_members` row per kid name in entry order, then
  *    the first memory (text and/or enqueued media) tagged to the kids
@@ -311,8 +370,22 @@ async function resolveExistingTaggedMemberIds(
  */
 export async function commitOnboarding(
   draft: OnboardingDraft,
-  deps: CommitOnboardingDeps = {},
-): Promise<{ data: CommitOnboardingResult | null; error: ServiceError | null }> {
+): Promise<{
+  data: CommitOnboardingResult | null;
+  error: ServiceError | null;
+  /**
+   * Set only on a failure that happened *after* this call had already
+   * confirmed the authenticated user owns a real, existing family (the
+   * returning-owner branch below). The account and family are real even
+   * though this attempt's memory failed to save -- the caller must not
+   * treat this like "no account yet" and strand the user on a dead-end
+   * retry; it should route them into their real journal instead
+   * (docs/features/onboarding.md decision 18: never strand a returning
+   * owner mid-onboarding). Absent for every other failure, where there is
+   * genuinely nothing yet to route the user into.
+   */
+  existingFamilyId?: string;
+}> {
   const {
     data: { user },
     error: userError,
@@ -328,22 +401,38 @@ export async function commitOnboarding(
   let familyId = draft.committedFamilyId ?? null;
   let memoryId: string | null = null;
   let isNewFamily = false;
+  let pendingMediaUpload: PostMediaMemoryInput | null = null;
 
   if (!familyId) {
-    const existingFamilyId = await resolveExistingFamilyId(user.id);
+    const lookup = await resolveExistingFamilyId(user.id);
 
-    if (existingFamilyId) {
+    if (lookup.kind === 'unknown') {
+      // Could not determine whether this user already has a family --
+      // never guess. No `existingFamilyId` here (unlike the try/catch
+      // below): we don't actually know one exists, so the caller must not
+      // route this like a confirmed returning owner either. This is a
+      // plain, retryable error -- the same "Try again" path a genuinely
+      // new owner sees, which is exactly right: we simply don't know yet
+      // which of the two they are.
+      return {
+        data: null,
+        error: { message: 'Could not check your existing family. Please try again.', code: lookup.error.code },
+      };
+    }
+
+    if (lookup.kind === 'found') {
+      const existingFamilyId = lookup.familyId;
       try {
         const taggedMemberIds = await resolveExistingTaggedMemberIds(existingFamilyId, draft);
-        memoryId = await createFirstMemory(
-          user.id,
-          existingFamilyId,
-          draft.capture,
-          taggedMemberIds,
-          deps.enqueueMediaUpload,
-        );
+        const firstMemory = await createFirstMemory(user.id, existingFamilyId, draft.capture, taggedMemberIds);
+        memoryId = firstMemory.memoryId;
+        pendingMediaUpload = firstMemory.pendingMediaUpload;
       } catch (error) {
-        return { data: null, error: toServiceError(error, 'Could not save your memory. Please try again.') };
+        return {
+          data: null,
+          error: toServiceError(error, 'Could not save your memory. Please try again.'),
+          existingFamilyId,
+        };
       }
 
       familyId = existingFamilyId;
@@ -380,13 +469,9 @@ export async function commitOnboarding(
           return members[0] ? [members[0].id] : [];
         })();
 
-        memoryId = await createFirstMemory(
-          user.id,
-          newFamilyId,
-          draft.capture,
-          taggedMemberIds,
-          deps.enqueueMediaUpload,
-        );
+        const firstMemory = await createFirstMemory(user.id, newFamilyId, draft.capture, taggedMemberIds);
+        memoryId = firstMemory.memoryId;
+        pendingMediaUpload = firstMemory.pendingMediaUpload;
       } catch (error) {
         await rollbackFamily(newFamilyId);
         return { data: null, error: toServiceError(error, 'Could not finish setting up your journal') };
@@ -412,5 +497,5 @@ export async function commitOnboarding(
     console.warn('Failed to apply onboarding notification preference', profileError.message);
   }
 
-  return { data: { familyId, memoryId, isNewFamily }, error: null };
+  return { data: { familyId, memoryId, isNewFamily, pendingMediaUpload }, error: null };
 }
