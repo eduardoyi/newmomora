@@ -1,5 +1,6 @@
-import { assertEquals } from 'jsr:@std/assert@1';
-import { handleDeleteFamilyMember } from './index.ts';
+import { assertEquals, assertStrictEquals } from 'jsr:@std/assert@1';
+import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
+import { DEFAULT_DEPENDENCIES, handleDeleteFamilyMember } from './index.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const FAMILY_ID = '22222222-2222-4222-8222-222222222222';
@@ -170,4 +171,8 @@ Deno.test('delete-family-member releases the exact fence when R2 cleanup fails',
     fenceCalls[1].args.p_delete_token,
     fenceCalls[0].args.p_delete_token,
   );
+});
+
+Deno.test('WP-SEC: the real default wiring uses the anonymous-rejecting auth chokepoint, not the permissive one', () => {
+  assertStrictEquals(DEFAULT_DEPENDENCIES.getAuthenticatedUser, getAuthenticatedNonAnonymousUser);
 });

@@ -1,0 +1,209 @@
+appId: com.memora.app
+---
+# Visual review only: S0 through S12A. This flow intentionally stops before
+# entering an email or requesting an OTP, so it cannot create an account,
+# commit onboarding data, or start image generation. Run it via
+# `npm run test:e2e:onboarding:owner-visual-audit:pre-auth`, which refuses a hosted
+# Supabase configuration and writes the named captures to an ignored folder.
+#
+# Filename prefixes are the review order. The static name and memory text are
+# synthetic test data, never account data.
+- launchApp:
+    appId: com.memora.app
+    clearState: true
+    clearKeychain: true
+    arguments:
+      EXDevMenuIsOnboardingFinished: true
+- extendedWaitUntil:
+    visible:
+      text: "Continue|Close|Momora|I already have an account · Log in|Welcome back"
+    timeout: 90000
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+# iOS 26.5 exposes this server card visually but does not reliably attach the
+# `Momora` text to the DEVELOPMENT SERVERS accessibility container. Gate a
+# card-center tap on the heading instead of using the brittle text relation.
+- runFlow:
+    when:
+      visible: "DEVELOPMENT SERVERS"
+    commands:
+      - tapOn:
+          point: "50%, 22%"
+- extendedWaitUntil:
+    visible:
+      text: "Close|This is the developer menu. It gives you access to useful tools in development builds.|I already have an account · Log in|Welcome back"
+    timeout: 90000
+- runFlow:
+    when:
+      visible: "This is the developer menu. It gives you access to useful tools in development builds."
+    commands:
+      - tapOn:
+          text: "Continue"
+          below: "This is the developer menu. It gives you access to useful tools in development builds."
+- tapOn:
+    text: "Close"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: onb-welcome-screen
+    timeout: 90000
+
+- waitForAnimationToEnd
+- takeScreenshot: 00-welcome
+# Exercise the returning-login detour before rejoining the same owner story
+# route as "Start your family's journal". This guards against accidentally
+# resurrecting the retired `(auth)/signup` onboarding path.
+- tapOn:
+    id: onb-welcome-login-link
+- extendedWaitUntil:
+    visible:
+      id: login-email-input
+    timeout: 10000
+- tapOn:
+    id: login-create-account-link
+- extendedWaitUntil:
+    visible:
+      id: onb-story-0-cta-button
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 01-story-losing-track
+- tapOn:
+    id: onb-story-0-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-story-1-cta-button
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 02-story-growing-too-fast
+- tapOn:
+    id: onb-story-1-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-story-2-cta-button
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 03-story-remembering-matters
+- tapOn:
+    id: onb-story-2-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-founders-screen
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 04-founders
+- tapOn:
+    id: onb-founders-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-artifact-screen
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 05-artifact-example
+- tapOn:
+    id: onb-artifact-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-kids-screen
+    timeout: 10000
+# An inert text tap is safe whether iOS honored autofocus or not; bare
+# hideKeyboard fails when there is no presented keyboard.
+- tapOn:
+    text: "Who's this journal for?"
+- waitForAnimationToEnd
+- takeScreenshot: 06-kids-empty
+- tapOn:
+    id: onb-kids-input
+- waitForAnimationToEnd
+- takeScreenshot: 07-kids-keyboard-open
+- inputText: "Avery"
+- takeScreenshot: 08-kids-filled-keyboard-open
+- tapOn:
+    id: onb-kids-continue-button
+- extendedWaitUntil:
+    visible:
+      id: onb-family-name-screen
+    timeout: 10000
+- tapOn:
+    text: "You can change this any time, e.g. to \"The Rivera Family\"."
+- waitForAnimationToEnd
+- takeScreenshot: 09-family-name
+- tapOn:
+    id: onb-family-name-input
+- waitForAnimationToEnd
+- takeScreenshot: 10-family-name-keyboard-open
+- tapOn:
+    id: onb-family-name-continue-button
+- extendedWaitUntil:
+    visible:
+      id: onb-bridge-screen
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 11-bridge
+- tapOn:
+    id: onb-bridge-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onboarding-capture-type-instead
+    timeout: 10000
+- takeScreenshot: 12-capture-voice
+- tapOn:
+    id: onboarding-capture-type-instead
+- extendedWaitUntil:
+    visible:
+      id: onboarding-capture-textarea
+    timeout: 10000
+- tapOn:
+    id: onboarding-capture-textarea
+- waitForAnimationToEnd
+- takeScreenshot: 13-capture-typing-keyboard-open
+- inputText: "Built a pillow fort after dinner and called it a moon base."
+- takeScreenshot: 14-capture-typed-keyboard-open
+- tapOn:
+    id: onboarding-capture-keep
+- extendedWaitUntil:
+    visible:
+      id: onboarding-aha-card
+    timeout: 10000
+# The Aha card's finite heart transition must settle before visual review.
+- waitForAnimationToEnd
+- takeScreenshot: 15-first-page-aha
+- tapOn:
+    id: onboarding-aha-continue
+- extendedWaitUntil:
+    visible:
+      id: onboarding-year-stage
+    timeout: 10000
+- takeScreenshot: 16-year-view
+- tapOn:
+    id: onboarding-year-continue
+- extendedWaitUntil:
+    visible:
+      id: onboarding-notifications-option-none
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 17-notifications
+# "None" is the only notification choice that does not invoke the OS prompt.
+- tapOn:
+    id: onboarding-notifications-option-none
+- extendedWaitUntil:
+    visible:
+      id: onboarding-email-send
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 18-account-email
+- tapOn:
+    id: onboarding-email-name-input
+- waitForAnimationToEnd
+- takeScreenshot: 19-account-name-keyboard-open
+- tapOn:
+    id: onboarding-email-input
+- waitForAnimationToEnd
+- takeScreenshot: 20-account-email-keyboard-open

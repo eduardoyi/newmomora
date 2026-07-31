@@ -1,0 +1,70 @@
+appId: com.memora.app
+---
+# Local staged owner journey, from the real OTP through a rendered S17 portrait
+# and a real invite. The runner only permits this against its explicit,
+# isolated-local image stack; see run-onboarding-maestro.sh.
+# The prior stage leaves the app at onboarding-code-input without clearing state.
+- tapOn:
+    id: onboarding-code-input
+- inputText: ${TEST_ONBOARDING_OWNER_OTP}
+- extendedWaitUntil:
+    visible:
+      id: onb-trial-screen
+    timeout: 20000
+- tapOn:
+    id: onb-trial-cta-button
+- tapOn:
+    id: onb-included-cta-button
+- tapOn:
+    id: onb-paywall-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-portrait-choose-photo-button
+    timeout: 15000
+- tapOn:
+    id: onb-portrait-choose-photo-button
+- tapOn:
+    text: "Allow Full Access"
+    optional: true
+- tapOn:
+    text: "Allow Access to All Photos"
+    optional: true
+- runFlow: ../shared/pick-first-image.yaml
+- tapOn:
+    text: "Choose"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: onb-portrait-painting-frame
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: onb-reveal-screen
+    timeout: 240000
+- extendedWaitUntil:
+    visible:
+      id: onb-reveal-portrait-image-loaded
+    timeout: 30000
+- tapOn:
+    id: onb-reveal-done-button
+- extendedWaitUntil:
+    visible: "Timeline"
+    timeout: 20000
+
+# The join path needs an invite. Create it through the owner UI so the test
+# exercises both invitation creation and J1-J5 redemption.
+- tapOn:
+    id: tab-settings
+- tapOn:
+    id: settings-invite-family-member
+- tapOn:
+    id: sharing-invite-role-viewer
+- tapOn:
+    id: sharing-invite-create-button
+- tapOn:
+    text: "Cancel"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: pending-invites-back
+    timeout: 10000

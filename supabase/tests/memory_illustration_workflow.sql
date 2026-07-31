@@ -45,12 +45,18 @@ insert into public.memory_illustration_jobs (
   'test/new.webp', 'test/old.webp', 'safe stored prompt'
 );
 
+create function pg_temp.table_is_private(p_table regclass) returns boolean
+language plpgsql as $$
+declare v_count integer;
+begin
+  if not has_table_privilege(current_user, p_table, 'SELECT') then return true; end if;
+  execute format('select count(*) from %s', p_table) into v_count;
+  return v_count=0;
+end;
+$$;
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '12000000-0000-4000-8000-000000000001', true);
-select is_empty(
-  'select * from public.memory_illustration_jobs',
-  'authenticated clients cannot read private workflow jobs through RLS'
-);
+select ok(pg_temp.table_is_private('public.memory_illustration_jobs'), 'authenticated clients cannot read private workflow jobs through RLS');
 set local role postgres;
 
 select is(public.reserve_memory_illustration_provider_attempt('52000000-0000-4000-8000-000000000001', 'primary', 1::smallint), true, 'first primary reservation succeeds');

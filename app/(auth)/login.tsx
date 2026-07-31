@@ -11,6 +11,7 @@ import {
 } from '@/components/auth-screen';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { onboardingStoryRoute } from '@/lib/onboarding-routes';
 import { isPasswordLoginEmail, normalizeEmail } from '@/services/reviewer-auth';
 import { isE2eFixturesEnabled } from '@/utils/e2e-fixtures';
 
@@ -83,7 +84,11 @@ export default function LoginScreen() {
       footer={
         <Text style={styles.footerText}>
           New here?{' '}
-          <Link href="/(auth)/signup" style={styles.link}>
+          <Link
+            href={onboardingStoryRoute(0)}
+            style={styles.link}
+            testID="login-create-account-link"
+          >
             Create an account
           </Link>
         </Text>

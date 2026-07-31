@@ -1,7 +1,69 @@
 import { assertEquals, assertRejects } from 'jsr:@std/assert@1';
-import { chatJson, editImageWithReferences, generateImage } from './openai.ts';
+import {
+  assertAiUsageWriteSucceeded,
+  buildAiUsageLedgerAttribution,
+  chatJson,
+  editImageWithReferences,
+  generateImage,
+  scheduleBestEffortUsageWrite,
+} from './openai.ts';
 
 const TEST_OPENAI_KEY = 'test-openai-key';
+
+Deno.test('usage ledger attribution keeps family and onboarding costs disjoint', () => {
+  assertEquals(
+    buildAiUsageLedgerAttribution({
+      attributionScope: 'family', familyId: 'family-id', actorUserId: 'user-id', operation: 'transcription',
+    }),
+    {
+      p_family_id: 'family-id', p_actor_user_id: 'user-id',
+      p_attribution_scope: 'family', p_onboarding_request_id: null,
+    },
+  );
+  assertEquals(
+    buildAiUsageLedgerAttribution({
+      attributionScope: 'onboarding', familyId: null, onboardingRequestId: 'request-id', operation: 'voice_cleanup',
+    }),
+    {
+      p_family_id: null, p_actor_user_id: null,
+      p_attribution_scope: 'onboarding', p_onboarding_request_id: 'request-id',
+    },
+  );
+});
+
+Deno.test('best-effort usage failures are observed without EdgeRuntime or provider details', async () => {
+  const originalError = console.error;
+  const logs: unknown[][] = [];
+  const previousRuntime = (globalThis as { EdgeRuntime?: unknown }).EdgeRuntime;
+  delete (globalThis as { EdgeRuntime?: unknown }).EdgeRuntime;
+  console.error = (...args: unknown[]) => logs.push(args);
+  try {
+    scheduleBestEffortUsageWrite(async () => {
+      throw new Error('provider response contained private transcript');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assertEquals(logs, [['ai usage recording failed']]);
+  } finally {
+    console.error = originalError;
+    if (previousRuntime === undefined) delete (globalThis as { EdgeRuntime?: unknown }).EdgeRuntime;
+    else (globalThis as { EdgeRuntime?: unknown }).EdgeRuntime = previousRuntime;
+  }
+});
+
+Deno.test('a resolved AI usage RPC error is observed without exposing its details or blocking provider work', async () => {
+  const originalError = console.error;
+  const logs: unknown[][] = [];
+  console.error = (...args: unknown[]) => logs.push(args);
+  try {
+    scheduleBestEffortUsageWrite(async () => {
+      assertAiUsageWriteSucceeded({ error: { message: 'provider transcript: private' } });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assertEquals(logs, [['ai usage recording failed']]);
+  } finally {
+    console.error = originalError;
+  }
+});
 
 async function withMockedOpenAiFetch(run: (models: string[]) => Promise<void>): Promise<void> {
   const originalFetch = globalThis.fetch;
@@ -61,6 +123,52 @@ Deno.test('generateImage retries the fallback model after a non-abort provider f
     } else {
       Deno.env.set('OPENAI_API_KEY', originalKey);
     }
+  }
+});
+
+Deno.test('image fallbacks reserve a distinct durable provider attempt before each fetch', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  const attempts: string[] = [];
+  Deno.env.set('OPENAI_API_KEY', TEST_OPENAI_KEY);
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const body = await request.json();
+    if (body.model === 'gpt-image-2') return new Response('temporary failure', { status: 503 });
+    return new Response(JSON.stringify({ data: [{ b64_json: 'AQID' }] }), { headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    await generateImage('A gentle scene', {
+      beforeProviderAttempt: async ({ provider, attemptNumber }) => {
+        attempts.push(`${provider}:${attemptNumber}`);
+      },
+    });
+    assertEquals(attempts, ['primary:1', 'fallback:1']);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});
+
+Deno.test('a denied provider reservation prevents the OpenAI fetch', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  let fetches = 0;
+  Deno.env.set('OPENAI_API_KEY', TEST_OPENAI_KEY);
+  globalThis.fetch = async () => {
+    fetches += 1;
+    return new Response(JSON.stringify({ data: [{ b64_json: 'AQID' }] }));
+  };
+  try {
+    await assertRejects(() => generateImage('A gentle scene', {
+      beforeProviderAttempt: async () => { throw new Error('provider slot already reserved'); },
+    }));
+    assertEquals(fetches, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
   }
 });
 

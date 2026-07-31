@@ -37,7 +37,7 @@ function parseJob(value: unknown): PortraitWorkflowJobInput {
     return invalidBridgeResponse();
   }
 
-  return {
+  const base = {
     jobId: value.jobId,
     outputKey: value.outputKey,
     oldPortraitKey: value.oldPortraitKey,
@@ -46,12 +46,17 @@ function parseJob(value: unknown): PortraitWorkflowJobInput {
     sourcePhotoKey: value.sourcePhotoKey,
     styleReferenceKey: value.styleReferenceKey,
   };
+  if (value.providerProtocolVersion === 2 && typeof value.usageRequestId === 'string') {
+    return { ...base, providerProtocolVersion: 2, usageRequestId: value.usageRequestId };
+  }
+  if (value.providerProtocolVersion === undefined || value.providerProtocolVersion === 1) return base;
+  return invalidBridgeResponse();
 }
 
 async function callPortraitBridge<T>(
   env: Env,
   operation: 'get_input' | 'reserve_attempt' | 'authorize_upload' | 'record_upload_complete' |
-    'publish' | 'fail' | 'reconcile' | 'retrigger_memories',
+    'publish' | 'fail' | 'reconcile' | 'retrigger_memories' | 'record_usage',
   payload: Record<string, unknown>,
 ): Promise<T> {
   return await callBridgeAt<T>(
@@ -77,15 +82,39 @@ export async function reservePortraitAttempt(
   provider: PortraitProvider,
   model: IllustrationModel,
   attemptNumber: number,
+  usageRequestId: string,
+  aiCallId: string,
 ): Promise<BridgePortraitReserveAttemptResponse> {
   const response = await callPortraitBridge<unknown>(env, 'reserve_attempt', {
     jobId,
     provider,
     model,
     attemptNumber,
+    usageRequestId,
+    aiCallId,
+    protocolVersion: 2,
   });
+  if (!isRecord(response) || response.protocolVersion !== 2 ||
+    (response.outcome !== 'reserved_now' && response.outcome !== 'already_reserved' && response.outcome !== 'denied')) {
+    return invalidBridgeResponse();
+  }
+  return { outcome: response.outcome, protocolVersion: 2 };
+}
+
+export async function reservePortraitAttemptV1(
+  env: Env,
+  jobId: string,
+  provider: PortraitProvider,
+  model: IllustrationModel,
+  attemptNumber: number,
+): Promise<boolean> {
+  const response = await callPortraitBridge<unknown>(env, 'reserve_attempt', { jobId, provider, model, attemptNumber });
   if (!isRecord(response) || typeof response.reserved !== 'boolean') return invalidBridgeResponse();
-  return { reserved: response.reserved };
+  return response.reserved;
+}
+
+export async function recordPortraitUsage(env: Env, payload: Record<string, unknown>): Promise<void> {
+  await callPortraitBridge<unknown>(env, 'record_usage', payload);
 }
 
 export async function authorizePortraitUpload(

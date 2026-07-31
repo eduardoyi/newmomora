@@ -4,18 +4,25 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { sharingRedeemRoute, signupRoute } from '@/lib/routes';
+import { onboardingJoinFoundRoute } from '@/lib/onboarding-routes';
+import { sharingRedeemRoute } from '@/lib/routes';
 import { isValidInviteCodeShape, normalizeInviteCode } from '@/utils/invites';
 import { setPendingInviteCode } from '@/utils/pending-invite-code';
 
 /**
  * Universal-link entry point: https://usemomora.com/invite?code=sunny-tiger-lake
- * (docs/plans/family-sharing.md §9). Lives OUTSIDE the (auth)/(app) groups so
- * it resolves for signed-in and signed-out users alike. Stores the code in
- * AsyncStorage (`momora.pendingInviteCode`) and routes: with a session ->
- * the redeem screen (prefilled from storage); without -> signup, whose OTP
- * verification then forwards to redeem while the code survives in storage.
- * The code is only consumed by a redemption attempt, never by navigation.
+ * (docs/plans/family-sharing.md §9). Lives OUTSIDE the (auth)/(app)/(onboarding)
+ * groups so it resolves for signed-in and signed-out users alike. Stores the
+ * code in AsyncStorage (`momora.pendingInviteCode`) and routes: with a
+ * session -> the redeem screen (prefilled from storage, unchanged from
+ * before this package -- an already-authenticated deep link is the "adding a
+ * second family" case, not onboarding); without a session -> J2
+ * (docs/plans/onboarding-implementation.md WP5, spec decision 2: the
+ * unauthenticated invited path is now J1-J5, not the old signup screen). J2
+ * reads the same stored code (getPendingInviteCode) and handles a
+ * missing/invalid one gracefully on its own, so this redirects unconditionally
+ * on session presence alone, same as before. The code is only consumed by a
+ * redemption attempt, never by navigation.
  */
 export default function InviteLinkScreen() {
   const { code } = useLocalSearchParams<{ code?: string }>();
@@ -39,7 +46,7 @@ export default function InviteLinkScreen() {
         return;
       }
 
-      router.replace(session ? sharingRedeemRoute : signupRoute);
+      router.replace(session ? sharingRedeemRoute : onboardingJoinFoundRoute);
     })();
 
     return () => {

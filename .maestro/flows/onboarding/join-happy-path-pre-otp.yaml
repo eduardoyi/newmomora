@@ -1,0 +1,54 @@
+appId: com.memora.app
+---
+# Local staged join journey, J1 through sending the real local email OTP.
+# TEST_ONBOARDING_INVITE_CODE comes from the owner stage's real UI-created invite.
+- launchApp:
+    appId: com.memora.app
+    clearState: true
+    arguments:
+      EXDevMenuIsOnboardingFinished: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: onb-welcome-screen
+    timeout: 90000
+- tapOn:
+    id: onb-welcome-invite-button
+- tapOn:
+    id: onb-join-code-input
+- inputText: ${TEST_ONBOARDING_INVITE_CODE}
+- tapOn:
+    id: onb-join-code-submit-button
+- extendedWaitUntil:
+    visible:
+      id: onb-join-found-confirm-button
+    timeout: 15000
+- tapOn:
+    id: onb-join-found-confirm-button
+- tapOn:
+    id: onb-join-name-input
+- inputText: "Auntie Test"
+- tapOn:
+    id: onb-join-name-submit-button
+- tapOn:
+    id: onb-join-email-input
+- inputText: ${TEST_ONBOARDING_JOINER_EMAIL}
+- tapOn:
+    id: onb-join-email-send-button
+- extendedWaitUntil:
+    visible:
+      id: onb-join-email-code-input
+    timeout: 15000

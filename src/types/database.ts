@@ -7,13 +7,579 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.5"
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
   }
   public: {
     Tables: {
+      ai_family_usage_locks: {
+        Row: {
+          created_at: string
+          family_id: string
+        }
+        Insert: {
+          created_at?: string
+          family_id: string
+        }
+        Update: {
+          created_at?: string
+          family_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_family_usage_locks_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: true
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_image_generation_admissions: {
+        Row: {
+          admission_ordinal: number
+          admitted_at: string
+          finalized_at: string | null
+          id: number
+          request_id: string
+          reserved_until: string
+          state: string
+          utc_day: string
+          utc_month: string
+        }
+        Insert: {
+          admission_ordinal: number
+          admitted_at?: string
+          finalized_at?: string | null
+          id?: number
+          request_id: string
+          reserved_until: string
+          state: string
+          utc_day: string
+          utc_month: string
+        }
+        Update: {
+          admission_ordinal?: number
+          admitted_at?: string
+          finalized_at?: string | null
+          id?: number
+          request_id?: string
+          reserved_until?: string
+          state?: string
+          utc_day?: string
+          utc_month?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_image_generation_admissions_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "ai_image_generation_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_image_generation_requests: {
+        Row: {
+          actor_user_id: string | null
+          cancel_reason: string | null
+          cancelled_at: string | null
+          consumed_at: string | null
+          created_at: string
+          enforcement_epoch: number
+          family_id: string
+          id: string
+          protocol_version: number
+          provider_attempt_count: number
+          request_intent: string
+          state: string
+          target_id: string
+          target_kind: string
+        }
+        Insert: {
+          actor_user_id?: string | null
+          cancel_reason?: string | null
+          cancelled_at?: string | null
+          consumed_at?: string | null
+          created_at?: string
+          enforcement_epoch: number
+          family_id: string
+          id: string
+          protocol_version?: number
+          provider_attempt_count?: number
+          request_intent: string
+          state?: string
+          target_id: string
+          target_kind: string
+        }
+        Update: {
+          actor_user_id?: string | null
+          cancel_reason?: string | null
+          cancelled_at?: string | null
+          consumed_at?: string | null
+          created_at?: string
+          enforcement_epoch?: number
+          family_id?: string
+          id?: string
+          protocol_version?: number
+          provider_attempt_count?: number
+          request_intent?: string
+          state?: string
+          target_id?: string
+          target_kind?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_image_generation_requests_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_onboarding_voice_requests: {
+        Row: {
+          actor_user_id: string | null
+          attempt_number: number
+          cleanup_expected: boolean
+          created_at: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          actor_user_id?: string | null
+          attempt_number: number
+          cleanup_expected?: boolean
+          created_at?: string
+          id?: string
+          updated_at?: string
+        }
+        Update: {
+          actor_user_id?: string | null
+          attempt_number?: number
+          cleanup_expected?: boolean
+          created_at?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ai_provider_attempts: {
+        Row: {
+          attempt_number: number
+          id: number
+          provider: string
+          request_id: string
+          reserved_at: string
+        }
+        Insert: {
+          attempt_number: number
+          id?: number
+          provider: string
+          request_id: string
+          reserved_at?: string
+        }
+        Update: {
+          attempt_number?: number
+          id?: number
+          provider?: string
+          request_id?: string
+          reserved_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_provider_attempts_request_id_fkey"
+            columns: ["request_id"]
+            isOneToOne: false
+            referencedRelation: "ai_image_generation_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_system_usage_monthly_rollups: {
+        Row: {
+          attribution_scope: string
+          calls: number
+          estimated_cost_usd: number
+          failed_calls: number
+          model: string
+          month: string
+          operation: string
+          unpriced_calls: number
+          updated_at: string
+        }
+        Insert: {
+          attribution_scope: string
+          calls?: number
+          estimated_cost_usd?: number
+          failed_calls?: number
+          model: string
+          month: string
+          operation: string
+          unpriced_calls?: number
+          updated_at?: string
+        }
+        Update: {
+          attribution_scope?: string
+          calls?: number
+          estimated_cost_usd?: number
+          failed_calls?: number
+          model?: string
+          month?: string
+          operation?: string
+          unpriced_calls?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ai_usage_alert_outbox: {
+        Row: {
+          attempts: number
+          claim_started_at: string | null
+          claim_token: string | null
+          created_at: string
+          environment_id: string
+          family_id: string | null
+          id: string
+          idempotency_key: string
+          kind: string
+          payload: Json
+          period_start: string
+          policy_version: number
+          sent_at: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          claim_started_at?: string | null
+          claim_token?: string | null
+          created_at?: string
+          environment_id: string
+          family_id?: string | null
+          id?: string
+          idempotency_key: string
+          kind: string
+          payload?: Json
+          period_start: string
+          policy_version: number
+          sent_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          claim_started_at?: string | null
+          claim_token?: string | null
+          created_at?: string
+          environment_id?: string
+          family_id?: string | null
+          id?: string
+          idempotency_key?: string
+          kind?: string
+          payload?: Json
+          period_start?: string
+          policy_version?: number
+          sent_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_alert_outbox_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_usage_events: {
+        Row: {
+          actor_user_id: string | null
+          ai_call_id: string
+          attribution_scope: string
+          audio_seconds: number | null
+          billing_status: string
+          cached_input_tokens: number | null
+          cost_basis: string
+          cost_is_complete: boolean
+          created_at: string
+          estimated_cost_usd: number | null
+          family_id: string | null
+          id: string
+          input_image_tokens: number | null
+          input_text_tokens: number | null
+          model: string
+          onboarding_request_id: string | null
+          operation: string
+          output_image_tokens: number | null
+          output_text_tokens: number | null
+          pricing_version: string | null
+          provider: string | null
+          provider_usage: Json
+          request_intent: string | null
+          success: boolean
+          usage_request_id: string | null
+        }
+        Insert: {
+          actor_user_id?: string | null
+          ai_call_id: string
+          attribution_scope?: string
+          audio_seconds?: number | null
+          billing_status?: string
+          cached_input_tokens?: number | null
+          cost_basis?: string
+          cost_is_complete?: boolean
+          created_at?: string
+          estimated_cost_usd?: number | null
+          family_id?: string | null
+          id?: string
+          input_image_tokens?: number | null
+          input_text_tokens?: number | null
+          model: string
+          onboarding_request_id?: string | null
+          operation: string
+          output_image_tokens?: number | null
+          output_text_tokens?: number | null
+          pricing_version?: string | null
+          provider?: string | null
+          provider_usage?: Json
+          request_intent?: string | null
+          success: boolean
+          usage_request_id?: string | null
+        }
+        Update: {
+          actor_user_id?: string | null
+          ai_call_id?: string
+          attribution_scope?: string
+          audio_seconds?: number | null
+          billing_status?: string
+          cached_input_tokens?: number | null
+          cost_basis?: string
+          cost_is_complete?: boolean
+          created_at?: string
+          estimated_cost_usd?: number | null
+          family_id?: string | null
+          id?: string
+          input_image_tokens?: number | null
+          input_text_tokens?: number | null
+          model?: string
+          onboarding_request_id?: string | null
+          operation?: string
+          output_image_tokens?: number | null
+          output_text_tokens?: number | null
+          pricing_version?: string | null
+          provider?: string | null
+          provider_usage?: Json
+          request_intent?: string | null
+          success?: boolean
+          usage_request_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_events_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_usage_events_onboarding_request_id_fkey"
+            columns: ["onboarding_request_id"]
+            isOneToOne: false
+            referencedRelation: "ai_onboarding_voice_requests"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_usage_events_usage_request_id_fkey"
+            columns: ["usage_request_id"]
+            isOneToOne: false
+            referencedRelation: "ai_image_generation_requests"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_usage_limit_notices: {
+        Row: {
+          actor_user_id: string
+          created_at: string
+          dismissed_at: string | null
+          family_id: string
+          id: string
+          quota_policy_epoch: number
+          retry_after: string
+          scope: string
+          target_id: string
+          target_kind: string
+        }
+        Insert: {
+          actor_user_id: string
+          created_at?: string
+          dismissed_at?: string | null
+          family_id: string
+          id?: string
+          quota_policy_epoch: number
+          retry_after: string
+          scope: string
+          target_id: string
+          target_kind: string
+        }
+        Update: {
+          actor_user_id?: string
+          created_at?: string
+          dismissed_at?: string | null
+          family_id?: string
+          id?: string
+          quota_policy_epoch?: number
+          retry_after?: string
+          scope?: string
+          target_id?: string
+          target_kind?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_limit_notices_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_usage_monthly_rollups: {
+        Row: {
+          calls: number
+          estimated_cost_usd: number
+          failed_calls: number
+          family_id: string
+          model: string
+          month: string
+          operation: string
+          unpriced_calls: number
+          updated_at: string
+        }
+        Insert: {
+          calls?: number
+          estimated_cost_usd?: number
+          failed_calls?: number
+          family_id: string
+          model: string
+          month: string
+          operation: string
+          unpriced_calls?: number
+          updated_at?: string
+        }
+        Update: {
+          calls?: number
+          estimated_cost_usd?: number
+          failed_calls?: number
+          family_id?: string
+          model?: string
+          month?: string
+          operation?: string
+          unpriced_calls?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_monthly_rollups_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_usage_settings: {
+        Row: {
+          alert_policy_version: number
+          enforcement_activated_at: string | null
+          enforcement_enabled: boolean
+          family_monthly_spend_alert_usd: number
+          family_request_alert_fraction: number
+          family_unpriced_alert_min_calls: number
+          global_fallback_alert_fraction: number
+          global_fallback_alert_min_calls: number
+          global_unpriced_alert_fraction: number
+          global_unpriced_alert_min_calls: number
+          image_requests_per_family_per_day: number
+          image_requests_per_family_per_month: number
+          manual_regenerations_per_memory_per_day: number
+          max_alert_outbox_attempts: number
+          observability_gap_alert_minutes: number
+          quota_policy_epoch: number
+          singleton: boolean
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          alert_policy_version?: number
+          enforcement_activated_at?: string | null
+          enforcement_enabled?: boolean
+          family_monthly_spend_alert_usd?: number
+          family_request_alert_fraction?: number
+          family_unpriced_alert_min_calls?: number
+          global_fallback_alert_fraction?: number
+          global_fallback_alert_min_calls?: number
+          global_unpriced_alert_fraction?: number
+          global_unpriced_alert_min_calls?: number
+          image_requests_per_family_per_day?: number
+          image_requests_per_family_per_month?: number
+          manual_regenerations_per_memory_per_day?: number
+          max_alert_outbox_attempts?: number
+          observability_gap_alert_minutes?: number
+          quota_policy_epoch?: number
+          singleton?: boolean
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          alert_policy_version?: number
+          enforcement_activated_at?: string | null
+          enforcement_enabled?: boolean
+          family_monthly_spend_alert_usd?: number
+          family_request_alert_fraction?: number
+          family_unpriced_alert_min_calls?: number
+          global_fallback_alert_fraction?: number
+          global_fallback_alert_min_calls?: number
+          global_unpriced_alert_fraction?: number
+          global_unpriced_alert_min_calls?: number
+          image_requests_per_family_per_day?: number
+          image_requests_per_family_per_month?: number
+          manual_regenerations_per_memory_per_day?: number
+          max_alert_outbox_attempts?: number
+          observability_gap_alert_minutes?: number
+          quota_policy_epoch?: number
+          singleton?: boolean
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
       blocked_family_accounts: {
         Row: {
           blocked_membership_id: string | null
@@ -294,6 +860,14 @@ export type Database = {
           profile_picture_key: string
           reference_date: string | null
           updated_at: string
+          usage_limit_epoch: number | null
+          usage_limit_retry_after: string | null
+          usage_limit_scope: string | null
+          usage_preparation_deadline_at: string | null
+          usage_preparation_input_updated_at: string | null
+          usage_preparation_ordinal: number | null
+          usage_preparation_request_id: string | null
+          usage_preparation_token: string | null
           user_id: string | null
         }
         Insert: {
@@ -312,6 +886,14 @@ export type Database = {
           profile_picture_key: string
           reference_date?: string | null
           updated_at?: string
+          usage_limit_epoch?: number | null
+          usage_limit_retry_after?: string | null
+          usage_limit_scope?: string | null
+          usage_preparation_deadline_at?: string | null
+          usage_preparation_input_updated_at?: string | null
+          usage_preparation_ordinal?: number | null
+          usage_preparation_request_id?: string | null
+          usage_preparation_token?: string | null
           user_id?: string | null
         }
         Update: {
@@ -330,9 +912,24 @@ export type Database = {
           profile_picture_key?: string
           reference_date?: string | null
           updated_at?: string
+          usage_limit_epoch?: number | null
+          usage_limit_retry_after?: string | null
+          usage_limit_scope?: string | null
+          usage_preparation_deadline_at?: string | null
+          usage_preparation_input_updated_at?: string | null
+          usage_preparation_ordinal?: number | null
+          usage_preparation_request_id?: string | null
+          usage_preparation_token?: string | null
           user_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "family_member_portrait_versio_usage_preparation_request_id_fkey"
+            columns: ["usage_preparation_request_id"]
+            isOneToOne: false
+            referencedRelation: "ai_image_generation_requests"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "family_member_portrait_versions_member_family_fkey"
             columns: ["family_member_id", "family_id"]
@@ -491,6 +1088,14 @@ export type Database = {
           memory_date: string
           memory_type: string
           updated_at: string
+          usage_limit_epoch: number | null
+          usage_limit_retry_after: string | null
+          usage_limit_scope: string | null
+          usage_preparation_deadline_at: string | null
+          usage_preparation_input_updated_at: string | null
+          usage_preparation_ordinal: number | null
+          usage_preparation_request_id: string | null
+          usage_preparation_token: string | null
           user_id: string | null
         }
         Insert: {
@@ -511,6 +1116,14 @@ export type Database = {
           memory_date?: string
           memory_type?: string
           updated_at?: string
+          usage_limit_epoch?: number | null
+          usage_limit_retry_after?: string | null
+          usage_limit_scope?: string | null
+          usage_preparation_deadline_at?: string | null
+          usage_preparation_input_updated_at?: string | null
+          usage_preparation_ordinal?: number | null
+          usage_preparation_request_id?: string | null
+          usage_preparation_token?: string | null
           user_id?: string | null
         }
         Update: {
@@ -531,6 +1144,14 @@ export type Database = {
           memory_date?: string
           memory_type?: string
           updated_at?: string
+          usage_limit_epoch?: number | null
+          usage_limit_retry_after?: string | null
+          usage_limit_scope?: string | null
+          usage_preparation_deadline_at?: string | null
+          usage_preparation_input_updated_at?: string | null
+          usage_preparation_ordinal?: number | null
+          usage_preparation_request_id?: string | null
+          usage_preparation_token?: string | null
           user_id?: string | null
         }
         Relationships: [
@@ -539,6 +1160,13 @@ export type Database = {
             columns: ["family_id"]
             isOneToOne: false
             referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "memories_usage_preparation_request_id_fkey"
+            columns: ["usage_preparation_request_id"]
+            isOneToOne: false
+            referencedRelation: "ai_image_generation_requests"
             referencedColumns: ["id"]
           },
         ]
@@ -635,6 +1263,10 @@ export type Database = {
           updated_at: string
           upload_started_at: string | null
           upload_token: string | null
+          usage_enforcement_epoch: number | null
+          usage_enforcement_required: boolean
+          usage_protocol_version: number
+          usage_request_id: string | null
           workflow_instance_id: string
         }
         Insert: {
@@ -666,6 +1298,10 @@ export type Database = {
           updated_at?: string
           upload_started_at?: string | null
           upload_token?: string | null
+          usage_enforcement_epoch?: number | null
+          usage_enforcement_required?: boolean
+          usage_protocol_version?: number
+          usage_request_id?: string | null
           workflow_instance_id: string
         }
         Update: {
@@ -697,6 +1333,10 @@ export type Database = {
           updated_at?: string
           upload_started_at?: string | null
           upload_token?: string | null
+          usage_enforcement_epoch?: number | null
+          usage_enforcement_required?: boolean
+          usage_protocol_version?: number
+          usage_request_id?: string | null
           workflow_instance_id?: string
         }
         Relationships: [
@@ -712,6 +1352,13 @@ export type Database = {
             columns: ["memory_id"]
             isOneToOne: false
             referencedRelation: "memories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "memory_illustration_jobs_usage_request_id_fkey"
+            columns: ["usage_request_id"]
+            isOneToOne: false
+            referencedRelation: "ai_image_generation_requests"
             referencedColumns: ["id"]
           },
         ]
@@ -830,6 +1477,10 @@ export type Database = {
           updated_at: string
           upload_started_at: string | null
           upload_token: string | null
+          usage_enforcement_epoch: number | null
+          usage_enforcement_required: boolean
+          usage_protocol_version: number
+          usage_request_id: string | null
           workflow_instance_id: string
         }
         Insert: {
@@ -857,6 +1508,10 @@ export type Database = {
           updated_at?: string
           upload_started_at?: string | null
           upload_token?: string | null
+          usage_enforcement_epoch?: number | null
+          usage_enforcement_required?: boolean
+          usage_protocol_version?: number
+          usage_request_id?: string | null
           workflow_instance_id: string
         }
         Update: {
@@ -884,6 +1539,10 @@ export type Database = {
           updated_at?: string
           upload_started_at?: string | null
           upload_token?: string | null
+          usage_enforcement_epoch?: number | null
+          usage_enforcement_required?: boolean
+          usage_protocol_version?: number
+          usage_request_id?: string | null
           workflow_instance_id?: string
         }
         Relationships: [
@@ -899,6 +1558,13 @@ export type Database = {
             columns: ["portrait_version_id"]
             isOneToOne: false
             referencedRelation: "family_member_portrait_versions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portrait_generation_jobs_usage_request_id_fkey"
+            columns: ["usage_request_id"]
+            isOneToOne: false
+            referencedRelation: "ai_image_generation_requests"
             referencedColumns: ["id"]
           },
         ]
@@ -988,9 +1654,108 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      ai_usage_observability_gaps: {
+        Row: {
+          attribution_scope: string | null
+          consumed_at: string | null
+          expected_operation: string | null
+          family_id: string | null
+          onboarding_request_id: string | null
+          target_id: string | null
+          target_kind: string | null
+          usage_request_id: string | null
+        }
+        Relationships: []
+      }
+      company_ai_costs_monthly: {
+        Row: {
+          attribution_scope: string | null
+          calls: number | null
+          estimated_cost_usd: number | null
+          failed_calls: number | null
+          model: string | null
+          month: string | null
+          operation: string | null
+          unpriced_calls: number | null
+        }
+        Relationships: []
+      }
+      family_ai_costs_monthly: {
+        Row: {
+          calls: number | null
+          estimated_cost_usd: number | null
+          failed_calls: number | null
+          family_id: string | null
+          model: string | null
+          month: string | null
+          operation: string | null
+          unpriced_calls: number | null
+        }
+        Insert: {
+          calls?: number | null
+          estimated_cost_usd?: number | null
+          failed_calls?: number | null
+          family_id?: string | null
+          model?: string | null
+          month?: string | null
+          operation?: string | null
+          unpriced_calls?: number | null
+        }
+        Update: {
+          calls?: number | null
+          estimated_cost_usd?: number | null
+          failed_calls?: number | null
+          family_id?: string | null
+          model?: string | null
+          month?: string | null
+          operation?: string | null
+          unpriced_calls?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_monthly_rollups_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
+      ai_usage_is_active: {
+        Args: {
+          p_settings: Database["public"]["Tables"]["ai_usage_settings"]["Row"]
+        }
+        Returns: boolean
+      }
+      ai_usage_limit_scope: {
+        Args: {
+          p_family_id: string
+          p_intent: string
+          p_now: string
+          p_settings: Database["public"]["Tables"]["ai_usage_settings"]["Row"]
+          p_target_id: string
+          p_target_kind: string
+        }
+        Returns: string
+      }
+      ai_usage_reject: {
+        Args: {
+          p_actor_id: string
+          p_epoch: number
+          p_family_id: string
+          p_now: string
+          p_scope: string
+          p_target_id: string
+          p_target_kind: string
+        }
+        Returns: string
+      }
+      ai_usage_retry_after: {
+        Args: { p_now: string; p_scope: string }
+        Returns: string
+      }
       authorize_memory_illustration_workflow_upload: {
         Args: { p_job_id: string; p_output_key: string }
         Returns: {
@@ -1007,6 +1772,44 @@ export type Database = {
           upload_token: string
         }[]
       }
+      begin_memory_illustration_usage: {
+        Args: {
+          p_actor_user_id: string
+          p_memory_id: string
+          p_request_id: string
+          p_request_intent: string
+        }
+        Returns: {
+          existing_job_id: string
+          outcome: string
+          preparation_deadline_at: string
+          preparation_input_updated_at: string
+          preparation_ordinal: number
+          preparation_token: string
+          request_id: string
+          retry_after_iso: string
+          scope: string
+        }[]
+      }
+      begin_portrait_generation_usage: {
+        Args: {
+          p_actor_user_id: string
+          p_portrait_version_id: string
+          p_request_id: string
+          p_request_intent: string
+        }
+        Returns: {
+          existing_job_id: string
+          outcome: string
+          preparation_deadline_at: string
+          preparation_input_updated_at: string
+          preparation_ordinal: number
+          preparation_token: string
+          request_id: string
+          retry_after_iso: string
+          scope: string
+        }[]
+      }
       cancel_account_deletion: {
         Args: { p_owner_id: string }
         Returns: boolean
@@ -1014,6 +1817,14 @@ export type Database = {
       claim_account_hard_deletion: {
         Args: { p_hard_delete_token: string; p_owner_id: string }
         Returns: boolean
+      }
+      claim_ai_usage_alert_outbox: {
+        Args: { p_id: string }
+        Returns: {
+          claim_token: string
+          claimed: boolean
+          payload: Json
+        }[]
       }
       claim_content_report_email_alert: {
         Args: { p_report_id: string }
@@ -1052,6 +1863,14 @@ export type Database = {
           profile_picture_key: string
           reference_date: string | null
           updated_at: string
+          usage_limit_epoch: number | null
+          usage_limit_retry_after: string | null
+          usage_limit_scope: string | null
+          usage_preparation_deadline_at: string | null
+          usage_preparation_input_updated_at: string | null
+          usage_preparation_ordinal: number | null
+          usage_preparation_request_id: string | null
+          usage_preparation_token: string | null
           user_id: string | null
         }
         SetofOptions: {
@@ -1084,6 +1903,14 @@ export type Database = {
           profile_picture_key: string
           reference_date: string | null
           updated_at: string
+          usage_limit_epoch: number | null
+          usage_limit_retry_after: string | null
+          usage_limit_scope: string | null
+          usage_preparation_deadline_at: string | null
+          usage_preparation_input_updated_at: string | null
+          usage_preparation_ordinal: number | null
+          usage_preparation_request_id: string | null
+          usage_preparation_token: string | null
           user_id: string | null
         }
         SetofOptions: {
@@ -1188,6 +2015,14 @@ export type Database = {
           profile_picture_key: string
           reference_date: string | null
           updated_at: string
+          usage_limit_epoch: number | null
+          usage_limit_retry_after: string | null
+          usage_limit_scope: string | null
+          usage_preparation_deadline_at: string | null
+          usage_preparation_input_updated_at: string | null
+          usage_preparation_ordinal: number | null
+          usage_preparation_request_id: string | null
+          usage_preparation_token: string | null
           user_id: string | null
         }
         SetofOptions: {
@@ -1219,6 +2054,32 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      enqueue_ai_usage_alerts: {
+        Args: { p_environment_id: string; p_now?: string }
+        Returns: {
+          attempts: number
+          claim_started_at: string | null
+          claim_token: string | null
+          created_at: string
+          environment_id: string
+          family_id: string | null
+          id: string
+          idempotency_key: string
+          kind: string
+          payload: Json
+          period_start: string
+          policy_version: number
+          sent_at: string | null
+          status: string
+          updated_at: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "ai_usage_alert_outbox"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       fail_family_member_portrait_generation: {
         Args: { attempt_token: string; target_version_id: string }
         Returns: {
@@ -1237,6 +2098,14 @@ export type Database = {
           profile_picture_key: string
           reference_date: string | null
           updated_at: string
+          usage_limit_epoch: number | null
+          usage_limit_retry_after: string | null
+          usage_limit_scope: string | null
+          usage_preparation_deadline_at: string | null
+          usage_preparation_input_updated_at: string | null
+          usage_preparation_ordinal: number | null
+          usage_preparation_request_id: string | null
+          usage_preparation_token: string | null
           user_id: string | null
         }
         SetofOptions: {
@@ -1286,6 +2155,14 @@ export type Database = {
           profile_picture_key: string
           reference_date: string | null
           updated_at: string
+          usage_limit_epoch: number | null
+          usage_limit_retry_after: string | null
+          usage_limit_scope: string | null
+          usage_preparation_deadline_at: string | null
+          usage_preparation_input_updated_at: string | null
+          usage_preparation_ordinal: number | null
+          usage_preparation_request_id: string | null
+          usage_preparation_token: string | null
           user_id: string | null
         }
         SetofOptions: {
@@ -1332,6 +2209,27 @@ export type Database = {
           memory_id: string
         }[]
       }
+      get_my_ai_usage_limit_notices: {
+        Args: never
+        Returns: {
+          actor_user_id: string
+          created_at: string
+          dismissed_at: string | null
+          family_id: string
+          id: string
+          quota_policy_epoch: number
+          retry_after: string
+          scope: string
+          target_id: string
+          target_kind: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "ai_usage_limit_notices"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       get_my_open_content_reports: {
         Args: { p_family_id: string }
         Returns: {
@@ -1358,10 +2256,41 @@ export type Database = {
         Returns: boolean
       }
       is_family_member: { Args: { fam: string }; Returns: boolean }
+      mark_ai_usage_alert_outbox_delivery_unknown: {
+        Args: { p_id: string; p_token: string }
+        Returns: boolean
+      }
+      mark_ai_usage_alert_outbox_sent: {
+        Args: { p_id: string; p_token: string }
+        Returns: boolean
+      }
       mark_content_report_email_alert_sent: {
         Args: { p_attempt_token: string; p_report_id: string }
         Returns: boolean
       }
+      mark_onboarding_voice_cleanup_expected: {
+        Args: { p_actor_user_id: string; p_request_id: string }
+        Returns: boolean
+      }
+      promote_ai_image_preparation:
+        | {
+            Args: {
+              p_job_id?: string
+              p_preparation_token: string
+              p_request_id: string
+            }
+            Returns: boolean
+          }
+        | {
+            Args: {
+              p_job_id?: string
+              p_preparation_input_updated_at: string
+              p_preparation_ordinal: number
+              p_preparation_token: string
+              p_request_id: string
+            }
+            Returns: boolean
+          }
       publish_memory_illustration_workflow_job: {
         Args: { p_job_id: string; p_model: string }
         Returns: {
@@ -1378,6 +2307,16 @@ export type Database = {
           published: boolean
         }[]
       }
+      purge_expired_ai_usage_data: {
+        Args: { p_now?: string }
+        Returns: {
+          events_deleted: number
+          notices_deleted: number
+          outbox_deleted: number
+          requests_deleted: number
+          rollups_deleted: number
+        }[]
+      }
       reconcile_portrait_generation_workflow_job: {
         Args: { p_job_id: string; p_model: string }
         Returns: {
@@ -1385,6 +2324,74 @@ export type Database = {
           old_key: string
           published: boolean
         }[]
+      }
+      record_ai_memory_preparation_emotion: {
+        Args: {
+          p_emotion: string
+          p_preparation_input_updated_at: string
+          p_preparation_ordinal: number
+          p_preparation_token: string
+          p_request_id: string
+        }
+        Returns: boolean
+      }
+      record_ai_usage_event: {
+        Args: {
+          p_ai_call_id: string
+          p_attempt_number: number
+          p_audio_seconds: number
+          p_billing_status: string
+          p_cached_input_tokens: number
+          p_cost_basis: string
+          p_cost_is_complete: boolean
+          p_estimated_cost_usd: number
+          p_input_image_tokens: number
+          p_input_text_tokens: number
+          p_job_id: string
+          p_job_kind: string
+          p_model: string
+          p_operation: string
+          p_output_image_tokens: number
+          p_output_text_tokens: number
+          p_pricing_version: string
+          p_provider: string
+          p_provider_usage: Json
+          p_success: boolean
+          p_usage_request_id: string
+        }
+        Returns: boolean
+      }
+      record_ai_usage_event_detailed: {
+        Args: {
+          p_actor_user_id: string
+          p_ai_call_id: string
+          p_attribution_scope?: string
+          p_billing_status?: string
+          p_cost_basis?: string
+          p_cost_is_complete?: boolean
+          p_estimated_cost_usd?: number
+          p_family_id: string
+          p_model: string
+          p_onboarding_request_id?: string
+          p_operation: string
+          p_pricing_version?: string
+          p_provider_usage?: Json
+          p_success: boolean
+          p_usage_request_id: string
+        }
+        Returns: boolean
+      }
+      record_ai_usage_event_legacy: {
+        Args: {
+          p_ai_call_id: string
+          p_billing_status: string
+          p_model: string
+          p_operation: string
+          p_provider_usage: Json
+          p_success: boolean
+          p_usage_request_id: string
+        }
+        Returns: boolean
       }
       record_memory_illustration_workflow_upload_complete: {
         Args: { p_job_id: string; p_output_key: string; p_upload_token: string }
@@ -1400,6 +2407,29 @@ export type Database = {
       }
       release_account_hard_deletion_claim: {
         Args: { p_hard_delete_token: string; p_owner_id: string }
+        Returns: boolean
+      }
+      release_ai_image_preparation:
+        | {
+            Args: {
+              p_preparation_input_updated_at: string
+              p_preparation_ordinal: number
+              p_preparation_token: string
+              p_reason: string
+              p_request_id: string
+            }
+            Returns: boolean
+          }
+        | {
+            Args: {
+              p_preparation_token: string
+              p_reason?: string
+              p_request_id: string
+            }
+            Returns: boolean
+          }
+      release_ai_usage_alert_outbox: {
+        Args: { p_id: string; p_token: string }
         Returns: boolean
       }
       release_content_report_email_alert: {
@@ -1418,9 +2448,64 @@ export type Database = {
         Args: { assets: Json; target_memory_id: string }
         Returns: undefined
       }
+      reserve_ai_image_provider_attempt_v2:
+        | {
+            Args: {
+              p_attempt_number: number
+              p_job_id: string
+              p_job_kind: string
+              p_provider: string
+              p_request_id: string
+            }
+            Returns: {
+              outcome: string
+              protocol_version: number
+              retry_after_iso: string
+              scope: string
+            }[]
+          }
+        | {
+            Args: {
+              p_attempt_number: number
+              p_provider: string
+              p_request_id: string
+            }
+            Returns: {
+              outcome: string
+              protocol_version: number
+              retry_after_iso: string
+              scope: string
+            }[]
+          }
+      reserve_legacy_ai_image_provider_attempt_v2: {
+        Args: {
+          p_attempt_number: number
+          p_preparation_input_updated_at: string
+          p_preparation_ordinal: number
+          p_preparation_token: string
+          p_provider: string
+          p_request_id: string
+          p_target_id: string
+          p_target_kind: string
+        }
+        Returns: {
+          outcome: string
+          protocol_version: number
+          retry_after_iso: string
+          scope: string
+        }[]
+      }
       reserve_memory_illustration_provider_attempt: {
         Args: { p_attempt_number: number; p_job_id: string; p_provider: string }
         Returns: boolean
+      }
+      reserve_onboarding_voice_attempt: {
+        Args: { p_actor_user_id: string }
+        Returns: {
+          attempts_used: number
+          request_id: string
+          reserved: boolean
+        }[]
       }
       reserve_portrait_generation_provider_attempt: {
         Args: { p_attempt_number: number; p_job_id: string; p_provider: string }
@@ -1492,6 +2577,14 @@ export type Database = {
           profile_picture_key: string
           reference_date: string | null
           updated_at: string
+          usage_limit_epoch: number | null
+          usage_limit_retry_after: string | null
+          usage_limit_scope: string | null
+          usage_preparation_deadline_at: string | null
+          usage_preparation_input_updated_at: string | null
+          usage_preparation_ordinal: number | null
+          usage_preparation_request_id: string | null
+          usage_preparation_token: string | null
           user_id: string | null
         }
         SetofOptions: {
@@ -1629,6 +2722,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {},
   },

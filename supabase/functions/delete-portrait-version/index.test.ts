@@ -1,5 +1,6 @@
-import { assertEquals } from 'jsr:@std/assert@1';
-import { handleDeletePortraitVersion } from './index.ts';
+import { assertEquals, assertStrictEquals } from 'jsr:@std/assert@1';
+import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
+import { DEFAULT_DEPENDENCIES, handleDeletePortraitVersion } from './index.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const FAMILY_ID = '22222222-2222-4222-8222-222222222222';
@@ -121,4 +122,8 @@ Deno.test('delete-portrait-version deletes the complete prefix before finalizing
     `delete:${portraitKey}`,
     'finish_family_member_portrait_deletion',
   ]);
+});
+
+Deno.test('WP-SEC: the real default wiring uses the anonymous-rejecting auth chokepoint, not the permissive one', () => {
+  assertStrictEquals(DEFAULT_DEPENDENCIES.getAuthenticatedUser, getAuthenticatedNonAnonymousUser);
 });

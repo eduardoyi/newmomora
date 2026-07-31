@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { editImage, ImageProviderError } from '../src/openai';
+import { editImage, ImageProviderError, parseImageUsage } from '../src/openai';
+import { priceImageUsage } from '../src/pricing';
 
 const fakeEnv = { OPENAI_API_KEY: 'test-openai-key' } as Env;
 const references = [{ description: 'A child', bytes: new Uint8Array([1, 2, 3]).buffer }];
@@ -8,6 +9,32 @@ const references = [{ description: 'A child', bytes: new Uint8Array([1, 2, 3]).b
 afterEach(() => vi.unstubAllGlobals());
 
 describe('OpenAI error classification', () => {
+  it('allowlists nested image usage and prices split output categories', () => {
+    const usage = parseImageUsage({
+      input_tokens_details: { text_tokens: 10, image_tokens: 20, cached_tokens: 3, ignored: 999 },
+      output_tokens_details: { text_tokens: 4, image_tokens: 5, ignored: 999 },
+      prompt: 'must not persist',
+    });
+    expect(usage).toEqual({
+      inputTextTokens: 10,
+      inputImageTokens: 20,
+      inputCachedTokens: 3,
+      outputTextTokens: 4,
+      outputImageTokens: 5,
+    });
+    expect(priceImageUsage('gpt-image-1.5', usage)).toMatchObject({
+      costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: 0.000434,
+    });
+  });
+
+  it('marks missing usage unpriced instead of guessing a token count', () => {
+    expect(parseImageUsage({ input_tokens_details: { text_tokens: 1 } })).toMatchObject({
+      inputImageTokens: null, outputImageTokens: null,
+    });
+    expect(priceImageUsage('gpt-image-2', null)).toEqual({
+      costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null,
+    });
+  });
   it('does not fall back after moderation', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(
       { error: { code: 'moderation_blocked' } },

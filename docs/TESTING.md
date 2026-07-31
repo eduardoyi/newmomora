@@ -35,6 +35,26 @@ Tests are built **alongside features**, not after. Every major feature PR includ
 
 ---
 
+### Keyboard and safe-area regression contract
+
+Any screen with a `TextInput`, pinned CTA, footer, link, sheet action, or
+absolute bottom control must be verified as an edge-to-edge layout on both
+iOS and Android. The focused test must provide a non-zero bottom inset (use
+Android-style gesture or three-button navigation metrics), assert the
+keyboard-closed footer/action position, and assert the keyboard-open position
+separately. This catches actions that are technically inside the app view but
+still covered by Android system navigation.
+
+Use one layout primitive to own keyboard-height compensation. Tests should
+also cover a lower or multiline focused input and the transition back to a
+closed keyboard: the field and primary action stay reachable, content is not
+translated farther than necessary, and the previous scroll position is
+restored. Do not treat `adjustResize`, extra bottom padding, or an iOS-only
+snapshot as proof of keyboard safety. The implementation must use the live
+safe-area inset (or an equivalent safe-area edge wrapper) when the keyboard is
+closed and must not add the navigation-bar inset a second time when the
+keyboard already owns that region.
+
 ## Directory layout
 
 ```
@@ -297,14 +317,56 @@ maestro test .maestro/flows/
 ## Commands
 
 ```bash
-npm test                 # unit + integration (CI: --ci --coverage)
+npm test                 # unit + integration; detects and reports JS open handles
 npm run test:watch       # local development
 npm run test:edge        # Deno Edge Function tests
+npm exec supabase -- start # repo-pinned Supabase CLI
+npm run db:reset         # apply all migrations to the local database only
+npm run test:db          # pgTAP suites in supabase/tests against local only
 npm run test:e2e:family-fixture   # Maestro: family upload (fixture)
 npm run test:e2e:family-picker    # Maestro: family upload (system picker)
+npm run test:e2e:onboarding:owner-visual-audit:pre-auth # Maestro: safe owner S0-S12A screenshots
+npm run test:e2e:onboarding:owner-visual-audit          # Maestro: guarded local owner S0-S17 screenshots
 ```
 
+The repository pins the Supabase CLI in `devDependencies`; use `npm exec supabase -- …` or
+the `db:reset`/`test:db` scripts rather than a globally installed CLI. This avoids local Auth
+and migration behavior drifting with an older global binary.
+
+The default Jest command includes `--detectOpenHandles`. On macOS, the Expo native test stack can
+leave an opaque `fsevents` handle after an otherwise-complete full run; this detector lets Jest
+shut down while still reporting JavaScript handles. Do not replace it with `--forceExit`:
+force-exiting would hide leaks. `npm run test:watch` intentionally stays plain Jest watch mode.
+
 Until CI exists, run `npm test` before marking work complete.
+
+### Onboarding visual review captures
+
+The visual-audit flows are an AI-assisted design-review input, not a visual
+snapshot assertion. They require one (not a comma-separated list of)
+`MAESTRO_DEVICE_ID` and use synthetic names and memory text. Every capture name
+starts with its screen order so an agent can review the output in sequence
+without guessing the route.
+
+`npm run test:e2e:onboarding:owner-visual-audit:pre-auth` stops at the empty
+owner email screen (S12A). It requires `.env.local` to name exactly
+`http://127.0.0.1:<port>` and never enters an email, requests an OTP, commits
+onboarding data, or starts image generation. It captures keyboard-open kids,
+family-name, typed-capture, and account-email states as separate named images.
+
+`npm run test:e2e:onboarding:owner-visual-audit` continues through S17 only
+by delegating to the guarded isolated-local onboarding runner. It requires the
+same `ONBOARDING_E2E_IMAGE_STACK=isolated-local`, local Worker/R2/Edge Function
+configuration, and `MAESTRO_DEVICE_ID` as `test:e2e:onboarding`; it creates a
+synthetic local account and removes it through the normal hard-delete path.
+It also requires `ONBOARDING_VISUAL_AUDIT_ALLOW_REAL_IMAGE_COSTS=1`: the local
+Worker/R2 setup is isolated, but the portrait request still reaches the
+configured OpenAI provider and has a real provider cost. Both commands print
+their ignored output directory under `.maestro/report/`. An in-repository
+`ONBOARDING_VISUAL_AUDIT_OUTPUT` is accepted only when ignored by git; an
+external output path must be absolute. Do not run either audit with hosted or
+production configuration. This audit is owner-only; join-flow visual review is
+separate future work.
 
 ---
 

@@ -629,6 +629,7 @@
         "npm:react-native@0.85.3",
         "npm:react-test-renderer@19.2.3",
         "npm:react@19.2.3",
+        "npm:supabase@2.110.0",
         "npm:typescript@~6.0.3",
         "npm:ws@^8.21.0"
       ]

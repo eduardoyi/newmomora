@@ -4,6 +4,13 @@ export const addFamilyMemberRoute = '/(app)/add-family-member' as Href;
 export const newMemoryRoute = '/(app)/new-memory' as Href;
 export const timelineRoute = '/(app)/(tabs)/timeline' as Href;
 export const noFamilyRoute = '/(app)/no-family' as Href;
+// The kids roster tab ("The cast") -- app/(app)/(tabs)/family.tsx. Named
+// `familyRosterRoute`, not `familyRoute`, to avoid colliding with the
+// per-member `familyMemberRoute`/`editFamilyMemberRoute` below and with the
+// children-vs-household naming hazard this file already calls out for
+// `sharing/*` (see that comment): this route is the children roster, not
+// the family-sharing/household surface.
+export const familyRosterRoute = '/(app)/(tabs)/family' as Href;
 
 // Family sharing (household) routes -- deliberately under `sharing/`, not
 // `family/` (that group means the *children* roster; see plan §9 on the

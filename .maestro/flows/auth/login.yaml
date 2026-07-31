@@ -2,8 +2,13 @@ appId: com.memora.app
 ---
 - launchApp:
     appId: com.memora.app
+    clearState: true
     arguments:
       EXDevMenuIsOnboardingFinished: true
+- extendedWaitUntil:
+    visible:
+      text: "Continue|Close|Momora|Timeline|A little pause for illustrations|I already have an account · Log in|Welcome back"
+    timeout: 90000
 - tapOn:
     text: "Continue"
     optional: true
@@ -18,10 +23,40 @@ appId: com.memora.app
     text: "Momora"
     below: "DEVELOPMENT SERVERS"
     optional: true
+- extendedWaitUntil:
+    visible:
+      text: "Close|This is the developer menu. It gives you access to useful tools in development builds.|Timeline|A little pause for illustrations|I already have an account · Log in|Welcome back"
+    timeout: 90000
+- runFlow:
+    when:
+      visible: "This is the developer menu. It gives you access to useful tools in development builds."
+    commands:
+      - tapOn:
+          text: "Continue"
+          below: "This is the developer menu. It gives you access to useful tools in development builds."
+- tapOn:
+    text: "Close"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      text: "Timeline|A little pause for illustrations|I already have an account · Log in|Welcome back"
+    timeout: 90000
+# A session-less launch now lands on app/(onboarding)/welcome.tsx (S0), not
+# "Welcome back" directly -- the front door change in
+# docs/plans/onboarding-implementation.md WP5 (spec decision 2: "the new
+# flow is the front door"). Tap S0's quiet "Log in" link to reach the login
+# screen; optional so this is a no-op when a session already exists (the
+# "Welcome back" conditional below then just never fires). Do not remove
+# this tap even if it looks redundant -- without it the conditional below
+# silently never matches on a clean install.
+- tapOn:
+    id: onb-welcome-login-link
+    optional: true
 - runFlow:
     when:
       visible: "Welcome back"
     file: sign-in.yaml
 - extendedWaitUntil:
-    visible: "Timeline"
+    visible:
+      text: "Timeline|A little pause for illustrations"
     timeout: 90000

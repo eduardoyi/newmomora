@@ -144,9 +144,9 @@ export async function generatePortraitVersion(
   data: GeneratePortraitVersionResponse | null;
   error: PortraitVersionServiceError | null;
 }> {
-  const { data, error } = await invokeEdgeFunction<GeneratePortraitVersionResponse>('generate-portrait-illustration', {
-    portraitVersionId,
-  });
+  const { data, error } = await invokeEdgeFunction<GeneratePortraitVersionResponse>(
+    'generate-portrait-illustration', { portraitVersionId }, 'portrait_version',
+  );
   // Legacy callers receive `{ success: true }`; the durable dispatcher adds
   // `{ queued: true, jobId }`. Both mean the server accepted the same public
   // request and owns all subsequent state changes.

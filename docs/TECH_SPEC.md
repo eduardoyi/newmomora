@@ -992,25 +992,64 @@ Transcribes audio and returns cleaned text with suggested family tags.
 ```json
 {
   "audioBase64": "base64-encoded-audio",
-  "familyMembers": [
-    {
-      "id": "uuid",
-      "name": "Emma",
-      "nicknames": ["Em", "Emmy"],
-      "is_user_profile": false
-    }
-  ]
+  "familyId": "uuid"
 }
 ```
 
+`familyId` is required for current clients. The former `familyMembers` field
+may be accepted only for wire compatibility and is ignored for authorization
+and prompt construction. A legacy caller without `familyId` is resolved
+server-side only when its authorized active family is valid, or when it has
+exactly one authorized family membership; otherwise the function returns
+`FAMILY_CONTEXT_REQUIRED`. The client can never select the roster by sending
+member data.
+
+Pre-auth onboarding uses a separate, discriminated request. It is accepted
+only for a verified Supabase user whose server-returned `is_anonymous` field
+is exactly `true`; the client cannot opt into it by setting `mode` alone.
+
+```json
+{
+  "mode": "onboarding",
+  "audioBase64": "base64-encoded-audio",
+  "nameHints": ["Emma", "Theo"]
+}
+```
+
+`nameHints` is an optional spelling-hint list (0–6 trimmed, non-empty strings,
+maximum 50 characters each). Hints are prompt-only: they are not family-member
+IDs, do not authorize access to a family, and the onboarding response always
+has `mentionedMemberIds: []`. Before any OpenAI request, the function consumes
+one of two server-side onboarding voice attempts for that anonymous user via
+`reserve_onboarding_voice_attempt`; false returns HTTP 429
+`ONBOARDING_VOICE_LIMIT_REACHED`, while RPC errors or malformed results fail
+closed with `ONBOARDING_VOICE_RESERVATION_FAILED`. A successful reservation
+returns a private server-issued onboarding request ID; it is the only
+identifier sent to the usage ledger, which validates and derives the anonymous
+actor server-side. No onboarding session identifier is retained. The consumed
+attempt is not released when transcription or cleanup fails. After
+transcription returns, the function
+marks cleanup as expected with that request ID and verified actor before the
+cleanup call; a failed/malformed mark fails closed before that second provider
+call and drives observability-gap reporting without blocking transcription.
+
 **Logic**
 
-1. Build transcription prompt from all names + nicknames
-2. Call OpenAI `/v1/audio/transcriptions` (`gpt-4o-mini-transcribe`)
-3. Parse raw transcript for name/nickname matches → `mentionedMemberIds`
-4. Call `gpt-4o-mini` for cleanup + self-reference detection
-5. If `mentionedUserSelf`: append user profile family member ID
-6. Return result (audio discarded, not stored)
+Family mode:
+
+1. Verify the caller has a role in the requested family, then load its
+   canonical family-member roster server-side.
+2. Build transcription prompt from the canonical names + nicknames.
+3. Call OpenAI `/v1/audio/transcriptions` (`gpt-4o-mini-transcribe`).
+4. Parse raw transcript for name/nickname matches → `mentionedMemberIds`.
+5. Call `gpt-4o-mini` for cleanup + self-reference detection.
+6. If `mentionedUserSelf`, append the canonical user-profile member ID.
+7. Return result; audio is discarded and never stored.
+
+Onboarding mode follows the same two-minute/audio validation and OpenAI
+transcription + cleanup sequence, but uses only the supplied spelling hints,
+does not query a family roster, and records both provider calls as Momora
+system onboarding cost rather than family cost.
 
 **Response**
 
@@ -1021,13 +1060,47 @@ Transcribes audio and returns cleaned text with suggested family tags.
 }
 ```
 
-**Errors:** `TRANSCRIPTION_FAILED`, `EMPTY_AUDIO`, `AUDIO_TOO_LONG`
+**Errors:** `TRANSCRIPTION_FAILED`, `EMPTY_AUDIO`, `AUDIO_TOO_LONG`,
+`FAMILY_CONTEXT_REQUIRED`, `forbidden`, `ONBOARDING_ANONYMOUS_REQUIRED`,
+`ONBOARDING_VOICE_LIMIT_REACHED`, `ONBOARDING_VOICE_RESERVATION_FAILED`,
+`ONBOARDING_VOICE_CLEANUP_RESERVATION_FAILED`
 
 **Validation:** Reject audio representing > 2 minutes of recording
 
 ---
 
-### 4.5 `send-daily-reminder`
+### 4.5 `run-ai-usage-alerts`
+
+Service-only daily AI-usage alert and retention endpoint.
+
+**Trigger:** Scheduler POST at 06:00 UTC. `verify_jwt = false` is required
+because the scheduler has no user JWT; the endpoint instead requires the
+server-only `x-cron-secret` header containing `CRON_SECRET`.
+
+**Request:** `POST` with the cron-secret header and no body.
+
+**Logic**
+
+1. Enqueue threshold/anomaly alerts through the idempotent SQL outbox.
+2. Claim each row before delivery and email aggregate-only metrics to
+   `AI_USAGE_ALERT_EMAIL` (default `hello@usemomora.com`).
+3. Mark a confirmed send complete; a definite provider rejection is released
+   for bounded SQL retry; an unknown outcome is terminal to prevent duplicates.
+4. Purge expired AI-usage records. A retention-purge error is logged but does
+   not turn an otherwise completed alert run into a failed response.
+
+**Response**
+
+```json
+{ "success": true, "queued": 2, "sent": 2, "environment": "prod" }
+```
+
+The outbox payload and email contain only family IDs and aggregate metrics:
+never names, prompts, transcripts, audio, or memory content.
+
+---
+
+### 4.6 `send-daily-reminder`
 
 Sends a push notification to a single user.
 
@@ -1059,7 +1132,7 @@ Sends a push notification to a single user.
 
 ---
 
-### 4.6 `schedule-daily-reminders`
+### 4.7 `schedule-daily-reminders`
 
 Cron function run hourly.
 
@@ -1383,6 +1456,80 @@ names, journal text, media keys, or URLs appear in a response or email.
 
 ---
 
+### 4.16 `preview-family-invite`
+
+Previews a 3-word invite code before the caller has an account -- J2's
+dependency in the onboarding join path. One of exactly two Edge Function
+carve-outs (with `process-voice-memory`'s `mode: 'onboarding'` branch) that
+accept an anonymous Auth session; see §10 and
+[docs/plans/onboarding-implementation.md](../plans/onboarding-implementation.md)
+WP-SEC.
+
+**Request**
+
+```json
+{ "code": "sunny-tiger-lake" }
+```
+
+**Response**
+
+```json
+{ "familyName": "Rivera family", "inviterName": "Rosa" }
+```
+
+Never returns a membership list, email, the invite's role, or a family id.
+
+**Auth:** JWT -- accepts both an anonymous Auth session and a permanent one
+(the one normal-facing endpoint that deliberately accepts both). Rate-limited
+by CODE (not by caller): 20 previews/hour per normalized code, logged
+before the code is checked, same fail-closed convention as
+`redeem-family-invite`.
+
+**Errors:** `validation_error` (missing code), `invalid_code` (400 --
+not-found, expired, revoked, already-redeemed, and family-soft-deleted all
+collapse to this, same oracle-avoidance convention as
+`redeem-family-invite`), `rate_limited` (429), `internal_error` (500)
+
+---
+
+### 4.17 `cleanup-abandoned-anonymous-users`
+
+Scheduled maintenance endpoint -- WP-SEC item 5
+([docs/plans/onboarding-implementation.md](../plans/onboarding-implementation.md)).
+Deletes an anonymous Auth user (`ensureAnonymousSession()`, S9/J2) once it is
+older than `ABANDONED_ANONYMOUS_USER_TTL_DAYS` (7) and never holds a real
+`family_memberships` row or owns a `families` row -- both structurally
+impossible after the anonymous lockdown
+(`20260729130000_onboarding_anonymous_lockdown.sql`), and re-verified fresh
+immediately before every delete rather than trusted. No storage or family
+cascade to run: an anonymous user never has a `user_profiles` row, so there
+is nothing else to clean up. Deleting the `auth.users` row runs exactly the
+cascade [usage-limits.md](./features/usage-limits.md) documents (nulls
+`ai_onboarding_voice_requests`/`ai_usage_events` actor attribution via their
+own `on delete set null` FKs; the deidentified company COGS rollup is
+unaffected).
+
+**Trigger:** Scheduler POST. `verify_jwt = false` is required, same reason
+as `run-ai-usage-alerts` -- the scheduler has no user JWT. **Scheduled by
+`20260730120000_schedule_abandoned_anonymous_cleanup_cron.sql`**, which
+wires a daily 04:00 UTC pg_cron job (sufficient given the 7-day TTL) via
+`net.http_post`. That job reads its `project_url` and `cron_secret` Vault
+secrets at run time -- the same per-environment prerequisite the other
+pg_cron jobs in this spec already document -- and fails visibly in
+`cron.job_run_details` without side effects until both exist.
+
+**Request:** `POST` with the cron-secret header and no body.
+
+**Response**
+
+```json
+{ "success": true, "deletedCount": 2 }
+```
+
+**Auth:** `x-cron-secret` header containing `CRON_SECRET`.
+
+---
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)
@@ -1409,7 +1556,8 @@ while the DB validates both tag insertion and the `memory_type` transition.
 
 ```
 1. Record audio via expo-audio (tap start/stop, max 2 min)
-2. Invoke process-voice-memory(audioBase64, familyMembers)
+2. Invoke process-voice-memory(audioBase64, familyId); the server loads the
+   authorized canonical roster
 3. Populate form with cleanedText + suggested tags
 4. User edits → Save → same flow as 5.1
 ```
@@ -1681,6 +1829,7 @@ Momora2/
 │       ├── generate-illustration/
 │       ├── workflow-illustration-bridge/
 │       ├── process-voice-memory/
+│       ├── run-ai-usage-alerts/
 │       ├── send-daily-reminder/
 │       ├── schedule-daily-reminders/
 │       ├── delete-user-account/
@@ -1688,10 +1837,12 @@ Momora2/
 │       ├── hard-delete-expired-accounts/
 │       ├── redeem-family-invite/
 │       ├── resolve-family-invite/
+│       ├── preview-family-invite/ # anonymous-or-permanent carve-out (WP-SEC)
+│       ├── cleanup-abandoned-anonymous-users/ # scheduled (WP-SEC item 5)
 │       ├── notify-family-activity/
 │       ├── notify-memory-engagement/
 │       ├── send-content-report-alert/
-│       └── _shared/               # family-access.ts, storage-keys.ts, bento.ts, expo-push.ts, ...
+│       └── _shared/               # family-access.ts, storage-keys.ts, bento.ts, expo-push.ts, auth.ts (getAuthenticatedNonAnonymousUser chokepoint), ...
 ├── cloudflare/
 │   └── memory-illustration-worker/ # Worker + Workflow, bridge client, OpenAI/R2 execution
 ├── docs/
@@ -1732,13 +1883,22 @@ All AI operations are **async** — client shows status and allows navigation aw
 - [ ] Illustrated-memory max of 6 family member tags enforced server-side; text-only/media tags remain unlimited
 - [ ] Family-scoped RLS goes through `is_family_member`/`has_family_role`, never a hand-rolled join
 - [ ] Role/family checks are bound to one specific `family_id`, never "has this role somewhere"
-- [ ] Invite codes are rate-limited (user + IP) and never logged in plaintext
+- [ ] Invite codes are rate-limited (user + IP for redemption; by code for preview) and never logged in plaintext
 - [ ] Engagement RLS permits active viewers only for their own likes/comments; moderation is family-scoped
 - [ ] Push/log payloads never contain memory or comment content
+- [ ] An anonymous Auth session (`ensureAnonymousSession()`) is rejected by every normal Edge Function via `getAuthenticatedNonAnonymousUser` (`_shared/auth.ts`), with exactly two carve-outs: `process-voice-memory`'s `mode: 'onboarding'` branch and `preview-family-invite`; it is also rejected by a RESTRICTIVE RLS policy on every normal application table and an explicit guard inside every mutating normal SECURITY DEFINER RPC (`20260729130000_onboarding_anonymous_lockdown.sql`)
+- [ ] `cleanup-abandoned-anonymous-users` runs daily via pg_cron (`20260730120000_schedule_abandoned_anonymous_cleanup_cron.sql`) so abandoned anonymous Auth users don't accumulate forever
 
 ---
 
-## 11. Open Implementation Items
+## 11. Usage-limit rollout contract
+
+- Image generation is admitted server-side through a family-scoped logical request, admission, and provider-attempt protocol. The client must never calculate eligibility.
+- New jobs use bridge protocol v2 (`usageRequestId`, `providerProtocolVersion: 2`) and only `reserved_now` may call the provider. Existing queued v1 jobs retain their legacy reservation response during staged rollout.
+- Limit rejections use HTTP 429 with `code: USAGE_LIMIT_REACHED`, `scope`, and `retryAfterIso`. The app renders retry time locally and obtains cold-start notices only through `get_my_ai_usage_limit_notices` for the current actor.
+- Family `process-voice-memory` receives `familyId`; compatibility inference is server-owned and never client-selected. The separate `mode: 'onboarding'` contract is anonymous-only and attributes its two provider calls to Momora onboarding cost, never to a family.
+
+## 12. Open Implementation Items
 
 | Item | Notes |
 |------|-------|

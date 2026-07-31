@@ -1,0 +1,23 @@
+appId: com.memora.app
+---
+# Isolated-local visual-audit stage. It reuses the non-writing visual journey
+# through S12A, then requests a synthetic local Mailpit OTP so the guarded
+# harness can continue to S13-S17. Do not run directly.
+- addMedia:
+    - ../../assets/profile-fixture.jpg
+- runFlow:
+    file: owner-visual-audit-pre-auth.yaml
+- tapOn:
+    id: onboarding-email-name-input
+- inputText: "Rosa"
+- tapOn:
+    id: onboarding-email-input
+- inputText: ${TEST_ONBOARDING_OWNER_EMAIL}
+- tapOn:
+    id: onboarding-email-send
+- extendedWaitUntil:
+    visible:
+      id: onboarding-code-input
+    timeout: 15000
+- waitForAnimationToEnd
+- takeScreenshot: 21-account-otp-entry

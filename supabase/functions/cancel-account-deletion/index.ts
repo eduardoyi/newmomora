@@ -1,4 +1,4 @@
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
@@ -17,7 +17,7 @@ export async function handleCancelAccountDeletion(req: Request): Promise<Respons
     return errorResponse('Method not allowed', 405, 'method_not_allowed');
   }
 
-  const user = await getAuthenticatedUser(req);
+  const user = await getAuthenticatedNonAnonymousUser(req);
   if (!user) {
     return errorResponse('Unauthorized', 401, 'unauthorized');
   }

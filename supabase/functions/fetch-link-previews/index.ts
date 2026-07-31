@@ -1,4 +1,4 @@
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedNonAnonymousUser, getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole } from '../_shared/family-access.ts';
@@ -180,8 +180,10 @@ interface FetchLinkPreviewDependencies {
   markRun: (memoryId: string) => void;
 }
 
-const defaultDependencies: FetchLinkPreviewDependencies = {
-  getAuthenticatedUser,
+// WP-SEC: the default dependency rejects an anonymous Auth session -- see
+// _shared/auth.ts.
+export const defaultDependencies: FetchLinkPreviewDependencies = {
+  getAuthenticatedUser: getAuthenticatedNonAnonymousUser,
   getCallerFamilyRole,
   createUserClient,
   createServiceClient,

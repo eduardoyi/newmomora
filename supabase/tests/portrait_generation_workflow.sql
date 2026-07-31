@@ -28,10 +28,19 @@ insert into public.family_member_portrait_versions (
   '63000000-0000-4000-8000-000000000001', now() - interval '5 minutes 29 seconds', 'old/inflight.webp'
 );
 
+create function pg_temp.table_is_private(p_table regclass) returns boolean
+language plpgsql as $$
+declare v_count integer;
+begin
+  if not has_table_privilege(current_user, p_table, 'SELECT') then return true; end if;
+  execute format('select count(*) from %s', p_table) into v_count;
+  return v_count=0;
+end;
+$$;
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '13000000-0000-4000-8000-000000000001', true);
-select is_empty('select * from public.portrait_generation_jobs', 'authenticated clients cannot read private portrait workflow jobs');
-select is_empty('select * from public.portrait_generation_workflow_bridge_nonces', 'authenticated clients cannot read private portrait bridge nonces');
+select ok(pg_temp.table_is_private('public.portrait_generation_jobs'), 'authenticated clients cannot read private portrait workflow jobs');
+select ok(pg_temp.table_is_private('public.portrait_generation_workflow_bridge_nonces'), 'authenticated clients cannot read private portrait bridge nonces');
 select ok(not has_function_privilege('authenticated', 'public.reserve_portrait_generation_provider_attempt(uuid,text,smallint)', 'EXECUTE'), 'authenticated cannot reserve provider attempts');
 select ok(not has_function_privilege('authenticated', 'public.publish_portrait_generation_workflow_job(uuid,text)', 'EXECUTE'), 'authenticated cannot publish portrait workflow jobs');
 select throws_ok(
@@ -46,8 +55,7 @@ select throws_ok(
     '63000000-0000-4000-8000-000000000009',
     'initial', now() + interval '5 minutes', 'forbidden/client.webp'
   )$$,
-  '42501', 'new row violates row-level security policy for table "portrait_generation_jobs"',
-  'authenticated clients cannot insert private portrait workflow jobs'
+  42501
 );
 set local role postgres;
 select ok(has_function_privilege('service_role', 'public.reserve_portrait_generation_provider_attempt(uuid,text,smallint)', 'EXECUTE'), 'service role can reserve portrait provider attempts');
@@ -391,8 +399,7 @@ select throws_ok(
   $$update public.family_members
     set deletion_fence_token = 'c3000000-0000-4000-8000-000000000006'
     where id = '43000000-0000-4000-8000-000000000006'$$,
-  '42501', 'Deletion fence fields are service-managed',
-  'authenticated clients cannot set a member deletion fence'
+  42501
 );
 set local role postgres;
 

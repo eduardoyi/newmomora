@@ -9,11 +9,14 @@ import {
   publishPortrait,
   reconcilePortraitPublication,
   recordPortraitUploadComplete,
+  recordPortraitUsage,
   reservePortraitAttempt,
+  reservePortraitAttemptV1,
   retriggerPortraitDependentMemories,
 } from './portrait-bridge';
 import { PortraitReferenceError, loadPortraitReferences } from './portrait-references';
-import { editPortraitImage, ImageProviderError } from './openai';
+import { editPortraitImageWithUsage, ImageProviderError } from './openai';
+import { IMAGE_PRICING_VERSION, priceImageUsage } from './pricing';
 import {
   confirmExistingUploadWithLease,
   hasAmbiguousUploadOutput,
@@ -27,6 +30,7 @@ import type {
   IllustrationModel,
   PortraitLoadedReferences,
   PortraitWorkflowJobInput,
+  PortraitWorkflowJobInputV2,
   WorkflowDispatchPayload,
 } from './types';
 
@@ -56,6 +60,9 @@ function errorCode(error: unknown): string {
       'GENERATION_TIMEOUT',
       'ATTEMPT_CAP_EXHAUSTED',
       'INVALID_JOB_INPUT',
+      'UNSUPPORTED_PROVIDER_PROTOCOL',
+      'PROVIDER_ATTEMPT_ALREADY_RESERVED',
+      'PROVIDER_ATTEMPT_DENIED',
     ].includes(error.message)
   ) {
     return error.message;
@@ -94,6 +101,10 @@ function assertDeadline(job: PortraitWorkflowJobInput): number {
     throw new NonRetryableError('GENERATION_TIMEOUT');
   }
   return deadlineMs;
+}
+
+function isV2PortraitJob(job: PortraitWorkflowJobInput): job is PortraitWorkflowJobInputV2 {
+  return job.providerProtocolVersion === 2 && typeof job.usageRequestId === 'string';
 }
 
 async function callBridgeWithRetry<T>(operation: () => Promise<T>): Promise<T> {
@@ -158,16 +169,30 @@ async function runImageAttempt(
   references: PortraitLoadedReferences,
   provider: 'primary' | 'fallback',
   model: IllustrationModel,
+  attemptNumber: number,
   deadlineMs: number,
 ): Promise<GenerationStepResult> {
-  const reservation = await callBridgeWithRetry(() => reservePortraitAttempt(
-    env,
-    job.jobId,
-    provider,
-    model,
-    1,
-  ));
-  if (!reservation.reserved) throw new NonRetryableError('ATTEMPT_CAP_EXHAUSTED');
+  if (isV2PortraitJob(job)) {
+    const reservation = await callBridgeWithRetry(() => reservePortraitAttempt(
+      env,
+      job.jobId,
+      provider,
+      model,
+      attemptNumber,
+      job.usageRequestId,
+      `${job.usageRequestId}:${provider}:${attemptNumber}`,
+    ));
+    if (reservation.outcome !== 'reserved_now') {
+      throw new NonRetryableError(reservation.outcome === 'already_reserved'
+        ? 'PROVIDER_ATTEMPT_ALREADY_RESERVED'
+        : 'PROVIDER_ATTEMPT_DENIED');
+    }
+  } else {
+    const reserved = await callBridgeWithRetry(() => reservePortraitAttemptV1(
+      env, job.jobId, provider, model, attemptNumber,
+    ));
+    if (!reserved) throw new NonRetryableError('ATTEMPT_CAP_EXHAUSTED');
+  }
 
   const remainingMs = portraitProviderAttemptTimeoutMs(provider, deadlineMs);
   if (remainingMs <= 0) throw new NonRetryableError('GENERATION_TIMEOUT');
@@ -178,19 +203,56 @@ async function runImageAttempt(
     // Bounded R2 PUT retries below reuse these in-memory bytes. The enclosing
     // Workflow step itself has retries disabled so a replay never repeats an
     // OpenAI call after an ambiguous/crashed provider request.
-    const bytes = await editPortraitImage(
-      env,
-      model,
-      job.prompt,
-      references.style,
-      references.source,
-      controller.signal,
-    );
-    await uploadPortraitOutputWithLease(env, job.jobId, job.outputKey, bytes, model);
+    let result: Awaited<ReturnType<typeof editPortraitImageWithUsage>>;
+    try {
+      result = await editPortraitImageWithUsage(
+        env,
+        model,
+        job.prompt,
+        references.style,
+        references.source,
+        controller.signal,
+      );
+    } catch (error) {
+      queuePortraitUsageBestEffort(env, job, provider, model, attemptNumber, null, false);
+      throw error;
+    }
+    queuePortraitUsageBestEffort(env, job, provider, model, attemptNumber, result.usage, true);
+    await uploadPortraitOutputWithLease(env, job.jobId, job.outputKey, result.bytes, model);
     return { outputKey: job.outputKey, model };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function queuePortraitUsageBestEffort(
+  env: Env,
+  job: PortraitWorkflowJobInput,
+  provider: 'primary' | 'fallback',
+  model: IllustrationModel,
+  attemptNumber: number,
+  usage: import('./types').ImageUsage | null,
+  success: boolean,
+): void {
+  const pricing = priceImageUsage(model, usage);
+  const usageRequestId = isV2PortraitJob(job) ? job.usageRequestId : null;
+  const aiCallId = `${usageRequestId ?? job.jobId}:${provider}:${attemptNumber}`;
+  void recordPortraitUsage(env, {
+      jobId: job.jobId,
+      usageRequestId,
+      protocolVersion: isV2PortraitJob(job) ? 2 : 1,
+      aiCallId,
+      provider,
+      model,
+      attemptNumber,
+      aiOperation: 'image_generation',
+      success,
+      usage,
+      pricingVersion: IMAGE_PRICING_VERSION,
+      ...pricing,
+    }).catch(() => {
+    // Cost recording cannot change a completed image generation.
+  });
 }
 
 export async function generatePortraitAndUpload(env: Env, jobId: string): Promise<GenerationStepResult> {
@@ -200,7 +262,8 @@ export async function generatePortraitAndUpload(env: Env, jobId: string): Promis
     !job.outputKey ||
     !job.prompt ||
     !job.sourcePhotoKey ||
-    !job.styleReferenceKey
+    !job.styleReferenceKey ||
+    (job.providerProtocolVersion !== undefined && job.providerProtocolVersion !== 1 && !isV2PortraitJob(job))
   ) {
     throw new NonRetryableError('INVALID_JOB_INPUT');
   }
@@ -224,7 +287,7 @@ export async function generatePortraitAndUpload(env: Env, jobId: string): Promis
     throw new NonRetryableError('GENERATION_TIMEOUT');
   }
   try {
-    return await runImageAttempt(env, job, references, 'primary', PRIMARY_MODEL, deadlineMs);
+    return await runImageAttempt(env, job, references, 'primary', PRIMARY_MODEL, 1, deadlineMs);
   } catch (error) {
     // gpt-image-1.5 is only a provider fallback—not a shortcut when the
     // primary has not had a chance to run within the durable job deadline.
@@ -234,7 +297,7 @@ export async function generatePortraitAndUpload(env: Env, jobId: string): Promis
   if (!canStartPortraitProviderAttempt('fallback', deadlineMs)) {
     throw new NonRetryableError('GENERATION_TIMEOUT');
   }
-  return await runImageAttempt(env, job, references, 'fallback', FALLBACK_MODEL, deadlineMs);
+  return await runImageAttempt(env, job, references, 'fallback', FALLBACK_MODEL, 1, deadlineMs);
 }
 
 async function deletePortraitIfPresent(env: Env, key: string | null | undefined): Promise<void> {

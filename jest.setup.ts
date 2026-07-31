@@ -96,9 +96,20 @@ jest.mock('expo-image-manipulator', () => ({
 // decoration in Jest; interaction/accessibility assertions live on their
 // surrounding Pressables.
 jest.mock('lucide-react-native', () => ({
+  ArrowRight: () => null,
+  Check: () => null,
+  Clock: () => null,
   Heart: () => null,
+  Image: () => null,
   MessageCircle: () => null,
+  Mic: () => null,
+  Moon: () => null,
   Send: () => null,
+  Sparkles: () => null,
+  Square: () => null,
+  Sun: () => null,
+  Type: () => null,
+  X: () => null,
 }));
 
 // Native IME-inset controller. Its maintained Jest mock maps keyboard-aware

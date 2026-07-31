@@ -1,4 +1,4 @@
-import type { IllustrationModel, LoadedReference } from './types';
+import type { IllustrationModel, ImageProviderResult, ImageUsage, LoadedReference } from './types';
 
 const OPENAI_IMAGE_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 
@@ -27,6 +27,38 @@ export async function editImage(
   quality: 'medium' | undefined,
   signal: AbortSignal,
 ): Promise<ArrayBuffer> {
+  return (await editImageWithUsage(env, model, prompt, references, quality, signal)).bytes;
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** Extract only the OpenAI usage dimensions we persist. Never forward raw API bodies. */
+export function parseImageUsage(value: unknown): ImageUsage | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const usage = value as Record<string, unknown>;
+  const inputDetails = usage.input_tokens_details && typeof usage.input_tokens_details === 'object'
+    ? usage.input_tokens_details as Record<string, unknown> : {};
+  const outputDetails = usage.output_tokens_details && typeof usage.output_tokens_details === 'object'
+    ? usage.output_tokens_details as Record<string, unknown> : {};
+  return {
+    inputTextTokens: nonNegativeInteger(inputDetails.text_tokens ?? usage.input_text_tokens),
+    inputImageTokens: nonNegativeInteger(inputDetails.image_tokens ?? usage.input_image_tokens),
+    inputCachedTokens: nonNegativeInteger(inputDetails.cached_tokens ?? usage.input_cached_tokens),
+    outputTextTokens: nonNegativeInteger(outputDetails.text_tokens ?? usage.output_text_tokens),
+    outputImageTokens: nonNegativeInteger(outputDetails.image_tokens ?? usage.output_image_tokens),
+  };
+}
+
+export async function editImageWithUsage(
+  env: Env,
+  model: IllustrationModel,
+  prompt: string,
+  references: LoadedReference[],
+  quality: 'medium' | undefined,
+  signal: AbortSignal,
+): Promise<ImageProviderResult> {
   const form = new FormData();
   form.set('model', model);
   form.set('prompt', prompt);
@@ -73,7 +105,7 @@ export async function editImage(
     );
   }
 
-  let body: { data?: Array<{ b64_json?: string }> };
+  let body: { data?: Array<{ b64_json?: string }>; usage?: unknown };
   try {
     body = await response.json() as { data?: Array<{ b64_json?: string }> };
   } catch {
@@ -85,7 +117,7 @@ export async function editImage(
   }
 
   try {
-    return decodeBase64(image);
+    return { bytes: decodeBase64(image), usage: parseImageUsage(body.usage) };
   } catch {
     throw new ImageProviderError('OPENAI_MALFORMED_RESPONSE', true);
   }
@@ -112,6 +144,17 @@ export async function editPortraitImage(
     'medium',
     signal,
   );
+}
+
+export async function editPortraitImageWithUsage(
+  env: Env,
+  model: IllustrationModel,
+  prompt: string,
+  styleReference: LoadedReference,
+  sourceReference: LoadedReference,
+  signal: AbortSignal,
+): Promise<ImageProviderResult> {
+  return await editImageWithUsage(env, model, prompt, [styleReference, sourceReference], 'medium', signal);
 }
 
 function decodeBase64(base64: string): ArrayBuffer {

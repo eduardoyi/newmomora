@@ -1,0 +1,120 @@
+appId: com.memora.app
+---
+# Join happy path: an owner creates an invite, then a brand-new
+# unauthenticated device redeems it through J1-J5
+# (docs/plans/onboarding-implementation.md WP5, app/(onboarding)/join/*).
+# Mirrors the two-account "become a different signed-in user" transition
+# .maestro/flows/sharing/01-owner-create-invite.yaml +
+# 02-second-account-redeem.yaml already use, but as ONE file per this
+# package's brief -- phases are marked with comments instead of split into
+# numbered files.
+#
+# The full local runner is `npm run test:e2e:onboarding`. It creates the owner
+# and viewer invite through the app, reads each real OTP from local Mailpit,
+# then removes only the synthetic fixture accounts. It uses the staged
+# join-happy-path-{pre,post}-otp.yaml files because Maestro cannot fetch an
+# OTP while a flow is running. This standalone version remains useful for
+# targeted debugging when its explicit test credentials/OTP are supplied.
+#
+# Scope: this flow ends at J5's approval-wait state
+# (onb-join-waiting-screen / onb-join-waiting-title), which is a fully
+# successful completion of the ONBOARDING join path itself (J1-J5's job is
+# "code -> account -> display name -> in, or waiting" -- see
+# docs/features/onboarding.md's join-path flow section). Whether the owner
+# then approves the request and the joiner lands in the real timeline is
+# already covered by .maestro/flows/sharing/03-owner-approve.yaml +
+# 04-second-account-sees-timeline.yaml; not duplicated here.
+#
+# Requires for standalone debugging (the local runner supplies these itself):
+# - TEST_EMAIL / TEST_PASSWORD -- an existing owner account (phase 1 reuses
+#   the sharing suite's own invite-creation step, so it needs the same
+#   credentials that step already requires).
+# - TEST_ONBOARDING_JOINER_EMAIL / TEST_ONBOARDING_JOINER_OTP -- a fresh
+#   account that has never redeemed this owner's invite before.
+#   redeem-family-invite rejects an already-member redeemer with
+#   `already_member` (supabase/functions/redeem-family-invite/index.ts), so
+#   rerunning this flow against the same joiner address a second time fails
+#   at the redeem step -- same rerun caveat
+#   .maestro/flows/sharing/README.md documents for its own loop. J4 is real
+#   email-OTP (same mechanic as the owner path's S12) -- Maestro cannot read
+#   a real inbox, so TEST_ONBOARDING_JOINER_OTP is a placeholder that must be
+#   filled in by hand (or a test-inbox integration).
+
+# Phase 1: sign in as the owner and create a fresh invite. Reuses the sharing
+# suite's own first step rather than re-deriving invite creation -- see that
+# file for exactly which screens/testIDs it depends on.
+- runFlow: ../sharing/01-owner-create-invite.yaml
+
+# Phase 2: become a brand-new, unauthenticated device. `launchApp: clearState:
+# true` stands in for "sign out" the same way
+# .maestro/flows/sharing/02-second-account-redeem.yaml uses it -- the
+# pending-invites screen phase 1 ends on has no sign-out affordance. A fresh,
+# session-less launch now lands on app/(onboarding)/welcome.tsx (spec
+# decision 2), not the old "Welcome back" login screen.
+- launchApp:
+    clearState: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: onb-welcome-screen
+    timeout: 90000
+
+# Phase 3: J1 (code) -> J2 (found) -> J3 (name) -> J4 (email/OTP) -> J5
+# (waiting), as a fresh joiner.
+- tapOn:
+    id: onb-welcome-invite-button
+- tapOn:
+    id: onb-join-code-input
+- inputText: ${maestro.copiedText}
+- tapOn:
+    id: onb-join-code-submit-button
+
+# J2 -- ensureAnonymousSession + previewFamilyInvite run here; wait past the
+# loading spinner into the ready (or degraded-but-continuable) confirm state.
+- extendedWaitUntil:
+    visible:
+      id: onb-join-found-confirm-button
+    timeout: 15000
+- tapOn:
+    id: onb-join-found-confirm-button
+
+- tapOn:
+    id: onb-join-name-input
+- inputText: "Auntie Test"
+- tapOn:
+    id: onb-join-name-submit-button
+
+- tapOn:
+    id: onb-join-email-input
+- inputText: ${TEST_ONBOARDING_JOINER_EMAIL}
+- tapOn:
+    id: onb-join-email-send-button
+
+- extendedWaitUntil:
+    visible:
+      id: onb-join-email-code-input
+    timeout: 15000
+- tapOn:
+    id: onb-join-email-code-input
+- inputText: ${TEST_ONBOARDING_JOINER_OTP}
+
+# finishJoin (app/(onboarding)/join/email.tsx) applies the display name then
+# redeems the invite before replacing to J5 -- give it real network
+# round-trip time.
+- extendedWaitUntil:
+    visible:
+      id: onb-join-waiting-title
+    timeout: 20000

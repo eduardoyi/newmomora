@@ -14,6 +14,7 @@ import { SymbolView } from 'expo-symbols';
 
 import { colors, fonts } from '@/constants/theme';
 import { useVoiceInput } from '@/hooks/useVoiceInput';
+import { useFamily } from '@/hooks/use-family';
 import type { VoiceFamilyMemberPayload } from '@/services/ai';
 
 // Teal accent used only on this screen — matches the design mock
@@ -39,8 +40,9 @@ function VoiceSpeakItContent({
   onDismiss,
   onResult,
 }: VoiceSpeakItContentProps) {
+  const { familyId } = useFamily();
   const { isRecording, isProcessing, durationLabel, errorMessage, startRecording, stopRecording } =
-    useVoiceInput(familyMembers);
+    useVoiceInput(familyMembers, familyId);
 
   // Wait for the native modal presentation to finish before asking the OS to
   // present its microphone permission dialog.

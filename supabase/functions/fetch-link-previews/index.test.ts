@@ -1,5 +1,7 @@
-import { assertEquals } from 'jsr:@std/assert@1';
+import { assertEquals, assertStrictEquals } from 'jsr:@std/assert@1';
+import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import {
+  defaultDependencies,
   fetchLinkPreviewsForPlan,
   handleFetchLinkPreviews,
   normalizeLinkPreviews,
@@ -456,4 +458,8 @@ Deno.test('writeLinkPreviewsIfContentUnchanged uses IS NULL for a null content s
     { kind: 'eq', column: 'id', value: MEMORY_ID },
     { kind: 'is', column: 'content', value: null },
   ]);
+});
+
+Deno.test('WP-SEC: the real default wiring uses the anonymous-rejecting auth chokepoint, not the permissive one', () => {
+  assertStrictEquals(defaultDependencies.getAuthenticatedUser, getAuthenticatedNonAnonymousUser);
 });

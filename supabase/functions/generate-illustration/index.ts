@@ -1,4 +1,4 @@
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
@@ -59,6 +59,38 @@ export interface QueueIllustrationResponse {
   success: true;
   queued: true;
   jobId: string;
+}
+
+interface UsageBeginResult {
+  outcome: 'admitted_new' | 'admitted_recovered' | 'already_preparing' | 'already_queued' | 'limit_rejected' | 'enforcement_bypassed';
+  request_id: string | null;
+  preparation_token: string | null;
+  preparation_ordinal: number | null;
+  preparation_deadline_at: string | null;
+  preparation_input_updated_at: string | null;
+  existing_job_id: string | null;
+  scope: 'memory' | 'daily' | 'monthly' | null;
+  retry_after_iso: string | null;
+}
+
+function usageLimitResponse(result: UsageBeginResult): Response {
+  const retryAfter = result.retry_after_iso ? Date.parse(result.retry_after_iso) : Number.NaN;
+  const seconds = Number.isFinite(retryAfter) ? Math.max(1, Math.ceil((retryAfter - Date.now()) / 1000)) : 1;
+  return new Response(JSON.stringify({
+    error: 'Usage limit reached',
+    code: 'USAGE_LIMIT_REACHED',
+    scope: result.scope,
+    retryAfterIso: result.retry_after_iso,
+  }), {
+    status: 429,
+    headers: { 'Content-Type': 'application/json', 'Retry-After': String(seconds) },
+  });
+}
+
+function firstUsageBeginResult(data: unknown): UsageBeginResult | null {
+  const candidate = Array.isArray(data) ? data[0] : data;
+  if (!candidate || typeof candidate !== 'object') return null;
+  return candidate as UsageBeginResult;
 }
 
 const EMPTY_MEMBER_ID = '00000000-0000-4000-8000-000000000000';
@@ -378,7 +410,7 @@ export async function handleGenerateIllustration(
       return errorResponse('Invalid JSON body', 400, 'invalid_json');
     }
   } else {
-    const user = await getAuthenticatedUser(req);
+    const user = await getAuthenticatedNonAnonymousUser(req);
     if (!user) return errorResponse('Unauthorized', 401, 'unauthorized');
     try {
       body = JSON.parse(rawBody) as GenerateIllustrationRequest;
@@ -473,6 +505,51 @@ export async function handleGenerateIllustration(
     }
   }
 
+  // Admit before emotion/safety preparation. This is the shared gate for
+  // Cloudflare and legacy pipelines, so concurrent callers cannot both pay
+  // for preparation work and a rejected request remains capture-first.
+  const generationAttemptId = dependencies.createId();
+  const usageIntent = requestIntent ?? (forceRegenerate ? 'manual_regenerate' : 'initial');
+  const usageBeginResponse = await dependencies.createServiceClient().rpc(
+    'begin_memory_illustration_usage',
+    { p_memory_id: memoryId, p_request_intent: usageIntent, p_request_id: generationAttemptId, p_actor_user_id: callerId },
+  );
+  const usageBeginData = usageBeginResponse?.data;
+  const usageBeginError = usageBeginResponse?.error;
+  if (usageBeginError) {
+    console.error('generate-illustration usage admission failed', usageBeginError.code ?? 'unknown');
+    return errorResponse('Failed to start illustration generation', 500, 'internal_error');
+  }
+  const usageBegin = firstUsageBeginResult(usageBeginData);
+  // A null result is the safe compatibility shape from an old/disabled
+  // deployment during the staged rollout; active schema functions always
+  // return one row and therefore cannot silently bypass enforcement.
+  if (!usageBegin) {
+    // Continue through the grandfathered v1 path only while the RPC itself
+    // succeeded. A database/RPC failure was handled above.
+  }
+  if (usageBegin?.outcome === 'limit_rejected') return usageLimitResponse(usageBegin);
+  if (usageBegin?.outcome === 'already_preparing') {
+    return backend === 'cloudflare'
+      ? jsonResponse({ success: true, queued: true, jobId: usageBegin.request_id ?? memoryId } satisfies QueueIllustrationResponse, 202)
+      : errorResponse('Illustration generation in progress', 409, 'GENERATION_IN_PROGRESS');
+  }
+  if (usageBegin?.outcome === 'already_queued') {
+    // This is the durable winner selected inside the admission transaction.
+    // It is returned separately because grandfathered v1 jobs have no usage
+    // request id. Never prepare, claim, insert, or dispatch from this branch.
+    if (backend === 'cloudflare' && usageBegin.existing_job_id) {
+      return jsonResponse({ success: true, queued: true, jobId: usageBegin.existing_job_id } satisfies QueueIllustrationResponse, 202);
+    }
+    return errorResponse('Illustration generation in progress', 409, 'GENERATION_IN_PROGRESS');
+  }
+  const usageRequestId = usageBegin?.request_id ?? null;
+  const preparationToken = usageBegin?.preparation_token ?? null;
+  const preparationOrdinal = usageBegin?.preparation_ordinal ?? null;
+  // Admission snapshots the entity value read immediately before its RPC.
+  // The SQL return type intentionally stays stable during rollout.
+  const preparationInputUpdatedAt = usageBegin?.preparation_input_updated_at ?? memory.updated_at;
+
   // New clients no longer run emotion analysis locally.  Do it before the
   // attempt claim: an emotion write intentionally invalidates an in-flight
   // attempt, so doing it after claim would immediately discard our token.
@@ -487,18 +564,27 @@ export async function handleGenerateIllustration(
         const result = await dependencies.chatJson<{ emotion?: string; colorPalette?: string }>(
           buildEmotionSystemPrompt(),
           stripUrls(memory.content),
+          { usageContext: { attributionScope: 'family', familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'emotion_chat' } },
         );
         const normalized = normalizeEmotionLabel(result.emotion, EMOTION_PALETTES);
         const emotion = normalized.emotion;
         analyzedPalette = result.colorPalette ?? normalized.colorPalette;
         const service = dependencies.createServiceClient();
-        const { data: updated } = await service
-          .from('memories')
-          .update({ emotion })
-          .eq('id', memoryId)
-          .eq('updated_at', memory.updated_at)
-          .select('id')
-          .maybeSingle();
+        const { data: updated } = usageRequestId && preparationToken && preparationOrdinal && preparationInputUpdatedAt
+          ? await service.rpc('record_ai_memory_preparation_emotion', {
+            p_request_id: usageRequestId,
+            p_preparation_token: preparationToken,
+            p_preparation_ordinal: preparationOrdinal,
+            p_preparation_input_updated_at: preparationInputUpdatedAt,
+            p_emotion: emotion,
+          })
+          : await service
+            .from('memories')
+            .update({ emotion })
+            .eq('id', memoryId)
+            .eq('updated_at', memory.updated_at)
+            .select('id')
+            .maybeSingle();
         if (!updated) break; // A real edit won; the normal claim CAS will re-read next time.
         const { data: refreshed } = await supabase
           .from('memories')
@@ -543,7 +629,6 @@ export async function handleGenerateIllustration(
     return errorResponse('Illustration generation in progress', 409, 'GENERATION_IN_PROGRESS');
   }
 
-  const generationAttemptId = dependencies.createId();
   let generationClaimed = false;
   if (backend === 'cloudflare') {
     // Lock active jobs before the memory publication row. A simple client
@@ -875,6 +960,7 @@ export async function handleGenerateIllustration(
       expressionStyle?: string;
     }>(buildSafetySystemPrompt(safetyMembers), strippedContent, {
       signal: generationController.signal,
+      usageContext: { attributionScope: 'family', familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'safety_chat' },
     });
     throwIfAborted(generationController.signal);
     logGenerationPhase(memoryId, generationPhase, safetyPhaseStartedAt);
@@ -936,9 +1022,20 @@ export async function handleGenerateIllustration(
         reference_candidates: referenceCandidates,
         output_key: illustrationKey,
         old_illustration_key: memory.illustration_key,
+        ...(usageRequestId ? { usage_request_id: usageRequestId, usage_protocol_version: 2 } : {}),
       });
       if (jobError) throw new Error('Failed to create illustration workflow job');
       durableJobCreated = true;
+      if (usageRequestId && preparationToken) {
+        const { data: promoted, error: promotionError } = await service.rpc('promote_ai_image_preparation', {
+          p_request_id: usageRequestId,
+          p_preparation_token: preparationToken,
+          p_preparation_ordinal: preparationOrdinal,
+          p_preparation_input_updated_at: preparationInputUpdatedAt,
+          p_job_id: jobId,
+        });
+        if (promotionError || !promoted) throw new Error('Failed to promote illustration usage preparation');
+      }
       await dispatchWorkflowJob(dependencies.fetch, jobId);
       generationDispatched = true;
       return jsonResponse({ success: true, queued: true, jobId } satisfies QueueIllustrationResponse, 202);
@@ -971,9 +1068,50 @@ export async function handleGenerateIllustration(
 
     generationPhase = 'image-generation';
     const imagePhaseStartedAt = Date.now();
+    if (usageRequestId && preparationToken) {
+      const { data: promoted, error: promotionError } = await dependencies.createServiceClient().rpc(
+        'promote_ai_image_preparation',
+        {
+          p_request_id: usageRequestId,
+          p_preparation_token: preparationToken,
+          p_preparation_ordinal: preparationOrdinal,
+          p_preparation_input_updated_at: preparationInputUpdatedAt,
+          p_job_id: null,
+        },
+      );
+      if (promotionError || !promoted) throw new Error('Failed to promote illustration usage preparation');
+    }
     const illustrationBytes = await dependencies.editImageWithReferences(prompt, referenceImages, {
       signal: generationController.signal,
       ...getIllustrationImageRequestOptions(referenceImages.length),
+      ...(usageRequestId
+        ? {
+          beforeProviderAttempt: async (attempt: {
+            provider: 'primary' | 'fallback'; model: string; attemptNumber: number;
+          }) => {
+            const { data, error } = await dependencies.createServiceClient().rpc(
+              'reserve_legacy_ai_image_provider_attempt_v2',
+              {
+                p_request_id: usageRequestId,
+                p_target_kind: 'memory',
+                p_target_id: memoryId,
+                p_preparation_token: preparationToken,
+                p_preparation_ordinal: preparationOrdinal,
+                p_preparation_input_updated_at: preparationInputUpdatedAt,
+                p_provider: attempt.provider,
+                p_attempt_number: attempt.attemptNumber,
+              },
+            );
+            const outcome = Array.isArray(data) ? data[0] : data;
+            // Lost/replayed reservation responses are deliberately fail-closed:
+            // only the caller that durably reserved this provider slot may fetch.
+            if (error || outcome?.outcome !== 'reserved_now') {
+              throw new Error('Illustration provider attempt was not authorized');
+            }
+          },
+        }
+        : {}),
+      usageContext: { attributionScope: 'family', familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'illustration' },
     });
     throwIfAborted(generationController.signal);
     logGenerationPhase(memoryId, generationPhase, imagePhaseStartedAt);
@@ -1050,6 +1188,15 @@ export async function handleGenerateIllustration(
   } finally {
     clearTimeout(generationTimeoutId);
     if (!generationSucceeded && !generationDispatched && !durableJobCreated) {
+      if (usageRequestId && preparationToken) {
+        await dependencies.createServiceClient().rpc('release_ai_image_preparation', {
+          p_request_id: usageRequestId,
+          p_preparation_token: preparationToken,
+          p_preparation_ordinal: preparationOrdinal,
+          p_preparation_input_updated_at: preparationInputUpdatedAt,
+          p_reason: 'preparation_failed',
+        });
+      }
       const hasRetainedIllustration = Boolean(
         memory.illustration_key && memory.illustration_generation_id,
       );

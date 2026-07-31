@@ -11,6 +11,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
 
 import { colors } from '@/constants/theme';
 import { processVoiceMemory, type VoiceFamilyMemberPayload } from '@/services/ai';
+import { useFamily } from '@/hooks/use-family';
 import { readLocalFileAsBase64 } from '@/utils/local-files';
 import {
   getOrRequestNativePermission,
@@ -34,6 +35,7 @@ export function VoiceMemoryButton({
   onError,
   compact = false,
 }: VoiceMemoryButtonProps) {
+  const { familyId } = useFamily();
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 500);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -115,7 +117,11 @@ export function VoiceMemoryButton({
 
       const base64 = await readLocalFileAsBase64(uri);
 
-      const { data, error } = await processVoiceMemory(base64, familyMembers);
+      if (!familyId) {
+        onError('Choose a family before recording a memory.');
+        return;
+      }
+      const { data, error } = await processVoiceMemory(base64, familyMembers, familyId);
 
       if (error || !data) {
         onError(error?.message ?? 'Voice processing failed');
@@ -128,7 +134,7 @@ export function VoiceMemoryButton({
     } finally {
       setIsProcessing(false);
     }
-  }, [familyMembers, onError, onResult, recorder, recorderState.durationMillis, recorderState.isRecording]);
+  }, [familyId, familyMembers, onError, onResult, recorder, recorderState.durationMillis, recorderState.isRecording]);
 
   const handlePress = () => {
     if (recorderState.isRecording) {

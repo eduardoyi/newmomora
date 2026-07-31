@@ -172,7 +172,14 @@ async function withMockedIllustrationNetwork(
         ]);
       }
 
-      throw new Error(`Unexpected Supabase request: ${request.method} ${url}`);
+    if (url.pathname.endsWith('/rest/v1/rpc/begin_memory_illustration_usage')) {
+      return jsonResponse([{ outcome: 'enforcement_bypassed' }]);
+    }
+    if (url.pathname.endsWith('/rest/v1/rpc/release_ai_image_preparation')) {
+      return jsonResponse(false);
+    }
+
+    throw new Error(`Unexpected Supabase request: ${request.method} ${url}`);
     }
 
     if (url.href === 'https://api.openai.com/v1/chat/completions') {

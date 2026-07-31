@@ -16,6 +16,22 @@ import { sharingInviteRoute } from '@/lib/routes';
 import type { FamilyMemberProfile } from '@/services/family';
 import { canEditFamilyContent, canManageMember, roleLabel } from '@/utils/roles';
 
+// Safety net for a blank `user_profiles.name` (WP6: S12A now collects the
+// owner's display name, but a legacy/edge-case row could still be blank --
+// e.g. an account created before that fix, or a future auth path that skips
+// it). Bare `profile.name` would otherwise render an empty row label and
+// broken confirm copy like "` will no longer be able to see...`". Same
+// precedent as `profile?.name ?? 'You'` (memory-comments-drawer.tsx) and
+// `?? 'a former member'` (useFamilyMemberProfiles.ts) -- this one reads
+// correctly both as a standalone label and inside "X will no longer be
+// able to..." sentences, unlike "You" (wrong here -- these rows are never
+// the viewer's own name) or "a former member" (wrong for an active member).
+const FALLBACK_MEMBER_NAME = 'This family member';
+
+function memberDisplayName(name: string): string {
+  return name.trim() || FALLBACK_MEMBER_NAME;
+}
+
 /**
  * Family members list, moved out of Settings' FamilySection (which used to
  * render every member inline and grew unboundedly for large families -- up
@@ -56,7 +72,7 @@ export default function FamilyMembersScreen() {
           Alert.alert('List refreshed', error.message);
           return;
         }
-        Alert.alert('Could not update role', `Could not change ${profile.name}'s role. Please try again.`);
+        Alert.alert('Could not update role', `Could not change ${memberDisplayName(profile.name)}'s role. Please try again.`);
       }
     })();
   };
@@ -65,7 +81,7 @@ export default function FamilyMembersScreen() {
     setManageTarget(null);
     Alert.alert(
       'Remove from family',
-      `${profile.name} will no longer be able to see the family journal. Memories and photos they added will stay.`,
+      `${memberDisplayName(profile.name)} will no longer be able to see the family journal. Memories and photos they added will stay.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -80,7 +96,7 @@ export default function FamilyMembersScreen() {
                   Alert.alert('List refreshed', error.message);
                   return;
                 }
-                Alert.alert('Could not remove member', `Could not remove ${profile.name}. Please try again.`);
+                Alert.alert('Could not remove member', `Could not remove ${memberDisplayName(profile.name)}. Please try again.`);
               }
             })();
           },
@@ -152,13 +168,13 @@ export default function FamilyMembersScreen() {
               <SettingsRow
                 accessibilityLabel={
                   actionable || hasSafetyActions
-                    ? `${actionable ? 'Manage' : 'Account actions for'} ${isReported ? 'reported household account' : profile.name}`
+                    ? `${actionable ? 'Manage' : 'Account actions for'} ${isReported ? 'reported household account' : memberDisplayName(profile.name)}`
                     : undefined
                 }
                 chevron={actionable || hasSafetyActions}
                 first={!canInvite && index === 0}
                 key={profile.user_id}
-                label={isReported ? 'Reported household account' : profile.name}
+                label={isReported ? 'Reported household account' : memberDisplayName(profile.name)}
                 onPress={actionable || hasSafetyActions ? () => setManageTarget(profile) : undefined}
                 testID={`member-row-${profile.user_id}`}
                 value={isBlocked ? 'Blocked' : profile.is_active_member ? roleLabel(profile.role) : 'Former member'}
@@ -168,7 +184,7 @@ export default function FamilyMembersScreen() {
         </SettingsBlock>
 
         <MemberActionSheet
-          memberName={isManageTargetReported ? 'Reported household account' : manageTarget?.name ?? ''}
+          memberName={isManageTargetReported ? 'Reported household account' : memberDisplayName(manageTarget?.name ?? '')}
           memberRole={manageTarget?.role === 'owner' ? 'owner' : manageTarget?.role === 'manager' ? 'manager' : 'viewer'}
           onClose={() => setManageTarget(null)}
           onDemote={() => manageTarget && applyRoleChange(manageTarget, 'viewer')}

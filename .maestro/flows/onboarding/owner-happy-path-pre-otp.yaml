@@ -1,0 +1,76 @@
+appId: com.memora.app
+---
+# Local staged owner journey, S0 through sending the real local email OTP.
+# Run through npm run test:e2e:onboarding; do not call this against production.
+- addMedia:
+    - ../../assets/profile-fixture.jpg
+- launchApp:
+    appId: com.memora.app
+    clearState: true
+    arguments:
+      EXDevMenuIsOnboardingFinished: true
+- tapOn:
+    text: "Continue"
+    optional: true
+- tapOn:
+    text: "Close"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "RECENTLY OPENED"
+    optional: true
+- tapOn:
+    text: "Momora"
+    below: "DEVELOPMENT SERVERS"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: onb-welcome-screen
+    timeout: 90000
+
+- tapOn:
+    id: onb-welcome-start-button
+- tapOn:
+    id: onb-story-0-cta-button
+- tapOn:
+    id: onb-story-1-cta-button
+- tapOn:
+    id: onb-story-2-cta-button
+- tapOn:
+    id: onb-founders-cta-button
+- tapOn:
+    id: onb-artifact-cta-button
+- tapOn:
+    id: onb-kids-input
+- inputText: "Lila"
+- tapOn:
+    id: onb-kids-continue-button
+- tapOn:
+    id: onb-family-name-continue-button
+- tapOn:
+    id: onb-bridge-cta-button
+- tapOn:
+    id: onboarding-capture-type-instead
+- tapOn:
+    id: onboarding-capture-textarea
+- inputText: "Colored outside every single line today and was very proud of it."
+- tapOn:
+    id: onboarding-capture-keep
+- tapOn:
+    id: onboarding-aha-continue
+- tapOn:
+    id: onboarding-year-continue
+- tapOn:
+    id: onboarding-notifications-option-none
+- tapOn:
+    id: onboarding-email-name-input
+- inputText: "Rosa"
+- tapOn:
+    id: onboarding-email-input
+- inputText: ${TEST_ONBOARDING_OWNER_EMAIL}
+- tapOn:
+    id: onboarding-email-send
+- extendedWaitUntil:
+    visible:
+      id: onboarding-code-input
+    timeout: 15000

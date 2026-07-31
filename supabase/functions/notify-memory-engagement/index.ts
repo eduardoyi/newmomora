@@ -1,6 +1,6 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
-import { getAuthenticatedUser } from '../_shared/auth.ts';
+import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole } from '../_shared/family-access.ts';
@@ -223,7 +223,7 @@ export async function handleNotifyMemoryEngagement(req: Request): Promise<Respon
     return errorResponse('Method not allowed', 405, 'method_not_allowed');
   }
 
-  const user = await getAuthenticatedUser(req);
+  const user = await getAuthenticatedNonAnonymousUser(req);
   if (!user) return errorResponse('Unauthorized', 401, 'unauthorized');
 
   let body: unknown;
