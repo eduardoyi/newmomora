@@ -1,14 +1,13 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
-import { Platform, Pressable, TextInput } from 'react-native';
+import { Pressable, TextInput } from 'react-native';
 import { useKeyboardState } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import {
   FOOTER_KEYBOARD_CLEARANCE,
   getFooterBottomPadding,
-  getMaxOnboardingScrollOffset,
-  isShortOnboardingForm,
+  isOnboardingContentOverflowing,
   KEYBOARD_VERTICAL_OFFSET,
   OnbShell,
 } from '@/components/onboarding/onb-shell';
@@ -30,7 +29,7 @@ function renderShell(element: ReactElement) {
 }
 
 describe('OnbShell', () => {
-  it('keeps the footer outside the scroll body and assigns keyboard movement per platform', () => {
+  it('keeps the footer outside the scroll body and resizes the shared frame for the keyboard', () => {
     const { getByTestId } = renderShell(
       <OnbShell footer={<Pressable testID="onb-primary-action" />}>
         <TextInput testID="onb-lower-input" />
@@ -43,11 +42,10 @@ describe('OnbShell', () => {
     const keyboardFrame = getByTestId('onb-shell-keyboard-frame');
     const footer = getByTestId('onb-shell-footer');
 
-    // Android keeps the height-resized frame that protects edge-to-edge
-    // navigation. iOS uses the controller's sticky footer, which follows the
-    // IME without leaving the CTA partly underneath it.
+    // The same height-resized frame is used on both platforms, so the CTA
+    // remains in layout above the IME instead of translating over the form.
     expect(keyboardFrame.props.behavior).toBe('height');
-    expect(keyboardFrame.props.enabled).toBe(Platform.OS === 'android');
+    expect(keyboardFrame.props.enabled).toBe(true);
     expect(keyboardFrame.props.automaticOffset).toBe(true);
     expect(keyboardFrame.props.keyboardVerticalOffset).toBe(KEYBOARD_VERTICAL_OFFSET);
     let footerAncestor = footer.parent;
@@ -61,16 +59,33 @@ describe('OnbShell', () => {
         expect.objectContaining({ paddingBottom: 48 + spacing.sm }),
       ]),
     );
-    expect(getByTestId('onb-shell-footer-sticky').props.enabled).toBe(Platform.OS === 'ios');
     expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
     expect(FOOTER_KEYBOARD_CLEARANCE).toBeLessThan(spacing.xxl * 2);
     expect(scrollView.props.disableScrollOnKeyboardHide).toBe(false);
     expect(scrollView.props.mode).toBe('insets');
     expect(scrollView.props.bounces).toBe(false);
     expect(scrollView.props.overScrollMode).toBe('never');
+    expect(scrollView.props.enabled).toBe(false);
     expect(scrollView.props.onContentSizeChange).toEqual(expect.any(Function));
     expect(scrollView.props.onLayout).toEqual(expect.any(Function));
-    expect(scrollView.props.onScroll).toEqual(expect.any(Function));
+  });
+
+  it('only enables keyboard spacer scrolling after content exceeds the measured viewport', () => {
+    const { getByTestId } = renderShell(
+      <OnbShell footer={<Pressable testID="onb-primary-action" />}>
+        <TextInput testID="onb-lower-input" />
+      </OnbShell>,
+    );
+
+    const scrollView = getByTestId('onb-shell-scroll');
+    expect(scrollView.props.enabled).toBe(false);
+
+    fireEvent(scrollView, 'layout', { nativeEvent: { layout: { height: 480 } } });
+    fireEvent(scrollView, 'contentSizeChange', 360, 480);
+    expect(getByTestId('onb-shell-scroll').props.enabled).toBe(false);
+
+    fireEvent(scrollView, 'contentSizeChange', 360, 800);
+    expect(getByTestId('onb-shell-scroll').props.enabled).toBe(true);
   });
 
   it('does not reserve a phantom action area on steps without a footer', () => {
@@ -109,12 +124,9 @@ describe('OnbShell', () => {
     expect(getFooterBottomPadding(48, true)).toBe(spacing.sm);
   });
 
-  it('clamps keyboard scroll to real content instead of the keyboard spacer', () => {
-    expect(getMaxOnboardingScrollOffset(600, 600)).toBe(0);
-    expect(getMaxOnboardingScrollOffset(600, 480)).toBe(120);
-    expect(getMaxOnboardingScrollOffset(480, 600)).toBe(0);
-    expect(isShortOnboardingForm(600, 600)).toBe(true);
-    expect(isShortOnboardingForm(600, 598)).toBe(false);
-    expect(isShortOnboardingForm(480, 600)).toBe(true);
+  it('identifies only content beyond the viewport as scrollable', () => {
+    expect(isOnboardingContentOverflowing(600, 600)).toBe(false);
+    expect(isOnboardingContentOverflowing(600, 598)).toBe(true);
+    expect(isOnboardingContentOverflowing(480, 600)).toBe(false);
   });
 });

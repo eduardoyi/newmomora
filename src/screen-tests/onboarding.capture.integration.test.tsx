@@ -207,7 +207,7 @@ describe('OnboardingCaptureScreen (S9) -- typed path', () => {
 });
 
 describe('OnboardingCaptureScreen (S9) -- keyboard avoidance', () => {
-  it('keeps the focused composer in the scroll view while its primary action lives in the keyboard-sticky region', () => {
+  it('keeps the focused composer in the scroll view while its primary action stays in the resized shell frame', () => {
     mockDraft({ kidNames: ['Lila'] });
     const screen = renderScreen();
 

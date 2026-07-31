@@ -120,7 +120,7 @@ describe('KidsScreen (S6)', () => {
     expect(getByTestId('onb-kids-continue-button').props.accessibilityState.disabled).toBe(false);
   });
 
-  it('keeps its primary action in the shell’s keyboard-sticky region when the name field is focused', () => {
+  it('keeps its primary action in the resized shell frame when the name field is focused', () => {
     const { getByTestId } = renderScreen();
 
     fireEvent(getByTestId('onb-kids-input'), 'focus');
