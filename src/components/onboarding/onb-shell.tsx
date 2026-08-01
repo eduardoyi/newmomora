@@ -97,35 +97,29 @@
 // plain `onLayout` measurement of the footer's own rendered box, not
 // anything derived from `useKeyboardState`'s cross-screen singleton (see
 // cause A above for why that pattern is banned in this file).
+//
+// --- Extraction, 2026-08-01 ---
+// The mechanism above (native bottom-inset SafeAreaView, KeyboardStickyView
+// footer, always-on KeyboardAwareScrollView, measured-footer-height folded
+// into bottomOffset) moved to `src/components/keyboard-sticky-shell.tsx`
+// (`KeyboardStickyShell`) so `AuthScreen` (`src/components/auth-screen.tsx`)
+// and the login screen could reuse it for the same keyboard-covers-the-CTA
+// bug instead of re-deriving it a third time. `OnbShell` below is now a
+// thin styling wrapper around that shared component -- its own prop
+// contract and rendered behavior (testIDs, footer padding, bottomOffset
+// math) are unchanged; every test in `onb-shell.test.tsx` still exercises
+// this file's public surface directly.
 import type { ReactNode } from 'react';
-import { useState } from 'react';
-import {
-  StyleSheet,
-  View,
-  type LayoutChangeEvent,
-  type StyleProp,
-  type ViewStyle,
-} from 'react-native';
-import {
-  KeyboardAwareScrollView,
-  KeyboardStickyView,
-} from 'react-native-keyboard-controller';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
+import {
+  FOOTER_KEYBOARD_CLEARANCE,
+  KeyboardStickyShell,
+  MIN_FOOTER_BOTTOM_PADDING,
+} from '@/components/keyboard-sticky-shell';
 import { colors, spacing } from '@/constants/theme';
 
-// This value is only the remaining footer/caret clearance. Treating it as a
-// second full keyboard height makes KeyboardAwareScrollView needlessly throw
-// centered content/headlines off the top of short screens.
-export const FOOTER_KEYBOARD_CLEARANCE = spacing.xxl + spacing.lg;
-
-// The design's default footer bottom gap on a device with no meaningful
-// native bottom inset (e.g. Android 3-button nav, older hardware). Used two
-// different ways below -- see `getFooterBottomPadding` (year.tsx's screen,
-// which owns its own clearance) and `getStickyFooterBottomPadding` (this
-// shell's footer, which tops a *native* inset up to this floor instead of
-// stacking JS padding on top of it).
-const MIN_FOOTER_BOTTOM_PADDING = spacing.xl + spacing.sm;
+export { FOOTER_KEYBOARD_CLEARANCE };
 
 // `OnbShell` itself no longer calls this -- it used to gate
 // `KeyboardAwareScrollView`'s `enabled` prop, which (cause D above) also
@@ -148,8 +142,9 @@ export function isOnboardingContentOverflowing(contentHeight: number, viewportHe
  * `OnbShell` itself no longer calls this or tracks keyboard visibility --
  * its footer's nav-bar clearance is now a *native* `SafeAreaView
  * edges={['bottom']}` inset (see file header, causes A-C), and its own
- * bottom-padding math lives in `getStickyFooterBottomPadding` below, which
- * assumes that native inset is already applied outside of it.
+ * bottom-padding math lives in `getStickyFooterBottomPadding` in
+ * `keyboard-sticky-shell.tsx`, which assumes that native inset is already
+ * applied outside of it.
  *
  * `isKeyboardVisible` is kept as a parameter, always ignored, solely so
  * `year.tsx`'s existing `getFooterBottomPadding(bottomInset, false)` call
@@ -161,21 +156,6 @@ export function getFooterBottomPadding(bottomInset: number, _isKeyboardVisible: 
   // Keep the visual gap that the design expects while guaranteeing that an
   // edge-to-edge Android navigation bar can never cover the CTA.
   return Math.max(MIN_FOOTER_BOTTOM_PADDING, bottomInset + spacing.sm);
-}
-
-// Unlike `getFooterBottomPadding` above, this shell's own footer sits
-// inside a native `SafeAreaView edges={['bottom']}` that already supplies
-// real nav-bar/home-indicator clearance (see file header). Adding
-// `bottomInset + spacing.sm` on top of that here would double-count the
-// inset. Instead this only tops the design's usual footer gap up to
-// `MIN_FOOTER_BOTTOM_PADDING` on devices whose native inset is smaller than
-// that gap (e.g. 0 on an inset-less Android phone); on devices with a
-// generous inset (e.g. a ~48dp Android nav bar) it shrinks to the bare
-// `spacing.sm` visual gap. Worst case this gap is merely tight -- it can
-// never land the CTA under the nav bar, since the native inset is applied
-// regardless of this value.
-function getStickyFooterBottomPadding(bottomInset: number) {
-  return Math.max(MIN_FOOTER_BOTTOM_PADDING - bottomInset, spacing.sm);
 }
 
 interface OnbShellProps {
@@ -195,63 +175,20 @@ export function OnbShell({
   keyboardBottomOffset = FOOTER_KEYBOARD_CLEARANCE,
   testID,
 }: OnbShellProps) {
-  const { bottom: bottomInset } = useSafeAreaInsets();
-
-  // Cause E above: how tall the translated footer actually renders, so it
-  // can be folded into `bottomOffset` below. Measured on the same box
-  // `KeyboardStickyView` translates (native inset padding included), not
-  // derived from `bottomInset` -- `useSafeAreaInsets().bottom` is the value
-  // cause B found unreliable mid-IME-transition, while a fresh `onLayout`
-  // reports whatever is actually on screen. Starts at `0` (no clearance)
-  // until the first layout pass; `KeyboardAwareScrollView` re-syncs itself
-  // whenever `bottomOffset` changes, so the one-frame lag self-corrects
-  // rather than sticking.
-  const [footerHeight, setFooterHeight] = useState(0);
-
-  const handleFooterLayout = (event: LayoutChangeEvent) => {
-    const nextHeight = event.nativeEvent.layout.height;
-    setFooterHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
-  };
-
-  const footerView = footer ? (
-    <KeyboardStickyView
-      offset={{ closed: 0, opened: bottomInset }}
-      testID="onb-shell-sticky-footer"
-    >
-      <SafeAreaView edges={['bottom']} onLayout={handleFooterLayout}>
-        <View
-          style={[styles.footer, { paddingBottom: getStickyFooterBottomPadding(bottomInset) }]}
-          testID="onb-shell-footer"
-        >
-          {footer}
-        </View>
-      </SafeAreaView>
-    </KeyboardStickyView>
-  ) : null;
-
   return (
-    <SafeAreaView edges={['top', 'left', 'right']} style={styles.safeArea} testID={testID}>
-      <KeyboardAwareScrollView
-        // Cause D above: this used to be `enabled={isContentOverflowing}`.
-        // Always-on is not a behavior change with the keyboard closed (see
-        // cause D) and is exactly what lets a short, non-overflowing step
-        // scroll its focused input clear once the keyboard opens.
-        enabled
-        bottomOffset={footer ? keyboardBottomOffset + footerHeight : spacing.lg}
-        contentContainerStyle={[styles.scrollContent, contentContainerStyle]}
-        disableScrollOnKeyboardHide={false}
-        bounces={false}
-        keyboardShouldPersistTaps="handled"
-        mode="insets"
-        overScrollMode="never"
-        style={styles.scrollView}
-        testID="onb-shell-scroll"
-      >
-        <View style={styles.body}>{children}</View>
-      </KeyboardAwareScrollView>
-
-      {footerView}
-    </SafeAreaView>
+    <KeyboardStickyShell
+      contentContainerStyle={[styles.scrollContent, contentContainerStyle]}
+      footer={footer}
+      footerStyle={styles.footer}
+      footerTestID="onb-shell-footer"
+      keyboardBottomOffset={keyboardBottomOffset}
+      safeAreaStyle={styles.safeArea}
+      scrollTestID="onb-shell-scroll"
+      stickyFooterTestID="onb-shell-sticky-footer"
+      testID={testID}
+    >
+      <View style={styles.body}>{children}</View>
+    </KeyboardStickyShell>
   );
 }
 
@@ -259,9 +196,6 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.bg,
-  },
-  scrollView: {
-    flex: 1,
   },
   scrollContent: {
     flexGrow: 1,

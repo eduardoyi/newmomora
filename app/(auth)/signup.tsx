@@ -105,8 +105,9 @@ export default function SignUpScreen() {
 
 const styles = StyleSheet.create({
   footerText: {
-    color: colors.textMuted,
-    fontSize: 15,
+    color: colors.ink2,
+    fontSize: 14,
+    textAlign: 'center',
   },
   link: {
     color: colors.primary,

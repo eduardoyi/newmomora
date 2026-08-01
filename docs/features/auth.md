@@ -63,8 +63,9 @@ No Edge Functions for auth in MVP — client uses Supabase Auth directly with an
 | Auth hook + provider | `src/hooks/use-auth.tsx` — `requestSignInOtp`, `requestSignUpOtp`, `verifyOtp`, `signInWithPassword` (dedicated review account + dev/E2E), `signOut` |
 | Auth deep-link fallback | `src/hooks/use-auth-url-handler.ts`, `src/lib/create-session-from-url.ts` |
 | Providers wrapper | `src/components/app-providers.tsx` |
-| Auth screens | `app/(auth)/login.tsx`, `password.tsx`, `signup.tsx`, `verify-otp.tsx` |
-| Shared auth shell | `src/components/auth-screen.tsx` — keyboard-safe layout + `AuthField`/`AuthInput`/`AuthButton` |
+| Auth screens | `app/(auth)/login.tsx`, `password.tsx`, `signup.tsx`, `verify-otp.tsx` — all four render through `AuthScreen` |
+| Shared auth shell | `src/components/auth-screen.tsx` — editorial shell (wordmark + Newsreader headline + subtitle + pinned footer) plus `AuthField`/`AuthInput`/`AuthButton`/`AuthErrorMessage`, used by these four screens **and** eight `app/(app)/` screens (settings, no-family, redeem, add-family-member, edit-member, sharing invite/manage) for just the field/button/error primitives |
+| Shared keyboard mechanism | `src/components/keyboard-sticky-shell.tsx` — `KeyboardStickyShell`, the footer-outside-the-scroll-view + `KeyboardStickyView` + native bottom `SafeAreaView` + measured-footer-height pattern; also used by onboarding's `OnbShell` (`src/components/onboarding/onb-shell.tsx`). One implementation, two thin styling wrappers — do not fork it. |
 | Reviewer-email guard | `src/services/reviewer-auth.ts` |
 | Route guards | `app/index.tsx`, `app/(auth)/_layout.tsx`, `app/(app)/_layout.tsx` |
 | Dev/E2E gate reused for the password toggle | `src/utils/e2e-fixtures.ts` (`isE2eFixturesEnabled`) |
@@ -83,7 +84,7 @@ Env vars (client):
 ## Constraints & gotchas
 
 - Never put service role or OpenAI keys in the client.
-- Keyboard safety: `AuthScreen` wraps every auth screen in `react-native-keyboard-controller`'s `KeyboardAwareScrollView` (`mode="insets"`), the same container as `KeyboardAwareFormScreen`. Its `bottomOffset` is deliberately larger than the form-screen default because each auth screen's submit CTA sits directly below the last field — with a smaller offset Android keeps "Continue" and the verify-OTP actions under the keyboard. Do not swap it back to `KeyboardAvoidingView`: with edge-to-edge Android layouts that component needs a `behavior` React Native does not provide, so Android gets no avoidance at all.
+- Keyboard safety: `AuthScreen` renders through `KeyboardStickyShell` (`src/components/keyboard-sticky-shell.tsx`), not a bare `KeyboardAwareScrollView`. The submit CTA / footer lives **outside** the scroll view and is translated above the keyboard by `KeyboardStickyView`; nav-bar/home-indicator clearance comes from a native `SafeAreaView edges={['bottom']}` around it (not a JS-computed `useSafeAreaInsets().bottom`, which reads 0 mid-IME-transition on Android); the footer's rendered height is measured via `onLayout` and folded into the scroll view's `bottomOffset`, since the scroll view can't otherwise see that a translated footer overlays the bottom of its viewport. This replaced an earlier design where the footer sat *inside* the same scroll view, which is what let the keyboard cover the submit button (fixed 2026-08-01; see `src/components/onboarding/onb-shell.tsx`'s file header for the full incident history the fix is based on). Never fork this mechanism into a screen-local `KeyboardAwareScrollView`/`KeyboardAvoidingView` — extend `KeyboardStickyShell` instead. Do not use `KeyboardAvoidingView`: `behavior="height"` locks its first measured layout at mount, which can freeze a stale frame permanently on a screen pushed while the keyboard is already open.
 - `signInWithPassword` is reachable in production only after an allowlisted fixture email is entered through the normal login field. The guarded password route must reject every other route email. Do not add a visible reviewer link, a normal-user password option, or a prefilled password.
 - The `__DEV__` password shortcut must stay compile-time gated. Follow the same pattern used for the family-member E2E photo fixture: a helper that returns `__DEV__`, used to conditionally render the shortcut and everything behind it.
 - Provisioning and seeding are manual release operations; follow [the reviewer-access runbook](../reviewer-access.md). The dedicated email is an intentionally committed, non-secret route classifier; never place the password or any other secrets in source, EAS public variables, docs, tests, screenshots, or logs.
@@ -120,9 +121,9 @@ Custom SMTP (Bento relay, `yubin.sentbybento.com:587` STARTTLS) delivers the OTP
 
 | Layer | File |
 |-------|------|
-| Unit | `src/services/auth.test.ts`, `src/services/reviewer-auth.test.ts`, `src/components/auth-screen.test.tsx` |
+| Unit | `src/services/auth.test.ts`, `src/services/reviewer-auth.test.ts`, `src/components/auth-screen.test.tsx`, `src/components/keyboard-sticky-shell.test.tsx` |
 | Integration | `src/hooks/use-auth.integration.test.tsx` |
-| Screen integration | `src/screen-tests/reviewer-password.integration.test.tsx` |
+| Screen integration | `src/screen-tests/reviewer-password.integration.test.tsx`, `src/screen-tests/login.integration.test.tsx` |
 | E2E | `.maestro/flows/auth/app-review-access.yaml`; `.maestro/flows/auth/login.yaml` (+ `.maestro/flows/auth/sign-in.yaml` for the `__DEV__` shortcut) |
 
 ```bash
@@ -135,6 +136,7 @@ maestro test .maestro/flows/auth/app-review-access.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-08-01 | Fixed the keyboard covering login's "Sign in" button: the footer moved outside the scroll view onto the same `KeyboardStickyView` + native-inset + measured-footer-height mechanism `OnbShell` uses, extracted into `src/components/keyboard-sticky-shell.tsx` so onboarding and auth share one implementation. `AuthScreen` was rebuilt into the editorial shell (wordmark + Newsreader headline + subtitle) to match `login.tsx`'s look; `verify-otp.tsx`, `password.tsx` and `signup.tsx` now share it. `login.tsx` itself renders through `AuthScreen` instead of duplicating the composition. `AuthField`/`AuthInput`/`AuthButton`/`AuthErrorMessage` and their eight `app/(app)/` consumers are unchanged. |
 | 2026-08-01 | OTP email subject changed from `[Momora] Your sign-in link` to `{{ .Token }} is your Momora code`; canonical subject/body recorded above. |
 | 2026-07-25 | Auth screens adopt the keyboard-controller scroll container so Android stops covering the submit buttons. |
 | 2026-07-18 | Added the screenshot demo account to the guarded production password allowlist. |

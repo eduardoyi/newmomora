@@ -1,14 +1,17 @@
 // Soft-editorial login restyle (app/(auth)/login.tsx). Routing/reviewer-
 // password behavior is already covered end-to-end by
 // reviewer-password.integration.test.tsx -- this file covers what changed
-// with the restyle: the new keyboard-safe container, the mockup-matched
+// with the restyle: the keyboard-safe container (now `AuthScreen` /
+// `KeyboardStickyShell` -- see those files' headers for the
+// keyboard-covers-the-Sign-in-button bug this replaced), the mockup-matched
 // copy (no em dash per docs/plans/onboarding-design-brief.md), the "Sign
 // in" CTA states, and the dev/E2E password toggle staying functional.
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import LoginScreen from '../../app/(auth)/login';
-import { colors, spacing } from '@/constants/theme';
+import { FOOTER_KEYBOARD_CLEARANCE } from '@/components/keyboard-sticky-shell';
+import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { isE2eFixturesEnabled } from '@/utils/e2e-fixtures';
 
@@ -90,13 +93,51 @@ describe('LoginScreen (soft editorial)', () => {
     it('keeps the focused email field and the Sign in button above the keyboard', () => {
       const { getByTestId } = renderScreen();
       const scrollView = getByTestId('login-screen-scroll');
+      const submitButton = getByTestId('login-submit-button');
+
+      // Regression: the Sign in button used to live *inside* the same
+      // KeyboardAwareScrollView as the fields, so it could scroll out of
+      // view / end up under the open keyboard. It must not be a descendant
+      // of the scroll view -- it's translated above the keyboard by its own
+      // sticky footer instead (see app/(auth)/login.tsx and
+      // src/components/keyboard-sticky-shell.tsx).
+      let ancestor = submitButton.parent;
+      let isInsideScrollView = false;
+      while (ancestor) {
+        if (ancestor === scrollView) {
+          isInsideScrollView = true;
+          break;
+        }
+        ancestor = ancestor.parent;
+      }
+      expect(isInsideScrollView).toBe(false);
 
       fireEvent(getByTestId('login-email-input'), 'focus');
 
-      expect(scrollView.props.bottomOffset).toBe(spacing.xxl * 2);
-      expect(scrollView.props.disableScrollOnKeyboardHide).toBe(true);
+      expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
+      expect(scrollView.props.disableScrollOnKeyboardHide).toBe(false);
       expect(scrollView.props.keyboardShouldPersistTaps).toBe('handled');
       expect(scrollView.props.mode).toBe('insets');
+      // Cause D (onb-shell.tsx file header): keyboard-avoidance must never
+      // be gated on measured content overflow -- always enabled.
+      expect(scrollView.props.enabled).toBe(true);
+    });
+
+    it('folds the sticky footer\'s measured height into bottomOffset, so a focused field clears the footer as well as the keyboard', () => {
+      const { getByTestId } = renderScreen();
+      const scrollView = getByTestId('login-screen-scroll');
+      const submitButton = getByTestId('login-submit-button');
+
+      expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
+
+      // `onLayout` is registered on the native `SafeAreaView` two levels
+      // above the button -- the same box the sticky view translates.
+      const footerSafeArea = submitButton.parent?.parent;
+      fireEvent(footerSafeArea, 'layout', { nativeEvent: { layout: { height: 132 } } });
+
+      expect(getByTestId('login-screen-scroll').props.bottomOffset).toBe(
+        FOOTER_KEYBOARD_CLEARANCE + 132,
+      );
     });
   });
 

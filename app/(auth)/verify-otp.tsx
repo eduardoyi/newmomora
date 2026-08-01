@@ -209,8 +209,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   footerText: {
-    color: colors.textMuted,
-    fontSize: 15,
+    color: colors.ink2,
+    fontSize: 14,
+    textAlign: 'center',
   },
   link: {
     color: colors.primary,
