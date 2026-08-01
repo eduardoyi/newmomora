@@ -99,7 +99,16 @@ In [Auth → URL Configuration](https://supabase.com/dashboard/project/uglhonlaq
 | **Site URL** | `momora://auth/callback` |
 | **Redirect URLs** | `momora://**`, `momora://auth/callback`, `exp://**` |
 
-In Auth → Emails → **Magic Link** template: it must include `{{ .Token }}` — by default Supabase's template only sends a clickable link, not a numeric code, and `verifyOtp({ type: 'email' })` needs the code. Verify this before relying on the OTP UI end-to-end.
+In Auth → Emails → **Magic Link** template: the body must include `{{ .Token }}` — by default Supabase's template only sends a clickable link, not a numeric code, and `verifyOtp({ type: 'email' })` needs the code. Verify this before relying on the OTP UI end-to-end.
+
+The **subject** is also a Go template rendered with the same data as the body (GoTrue's own Reauthentication default is `{{ .Token }} is your verification code`), so the code goes there too. Canonical values — dashboard-only, nothing in this repo drives them:
+
+| Field | Value |
+|-------|-------|
+| Subject | `{{ .Token }} is your Momora code` |
+| Body | `<p>Your Momora sign-in code is:</p><h2 style="font-size:32px;letter-spacing:6px;margin:16px 0;">{{ .Token }}</h2><p>It expires in 10 minutes. If you didn't request it, you can ignore this email.</p>` |
+
+Code-first in the subject so it is readable from the inbox list without opening the mail; "link" is deliberately absent because this flow never sends one.
 
 In Auth → Providers → Email: set **OTP expiry** to 10 minutes (family-sharing plan §4 Phase 0).
 
@@ -126,6 +135,7 @@ maestro test .maestro/flows/auth/app-review-access.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-08-01 | OTP email subject changed from `[Momora] Your sign-in link` to `{{ .Token }} is your Momora code`; canonical subject/body recorded above. |
 | 2026-07-25 | Auth screens adopt the keyboard-controller scroll container so Android stops covering the submit buttons. |
 | 2026-07-18 | Added the screenshot demo account to the guarded production password allowlist. |
 | 2026-07-17 | Replaced the visible reviewer link with an email-triggered, route-guarded generic password step. |
