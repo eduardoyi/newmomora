@@ -33,6 +33,7 @@ import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { navigateBack } from '@/lib/navigation';
 import { editMemoryRoute } from '@/lib/routes';
+import { trackEvent } from '@/services/analytics';
 import { aspectRatioFromDimensions, clampMediaAspectRatio } from '@/utils/media-aspect';
 import { canEditFamilyContent } from '@/utils/roles';
 import { formatTaggedMemberAge } from '@/utils/family-members';
@@ -546,6 +547,9 @@ export default function MemoryDetailScreen() {
 
   const handleRetry = async () => {
     if (!memory) return;
+    // Recovery: the failed-state "Retry illustration" button (memory-detail
+    // section above) -- distinct from the manual regenerate button below.
+    trackEvent('illustration_retry_requested', { intent: 'recovery' });
     await retryIllustration(memory.id);
   };
 
@@ -562,6 +566,7 @@ export default function MemoryDetailScreen() {
         {
           text: 'Regenerate',
           onPress: () => {
+            trackEvent('illustration_retry_requested', { intent: 'manual_regenerate' });
             void regenerateIllustration(memory.id)
               .then((result) => {
                 // Not an error -- the memory is parked at pending/ready and

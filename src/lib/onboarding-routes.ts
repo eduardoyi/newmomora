@@ -13,6 +13,7 @@
 // `sharingWaitingRouteWithName` already establishes in src/lib/routes.ts.
 import type { Href } from 'expo-router';
 
+import type { AnalyticsEventMap } from '@/services/analytics';
 import type { OnboardingPaywallMode, OnboardingStepId } from '@/utils/onboarding-progress';
 
 // Owner-path story/capture/trust arc (S0, S4-S8, S9-S11, S13-S16). S1-S3
@@ -40,8 +41,24 @@ export const onboardingResubscribePaywallRoute = {
   params: { mode: 'resubscribe' },
 } as unknown as Href;
 
-export function onboardingPaywallRouteForMode(mode: OnboardingPaywallMode): Href {
-  return mode === 'resubscribe' ? onboardingResubscribePaywallRoute : onboardingPaywallRoute;
+/**
+ * `source` (docs/plans/analytics-implementation.md WP2.5) feeds
+ * `paywall_viewed.source` once the screen mounts -- an optional param so
+ * every existing caller keeps landing on the plain routes above (paywall.tsx
+ * defaults an absent `source` search param to `'onboarding'` itself). Only
+ * callers that need to attribute a specific bounce (e.g. app/index.tsx's
+ * `resume-paywall` branch, passing `'resume'`) supply it.
+ */
+export function onboardingPaywallRouteForMode(
+  mode: OnboardingPaywallMode,
+  source?: AnalyticsEventMap['paywall_viewed']['source'],
+): Href {
+  if (!source) {
+    return mode === 'resubscribe' ? onboardingResubscribePaywallRoute : onboardingPaywallRoute;
+  }
+  return mode === 'resubscribe'
+    ? ({ pathname: '/(onboarding)/paywall', params: { mode: 'resubscribe', source } } as unknown as Href)
+    : ({ pathname: '/(onboarding)/paywall', params: { source } } as unknown as Href);
 }
 
 /** S1-S3, distinguished by the `beat` search param. */
@@ -140,5 +157,86 @@ export function onboardingStepRoute(step: OnboardingStepId): Href {
       const exhaustive: never = step;
       return exhaustive;
     }
+  }
+}
+
+type OnboardingAnalyticsStepView = AnalyticsEventMap['onboarding_step_viewed'];
+
+/**
+ * Pure mapping from `usePathname()`'s bare pathname (docs/plans/
+ * analytics-implementation.md WP2.1) to the `onboarding_step_viewed` event's
+ * `{step, flow}`. Expo Router strips the `(onboarding)` group segment, so
+ * `usePathname()` returns `/welcome`, `/story`, `/join/code` -- NEVER
+ * `/(onboarding)/welcome` -- which is why this switches on bare pathnames
+ * instead of reusing the Href constants above. Returns `null` for any
+ * pathname this layout doesn't own (defensive -- every route this layout
+ * renders is listed below).
+ *
+ * `/story` is the one route this can't resolve from the pathname alone --
+ * S1-S3 share a single screen distinguished by the `beat` search param
+ * (`onboardingStoryRoute` above). The caller supplies it via
+ * `useGlobalSearchParams()`, not `useLocalSearchParams()`, which at layout
+ * level may not surface a leaf screen's params (see the `_layout.tsx` hook).
+ * A missing/unparseable beat falls back to `story-0` rather than dropping
+ * the event -- the same "beat 0 is the default" behavior `onboardingStoryRoute`
+ * assumes.
+ */
+export function onboardingAnalyticsStepFromPathname(
+  pathname: string,
+  beatParam?: string | string[],
+): OnboardingAnalyticsStepView | null {
+  if (pathname === '/story') {
+    const beat = Array.isArray(beatParam) ? beatParam[0] : beatParam;
+    const step: OnboardingStepId = beat === '1' ? 'story-1' : beat === '2' ? 'story-2' : 'story-0';
+    return { step, flow: 'owner' };
+  }
+
+  switch (pathname) {
+    case '/welcome':
+      return { step: 'welcome', flow: 'owner' };
+    case '/founders':
+      return { step: 'founders', flow: 'owner' };
+    case '/artifact':
+      return { step: 'artifact', flow: 'owner' };
+    case '/kids':
+      return { step: 'kids', flow: 'owner' };
+    case '/family-name':
+      return { step: 'family-name', flow: 'owner' };
+    case '/bridge':
+      return { step: 'bridge', flow: 'owner' };
+    case '/capture':
+      return { step: 'capture', flow: 'owner' };
+    case '/aha':
+      return { step: 'aha', flow: 'owner' };
+    case '/year':
+      return { step: 'year', flow: 'owner' };
+    case '/notifications':
+      return { step: 'notifications', flow: 'owner' };
+    case '/email':
+      return { step: 'email', flow: 'owner' };
+    case '/code':
+      return { step: 'code', flow: 'owner' };
+    case '/trial':
+      return { step: 'trial', flow: 'owner' };
+    case '/included':
+      return { step: 'included', flow: 'owner' };
+    case '/paywall':
+      return { step: 'paywall', flow: 'owner' };
+    case '/portrait':
+      return { step: 'portrait', flow: 'owner' };
+    case '/reveal':
+      return { step: 'reveal', flow: 'owner' };
+    case '/join/code':
+      return { step: 'join-code', flow: 'joiner' };
+    case '/join/found':
+      return { step: 'join-found', flow: 'joiner' };
+    case '/join/name':
+      return { step: 'join-name', flow: 'joiner' };
+    case '/join/email':
+      return { step: 'join-email', flow: 'joiner' };
+    case '/join/waiting':
+      return { step: 'join-waiting', flow: 'joiner' };
+    default:
+      return null;
   }
 }

@@ -1249,8 +1249,13 @@ this is the contract.
 **Response**
 
 ```json
-{ "familyName": "Rivera family", "role": "viewer" }
+{ "familyName": "Rivera family", "role": "viewer", "familyId": "uuid" }
 ```
+
+`familyId` is the redeemed invite's family — the join analytics events
+(`invite_redeemed`, `invite_resolved`) key off it, since it's the only value
+that correlates the inviter and redeemer as different persons (see
+[docs/features/analytics.md](./features/analytics.md)).
 
 **Auth:** JWT. Rate-limited: ≤10 attempts/hour/user and ≤30/hour/IP (best-effort, from the last `x-forwarded-for` hop).
 

@@ -10,6 +10,8 @@ import {
   removeMemoryFromListCaches,
 } from '@/hooks/memory-cache';
 import { clearRealtimeStatus, setRealtimeLive } from '@/hooks/realtime-status';
+import { shouldReportIllustrationOutcome } from '@/lib/illustration-outcome-dedupe';
+import { trackEvent } from '@/services/analytics';
 import { fetchMemoryById, type Memory } from '@/services/memories';
 
 // Workstream D2 (docs/plans/performance-optimizations.md): push-based
@@ -126,6 +128,19 @@ export function useMemoriesRealtime(familyId: string | null | undefined): void {
           if (row.illustration_status === 'ready' && wasGenerating) {
             queryClient.invalidateQueries({ queryKey: ['media-urls'] });
             queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+          }
+
+          // `illustration_completed` (docs/plans/analytics-tracking.md Tier
+          // 2) -- A5's poll can observe the same ready/failed transition (a
+          // SUBSCRIBED transition below forces one of its ticks), so the
+          // module-level dedupe singleton is what keeps this to one report
+          // per memory per terminal transition.
+          if (
+            wasGenerating &&
+            (row.illustration_status === 'ready' || row.illustration_status === 'failed') &&
+            shouldReportIllustrationOutcome(row.id, row.illustration_status)
+          ) {
+            trackEvent('illustration_completed', { outcome: row.illustration_status });
           }
         },
       )

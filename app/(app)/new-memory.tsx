@@ -1,5 +1,5 @@
 import { navigateBack } from '@/lib/navigation';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -34,6 +34,7 @@ import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
 import { useSuggestedMemoryDate } from '@/hooks/use-suggested-memory-date';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { trackEvent, type AnalyticsEventMap } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
   clearNewMemoryDraft,
@@ -64,6 +65,23 @@ function createMemoryId(): string {
   });
 }
 
+// `memory_saved.source` (docs/plans/analytics-tracking.md Tier 2) --
+// normalizes the `source` route param (see `newMemoryRoute` in
+// src/lib/routes.ts) into the event's closed union, defaulting to `'other'`
+// for a bare open (no param) or anything unrecognized (e.g. a stale deep
+// link from an older build).
+function normalizeMemorySavedSource(raw: string | undefined): AnalyticsEventMap['memory_saved']['source'] {
+  switch (raw) {
+    case 'fab_timeline':
+    case 'fab_calendar':
+    case 'share_sheet':
+    case 'notification':
+      return raw;
+    default:
+      return 'other';
+  }
+}
+
 const TYPE_CONFIGS = {
   text_illustration: { label: 'Illustrated', color: colors.primary, bg: colors.primaryTint, border: colors.primarySoft },
   text_only:         { label: 'Text only',   color: colors.ink2,    bg: colors.surface,     border: colors.border },
@@ -73,6 +91,8 @@ const TYPE_CONFIGS = {
 } as const;
 
 export default function NewMemoryScreen() {
+  const { source: rawSource } = useLocalSearchParams<{ source?: string }>();
+  const memorySavedSource = useMemo(() => normalizeMemorySavedSource(rawSource), [rawSource]);
   const { user } = useAuth();
   const { role, familyId } = useFamily();
   const { status: billingStatus, isLoading: isBillingLoading } = useBilling();
@@ -95,7 +115,10 @@ export default function NewMemoryScreen() {
       return;
     }
 
-    router.replace({ pathname: '/(onboarding)/paywall', params: { mode: 'resubscribe' } });
+    router.replace({
+      pathname: '/(onboarding)/paywall',
+      params: { mode: 'resubscribe', source: 'new_memory_bounce' },
+    });
   }, [billingStatus, familyId, isBillingLoading, role, user?.id]);
 
   // Subscription ownership belongs to the family owner. A manager must never
@@ -131,6 +154,10 @@ export default function NewMemoryScreen() {
   const [illustrationEnabled, setIllustrationEnabled] = useState(true);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  // `memory_saved.used_voice` -- set once the Speak It modal ever hands back
+  // a result, even if the user edits the transcribed text afterward. Not
+  // reset on save (a fresh mount is a fresh composer instance).
+  const usedVoiceRef = useRef(false);
   // Enqueueing a media post returns instantly, so React Query's isPending
   // can't guard the Save button like it did for the old inline mutation. The
   // ref blocks synchronous double-taps that land before the state re-render.
@@ -342,13 +369,30 @@ export default function NewMemoryScreen() {
   const handleSave = async () => {
     setErrorMessage('');
     const contentError = validateMemoryContent(content, memoryType);
-    if (contentError) { setErrorMessage(contentError); return; }
+    if (contentError) {
+      setErrorMessage(contentError);
+      trackEvent('memory_save_failed', { code: 'validation_error' });
+      return;
+    }
     const dateError = validateMemoryDate(memoryDate);
-    if (dateError) { setErrorMessage(dateError); return; }
+    if (dateError) {
+      setErrorMessage(dateError);
+      trackEvent('memory_save_failed', { code: 'validation_error' });
+      return;
+    }
+
+    // Media memories never carry an AI illustration (deriveMemoryType routes
+    // any attached media to 'media' regardless of the toggle) -- only
+    // 'text_illustration' actually triggers generation.
+    const illustrationEnabledForEvent = memoryType === 'text_illustration';
 
     try {
       if (memoryType === 'media') {
-        if (attachedMedia.length === 0) { setErrorMessage('Attach a photo or video before saving.'); return; }
+        if (attachedMedia.length === 0) {
+          setErrorMessage('Attach a photo or video before saving.');
+          trackEvent('memory_save_failed', { code: 'validation_error' });
+          return;
+        }
         if (hasEnqueuedMediaRef.current) { return; }
         hasEnqueuedMediaRef.current = true;
         setIsPostingMedia(true);
@@ -368,12 +412,33 @@ export default function NewMemoryScreen() {
           memoryDate: memoryDate.trim(),
           taggedMemberIds: selectedMemberIds,
         });
+        // `memory_saved` means the save gesture completed -- the media path
+        // enqueues here and uploads in the background; a background upload
+        // failure reports its own `memory_save_failed
+        // {code:'media_upload_failed'}` from the queue's terminal-failure
+        // transition (use-pending-memory-uploads.tsx), not here.
+        trackEvent('memory_saved', {
+          memory_type: memoryType,
+          used_voice: usedVoiceRef.current,
+          has_media: true,
+          tagged_count: selectedMemberIds.length,
+          illustration_enabled: illustrationEnabledForEvent,
+          source: memorySavedSource,
+        });
       } else {
         await createMemory({
           content: content.trim(),
           memoryDate: memoryDate.trim(),
           taggedMemberIds: selectedMemberIds,
           memoryType,
+        });
+        trackEvent('memory_saved', {
+          memory_type: memoryType,
+          used_voice: usedVoiceRef.current,
+          has_media: false,
+          tagged_count: selectedMemberIds.length,
+          illustration_enabled: illustrationEnabledForEvent,
+          source: memorySavedSource,
         });
       }
       // Both paths are considered "posted" here: the media path enqueues
@@ -388,6 +453,7 @@ export default function NewMemoryScreen() {
     } catch (error) {
       hasEnqueuedMediaRef.current = false;
       setIsPostingMedia(false);
+      trackEvent('memory_save_failed', { code: 'network_error' });
       setErrorMessage(
         error instanceof Error ? error.message : 'Could not save memory',
       );
@@ -556,6 +622,7 @@ export default function NewMemoryScreen() {
         familyMembers={voiceMembers}
         onDismiss={() => setShowVoiceModal(false)}
         onResult={(result) => {
+          usedVoiceRef.current = true;
           setContent(result.cleanedText);
           // applyVoiceResult overwrites selectedMemberIds with the mention
           // match. With no name mentioned ("she took her first steps

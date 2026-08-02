@@ -29,6 +29,7 @@ import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
 import { onboardingPortraitRoute, onboardingWelcomeRoute } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
+import { setPersonProperties, trackEvent } from '@/services/analytics';
 import { commitOnboarding } from '@/services/onboarding';
 import { createEmptyOnboardingDraft, type OnboardingDraft } from '@/utils/onboarding-progress';
 import { colors } from '@/constants/theme';
@@ -83,6 +84,11 @@ jest.mock('@/services/onboarding', () => ({
   commitOnboarding: jest.fn(),
 }));
 
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
+  setPersonProperties: jest.fn(),
+}));
+
 // createEmptyOnboardingDraft lives in the same module as the real
 // AsyncStorage-backed persistence helpers (src/utils/onboarding-progress.ts)
 // -- swap in the maintained mock so importing it doesn't pull in the native
@@ -98,6 +104,8 @@ const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseBilling = useBilling as jest.MockedFunction<typeof useBilling>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedCommitOnboarding = commitOnboarding as jest.MockedFunction<typeof commitOnboarding>;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
+const mockedSetPersonProperties = setPersonProperties as jest.MockedFunction<typeof setPersonProperties>;
 
 const annualPackage = {
   identifier: '$rc_annual',
@@ -131,6 +139,23 @@ function activeCustomerInfo() {
 
 function renderScreen() {
   return render(
+    <SafeAreaProvider
+      initialMetrics={{
+        frame: { height: 844, width: 390, x: 0, y: 0 },
+        insets: { bottom: 34, left: 0, right: 0, top: 47 },
+      }}
+    >
+      <PaywallScreen />
+    </SafeAreaProvider>,
+  );
+}
+
+// Re-renders the same element tree so a mid-test change to a mocked hook's
+// return value (e.g. offerings arriving after mode has already settled) is
+// picked up -- the hooks here are jest.fn() mocks, not real state, so
+// nothing re-renders the screen on its own when their return value changes.
+function rerenderScreen(utils: ReturnType<typeof renderScreen>) {
+  utils.rerender(
     <SafeAreaProvider
       initialMetrics={{
         frame: { height: 844, width: 390, x: 0, y: 0 },
@@ -608,5 +633,258 @@ describe('PaywallScreen (S15)', () => {
     fireEvent.press(getByTestId('onb-paywall-restore-button'));
 
     await waitFor(() => expect(router.replace).toHaveBeenCalledWith(onboardingPortraitRoute));
+  });
+
+  // docs/plans/analytics-implementation.md WP2.6's required test list.
+  describe('analytics', () => {
+    it('fires no paywall_viewed for an entitled pass-through (serverPaywallMode stays null)', async () => {
+      const billing = {
+        purchase: jest.fn(),
+        startOnboardingIllustration: jest.fn().mockResolvedValue(undefined),
+      };
+      mockedUseBilling.mockReturnValue({
+        offerings: { offering: {} as never, annual: annualPackage, monthly: monthlyPackage, annualTrialEligibility: 'eligible', raw: {} as never },
+        status: {
+          family_id: 'family-1',
+          owner_user_id: 'user-1',
+          has_write_access: true,
+          has_ever_had_access: true,
+          trial_eligible: false,
+          access_reason: 'active',
+        } as never,
+        isConfigured: true,
+        isLoading: false,
+        isOffline: false,
+        purchase: billing.purchase,
+        restore: jest.fn(),
+        startOnboardingIllustration: billing.startOnboardingIllustration,
+        refresh: jest.fn().mockResolvedValue(undefined),
+      } as never);
+
+      renderScreen();
+
+      await waitFor(() => expect(router.replace).toHaveBeenCalledWith(onboardingPortraitRoute));
+      expect(mockedTrackEvent).not.toHaveBeenCalledWith('paywall_viewed', expect.anything());
+    });
+
+    it('fires exactly one paywall_viewed, with the settled mode, once the pending owner-status check resolves', async () => {
+      let releaseRefresh!: () => void;
+      const refresh = jest.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseRefresh = resolve;
+          }),
+      );
+      mockedUseBilling.mockReturnValue({
+        offerings: {
+          offering: {} as never,
+          annual: annualPackage,
+          monthly: monthlyPackage,
+          annualTrialEligibility: 'eligible',
+          raw: {} as never,
+        },
+        status: pendingBillingStatus,
+        isConfigured: true,
+        isLoading: false,
+        isOffline: false,
+        purchase: jest.fn(),
+        restore: jest.fn(),
+        startOnboardingIllustration: jest.fn(),
+        refresh,
+      } as never);
+
+      renderScreen();
+
+      // Still checking -- serverPaywallMode is null while the refresh is
+      // pending, so paywall_viewed must not have fired yet.
+      expect(mockedTrackEvent).not.toHaveBeenCalledWith('paywall_viewed', expect.anything());
+
+      releaseRefresh();
+      await waitFor(() => {
+        expect(mockedTrackEvent).toHaveBeenCalledWith('paywall_viewed', {
+          mode: 'new-owner',
+          trial_eligible: true,
+          has_monthly: true,
+          source: 'onboarding',
+        });
+      });
+      expect(mockedTrackEvent.mock.calls.filter(([name]) => name === 'paywall_viewed')).toHaveLength(1);
+    });
+
+    it('withholds paywall_viewed until offerings settle too, even after the mode has already settled, then reports the offerings that actually arrived', async () => {
+      let releaseRefresh!: () => void;
+      const refresh = jest.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseRefresh = resolve;
+          }),
+      );
+      const billingBase = {
+        status: pendingBillingStatus,
+        isConfigured: true,
+        isLoading: false,
+        isOffline: false,
+        purchase: jest.fn(),
+        restore: jest.fn(),
+        startOnboardingIllustration: jest.fn(),
+        refresh,
+      };
+      // Offerings (RevenueCat) have not loaded yet when the screen mounts --
+      // status/mode and offerings settle independently.
+      mockedUseBilling.mockReturnValue({ ...billingBase, offerings: null } as never);
+      const { patch } = mockDraft({ kidNames: ['Lila'], capture: { text: 'Bath time giggles', taggedKidIndexes: [0] } });
+
+      const utils = renderScreen();
+
+      expect(mockedTrackEvent).not.toHaveBeenCalledWith('paywall_viewed', expect.anything());
+
+      releaseRefresh();
+      // `patch({..., paywallMode})` only ever fires once serverPaywallMode
+      // has actually settled -- a reliable signal that the mode half of the
+      // race is done, independent of the offerings-unavailable fallback UI
+      // (which can render for other reasons while still checking).
+      await waitFor(() => {
+        expect(patch).toHaveBeenCalledWith({ step: 'paywall', paywallMode: 'new-owner' });
+      });
+
+      // The bug this test guards against: mode is settled, but offerings are
+      // still null -- paywall_viewed must NOT have fired yet (it would have,
+      // pre-fix, with has_monthly/trial_eligible wrongly false).
+      expect(mockedTrackEvent).not.toHaveBeenCalledWith('paywall_viewed', expect.anything());
+
+      // Offerings arrive later.
+      mockedUseBilling.mockReturnValue({
+        ...billingBase,
+        offerings: {
+          offering: {} as never,
+          annual: annualPackage,
+          monthly: monthlyPackage,
+          annualTrialEligibility: 'eligible',
+          raw: {} as never,
+        },
+      } as never);
+      rerenderScreen(utils);
+
+      await waitFor(() => {
+        expect(mockedTrackEvent).toHaveBeenCalledWith('paywall_viewed', {
+          mode: 'new-owner',
+          trial_eligible: true,
+          has_monthly: true,
+          source: 'onboarding',
+        });
+      });
+      expect(mockedTrackEvent.mock.calls.filter(([name]) => name === 'paywall_viewed')).toHaveLength(1);
+    });
+
+    it('never fires paywall_viewed when offerings fail to load -- only paywall_error_shown {code: offerings_unavailable}', async () => {
+      mockedUseBilling.mockReturnValue({
+        offerings: null,
+        status: pendingBillingStatus,
+        isConfigured: true,
+        isLoading: false,
+        isOffline: false,
+        offeringsError: new Error('No active offering'),
+        purchase: jest.fn(),
+        restore: jest.fn(),
+        startOnboardingIllustration: jest.fn(),
+        refresh: jest.fn().mockResolvedValue(undefined),
+      } as never);
+
+      renderScreen();
+
+      await waitFor(() => {
+        expect(mockedTrackEvent).toHaveBeenCalledWith('paywall_error_shown', { code: 'offerings_unavailable' });
+      });
+      expect(mockedTrackEvent).not.toHaveBeenCalledWith('paywall_viewed', expect.anything());
+    });
+
+    it('reports a RevenueCat user-cancel as paywall_purchase_failed {code: store_cancel}, never purchase_completed', async () => {
+      const purchase = jest.fn().mockRejectedValue({ userCancelled: true, message: 'cancelled' });
+      mockedUseBilling.mockReturnValue({
+        offerings: { offering: {} as never, annual: annualPackage, monthly: monthlyPackage, annualTrialEligibility: 'eligible', raw: {} as never },
+        status: pendingBillingStatus,
+        isConfigured: true,
+        isLoading: false,
+        isOffline: false,
+        purchase,
+        restore: jest.fn(),
+        startOnboardingIllustration: jest.fn(),
+        refresh: jest.fn().mockResolvedValue(undefined),
+      } as never);
+      const { getByTestId } = renderScreen();
+
+      await waitFor(() => expect(getByTestId('onb-paywall-cta-button').props.accessibilityState?.disabled).toBeFalsy());
+      fireEvent.press(getByTestId('onb-paywall-cta-button'));
+
+      await waitFor(() => {
+        expect(mockedTrackEvent).toHaveBeenCalledWith('paywall_purchase_failed', { code: 'store_cancel' });
+      });
+      expect(mockedTrackEvent).not.toHaveBeenCalledWith('paywall_purchase_completed', expect.anything());
+    });
+
+    it('still fires paywall_purchase_completed (and never purchase_failed) when finishPaidOnboarding fails after a confirmed purchase', async () => {
+      mockDraft({
+        kidNames: ['Lila'],
+        committedFamilyId: 'family-1',
+        captureCommitted: false,
+        capture: { text: 'Bath time giggles', taggedKidIndexes: [0] },
+      });
+      mockedCommitOnboarding.mockResolvedValue({
+        data: null,
+        error: { message: 'Your capture could not be saved yet. Please try again.' },
+      });
+      const billing = {
+        purchase: jest.fn().mockResolvedValue(activeCustomerInfo()),
+        startOnboardingIllustration: jest.fn().mockResolvedValue(undefined),
+      };
+      mockedUseBilling.mockReturnValue({
+        offerings: { offering: {} as never, annual: annualPackage, monthly: monthlyPackage, annualTrialEligibility: 'eligible', raw: {} as never },
+        status: pendingBillingStatus,
+        isConfigured: true,
+        isLoading: false,
+        isOffline: false,
+        purchase: billing.purchase,
+        restore: jest.fn(),
+        startOnboardingIllustration: billing.startOnboardingIllustration,
+        refresh: jest.fn().mockResolvedValue(undefined),
+      } as never);
+
+      const { getByTestId } = renderScreen();
+
+      await waitFor(() => expect(getByTestId('onb-paywall-cta-button').props.accessibilityState?.disabled).toBeFalsy());
+      fireEvent.press(getByTestId('onb-paywall-cta-button'));
+
+      await waitFor(() => {
+        expect(mockedTrackEvent).toHaveBeenCalledWith('paywall_purchase_completed', { plan: 'annual' });
+      });
+      expect(mockedTrackEvent).not.toHaveBeenCalledWith('paywall_purchase_failed', expect.anything());
+    });
+
+    it('refreshes the access_reason person property once billing settles', async () => {
+      mockedUseBilling.mockReturnValue({
+        offerings: { offering: {} as never, annual: annualPackage, monthly: monthlyPackage, annualTrialEligibility: 'eligible', raw: {} as never },
+        status: {
+          family_id: 'family-1',
+          owner_user_id: 'user-1',
+          has_write_access: false,
+          has_ever_had_access: false,
+          trial_eligible: true,
+          access_reason: 'off',
+        } as never,
+        isConfigured: true,
+        isLoading: false,
+        isOffline: false,
+        purchase: jest.fn(),
+        restore: jest.fn(),
+        startOnboardingIllustration: jest.fn(),
+        refresh: jest.fn().mockResolvedValue(undefined),
+      } as never);
+
+      renderScreen();
+
+      await waitFor(() => {
+        expect(mockedSetPersonProperties).toHaveBeenCalledWith({ access_reason: 'off' });
+      });
+    });
   });
 });

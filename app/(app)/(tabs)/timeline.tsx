@@ -367,7 +367,7 @@ export default function TimelineScreen() {
         />
       )}
 
-      {canEdit && <MemoryFab onPress={() => router.push(newMemoryRoute)} />}
+      {canEdit && <MemoryFab onPress={() => router.push(newMemoryRoute('fab_timeline'))} />}
     </View>
   );
 }

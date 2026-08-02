@@ -2,7 +2,26 @@ import type { Href } from 'expo-router';
 
 export const rootRoute = '/' as Href;
 export const addFamilyMemberRoute = '/(app)/add-family-member' as Href;
-export const newMemoryRoute = '/(app)/new-memory' as Href;
+
+// `memory_saved.source` (docs/plans/analytics-tracking.md Tier 2) needs to
+// know which entry point opened the composer -- carried as a route param
+// (read by new-memory.tsx, defaults to `'other'` when omitted) rather than
+// component state, since the FAB, the incoming-share router, and the push
+// notification handler each navigate here from a different module with no
+// shared state to stash it in.
+export type NewMemorySource = 'fab_timeline' | 'fab_calendar' | 'share_sheet' | 'notification';
+
+export function newMemoryRoute(source?: NewMemorySource): Href {
+  if (!source) {
+    return '/(app)/new-memory' as Href;
+  }
+
+  return {
+    pathname: '/(app)/new-memory',
+    params: { source },
+  } as Href;
+}
+
 export const timelineRoute = '/(app)/(tabs)/timeline' as Href;
 export const noFamilyRoute = '/(app)/no-family' as Href;
 // The kids roster tab ("The cast") -- app/(app)/(tabs)/family.tsx. Named

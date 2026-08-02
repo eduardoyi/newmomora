@@ -47,7 +47,7 @@ beforeEach(() => {
 it('opens the composer when a cold-start share remains after timeline routing settles', () => {
   render(<IncomingShareRouter />);
 
-  expect(push).toHaveBeenCalledWith(newMemoryRoute);
+  expect(push).toHaveBeenCalledWith(newMemoryRoute('share_sheet'));
 });
 
 it('waits at the root path so it cannot race the initial timeline redirect', () => {
@@ -85,5 +85,5 @@ it('rechecks pending payloads when the app returns to the foreground', () => {
   expect(push).not.toHaveBeenCalled();
 
   handleAppStateChange?.('active');
-  expect(push).toHaveBeenCalledWith(newMemoryRoute);
+  expect(push).toHaveBeenCalledWith(newMemoryRoute('share_sheet'));
 });

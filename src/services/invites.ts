@@ -15,6 +15,9 @@ export type RedeemedInviteStatus =
 export interface RedeemFamilyInviteResponse {
   familyName: string;
   role: string;
+  // Join key for the client's `invite_redeemed` analytics event
+  // (docs/plans/analytics-tracking.md Tier 2, sharing/redeem.tsx).
+  familyId: string;
 }
 
 export interface ResolveFamilyInviteResponse {

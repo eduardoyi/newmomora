@@ -742,7 +742,7 @@ export default function CalendarScreen() {
         visible={isMonthPickerVisible}
       />
 
-      {canEdit && <MemoryFab onPress={() => router.push(newMemoryRoute)} />}
+      {canEdit && <MemoryFab onPress={() => router.push(newMemoryRoute('fab_calendar'))} />}
     </View>
   );
 }

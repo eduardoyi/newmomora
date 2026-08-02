@@ -28,6 +28,7 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { discardAnonymousSession } from '@/lib/anonymous-session';
 import { onboardingJoinCodeRoute, onboardingJoinWaitingRoute } from '@/lib/onboarding-routes';
+import { trackEvent } from '@/services/analytics';
 import { redeemFamilyInvite } from '@/services/invites';
 import { clearJoinDraft, getJoinDraft } from '@/services/onboarding-join';
 import { updateUserProfile } from '@/services/user-profile';
@@ -90,7 +91,7 @@ export default function JoinEmailScreen() {
       await updateUserProfile({ name: draft.displayName });
     }
 
-    const { error } = await redeemFamilyInvite(code);
+    const { data, error } = await redeemFamilyInvite(code);
 
     if (error) {
       const isDefinitive = Boolean(error.code && DEFINITIVE_FAILURE_CODES.has(error.code));
@@ -103,6 +104,15 @@ export default function JoinEmailScreen() {
       setErrorMessage(error.message);
       setStep('error');
       return;
+    }
+
+    // invite_redeemed (docs/plans/analytics-implementation.md WP2 /
+    // analytics-tracking.md) -- finishJoin only ever runs once per mount
+    // (hasStartedFinishRef above guards the mount-effect against re-running
+    // it after handleVerify already started it), so this fires exactly once
+    // per successful redemption without a separate dedupe guard here.
+    if (data?.familyId) {
+      trackEvent('invite_redeemed', { family_id: data.familyId });
     }
 
     await clearPendingInviteCode();

@@ -22,6 +22,11 @@ export interface RedeemFamilyInviteRequest {
 export interface RedeemFamilyInviteResponse {
   familyName: string;
   role: string;
+  // Join key for the client's `invite_redeemed` analytics event
+  // (docs/plans/analytics-tracking.md Tier 2) -- the inviter and joiner are
+  // different persons, so `familyName` alone can't correlate them across
+  // PostHog's per-person timelines the way this UUID can.
+  familyId: string;
 }
 
 export const USER_ATTEMPT_LIMIT_PER_HOUR = 10;
@@ -251,6 +256,7 @@ export async function processRedemption(
   const response: RedeemFamilyInviteResponse = {
     familyName: family.name as string,
     role: invite.role,
+    familyId: invite.family_id,
   };
 
   return jsonResponse(response);

@@ -162,7 +162,7 @@ Momora handles family and child data. Treat security as a feature, not an aftert
 
 ### Child & family data
 
-- Minimal PII in analytics (no journal text in event payloads).
+- Minimal PII in analytics (no journal text in event payloads) — see [docs/features/analytics.md](docs/features/analytics.md) for the full event catalog and PII rules.
 - No public URLs for family photos or illustrations in MVP.
 - Account deletion (15-day grace) must purge DB rows **and** all storage under the user's prefix.
 

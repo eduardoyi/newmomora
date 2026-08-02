@@ -19,6 +19,7 @@ import {
   familyInvitesQueryKey,
   familyMemberProfilesQueryKey,
 } from '@/hooks/queryKeys';
+import { trackEvent } from '@/services/analytics';
 import {
   fetchInviteRedeemer,
   resolveFamilyInvite,
@@ -86,6 +87,10 @@ export default function ApprovalsScreen() {
       if (action === 'approve') {
         queryClient.invalidateQueries({ queryKey: familyMemberProfilesQueryKey(user?.id, familyId) });
       }
+      trackEvent('invite_resolved', {
+        outcome: action === 'approve' ? 'approved' : 'rejected',
+        family_id: invite.family_id,
+      });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not resolve the invite');
     } finally {

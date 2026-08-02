@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import RedeemInviteScreen from '../../app/(app)/sharing/redeem';
 import { redeemFamilyInvite } from '@/services/invites';
 import { sharingWaitingRouteWithName } from '@/lib/routes';
+import { trackEvent } from '@/services/analytics';
 import { clearPendingInviteCode, getPendingInviteCode } from '@/utils/pending-invite-code';
 
 jest.mock('expo-router', () => ({
@@ -21,12 +22,17 @@ jest.mock('@/services/invites', () => ({
   redeemFamilyInvite: jest.fn(),
 }));
 
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
+}));
+
 jest.mock('@/utils/pending-invite-code', () => ({
   getPendingInviteCode: jest.fn(),
   clearPendingInviteCode: jest.fn().mockResolvedValue(undefined),
 }));
 
 const mockedRedeem = redeemFamilyInvite as jest.MockedFunction<typeof redeemFamilyInvite>;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 const mockedGetPending = getPendingInviteCode as jest.MockedFunction<typeof getPendingInviteCode>;
 const mockedClearPending = clearPendingInviteCode as jest.MockedFunction<
   typeof clearPendingInviteCode
@@ -83,7 +89,7 @@ describe('RedeemInviteScreen', () => {
 
   it('sends the normalized code, clears the pending code, and lands on the waiting screen', async () => {
     mockedRedeem.mockResolvedValue({
-      data: { familyName: "Rosa's family", role: 'viewer' },
+      data: { familyName: "Rosa's family", role: 'viewer', familyId: 'family-1' },
       error: null,
     });
 
@@ -101,6 +107,22 @@ describe('RedeemInviteScreen', () => {
     expect(router.replace).toHaveBeenCalledWith(sharingWaitingRouteWithName("Rosa's family"));
   });
 
+  it('reports invite_redeemed with the family_id join key on success', async () => {
+    mockedRedeem.mockResolvedValue({
+      data: { familyName: "Rosa's family", role: 'viewer', familyId: 'family-1' },
+      error: null,
+    });
+
+    const { getByTestId } = renderScreen();
+
+    fireEvent.changeText(getByTestId('redeem-code-input'), 'sunny-tiger-lake');
+    fireEvent.press(getByTestId('redeem-submit-button'));
+
+    await waitFor(() => {
+      expect(mockedTrackEvent).toHaveBeenCalledWith('invite_redeemed', { family_id: 'family-1' });
+    });
+  });
+
   it('clears the pending code on a definitive invalid_code failure', async () => {
     mockedRedeem.mockResolvedValue({
       data: null,
@@ -115,6 +137,7 @@ describe('RedeemInviteScreen', () => {
     expect(await findByText('That invite code is invalid or has expired.')).toBeTruthy();
     expect(mockedClearPending).toHaveBeenCalled();
     expect(router.replace).not.toHaveBeenCalled();
+    expect(mockedTrackEvent).not.toHaveBeenCalled();
   });
 
   it('keeps the pending code on a transient failure (rate limit)', async () => {

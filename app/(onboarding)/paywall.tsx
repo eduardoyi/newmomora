@@ -23,8 +23,40 @@ import { onboardingPortraitRoute, onboardingWelcomeRoute } from '@/lib/onboardin
 import { resolveOwnerPaywallMode } from '@/lib/onboarding-routing';
 import { timelineRoute } from '@/lib/routes';
 import { MOMORA_ENTITLEMENT_ID, WrongAccountRestoreError } from '@/constants/billing';
+import { setPersonProperties, trackEvent, type AnalyticsEventMap } from '@/services/analytics';
 import { commitOnboarding } from '@/services/onboarding';
 import { patchOnboardingDraft } from '@/utils/onboarding-progress';
+
+type PaywallSource = AnalyticsEventMap['paywall_viewed']['source'];
+type PurchaseFailureCode = AnalyticsEventMap['paywall_purchase_failed']['code'];
+type PaywallErrorCode = AnalyticsEventMap['paywall_error_shown']['code'];
+
+/**
+ * Maps a thrown purchase error to `paywall_purchase_failed.code`
+ * (docs/plans/analytics-implementation.md WP2.6). RevenueCat's own
+ * cancellation signal is the error's `userCancelled` boolean -- checked here,
+ * not a message string, since messages aren't a stable contract. Only ever
+ * called for errors thrown before `paywall_purchase_completed` has fired
+ * (see handleStartTrial's `purchaseCompleted` flag) -- a throw from
+ * `finishPaidOnboarding()` after a confirmed purchase must never reach this.
+ */
+function purchaseFailureCode(error: unknown): PurchaseFailureCode {
+  if (error instanceof WrongAccountRestoreError) {
+    return 'wrong_account_restore';
+  }
+  if (error instanceof Error && 'code' in error && (error as { code?: string }).code === 'billing_confirmation_pending') {
+    return 'billing_confirmation_pending';
+  }
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'userCancelled' in error &&
+    Boolean((error as { userCancelled?: unknown }).userCancelled)
+  ) {
+    return 'store_cancel';
+  }
+  return 'other';
+}
 
 const NEW_OWNER_TRIAL_TRUST_BULLETS = [
   '$0.00 today',
@@ -66,8 +98,16 @@ const PAGE_WIDTH = 132;
 const PAGE_HEIGHT = 168;
 
 export default function PaywallScreen() {
-  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  const { mode, source } = useLocalSearchParams<{ mode?: string; source?: string }>();
   const requestedPaywallMode = mode === 'resubscribe' ? 'resubscribe' : 'new-owner';
+  // `source` defaults to 'onboarding' -- the only other callers today are
+  // app/index.tsx's resume-paywall branch ('resume') and
+  // app/(app)/new-memory.tsx's owner-lapsed bounce ('new_memory_bounce',
+  // passed as a raw param outside onboardingPaywallRouteForMode). Any other
+  // value collapses to the default rather than smuggling an arbitrary string
+  // into an analytics property.
+  const paywallSource: PaywallSource =
+    source === 'new_memory_bounce' ? 'new_memory_bounce' : source === 'resume' ? 'resume' : 'onboarding';
   const [isCloseSheetVisible, setIsCloseSheetVisible] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<'annual' | 'monthly'>('annual');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -172,6 +212,84 @@ export default function PaywallScreen() {
   );
   const isPaywallBusy = isSubmitting || isBillingStatusLoading || isAccessHandoff || isLeaving;
 
+  // paywall_viewed (docs/plans/analytics-implementation.md WP2.6) -- gated
+  // on `serverPaywallMode !== null` AND `offerings` truthy, never on the
+  // render path. The mode check alone excludes entitled pass-throughs/access
+  // handoffs (for whom `shouldRenderSubscriptionOptions` is misleadingly
+  // true and `mode` would be null); the `offerings` check is equally load-
+  // bearing -- `status` (server billing) and `offerings` (RevenueCat) settle
+  // independently, so mode can go non-null while offerings are still
+  // loading. Firing on mode alone would under-report `has_monthly`/
+  // `trial_eligible` (both default false before offerings arrive) and, if
+  // offerings never load at all, would count an error screen
+  // (`paywall_error_shown {code: 'offerings_unavailable'}`, fired
+  // separately below) as a real paywall view, inflating the funnel's #1 KPI.
+  // Fires at most once per mount, at whichever moment both have settled --
+  // if offerings arrive late, the event carries their final values, not an
+  // early snapshot.
+  const hasTrackedPaywallViewedRef = useRef(false);
+  useEffect(() => {
+    if (serverPaywallMode === null || !offerings || hasTrackedPaywallViewedRef.current) {
+      return;
+    }
+    hasTrackedPaywallViewedRef.current = true;
+    trackEvent('paywall_viewed', {
+      mode: serverPaywallMode,
+      trial_eligible: offerings.annualTrialEligibility === 'eligible',
+      has_monthly: Boolean(offerings.monthly),
+      source: paywallSource,
+    });
+  }, [offerings, paywallSource, serverPaywallMode]);
+
+  // Person property refresh (WP1.6/WP2 person-properties): `access_reason`
+  // is only known once the server billing status settles, so it can't be
+  // set alongside `role`/`membership_count` at the app/index.tsx resolve
+  // effect -- this is the one place onboarding ever learns it pre-purchase.
+  const lastTrackedAccessReasonRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!hasAuthoritativeBillingStatus || !status) {
+      return;
+    }
+    if (lastTrackedAccessReasonRef.current === status.access_reason) {
+      return;
+    }
+    lastTrackedAccessReasonRef.current = status.access_reason;
+    setPersonProperties({ access_reason: status.access_reason });
+  }, [hasAuthoritativeBillingStatus, status]);
+
+  // paywall_error_shown (WP2.6) -- one of the paywall's load-time error UIs
+  // rendered (never a purchase-catch failure; those are
+  // paywall_purchase_failed). Each code fires at most once per mount.
+  const trackedErrorCodesRef = useRef<Set<PaywallErrorCode>>(new Set());
+  const trackErrorShownOnce = (code: PaywallErrorCode) => {
+    if (trackedErrorCodesRef.current.has(code)) {
+      return;
+    }
+    trackedErrorCodesRef.current.add(code);
+    trackEvent('paywall_error_shown', { code });
+  };
+
+  useEffect(() => {
+    if (isPaywallStatusUnavailable) {
+      trackErrorShownOnce('generic');
+    }
+  }, [isPaywallStatusUnavailable]);
+
+  useEffect(() => {
+    if (!isBillingLoading && !isConfigured) {
+      trackErrorShownOnce('unavailable');
+    }
+  }, [isBillingLoading, isConfigured]);
+
+  useEffect(() => {
+    // Mirrors the offerings-unavailable render condition below exactly --
+    // unreachable from the purchase catch block since the CTA is disabled
+    // without a selected package.
+    if (!isBillingLoading && isConfigured && !offerings && !isAccessHandoff && !isPaywallStatusUnavailable) {
+      trackErrorShownOnce('offerings_unavailable');
+    }
+  }, [isAccessHandoff, isBillingLoading, isConfigured, isPaywallStatusUnavailable, offerings]);
+
   // Correct a stale URL or device-local mode as soon as server billing is
   // available. This is what makes direct login, onboarding re-entry, and a
   // cold-launch resume converge on the same trial/resubscribe copy.
@@ -220,6 +338,14 @@ export default function PaywallScreen() {
       if (committed.error || !committed.data) {
         throw new Error(committed.error?.message ?? 'Your capture could not be saved yet. Please try again.');
       }
+      // onboarding_committed (docs/plans/analytics-implementation.md WP2.3)
+      // -- the second of the two commit sites: an owner whose code.tsx
+      // commit deferred (S15 was reached with a real family already, capture
+      // still local) commits here instead, after a successful purchase.
+      trackEvent('onboarding_committed', {
+        kid_count: draft.kidNames.length,
+        is_new_family: committed.data.isNewFamily,
+      });
       if (committed.data.pendingMediaUpload) {
         const accepted = enqueue(committed.data.pendingMediaUpload);
         if (accepted === false) {
@@ -292,13 +418,26 @@ export default function PaywallScreen() {
     if (!selectedPackage || !user || !canPurchase || isSubmitting) return;
     setErrorMessage('');
     setIsSubmitting(true);
+    trackEvent('paywall_purchase_started', { plan: selectedPlan });
+    // Set only once the entitlement is confirmed active, BEFORE
+    // finishPaidOnboarding() runs (docs/plans/analytics-implementation.md
+    // WP2.6, "purchase event placement is load-bearing"). finishPaidOnboarding
+    // can itself throw after money was already taken (capture-commit/media
+    // errors) -- gating the catch block's failure event on this flag is what
+    // keeps that from being misreported as a purchase failure.
+    let purchaseCompleted = false;
     try {
       const customerInfo = await purchase(selectedPackage);
       if (!customerInfo.entitlements.active[MOMORA_ENTITLEMENT_ID]) {
         throw new Error('Your purchase is still being confirmed. Please try again in a moment.');
       }
+      purchaseCompleted = true;
+      trackEvent('paywall_purchase_completed', { plan: selectedPlan });
       await finishPaidOnboarding();
     } catch (error) {
+      if (!purchaseCompleted) {
+        trackEvent('paywall_purchase_failed', { code: purchaseFailureCode(error) });
+      }
       if (error instanceof WrongAccountRestoreError) {
         setErrorMessage(error.message);
       } else if (error instanceof Error && 'code' in error && error.code === 'billing_confirmation_pending') {
@@ -343,6 +482,10 @@ export default function PaywallScreen() {
     if (isPaywallBusy) return;
     setIsLeaving(true);
     setIsCloseSheetVisible(false);
+    // paywall_abandoned (the bounce metric) -- the server-settled mode when
+    // known, else the URL/draft's requested mode (billing may still be
+    // unsettled at the moment "Leave" is confirmed).
+    trackEvent('paywall_abandoned', { mode: serverPaywallMode ?? requestedPaywallMode });
     try {
       await signOut();
       // Keep the paywall marker in device storage so signing back in can

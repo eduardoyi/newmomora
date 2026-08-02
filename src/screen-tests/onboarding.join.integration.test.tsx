@@ -29,6 +29,7 @@ import {
   onboardingJoinWaitingRoute,
 } from '@/lib/onboarding-routes';
 import { noFamilyRoute, timelineRoute } from '@/lib/routes';
+import { trackEvent } from '@/services/analytics';
 import { redeemFamilyInvite } from '@/services/invites';
 import { clearJoinDraft, getJoinDraft, patchJoinDraft, previewFamilyInvite } from '@/services/onboarding-join';
 import { updateUserProfile } from '@/services/user-profile';
@@ -62,6 +63,10 @@ jest.mock('@/services/onboarding-join', () => ({
 
 jest.mock('@/services/invites', () => ({
   redeemFamilyInvite: jest.fn(),
+}));
+
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
 }));
 
 jest.mock('@/services/user-profile', () => ({
@@ -98,6 +103,7 @@ const mockedUpdateUserProfile = updateUserProfile as jest.MockedFunction<typeof 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseRedeemedInviteStatus = useRedeemedInviteStatus as jest.MockedFunction<typeof useRedeemedInviteStatus>;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 function renderScreen(ui: React.ReactElement) {
   return render(
@@ -321,7 +327,10 @@ describe('JoinEmailScreen (J4)', () => {
     const requestSignUpOtp = jest.fn().mockResolvedValue({ error: null });
     const verifyOtp = jest.fn().mockResolvedValue({ error: null });
     mockedUseAuth.mockReturnValue(authState({ requestSignUpOtp, verifyOtp }));
-    mockedRedeemFamilyInvite.mockResolvedValue({ data: { familyName: 'Rivera Family', role: 'viewer' }, error: null });
+    mockedRedeemFamilyInvite.mockResolvedValue({
+      data: { familyName: 'Rivera Family', role: 'viewer', familyId: 'family-rivera' },
+      error: null,
+    });
 
     const { getByTestId, findByTestId } = renderScreen(<JoinEmailScreen />);
 
@@ -347,6 +356,31 @@ describe('JoinEmailScreen (J4)', () => {
       expect(mockedClearJoinDraft).toHaveBeenCalled();
     });
     expect(router.replace).toHaveBeenCalledWith(onboardingJoinWaitingRoute);
+    // invite_redeemed (docs/plans/analytics-implementation.md WP2) -- fires
+    // exactly once on redeem success, carrying only the UUID join key.
+    expect(mockedTrackEvent).toHaveBeenCalledWith('invite_redeemed', { family_id: 'family-rivera' });
+    expect(mockedTrackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire invite_redeemed when the redemption fails', async () => {
+    const verifyOtp = jest.fn().mockResolvedValue({ error: null });
+    mockedUseAuth.mockReturnValue(authState({ verifyOtp }));
+    mockedRedeemFamilyInvite.mockResolvedValue({
+      data: null,
+      error: { message: 'That invite code is invalid or has expired.', code: 'invalid_code' },
+    });
+
+    const { getByTestId, findByTestId, findByText } = renderScreen(<JoinEmailScreen />);
+
+    await findByTestId('onb-join-email-input');
+    fireEvent.changeText(getByTestId('onb-join-email-input'), 'ana@example.com');
+    fireEvent.press(getByTestId('onb-join-email-send-button'));
+
+    await findByTestId('onb-join-email-code-input');
+    fireEvent.changeText(getByTestId('onb-join-email-code-input'), '123456');
+
+    expect(await findByText('That invite code is invalid or has expired.')).toBeTruthy();
+    expect(mockedTrackEvent).not.toHaveBeenCalledWith('invite_redeemed', expect.anything());
   });
 
   it('a definitive redeem failure clears the pending code and offers to enter a different code', async () => {
@@ -377,7 +411,10 @@ describe('JoinEmailScreen (J4)', () => {
     mockedUseAuth.mockReturnValue(
       authState({ session: { user: { id: 'u1', is_anonymous: false } } as never }),
     );
-    mockedRedeemFamilyInvite.mockResolvedValue({ data: { familyName: 'Rivera Family', role: 'viewer' }, error: null });
+    mockedRedeemFamilyInvite.mockResolvedValue({
+      data: { familyName: 'Rivera Family', role: 'viewer', familyId: 'family-rivera' },
+      error: null,
+    });
 
     const { queryByTestId } = renderScreen(<JoinEmailScreen />);
 
@@ -387,6 +424,7 @@ describe('JoinEmailScreen (J4)', () => {
       expect(mockedRedeemFamilyInvite).toHaveBeenCalledWith('sunny-tiger-lake');
     });
     expect(router.replace).toHaveBeenCalledWith(onboardingJoinWaitingRoute);
+    expect(mockedTrackEvent).toHaveBeenCalledWith('invite_redeemed', { family_id: 'family-rivera' });
   });
 });
 

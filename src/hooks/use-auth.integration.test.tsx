@@ -1,11 +1,18 @@
-import { renderHook, waitFor } from '@testing-library/react-native';
+import type { Session } from '@supabase/supabase-js';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 import { AuthProvider, useAuth } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabase';
+import { identifyUser, resetAnalytics } from '@/services/analytics';
 
 jest.mock('@/hooks/use-auth-url-handler', () => ({
   useAuthUrlHandler: jest.fn(),
+}));
+
+jest.mock('@/services/analytics', () => ({
+  identifyUser: jest.fn(),
+  resetAnalytics: jest.fn(),
 }));
 
 jest.mock('@/lib/supabase', () => ({
@@ -22,6 +29,8 @@ jest.mock('@/lib/supabase', () => ({
 }));
 
 const mockedSupabase = supabase as jest.Mocked<typeof supabase>;
+const mockedIdentifyUser = identifyUser as jest.Mock;
+const mockedResetAnalytics = resetAnalytics as jest.Mock;
 
 function wrapper({ children }: { children: ReactNode }) {
   return <AuthProvider>{children}</AuthProvider>;
@@ -235,5 +244,139 @@ describe('useAuth', () => {
     await expect(result.current.signOut()).rejects.toEqual(
       expect.objectContaining({ message: 'session unavailable' }),
     );
+  });
+});
+
+// docs/plans/analytics-implementation.md WP1.5 -- the anonymous-session
+// guard is the critical piece: anonymous sessions (created for S9 voice
+// transcription / J2 invite preview via signInAnonymously()) must never
+// trigger identify/reset, only non-anonymous sessions may.
+describe('useAuth analytics identity', () => {
+  let authChangeCallback: (event: string, session: Session | null) => void = () => undefined;
+
+  function fakeSession(userId: string, isAnonymous: boolean): Session {
+    return {
+      access_token: 'token',
+      refresh_token: 'refresh',
+      expires_in: 3600,
+      token_type: 'bearer',
+      user: {
+        id: userId,
+        is_anonymous: isAnonymous,
+        app_metadata: {},
+        user_metadata: {},
+        aud: 'authenticated',
+        created_at: new Date().toISOString(),
+      },
+    } as unknown as Session;
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    mockedSupabase.auth.getSession.mockResolvedValue({
+      data: { session: null },
+      error: null,
+    });
+
+    mockedSupabase.auth.onAuthStateChange.mockImplementation((callback) => {
+      authChangeCallback = callback as unknown as (event: string, session: Session | null) => void;
+      return {
+        data: {
+          subscription: {
+            unsubscribe: jest.fn(),
+          },
+        },
+      } as never;
+    });
+  });
+
+  it('is a no-op when an anonymous session appears, then a strict no-op when it is discarded', async () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      authChangeCallback('SIGNED_IN', fakeSession('anon-1', true));
+    });
+
+    expect(mockedIdentifyUser).not.toHaveBeenCalled();
+    expect(mockedResetAnalytics).not.toHaveBeenCalled();
+
+    act(() => {
+      // discardAnonymousSession() drops the throwaway session before the
+      // real OTP sign-in.
+      authChangeCallback('SIGNED_OUT', null);
+    });
+
+    expect(mockedIdentifyUser).not.toHaveBeenCalled();
+    expect(mockedResetAnalytics).not.toHaveBeenCalled();
+  });
+
+  it('identifies with the real user id once a non-anonymous session arrives after an anonymous one', async () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      authChangeCallback('SIGNED_IN', fakeSession('anon-1', true));
+    });
+    act(() => {
+      authChangeCallback('SIGNED_OUT', null);
+    });
+    act(() => {
+      authChangeCallback('SIGNED_IN', fakeSession('real-user-1', false));
+    });
+
+    expect(mockedIdentifyUser).toHaveBeenCalledTimes(1);
+    expect(mockedIdentifyUser).toHaveBeenCalledWith('real-user-1');
+    // No prior identified user, so no reset is expected on first identify.
+    expect(mockedResetAnalytics).not.toHaveBeenCalled();
+  });
+
+  it('resets analytics when a real (non-anonymous) session signs out', async () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      authChangeCallback('SIGNED_IN', fakeSession('real-user-1', false));
+    });
+    expect(mockedIdentifyUser).toHaveBeenCalledWith('real-user-1');
+
+    act(() => {
+      authChangeCallback('SIGNED_OUT', null);
+    });
+
+    expect(mockedResetAnalytics).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets then re-identifies when switching between two different non-anonymous users', async () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      authChangeCallback('SIGNED_IN', fakeSession('real-user-1', false));
+    });
+    act(() => {
+      authChangeCallback('SIGNED_IN', fakeSession('real-user-2', false));
+    });
+
+    expect(mockedResetAnalytics).toHaveBeenCalledTimes(1);
+    expect(mockedIdentifyUser).toHaveBeenNthCalledWith(1, 'real-user-1');
+    expect(mockedIdentifyUser).toHaveBeenNthCalledWith(2, 'real-user-2');
+  });
+
+  it('does not re-identify or reset on a repeated auth event for the same real user', async () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      authChangeCallback('SIGNED_IN', fakeSession('real-user-1', false));
+    });
+    act(() => {
+      // e.g. a token refresh firing onAuthStateChange again for the same user.
+      authChangeCallback('TOKEN_REFRESHED', fakeSession('real-user-1', false));
+    });
+
+    expect(mockedIdentifyUser).toHaveBeenCalledTimes(1);
+    expect(mockedResetAnalytics).not.toHaveBeenCalled();
   });
 });

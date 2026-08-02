@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { useLocalSearchParams } from 'expo-router';
 import { Alert, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -23,6 +24,7 @@ import { useMemoryMutations } from '@/hooks/useMemories';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { navigateBack } from '@/lib/navigation';
+import { trackEvent } from '@/services/analytics';
 import { getNewMemoryDraftStorageKey, saveNewMemoryDraft } from '@/utils/new-memory-draft';
 
 // Imported with a relative path -- jest's moduleNameMapper only maps `@/` to
@@ -87,6 +89,7 @@ jest.mock('@/lib/navigation', () => ({
 
 jest.mock('expo-router', () => ({
   router: { replace: jest.fn() },
+  useLocalSearchParams: jest.fn(() => ({})),
 }));
 
 jest.mock('@/hooks/use-auth', () => ({
@@ -125,6 +128,10 @@ jest.mock('@/hooks/use-incoming-memory-share', () => ({
   useIncomingMemoryShare: jest.fn(() => false),
 }));
 
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
+}));
+
 const mockedImagePicker = ImagePicker as jest.Mocked<typeof ImagePicker>;
 const mockedDateTimePickerAndroid = DateTimePickerAndroid as jest.Mocked<
   typeof DateTimePickerAndroid
@@ -137,6 +144,8 @@ const mockedUseMemoryMutations = useMemoryMutations as jest.Mock;
 const mockedUseUserProfile = useUserProfile as jest.Mock;
 const mockedUsePendingMemoryUploads = usePendingMemoryUploads as jest.Mock;
 const mockedUseIncomingMemoryShare = useIncomingMemoryShare as jest.Mock;
+const mockedUseLocalSearchParams = useLocalSearchParams as jest.Mock;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 function renderScreen() {
   return render(
@@ -661,5 +670,147 @@ describe('NewMemoryScreen -- draft autosave and prompt placeholder integration',
     fireEvent.changeText(screen.getByTestId('new-memory-content'), '');
 
     expect(screen.getByTestId('new-memory-content').props.placeholder).toBe(initialPlaceholder);
+  });
+});
+
+// docs/plans/analytics-implementation.md WP3 item 2 -- `memory_saved` /
+// `memory_save_failed` (docs/plans/analytics-tracking.md Tier 2).
+describe('NewMemoryScreen -- memory_saved / memory_save_failed analytics', () => {
+  const enqueue = jest.fn();
+  const createMemory = jest.fn();
+  const updateProfile = jest.fn().mockResolvedValue(undefined);
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    await AsyncStorage.clear();
+    jest.useFakeTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+
+    mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as ImagePicker.MediaLibraryPermissionResponse);
+
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseFamily.mockReturnValue({
+      role: 'manager',
+      familyId: 'family-1',
+      family: { id: 'family-1', name: 'Test family' },
+      memberships: [],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseFamilyMembers.mockReturnValue({ members: [] });
+    mockedUseMemoryMutations.mockReturnValue({ createMemory, isCreating: false });
+    mockedUseUserProfile.mockReturnValue({ updateProfile });
+    mockedUsePendingMemoryUploads.mockReturnValue({ enqueue, retry: jest.fn(), discard: jest.fn(), uploads: [] });
+    mockedUseIncomingMemoryShare.mockReturnValue(false);
+    mockedUseLocalSearchParams.mockReturnValue({});
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+  });
+
+  it('fires memory_saved with the default source and correct props on a text save', async () => {
+    createMemory.mockResolvedValue({ id: 'memory-1' });
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Bedtime story time');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('memory_saved', {
+      memory_type: 'text_illustration',
+      used_voice: false,
+      has_media: false,
+      tagged_count: 0,
+      illustration_enabled: true,
+      source: 'other',
+    });
+  });
+
+  it('carries the source read from the route params (fab_timeline)', async () => {
+    mockedUseLocalSearchParams.mockReturnValue({ source: 'fab_timeline' });
+    createMemory.mockResolvedValue({ id: 'memory-1' });
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Park afternoon');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith(
+      'memory_saved',
+      expect.objectContaining({ source: 'fab_timeline' }),
+    );
+  });
+
+  it('falls back to "other" for an unrecognized source param', async () => {
+    mockedUseLocalSearchParams.mockReturnValue({ source: 'not-a-real-source' });
+    createMemory.mockResolvedValue({ id: 'memory-1' });
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Zoo trip');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith(
+      'memory_saved',
+      expect.objectContaining({ source: 'other' }),
+    );
+  });
+
+  it('reports illustration_enabled: false and has_media: true for a media save', async () => {
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    await attachPhoto(screen, buildImageAsset());
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('memory_saved', {
+      memory_type: 'media',
+      used_voice: false,
+      has_media: true,
+      tagged_count: 0,
+      illustration_enabled: false,
+      source: 'other',
+    });
+  });
+
+  it('fires memory_save_failed {code: network_error} when createMemory throws', async () => {
+    createMemory.mockRejectedValue(new Error('network down'));
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Bedtime story time');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('memory_save_failed', { code: 'network_error' });
+    expect(mockedTrackEvent).not.toHaveBeenCalledWith('memory_saved', expect.anything());
   });
 });

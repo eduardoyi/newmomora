@@ -12,6 +12,7 @@ import {
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { calendarMemoriesQueryKeyBase, memoriesQueryKeyBase } from '@/hooks/queryKeys';
+import { trackEvent } from '@/services/analytics';
 import {
   patchMemoryInCaches,
   prependMemoryToListCaches,
@@ -160,6 +161,13 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
           status: 'failed',
           errorMessage: error instanceof Error ? error.message : 'Could not save memory',
         });
+        // Terminal-failure transition (docs/plans/analytics-tracking.md Tier
+        // 2) -- the composer's own `memory_saved` already fired when the
+        // media path was enqueued, so this is the only place a media post's
+        // eventual failure gets reported. Fires again on a user-initiated
+        // retry() that also fails -- that's a new terminal failure, not a
+        // duplicate of this one.
+        trackEvent('memory_save_failed', { code: 'media_upload_failed' });
       }
     },
     [patchUpload, queryClient, removeUpload],

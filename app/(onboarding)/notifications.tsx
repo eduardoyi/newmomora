@@ -29,6 +29,7 @@ import { colors, emotionColors, fonts, radius, type EmotionName } from '@/consta
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
 import { onboardingEmailRoute } from '@/lib/onboarding-routes';
+import { trackEvent } from '@/services/analytics';
 import type { OnboardingNotificationChoice } from '@/utils/onboarding-progress';
 
 interface NotificationOption {
@@ -62,9 +63,15 @@ export default function OnboardingNotificationsScreen() {
     setIsSubmitting(true);
     patch({ notificationChoice: option.id, step: 'email' });
 
+    // os_granted is null-safe for 'none' (no registration attempt to report
+    // an OS outcome for) and for a device where notifications aren't
+    // available at all (requestRegistration resolves null).
+    let osGranted: boolean | null = null;
     if (option.id !== 'none') {
-      await requestRegistration();
+      const result = await requestRegistration();
+      osGranted = result?.granted ?? null;
     }
+    trackEvent('notification_choice', { choice: option.id, os_granted: osGranted });
 
     router.push(onboardingEmailRoute);
   };

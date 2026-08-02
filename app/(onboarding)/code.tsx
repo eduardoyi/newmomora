@@ -38,6 +38,7 @@ import {
   startPendingOnboardingIllustration,
 } from '@/services/billing';
 import type { PostMediaMemoryInput } from '@/services/memory-posting';
+import { trackEvent } from '@/services/analytics';
 import { commitOnboarding } from '@/services/onboarding';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
 import { focusOtpInput } from '@/utils/otp-input';
@@ -202,6 +203,13 @@ export default function OnboardingCodeScreen() {
       setErrorMessage(error?.message ?? 'Could not finish setting up your journal. Please try again.');
       return;
     }
+
+    // onboarding_committed (docs/plans/analytics-implementation.md WP2.3) --
+    // fired here (the primary commit site) and again from paywall.tsx's own
+    // pending-capture commit for owners whose code.tsx commit deferred.
+    // `is_new_family` lets the funnel filter out returning owners who
+    // re-enter onboarding (decision 18) and commit too.
+    trackEvent('onboarding_committed', { kid_count: draft.kidNames.length, is_new_family: data.isNewFamily });
 
     // commitOnboarding creates/resolves the family through direct service
     // calls, not a query-invalidating mutation -- FamilyProvider's cached

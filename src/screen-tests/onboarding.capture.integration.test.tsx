@@ -12,11 +12,15 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { router } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { useAudioRecorder } from 'expo-audio';
+
 import OnboardingCaptureScreen from '../../app/(onboarding)/capture';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { ensureAnonymousSession } from '@/lib/anonymous-session';
 import { onboardingAhaRoute } from '@/lib/onboarding-routes';
 import { processOnboardingVoiceMemory } from '@/services/ai';
+import { trackEvent } from '@/services/analytics';
+import { getOrRequestNativePermission } from '@/utils/native-permissions';
 import { createEmptyOnboardingDraft, type OnboardingDraft } from '@/utils/onboarding-progress';
 import { FOOTER_KEYBOARD_CLEARANCE } from '@/components/onboarding/onb-shell';
 
@@ -34,6 +38,10 @@ jest.mock('@/lib/anonymous-session', () => ({
 
 jest.mock('@/services/ai', () => ({
   processOnboardingVoiceMemory: jest.fn(),
+}));
+
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
 }));
 
 jest.mock('@/utils/local-files', () => ({
@@ -123,6 +131,11 @@ const mockedUseOnboardingFlow = useOnboardingFlow as jest.MockedFunction<typeof 
 const mockedEnsureAnonymousSession = ensureAnonymousSession as jest.MockedFunction<typeof ensureAnonymousSession>;
 const mockedProcessOnboardingVoiceMemory = processOnboardingVoiceMemory as jest.MockedFunction<
   typeof processOnboardingVoiceMemory
+>;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
+const mockedUseAudioRecorder = useAudioRecorder as jest.MockedFunction<typeof useAudioRecorder>;
+const mockedGetOrRequestNativePermission = getOrRequestNativePermission as jest.MockedFunction<
+  typeof getOrRequestNativePermission
 >;
 
 function renderScreen() {
@@ -310,6 +323,82 @@ describe('OnboardingCaptureScreen (S9) -- typed path', () => {
     const note = screen.getByTestId('onboarding-capture-fallback-note').props.children;
     expect(String(note).toLowerCase()).not.toMatch(/quota|limit/);
     expect(mockedProcessOnboardingVoiceMemory).not.toHaveBeenCalled();
+  });
+});
+
+describe('OnboardingCaptureScreen (S9) -- onboarding_capture_completed analytics', () => {
+  it('reports method: typed, transcription_failed: false for the typed-only path', () => {
+    mockDraft({ kidNames: ['Lila'] });
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByTestId('onboarding-capture-type-instead'));
+    fireEvent.changeText(screen.getByTestId('onboarding-capture-textarea'), 'Typed only.');
+    fireEvent.press(screen.getByTestId('onboarding-capture-keep'));
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('onboarding_capture_completed', {
+      method: 'typed',
+      has_media: false,
+      transcription_failed: false,
+    });
+  });
+
+  it('reports method: voice, transcription_failed: false when a recording transcribes successfully', async () => {
+    mockDraft({ kidNames: ['Lila'] });
+    mockedUseAudioRecorder.mockReturnValue({
+      prepareToRecordAsync: jest.fn().mockResolvedValue(undefined),
+      record: jest.fn(),
+      stop: jest.fn().mockResolvedValue(undefined),
+      uri: 'file:///onboarding-recording.m4a',
+    } as never);
+    mockedGetOrRequestNativePermission.mockResolvedValue({
+      permission: { granted: true, canAskAgain: true },
+      didRequest: false,
+    } as never);
+    mockedProcessOnboardingVoiceMemory.mockResolvedValue({
+      data: { cleanedText: 'She lined up her stuffed animals.', mentionedMemberIds: [] },
+      error: null,
+    });
+
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByTestId('onboarding-capture-mic'));
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-capture-mic').props.accessibilityLabel).toBe('Stop recording');
+    });
+
+    fireEvent.press(screen.getByTestId('onboarding-capture-mic'));
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-capture-textarea')).toBeTruthy();
+    });
+
+    fireEvent.press(screen.getByTestId('onboarding-capture-keep'));
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('onboarding_capture_completed', {
+      method: 'voice',
+      has_media: false,
+      transcription_failed: false,
+    });
+  });
+
+  it('reports method: typed, transcription_failed: true when voice fails and the user types instead', async () => {
+    mockDraft({ kidNames: ['Lila'] });
+    mockedEnsureAnonymousSession.mockResolvedValue({ error: { message: 'anonymous sign-ins disabled' } });
+
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByTestId('onboarding-capture-mic'));
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-capture-textarea')).toBeTruthy();
+    });
+
+    fireEvent.changeText(screen.getByTestId('onboarding-capture-textarea'), 'Typed after voice failed.');
+    fireEvent.press(screen.getByTestId('onboarding-capture-keep'));
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('onboarding_capture_completed', {
+      method: 'typed',
+      has_media: false,
+      transcription_failed: true,
+    });
   });
 });
 

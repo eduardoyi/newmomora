@@ -3,6 +3,12 @@ import '@testing-library/jest-native/extend-expect';
 process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
 process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
 
+// No PostHog API key by default -- `src/services/analytics.ts` must stay on
+// its no-op path so tests don't accidentally depend on (or assert against) a
+// live-looking client. Tests exercising the keyed path set this explicitly
+// and call `jest.resetModules()` before re-requiring the module.
+delete process.env.EXPO_PUBLIC_POSTHOG_API_KEY;
+
 // Native gesture handlers. The maintained setup swaps the native module for a
 // JS mock, which is also what `fireGestureHandler` (jest-utils) drives.
 // eslint-disable-next-line @typescript-eslint/no-require-imports

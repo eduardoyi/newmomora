@@ -15,6 +15,7 @@ import OnboardingNotificationsScreen from '../../app/(onboarding)/notifications'
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
 import { onboardingEmailRoute } from '@/lib/onboarding-routes';
+import { trackEvent } from '@/services/analytics';
 import { createEmptyOnboardingDraft } from '@/utils/onboarding-progress';
 
 jest.mock('expo-router', () => ({
@@ -27,6 +28,10 @@ jest.mock('@/hooks/use-onboarding-flow', () => ({
 
 jest.mock('@/hooks/useNotifications', () => ({
   useNotificationsRegistration: jest.fn(),
+}));
+
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
 }));
 
 // lucide-react-native (Moon, Sun, X) is stubbed globally in jest.setup.ts --
@@ -45,6 +50,7 @@ const mockedUseOnboardingFlow = useOnboardingFlow as jest.MockedFunction<typeof 
 const mockedUseNotificationsRegistration = useNotificationsRegistration as jest.MockedFunction<
   typeof useNotificationsRegistration
 >;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 function renderScreen() {
   return render(
@@ -94,6 +100,7 @@ describe('OnboardingNotificationsScreen (S11)', () => {
   });
 
   it.each(['eve', 'morn', 'late'])('selecting a real option writes notificationChoice %s, fires the OS prompt, and advances to email', async (choiceId) => {
+    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true, isRegistered: true });
     const screen = renderScreen();
 
     fireEvent.press(screen.getByTestId(`onboarding-notifications-option-${choiceId}`));
@@ -104,6 +111,31 @@ describe('OnboardingNotificationsScreen (S11)', () => {
     expect(patch).toHaveBeenCalledWith({ notificationChoice: choiceId, step: 'email' });
     await waitFor(() => {
       expect(router.push).toHaveBeenCalledWith(onboardingEmailRoute);
+    });
+    // notification_choice (docs/plans/analytics-implementation.md WP2.4) --
+    // os_granted reflects the real requestRegistration outcome.
+    expect(mockedTrackEvent).toHaveBeenCalledWith('notification_choice', { choice: choiceId, os_granted: true });
+  });
+
+  it('reports os_granted: false when the OS prompt is denied', async () => {
+    requestRegistration.mockResolvedValue({ granted: false, canAskAgain: true, isRegistered: false });
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByTestId('onboarding-notifications-option-eve'));
+
+    await waitFor(() => {
+      expect(mockedTrackEvent).toHaveBeenCalledWith('notification_choice', { choice: 'eve', os_granted: false });
+    });
+  });
+
+  it('reports os_granted: null when notifications are unavailable on the device (requestRegistration resolves null)', async () => {
+    requestRegistration.mockResolvedValue(null);
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByTestId('onboarding-notifications-option-morn'));
+
+    await waitFor(() => {
+      expect(mockedTrackEvent).toHaveBeenCalledWith('notification_choice', { choice: 'morn', os_granted: null });
     });
   });
 
@@ -117,6 +149,9 @@ describe('OnboardingNotificationsScreen (S11)', () => {
     await waitFor(() => {
       expect(router.push).toHaveBeenCalledWith(onboardingEmailRoute);
     });
+    // 'none' never attempts registration, so os_granted is null-safe rather
+    // than reporting a false OS denial that never happened.
+    expect(mockedTrackEvent).toHaveBeenCalledWith('notification_choice', { choice: 'none', os_granted: null });
   });
 
   it('ignores a second tap while the first selection is still processing', async () => {

@@ -38,6 +38,7 @@ import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { ensureAnonymousSession } from '@/lib/anonymous-session';
 import { onboardingAhaRoute } from '@/lib/onboarding-routes';
 import { processOnboardingVoiceMemory } from '@/services/ai';
+import { trackEvent } from '@/services/analytics';
 import type { MemberWithNames } from '@/utils/member-mentions';
 import { capturePrompt } from '@/utils/onboarding-copy';
 import { readLocalFileAsBase64 } from '@/utils/local-files';
@@ -140,6 +141,17 @@ export default function OnboardingCaptureScreen() {
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment | null>(null);
   const [fallbackNote, setFallbackNote] = useState('');
   const [mediaError, setMediaError] = useState('');
+  // onboarding_capture_completed's method/transcription_failed properties
+  // (docs/plans/analytics-implementation.md WP2.2) -- `mode` alone collapses
+  // to 'compose' regardless of how the text got there, so these track the
+  // voice pipeline's outcome independently: `usedVoice` flips true only on a
+  // successful transcription; `voiceFailed` flips true on ANY degrade to
+  // typing from the mic flow (fallBackToTyping below is only ever called
+  // from within handleMicPress's voice attempt, never from the explicit
+  // "I'd rather type" tap). Neither ever resets -- a retry that later
+  // succeeds after an earlier failure should still report the failure.
+  const [usedVoice, setUsedVoice] = useState(false);
+  const [voiceFailed, setVoiceFailed] = useState(false);
 
   // Reuses the app's mention-matching/suppression logic (useAutoMemoryTags,
   // used by app/(app)/new-memory.tsx) so typing or speaking a kid's name
@@ -217,6 +229,7 @@ export default function OnboardingCaptureScreen() {
   const fallBackToTyping = (note: string = TYPING_FALLBACK_NOTE) => {
     setMode('compose');
     setFallbackNote(note);
+    setVoiceFailed(true);
   };
 
   const handleMicPress = async () => {
@@ -284,6 +297,7 @@ export default function OnboardingCaptureScreen() {
         applyForContent(data.cleanedText);
         setFallbackNote('');
         setMode('compose');
+        setUsedVoice(true);
       } catch {
         fallBackToTyping();
       }
@@ -323,6 +337,12 @@ export default function OnboardingCaptureScreen() {
     if (!canKeep) {
       return;
     }
+
+    trackEvent('onboarding_capture_completed', {
+      method: usedVoice ? 'voice' : 'typed',
+      has_media: attachedMedia !== null,
+      transcription_failed: voiceFailed,
+    });
 
     patch({
       capture: {

@@ -59,7 +59,7 @@ export function IncomingShareRouter() {
     }
 
     hasRoutedRef.current = true;
-    router.push(newMemoryRoute);
+    router.push(newMemoryRoute('share_sheet'));
   }, [familyId, isAuthLoading, isFamilyLoading, isOnAppRoute, pathname, role, router, session]);
 
   useEffect(() => {

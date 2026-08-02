@@ -29,6 +29,7 @@ import {
   hasComplimentaryFamilyAccess,
   startPendingOnboardingIllustration,
 } from '@/services/billing';
+import { trackEvent } from '@/services/analytics';
 import { commitOnboarding } from '@/services/onboarding';
 import { createEmptyOnboardingDraft } from '@/utils/onboarding-progress';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
@@ -59,6 +60,10 @@ jest.mock('@/hooks/use-pending-memory-uploads', () => ({
 
 jest.mock('@/services/onboarding', () => ({
   commitOnboarding: jest.fn(),
+}));
+
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
 }));
 
 jest.mock('@/services/billing', () => ({
@@ -93,6 +98,7 @@ const mockedStartPendingOnboardingIllustration = startPendingOnboardingIllustrat
   typeof startPendingOnboardingIllustration
 >;
 const mockedGetPendingInviteCode = getPendingInviteCode as jest.MockedFunction<typeof getPendingInviteCode>;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 function renderScreen(queryClient: QueryClient) {
   return render(
@@ -206,6 +212,10 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     const invalidateOrder = invalidateSpy.mock.invocationCallOrder[0];
     const navigateOrder = (router.replace as jest.Mock).mock.invocationCallOrder[0];
     expect(invalidateOrder).toBeLessThan(navigateOrder);
+
+    // onboarding_committed (docs/plans/analytics-implementation.md WP2.3) --
+    // fired at this, the primary commit site, once commitOnboarding succeeds.
+    expect(mockedTrackEvent).toHaveBeenCalledWith('onboarding_committed', { kid_count: 0, is_new_family: true });
   });
 
   it('skips purchase screens for a complimentary new owner and starts the first illustration', async () => {
@@ -251,6 +261,10 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     const invalidateOrder = invalidateSpy.mock.invocationCallOrder[0];
     const navigateOrder = (router.replace as jest.Mock).mock.invocationCallOrder[0];
     expect(invalidateOrder).toBeLessThan(navigateOrder);
+
+    // is_new_family: false lets the funnel filter out returning owners who
+    // re-enter onboarding (decision 18) and commit too.
+    expect(mockedTrackEvent).toHaveBeenCalledWith('onboarding_committed', { kid_count: 0, is_new_family: false });
   });
 
   it('does not invalidate anything when commitOnboarding fails', async () => {
@@ -272,6 +286,7 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
     expect(router.replace).not.toHaveBeenCalledWith(onboardingTrialRoute);
     expect(router.replace).not.toHaveBeenCalledWith(timelineRoute);
+    expect(mockedTrackEvent).not.toHaveBeenCalledWith('onboarding_committed', expect.anything());
   });
 
   // An owner can have a real family before ever purchasing: they may have

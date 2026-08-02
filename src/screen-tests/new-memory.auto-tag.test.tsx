@@ -88,6 +88,7 @@ jest.mock('@/lib/navigation', () => ({
 
 jest.mock('expo-router', () => ({
   router: { replace: jest.fn() },
+  useLocalSearchParams: jest.fn(() => ({})),
 }));
 
 jest.mock('@/hooks/use-auth', () => ({

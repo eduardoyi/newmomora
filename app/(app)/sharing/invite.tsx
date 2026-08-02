@@ -8,6 +8,7 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { familyInvitesQueryKey } from '@/hooks/queryKeys';
 import { sharingPendingInvitesRoute } from '@/lib/routes';
+import { trackEvent } from '@/services/analytics';
 import { createFamilyInvite } from '@/services/invites';
 import { buildInviteShareMessage } from '@/utils/invites';
 import { canEditFamilyContent } from '@/utils/roles';
@@ -58,6 +59,7 @@ export default function InviteFamilyMemberScreen() {
       }
 
       queryClient.invalidateQueries({ queryKey: familyInvitesQueryKey(familyId) });
+      trackEvent('invite_created', { role: selectedRole, family_id: familyId });
 
       // The share sheet resolving covers both "shared" and "dismissed" -- in
       // either case the invite now exists, so land on pending-invites where

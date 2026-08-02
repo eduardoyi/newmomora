@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useFamily } from '@/hooks/use-family';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { memoryDetailRoute, newMemoryRoute, sharingApprovalsRoute, timelineRoute } from '@/lib/routes';
+import { trackEvent } from '@/services/analytics';
 
 /**
  * expo-notifications registers its native module through expo-modules-core's
@@ -203,8 +204,30 @@ function routeToMemoryDetail(payload: PushRouteData, context: RouteFromPushDataC
     });
 }
 
+// The recognized `PushRouteData.route` literals -- checked against at
+// runtime before reporting `notification_opened` so an unrecognized/garbage
+// route value (a payload typo, or a future route this build doesn't know
+// about yet) can never leak into the event's closed `target` union. `data`
+// is untyped (`as PushRouteData | undefined` is just a cast, not a runtime
+// check), so this guard is the actual enforcement.
+const RECOGNIZED_PUSH_ROUTES = new Set<NonNullable<PushRouteData['route']>>([
+  'timeline',
+  'approvals',
+  'new-memory',
+  'memory',
+]);
+
 export function routeFromPushData(data: unknown, context: RouteFromPushDataContext = {}): void {
   const payload = data as PushRouteData | undefined;
+
+  // `target` is the literal `PushRouteData.route` value verbatim -- never
+  // any other field off the push payload (docs/plans/analytics-tracking.md
+  // Tier 2, `notification_opened`). Fired once per recognized route, ahead
+  // of the branch below so every taken path (including the memory-detail
+  // family-switch branch) is covered by a single call site.
+  if (payload?.route && RECOGNIZED_PUSH_ROUTES.has(payload.route)) {
+    trackEvent('notification_opened', { target: payload.route });
+  }
 
   if (payload?.route === 'approvals') {
     router.push(sharingApprovalsRoute);
@@ -217,7 +240,7 @@ export function routeFromPushData(data: unknown, context: RouteFromPushDataConte
   }
 
   if (payload?.route === 'new-memory') {
-    router.push(newMemoryRoute);
+    router.push(newMemoryRoute('notification'));
     return;
   }
 

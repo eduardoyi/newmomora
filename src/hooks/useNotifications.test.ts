@@ -18,6 +18,7 @@ import {
   sharingApprovalsRoute,
   timelineRoute,
 } from '@/lib/routes';
+import { trackEvent } from '@/services/analytics';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -25,6 +26,10 @@ jest.mock('expo-router', () => ({
     replace: jest.fn(),
     back: jest.fn(),
   },
+}));
+
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
 }));
 
 // useNotifications.ts also exports the registration hook, which pulls in
@@ -85,6 +90,7 @@ const mockedRequestPermissions = Notifications.requestPermissionsAsync as jest.M
 const mockedGetExpoPushToken = Notifications.getExpoPushTokenAsync as jest.MockedFunction<
   typeof Notifications.getExpoPushTokenAsync
 >;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 describe('routeFromPushData (plan §10 push deep links)', () => {
   beforeEach(() => {
@@ -130,7 +136,7 @@ describe('routeFromPushData (plan §10 push deep links)', () => {
   it('routes to the create-memory screen for the daily-reminder push', () => {
     routeFromPushData({ route: 'new-memory' });
 
-    expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute);
+    expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute('notification'));
   });
 
   it('routes to the memory detail screen for a new-memory-activity push', () => {
@@ -143,6 +149,51 @@ describe('routeFromPushData (plan §10 push deep links)', () => {
     routeFromPushData({ route: 'memory', familyId: 'family-1' });
 
     expect(mockedPush).toHaveBeenCalledWith(timelineRoute);
+  });
+});
+
+describe('routeFromPushData - notification_opened target mapping', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it.each([
+    ['approvals', { route: 'approvals' as const, familyId: 'family-1' }],
+    ['timeline', { route: 'timeline' as const, familyId: 'family-1' }],
+    ['new-memory', { route: 'new-memory' as const }],
+    ['memory', { route: 'memory' as const, memoryId: 'memory-1', familyId: 'family-1' }],
+  ])('reports the literal %s route as the notification_opened target', (target, payload) => {
+    routeFromPushData(payload);
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('notification_opened', { target });
+  });
+
+  it('never fires for a push with no data payload', () => {
+    routeFromPushData(undefined);
+
+    expect(mockedTrackEvent).not.toHaveBeenCalled();
+  });
+
+  it('never fires for an unrecognized route', () => {
+    routeFromPushData({ route: 'something-else' });
+
+    expect(mockedTrackEvent).not.toHaveBeenCalled();
+  });
+
+  it('never fires for the plain daily-reminder push with no route field', () => {
+    routeFromPushData({});
+
+    expect(mockedTrackEvent).not.toHaveBeenCalled();
+  });
+
+  it('never puts anything beyond the literal route value on the payload (no ids leak through)', () => {
+    routeFromPushData({ route: 'memory', memoryId: 'memory-1', familyId: 'family-1' });
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('notification_opened', { target: 'memory' });
+    expect(mockedTrackEvent).not.toHaveBeenCalledWith(
+      'notification_opened',
+      expect.objectContaining({ memoryId: expect.anything() }),
+    );
   });
 });
 
@@ -260,7 +311,7 @@ describe('useNotificationResponseRouting cold start + dedupe', () => {
     renderHook(() => useNotificationResponseRouting(true));
     await flushPromises();
 
-    expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute);
+    expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute('notification'));
   });
 
   it('does not act on the cold-start response until ready flips true', async () => {
@@ -276,7 +327,7 @@ describe('useNotificationResponseRouting cold start + dedupe', () => {
     rerender({ ready: true });
     await flushPromises();
 
-    expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute);
+    expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute('notification'));
   });
 
   it('handling the same response identifier twice (e.g. a remount) only navigates once', async () => {

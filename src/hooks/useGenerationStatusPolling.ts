@@ -5,6 +5,8 @@ import { useFamily } from '@/hooks/use-family';
 import { calendarMemoriesQueryKeyBase } from '@/hooks/queryKeys';
 import { isMemoriesListQueryKey, patchMemoryInCaches } from '@/hooks/memory-cache';
 import { useIsRealtimeLive } from '@/hooks/realtime-status';
+import { shouldReportIllustrationOutcome } from '@/lib/illustration-outcome-dedupe';
+import { trackEvent } from '@/services/analytics';
 import {
   fetchMemoryGenerationStatuses,
   type MemoryGenerationStatusRow,
@@ -120,6 +122,19 @@ function applyStatusPatches(
     if (status.illustration_status === 'ready' && isMemoryGenerating(previous)) {
       queryClient.invalidateQueries({ queryKey: ['media-urls'] });
       queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+    }
+
+    // `illustration_completed` (docs/plans/analytics-tracking.md Tier 2) --
+    // useMemoriesRealtime observes the same ready/failed transition (a
+    // realtime UPDATE forces a poll tick on SUBSCRIBED), so the module-level
+    // dedupe singleton is what keeps this to one report per memory per
+    // terminal transition.
+    if (
+      isMemoryGenerating(previous) &&
+      (status.illustration_status === 'ready' || status.illustration_status === 'failed') &&
+      shouldReportIllustrationOutcome(status.id, status.illustration_status)
+    ) {
+      trackEvent('illustration_completed', { outcome: status.illustration_status });
     }
   }
 }

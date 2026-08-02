@@ -11,6 +11,7 @@ import {
   resetRealtimeStatusForTests,
   setRealtimeLive,
 } from '@/hooks/realtime-status';
+import { trackEvent } from '@/services/analytics';
 import { fetchMemoryGenerationStatuses } from '@/services/memories';
 import type { MemoriesPage, MemoryWithTags } from '@/services/memories';
 
@@ -19,12 +20,16 @@ jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/services/memories', () => ({
   fetchMemoryGenerationStatuses: jest.fn(),
 }));
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
+}));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedFetchStatuses = fetchMemoryGenerationStatuses as jest.MockedFunction<
   typeof fetchMemoryGenerationStatuses
 >;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 const FAMILY_ID = 'family-1';
 
@@ -131,6 +136,60 @@ describe('useGenerationStatusPolling', () => {
     mockedFetchStatuses.mockClear();
     await jest.advanceTimersByTimeAsync(5000);
     expect(mockedFetchStatuses).not.toHaveBeenCalled();
+  });
+
+  it('reports illustration_completed({outcome: ready}) when a status transitions to ready', async () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([buildMemory({ id: 'memory-poll-ready-1', illustration_status: 'generating' })]),
+    );
+    mockedFetchStatuses.mockResolvedValue({
+      data: [
+        {
+          id: 'memory-poll-ready-1',
+          illustration_status: 'ready',
+          illustration_key: 'key.webp',
+          emotion: 'joy',
+          updated_at: '2026-05-24T00:00:01.000Z',
+        },
+      ],
+      error: null,
+    });
+
+    renderHook(() => useGenerationStatusPolling(), { wrapper });
+
+    await waitFor(() =>
+      expect(mockedTrackEvent).toHaveBeenCalledWith('illustration_completed', { outcome: 'ready' }),
+    );
+  });
+
+  it('reports illustration_completed({outcome: failed}) when a status transitions to failed', async () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([buildMemory({ id: 'memory-poll-failed-1', illustration_status: 'pending' })]),
+    );
+    mockedFetchStatuses.mockResolvedValue({
+      data: [
+        {
+          id: 'memory-poll-failed-1',
+          illustration_status: 'failed',
+          illustration_key: null,
+          emotion: null,
+          updated_at: '2026-05-24T00:00:01.000Z',
+        },
+      ],
+      error: null,
+    });
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    renderHook(() => useGenerationStatusPolling(), { wrapper });
+
+    await waitFor(() =>
+      expect(mockedTrackEvent).toHaveBeenCalledWith('illustration_completed', { outcome: 'failed' }),
+    );
+    // A failed transition never triggers the ready-only media-urls/calendar
+    // invalidation.
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['media-urls'] });
   });
 
   it('invalidates media-urls and calendar when a status transitions to ready', async () => {

@@ -234,7 +234,7 @@ Deno.test('redeem-family-invite rejects unauthenticated requests', async () => {
   assertEquals(response.status, 401);
 });
 
-Deno.test('happy path: claims the invite, pushes to the inviter, returns familyName + role', async () => {
+Deno.test('happy path: claims the invite, pushes to the inviter, returns familyName + role + familyId', async () => {
   const state = baseState();
   const client = createFakeServiceClient(state);
 
@@ -250,7 +250,7 @@ Deno.test('happy path: claims the invite, pushes to the inviter, returns familyN
 
   assertEquals(response.status, 200);
   const body = await response.json();
-  assertEquals(body, { familyName: "Rosa's family", role: 'viewer' });
+  assertEquals(body, { familyName: "Rosa's family", role: 'viewer', familyId: FAMILY_ID });
 
   // Invite is atomically claimed.
   assertEquals(state.invites[0].status, 'redeemed');

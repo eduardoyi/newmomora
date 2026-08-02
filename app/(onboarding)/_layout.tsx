@@ -18,13 +18,16 @@
 // harmless -- expo-router's useSortedScreens only logs a dev warning and
 // renders nothing for it until the file lands -- so this list can be
 // complete on day one instead of growing PR by PR.
-import { Redirect, Stack } from 'expo-router';
+import { Redirect, Stack, useGlobalSearchParams, usePathname } from 'expo-router';
+import { useEffect, useRef } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { OnboardingFlowProvider, useOnboardingFlow } from '@/hooks/use-onboarding-flow';
+import { onboardingAnalyticsStepFromPathname } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
+import { trackEvent } from '@/services/analytics';
 
 export default function OnboardingLayout() {
   return (
@@ -37,6 +40,33 @@ export default function OnboardingLayout() {
 function OnboardingLayoutContent() {
   const { draft, isHydrated } = useOnboardingFlow();
   const { isLoading: isAuthLoading, session } = useAuth();
+
+  // onboarding_step_viewed (docs/plans/analytics-implementation.md WP2.1) --
+  // the single hook for the whole S0-S17 + J1-J5 arc. usePathname() returns
+  // the BARE pathname (`/welcome`, `/join/code`) -- Expo Router strips the
+  // `(onboarding)` group segment -- so the mapping switches on that shape
+  // (see onboardingAnalyticsStepFromPathname's doc comment). `beat` rides
+  // useGlobalSearchParams(), not useLocalSearchParams(), which at this
+  // layout level may not surface a leaf screen's params. Dedupe consecutive
+  // repeats only: a portrait <-> reveal sibling-chain re-entry changes the
+  // pathname each hop, so it naturally clears the dedupe key and fires again
+  // (a genuinely new view, not a re-render of the same one).
+  const pathname = usePathname();
+  const { beat } = useGlobalSearchParams<{ beat?: string }>();
+  const lastTrackedStepKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const view = onboardingAnalyticsStepFromPathname(pathname, beat);
+    if (!view) {
+      return;
+    }
+    const key = `${view.flow}:${view.step}`;
+    if (lastTrackedStepKeyRef.current === key) {
+      return;
+    }
+    lastTrackedStepKeyRef.current = key;
+    trackEvent('onboarding_step_viewed', view);
+  }, [pathname, beat]);
 
   if (!isHydrated || isAuthLoading) {
     return (

@@ -5,12 +5,14 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 
 import { useAuthUrlHandler } from '@/hooks/use-auth-url-handler';
 import { supabase } from '@/lib/supabase';
+import { identifyUser, resetAnalytics } from '@/services/analytics';
 import {
   getDeviceTimezone,
   isUserNotFoundOtpError,
@@ -62,6 +64,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.subscription.unsubscribe();
     };
   }, []);
+
+  // Analytics identity (docs/plans/analytics-implementation.md WP1.5).
+  // CRITICAL anonymous-session guard: the app creates real Supabase sessions
+  // via `signInAnonymously()` (src/lib/anonymous-session.ts) for S9 voice
+  // transcription and J2 invite preview, and that throwaway session lives
+  // from S9 until the email screen discards it. An anonymous session
+  // appearing or disappearing must be a strict no-op -- no identify, no
+  // reset -- otherwise pre-auth events get attributed to (and orphaned on) a
+  // throwaway person instead of stitching to the real user at identify time.
+  // Track only the last non-anonymous id we identified; every decision below
+  // is driven off that, not off the raw session transition.
+  const identifiedUserIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const currentUser = session?.user ?? null;
+    const isRealUser = currentUser !== null && !currentUser.is_anonymous;
+
+    if (isRealUser) {
+      if (identifiedUserIdRef.current !== currentUser.id) {
+        // Switching from one identified non-anonymous user to a different
+        // one -- reset first so events don't merge across two real people.
+        if (identifiedUserIdRef.current !== null) {
+          resetAnalytics();
+        }
+        identifyUser(currentUser.id);
+        identifiedUserIdRef.current = currentUser.id;
+      }
+      return;
+    }
+
+    // `currentUser` is null (signed out) or anonymous. Only react if we
+    // previously identified a real user -- an anonymous session appearing
+    // or disappearing while we've never identified anyone is a no-op.
+    if (identifiedUserIdRef.current !== null) {
+      resetAnalytics();
+      identifiedUserIdRef.current = null;
+    }
+  }, [session]);
 
   const requestSignInOtp = useCallback(async (email: string): Promise<RequestSignInOtpResult> => {
     const { error } = await supabase.auth.signInWithOtp({

@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { useMemoriesRealtime } from '@/hooks/useMemoriesRealtime';
 import { memoriesQueryKey } from '@/hooks/queryKeys';
 import { supabase } from '@/lib/supabase';
+import { trackEvent } from '@/services/analytics';
 import { fetchMemoryById } from '@/services/memories';
 import type { Memory, MemoriesPage, MemoryWithTags } from '@/services/memories';
 
@@ -19,9 +20,14 @@ jest.mock('@/services/memories', () => ({
   fetchMemoryById: jest.fn(),
 }));
 
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
+}));
+
 const mockedChannel = supabase.channel as jest.MockedFunction<typeof supabase.channel>;
 const mockedRemoveChannel = supabase.removeChannel as jest.MockedFunction<typeof supabase.removeChannel>;
 const mockedFetchMemoryById = fetchMemoryById as jest.MockedFunction<typeof fetchMemoryById>;
+const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 const FAMILY_ID = 'family-1';
 
@@ -180,6 +186,40 @@ describe('useMemoriesRealtime', () => {
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['media-urls'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['calendar-memories'] });
+  });
+
+  it('reports illustration_completed({outcome: ready}) when an UPDATE transitions to ready', () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([buildMemoryWithTags({ id: 'memory-rt-ready-1', illustration_status: 'generating' })]),
+    );
+
+    renderHook(() => useMemoriesRealtime(FAMILY_ID), { wrapper });
+
+    fake.emit('UPDATE', {
+      new: buildMemoryRow({ id: 'memory-rt-ready-1', illustration_status: 'ready', illustration_key: 'key.webp' }),
+      old: { id: 'memory-rt-ready-1' },
+    });
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('illustration_completed', { outcome: 'ready' });
+  });
+
+  it('reports illustration_completed({outcome: failed}) when an UPDATE transitions to failed', () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([buildMemoryWithTags({ id: 'memory-rt-failed-1', illustration_status: 'generating' })]),
+    );
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    renderHook(() => useMemoriesRealtime(FAMILY_ID), { wrapper });
+
+    fake.emit('UPDATE', {
+      new: buildMemoryRow({ id: 'memory-rt-failed-1', illustration_status: 'failed' }),
+      old: { id: 'memory-rt-failed-1' },
+    });
+
+    expect(mockedTrackEvent).toHaveBeenCalledWith('illustration_completed', { outcome: 'failed' });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['media-urls'] });
   });
 
   it('does not invalidate media-urls when the row was not previously generating', () => {

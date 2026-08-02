@@ -6,6 +6,7 @@ import { AuthErrorMessage, AuthField, AuthInput } from '@/components/auth-screen
 import { KeyboardAwareFormScreen } from '@/components/keyboard-aware-form-screen';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { sharingWaitingRouteWithName } from '@/lib/routes';
+import { trackEvent } from '@/services/analytics';
 import { redeemFamilyInvite } from '@/services/invites';
 import {
   formatInviteCodeInput,
@@ -70,6 +71,9 @@ export default function RedeemInviteScreen() {
       }
 
       await clearPendingInviteCode();
+      if (data?.familyId) {
+        trackEvent('invite_redeemed', { family_id: data.familyId });
+      }
       router.replace(sharingWaitingRouteWithName(data?.familyName ?? ''));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not redeem the code');
