@@ -11,7 +11,8 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 
 import { OnbShell } from '@/components/onboarding/onb-shell';
 import { OnbBody, OnbDisplay } from '@/components/onboarding/onb-typography';
@@ -32,6 +33,7 @@ import { timelineRoute } from '@/lib/routes';
 import type { PostMediaMemoryInput } from '@/services/memory-posting';
 import { commitOnboarding } from '@/services/onboarding';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
+import { focusOtpInput } from '@/utils/otp-input';
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -96,6 +98,7 @@ export default function OnboardingCodeScreen() {
   const { enqueue } = usePendingMemoryUploads();
   const { refetchMemberships } = useFamily();
   const queryClient = useQueryClient();
+  const codeInputRef = useRef<TextInput>(null);
 
   // finishAfterCommit's async chain starts on the render right before the
   // code is submitted -- necessarily pre-auth, since submitting is what
@@ -269,6 +272,12 @@ export default function OnboardingCodeScreen() {
     }
   };
 
+  const handleCodeInputPress = () => {
+    if (!isProcessing) {
+      focusOtpInput(codeInputRef.current, KeyboardController.isVisible());
+    }
+  };
+
   const handleResend = async () => {
     if (cooldown > 0 || !email) {
       return;
@@ -303,7 +312,14 @@ export default function OnboardingCodeScreen() {
         </OnbBody>
 
         <View style={styles.codeInputWrap}>
-          <View pointerEvents="none" style={styles.codeRow}>
+          <Pressable
+            accessibilityHint="Enter the six digits from your email."
+            accessibilityLabel="Verification code"
+            disabled={isProcessing}
+            onPress={handleCodeInputPress}
+            style={styles.codeRow}
+            testID="onboarding-code-input-target"
+          >
             {digits.map((digit, index) => (
               <View
                 key={index}
@@ -316,7 +332,7 @@ export default function OnboardingCodeScreen() {
                 <Text style={styles.codeDigit}>{digit}</Text>
               </View>
             ))}
-          </View>
+          </Pressable>
 
           <TextInput
             accessibilityHint="Enter the six digits from your email."
@@ -328,6 +344,8 @@ export default function OnboardingCodeScreen() {
             keyboardType="number-pad"
             maxLength={CODE_LENGTH}
             onChangeText={handleChangeCode}
+            pointerEvents="none"
+            ref={codeInputRef}
             selectionColor="transparent"
             style={styles.hiddenInput}
             testID="onboarding-code-input"

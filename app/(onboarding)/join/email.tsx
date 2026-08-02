@@ -18,7 +18,8 @@
 // redeem failure to retry with a different code while already signed in.
 import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 
 import { OnbBody, OnbDisplay } from '@/components/onboarding/onb-typography';
 import { OnbButton } from '@/components/onboarding/onb-button';
@@ -31,6 +32,7 @@ import { redeemFamilyInvite } from '@/services/invites';
 import { clearJoinDraft, getJoinDraft } from '@/services/onboarding-join';
 import { updateUserProfile } from '@/services/user-profile';
 import { clearPendingInviteCode, getPendingInviteCode } from '@/utils/pending-invite-code';
+import { focusOtpInput } from '@/utils/otp-input';
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -57,6 +59,7 @@ export default function JoinEmailScreen() {
   const [isResending, setIsResending] = useState(false);
   const [resendMessage, setResendMessage] = useState('');
   const [cooldown, setCooldown] = useState(RESEND_COOLDOWN_SECONDS);
+  const codeInputRef = useRef<TextInput>(null);
 
   // Guards the mount-time "already authenticated" effect from double-firing
   // finishJoin when handleVerify already started it -- verifyOtp's success
@@ -194,6 +197,12 @@ export default function JoinEmailScreen() {
     }
   };
 
+  const handleCodeInputPress = () => {
+    if (!isVerifying) {
+      focusOtpInput(codeInputRef.current, KeyboardController.isVisible());
+    }
+  };
+
   const handleResend = async () => {
     if (cooldown > 0) {
       return;
@@ -296,7 +305,14 @@ export default function JoinEmailScreen() {
           </OnbBody>
 
           <View style={styles.codeInputWrap}>
-            <View pointerEvents="none" style={styles.codeRow}>
+            <Pressable
+              accessibilityHint="Enter the six digits from your email."
+              accessibilityLabel="Verification code"
+              disabled={isVerifying}
+              onPress={handleCodeInputPress}
+              style={styles.codeRow}
+              testID="onb-join-email-code-input-target"
+            >
               {digits.map((digit, index) => (
                 <View
                   key={index}
@@ -309,7 +325,7 @@ export default function JoinEmailScreen() {
                   <Text style={styles.codeDigit}>{digit}</Text>
                 </View>
               ))}
-            </View>
+            </Pressable>
 
             <TextInput
               accessibilityHint="Enter the six digits from your email."
@@ -320,6 +336,8 @@ export default function JoinEmailScreen() {
               keyboardType="number-pad"
               maxLength={CODE_LENGTH}
               onChangeText={handleChangeCode}
+              pointerEvents="none"
+              ref={codeInputRef}
               selectionColor="transparent"
               style={styles.hiddenInput}
               testID="onb-join-email-code-input"

@@ -1,12 +1,14 @@
 import { Link, router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 
 import { AuthButton, AuthErrorMessage, AuthScreen } from '@/components/auth-screen';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { sharingRedeemRoute } from '@/lib/routes';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
+import { focusOtpInput } from '@/utils/otp-input';
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -19,6 +21,7 @@ export default function VerifyOtpScreen() {
 
   const { verifyOtp, requestSignInOtp, requestSignUpOtp } = useAuth();
 
+  const codeInputRef = useRef<TextInput>(null);
   const [code, setCode] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
@@ -76,6 +79,10 @@ export default function VerifyOtpScreen() {
     }
   };
 
+  const handleCodeInputPress = () => {
+    focusOtpInput(codeInputRef.current, KeyboardController.isVisible());
+  };
+
   const handleResend = async () => {
     if (cooldown > 0 || !email) {
       return;
@@ -116,7 +123,13 @@ export default function VerifyOtpScreen() {
       title="Check your email"
     >
       <View style={styles.codeInputWrap}>
-        <View pointerEvents="none" style={styles.codeRow}>
+        <Pressable
+          accessibilityHint="Enter the six digits from your email."
+          accessibilityLabel="Verification code"
+          onPress={handleCodeInputPress}
+          style={styles.codeRow}
+          testID="verify-otp-code-input-target"
+        >
           {digits.map((digit, index) => (
             <View
               key={index}
@@ -129,13 +142,15 @@ export default function VerifyOtpScreen() {
               <Text style={styles.codeDigit}>{digit}</Text>
             </View>
           ))}
-        </View>
+        </Pressable>
 
         <TextInput
           autoFocus
           keyboardType="number-pad"
           maxLength={CODE_LENGTH}
           onChangeText={handleChangeCode}
+          pointerEvents="none"
+          ref={codeInputRef}
           style={styles.hiddenInput}
           testID="verify-otp-code-input"
           textContentType="oneTimeCode"

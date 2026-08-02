@@ -14,6 +14,7 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { router } from 'expo-router';
+import { KeyboardController } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import OnboardingCodeScreen from '../../app/(onboarding)/code';
@@ -147,6 +148,15 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     expect(input.props.caretHidden).toBe(true);
     expect(input.props.cursorColor).toBe('transparent');
     expect(input.props.style).toEqual(expect.objectContaining({ color: 'transparent', opacity: 0 }));
+  });
+
+  it('checks the keyboard state when the OTP boxes are tapped again', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = renderScreen(queryClient);
+
+    fireEvent.press(screen.getByTestId('onboarding-code-input-target'));
+
+    expect(KeyboardController.isVisible).toHaveBeenCalled();
   });
 
   it('invalidates the memberships query before navigating a brand-new owner into S13', async () => {
