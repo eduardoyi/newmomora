@@ -165,13 +165,29 @@ export interface AnalyticsPersonProperties {
 let client: PostHog | null | undefined;
 
 // Every dashboard filters on `env = prod`; launch funnels are small-N and a
-// few developer/simulator runs would otherwise skew them. Registered at
-// client creation AND after every reset() -- reset clears registered super
-// properties along with the distinct id (verified against a live project:
-// post-sign-out events arrived without `env`, which would silently drop
-// every post-sign-out user from the env-filtered dashboards).
+// few developer/simulator runs would otherwise skew them.
+//
+// `__DEV__` alone is NOT a safe discriminator: a dev-client launched without
+// a Metro connection runs its embedded RELEASE bundle, so `__DEV__` is false
+// and standalone test runs on a physical device self-report as prod
+// (observed live: three device test runs landed as `env: prod`). The
+// authoritative signal is `EXPO_PUBLIC_APP_ENV`, baked in per EAS
+// environment ("production" only on the production environment); `__DEV__`
+// is only the fallback for local runs without the var.
+function resolveAnalyticsEnv(): 'dev' | 'prod' {
+  const appEnv = process.env.EXPO_PUBLIC_APP_ENV;
+  if (appEnv) {
+    return appEnv === 'production' ? 'prod' : 'dev';
+  }
+  return __DEV__ ? 'dev' : 'prod';
+}
+
+// Registered at client creation AND after every reset() -- reset clears
+// registered super properties along with the distinct id (verified against a
+// live project: post-sign-out events arrived without `env`, which would
+// silently drop every post-sign-out user from the env-filtered dashboards).
 function registerEnvSuperProperty(instance: PostHog): void {
-  void instance.register({ env: __DEV__ ? 'dev' : 'prod' }).catch((error: unknown) => {
+  void instance.register({ env: resolveAnalyticsEnv() }).catch((error: unknown) => {
     console.warn('[analytics] failed to register super properties', error);
   });
 }

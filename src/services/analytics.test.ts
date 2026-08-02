@@ -32,6 +32,7 @@ describe('analytics', () => {
     process.env = { ...ORIGINAL_ENV };
     delete process.env.EXPO_PUBLIC_POSTHOG_API_KEY;
     delete process.env.EXPO_PUBLIC_POSTHOG_HOST;
+    delete process.env.EXPO_PUBLIC_APP_ENV;
   });
 
   afterAll(() => {
@@ -132,6 +133,25 @@ describe('analytics', () => {
       const { mockPostHogClient } = loadPostHogMock();
 
       expect(mockPostHogClient.register).toHaveBeenCalledWith(expect.objectContaining({ env: expect.any(String) }));
+    });
+
+    // `__DEV__` is false when a dev-client runs its embedded release bundle
+    // (standalone, no Metro), so EXPO_PUBLIC_APP_ENV is the authoritative
+    // dev/prod signal -- only the production EAS environment maps to 'prod'.
+    it('maps EXPO_PUBLIC_APP_ENV=production to env: prod', () => {
+      process.env.EXPO_PUBLIC_APP_ENV = 'production';
+      loadAnalytics().trackEvent('onboarding_step_viewed', { step: 'welcome', flow: 'owner' });
+      const { mockPostHogClient } = loadPostHogMock();
+
+      expect(mockPostHogClient.register).toHaveBeenCalledWith(expect.objectContaining({ env: 'prod' }));
+    });
+
+    it('maps any non-production EXPO_PUBLIC_APP_ENV to env: dev', () => {
+      process.env.EXPO_PUBLIC_APP_ENV = 'preview';
+      loadAnalytics().trackEvent('onboarding_step_viewed', { step: 'welcome', flow: 'owner' });
+      const { mockPostHogClient } = loadPostHogMock();
+
+      expect(mockPostHogClient.register).toHaveBeenCalledWith(expect.objectContaining({ env: 'dev' }));
     });
 
     it('helpers never throw when the underlying SDK throws', () => {
