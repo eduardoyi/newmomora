@@ -1530,6 +1530,92 @@ pg_cron jobs in this spec already document -- and fails visibly in
 
 ---
 
+### 4.18 Paid subscriptions and billing
+
+Momora Plus uses RevenueCat for Apple App Store and Google Play store
+transactions and Supabase for server-side authorization. The product catalog
+is allowlisted in `billing_products`:
+
+| Store | Product | Period |
+|-------|---------|--------|
+| App Store | `momora_annual_v1` | annual, 7-day intro offer |
+| App Store | `momora_monthly_v1` | monthly |
+| Play Store | `momora:annual` / base plan `annual` | annual, 7-day offer |
+| Play Store | `momora:monthly` / base plan `monthly` | monthly |
+
+RevenueCat entitlement `momora_plus` is exposed through the `default`
+offering. The mobile SDK is configured with the authenticated Supabase user
+ID as `appUserID`; purchases and restores call `billing-reconcile` before the
+client treats them as complete. RevenueCat's webhook is the durable recovery
+path. Webhook event IDs are unique, event timestamps prevent older events from
+overwriting newer entitlements, and unsupported products/environments/accounts
+are dead-lettered.
+
+Billing schema is established by `20260801120000_paid_subscriptions.sql` and
+extended by `20260802100000_owner_complimentary_access.sql`:
+
+- `billing_settings`: singleton enforcement mode, cutover, fair-use limits,
+  store grace settings, and `allow_sandbox_access` (false in production).
+- `billing_products`: store/product allowlist.
+- `owner_entitlements`: owner/store/environment/status ledger.
+- `owner_complimentary_access`: private owner-wide permanent or expiring
+  free-access grants; not a RevenueCat entitlement.
+- `billing_webhook_events` and `billing_dead_letters`: queue and operator
+  diagnostics.
+- `billing_trial_reminder_outbox`: idempotent email/push reminder queue.
+- `onboarding_commits`: idempotent post-auth family/capture commit.
+- `families.billing_grace_until`, server-owned
+  `memories.onboarding_attributed`, and temporary
+  `memories.onboarding_media_pending*` fields: rollout grace and paid
+  onboarding hand-off state. Client table privileges cannot write these
+  fields.
+
+`get_family_billing_status(family_id)` is the only client-readable billing
+RPC. It verifies family membership and returns `has_write_access`,
+`has_ever_had_access`, `trial_eligible`, plan/expiry/grace information, the
+management URL, and the active enforcement mode. An active
+`owner_complimentary_access` row makes `has_write_access` true and returns
+`access_reason: complimentary`; it applies to every family owned by that
+user. Normal memory/media, engagement, and AI-generation mutations enforce
+owner access with RLS or the server admission RPC; archive reads and the owner
+export path remain available after lapse.
+
+#### Billing Edge Functions
+
+| Function | Contract |
+|----------|----------|
+| `revenuecat-webhook` | `POST` with `x-revenuecat-webhook-authorization`; normalizes RevenueCat store/environment/product fields and queues a webhook event. |
+| `billing-reconcile` | Authenticated user; calls RevenueCat REST with the server secret, separates production/sandbox subscriber data, and upserts both snapshots. |
+| `billing-reconcile-owners` | Cron-secret endpoint; claims owners with stale active/trial/grace snapshots and reconciles them with the RevenueCat API in bounded batches. |
+| `process-billing-webhooks` | Cron-secret endpoint; claims, applies, retries, and dead-letters queued events. |
+| `send-billing-trial-reminders` | Cron-secret endpoint; claims outbox rows and sends Bento email/push reminders 48 hours before trial expiry. |
+
+`20260801123000_schedule_paid_billing_cron.sql` schedules webhook processing,
+trial reminders, entitlement expiry, export-job expiry, and stale-owner
+reconciliation. RevenueCat's secret API key and webhook secret are Supabase
+secrets only; public SDK keys are Expo variables.
+
+### 4.19 Owner data export
+
+The Cloudflare Worker at `cloudflare/momora-export-worker` exposes:
+
+- `POST /exports` — authenticates a Supabase JWT, verifies that the subject owns
+  at least one non-deleted family, creates a one-hour `export_jobs` row, and
+  returns a job URL.
+- `GET /exports/:jobId` — re-authenticates the same owner, rebuilds the
+  owner-scoped manifest, heads private R2 assets, and streams a ZIP containing
+  `manifest.json` and numbered asset files.
+
+The worker uses service-role PostgREST access only on the server and a private
+R2 binding. It batches ID filters, caps families/assets, and rejects archives
+over 2 GiB to stay within ZIP32 limits. It never creates public asset URLs or
+logs archive contents. Export-job admission uses the atomic `create_export_job`
+RPC, which serializes the active-job limit per owner; `export_jobs` has
+owner-only RLS for metadata and is expired by the scheduled
+`expire_export_jobs` function. The ZIP stream is pull-driven so backpressure
+does not accumulate the full archive in Worker memory. The native client
+downloads the short-lived job URL into the cache and opens `expo-sharing`.
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)
@@ -1745,6 +1831,9 @@ per family, not per user). No style picker UI.
 |----------|-------------|
 | `EXPO_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
+| `EXPO_PUBLIC_REVENUECAT_IOS_API_KEY` | RevenueCat public iOS SDK key |
+| `EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY` | RevenueCat public Android SDK key |
+| `EXPO_PUBLIC_EXPORT_WORKER_URL` | HTTPS base URL of the Cloudflare export Worker |
 
 ### Edge Functions (Supabase secrets)
 
@@ -1772,6 +1861,9 @@ per family, not per user). No style picker UI.
 | `BENTO_SECRET_KEY` | Bento secret key — HTTP Basic auth password |
 | `BENTO_FROM_EMAIL` | Sender address; must be pre-registered as an author on the Bento site |
 | `CONTENT_REPORT_ALERT_EMAIL` | Optional safe operator recipient; defaults to `hello@usemomora.com` |
+| `REVENUECAT_SECRET_API_KEY` | RevenueCat project secret used only by `billing-reconcile` |
+| `REVENUECAT_PROJECT_ID` | RevenueCat project identifier used by reconciliation |
+| `REVENUECAT_WEBHOOK_SECRET` | Shared secret expected by `revenuecat-webhook` |
 
 ### Cloudflare Worker configuration
 
@@ -1790,6 +1882,12 @@ Worker secret store contains `OPENAI_API_KEY`,
 `STYLE_REFERENCES`, bind Cloudflare Images as `IMAGES`, and bind Workflows as
 `MEMORY_ILLUSTRATION_WORKFLOW` and `PORTRAIT_GENERATION_WORKFLOW`. Do not put
 any of these values in Expo variables or commit `.dev.vars`.
+
+The `cloudflare/momora-export-worker` deployment binds the private `momora-prod`
+R2 bucket as `MEDIA` and keeps `SUPABASE_ANON_KEY` and
+`SUPABASE_SERVICE_ROLE_KEY` in the Worker secret store. Its public
+`workers.dev` URL is the value of `EXPO_PUBLIC_EXPORT_WORKER_URL`; the mobile
+bundle never receives the service-role key.
 
 ### Database Vault secrets (read by pg_cron jobs)
 
@@ -1880,6 +1978,11 @@ All AI operations are **async** — client shows status and allows navigation aw
 - [ ] Account deletion grace period enforced
 - [ ] Voice audio not persisted after transcription
 - [ ] Input validation on all Edge Function payloads
+- [ ] RevenueCat webhook secret, secret API key, and project ID are configured only in Supabase secrets; public SDK keys are configured only as Expo public variables
+- [ ] RevenueCat restore behavior verifies the current App User ID and every purchase/restore is reconciled before UI success
+- [ ] Production billing ignores sandbox entitlements unless an explicit non-production setting enables them
+- [ ] Complimentary access is stored in a private owner-keyed table, never represented as a store entitlement, and managed only through the operator runbook
+- [ ] Export Worker re-authenticates the owner for both job creation and download; R2 remains private and archive contents never enter logs
 - [ ] Illustrated-memory max of 6 family member tags enforced server-side; text-only/media tags remain unlimited
 - [ ] Family-scoped RLS goes through `is_family_member`/`has_family_role`, never a hand-rolled join
 - [ ] Role/family checks are bound to one specific `family_id`, never "has this role somewhere"

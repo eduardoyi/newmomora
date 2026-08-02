@@ -66,6 +66,10 @@ jest.mock('@/services/family', () => ({
   updateFamilyName: jest.fn(),
 }));
 
+jest.mock('@/services/export', () => ({
+  createAndShareDataExport: jest.fn(),
+}));
+
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseBilling = useBilling as jest.MockedFunction<typeof useBilling>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;

@@ -1,10 +1,10 @@
 # Store submission answers
 
-**Draft date:** July 16, 2026
+**Draft date:** August 1, 2026
 
 **App:** UseMomora (`com.memora.app`)
 
-**Release:** 1.1.0
+**Release:** 1.2.0
 
 **Audience:** Adults 18+ only
 
@@ -14,7 +14,7 @@ This is a console-entry draft, not proof that either store has been updated. Ite
 
 The draft reflects the current repository, Privacy Policy, and Terms of Service:
 
-- The mobile dependency/config audit found no analytics, crash-reporting, advertising, attribution, App Tracking Transparency, IDFA, or in-app-purchase SDK.
+- The mobile dependency/config audit found no analytics, crash-reporting, advertising, attribution, App Tracking Transparency, or IDFA SDK. The release now includes RevenueCat's in-app-purchase SDK for Apple/Google subscription processing; declare purchase history/transaction-linked identifiers only if the final store privacy forms ask for them, and verify the final native dependency graph before submission.
 - The website uses Google Tag Manager, but no equivalent analytics SDK is declared in the mobile app. Website-only GTM data is therefore excluded from the app declarations. Recheck the final native dependency graph before submission.
 - Supabase provides authentication/database/functions; Cloudflare R2 stores private media; OpenAI processes requested AI and voice features; Expo/APNs/FCM deliver pushes; Bento delivers transactional email.
 - Account and family data is stored against account/family identifiers. Photos, videos, journal text, comments, AI output, and most operational records are therefore linked to an account even though access is private.
@@ -72,7 +72,7 @@ Clarifications:
 - Do not declare location merely because infrastructure sees an IP address; Apple says to map IP collection according to how it is actually used. Momora uses it for request security/rate limiting, not location inference.
 - Do not declare raw photo EXIF/GPS metadata: it is read on-device only to derive a date, and only the derived date is transmitted. Apple excludes data processed only on-device. The selected Photos/Videos and Other Data Types entries already cover the uploaded media and stored date.
 - Do not declare mobile analytics or advertising because website GTM is not embedded in the mobile app.
-- Do not select Purchases unless the final binary or backend restores purchase handling.
+- Select **Purchases / Purchase History** only if the current App Store Connect form maps RevenueCat's subscription purchase/restore processing to that category; the app does process purchases to grant Momora Plus, but it does not use them for advertising or tracking.
 
 ### Apple transient-processing gate
 
@@ -251,32 +251,56 @@ Google requires credentials to remain reusable, location-independent, and valid 
 
 **HUMAN CONFIRMATION REQUIRED:** Backend/account/media fixture verification is complete, but the email-triggered UI still must be tested from a clean install of the exact final build. Enter the reusable credential pair in both consoles. Do not use real child/family data. The code and docs alone do not complete this task.
 
-## 6. IAP and monetization cleanup
+## 6. Paid subscriptions and monetization
 
-Repository evidence: the current app declares no StoreKit/Play Billing/RevenueCat/IAP package and contains no paywall, product ID, entitlement, subscription, credit, or purchase flow. The Terms say the current version has no purchases.
+The current binary contains a RevenueCat-backed hard paywall. The archive
+remains viewable/exportable after lapse; payment is never represented as a
+client-only navigation flag.
 
-### Apple
+### Catalog and store setup
 
-1. App Store Connect → Monetization → In-App Purchases: remove every old one-time product from sale in every territory. Confirm each status becomes **Developer Removed from Sale**. Apple documents that status and says prior purchasers retain access in [In-App Purchase statuses](https://developer.apple.com/help/app-store-connect/reference/in-app-purchases-and-subscriptions/in-app-purchase-statuses).
-2. Monetization → Subscriptions: for every old subscription, clear **Cleared for Sale** / remove all availability. Apple documents the process in [Set availability for an auto-renewable subscription](https://developer.apple.com/help/app-store-connect/manage-subscriptions/set-availability-for-an-auto-renewable-subscription).
-3. Remove promoted IAPs, subscription promotional images, review notes, offer codes, and store-listing copy/screenshots that imply payment.
-4. Keep the app price **Free** and do not attach any IAP to the submitted version.
-5. Verify Sales and Trends / subscription reports show zero active subscribers, billing-retry/grace-period users, and unfulfilled purchases as of the cutoff.
+| Store | Product | Price | Trial |
+|-------|---------|-------|-------|
+| Apple App Store | `momora_annual_v1` | $99.99/year | 7-day intro offer |
+| Apple App Store | `momora_monthly_v1` | $12.99/month | none |
+| Google Play | `momora:annual`, base plan `annual` | $99.99/year | 7-day offer |
+| Google Play | `momora:monthly`, base plan `monthly` | $12.99/month | none |
 
-### Google Play
+RevenueCat entitlement: `momora_plus`; offering: `default`; annual is the
+default package. RevenueCat restore behavior must remain **Keep with original
+App User ID**. The mobile app uses the Supabase user ID as the RevenueCat App
+User ID and rejects a restore belonging to a different account.
 
-1. Monetize with Play → Products → One-time products: deactivate every active purchase option. Google's current steps are in [Overview of one-time products](https://support.google.com/googleplay/android-developer/answer/16430488).
-2. If a migrated legacy product shows **Inactive: Visible in Play Billing Library**, follow Google's documented reactivate-then-deactivate sequence so it is no longer returned by Play Billing Library.
-3. Monetize with Play → Products → Subscriptions: deactivate every base plan and offer. Do not reuse historical product IDs; Google says inactive base plans stop new purchases while subscription history remains in [Understanding subscriptions](https://support.google.com/googleplay/android-developer/answer/12154973).
-4. Remove store-listing, promotional-content, and review-note references to subscriptions, credits, trials, premium access, or purchases.
-5. Confirm **Contains ads: No**, and verify there is no paid-app price or in-app-product badge implied by the final listing.
-6. Verify Play financial/subscription reports show zero active, paused, grace-period, account-hold, pending, or unacknowledged transactions.
+### Apple review answers
 
-### No migration/refund path
+- The app price remains **Free**; the paid products are auto-renewable
+  subscriptions shown only after the value moment and account creation.
+- The paywall states the seven-day annual trial, post-trial price, cancellation
+  path, and that memories remain exportable after cancellation.
+- No misleading trial toggle, urgency device, credits, or weekly plan is used.
+- The reviewer can use the reusable account documented in
+  [reviewer-access.md](./reviewer-access.md), then exercise the paywall and
+  restore path in an Apple sandbox build.
 
-No subscriber migration or refunds are planned because there are no current purchases or subscribers. **HUMAN CONFIRMATION REQUIRED:** Treat that as true only after both stores' transaction/subscription reports confirm zero. Save dated report screenshots or exports in the team's private release records, not in git. If either store shows an active entitlement or transaction, stop and handle that user before disabling service.
+### Google Play review answers
 
-After cleanup, test a clean install and an upgrade from the last public binary. No purchase UI should appear, old products should not be purchasable, and journal access must not depend on an old entitlement.
+- Declare digital purchases/subscriptions accurately in the current Play
+  Console questionnaire; do not use the old “no purchases” answer.
+- Keep the listing copy, screenshots, and reviewer notes consistent with the
+  Momora Plus catalog and the free-export promise.
+- Configure the reviewer account for an internal-test build and provide the
+  same reusable sign-in instructions as the Apple review notes.
+
+### Release verification
+
+- [ ] Complete/activate both Google Play base plans and the annual offer.
+- [ ] Configure the RevenueCat webhook endpoint and secret.
+- [ ] Deploy the Supabase billing migrations/functions and configure the
+  RevenueCat secret API key, project ID, webhook secret, and cron secret.
+- [ ] Verify Apple sandbox and Google internal-test purchase, restore,
+  cancellation/expiration, lapsed archive/export, and resubscribe.
+- [ ] Confirm production `allow_sandbox_access` is false and no test receipt can
+  grant production access.
 
 ## 7. UGC and AI reviewer notes
 
@@ -316,5 +340,5 @@ With the seeded reviewer account, provide exact steps for these checks in the su
 - [ ] Complete Apple age questionnaire and verify 18+ regional override.
 - [ ] Select Google 18+ only and enable Restrict minor access.
 - [ ] Provision, seed, and clean-install-test reviewer access; enter credentials only in secure console fields.
-- [ ] Remove/deactivate every Apple and Google IAP/subscription product and verify zero transactions/subscribers.
+- [ ] Verify the Apple/Google Momora Plus products, RevenueCat webhook, Supabase ledger, and purchase/restore/lapse flows from the final builds.
 - [ ] Verify UGC/AI report, block/unblock, removal/leave, moderation queue, and support response from the final build.

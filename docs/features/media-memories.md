@@ -347,6 +347,12 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `supabase/scripts/backfill-media-previews.test.ts` | `decidePreviewResize` no-upscale/resize-axis decision; `deriveMediaPreviewKey` key derivation and validation for image extensions |
 | `supabase/scripts/backfill-video-posters.test.ts` | `buildFfmpegPosterArgs` — first-frame extraction, `min()`-bounded scale box (never upscales, unlike a fixed NxN box with `force_original_aspect_ratio=decrease`), single-JPEG-to-stdout output shape; `parseContentRangeTotalBytes` — standard/missing/malformed `Content-Range` header parsing; `deriveMediaPreviewKey` (imported, not copied) pinned against `.mp4`/`.mov` originals |
 
+### Database tests (pgTAP)
+
+| File | Covers |
+|------|--------|
+| `supabase/tests/memory_media_metadata.sql` | `replace_memory_media_assets` persists photo aspect ratios and preview keys, and preserves both when an older edit payload omits them |
+
 ### Run this feature's tests
 
 ```bash
@@ -356,6 +362,7 @@ maestro test .maestro/flows/memories/create-video-memory.yaml
 maestro test .maestro/flows/memories/prefill-date-from-photo.yaml
 deno test supabase/functions/get-upload-url/
 deno test supabase/scripts/backfill-video-posters.test.ts
+supabase test db supabase/tests/memory_media_metadata.sql
 ```
 
 ## Backlog

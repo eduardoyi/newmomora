@@ -1,24 +1,24 @@
 # Onboarding — Implementation Plan
 
-**Status:** WP0–WP6 and WP7-A done (see Execution log). WP-SEC's mandatory anonymous-authorization lockdown has landed (`enable_anonymous_sign_ins` is `true`); its cleanup cron for abandoned anonymous users is still in flight.
+**Status:** WP0–WP7-A and the paid-access cutover are done (see Execution log). WP-SEC's mandatory anonymous-authorization lockdown and cleanup cron have landed.
 **Spec:** [docs/features/onboarding.md](../features/onboarding.md) (decisions + routing) · [docs/plans/onboarding-design-brief.md](onboarding-design-brief.md) (layout + copy)
 **Design handoff:** Claude Design bundle `Momora screens` (S0–S17, J1–J5). Prototype source is HTML/CSS; recreate the visual output in React Native, do not port its structure.
-**Last updated:** 2026-07-30
+**Last updated:** 2026-08-01
 
 ## Scope of this pass
 
 | In | Out |
 |----|-----|
 | S0–S8 story arc | `CastWaitingState` unpainted-kid family-tab card -- **dropped by owner decision (WP6), not deferred**: redundant with the existing family tab, which already invites a photo for any unpainted kid |
-| S9–S12 capture → aha → account (WP6: S12A also collects the owner's display name) | Real billing/RevenueCat, entitlement enforcement |
-| S13–S16 trust → paywall → portrait, **paywall is a non-functional placeholder** (WP6: S16 reads real portrait status) | Lapsed-owner resubscribe screen |
+| S9–S12 capture → aha → account (WP6: S12A also collects the owner's display name) | Attribution screen |
+| S13–S16 trust → paywall → portrait, now wired to RevenueCat and server entitlements | |
 | S17 portrait reveal + sibling chain (WP6, in-trial moment) | Attribution screen (deliberately deferred, spec §six-jobs) |
 | J1–J5 join path | |
 | Real illustrations (styled placeholders + documented drop-in point) | |
 
 ## Decisions settled before implementation
 
-1. **Fully wired except the paywall.** S6/S7 really create the family and name-only child profiles; S9 really records/transcribes; S10 renders the memory that was really saved; S11 really sets the reminder preference and fires the OS prompt; S12/J4 use the real OTP auth; S16 really kicks off portrait generation. S15 renders completely but "Start my free week" only advances the flow.
+1. **The owner flow is fully wired.** S6/S7 really create the family and name-only child profiles; S9 really records/transcribes; S10 renders the memory that was really saved; S11 really sets the reminder preference and fires the OS prompt; S12/J4 use the real OTP auth; S15 performs RevenueCat purchase/restore; and S16 really kicks off portrait generation. The paid hand-off and lapsed-owner route are server-enforced.
 2. **The new flow is the front door.** Unauthenticated launches land on S0, not `(auth)/login`. The existing login/verify-otp screens survive as the quiet "Log in" branch. J1–J5 is the unauthenticated invited path; `sharing/redeem` + `sharing/waiting` stay for the already-authenticated case (adding a second family, deep link arriving with a session).
 3. **Pre-auth server calls ride an anonymous Supabase session.** S9's transcription and J2's invite lookup both need a JWT before the user has an account. `signInAnonymously()` supplies one. **No anonymous client/tenant writes** happen under it — the anonymous session may never create or touch normal application rows. The server *does* create private admission and cost-ledger records on its own behalf (see decision 7). The session is discarded (`signOut()`) at S12/J4 before the real OTP sign-in.
 
@@ -146,18 +146,26 @@ The single source of truth for spec decision 17. Consumed by WP2 (post-OTP), WP4
 export type PostAuthDestination =
   | { kind: 'journal' }
   | { kind: 'resume-onboarding'; step: OnboardingStepId }
+  | { kind: 'resume-paywall'; mode: 'new-owner' | 'resubscribe' }
   | { kind: 'join-waiting' }
   | { kind: 'ask-invite-code' };
 
 export function resolvePostAuthDestination(input: {
-  memberships: readonly { familyId: string }[];
+  memberships: readonly { familyId: string; role?: string }[];
   hasPendingInviteCode: boolean;
   draft: OnboardingDraft | null;
+  billing?: {
+    familyId: string;
+    isOwner: boolean;
+    hasWriteAccess: boolean;
+    hasEverHadAccess: boolean;
+    trialEligible: boolean;
+  } | null;
   intent: 'owner' | 'join' | 'login';
 }): PostAuthDestination
 ```
 
-Cover the spec's Returning-users table, including the edge case it calls out explicitly: a returning owner who habit-tapped "Start your family's journal", captured a memory, and must land in their existing journal with that memory saved to it — never in a second family or a paywall.
+Cover the spec's Returning-users table, including the edge case it calls out explicitly: a returning owner who habit-tapped "Start your family's journal", captured a memory, and must land in their existing journal with that memory saved to it — never in a second family or a paywall. The one intentional exception is an authenticated S15 draft explicitly marked with `step: 'paywall'` and its paywall mode; that marker is a resume hint while billing is unavailable, but loaded server billing can correct stale device state. The front door also reads the resolved owner's billing status: a family owner with no store history and no write access gets the first-time trial variant, while an owner with prior store history gets the no-trial resubscribe variant; joiners and owners with write access go to the journal. If S12B reaches an existing family with a capture that cannot be written, it preserves the capture and routes to that same billing-selected variant; after purchase, S15 commits the pending capture before continuing.
 
 ### 0.8 `src/lib/onboarding-routes.ts`
 
@@ -244,16 +252,16 @@ Depends on WP0. No shared files with WP1/WP2/WP4.
 
 - **S13 `trial.tsx`** — vertical timeline, three nodes (`Today` / `Day 5` / `Day 7`) with emotion-tinted circular icon tiles and a connecting rule. No prices on this screen. CTA `Sounds fair`.
 - **S14 `included.tsx`** — four checklist rows, then **the promise as a signed card**: bordered, rotated `-0.6deg`, Caveat `our promise` tab breaking the top border, title `Your memories are always yours.`, body about free export even after cancelling, Caveat signature `Eduardo & Adriana`. CTA `Almost done`.
-- **S15 `paywall.tsx` — placeholder, deliberately not connected.**
-  - Renders complete: fanned backdrop illustration pages, headline, single plan card (`7 days free, then $99.99/year` / `That's $8.33/month` — from `docs/PRICING_STRATEGY.md`), four trust bullets, `Start my free week`, quiet `Restore purchases · Terms · Privacy` row, quiet X.
+- **S15 `paywall.tsx` — live RevenueCat paywall.**
+  - Renders the fanned backdrop illustration pages, annual default plan (`7 days free, then $99.99/year` / `That's $8.33/month` — from `docs/PRICING_STRATEGY.md`), optional monthly plan, four trust bullets, `Start my free week`, `Restore purchases · Terms · Privacy`, and quiet X.
   - X opens the close-confirm sheet: `Leave {name}'s first page here for now?` / `It'll be waiting if you come back.` with `Leave` / `Stay`.
-  - **No billing.** `Start my free week` advances to S16. `Restore purchases` and the close-sheet `Leave` are inert-but-visible. Put a single clearly-marked seam at the top of the file — one commented `TODO(paywall)` block naming what has to be swapped in — rather than scattering stubs.
+  - Purchases and restores use the authenticated RevenueCat App User ID, then call `billing-reconcile` and require the `momora_plus` entitlement before continuing. Wrong-account restores fail explicitly; the close-sheet `Leave` signs out and returns to S0 without granting access.
   - Compliance shape matters even in the placeholder: trial terms in plain sight, no toggle tricks.
 - **S16 `portrait.tsx`** — two states. `pick`: photo→portrait before/after cards, headline `Let's make {name}'s portrait.`, CTA `Choose a photo`, plus `The others get their turn next, promise.` when more than one kid exists. `painting`: pulsing framed illustration, Caveat `painting…`, `We're painting.` + the go-do-anything-else body, secondary `Take me to the journal`.
   - Wire the real pipeline: reuse the photo-picking helpers in `src/utils/family-profile-photo-picker.ts` (including the Android `getPendingResultAsync` recovery the add-family-member screen does) and `createPortraitVersion` from `src/services/portrait-versions.ts` against the child row created by `commitOnboarding`. Start with the kid tagged in the first memory, else the first-entered name.
   - Never block on completion — generation is async, the user leaves to the journal.
 
-**Tests:** `src/screen-tests/onboarding.paywall.integration.test.tsx` (close sheet opens/dismisses; CTA advances without touching any billing service), `onboarding.portrait.integration.test.tsx` (picking a photo calls `createPortraitVersion` for the right member and transitions to `painting`).
+**Tests:** `src/screen-tests/onboarding.paywall.integration.test.tsx` (close sheet, package selection, purchase/restore and entitlement paths), `onboarding.portrait.integration.test.tsx` (picking a photo calls `createPortraitVersion` for the right member and transitions to `painting`).
 
 **Extended by WP6:** S16's `painting` state above shipped purely decorative (the pulse never stopped, and a failed generation still said "We're painting." forever) — see WP6 below for the fix and for S17. WP6 also widened S16's target-member resolution: the tagged-kid-from-the-draft lookup above only ever worked in the brief window before S12B's `code.tsx` clears the draft, so it now falls back to real `useFamilyMembers()` data once the draft is empty.
 
@@ -286,7 +294,7 @@ Lands after WP1–WP4, because it points routes at screens that must already exi
 - **`app/invite.tsx`** — a deep-linked invite with no session should land on J2 (code already stored) instead of bouncing through the authed redeem screen. With a session, keep today's behavior.
 - **`app/(app)/_layout.tsx`** — the no-family guard must not fight a user who is mid-onboarding-commit. Verify the interaction; adjust only if it actually misfires.
 - **Docs, in this same change:**
-  - `docs/features/onboarding.md` — flip status to `done` for what shipped, fill in Architecture / Data model / Client integration / Testing, record the four decisions above (anon session, device-local draft, placeholder paywall, global-not-per-family display name), and list what's still `planned` (S17, billing).
+  - `docs/features/onboarding.md` — keep the completed S0–S17 flow, live paywall, lapsed-owner route, and paid-access hand-off documented alongside the remaining attribution-screen deferral.
   - `docs/features/README.md` — index row.
   - This plan — mark completed packages.
 
@@ -344,7 +352,7 @@ Capture → aha → account (S9–S12) landed: `capture.tsx`, `aha.tsx`, `year.t
 
 ### WP3 — done
 
-Trust → paywall → portrait (S13–S16) landed: `trial.tsx`, `included.tsx`, `paywall.tsx` (placeholder, `TODO(paywall)` block marks the real-billing seam), `portrait.tsx` (real photo pick + `createPortraitVersion` against the child row `commitOnboarding` created). Reviewed and accepted.
+Trust → paywall → portrait (S13–S16) landed: `trial.tsx`, `included.tsx`, `paywall.tsx` (RevenueCat purchase/restore with server entitlement verification), `portrait.tsx` (real photo pick + `createPortraitVersion` against the child row `commitOnboarding` created). Reviewed and accepted.
 
 ### WP4 — done
 
@@ -354,7 +362,7 @@ Join path (J1–J5) landed under `app/(onboarding)/join/*` plus `src/services/on
 
 Front-door rewiring + docs, landed as specified:
 
-- `app/index.tsx` — no session → `/(onboarding)/welcome`; session → `resolvePostAuthDestination` (`intent: 'login'`, since a cold launch/relaunch is never a fork-button tap).
+- `app/index.tsx` — no session → `/(onboarding)/welcome`; session → `resolvePostAuthDestination` (`intent: 'login'`, since a cold launch/relaunch is never a fork-button tap). Loaded owner billing state selects the paywall variant; an explicit S15 paywall marker is used as a fallback while billing is unavailable.
 - `app/(auth)/_layout.tsx` — the hard "any session → timeline" redirect (which would have stranded a user mid-onboarding) is now the same `resolvePostAuthDestination` routing.
 - `app/_layout.tsx` — registered the `(onboarding)` group alongside `(auth)`/`(app)`.
 - `app/invite.tsx` — a deep-linked invite with no session now lands on J2 (`onboardingJoinFoundRoute`) instead of the old signup screen; the already-authenticated branch (→ `sharing/redeem`) is unchanged.
@@ -388,7 +396,6 @@ Closed the testing blind spot behind WP6's S16 fix: `code.tsx`'s `finishAfterCom
 
 ## Follow-ups (not this pass)
 
-- Real billing behind the S15 placeholder; family-scoped entitlements (spec decision 6).
-- Cleanup cron for abandoned anonymous users.
+- Attribution screen (spec six-jobs table).
 - Per-family display names (schema change) if the join path's global-name divergence proves wrong.
 - Real illustration assets into `src/constants/onboarding-illustrations.ts`.

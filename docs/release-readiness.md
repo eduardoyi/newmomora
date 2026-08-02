@@ -42,10 +42,14 @@ This is the working must-do list for the next App Store and Google Play release.
 - [x] Add Terms acknowledgment during account creation.
 - [x] Add direct FAQ, privacy, Terms, and support/contact routes in the app.
   - Implemented in the current working tree; include these changes in the release commit.
-- [x] 🔒 Disable or remove from sale all old Apple and Google in-app purchase products.
-  - [x] Confirm that no subscriber migration is required.
-  - [x] Confirm that no refunds are required.
-  - [x] Remove remaining monetization references from the store listings and store configuration.
+- [ ] 🔒 Complete the paid-subscription rollout for the current release.
+  - [x] Configure the RevenueCat `momora_plus` entitlement and `default` offering.
+  - [x] Create Apple annual/monthly products and the annual seven-day intro offer.
+  - [ ] Complete and activate Google Play annual/monthly base plans and the annual seven-day offer.
+  - [ ] Configure the RevenueCat webhook endpoint and secret; configure Supabase billing secrets.
+  - [ ] Deploy the paid-subscription migrations and Edge Functions, then verify production reconciliation.
+  - [ ] Run Apple sandbox and Google Play internal-test purchase, restore, lapse, and resubscribe checks.
+  - [x] Keep archive viewing/export available after lapse; export Worker setup remains part of the release verification.
 - [x] Keep the public App Store and Google Play name as **UseMomora**.
 - [x] Keep the on-device app name as **Momora**.
 
@@ -84,10 +88,10 @@ This is the working must-do list for the next App Store and Google Play release.
 ## 4.1 Store listings, descriptions, and screenshots
 
 - [x] 🔒 Review and update the App Store description, promotional text, keywords, and support/marketing URLs for the current release.
-  - [x] Remove references to subscriptions, trials, credits, premium access, or purchases.
+  - [ ] Update subscription/trial copy and prices to match Momora Plus; do not remove paid-access references.
   - [x] Keep the private, invite-only family-sharing model and AI illustration behavior accurate; do not imply public sharing or discovery.
 - [x] 🔒 Review and update the Google Play short description, full description, and privacy-policy link for the current release.
-  - [x] Remove references to subscriptions, trials, credits, premium access, or purchases.
+  - [ ] Update subscription/trial copy and prices to match Momora Plus; do not remove paid-access references.
   - [x] Keep the private, invite-only family-sharing model and AI illustration behavior accurate; do not imply public sharing or discovery.
 - [x] 🔒 Replace outdated App Store and Google Play phone screenshots that show old UI, pricing, or obsolete flows.
 - [x] 🔒 Replace the old App Store iPad screenshots with current iPad screenshots.
@@ -198,9 +202,10 @@ Do not commit `google-services.json`, service-account keys, `.p8` files, provisi
 The release is ready to submit only when:
 
 - [x] All required reporting/moderation behavior is implemented and documented, the daily queue owner is assigned, and release-mode verification is complete. Maestro is waived by the founder for this release.
-- [x] Store declarations, ratings, reviewer access, listings, and IAP cleanup are complete.
+- [ ] Store declarations, ratings, reviewer access, listings, and paid-subscription setup are complete.
 - [x] Android build number is at least 34 and iOS build number is at least 35.
 - [x] Physical-device push delivery works on Android and iOS/iPadOS.
 - [x] Typecheck, lint, Jest, and Edge tests pass from the final clean commit. Maestro is waived by the founder for this release; final production-artifact checks remain required.
 - [ ] Final production-artifact smoke tests pass on iPhone, iPad, and Android. A separate TestFlight/Google Play internal-testing smoke pass is waived by the founder; Apple build processing and store-submission checks still apply.
+- [ ] Paid-access smoke tests pass: new purchase, restore to the same account, wrong-account restore rejection, lapsed archive/export, and resubscribe.
 - [x] The legacy-backend rollback-only window has an owner and a production-verification end condition.

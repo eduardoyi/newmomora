@@ -301,10 +301,10 @@ export default function JoinEmailScreen() {
         <View style={styles.container}>
           <OnbDisplay size={33}>Check your inbox.</OnbDisplay>
           <OnbBody muted style={styles.body}>
-            Enter the 6-digit code we sent to {email.trim()}.
-          </OnbBody>
+          Enter the 6-digit code we sent to {email.trim()}.
+        </OnbBody>
 
-          <View style={styles.codeInputWrap}>
+        <View style={styles.codeInputWrap}>
             <Pressable
               accessibilityHint="Enter the six digits from your email."
               accessibilityLabel="Verification code"

@@ -24,7 +24,7 @@ Parents of young children live with a quiet double fear: childhood is going by t
 - What slips away first is **texture** — the funny things kids say, the babble and mispronunciations, the context behind a photo — precisely the moments that happen too fast, or with hands too full, to photograph
 - The camera roll (often 5,000–30,000+ photos) proves they cared but doesn't function as memory: unfindable, uncurated, story-less
 - Existing memory-keeping fails by becoming **homework**: baby books are abandoned by month 3–6 and turn into guilt objects; prompt apps add a daily obligation and then punish lapses — and the guilt compounds for second and third children
-- Parents explicitly reject anything that adds another chore, makes missed days feel like failure, or holds their memories behind a subscription
+- Parents explicitly reject anything that adds another chore, makes missed days feel like failure, or holds their memories hostage behind a subscription. Momora therefore makes the paid boundary transparent and keeps archive viewing and export available after cancellation.
 
 Momora's job is to rescue those moments without handing parents another job.
 
@@ -459,13 +459,42 @@ sequenceDiagram
 
 ---
 
+### 6.9 Paid access and data export
+
+Momora Plus is a transparent hard-paywall subscription for family owners.
+
+- Annual: **$99.99/year**, default plan, with a **7-day free trial**.
+- Monthly: **$12.99/month**, available as a secondary plan, with no trial.
+- No weekly plan, credits, metering UI, urgency devices, or guilt mechanics.
+- RevenueCat manages Apple App Store and Google Play purchases under the
+  `momora_plus` entitlement. The server is the final authorization boundary.
+- A subscription belongs to the family owner; invited members inherit the
+  owner's family access and never see the owner paywall.
+- Active/trial/grace owners can create memories, use paid AI generation, and
+  perform other journal mutations. A lapsed owner can still read and export
+  the archive, but new paid mutations route to resubscribe.
+- Owners can export their archive as a private ZIP containing structured
+  metadata and private media. Export remains free forever, including after
+  cancellation.
+
+### 6.10 Subscription and export acceptance criteria
+
+- Store purchase and restore are authenticated to the Momora account and are
+  never granted by client navigation alone.
+- Apple and Google product IDs are allowlisted server-side; unknown products,
+  environments, accounts, and webhook events fail closed or dead-letter.
+- Webhook processing is idempotent and event-timestamp ordered; missed events
+  are repaired by RevenueCat reconciliation.
+- Sandbox entitlements are kept separate from production and are disabled in
+  production by default.
+- The first onboarding capture is saved before payment and its first
+  illustration starts after successful entitlement activation.
+
 ## 7. Explicit MVP Out-of-Scope
 
 The following are **post-MVP**. They must not block or expand MVP scope:
 
-- Monetization / subscriptions / credits
 - Family sharing & collaboration
-- Data export / backup (JSON, ZIP)
 - Photo-based illustration generation (using user-uploaded photos as AI image-generation input for portraits and illustrations — distinct from storing photos/videos as memory attachments, which is now in-scope; see §6.3)
 - Monthly story summaries
 - Social sharing / watermarked exports
