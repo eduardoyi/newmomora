@@ -32,6 +32,8 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 |---------|-----|--------|
 | Auth | [auth.md](./auth.md) | done |
 | Onboarding & paywall | [onboarding.md](./onboarding.md) | done |
+| Paid subscriptions | [subscriptions.md](./subscriptions.md) | implementation complete; store release pending |
+| Data export | [data-export.md](./data-export.md) | done |
 | Family sharing | [family-sharing.md](./family-sharing.md) | done |
 | Family profiles | [family-profiles.md](./family-profiles.md) | done |
 | Portrait timeline | [portrait-timeline.md](./portrait-timeline.md) | done |

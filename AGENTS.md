@@ -16,7 +16,7 @@ Memory journal for parents. Capture moments in text or voice; AI generates consi
 - **Privacy:** Private storage, RLS everywhere, signed URLs for images, no public sharing in MVP.
 - **Account deletion:** 15-day grace period before hard delete.
 - **Illustration style:** Single token (`illustration_style: 'default'`) — extensible later.
-- **Out of scope:** Monetization, data export, SSO, photo-based illustrations, owner transfer, per-memory privacy, relationship labels, web app for viewers. (Family sharing itself — multi-user households, roles, invites — shipped; see [docs/features/family-sharing.md](docs/features/family-sharing.md) and [docs/plans/family-sharing.md](docs/plans/family-sharing.md) §15 for its own out-of-scope list.)
+- **Released scope:** Paid subscriptions and owner-scoped archive export are shipped; follow [docs/features/subscriptions.md](docs/features/subscriptions.md) and [docs/features/data-export.md](docs/features/data-export.md). Still out of scope: SSO, photo-based illustrations, owner transfer, per-memory privacy, relationship labels, and web app for viewers. (Family sharing itself — multi-user households, roles, invites — shipped; see [docs/features/family-sharing.md](docs/features/family-sharing.md) and [docs/plans/family-sharing.md](docs/plans/family-sharing.md) §15 for its own out-of-scope list.)
 
 ---
 
@@ -296,7 +296,7 @@ Feature docs explain **how things work in practice**. [TECH_SPEC.md](docs/TECH_S
 
 ## Do not
 
-- Add monetization, export, SSO, or photo-upload illustration flows (post-MVP).
+- Add new monetization or export variants without updating the subscription/export feature docs, store configuration, RLS, and tests. SSO and photo-upload illustration generation remain post-MVP.
 - Use `expo-av` for new code — use `expo-audio`.
 - Put OpenAI or service role keys in client code or `EXPO_PUBLIC_*` vars.
 - Bypass RLS with service role from the app.

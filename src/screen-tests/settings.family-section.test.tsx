@@ -19,6 +19,7 @@ import {
   sharingPendingInvitesRoute,
   sharingRedeemRoute,
 } from '@/lib/routes';
+import { createAndShareDataExport } from '@/services/export';
 import { leaveFamily, updateFamilyName } from '@/services/family';
 
 jest.mock('expo-router', () => ({
@@ -56,7 +57,8 @@ jest.mock('@/hooks/useUserProfile', () => ({
 
 // This screen's notification registration flow (permissions, expo-notifications)
 // is covered by useNotifications.test.ts and settings.notifications.test.tsx --
-// stub it out here since this file only exercises the Family section.
+// stub it out here since this file exercises the Family section and the owner
+// archive export entry point, not notification registration.
 jest.mock('@/hooks/useNotifications', () => ({
   useNotificationsRegistration: jest.fn(() => ({ requestRegistration: jest.fn() })),
 }));
@@ -78,6 +80,7 @@ const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.MockedFunc
   typeof useFamilyMemberProfiles
 >;
 const mockedUseUserProfile = useUserProfile as jest.MockedFunction<typeof useUserProfile>;
+const mockedCreateAndShareDataExport = createAndShareDataExport as jest.MockedFunction<typeof createAndShareDataExport>;
 const mockedLeaveFamily = leaveFamily as jest.MockedFunction<typeof leaveFamily>;
 const mockedUpdateFamilyName = updateFamilyName as jest.MockedFunction<typeof updateFamilyName>;
 
@@ -132,6 +135,11 @@ describe('Settings Family section', () => {
       startOnboardingIllustration: jest.fn(),
       refresh: jest.fn(),
     } as never);
+
+    mockedCreateAndShareDataExport.mockResolvedValue({
+      data: { shared: true, expiresAt: '2030-01-01T00:00:00Z' },
+      error: null,
+    });
 
     mockedUseUserProfile.mockReturnValue({
       profile: { name: 'Rosa', enable_daily_reminder: false } as never,
@@ -278,6 +286,54 @@ describe('Settings Family section', () => {
     );
 
     expect(queryByTestId('settings-leave-family')).toBeTruthy();
+  });
+
+  it('starts a private archive export from the owner settings', async () => {
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+
+    const { getByTestId } = renderScreen();
+
+    fireEvent.press(getByTestId('settings-export-memories'));
+
+    await waitFor(() => {
+      expect(mockedCreateAndShareDataExport).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('shows an error when the archive export cannot be created', async () => {
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedCreateAndShareDataExport.mockResolvedValue({
+      data: null,
+      error: { message: 'Export service unavailable', code: 'export_unavailable' },
+    });
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+
+    const { getByTestId } = renderScreen();
+    fireEvent.press(getByTestId('settings-export-memories'));
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('Could not export memories', 'Export service unavailable');
+    });
+
+    alertSpy.mockRestore();
   });
 
   it('leaves the family after confirming the alert', async () => {

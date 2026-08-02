@@ -34,6 +34,7 @@ import {
   sharingRedeemRoute,
 } from '@/lib/routes';
 import { getDeviceTimezone } from '@/services/auth';
+import { createAndShareDataExport } from '@/services/export';
 import { leaveFamily, updateFamilyName } from '@/services/family';
 import { isPendingInviteActive } from '@/utils/invites';
 import { canEditFamilyContent, isOwnerRole, isViewerRole, roleLabel } from '@/utils/roles';
@@ -46,16 +47,20 @@ const FAQ_URL = 'https://usemomora.com/faq/';
 const PRIVACY_POLICY_URL = 'https://usemomora.com/privacy-policy/';
 const TERMS_OF_SERVICE_URL = 'https://usemomora.com/terms-of-service/';
 const SUPPORT_EMAIL_URL = 'mailto:hello@usemomora.com';
-const MEMORY_EXPORT_REQUEST_SUBJECT = 'Request a download of all my memories';
-const MEMORY_EXPORT_REQUEST_BODY =
-  'Hi Momora support,\n\nI would like to request a download of all my memories.\n\nThank you.';
-const MEMORY_EXPORT_REQUEST_URL = `${SUPPORT_EMAIL_URL}?subject=${encodeURIComponent(
-  MEMORY_EXPORT_REQUEST_SUBJECT,
-)}&body=${encodeURIComponent(MEMORY_EXPORT_REQUEST_BODY)}`;
 const APP_VERSION = Constants.expoConfig?.version ?? '1.2.0';
 
 function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message ? error.message : fallback;
+  if (error instanceof Error && error.message) return error.message;
+  if (
+    typeof error === 'object'
+    && error !== null
+    && 'message' in error
+    && typeof error.message === 'string'
+    && error.message
+  ) {
+    return error.message;
+  }
+  return fallback;
 }
 
 // Backend cron only honors the hour (see parseNotificationHour in
@@ -342,6 +347,7 @@ export default function SettingsScreen() {
   const { role } = useFamily();
   const isViewer = isViewerRole(role);
   const { status: billingStatus, isLoading: isBillingLoading } = useBilling();
+  const [isExporting, setIsExporting] = useState(false);
   const {
     profile,
     updateProfile,
@@ -504,6 +510,22 @@ export default function SettingsScreen() {
     await openExternalUrl(billingStatus.management_url);
   };
 
+  const handleExportMemories = async () => {
+    if (isExporting) return;
+
+    setIsExporting(true);
+    try {
+      const result = await createAndShareDataExport();
+      if (result.error) {
+        showMutationError('Could not export memories', result.error, 'Please try again.');
+      }
+    } catch (error) {
+      showMutationError('Could not export memories', error, 'Please try again.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const scheduleAccountDeletion = async () => {
     try {
       await deleteAccount();
@@ -656,10 +678,11 @@ export default function SettingsScreen() {
                   testID="settings-manage-subscription"
                 />
                 <SettingsRow
-                  chevron
-                  label="Export your memories"
-                  caption="Request a download of all your memories"
-                  onPress={() => void openExternalUrl(MEMORY_EXPORT_REQUEST_URL)}
+                  chevron={!isExporting}
+                  label={isExporting ? 'Preparing your archive…' : 'Export your memories'}
+                  caption={isExporting ? 'This may take a moment.' : 'Download a ZIP of your memories'}
+                  onPress={isExporting ? undefined : () => void handleExportMemories()}
+                  right={isExporting ? <ActivityIndicator color={colors.primary} size="small" /> : undefined}
                   testID="settings-export-memories"
                 />
               </SettingsBlock>

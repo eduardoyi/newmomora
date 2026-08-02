@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "momora-export-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": {
+    "SUPABASE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co"
+  },
+  "secrets": {
+    "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"]
+  },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "momora-prod"
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "momora-export-worker-staging",
+      "vars": {
+        "SUPABASE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co"
+      },
+      "secrets": {
+        "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"]
+      },
+      "r2_buckets": [
+        {
+          "binding": "MEDIA",
+          "bucket_name": "REPLACE_WITH_STAGING_MEDIA_BUCKET"
+        }
+      ]
+    }
+  }
+}
