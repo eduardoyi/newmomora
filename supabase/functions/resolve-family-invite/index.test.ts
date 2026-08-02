@@ -27,6 +27,7 @@ interface FakeState {
   profiles: Array<{ id: string; expo_push_token?: string | null; active_family_id?: string | null }>;
   authUsers: Array<{ id: string; email: string | null }>;
   membershipInsertError?: { code: string; message: string } | null;
+  billingRpcError?: { code: string; message: string } | null;
 }
 
 function createFakeServiceClient(state: FakeState) {
@@ -136,6 +137,12 @@ function createFakeServiceClient(state: FakeState) {
       }
 
       throw new Error(`Unexpected table ${table}`);
+    },
+    rpc(name: string) {
+      if (name !== 'assert_billing_write_access') {
+        throw new Error(`Unexpected RPC ${name}`);
+      }
+      return Promise.resolve({ data: true, error: state.billingRpcError ?? null });
     },
   };
 }
@@ -286,6 +293,18 @@ Deno.test('a manager (not just the owner) can approve', async () => {
   assertEquals(response.status, 200);
   assertEquals(state.invites[0].status, 'approved');
   await response.body?.cancel();
+});
+
+Deno.test('approval is denied when the family owner has lapsed billing access', async () => {
+  const state = baseState({ billingRpcError: { code: 'P0001', message: 'Subscription required' } });
+  const client = createFakeServiceClient(state);
+
+  const response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+
+  assertEquals(response.status, 402);
+  assertEquals((await response.json()).code, 'subscription_required');
+  assertEquals(state.invites[0].status, 'redeemed');
+  assertEquals(state.memberships.some((m) => m.user_id === REDEEMER_ID), false);
 });
 
 Deno.test('reject marks the invite rejected and does NOT insert a membership or touch active_family_id', async () => {

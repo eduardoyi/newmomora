@@ -86,6 +86,7 @@ jest.mock('@/lib/supabase', () => ({
       signInWithOtp: jest.fn(),
       signOut: jest.fn(),
     },
+    rpc: jest.fn(),
   },
 }));
 
@@ -135,6 +136,10 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- jest.mock factories cannot use ESM imports
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
+
+jest.mock('@react-native-community/netinfo', () => ({
+  fetch: jest.fn().mockResolvedValue({ isConnected: true, isInternetReachable: true }),
+}));
 
 const mockedSupabase = supabase as jest.Mocked<typeof supabase>;
 const mockedFetchMyFamilyMemberships = fetchMyFamilyMemberships as jest.MockedFunction<typeof fetchMyFamilyMemberships>;
@@ -246,6 +251,7 @@ describe('S12B code.tsx -- returning owner with a photo capture (real auth/sessi
       data: { user: RETURNING_OWNER_USER },
       error: null,
     } as never);
+    mockedSupabase.rpc.mockResolvedValue({ data: { has_write_access: true }, error: null } as never);
 
     // The returning owner already has a real family.
     mockedFetchMyFamilyMemberships.mockResolvedValue({
@@ -289,9 +295,11 @@ describe('S12B code.tsx -- returning owner with a photo capture (real auth/sessi
     );
 
     let seededPatch!: ReturnType<typeof useOnboardingFlow>['patch'];
-    await act(async () => {
-      seededPatch = await draftReady.promise;
-    });
+    // Do not wrap this signal wait in async act: React's async-act queue can
+    // defer the hydration render that resolves the signal until the callback
+    // itself returns, creating a deadlock. The state write below is the part
+    // that needs act.
+    seededPatch = await draftReady.promise;
 
     // S9-S11 would have populated this: a photo capture, tagged to a kid
     // typed again this session (matched by name against the real roster --

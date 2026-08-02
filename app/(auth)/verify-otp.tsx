@@ -6,7 +6,7 @@ import { KeyboardController } from 'react-native-keyboard-controller';
 import { AuthButton, AuthErrorMessage, AuthScreen } from '@/components/auth-screen';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { sharingRedeemRoute } from '@/lib/routes';
+import { rootRoute, sharingRedeemRoute } from '@/lib/routes';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
 import { focusOtpInput } from '@/utils/otp-input';
 
@@ -66,7 +66,10 @@ export default function VerifyOtpScreen() {
     // over the default landing: route straight to the redeem screen so the
     // universal-link flow finishes where it started (plan §9).
     const pendingInviteCode = await getPendingInviteCode();
-    router.replace(pendingInviteCode ? sharingRedeemRoute : '/(app)/(tabs)/timeline');
+    // Let the authenticated front door resolve memberships, invite state, and
+    // an unfinished paywall resume together. Directly replacing with the
+    // timeline here would strand a user who verified while S15 was pending.
+    router.replace(pendingInviteCode ? sharingRedeemRoute : rootRoute);
   };
 
   const handleChangeCode = (text: string) => {

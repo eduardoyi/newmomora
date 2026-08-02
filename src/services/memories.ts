@@ -848,16 +848,17 @@ export async function createMemory(input: CreateMemoryInput): Promise<{
 
   const illustrationStatus = memoryType === 'text_illustration' ? 'pending' : 'none';
 
-  const { data: memory, error } = await supabase
+  const memoryInsert = {
+    user_id: input.userId,
+    family_id: input.familyId,
+    content: normalizeOptionalContent(input.content),
+    memory_date: input.memoryDate,
+    memory_type: memoryType,
+    illustration_status: illustrationStatus,
+  };
+  const { data: memory, error } = await (supabase as any)
     .from('memories')
-    .insert({
-      user_id: input.userId,
-      family_id: input.familyId,
-      content: normalizeOptionalContent(input.content),
-      memory_date: input.memoryDate,
-      memory_type: memoryType,
-      illustration_status: illustrationStatus,
-    })
+    .insert(memoryInsert)
     .select('*')
     .single();
 
@@ -871,7 +872,7 @@ export async function createMemory(input: CreateMemoryInput): Promise<{
     return { data: null, error: tagsError };
   }
 
-  if (memoryType === 'text_illustration') {
+  if (memoryType === 'text_illustration' && !input.deferIllustration) {
     void runMemoryIllustrationPipeline(memory.id);
   } else if (memoryType === 'text_only') {
     void runTextOnlyEmotionAnalysis(memory.id);
@@ -912,18 +913,23 @@ async function continueCreateMediaMemory(
   memory: Memory,
   input: CreateMediaMemoryInput,
 ): Promise<{ data: MemoryWithTags | null; error: ServiceError | null }> {
-  const mediaReplaceError = await replaceMemoryMediaAssets(memory.id, input.mediaAssets);
-  if (mediaReplaceError) {
-    await rollbackMediaMemoryRow(memory.id);
-    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
-    return { data: null, error: mediaReplaceError };
-  }
-
+  // Onboarding media rows are created atomically before R2 upload and remain
+  // marked onboarding-attributed until their tags have been restored. Insert
+  // tags first so the row keeps the onboarding RLS exception through the
+  // whole retry/finalization transaction; replace_memory_media_assets then
+  // publishes the first object key and clears that marker.
   const tagsError = await replaceMemoryTags(memory.id, input.taggedMemberIds);
   if (tagsError) {
     await rollbackMediaMemoryRow(memory.id);
     await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
     return { data: null, error: tagsError };
+  }
+
+  const mediaReplaceError = await replaceMemoryMediaAssets(memory.id, input.mediaAssets);
+  if (mediaReplaceError) {
+    await rollbackMediaMemoryRow(memory.id);
+    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
+    return { data: null, error: mediaReplaceError };
   }
 
   const tagMap = await fetchTagsForMemories([memory.id]);

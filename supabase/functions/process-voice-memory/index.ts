@@ -14,6 +14,7 @@ import {
   buildVoiceCleanupSystemPrompt,
 } from '../_shared/prompts.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { checkBillingFamilyWrite } from '../_shared/billing.ts';
 
 const MAX_AUDIO_SECONDS = 120;
 
@@ -320,6 +321,8 @@ export async function handleProcessVoiceMemoryWithDependencies(
       return errorResponse('Not authorized for this family', 403, 'forbidden');
     }
     const familyId = familyResolution.familyId;
+    const billingResponse = await checkBillingFamilyWrite(supabase, familyId, user.id, 'voice_memory');
+    if (billingResponse) return billingResponse;
     const familyMembers = await dependencies.getCanonicalFamilyMembers({ supabase, familyId });
 
     const transcript = await dependencies.transcribeAudio(

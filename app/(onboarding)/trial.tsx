@@ -3,15 +3,21 @@
 // prices anywhere on this screen -- that's the paywall's job (S15).
 import { router } from 'expo-router';
 import { Check, Clock, Send } from 'lucide-react-native';
-import { useEffect } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useEffect, useMemo } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { OnbButton } from '@/components/onboarding/onb-button';
 import { OnbBody, OnbDisplay, OnbTitle } from '@/components/onboarding/onb-typography';
 import { OnbShell } from '@/components/onboarding/onb-shell';
+import { BillingStatusGate } from '@/components/billing-status-gate';
 import { colors, emotionColors, type EmotionName } from '@/constants/theme';
+import { useAuth } from '@/hooks/use-auth';
+import { useBilling } from '@/hooks/use-billing';
+import { useFamily } from '@/hooks/use-family';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
-import { onboardingIncludedRoute } from '@/lib/onboarding-routes';
+import { onboardingIncludedRoute, onboardingPaywallRouteForMode } from '@/lib/onboarding-routes';
+import { resolveOwnerPaywallMode } from '@/lib/onboarding-routing';
+import { timelineRoute } from '@/lib/routes';
 
 const HEADLINE = 'Try everything free for 7 days.';
 
@@ -52,10 +58,75 @@ const TRIAL_NODES: readonly TrialNode[] = [
 
 export default function TrialScreen() {
   const { patch } = useOnboardingFlow();
+  const { user } = useAuth();
+  const { familyId, isLoading: isFamilyLoading, role } = useFamily();
+  const {
+    offerings,
+    status,
+    billingStatusError,
+    isLoading: isBillingLoading,
+    refresh,
+  } = useBilling();
+
+  const billingDecision = useMemo<'loading' | 'eligible' | 'paywall' | 'access' | 'error'>(() => {
+    if (isFamilyLoading || isBillingLoading) {
+      return 'loading';
+    }
+    if (
+      billingStatusError ||
+      !user ||
+      !familyId ||
+      role !== 'owner' ||
+      !status ||
+      status.family_id !== familyId ||
+      status.owner_user_id !== user.id
+    ) {
+      return 'error';
+    }
+    if (status.has_write_access) {
+      return 'access';
+    }
+    const mode = resolveOwnerPaywallMode({
+      hasEverHadAccess: status.has_ever_had_access,
+      trialEligible: status.trial_eligible,
+    });
+    return mode === 'new-owner' && offerings?.annualTrialEligibility === 'eligible' ? 'eligible' : 'paywall';
+  }, [billingStatusError, familyId, isBillingLoading, isFamilyLoading, offerings, role, status, user]);
+
+  const paywallMode = useMemo(
+    () =>
+      status
+        ? resolveOwnerPaywallMode({
+            hasEverHadAccess: status.has_ever_had_access,
+            trialEligible: status.trial_eligible,
+          })
+        : 'new-owner',
+    [status],
+  );
 
   useEffect(() => {
     patch({ step: 'trial' });
   }, [patch]);
+
+  useEffect(() => {
+    if (billingDecision === 'paywall') {
+      router.replace(onboardingPaywallRouteForMode(paywallMode));
+    } else if (billingDecision === 'access') {
+      router.replace(timelineRoute);
+    }
+  }, [billingDecision, paywallMode]);
+
+  if (billingDecision === 'loading' || billingDecision === 'paywall' || billingDecision === 'access') {
+    return (
+      <View style={styles.loading} testID="onb-trial-billing-loading">
+        <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  if (billingDecision === 'error') {
+    return <BillingStatusGate onRetry={refresh} />;
+  }
 
   return (
     <OnbShell
@@ -97,6 +168,12 @@ export default function TrialScreen() {
 }
 
 const styles = StyleSheet.create({
+  loading: {
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    flex: 1,
+    justifyContent: 'center',
+  },
   container: {
     paddingHorizontal: 26,
     paddingTop: 50,

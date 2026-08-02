@@ -426,6 +426,20 @@ verify_jwt = false
 [functions.workflow-portrait-bridge]
 verify_jwt = false
 
+# RevenueCat signs this request with the webhook secret; it intentionally does
+# not use a Supabase user JWT.  The two maintenance functions use x-cron-secret.
+[functions.revenuecat-webhook]
+verify_jwt = false
+
+[functions.process-billing-webhooks]
+verify_jwt = false
+
+[functions.send-billing-trial-reminders]
+verify_jwt = false
+
+[functions.billing-reconcile-owners]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

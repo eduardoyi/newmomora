@@ -22,6 +22,7 @@ import {
   loadStyleReferenceBytes,
 } from '../_shared/styles.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { checkBillingAiGeneration } from '../_shared/billing.ts';
 
 export interface GeneratePortraitRequest {
   portraitVersionId: string;
@@ -249,6 +250,15 @@ export async function handleGeneratePortraitIllustration(
   if (!version.reference_date) {
     return errorResponse('Set a portrait date before generation', 400, 'DATE_REQUIRED');
   }
+
+  const billingResponse = await checkBillingAiGeneration(supabase, {
+    familyId: version.family_id,
+    actorUserId: user.id,
+    targetKind: 'portrait_version',
+    targetId: version.id,
+    requestIntent: 'initial',
+  });
+  if (billingResponse) return billingResponse;
 
   const { data: member, error: memberError } = await supabase
     .from('family_members')

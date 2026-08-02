@@ -13,6 +13,7 @@ import { Alert, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/hooks/use-auth';
+import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
@@ -85,8 +86,16 @@ jest.mock('@/lib/navigation', () => ({
   navigateBack: jest.fn(),
 }));
 
+jest.mock('expo-router', () => ({
+  router: { replace: jest.fn() },
+}));
+
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
+}));
+
+jest.mock('@/hooks/use-billing', () => ({
+  useBilling: jest.fn(),
 }));
 
 jest.mock('@/hooks/use-family', () => ({
@@ -115,6 +124,7 @@ jest.mock('@/hooks/use-incoming-memory-share', () => ({
 
 const mockedImagePicker = ImagePicker as jest.Mocked<typeof ImagePicker>;
 const mockedUseAuth = useAuth as jest.Mock;
+const mockedUseBilling = useBilling as jest.Mock;
 const mockedUseFamily = useFamily as jest.Mock;
 const mockedUseFamilyMembers = useFamilyMembers as jest.Mock;
 const mockedUseMemoryMutations = useMemoryMutations as jest.Mock;
@@ -180,6 +190,7 @@ describe('NewMemoryScreen -- auto-tag the sole family member (WS1)', () => {
     } as ImagePicker.MediaLibraryPermissionResponse);
 
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',

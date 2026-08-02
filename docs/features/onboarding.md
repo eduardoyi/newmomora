@@ -1,13 +1,13 @@
 # Feature: Onboarding & Paywall
 
-**Status:** `done` (S0–S17 owner path, J1–J5 join path — see "Not yet shipped" below for what's deliberately deferred)
-**Last updated:** 2026-07-31
-**PRD reference:** PRD §onboarding (update when implemented)
+**Status:** `done` (S0–S17 owner path, J1–J5 join path)
+**Last updated:** 2026-08-02
+**PRD reference:** [PRD §6.9](../PRD.md#69-paid-access-and-data-export)
 **Research inputs:** [docs/voice-of-customer.md](../voice-of-customer.md) (VoC) · tasu conversion brain (tasu.ai/library, queried 2026-07-23)
 **Design brief:** [docs/plans/onboarding-design-brief.md](../plans/onboarding-design-brief.md) — screen-by-screen layout + copy for design handoff
 **Implementation plan:** [docs/plans/onboarding-implementation.md](../plans/onboarding-implementation.md) — work packages, decisions, execution log
 
-Design spec agreed 2026-07-23; implemented in WP0–WP7-A (see the implementation plan's Execution log for package-by-package detail). Real onboarding illustration art shipped in `8555064`; real billing remains deliberately out of scope — see "Not yet shipped."
+Design spec agreed 2026-07-23; implemented in WP0–WP7-A plus the paid-access cutover (see the implementation plan's Execution log for package-by-package detail). Real onboarding illustration art shipped in `8555064`.
 
 ## Overview
 
@@ -68,7 +68,8 @@ After any successful OTP auth — regardless of which fork button started it —
 
 | Post-auth state | Destination |
 |-----------------|-------------|
-| Member of ≥1 family, entitlement active (own sub, trial, or a family whose owner pays) | Journal. No onboarding, no invite flow. |
+| Member of ≥1 family, entitlement active (own sub, trial, or a family whose owner pays) | Journal. No onboarding, no invite flow. A device-local unfinished S15 marker is only used while billing is still loading; loaded access wins. |
+| Owner of a family with no store entitlement history and no write access | First-time S15 paywall with the annual 7-day trial; this applies even when the owner signs in directly after a previous abandoned setup. |
 | Owner whose trial/subscription lapsed | Lapsed state: archive stays viewable and exportable (decision 4 — never hostage); capture/generation gated behind a resubscribe paywall. No trial re-offer (store rules), no trust-screen replay. |
 | Account exists, no family, onboarding never completed | Resume owner onboarding at the first incomplete step; restore any device-local captured memory. Don't replay completed story beats. |
 | Pending invite attached (code entered or deep link followed pre-auth) | Complete join path: display name → family journal. |
@@ -84,6 +85,7 @@ flowchart LR
   A -->|session| C[resolvePostAuthDestination]
   C -->|journal| D[(app) timeline]
   C -->|resume-onboarding| E[onboardingStepRoute]
+  C -->|resume-paywall| S15[S15 paywall]
   C -->|finish-join| F[join/found.tsx J2]
   C -->|ask-invite-code| G[join/code.tsx J1]
   B --> H[S1-S16 story/capture/trust/paywall/portrait]
@@ -94,9 +96,13 @@ flowchart LR
   H -->|portrait status: ready| M[reveal.tsx S17]
   M -->|sibling still unpainted| H
   M -->|"Later"| N[(app) family roster tab]
+  H -->|purchase/restore| O[RevenueCat]
+  O --> P[family billing ledger]
+  P -->|active| Q[portrait + journal access]
+  P -->|lapsed| R[archive/export + resubscribe paywall]
 ```
 
-`app/(onboarding)/_layout.tsx` mounts `OnboardingFlowProvider` (`src/hooks/use-onboarding-flow.tsx`) once for the whole S0–S17 + J1–J5 arc; every screen reads/writes the device-local draft through it rather than touching AsyncStorage directly. The front door (`app/index.tsx`, `app/(auth)/_layout.tsx`) and every post-OTP screen (S12B `code.tsx`, J4 `join/email.tsx`) all resolve where to go next through the single `resolvePostAuthDestination` function (`src/lib/onboarding-routing.ts`) — see spec decision 17 and that file's doc comment for the exact priority order (membership wins over everything, then a stored invite code, then intent, then resume-at-draft-step).
+`app/(onboarding)/_layout.tsx` mounts `OnboardingFlowProvider` (`src/hooks/use-onboarding-flow.tsx`) once for the whole S0–S17 + J1–J5 arc; every screen reads/writes the device-local draft through it rather than touching AsyncStorage directly. The front door (`app/index.tsx`, `app/(auth)/_layout.tsx`) and every post-OTP screen (S12B `code.tsx`, J4 `join/email.tsx`) all resolve where to go next through the single `resolvePostAuthDestination` function (`src/lib/onboarding-routing.ts`) — see spec decision 17 and that file's doc comment for the exact priority order (loaded owner billing state, otherwise explicit unfinished paywall marker, membership, stored invite code, intent, then resume-at-draft-step). S15 stores both `step: 'paywall'` and its `paywallMode` (`new-owner` or `resubscribe`) before rendering, because the family membership created before S15 would otherwise make a cold launch look like a completed returning-owner session. The persisted mode is a resume hint only: once billing has loaded, server store history can correct a stale marker left by an interrupted attempt. If a returning owner reaches S12B with a capture still pending and no write access, `code.tsx` preserves the draft and routes to the server-selected paywall variant; after purchase, S15 commits that capture before continuing. The S15 close-sheet `Leave` action signs the user out and returns to S0; it never exposes an unpaid owner to the timeline, while the paywall marker remains available for a later sign-in resume.
 
 S17 (`reveal.tsx`) is reached only from S16 (`portrait.tsx`) once that screen's own `usePortraitVersions` poll reports the target member's status as `ready`; it is not one of `OnboardingStepId`'s resume steps (see `onboardingStepRoute`'s doc comment in `src/lib/onboarding-routes.ts` for why — reveal always needs a specific member id, which a bare step id can't carry, and it's unreachable via that resume path in practice anyway since it only ever fires after a family already exists).
 
@@ -104,16 +110,21 @@ Pre-auth, two screens need a server round trip before the user has an account: S
 
 ## Data model
 
-No new tables. Onboarding writes to existing tables at commit time and otherwise lives entirely on-device until then.
+Onboarding writes to the existing family/memory tables at commit time and
+records the atomic commit and paid onboarding hand-off in the billing
+migration. Pre-auth progress remains device-local until then.
 
 | Table / storage | Role in this feature |
 |------------------|----------------------|
-| AsyncStorage `momora.onboardingDraft` | Device-local `OnboardingDraft` (kid names, family name, captured memory, notification choice, `committedFamilyId`) — see `src/utils/onboarding-progress.ts`. Never holds audio. |
+| AsyncStorage `momora.onboardingDraft` | Device-local `OnboardingDraft` (kid names, family name, captured memory, notification choice, `committedFamilyId`, and the active S15 `paywallMode`) — see `src/utils/onboarding-progress.ts`. Never holds audio. |
 | AsyncStorage `momora.pendingInviteCode` | Shared with family-sharing (`src/utils/pending-invite-code.ts`) — the same storage `app/invite.tsx`, J1, and the authenticated redeem screen all read/write. |
 | Join draft (`src/services/onboarding-join.ts`) | Device-local display name + inviter name for J3/J5, separate from the owner path's draft (the join path never resumes through `OnboardingDraft.step`). |
 | `families` / `family_members` | Created by `commitOnboarding`: one family (named from `defaultFamilyName` or the edited S7 value), one name-only `family_members` row per kid name (nullable `date_of_birth`/`profile_picture_key`, per WP0 §0.9). |
 | `memories` | The first memory (S9's capture), tagged to the kid chip(s) selected on S9; media path enqueues through the existing pending-upload queue. |
 | `user_profiles` | `enableDailyReminder` + `notificationTime` from S11's choice; `name` (global) from J3's display name — see the display-name divergence below. |
+| `onboarding_commits` | Idempotency record for the owner family/first-memory commit. |
+| `memories.onboarding_attributed` | Marks the first illustrated onboarding memory so purchase completion can dispatch it and fair-use accounting can exempt it. |
+| `families.billing_grace_until` | Read-only archive/grace behavior during the subscription rollout. |
 
 ## Client integration
 
@@ -124,7 +135,8 @@ No new tables. Onboarding writes to existing tables at commit time and otherwise
 | Routing | `src/lib/onboarding-routing.ts` (`resolvePostAuthDestination`), `src/lib/onboarding-routes.ts` (`Href` constants + `onboardingStepRoute`, `onboardingRevealRoute`, `onboardingPortraitRouteForMember`), `src/lib/routes.ts` (`familyRosterRoute`, the sibling-chain "Later" destination) | Single source of truth for post-auth destination and route paths |
 | State | `src/hooks/use-onboarding-flow.tsx` (`OnboardingFlowProvider`/`useOnboardingFlow`), `src/utils/onboarding-progress.ts` (AsyncStorage draft) | Draft hydration, debounced persistence, resume point |
 | Auth | `src/lib/anonymous-session.ts` (`ensureAnonymousSession`/`discardAnonymousSession`) | Pre-auth JWT for S9/J2, discarded before real OTP sign-in |
-| Services | `src/services/onboarding.ts` (`commitOnboarding`), `src/services/onboarding-join.ts` (join draft + `previewFamilyInvite`), `src/services/ai.ts` (`processOnboardingVoiceMemory`) | Turning the device-local draft into real rows; pre-auth invite preview; pre-auth voice |
+| Services | `src/services/onboarding.ts` (`commitOnboarding`), `src/services/onboarding-join.ts` (join draft + `previewFamilyInvite`), `src/services/ai.ts` (`processOnboardingVoiceMemory`), `src/services/billing.ts` | Turning the device-local draft into real rows; pre-auth invite preview/voice; RevenueCat reconciliation and onboarding-illustration dispatch |
+| Billing | `src/hooks/use-billing.tsx`, `src/constants/billing.ts`, `app/(onboarding)/paywall.tsx` | Store offerings, annual/monthly purchase, restore, owner entitlement status, wrong-account protection |
 | Utils | `src/utils/onboarding-copy.ts` (copy generators), `src/utils/pending-invite-code.ts` (shared with family-sharing) | Pure copy logic; invite-code storage |
 | Hooks | `src/hooks/use-onboarding-kid-possessive.ts` (`useOnboardingKidPossessive`) | S14/S15's shared kid-name personalization resolver — draft first, real `useFamilyMembers()` data once the draft is empty (WP7-A) |
 | Components | `src/components/onboarding/*` (`OnbShell`, `OnbButton`, `OnbTypography` family, `OnbDots`, `OnbIllustration`, `KidChip`) | Shared onboarding primitives, styled from `src/constants/theme.ts` tokens |
@@ -136,7 +148,8 @@ Decisions settled during implementation that aren't in the product-decision tabl
 
 1. **Pre-auth server calls ride an anonymous Supabase session.** S9's transcription and J2's invite lookup both need a JWT before the user has an account — `ensureAnonymousSession()` supplies one via `signInAnonymously()`, discarded (`discardAnonymousSession()`) at S12A/J4 before the real OTP sign-in. **The rule is "no anonymous client/tenant writes"**, not "no writes at all": the anonymous session itself may never create or touch normal application rows (families, memories, etc.) — but the server *does* create private admission and cost-ledger records on its own behalf for pre-auth voice (`process-voice-memory`'s `mode: 'onboarding'` branch, attributed as Momora onboarding cost rather than family cost — see [usage-limits.md](./usage-limits.md) "Pre-auth onboarding voice contract"). `enable_anonymous_sign_ins` stays gated behind WP-SEC's authorization lockdown (RLS anonymous-deny policies, SECURITY DEFINER RPC guards, Edge Function auth) — anonymous users get the normal `authenticated` DB role, so this is mandatory security work, not optional hardening.
 2. **Pre-auth progress is device-local, not server-side.** Kid names, family name, the captured memory, and the notification choice live in AsyncStorage (`OnboardingDraft`) until auth, then commit server-side in one idempotent step (`commitOnboarding`). This is what lets the flow survive the OTP round trip through the mail app and an app kill mid-flow — the draft rehydrates on relaunch and the front door resumes at `draft.step` via `resolvePostAuthDestination`.
-3. **S15 (the paywall) is a deliberately non-functional placeholder.** It renders completely — plan card, trust bullets, the close-confirm sheet — but "Start my free week" only advances to S16 with zero billing side effects; "Restore purchases" and the close-sheet "Leave" are inert-but-visible. `app/(onboarding)/paywall.tsx` has one commented `TODO(paywall)` block naming exactly what a real billing integration (RevenueCat-or-equivalent, not yet chosen) needs to swap in. No entitlement is enforced anywhere yet — every "subscriber" is really just anyone who tapped through S15.
+3. **S15 is a live RevenueCat paywall.** It loads the configured `default` offering, presents annual Momora Plus by default and monthly when available, purchases/restores against the authenticated Supabase user ID, checks the `momora_plus` entitlement through the server ledger, and starts the attributed onboarding illustration after a successful purchase. A missing store configuration fails closed with a useful error; a tap never grants access by itself.
+3a. **S15 is resumable after an app kill.** Once the family exists, `paywall.tsx` persists `step: 'paywall'` plus `paywallMode: 'new-owner' | 'resubscribe'`. The front door uses that marker while billing is still unavailable, then lets the loaded server billing history correct a stale mode before choosing the paywall or journal. It clears the marker after purchase/restore so completed onboarding cannot loop back to S15. An unmarked stale draft still follows the normal returning-owner journal rule.
 4. **Display name is global (`user_profiles.name`), not per-family**, diverging from the design brief's per-family display name. The schema only has a global field, and widening it was out of scope for this pass — J3's "What should the family call you?" writes the same global field the join path's account uses everywhere else, so for someone who already belongs to another family, completing a second join also renames their display name there. Tracked in the plan's Follow-ups as a schema change to reconsider if this divergence proves wrong in practice.
 5. **(WP6) The owner's display name is collected at S12A (`app/(onboarding)/email.tsx`), not a new screen.** Before this, `requestSignUpOtp` was always called with an empty `name`, leaving `user_profiles.name` blank for every owner — the name shown next to their own comments/memories. S12A now has a "Your name" field above the email input (owner-path equivalent of J3's "What should the family call you?"), and both fields must be non-empty before "Send my code" enables. A defensive fallback (`'This family member'`) was also added to `app/(app)/sharing/members.tsx`'s bare `profile.name` usages for any account whose name is still blank (legacy rows predating this fix, or a future path that skips it).
 6. **(WP6) S16 (`portrait.tsx`) resolves its target member from real server data, not only the local draft.** `code.tsx`'s `finishAfterCommit` clears the onboarding draft (including `kidNames`/`capture`) *before* routing into S13–S16, specifically so the layout's `committedFamilyId` backstop doesn't redirect that arc back to the journal. That means S16's original "read the tagged kid's name from the draft" resolution was only ever populated in a brief pre-clear window; `resolveTargetMember` now falls back to real `useFamilyMembers()` data — the first member with zero portrait versions ever created (`hasNoPortraitYet`, `src/utils/family-members.ts`) — which, because `fetchFamilyMembers` sorts by tag count first, still surfaces the kid tagged on the first memory ahead of untagged siblings for free. The same function also now accepts an explicit `memberId` search param so S17's sibling chain can target a specific next kid.
@@ -152,9 +165,8 @@ Decisions settled during implementation that aren't in the product-decision tabl
 Deliberately out of scope (see the implementation plan's Scope table and Follow-ups):
 
 - **The design brief's `CastWaitingState` unpainted-kid family-tab card** — deliberately dropped by owner decision (see implementation decision 7 above), not deferred; the existing family tab covers the same job.
-- **Real billing** — RevenueCat-or-equivalent, entitlement enforcement, family-scoped subscriptions (product decision 6). S15 is the placeholder described above.
 - **Per-IP/per-device onboarding voice limits, CAPTCHA/Turnstile, fraud scoring** on the anonymous-session surfaces (explicit WP-SEC backlog per usage-limits.md).
-- **Lapsed-owner resubscribe screen** and the **attribution screen** (spec six-jobs table — deliberately deferred).
+- **The attribution screen** (spec six-jobs table — deliberately deferred).
 
 ## Six-jobs coverage check
 
@@ -200,7 +212,7 @@ Retention gate (VoC §8): if 30-day retention tracks the Qeepsake/Tinybeans chur
 
 ## Dependencies
 
-- Depends on: family-profiles, family-sharing (join path), memories (first capture), voice-journaling (voice input), portrait-timeline + cloudflare-illustration-workflows (background generation at trial start), RevenueCat-or-equivalent subscription infra (not yet chosen/implemented).
+- Depends on: family-profiles, family-sharing (join path), memories (first capture), voice-journaling (voice input), portrait-timeline + cloudflare-illustration-workflows (background generation at trial start), and [paid subscriptions](./subscriptions.md).
 - Used by: everything — this is the front door.
 
 ### Anonymous onboarding production checklist
@@ -240,7 +252,7 @@ sign-ins for a hosted project.
 |------|--------|
 | `src/utils/onboarding-copy.test.ts` | `kidsPhrase`, `defaultFamilyName`, `capturePrompt`, `firstPageCaption`, `possessiveHeadline`, `possessive`, `kidsPossessive`, `journalPossessive`, `capitalizeFragment` — including the s-ending possessive rule and the their→your "journal" reconciliation (implementation decision 13) |
 | `src/utils/onboarding-progress.test.ts` | Draft read/write/patch/clear, version/shape forward-compat, storage-hiccup fallbacks |
-| `src/lib/onboarding-routing.test.ts` | `resolvePostAuthDestination` — every priority-order branch (membership wins, pending-code, intent, resume-at-step), including the front-door call shape (`intent: 'login'`) added in WP5 |
+| `src/lib/onboarding-routing.test.ts` | `resolvePostAuthDestination` and owner paywall-mode selection — loaded billing state, stale-marker correction, membership, pending-code, intent, resume-at-step, and the front-door call shape (`intent: 'login'`) added in WP5 |
 | `src/components/onboarding/onb-illustration.test.tsx` | Falls back to the watercolor wash when a slot has no asset; `accessibilityLabel` from the slot description |
 | `src/components/onboarding/onb-shell.test.tsx` | Android bottom-inset footer protection, keyboard-open inset de-duplication, bounded keyboard movement, and scroll restoration |
 | `src/hooks/use-onboarding-kid-possessive.test.tsx` | (WP7-A) `useOnboardingKidPossessive`'s priority order in isolation: single tagged kid / single-kid-nothing-tagged from the draft; "their" for several tagged (without consulting server data); real single/multiple member fallback once the draft is empty; "their" last resort when member data isn't available |
@@ -259,7 +271,7 @@ sign-ins for a hosted project.
 | `src/screen-tests/onboarding.aha.integration.test.tsx` | No hardcoded emotion chip; watermark quote-mark treatment; measured/clamped media aspect ratio; (implementation decision 13, new) the "saved · {X} journal" caption for 1/2/3+ tagged kids, including the s-ending rule and "Your" (not "Their") for 2+ |
 | `src/screen-tests/onboarding.year.integration.test.tsx` | Fixed non-scrollable layout; demo-only timeline (the user's own memory never appears); (implementation decision 13) the "...lands in {X} journal" body for 1/2/3+ tagged kids, "your" (not "their") for 2+ |
 | `src/screen-tests/onboarding.included.integration.test.tsx` | (WP7-A, new — S14 had no prior coverage) Checklist + signed promise card render; draft-first personalization (single kid, "their" on the non-journal portrait bullet for several tagged); CTA advances to the paywall route; (implementation decision 13) the "journal" headline uses "your" (not "their") for 2 and 3+ tagged kids while the portrait bullet keeps "their" |
-| `src/screen-tests/onboarding.paywall.integration.test.tsx` | Close-confirm sheet opens/dismisses; CTA advances without touching any billing service |
+| `src/screen-tests/onboarding.paywall.integration.test.tsx` | Close-confirm sheet, live offering selection, purchase/restore success, entitlement verification, wrong-account handling, and persistence of first-time/resubscribe resume modes |
 | `src/screen-tests/onboarding.portrait.integration.test.tsx` | Picking a photo calls `createPortraitVersion` for the right member and transitions to `painting`; (WP6) `ready` navigates to S17's reveal for that member, `failed` surfaces the retry state and calls `retryVersion`, the journal escape stays available in every sub-state |
 | `src/screen-tests/onboarding.reveal.integration.test.tsx` | (WP6) S17's two CTA branches — sibling-remaining vs. none — including that a sibling with a portrait version already in progress doesn't count as "unpainted"; "Later" routes to `familyRosterRoute`; an unresolvable `memberId` bounces to the journal |
 | `src/screen-tests/onboarding.email.integration.test.tsx` | (WP6) S12A's name field: "Send my code" stays disabled until both name and email are filled; the trimmed name reaches `requestSignUpOtp`; two-field keyboard clearance keeps email tappable below the focused name |
@@ -271,7 +283,7 @@ sign-ins for a hosted project.
 
 | Flow | Scenario |
 |------|----------|
-| `.maestro/flows/onboarding/owner-happy-path.yaml` | S0 → story → founders → artifact → kids → family-name → bridge → capture (typed) → aha → year → notifications → account (OTP) → trial → included → paywall (placeholder) → fixture-photo portrait → painting → S17 reveal with the signed image actually loaded → journal. The staged local harness uses synthetic accounts, local Mailpit, an explicitly matched local client/Edge Function/Worker/R2 stack, and the normal deletion-fence cleanup; it refuses a database that already has a due account deletion, so start from an isolated/reset local database. It does **not** exercise a hosted or production image stack. Current-device execution remains a release check. |
+| `.maestro/flows/onboarding/owner-happy-path.yaml` | S0 → story → founders → artifact → kids → family-name → bridge → capture (typed) → aha → year → notifications → account (OTP) → trial → included → sandbox paywall purchase/restore → fixture-photo portrait → painting → S17 reveal with the signed image actually loaded → journal. The staged local harness uses synthetic accounts, local Mailpit, an explicitly matched local client/Edge Function/Worker/R2 stack, and the normal deletion-fence cleanup; it refuses a database that already has a due account deletion, so start from an isolated/reset local database. It does **not** exercise a hosted or production image stack. Current-device execution remains a release check. |
 | `.maestro/flows/onboarding/join-happy-path.yaml` | Owner creates an invite → fresh device → J1 (code) → J2 (found) → J3 (name) → J4 (OTP) → J5 (waiting). It ends at the approval-wait state by design; the owner approval/timeline continuation remains in the sharing flows. Current-device execution is a release check. |
 | `.maestro/flows/onboarding/owner-visual-audit-pre-auth.yaml` | Deterministic, synthetic **owner** S0–S12A visual-review capture set: welcome through the empty email screen, including the kids, family-name, typed-capture, and account-email keyboard-open states. It stops before email entry, therefore cannot create an account, commit onboarding data, or generate images. The runner accepts only an explicit `http://127.0.0.1:<port>` client configuration. |
 | `.maestro/flows/onboarding/owner-visual-audit-{pre,post}-otp.yaml` | Full **owner** S0–S17 visual-review capture set. These staged flows run only through the existing isolated-local harness, use its local Mailpit OTP and fixture photo, wait for the signed portrait to decode, and clean up the synthetic account through the deletion fence. The Worker/R2 path is local, but the synthetic portrait still uses the configured OpenAI provider and incurs a real cost; the command requires an explicit acknowledgement. Capture filenames use screen-order prefixes (`00-…` through `27-…`) for later AI review. Join-flow visual audit is not included. |
@@ -296,6 +308,7 @@ ONBOARDING_VISUAL_AUDIT_ALLOW_REAL_IMAGE_COSTS=1 npm run test:e2e:onboarding:own
 
 | Date | Change |
 |------|--------|
+| 2026-08-02 | Prevented a cached offering from showing the generic no-trial paywall while billing refresh is in flight; plan cards and purchase remain unavailable until the signed-in owner’s current status is authoritative. Added a regression test for this cold-login/re-entry race. |
 | 2026-07-23 | Initial design spec (Eduardo + Claude, tasu-sourced) |
 | 2026-07-29 | WP0–WP5 implemented: S0–S16 owner path, J1–J5 join path, front door wired (`app/index.tsx`, `app/(auth)/_layout.tsx`, `app/invite.tsx`), status flipped to `done`. S17, real billing, and real illustration assets remain `planned`. |
 | 2026-07-30 | WP6 implemented: S12A now collects the owner's display name (`app/(onboarding)/email.tsx`, plus a blank-name safety net in `app/(app)/sharing/members.tsx`); S16 (`portrait.tsx`) reads the real portrait status instead of a decorative pulse and hands off to the new S17 `reveal.tsx` on `ready`, with a warm retry on `failed`; S17 ships with the sibling chain, and the design brief's `CastWaitingState` cast card is deliberately dropped by owner decision in favour of the existing family tab. Real billing and real illustration assets remain `planned`. |
@@ -306,3 +319,8 @@ ONBOARDING_VISUAL_AUDIT_ALLOW_REAL_IMAGE_COSTS=1 npm run test:e2e:onboarding:own
 | 2026-07-31 | Corrected the cross-platform keyboard contract: the footer now stays in the resized layout on iOS and Android, and keyboard spacer scrolling is enabled only for measured overflow so short forms cannot reveal empty space. |
 | 2026-07-31 | Three device-reported S9 (`capture.tsx`) fixes: removed the idle/recording state's "Add a photo or video" secondary action (media stays reachable via the compose state's existing picker); multi-kid chips now pre-select every kid by default instead of only the first-entered one, so `capturePrompt`'s existing ladder covers 2 and 3+ kid families without naming every child; and the screen now reuses `useAutoMemoryTags` for text/voice mention auto-tagging via synthetic per-draft-index ids, with manual chip deselects protected from being undone by later typing (implementation decision 11). |
 | 2026-07-31 | Device-reported fix (implementation decision 13): single-child copy no longer leaks onto multi-child families on four screens. `bridge.tsx` (S8) had a root-cause bug — it read only `draft.kidNames[0]`, always naming the first-entered kid regardless of family size; `included.tsx` (S14) correctly detected multiple kids but rendered the third-person "their journal," which the owner flagged as distant and asked to be second-person "your journal" instead. Audited every onboarding screen for the same "journal" pattern and fixed two more instances of the old third-person convention: `aha.tsx`'s (S10) "saved · {X} journal" caption and `year.tsx`'s (S10b) "...lands in {X} journal" body. New `kidsPossessive`/`journalPossessive`/`capitalizeFragment` in `src/utils/onboarding-copy.ts` centralize the fix — scoped specifically to the literal word "journal"; every other multi-kid screen (S7, S10's `firstPageCaption`, S15 paywall) keeps the existing neutral "their" unchanged. `portrait.tsx`/`reveal.tsx` audited and confirmed correct as-is (portraits are inherently single-kid, painted one at a time). New `onboarding.bridge.integration.test.tsx` (S8 had no prior coverage) plus extended coverage on `onboarding.aha`/`onboarding.year`/`onboarding.included.integration.test.tsx` for 1/2/3+ kid cases. |
+| 2026-08-01 | Replaced the inert S15 paywall with RevenueCat purchase/restore, server-side family entitlement enforcement, lapsed-owner resubscribe routing, and onboarding-illustration dispatch after purchase. |
+| 2026-08-02 | Fixed cold-launch resumption from S15: the paywall now persists its step and variant, and the authenticated front door resumes it before applying the normal membership-to-journal shortcut. |
+| 2026-08-02 | Made direct sign-in billing-aware: owners with no store history and no write access resume the first-time trial paywall, lapsed owners use resubscribe, joiners/grandfathered owners stay in the journal, and S15 `Leave` signs out instead of opening the timeline. |
+| 2026-08-02 | Fixed the second entry path for unpaid owners: re-running onboarding with an existing family now chooses the server-selected trial/resubscribe variant, preserves the pending capture, and commits it after purchase. A stale device paywall mode can no longer override loaded billing history. |
+| 2026-08-02 | Hardened the resume boundary after review: paywall drafts are account-bound, media captures keep a stable pending memory id until the upload queue accepts them, owner-only routing refreshes membership state, every server-confirmed access reason hands off automatically, and billing lookup/offerings failures fail closed with retry UI. |

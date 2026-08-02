@@ -172,6 +172,9 @@ async function withMockedIllustrationNetwork(
         ]);
       }
 
+    if (url.pathname.endsWith('/rest/v1/rpc/billing_ai_generation_check')) {
+      return jsonResponse([{ allowed: true, scope: null, retry_after_iso: null, error_code: null }]);
+    }
     if (url.pathname.endsWith('/rest/v1/rpc/begin_memory_illustration_usage')) {
       return jsonResponse([{ outcome: 'enforcement_bypassed' }]);
     }

@@ -124,8 +124,9 @@ appId: com.memora.app
       id: onb-trial-screen
     timeout: 20000
 
-# S13 -> S14 -> S15 (placeholder paywall -- "Start my free week" advances
-# with zero billing, per that screen's own TODO(paywall) block).
+# S13 -> S14 -> S15. The paywall is a real RevenueCat purchase flow. Run this
+# smoke path only with a store-configured Apple sandbox or Play internal-test
+# account; it must never use a production account or a real purchase.
 - tapOn:
     id: onb-trial-cta-button
 - tapOn:

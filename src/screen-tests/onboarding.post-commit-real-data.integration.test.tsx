@@ -71,15 +71,15 @@ import PaywallScreen from '../../app/(onboarding)/paywall';
 import PortraitScreen from '../../app/(onboarding)/portrait';
 import RevealScreen from '../../app/(onboarding)/reveal';
 import { useAuth } from '@/hooks/use-auth';
+import { useBilling } from '@/hooks/use-billing';
 import { FamilyProvider, familyMembershipsQueryKey, useFamily } from '@/hooks/use-family';
 import { useMemoriesRealtime } from '@/hooks/useMemoriesRealtime';
 import { OnboardingFlowProvider, useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { onboardingRevealRoute } from '@/lib/onboarding-routes';
 import { supabase } from '@/lib/supabase';
-import { createFamily, fetchMyFamilyMemberships } from '@/services/family';
-import { createFamilyMember, fetchFamilyMembers } from '@/services/family-members';
+import { fetchMyFamilyMemberships } from '@/services/family';
+import { fetchFamilyMembers } from '@/services/family-members';
 import { getMediaUrls } from '@/services/media';
-import { createMemory } from '@/services/memories';
 import { commitOnboarding } from '@/services/onboarding';
 import { createPortraitVersion, fetchFamilyPortraitVersions, generatePortraitVersion } from '@/services/portrait-versions';
 import { fetchUserProfile, updateUserProfile } from '@/services/user-profile';
@@ -122,6 +122,14 @@ jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
 }));
 
+jest.mock('@/hooks/use-billing', () => ({
+  useBilling: jest.fn(),
+}));
+
+jest.mock('@/hooks/use-pending-memory-uploads', () => ({
+  usePendingMemoryUploads: jest.fn(() => ({ enqueue: jest.fn() })),
+}));
+
 jest.mock('@/hooks/useMemoriesRealtime', () => ({
   useMemoriesRealtime: jest.fn(),
 }));
@@ -130,26 +138,20 @@ jest.mock('@/hooks/useMemoriesRealtime', () => ({
 // FamilyProvider, useFamilyMembers, usePortraitVersions, and useMediaUrl
 // ultimately call.
 jest.mock('@/lib/supabase', () => ({
-  supabase: { auth: { getUser: jest.fn() } },
+  supabase: { auth: { getUser: jest.fn() }, rpc: jest.fn() },
 }));
 
 jest.mock('@/services/family', () => ({
-  createFamily: jest.fn(),
   deleteFamily: jest.fn(),
   fetchMyFamilyMemberships: jest.fn(),
   friendlyFamilyLimitError: jest.fn((message: string) => message),
 }));
 
 jest.mock('@/services/family-members', () => ({
-  createFamilyMember: jest.fn(),
   fetchFamilyMembers: jest.fn(),
   createFamilyMemberWithPhoto: jest.fn(),
   updateFamilyMemberWithPhoto: jest.fn(),
   deleteFamilyMember: jest.fn(),
-}));
-
-jest.mock('@/services/memories', () => ({
-  createMemory: jest.fn(),
 }));
 
 jest.mock('@/services/user-profile', () => ({
@@ -197,13 +199,11 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
+const mockedUseBilling = useBilling as jest.MockedFunction<typeof useBilling>;
 const mockedUseMemoriesRealtime = useMemoriesRealtime as jest.MockedFunction<typeof useMemoriesRealtime>;
 const mockedSupabase = supabase as jest.Mocked<typeof supabase>;
-const mockedCreateFamily = createFamily as jest.MockedFunction<typeof createFamily>;
 const mockedFetchMyFamilyMemberships = fetchMyFamilyMemberships as jest.MockedFunction<typeof fetchMyFamilyMemberships>;
-const mockedCreateFamilyMember = createFamilyMember as jest.MockedFunction<typeof createFamilyMember>;
 const mockedFetchFamilyMembers = fetchFamilyMembers as jest.MockedFunction<typeof fetchFamilyMembers>;
-const mockedCreateMemory = createMemory as jest.MockedFunction<typeof createMemory>;
 const mockedFetchUserProfile = fetchUserProfile as jest.MockedFunction<typeof fetchUserProfile>;
 const mockedUpdateUserProfile = updateUserProfile as jest.MockedFunction<typeof updateUserProfile>;
 const mockedFetchFamilyPortraitVersions = fetchFamilyPortraitVersions as jest.MockedFunction<typeof fetchFamilyPortraitVersions>;
@@ -309,10 +309,37 @@ describe('Post-commit onboarding screens read real server data, not the cleared 
       signInWithPassword: jest.fn(),
       signOut: jest.fn(),
     });
+    mockedUseBilling.mockReturnValue({
+      offerings: {
+        offering: {} as never,
+        annual: { product: { priceString: '$99.99', pricePerMonthString: '$8.33' }, packageType: 'ANNUAL' } as never,
+        monthly: null,
+        annualTrialEligibility: 'eligible',
+        raw: {} as never,
+      },
+      status: {
+        family_id: 'family-1',
+        owner_user_id: 'user-1',
+        has_write_access: false,
+        has_ever_had_access: false,
+        trial_eligible: true,
+      } as never,
+      isConfigured: true,
+      isLoading: false,
+      isOffline: false,
+      purchase: jest.fn(),
+      restore: jest.fn(),
+      startOnboardingIllustration: jest.fn().mockResolvedValue(undefined),
+      refresh: jest.fn().mockResolvedValue(undefined),
+    } as never);
     mockedUseMemoriesRealtime.mockReturnValue(undefined);
 
     mockedSupabase.auth.getUser.mockResolvedValue({
       data: { user: { id: 'user-1' } },
+      error: null,
+    } as never);
+    mockedSupabase.rpc.mockResolvedValue({
+      data: [{ family_id: 'family-1', memory_id: 'memory-1', is_new_family: true }],
       error: null,
     } as never);
     // active_family_id pre-set to the family this suite creates: once
@@ -375,15 +402,6 @@ describe('Post-commit onboarding screens read real server data, not the cleared 
 
     // ---- commitOnboarding, for real -- no existing family (brand-new owner). ----
     mockedFetchMyFamilyMemberships.mockResolvedValue({ data: [], error: null });
-    mockedCreateFamily.mockResolvedValue({
-      data: { id: 'family-1', name: "Lila & Miguel's Family" } as never,
-      error: null,
-    });
-    mockedCreateFamilyMember
-      .mockResolvedValueOnce({ data: { id: 'member-lila' } as never, error: null })
-      .mockResolvedValueOnce({ data: { id: 'member-miguel' } as never, error: null });
-    mockedCreateMemory.mockResolvedValue({ data: { id: 'memory-1' } as never, error: null });
-
     let commitResult: Awaited<ReturnType<typeof commitOnboarding>> | undefined;
     await act(async () => {
       commitResult = await commitOnboarding(seededDraft);
@@ -443,7 +461,7 @@ describe('Post-commit onboarding screens read real server data, not the cleared 
     // ---- S13: only uses patch() -- no draft read to regress. Rendering it
     // here proves it survives the empty draft without crashing. ----
     utils = renderTree(<TrialScreen />, utils);
-    expect(utils.getByTestId('onb-trial-screen')).toBeTruthy();
+    await waitFor(() => expect(utils.getByTestId('onb-trial-screen')).toBeTruthy());
 
     // ---- S14: the first real regression assertion. Before WP7-A this
     // rendered "Everything their journal comes with:" -- the neutral

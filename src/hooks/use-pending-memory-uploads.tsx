@@ -42,7 +42,7 @@ export interface PendingMemoryUpload {
 
 interface PendingMemoryUploadsContextValue {
   uploads: PendingMemoryUpload[];
-  enqueue: (input: PostMediaMemoryInput) => void;
+  enqueue: (input: PostMediaMemoryInput) => boolean;
   retry: (memoryId: string) => void;
   discard: (memoryId: string) => void;
 }
@@ -191,6 +191,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
       ]);
 
       void runUpload(input, user.id, familyId);
+      return true;
     },
     [user, familyId, runUpload],
   );

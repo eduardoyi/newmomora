@@ -49,6 +49,12 @@ function dependencies(role: "owner" | "manager" | "viewer", sourceKey: string) {
         }),
       };
     },
+    rpc: async (name: string) => {
+      if (name === "billing_ai_generation_check") {
+        return { data: [{ allowed: true, scope: null, retry_after_iso: null, error_code: null }], error: null };
+      }
+      return { data: null, error: null };
+    },
   };
   return {
     getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
@@ -199,6 +205,9 @@ function cloudflarePortraitClient(input: {
     },
     rpc: async (name: string) => {
       rpcCalls.push(name);
+      if (name === "billing_ai_generation_check") {
+        return { data: [{ allowed: true, scope: null, retry_after_iso: null, error_code: null }], error: null };
+      }
       if (name === "begin_portrait_generation_usage" && input.beginOutcome) return { data: input.beginOutcome, error: null };
       if (name === "claim_family_member_portrait_generation") return { data: version, error: null };
       return { data: 1, error: null };
@@ -229,7 +238,7 @@ Deno.test("portrait Cloudflare dispatcher reuses and re-dispatches a fresh match
     assertEquals(await response.json(), { success: true, queued: true });
     assertEquals(JSON.parse(dispatchBodies[0]), { jobId: attemptId });
     assertEquals(mock.inserted.length, 0);
-    assertEquals(mock.rpcCalls.length, 0);
+    assertEquals(mock.rpcCalls, ["billing_ai_generation_check"]);
   });
 });
 
@@ -252,7 +261,7 @@ Deno.test("portrait already_queued admission returns the durable v1 job without 
     assertEquals(response.status, 202);
     assertEquals(await response.json(), { success: true, queued: true });
     assertEquals(mock.inserted.length, 0);
-    assertEquals(mock.rpcCalls, ["begin_portrait_generation_usage"]);
+    assertEquals(mock.rpcCalls, ["billing_ai_generation_check", "begin_portrait_generation_usage"]);
     assertEquals(dispatched, false);
   });
 });
@@ -271,6 +280,7 @@ Deno.test("portrait Cloudflare dispatch ambiguity retains the durable job and a 
     assertEquals(await firstResponse.json(), { success: true, queued: true });
     assertEquals(initial.inserted.length, 1);
     assertEquals(initial.rpcCalls, [
+      "billing_ai_generation_check",
       "begin_portrait_generation_usage",
       "claim_family_member_portrait_generation",
       "supersede_portrait_generation_workflow_jobs",
@@ -296,7 +306,7 @@ Deno.test("portrait Cloudflare dispatch ambiguity retains the durable job and a 
     assertEquals(recoveryResponse.status, 202);
     assertEquals(JSON.parse(redispatchBodies[0]), { jobId });
     assertEquals(recovery.inserted.length, 0);
-    assertEquals(recovery.rpcCalls.length, 0);
+    assertEquals(recovery.rpcCalls, ["billing_ai_generation_check"]);
   });
 });
 
@@ -390,6 +400,9 @@ Deno.test("generate-portrait-illustration fails the claimed attempt before its r
     },
     rpc: async (name: string) => {
       rpcCalls.push(name);
+      if (name === "billing_ai_generation_check") {
+        return { data: [{ allowed: true, scope: null, retry_after_iso: null, error_code: null }], error: null };
+      }
       return { data: rows.family_member_portrait_versions, error: null };
     },
   };
@@ -435,6 +448,7 @@ Deno.test("generate-portrait-illustration fails the claimed attempt before its r
   assertEquals(await response.json(), { success: true, queued: true });
   await backgroundTask;
   assertEquals(rpcCalls, [
+    "billing_ai_generation_check",
     "begin_portrait_generation_usage",
     "claim_family_member_portrait_generation",
     "fail_family_member_portrait_generation",
@@ -575,6 +589,9 @@ function buildRetriggerClient(
       return builder;
     },
     rpc: async (name: string) => {
+      if (name === "billing_ai_generation_check") {
+        return { data: [{ allowed: true, scope: null, retry_after_iso: null, error_code: null }], error: null };
+      }
       if (name === "begin_portrait_generation_usage") {
         return { data: { outcome: "enforcement_bypassed" }, error: null };
       }

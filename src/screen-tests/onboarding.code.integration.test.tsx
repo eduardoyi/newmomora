@@ -22,8 +22,13 @@ import { useAuth } from '@/hooks/use-auth';
 import { familyMembershipsQueryKey, useFamily } from '@/hooks/use-family';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
-import { onboardingTrialRoute } from '@/lib/onboarding-routes';
+import { onboardingPaywallRoute, onboardingPortraitRoute, onboardingTrialRoute } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
+import {
+  fetchFamilyBillingStatus,
+  hasComplimentaryFamilyAccess,
+  startPendingOnboardingIllustration,
+} from '@/services/billing';
 import { commitOnboarding } from '@/services/onboarding';
 import { createEmptyOnboardingDraft } from '@/utils/onboarding-progress';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
@@ -56,6 +61,12 @@ jest.mock('@/services/onboarding', () => ({
   commitOnboarding: jest.fn(),
 }));
 
+jest.mock('@/services/billing', () => ({
+  fetchFamilyBillingStatus: jest.fn(),
+  hasComplimentaryFamilyAccess: jest.fn(),
+  startPendingOnboardingIllustration: jest.fn(),
+}));
+
 jest.mock('@/utils/pending-invite-code', () => ({
   getPendingInviteCode: jest.fn(),
 }));
@@ -74,6 +85,13 @@ const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseOnboardingFlow = useOnboardingFlow as jest.MockedFunction<typeof useOnboardingFlow>;
 const mockedUsePendingMemoryUploads = usePendingMemoryUploads as jest.MockedFunction<typeof usePendingMemoryUploads>;
 const mockedCommitOnboarding = commitOnboarding as jest.MockedFunction<typeof commitOnboarding>;
+const mockedHasComplimentaryFamilyAccess = hasComplimentaryFamilyAccess as jest.MockedFunction<
+  typeof hasComplimentaryFamilyAccess
+>;
+const mockedFetchFamilyBillingStatus = fetchFamilyBillingStatus as jest.MockedFunction<typeof fetchFamilyBillingStatus>;
+const mockedStartPendingOnboardingIllustration = startPendingOnboardingIllustration as jest.MockedFunction<
+  typeof startPendingOnboardingIllustration
+>;
 const mockedGetPendingInviteCode = getPendingInviteCode as jest.MockedFunction<typeof getPendingInviteCode>;
 
 function renderScreen(queryClient: QueryClient) {
@@ -94,6 +112,7 @@ function renderScreen(queryClient: QueryClient) {
 describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
   const verifyOtp = jest.fn().mockResolvedValue({ error: null });
   const clear = jest.fn().mockResolvedValue(undefined);
+  const patchDraft = jest.fn();
   const enqueue = jest.fn();
   const refetchMemberships = jest.fn().mockResolvedValue([]);
 
@@ -101,7 +120,11 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     jest.clearAllMocks();
     verifyOtp.mockResolvedValue({ error: null });
     clear.mockResolvedValue(undefined);
+    patchDraft.mockClear();
     refetchMemberships.mockResolvedValue([]);
+    mockedHasComplimentaryFamilyAccess.mockResolvedValue(false);
+    mockedFetchFamilyBillingStatus.mockResolvedValue({ data: null, error: null });
+    mockedStartPendingOnboardingIllustration.mockResolvedValue({ data: null, error: null });
 
     mockedUseAuth.mockReturnValue({
       session: null,
@@ -116,7 +139,7 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     mockedUseOnboardingFlow.mockReturnValue({
       draft: createEmptyOnboardingDraft('code'),
       isHydrated: true,
-      patch: jest.fn(),
+      patch: patchDraft,
       clear,
     });
     mockedUsePendingMemoryUploads.mockReturnValue({
@@ -185,6 +208,25 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     expect(invalidateOrder).toBeLessThan(navigateOrder);
   });
 
+  it('skips purchase screens for a complimentary new owner and starts the first illustration', async () => {
+    mockedCommitOnboarding.mockResolvedValue({
+      data: { familyId: 'family-1', memoryId: 'memory-1', isNewFamily: true, pendingMediaUpload: null },
+      error: null,
+    });
+    mockedHasComplimentaryFamilyAccess.mockResolvedValue(true);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = renderScreen(queryClient);
+    fireEvent.changeText(screen.getByTestId('onboarding-code-input'), '123456');
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith(onboardingPortraitRoute);
+    });
+
+    expect(mockedStartPendingOnboardingIllustration).toHaveBeenCalledWith('family-1', 'memory-1');
+    expect(router.replace).not.toHaveBeenCalledWith(onboardingPaywallRoute);
+  });
+
   it('invalidates the memberships query for a returning owner too, before routing via resolvePostAuthDestination', async () => {
     mockedCommitOnboarding.mockResolvedValue({
       data: { familyId: 'family-existing', memoryId: 'memory-1', isNewFamily: false, pendingMediaUpload: null },
@@ -232,18 +274,23 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     expect(router.replace).not.toHaveBeenCalledWith(timelineRoute);
   });
 
-  // Bug fix: commitOnboarding can fail *after* it has already confirmed the
-  // signed-in user owns a real, existing family (the returning-owner
-  // branch, decision 18) -- e.g. the memory failed to save. Previously this
-  // showed the same dead-end red error + "Try again" as a genuinely new
-  // owner's failure, stranding an already-verified returning owner on this
-  // screen. The account and family are real, so this must route them into
-  // their journal instead.
-  it('routes a returning owner straight to their journal, with no red error, when commitOnboarding fails after finding their existing family', async () => {
+  // An owner can have a real family before ever purchasing: they may have
+  // closed S15 and later restarted onboarding. The server status, not merely
+  // the existence of a family, chooses the first-time versus resubscribe
+  // variant. The capture must remain in the draft either way.
+  it('preserves a returning owner capture and routes a trial-eligible owner to the first-time paywall', async () => {
     mockedCommitOnboarding.mockResolvedValue({
       data: null,
       error: { message: 'Could not save your memory. Please try again.' },
       existingFamilyId: 'family-existing',
+    });
+    mockedFetchFamilyBillingStatus.mockResolvedValue({
+      data: {
+        has_write_access: false,
+        has_ever_had_access: false,
+        trial_eligible: true,
+      } as never,
+      error: null,
     });
 
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -252,12 +299,79 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     fireEvent.changeText(screen.getByTestId('onboarding-code-input'), '123456');
 
     await waitFor(() => {
-      expect(router.replace).toHaveBeenCalledWith(timelineRoute);
+      expect(router.replace).toHaveBeenCalledWith(onboardingPaywallRoute);
     });
 
-    expect(clear).toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(patchDraft).toHaveBeenCalledWith({
+      committedFamilyId: 'family-existing',
+      captureCommitted: false,
+      step: 'paywall',
+      paywallMode: 'new-owner',
+    });
+    expect(mockedFetchFamilyBillingStatus).toHaveBeenCalledWith('family-existing');
     expect(screen.queryByTestId('onboarding-code-error')).toBeNull();
     expect(screen.queryByTestId('onboarding-code-retry')).toBeNull();
+  });
+
+  it('preserves a returning owner capture and routes a lapsed owner to resubscribe', async () => {
+    mockedCommitOnboarding.mockResolvedValue({
+      data: null,
+      error: { message: 'Could not save your memory. Please try again.' },
+      existingFamilyId: 'family-existing',
+    });
+    mockedFetchFamilyBillingStatus.mockResolvedValue({
+      data: {
+        has_write_access: false,
+        has_ever_had_access: true,
+        trial_eligible: false,
+      } as never,
+      error: null,
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    const screen = renderScreen(queryClient);
+    fireEvent.changeText(screen.getByTestId('onboarding-code-input'), '123456');
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith({ pathname: onboardingPaywallRoute, params: { mode: 'resubscribe' } });
+    });
+
+    expect(clear).not.toHaveBeenCalled();
+    expect(patchDraft).toHaveBeenCalledWith({
+      committedFamilyId: 'family-existing',
+      captureCommitted: false,
+      step: 'paywall',
+      paywallMode: 'resubscribe',
+    });
+  });
+
+  it('does not send a non-owner family member to the owner paywall', async () => {
+    mockedCommitOnboarding.mockResolvedValue({
+      data: null,
+      error: { message: 'An active Momora subscription is required for this action' },
+      existingFamilyId: 'family-existing',
+    });
+    mockedFetchFamilyBillingStatus.mockResolvedValue({
+      data: {
+        has_write_access: false,
+        has_ever_had_access: true,
+        trial_eligible: false,
+      } as never,
+      error: null,
+    });
+    refetchMemberships.mockResolvedValue([
+      { id: 'membership-1', familyId: 'family-existing', role: 'manager', name: 'Our Family' },
+    ]);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const screen = renderScreen(queryClient);
+    fireEvent.changeText(screen.getByTestId('onboarding-code-input'), '123456');
+
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith(timelineRoute));
+    expect(router.replace).not.toHaveBeenCalledWith(onboardingPaywallRoute);
+    expect(clear).toHaveBeenCalledTimes(1);
   });
 
   // Bug fix (the closure-staleness half): finishAfterCommit's async chain

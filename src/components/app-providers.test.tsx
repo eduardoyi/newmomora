@@ -11,6 +11,9 @@ jest.mock('@/hooks/use-auth', () => ({
 jest.mock('@/hooks/use-family', () => ({
   FamilyProvider: ({ children }: { children: ReactNode }) => children,
 }));
+jest.mock('@/hooks/use-billing', () => ({
+  BillingProvider: ({ children }: { children: ReactNode }) => children,
+}));
 jest.mock('@/hooks/use-pending-memory-uploads', () => ({
   PendingMemoryUploadsProvider: ({ children }: { children: ReactNode }) => children,
 }));

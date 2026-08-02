@@ -73,6 +73,29 @@ describe('onboarding draft storage', () => {
     expect(draft?.capture).toEqual({ text: 'Said something funny.', taggedKidIndexes: [0] });
   });
 
+  it('round-trips the paywall resume mode', async () => {
+    await patchOnboardingDraft({ step: 'paywall', paywallMode: 'resubscribe' });
+
+    expect((await getOnboardingDraft())?.paywallMode).toBe('resubscribe');
+  });
+
+  it('treats an invalid paywall mode as an absent draft', async () => {
+    await AsyncStorage.setItem(
+      ONBOARDING_DRAFT_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        step: 'paywall',
+        kidNames: [],
+        familyName: '',
+        capture: null,
+        notificationChoice: null,
+        paywallMode: 'unknown',
+      }),
+    );
+
+    expect(await getOnboardingDraft()).toBeNull();
+  });
+
   // Regression coverage for the media-sizing bug: the aspect ratio (and, for
   // video, duration) captured alongside the media uri must round-trip
   // through the device-local draft the same as every other capture field.

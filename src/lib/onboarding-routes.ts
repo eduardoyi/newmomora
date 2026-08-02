@@ -13,7 +13,7 @@
 // `sharingWaitingRouteWithName` already establishes in src/lib/routes.ts.
 import type { Href } from 'expo-router';
 
-import type { OnboardingStepId } from '@/utils/onboarding-progress';
+import type { OnboardingPaywallMode, OnboardingStepId } from '@/utils/onboarding-progress';
 
 // Owner-path story/capture/trust arc (S0, S4-S8, S9-S11, S13-S16). S1-S3
 // share one screen (`story.tsx`) -- see `onboardingStoryRoute` below.
@@ -33,6 +33,16 @@ export const onboardingTrialRoute = '/(onboarding)/trial' as Href;
 export const onboardingIncludedRoute = '/(onboarding)/included' as Href;
 export const onboardingPaywallRoute = '/(onboarding)/paywall' as Href;
 export const onboardingPortraitRoute = '/(onboarding)/portrait' as Href;
+
+/** The resubscribe variant must retain its mode across a cold-launch resume. */
+export const onboardingResubscribePaywallRoute = {
+  pathname: '/(onboarding)/paywall',
+  params: { mode: 'resubscribe' },
+} as unknown as Href;
+
+export function onboardingPaywallRouteForMode(mode: OnboardingPaywallMode): Href {
+  return mode === 'resubscribe' ? onboardingResubscribePaywallRoute : onboardingPaywallRoute;
+}
 
 /** S1-S3, distinguished by the `beat` search param. */
 export function onboardingStoryRoute(beat: 0 | 1 | 2): Href {
@@ -76,11 +86,14 @@ export const onboardingJoinWaitingRoute = '/(onboarding)/join/waiting' as Href;
  * path in practice: `resolvePostAuthDestination` only returns
  * `resume-onboarding` when the caller has zero memberships, but S17 only
  * ever fires after `commitOnboarding` has already created one -- the same
- * reason `trial`/`included`/`paywall`/`portrait`'s own `patch({step: ...})`
- * calls are already moot post-commit (see code.tsx's `finishAfterCommit`:
- * `clear()` empties the draft, including `committedFamilyId`, before
- * routing into that arc, specifically so the layout's backstop redirect
- * doesn't trap it). Adding a step id that can never correctly resolve a
+ * reason `trial`/`included`/`portrait`'s own `patch({step: ...})` calls are
+ * still moot post-commit (see code.tsx's `finishAfterCommit`: `clear()`
+ * empties the draft, including `committedFamilyId`, before routing into
+ * that arc, specifically so the layout's backstop redirect doesn't trap
+ * it). S15 is the intentional exception: it writes an explicit paywall
+ * marker after the family exists, and `resolvePostAuthDestination` handles
+ * that marker separately so an app kill can return to the purchase screen.
+ * Adding a step id that can never correctly resolve a
  * route would be actively worse than omitting it.
  */
 export function onboardingStepRoute(step: OnboardingStepId): Href {

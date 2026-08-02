@@ -25,15 +25,23 @@ import {
   onboardingEmailRoute,
   onboardingJoinCodeRoute,
   onboardingJoinFoundRoute,
+  onboardingPaywallRouteForMode,
+  onboardingPortraitRoute,
   onboardingStepRoute,
   onboardingTrialRoute,
 } from '@/lib/onboarding-routes';
-import { resolvePostAuthDestination } from '@/lib/onboarding-routing';
+import { resolveOwnerPaywallMode, resolvePostAuthDestination } from '@/lib/onboarding-routing';
 import { timelineRoute } from '@/lib/routes';
+import {
+  fetchFamilyBillingStatus,
+  hasComplimentaryFamilyAccess,
+  startPendingOnboardingIllustration,
+} from '@/services/billing';
 import type { PostMediaMemoryInput } from '@/services/memory-posting';
 import { commitOnboarding } from '@/services/onboarding';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
 import { focusOtpInput } from '@/utils/otp-input';
+import { patchOnboardingDraft } from '@/utils/onboarding-progress';
 
 const CODE_LENGTH = 6;
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -62,8 +70,8 @@ const ENQUEUE_MEDIA_UPLOAD_RETRY_DELAY_MS = 50;
  */
 async function enqueuePendingMediaUpload(
   pendingMediaUpload: PostMediaMemoryInput,
-  enqueueRef: { current: (input: PostMediaMemoryInput) => void },
-): Promise<void> {
+  enqueueRef: { current: (input: PostMediaMemoryInput) => boolean },
+): Promise<boolean> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt < ENQUEUE_MEDIA_UPLOAD_ATTEMPTS; attempt += 1) {
@@ -72,21 +80,21 @@ async function enqueuePendingMediaUpload(
     }
 
     try {
-      enqueueRef.current(pendingMediaUpload);
-      return;
+      const accepted = enqueueRef.current(pendingMediaUpload);
+      if (accepted === false) {
+        throw new Error('upload_queue_rejected');
+      }
+      return true;
     } catch (error) {
       lastError = error;
     }
   }
 
-  // The family/kids/text are already safely committed at this point --
-  // losing just the photo/video attachment in this unlikely case isn't
-  // worth a hard onboarding error; same tolerance commitOnboarding already
-  // applies to a failed notification-preference write.
   console.warn(
     'Failed to enqueue onboarding photo upload',
     lastError instanceof Error ? lastError.message : 'unknown',
   );
+  return false;
 }
 
 export default function OnboardingCodeScreen() {
@@ -94,7 +102,7 @@ export default function OnboardingCodeScreen() {
   const email = (params.email ?? '').trim();
 
   const { verifyOtp, requestSignUpOtp } = useAuth();
-  const { draft, clear } = useOnboardingFlow();
+  const { draft, clear, patch } = useOnboardingFlow();
   const { enqueue } = usePendingMemoryUploads();
   const { refetchMemberships } = useFamily();
   const queryClient = useQueryClient();
@@ -115,7 +123,9 @@ export default function OnboardingCodeScreen() {
   // before calling it, so its own user/family guard sees a family React
   // actually knows about).
   const enqueueRef = useRef(enqueue);
-  enqueueRef.current = enqueue;
+  useEffect(() => {
+    enqueueRef.current = enqueue;
+  }, [enqueue]);
 
   const [code, setCode] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -149,16 +159,43 @@ export default function OnboardingCodeScreen() {
 
     if (error || !data) {
       if (existingFamilyId) {
-        // This failure happened after commitOnboarding had already
-        // confirmed the signed-in user owns a real, existing family
-        // (decision 18) -- their account is real even though this
-        // attempt's memory failed to save. Never strand a returning owner
-        // on this screen with a dead-end retry: the capture was already
-        // saved locally on this device, so land them in their journal
-        // instead of a red error.
-        await clear();
-        router.replace(timelineRoute);
-        return;
+        // The family is real, but this may be either an owner who has never
+        // subscribed (the first-time trial) or a genuinely lapsed owner. Ask
+        // the same server-owned status RPC used by the front door instead of
+        // guessing from the fact that the write failed. Keep the draft so the
+        // paywall can commit the capture after a successful purchase.
+        const billing = await fetchFamilyBillingStatus(existingFamilyId);
+        if (billing.data && !billing.error && !billing.data.has_write_access) {
+          // The billing RPC is callable by every family member, but the
+          // paywall is an owner-only destination. Refresh membership state
+          // before routing so a manager/viewer who accidentally entered the
+          // owner onboarding fork lands in the journal instead of being asked
+          // to buy the owner's subscription.
+          await queryClient.invalidateQueries({ queryKey: familyMembershipsQueryKey });
+          const freshMemberships = (await refetchMemberships()) ?? [];
+          const membership = freshMemberships.find((item) => item.familyId === existingFamilyId);
+          if (membership && membership.role !== 'owner') {
+            await clear();
+            setIsProcessing(false);
+            router.replace(timelineRoute);
+            return;
+          }
+
+          const mode = resolveOwnerPaywallMode({
+            hasEverHadAccess: billing.data.has_ever_had_access,
+            trialEligible: billing.data.trial_eligible,
+          });
+          await patchOnboardingDraft({
+            committedFamilyId: existingFamilyId,
+            captureCommitted: false,
+            step: 'paywall',
+            paywallMode: mode,
+          });
+          patch({ committedFamilyId: existingFamilyId, captureCommitted: false, step: 'paywall', paywallMode: mode });
+          setIsProcessing(false);
+          router.replace(onboardingPaywallRouteForMode(mode));
+          return;
+        }
       }
 
       setIsProcessing(false);
@@ -186,15 +223,52 @@ export default function OnboardingCodeScreen() {
     // src/services/onboarding.ts's CommitOnboardingResult.pendingMediaUpload
     // doc comment.
     if (data.pendingMediaUpload) {
-      await enqueuePendingMediaUpload(data.pendingMediaUpload, enqueueRef);
+      const wasAccepted = await enqueuePendingMediaUpload(data.pendingMediaUpload, enqueueRef);
+      if (!wasAccepted) {
+        // The placeholder row and text are already durable, but the local
+        // attachment has not been handed to the upload queue. Preserve the
+        // draft and the capture marker so the verified user can retry instead
+        // of silently losing the only local copy of the attachment.
+        await patchOnboardingDraft({
+          committedFamilyId: data.familyId,
+          captureCommitted: false,
+          pendingMediaMemoryId: data.pendingMediaUpload.memoryId,
+        });
+        patch({
+          committedFamilyId: data.familyId,
+          captureCommitted: false,
+          pendingMediaMemoryId: data.pendingMediaUpload.memoryId,
+        });
+        setIsProcessing(false);
+        setErrorMessage('Your capture is safe, but the photo could not be attached yet. Tap Try again.');
+        return;
+      }
+
+      // `captureCommitted` is the durable hand-off marker. Do not let a
+      // debounced provider write race navigation: persist it only after the
+      // media queue has accepted the attachment. The memory id is stable so
+      // a retry after a crash can repair/complete the same pending post.
+      await patchOnboardingDraft({
+        committedFamilyId: data.familyId,
+        captureCommitted: true,
+        pendingMediaMemoryId: undefined,
+      });
+      patch({ committedFamilyId: data.familyId, captureCommitted: true, pendingMediaMemoryId: undefined });
     }
 
     if (data.isNewFamily) {
       // A genuinely new owner continues the trust/paywall/portrait arc --
       // the routing gate (decision 17) only diverts an owner who already
       // had a family (see the `else` branch below).
+      // Owner-wide complimentary grants are the one deliberate exception:
+      // they skip the purchase screens, but still start the normal portrait
+      // handoff and first-illustration pipeline.
+      const hasComplimentaryAccess = await hasComplimentaryFamilyAccess(data.familyId);
+      if (hasComplimentaryAccess && data.memoryId && !data.pendingMediaUpload) {
+        await startPendingOnboardingIllustration(data.familyId, data.memoryId).catch(() => undefined);
+      }
       await clear();
-      router.replace(onboardingTrialRoute);
+      router.replace(hasComplimentaryAccess ? onboardingPortraitRoute : onboardingTrialRoute);
       return;
     }
 
@@ -202,11 +276,28 @@ export default function OnboardingCodeScreen() {
     // memory just landed there instead of a second family being created --
     // route on real post-auth state, same as any other returning user.
     const freshMemberships = (await refetchMemberships()) ?? [];
+    const resolvedMembership = freshMemberships.find((membership) => membership.familyId === data.familyId);
+    if (resolvedMembership && resolvedMembership.role !== 'owner') {
+      await clear();
+      router.replace(timelineRoute);
+      return;
+    }
+    const billing = await fetchFamilyBillingStatus(data.familyId);
     const hasPendingInviteCode = Boolean(await getPendingInviteCode());
     const destination = resolvePostAuthDestination({
       memberships: freshMemberships.map((membership) => ({ familyId: membership.familyId })),
       hasPendingInviteCode,
       draft,
+      billing:
+        billing.data && !billing.error && resolvedMembership
+          ? {
+              familyId: billing.data.family_id,
+              isOwner: resolvedMembership.role === 'owner',
+              hasWriteAccess: billing.data.has_write_access,
+              hasEverHadAccess: billing.data.has_ever_had_access,
+              trialEligible: billing.data.trial_eligible,
+            }
+          : null,
       intent: 'owner',
     });
 
@@ -218,6 +309,9 @@ export default function OnboardingCodeScreen() {
         break;
       case 'resume-onboarding':
         router.replace(onboardingStepRoute(destination.step));
+        break;
+      case 'resume-paywall':
+        router.replace(onboardingPaywallRouteForMode(destination.mode));
         break;
       case 'finish-join':
         router.replace(onboardingJoinFoundRoute);

@@ -50,7 +50,10 @@ function OnboardingLayoutContent() {
   // once the family/kids/first memory are committed. This guards a stray
   // deep link or a stale nav-stack entry from re-running the story arc for
   // someone who is already fully set up.
-  if (session && draft.committedFamilyId) {
+  // A returning lapsed owner may have a confirmed family but an unsaved
+  // capture. That draft must be allowed to reach the resubscribe paywall;
+  // only a fully handed-off capture gets the journal backstop.
+  if (session && draft.committedFamilyId && draft.captureCommitted !== false) {
     return <Redirect href={timelineRoute} />;
   }
 

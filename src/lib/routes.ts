@@ -1,5 +1,6 @@
 import type { Href } from 'expo-router';
 
+export const rootRoute = '/' as Href;
 export const addFamilyMemberRoute = '/(app)/add-family-member' as Href;
 export const newMemoryRoute = '/(app)/new-memory' as Href;
 export const timelineRoute = '/(app)/(tabs)/timeline' as Href;

@@ -7,6 +7,11 @@ export type Json =
   | Json[]
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.5"
+  }
   graphql_public: {
     Tables: {
       [_ in never]: never
@@ -580,6 +585,263 @@ export type Database = {
         }
         Relationships: []
       }
+      billing_dead_letters: {
+        Row: {
+          app_user_id: string | null
+          created_at: string
+          environment: string | null
+          event_id: string | null
+          event_type: string | null
+          id: string
+          product_id: string | null
+          reason: string
+          resolved_at: string | null
+          store: string | null
+        }
+        Insert: {
+          app_user_id?: string | null
+          created_at?: string
+          environment?: string | null
+          event_id?: string | null
+          event_type?: string | null
+          id?: string
+          product_id?: string | null
+          reason: string
+          resolved_at?: string | null
+          store?: string | null
+        }
+        Update: {
+          app_user_id?: string | null
+          created_at?: string
+          environment?: string | null
+          event_id?: string | null
+          event_type?: string | null
+          id?: string
+          product_id?: string | null
+          reason?: string
+          resolved_at?: string | null
+          store?: string | null
+        }
+        Relationships: []
+      }
+      billing_owner_locks: {
+        Row: {
+          created_at: string
+          owner_user_id: string
+        }
+        Insert: {
+          created_at?: string
+          owner_user_id: string
+        }
+        Update: {
+          created_at?: string
+          owner_user_id?: string
+        }
+        Relationships: []
+      }
+      billing_products: {
+        Row: {
+          active: boolean
+          created_at: string
+          entitlement_id: string
+          period_type: string
+          product_id: string
+          store: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          entitlement_id?: string
+          period_type: string
+          product_id: string
+          store: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          entitlement_id?: string
+          period_type?: string
+          product_id?: string
+          store?: string
+        }
+        Relationships: []
+      }
+      billing_settings: {
+        Row: {
+          allow_sandbox_access: boolean
+          apple_grace_days: number
+          enforcement_mode: string
+          google_grace_days: number
+          min_supported_app_version: string
+          new_family_cutover_at: string
+          owner_ai_requests_per_day: number
+          owner_ai_requests_per_month: number
+          singleton: boolean
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          allow_sandbox_access?: boolean
+          apple_grace_days?: number
+          enforcement_mode?: string
+          google_grace_days?: number
+          min_supported_app_version?: string
+          new_family_cutover_at?: string
+          owner_ai_requests_per_day?: number
+          owner_ai_requests_per_month?: number
+          singleton?: boolean
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          allow_sandbox_access?: boolean
+          apple_grace_days?: number
+          enforcement_mode?: string
+          google_grace_days?: number
+          min_supported_app_version?: string
+          new_family_cutover_at?: string
+          owner_ai_requests_per_day?: number
+          owner_ai_requests_per_month?: number
+          singleton?: boolean
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
+      billing_trial_reminder_outbox: {
+        Row: {
+          attempts: number
+          channel: string
+          claim_token: string | null
+          created_at: string
+          due_at: string
+          entitlement_id: string
+          id: string
+          last_error: string | null
+          owner_user_id: string
+          sent_at: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          channel: string
+          claim_token?: string | null
+          created_at?: string
+          due_at: string
+          entitlement_id: string
+          id?: string
+          last_error?: string | null
+          owner_user_id: string
+          sent_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          channel?: string
+          claim_token?: string | null
+          created_at?: string
+          due_at?: string
+          entitlement_id?: string
+          id?: string
+          last_error?: string | null
+          owner_user_id?: string
+          sent_at?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_trial_reminder_outbox_entitlement_id_fkey"
+            columns: ["entitlement_id"]
+            isOneToOne: false
+            referencedRelation: "owner_entitlements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      billing_webhook_events: {
+        Row: {
+          app_user_id: string | null
+          attempts: number
+          created_at: string
+          entitlement_id: string | null
+          environment: string
+          event_at: string
+          event_id: string
+          event_type: string
+          expires_at: string | null
+          grace_until: string | null
+          last_error: string | null
+          management_url: string | null
+          next_attempt_at: string
+          original_transaction_id: string | null
+          owner_user_id: string | null
+          period_type: string | null
+          processed_at: string | null
+          product_id: string | null
+          purchased_at: string | null
+          status: string
+          store: string
+          transaction_id: string | null
+          updated_at: string
+          will_renew: boolean | null
+        }
+        Insert: {
+          app_user_id?: string | null
+          attempts?: number
+          created_at?: string
+          entitlement_id?: string | null
+          environment: string
+          event_at?: string
+          event_id: string
+          event_type: string
+          expires_at?: string | null
+          grace_until?: string | null
+          last_error?: string | null
+          management_url?: string | null
+          next_attempt_at?: string
+          original_transaction_id?: string | null
+          owner_user_id?: string | null
+          period_type?: string | null
+          processed_at?: string | null
+          product_id?: string | null
+          purchased_at?: string | null
+          status?: string
+          store: string
+          transaction_id?: string | null
+          updated_at?: string
+          will_renew?: boolean | null
+        }
+        Update: {
+          app_user_id?: string | null
+          attempts?: number
+          created_at?: string
+          entitlement_id?: string | null
+          environment?: string
+          event_at?: string
+          event_id?: string
+          event_type?: string
+          expires_at?: string | null
+          grace_until?: string | null
+          last_error?: string | null
+          management_url?: string | null
+          next_attempt_at?: string
+          original_transaction_id?: string | null
+          owner_user_id?: string | null
+          period_type?: string | null
+          processed_at?: string | null
+          product_id?: string | null
+          purchased_at?: string | null
+          status?: string
+          store?: string
+          transaction_id?: string | null
+          updated_at?: string
+          will_renew?: boolean | null
+        }
+        Relationships: []
+      }
       blocked_family_accounts: {
         Row: {
           blocked_membership_id: string | null
@@ -719,9 +981,43 @@ export type Database = {
           },
         ]
       }
+      export_jobs: {
+        Row: {
+          asset_count: number
+          created_at: string
+          expires_at: string
+          family_count: number
+          id: string
+          last_accessed_at: string | null
+          owner_user_id: string
+          status: string
+        }
+        Insert: {
+          asset_count?: number
+          created_at?: string
+          expires_at?: string
+          family_count?: number
+          id?: string
+          last_accessed_at?: string | null
+          owner_user_id: string
+          status?: string
+        }
+        Update: {
+          asset_count?: number
+          created_at?: string
+          expires_at?: string
+          family_count?: number
+          id?: string
+          last_accessed_at?: string | null
+          owner_user_id?: string
+          status?: string
+        }
+        Relationships: []
+      }
       families: {
         Row: {
           account_deletion_token: string | null
+          billing_grace_until: string | null
           created_at: string
           deleted_at: string | null
           deletion_fence_started_at: string | null
@@ -734,6 +1030,7 @@ export type Database = {
         }
         Insert: {
           account_deletion_token?: string | null
+          billing_grace_until?: string | null
           created_at?: string
           deleted_at?: string | null
           deletion_fence_started_at?: string | null
@@ -746,6 +1043,7 @@ export type Database = {
         }
         Update: {
           account_deletion_token?: string | null
+          billing_grace_until?: string | null
           created_at?: string
           deleted_at?: string | null
           deletion_fence_started_at?: string | null
@@ -1051,6 +1349,24 @@ export type Database = {
         }
         Relationships: []
       }
+      invite_preview_attempts: {
+        Row: {
+          attempted_at: string
+          code: string
+          ip: string | null
+        }
+        Insert: {
+          attempted_at?: string
+          code: string
+          ip?: string | null
+        }
+        Update: {
+          attempted_at?: string
+          code?: string
+          ip?: string | null
+        }
+        Relationships: []
+      }
       invite_redemption_attempts: {
         Row: {
           attempted_at: string
@@ -1087,6 +1403,9 @@ export type Database = {
           media_key: string | null
           memory_date: string
           memory_type: string
+          onboarding_attributed: boolean
+          onboarding_media_pending: boolean
+          onboarding_media_pending_until: string | null
           updated_at: string
           usage_limit_epoch: number | null
           usage_limit_retry_after: string | null
@@ -1115,6 +1434,9 @@ export type Database = {
           media_key?: string | null
           memory_date?: string
           memory_type?: string
+          onboarding_attributed?: boolean
+          onboarding_media_pending?: boolean
+          onboarding_media_pending_until?: string | null
           updated_at?: string
           usage_limit_epoch?: number | null
           usage_limit_retry_after?: string | null
@@ -1143,6 +1465,9 @@ export type Database = {
           media_key?: string | null
           memory_date?: string
           memory_type?: string
+          onboarding_attributed?: boolean
+          onboarding_media_pending?: boolean
+          onboarding_media_pending_until?: string | null
           updated_at?: string
           usage_limit_epoch?: number | null
           usage_limit_retry_after?: string | null
@@ -1451,6 +1776,138 @@ export type Database = {
           },
         ]
       }
+      onboarding_commits: {
+        Row: {
+          commit_id: string
+          created_at: string
+          family_id: string
+          is_new_family: boolean
+          memory_id: string | null
+          user_id: string
+        }
+        Insert: {
+          commit_id: string
+          created_at?: string
+          family_id: string
+          is_new_family?: boolean
+          memory_id?: string | null
+          user_id: string
+        }
+        Update: {
+          commit_id?: string
+          created_at?: string
+          family_id?: string
+          is_new_family?: boolean
+          memory_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_commits_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_commits_memory_id_fkey"
+            columns: ["memory_id"]
+            isOneToOne: false
+            referencedRelation: "memories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      owner_complimentary_access: {
+        Row: {
+          created_at: string
+          expires_at: string | null
+          note: string | null
+          owner_user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string | null
+          note?: string | null
+          owner_user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string | null
+          note?: string | null
+          owner_user_id?: string
+        }
+        Relationships: []
+      }
+      owner_entitlements: {
+        Row: {
+          app_user_id: string
+          created_at: string
+          entitlement_id: string
+          environment: string
+          expires_at: string | null
+          grace_until: string | null
+          id: string
+          last_event_at: string
+          last_event_id: string | null
+          management_url: string | null
+          original_transaction_id: string | null
+          owner_user_id: string
+          period_type: string
+          product_id: string
+          purchased_at: string | null
+          status: string
+          store: string
+          transaction_id: string | null
+          updated_at: string
+          will_renew: boolean
+        }
+        Insert: {
+          app_user_id: string
+          created_at?: string
+          entitlement_id: string
+          environment: string
+          expires_at?: string | null
+          grace_until?: string | null
+          id?: string
+          last_event_at?: string
+          last_event_id?: string | null
+          management_url?: string | null
+          original_transaction_id?: string | null
+          owner_user_id: string
+          period_type: string
+          product_id: string
+          purchased_at?: string | null
+          status: string
+          store: string
+          transaction_id?: string | null
+          updated_at?: string
+          will_renew?: boolean
+        }
+        Update: {
+          app_user_id?: string
+          created_at?: string
+          entitlement_id?: string
+          environment?: string
+          expires_at?: string | null
+          grace_until?: string | null
+          id?: string
+          last_event_at?: string
+          last_event_id?: string | null
+          management_url?: string | null
+          original_transaction_id?: string | null
+          owner_user_id?: string
+          period_type?: string
+          product_id?: string
+          purchased_at?: string | null
+          status?: string
+          store?: string
+          transaction_id?: string | null
+          updated_at?: string
+          will_renew?: boolean
+        }
+        Relationships: []
+      }
       portrait_generation_jobs: {
         Row: {
           actor_user_id: string | null
@@ -1756,6 +2213,18 @@ export type Database = {
         Args: { p_now: string; p_scope: string }
         Returns: string
       }
+      apply_billing_webhook_event: {
+        Args: { p_event_id: string }
+        Returns: Json
+      }
+      assert_billing_write_access: {
+        Args: {
+          p_actor_user_id: string
+          p_family_id: string
+          p_operation?: string
+        }
+        Returns: boolean
+      }
       authorize_memory_illustration_workflow_upload: {
         Args: { p_job_id: string; p_output_key: string }
         Returns: {
@@ -1810,6 +2279,38 @@ export type Database = {
           scope: string
         }[]
       }
+      billing_ai_generation_check: {
+        Args: {
+          p_actor_user_id: string
+          p_family_id: string
+          p_request_intent: string
+          p_target_id: string
+          p_target_kind: string
+        }
+        Returns: {
+          allowed: boolean
+          error_code: string
+          retry_after_iso: string
+          scope: string
+        }[]
+      }
+      billing_engagement_allowed: {
+        Args: { p_actor_user_id: string; p_family_id: string }
+        Returns: boolean
+      }
+      billing_mode_applies: { Args: { p_family_id: string }; Returns: boolean }
+      billing_owner_ai_limit_scope: {
+        Args: { p_family_id: string; p_now?: string }
+        Returns: string
+      }
+      billing_write_allowed: {
+        Args: { p_actor_user_id: string; p_family_id: string }
+        Returns: boolean
+      }
+      billing_write_allowed_for_current_user: {
+        Args: { p_family_id: string }
+        Returns: boolean
+      }
       cancel_account_deletion: {
         Args: { p_owner_id: string }
         Returns: boolean
@@ -1825,6 +2326,56 @@ export type Database = {
           claimed: boolean
           payload: Json
         }[]
+      }
+      claim_billing_reconcile_owners: {
+        Args: { p_limit?: number }
+        Returns: {
+          owner_user_id: string
+        }[]
+      }
+      claim_billing_trial_reminders: {
+        Args: { p_limit?: number }
+        Returns: {
+          channel: string
+          claim_token: string
+          id: string
+          owner_user_id: string
+        }[]
+      }
+      claim_billing_webhook_events: {
+        Args: { p_limit?: number }
+        Returns: {
+          app_user_id: string | null
+          attempts: number
+          created_at: string
+          entitlement_id: string | null
+          environment: string
+          event_at: string
+          event_id: string
+          event_type: string
+          expires_at: string | null
+          grace_until: string | null
+          last_error: string | null
+          management_url: string | null
+          next_attempt_at: string
+          original_transaction_id: string | null
+          owner_user_id: string | null
+          period_type: string | null
+          processed_at: string | null
+          product_id: string | null
+          purchased_at: string | null
+          status: string
+          store: string
+          transaction_id: string | null
+          updated_at: string
+          will_renew: boolean | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "billing_webhook_events"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
       claim_content_report_email_alert: {
         Args: { p_report_id: string }
@@ -1936,6 +2487,30 @@ export type Database = {
         }
         Returns: boolean
       }
+      commit_onboarding: {
+        Args: {
+          p_capture: Json
+          p_commit_id: string
+          p_family_name: string
+          p_kid_names: Json
+          p_memory_date?: string
+          p_tagged_kid_indexes: Json
+        }
+        Returns: {
+          commit_id: string
+          created_at: string
+          family_id: string
+          is_new_family: boolean
+          memory_id: string | null
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "onboarding_commits"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       create_content_report: {
         Args: {
           p_note?: string
@@ -1946,10 +2521,34 @@ export type Database = {
         }
         Returns: string
       }
+      create_export_job: {
+        Args: {
+          p_family_count: number
+          p_max_active?: number
+          p_owner_user_id: string
+        }
+        Returns: {
+          asset_count: number
+          created_at: string
+          expires_at: string
+          family_count: number
+          id: string
+          last_accessed_at: string | null
+          owner_user_id: string
+          status: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "export_jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       create_family: {
         Args: { name: string }
         Returns: {
           account_deletion_token: string | null
+          billing_grace_until: string | null
           created_at: string
           deleted_at: string | null
           deletion_fence_started_at: string | null
@@ -2037,6 +2636,7 @@ export type Database = {
         Args: { fam: string }
         Returns: {
           account_deletion_token: string | null
+          billing_grace_until: string | null
           created_at: string
           deleted_at: string | null
           deletion_fence_started_at: string | null
@@ -2080,6 +2680,12 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      enqueue_billing_trial_reminders: {
+        Args: { p_now?: string }
+        Returns: number
+      }
+      expire_billing_entitlements: { Args: { p_now?: string }; Returns: number }
+      expire_export_jobs: { Args: { p_now?: string }; Returns: number }
       fail_family_member_portrait_generation: {
         Args: { attempt_token: string; target_version_id: string }
         Returns: {
@@ -2176,11 +2782,22 @@ export type Database = {
         Args: { p_fences: Json; p_owner_id: string }
         Returns: boolean
       }
+      get_abandoned_anonymous_auth_user_ids: {
+        Args: { p_older_than: string }
+        Returns: {
+          created_at: string
+          id: string
+        }[]
+      }
       get_content_report_email_alert_redrive_candidates: {
         Args: { p_limit?: number }
         Returns: {
           report_id: string
         }[]
+      }
+      get_family_billing_status: {
+        Args: { p_family_id: string }
+        Returns: Json
       }
       get_family_member_profiles: {
         Args: { fam: string }
@@ -2255,6 +2872,7 @@ export type Database = {
         Args: { fam: string; roles: string[] }
         Returns: boolean
       }
+      is_anonymous_user: { Args: never; Returns: boolean }
       is_family_member: { Args: { fam: string }; Returns: boolean }
       mark_ai_usage_alert_outbox_delivery_unknown: {
         Args: { p_id: string; p_token: string }
@@ -2264,12 +2882,20 @@ export type Database = {
         Args: { p_id: string; p_token: string }
         Returns: boolean
       }
+      mark_billing_trial_reminder_sent: {
+        Args: { p_claim_token: string; p_id: string }
+        Returns: boolean
+      }
       mark_content_report_email_alert_sent: {
         Args: { p_attempt_token: string; p_report_id: string }
         Returns: boolean
       }
       mark_onboarding_voice_cleanup_expected: {
         Args: { p_actor_user_id: string; p_request_id: string }
+        Returns: boolean
+      }
+      owner_has_billing_access: {
+        Args: { p_now?: string; p_owner_user_id: string }
         Returns: boolean
       }
       promote_ai_image_preparation:
@@ -2316,6 +2942,35 @@ export type Database = {
           requests_deleted: number
           rollups_deleted: number
         }[]
+      }
+      queue_billing_webhook_event: {
+        Args: {
+          p_app_user_id: string
+          p_entitlement_id: string
+          p_environment: string
+          p_event_at: string
+          p_event_id: string
+          p_event_type: string
+          p_expires_at: string
+          p_grace_until: string
+          p_management_url: string
+          p_original_transaction_id: string
+          p_period_type: string
+          p_product_id: string
+          p_purchased_at: string
+          p_store: string
+          p_transaction_id: string
+          p_will_renew: boolean
+        }
+        Returns: Json
+      }
+      reconcile_billing_snapshot: {
+        Args: {
+          p_entitlements: Json
+          p_environment: string
+          p_owner_user_id: string
+        }
+        Returns: boolean
       }
       reconcile_portrait_generation_workflow_job: {
         Args: { p_job_id: string; p_model: string }
@@ -2430,6 +3085,10 @@ export type Database = {
           }
       release_ai_usage_alert_outbox: {
         Args: { p_id: string; p_token: string }
+        Returns: boolean
+      }
+      release_billing_trial_reminder: {
+        Args: { p_claim_token: string; p_error: string; p_id: string }
         Returns: boolean
       }
       release_content_report_email_alert: {

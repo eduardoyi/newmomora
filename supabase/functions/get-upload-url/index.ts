@@ -5,6 +5,7 @@ import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts'
 import { createPresignedPutUrl, R2_URL_EXPIRY } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { assertUserOwnedKey, getAllowedContentTypes, parseStorageKey } from '../_shared/storage-keys.ts';
+import { checkBillingMediaUpload } from '../_shared/billing.ts';
 
 export interface GetUploadUrlRequest {
   objectKey: string;
@@ -88,6 +89,22 @@ export async function handleGetUploadUrl(req: Request): Promise<Response> {
   }
 
   const parsed = parseStorageKey(objectKey);
+  if (parsed?.kind === 'memory_media') {
+    const billingResponse = await checkBillingMediaUpload(serviceClient, {
+      familyId,
+      actorUserId: user.id,
+      memoryId: parsed.entityId,
+    });
+    if (billingResponse) return billingResponse;
+  }
+  if (parsed?.kind !== 'memory_media') {
+    const billingResponse = await checkBillingMediaUpload(serviceClient, {
+      familyId,
+      actorUserId: user.id,
+      memoryId: '00000000-0000-4000-8000-000000000000',
+    });
+    if (billingResponse) return billingResponse;
+  }
   if (parsed?.kind === 'portrait_version_photo') {
     const [{ data: member }, { data: existingVersion }] = await Promise.all([
       serviceClient

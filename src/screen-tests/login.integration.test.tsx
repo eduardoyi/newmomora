@@ -13,6 +13,7 @@ import LoginScreen from '../../app/(auth)/login';
 import { FOOTER_KEYBOARD_CLEARANCE } from '@/components/keyboard-sticky-shell';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { rootRoute } from '@/lib/routes';
 import { isE2eFixturesEnabled } from '@/utils/e2e-fixtures';
 
 jest.mock('expo-router', () => ({
@@ -221,7 +222,7 @@ describe('LoginScreen (soft editorial)', () => {
           email: 'dev@example.com',
           password: 'super-secret',
         });
-        expect(router.replace).toHaveBeenCalledWith('/(app)/(tabs)/timeline');
+        expect(router.replace).toHaveBeenCalledWith(rootRoute);
       });
     });
 

@@ -24,6 +24,7 @@ import { AuthButton, AuthErrorMessage, AuthField, AuthInput, AuthScreen } from '
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { onboardingStoryRoute } from '@/lib/onboarding-routes';
+import { rootRoute } from '@/lib/routes';
 import { isPasswordLoginEmail, normalizeEmail } from '@/services/reviewer-auth';
 import { isE2eFixturesEnabled } from '@/utils/e2e-fixtures';
 
@@ -88,7 +89,7 @@ export default function LoginScreen() {
       return;
     }
 
-    router.replace('/(app)/(tabs)/timeline');
+    router.replace(rootRoute);
   };
 
   return (

@@ -4,7 +4,8 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { putObjectBytes } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
-import { assertUserOwnedKey, getAllowedContentTypes } from '../_shared/storage-keys.ts';
+import { assertUserOwnedKey, getAllowedContentTypes, parseStorageKey } from '../_shared/storage-keys.ts';
+import { checkBillingMediaUpload } from '../_shared/billing.ts';
 
 export interface UploadMediaResponse {
   objectKey: string;
@@ -87,6 +88,14 @@ export async function handleUploadMedia(req: Request): Promise<Response> {
   if (!isManagerRole(role)) {
     return errorResponse('Not authorized for this family', 403, 'forbidden');
   }
+
+  const parsed = parseStorageKey(objectKey);
+  const billingResponse = await checkBillingMediaUpload(serviceClient, {
+    familyId,
+    actorUserId: user.id,
+    memoryId: parsed?.kind === 'memory_media' ? parsed.entityId : '00000000-0000-4000-8000-000000000000',
+  });
+  if (billingResponse) return billingResponse;
 
   const maxBytes = maxBytesForContentType(contentType);
   const contentLength = parseContentLength(req.headers.get('content-length'));

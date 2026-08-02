@@ -18,6 +18,7 @@ import {
 } from '../_shared/prompts.ts';
 import { getObjectBytes } from '../_shared/r2.ts';
 import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
+import { checkBillingFamilyWrite } from '../_shared/billing.ts';
 
 export interface AnalyzeEmotionRequest {
   memoryId: string;
@@ -259,6 +260,14 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
   if (!callerRole) {
     return errorResponse('Not authorized for this memory', 403, 'forbidden');
   }
+
+  const billingResponse = await checkBillingFamilyWrite(
+    serviceClient,
+    memory.family_id,
+    user.id,
+    'emotion_analysis',
+  );
+  if (billingResponse) return billingResponse;
 
   const row = memory as MemoryRow;
   const snapshot = {

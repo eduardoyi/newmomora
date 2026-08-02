@@ -39,6 +39,7 @@ import {
 } from '../_shared/portrait-memory-retrigger.ts';
 import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
 import { resolvePortraitVersionAtDate } from '../_shared/portrait-versions.ts';
+import { checkBillingAiGeneration } from '../_shared/billing.ts';
 
 export interface GenerateIllustrationRequest {
   memoryId: string;
@@ -471,6 +472,18 @@ export async function handleGenerateIllustration(
       'invalid_memory_type',
     );
   }
+
+  const billingResponse = await checkBillingAiGeneration(
+    dependencies.createServiceClient(),
+    {
+      familyId: memory.family_id,
+      actorUserId: callerId,
+      targetKind: 'memory',
+      targetId: memory.id,
+      requestIntent: requestIntent ?? (forceRegenerate ? 'manual_regenerate' : 'initial'),
+    },
+  );
+  if (billingResponse) return billingResponse;
 
   const backend = getIllustrationBackend();
   const isExplicitManualRegenerate = requestIntent === 'manual_regenerate';

@@ -5,6 +5,7 @@ import PasswordScreen from '../../app/(auth)/password';
 import LoginScreen from '../../app/(auth)/login';
 import { useAuth } from '@/hooks/use-auth';
 import { onboardingStoryRoute } from '@/lib/onboarding-routes';
+import { rootRoute } from '@/lib/routes';
 import { DEMO_EMAIL, REVIEWER_EMAIL } from '@/services/reviewer-auth';
 
 jest.mock('expo-router', () => ({
@@ -162,7 +163,7 @@ describe('reviewer password sign-in', () => {
     });
   });
 
-  it('shows loading, submits only the guarded email, and routes to the timeline on success', async () => {
+  it('shows loading, submits only the guarded email, and routes through the front door on success', async () => {
     let resolveSignIn!: (value: { error: null }) => void;
     signInWithPassword.mockReturnValue(
       new Promise((resolve) => {
@@ -186,7 +187,7 @@ describe('reviewer password sign-in', () => {
     resolveSignIn({ error: null });
 
     await waitFor(() => {
-      expect(router.replace).toHaveBeenCalledWith('/(app)/(tabs)/timeline');
+      expect(router.replace).toHaveBeenCalledWith(rootRoute);
     });
   });
 

@@ -99,6 +99,23 @@ export async function processResolution(
     return errorResponse('This invite can no longer be approved', 409, 'invalid_status');
   }
 
+  // Approval adds a member and therefore changes the paid journal. Keep the
+  // enforcement authoritative even though this function uses the service
+  // client for its multi-table workflow; otherwise a lapsed owner could
+  // approve invites forever after the normal RLS path denied that same write.
+  const { error: billingError } = await serviceClient.rpc('assert_billing_write_access', {
+    p_family_id: invite.family_id,
+    p_actor_user_id: callerId,
+    p_operation: 'invite_approve',
+  });
+  if (billingError) {
+    if (billingError.code === 'P0001') {
+      return errorResponse('An active Momora subscription is required to approve invites.', 402, 'subscription_required');
+    }
+    console.error('resolve-family-invite billing check failed', billingError.message);
+    return errorResponse('Could not verify subscription access', 503, 'billing_unavailable');
+  }
+
   const { error: membershipError } = await serviceClient.from('family_memberships').insert({
     family_id: invite.family_id,
     user_id: invite.redeemed_by,

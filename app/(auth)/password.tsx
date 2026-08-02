@@ -11,6 +11,7 @@ import {
 } from '@/components/auth-screen';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { rootRoute } from '@/lib/routes';
 import { isPasswordLoginEmail, normalizeEmail } from '@/services/reviewer-auth';
 
 export default function PasswordScreen() {
@@ -43,7 +44,7 @@ function PasswordForm({ email }: { email: string }) {
       return;
     }
 
-    router.replace('/(app)/(tabs)/timeline');
+    router.replace(rootRoute);
   };
 
   return (

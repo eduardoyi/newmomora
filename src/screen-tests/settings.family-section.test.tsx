@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import SettingsScreen from '../../app/(app)/(tabs)/settings';
 import { useAuth } from '@/hooks/use-auth';
+import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
@@ -30,6 +31,10 @@ jest.mock('expo-router', () => ({
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
+}));
+
+jest.mock('@/hooks/use-billing', () => ({
+  useBilling: jest.fn(),
 }));
 
 jest.mock('@/hooks/useFamilyInvites', () => ({
@@ -62,6 +67,7 @@ jest.mock('@/services/family', () => ({
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
+const mockedUseBilling = useBilling as jest.MockedFunction<typeof useBilling>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyInvites = useFamilyInvites as jest.MockedFunction<typeof useFamilyInvites>;
 const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.MockedFunction<
@@ -110,6 +116,18 @@ describe('Settings Family section', () => {
       signInWithPassword: jest.fn(),
       signOut: jest.fn(),
     });
+
+    mockedUseBilling.mockReturnValue({
+      offerings: null,
+      status: null,
+      isConfigured: false,
+      isLoading: false,
+      isOffline: false,
+      purchase: jest.fn(),
+      restore: jest.fn(),
+      startOnboardingIllustration: jest.fn(),
+      refresh: jest.fn(),
+    } as never);
 
     mockedUseUserProfile.mockReturnValue({
       profile: { name: 'Rosa', enable_daily_reminder: false } as never,

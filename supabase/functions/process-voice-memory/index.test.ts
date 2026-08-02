@@ -42,6 +42,9 @@ function makeDependencies(input: Partial<ProcessVoiceMemoryDependencies> = {}): 
     getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: true }),
     createServiceClient: () => ({
       rpc: async (name, args) => {
+        if (name === 'assert_billing_write_access') {
+          return { data: true, error: null };
+        }
         calls.events.push(name === 'reserve_onboarding_voice_attempt' ? 'reserve' : 'mark-cleanup');
         calls.rpcCalls.push({ name, args });
         if (name === 'reserve_onboarding_voice_attempt') {

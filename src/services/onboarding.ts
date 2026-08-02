@@ -15,8 +15,8 @@
 // via step 2 rather than leaving an orphan family with no kids, or piling up
 // duplicate families on repeated retries.
 import { supabase } from '@/lib/supabase';
-import { createFamily, deleteFamily, fetchMyFamilyMemberships, friendlyFamilyLimitError } from '@/services/family';
-import { createFamilyMember, fetchFamilyMembers, type FamilyMember } from '@/services/family-members';
+import { fetchMyFamilyMemberships } from '@/services/family';
+import { fetchFamilyMembers } from '@/services/family-members';
 import { createMemory } from '@/services/memories';
 import type { PostMediaMemoryInput } from '@/services/memory-posting';
 import { fetchUserProfile, updateUserProfile } from '@/services/user-profile';
@@ -115,43 +115,6 @@ export function notificationSettingsForChoice(
   }
 }
 
-/**
- * Creates one name-only `family_members` row per kid name, in entry order.
- * Throws on the first failure -- the caller rolls the whole attempt back
- * rather than leaving a partial roster with no way to tell, on retry, which
- * names already exist (kid names are not unique, so re-deriving "what's
- * missing" from the DB is not reliable).
- */
-async function createKidMembers(
-  userId: string,
-  familyId: string,
-  kidNames: string[],
-): Promise<FamilyMember[]> {
-  const members: FamilyMember[] = [];
-
-  for (const rawName of kidNames) {
-    const name = rawName.trim();
-    if (!name) {
-      continue;
-    }
-
-    const { data, error } = await createFamilyMember({
-      userId,
-      familyId,
-      name,
-      dateOfBirth: null,
-    });
-
-    if (error || !data) {
-      throw new Error(error?.message ?? `Could not create a profile for ${name}`);
-    }
-
-    members.push(data);
-  }
-
-  return members;
-}
-
 interface FirstMemoryResult {
   memoryId: string | null;
   /** See CommitOnboardingResult.pendingMediaUpload's doc comment -- the
@@ -173,6 +136,7 @@ async function createFirstMemory(
   familyId: string,
   capture: OnboardingDraft['capture'],
   taggedMemberIds: string[],
+  pendingMediaMemoryId?: string,
 ): Promise<FirstMemoryResult> {
   if (!capture) {
     return { memoryId: null, pendingMediaUpload: null };
@@ -182,7 +146,7 @@ async function createFirstMemory(
   const memoryDate = getLocalTodayIso();
 
   if (capture.mediaUri) {
-    const memoryId = createUuid();
+    const memoryId = pendingMediaMemoryId ?? createUuid();
 
     return {
       memoryId,
@@ -218,7 +182,8 @@ async function createFirstMemory(
     content: text,
     memoryDate,
     taggedMemberIds,
-    memoryType: 'text_only',
+    memoryType: 'text_illustration',
+    deferIllustration: true,
   });
 
   if (error || !data) {
@@ -228,22 +193,57 @@ async function createFirstMemory(
   return { memoryId: data.id, pendingMediaUpload: null };
 }
 
-/**
- * Best-effort rollback for a fresh family that failed to reach a fully
- * committed state (kids and/or first memory). Soft-delete (`delete_family`)
- * is safe here even though the owner's membership row survives it --
- * fetchMyFamilyMemberships/FamilyProvider already filter out soft-deleted
- * families (see use-family.tsx), so a rolled-back attempt never resolves as
- * "existing family" for a later resolvePostAuthDestination check. Never
- * throws: a failed rollback must not mask the original error that triggered
- * it.
- */
-async function rollbackFamily(familyId: string): Promise<void> {
-  try {
-    await deleteFamily(familyId);
-  } catch {
-    // Best-effort -- see doc comment above.
+function buildOnboardingMediaUpload(
+  memoryId: string,
+  capture: OnboardingDraft['capture'],
+  taggedMemberIds: string[],
+): PostMediaMemoryInput | null {
+  if (!capture?.mediaUri) {
+    return null;
   }
+
+  return {
+    memoryId,
+    mediaAssets: [
+      {
+        fileUri: capture.mediaUri,
+        contentType: capture.mediaContentType ?? 'image/jpeg',
+        durationMs: capture.mediaDurationMs,
+        aspectRatio: capture.mediaAspectRatio,
+      },
+    ],
+    content: capture.text.trim() || undefined,
+    memoryDate: getLocalTodayIso(),
+    taggedMemberIds,
+  };
+}
+
+/**
+ * Captures are intentionally committed before the paywall hand-off, but a
+ * returning owner needs an authoritative billing check before we attempt any
+ * write. Otherwise a lapsed owner would discover the denial as a generic RLS
+ * error (or in the background media queue) and the caller could choose the
+ * wrong paywall variant.
+ */
+async function assertOnboardingWriteAccess(familyId: string): Promise<void> {
+  const { data, error } = await (supabase as any).rpc('get_family_billing_status', {
+    p_family_id: familyId,
+  });
+
+  if (error) {
+    throw new Error(error.message ?? 'Could not verify subscription access');
+  }
+
+  if (!data || data.has_write_access !== true) {
+    const billingError = new Error('An active Momora subscription is required for this action');
+    (billingError as Error & { code?: string }).code = 'SUBSCRIPTION_REQUIRED';
+    throw billingError;
+  }
+}
+
+function normalizeRpcRow<T>(value: unknown): T | null {
+  const row = Array.isArray(value) ? value[0] : value;
+  return row && typeof row === 'object' ? (row as T) : null;
 }
 
 /**
@@ -409,6 +409,37 @@ export async function commitOnboarding(
   let memoryId: string | null = null;
   let isNewFamily = false;
   let pendingMediaUpload: PostMediaMemoryInput | null = null;
+  // Older drafts only had committedFamilyId. Treat an absent marker as the
+  // legacy "capture already handed off" state; only an explicit false means
+  // a resubscribe flow still has a capture waiting to be saved.
+  let captureCommitted = draft.captureCommitted !== false || !draft.capture;
+
+  if (familyId && !captureCommitted) {
+    try {
+      await assertOnboardingWriteAccess(familyId);
+      const taggedMemberIds = await resolveExistingTaggedMemberIds(familyId, draft);
+      const firstMemory = await createFirstMemory(
+        user.id,
+        familyId,
+        draft.capture,
+        taggedMemberIds,
+        draft.pendingMediaMemoryId,
+      );
+      memoryId = firstMemory.memoryId;
+      pendingMediaUpload = firstMemory.pendingMediaUpload;
+      captureCommitted = !pendingMediaUpload;
+      await patchOnboardingDraft({
+        captureCommitted,
+        pendingMediaMemoryId: pendingMediaUpload ? memoryId ?? undefined : undefined,
+      });
+    } catch (error) {
+      return {
+        data: null,
+        error: toServiceError(error, 'Could not save your memory. Please try again.'),
+        existingFamilyId: familyId,
+      };
+    }
+  }
 
   if (!familyId) {
     const lookup = await resolveExistingFamilyId(user.id);
@@ -430,10 +461,18 @@ export async function commitOnboarding(
     if (lookup.kind === 'found') {
       const existingFamilyId = lookup.familyId;
       try {
+        await assertOnboardingWriteAccess(existingFamilyId);
         const taggedMemberIds = await resolveExistingTaggedMemberIds(existingFamilyId, draft);
-        const firstMemory = await createFirstMemory(user.id, existingFamilyId, draft.capture, taggedMemberIds);
+        const firstMemory = await createFirstMemory(
+          user.id,
+          existingFamilyId,
+          draft.capture,
+          taggedMemberIds,
+          draft.pendingMediaMemoryId,
+        );
         memoryId = firstMemory.memoryId;
         pendingMediaUpload = firstMemory.pendingMediaUpload;
+        captureCommitted = !pendingMediaUpload;
       } catch (error) {
         return {
           data: null,
@@ -443,53 +482,81 @@ export async function commitOnboarding(
       }
 
       familyId = existingFamilyId;
-      await patchOnboardingDraft({ committedFamilyId: familyId });
+      await patchOnboardingDraft({
+        committedFamilyId: familyId,
+        captureCommitted,
+        pendingMediaMemoryId: pendingMediaUpload ? memoryId ?? undefined : undefined,
+      });
     } else {
       const familyName = draft.familyName.trim() || defaultFamilyName(draft.kidNames) || 'Our Family';
-      const { data: family, error: familyError } = await createFamily(familyName);
+      const commitId = draft.onboardingCommitId ?? createUuid();
+      // Persist before the RPC. If the response is lost after Postgres
+      // commits, the next OTP retry sends the same idempotency key and gets
+      // the original family/memory instead of minting a second family.
+      await patchOnboardingDraft({ onboardingCommitId: commitId });
 
-      if (familyError || !family) {
-        return {
-          data: null,
-          error: familyError
-            ? { ...familyError, message: friendlyFamilyLimitError(familyError.message, familyError.code) }
-            : { message: 'Could not create your family' },
-        };
-      }
-
-      const newFamilyId = family.id;
-
-      try {
-        const members = await createKidMembers(user.id, newFamilyId, draft.kidNames);
-
-        const taggedMemberIds = (() => {
-          const fromSelection = (draft.capture?.taggedKidIndexes ?? [])
-            .map((index) => members[index]?.id)
-            .filter((id): id is string => Boolean(id));
-
-          // Defensive fallback so the first memory is never saved untagged --
-          // mirrors new-memory.tsx's own single-member auto-tag safety net.
-          if (fromSelection.length > 0) {
-            return fromSelection;
+      const capture = draft.capture
+        ? {
+            text: draft.capture.text,
+            hasMedia: Boolean(draft.capture.mediaUri),
+            contentType: draft.capture.mediaContentType ?? null,
+            durationMs: draft.capture.mediaDurationMs ?? null,
+            aspectRatio: draft.capture.mediaAspectRatio ?? null,
           }
+        : null;
+      const { data: commitData, error: commitError } = await (supabase as any).rpc(
+        'commit_onboarding',
+        {
+          p_commit_id: commitId,
+          p_family_name: familyName,
+          p_kid_names: draft.kidNames,
+          p_capture: capture,
+          p_tagged_kid_indexes: draft.capture?.taggedKidIndexes ?? [],
+          p_memory_date: getLocalTodayIso(),
+        },
+      );
 
-          return members[0] ? [members[0].id] : [];
-        })();
-
-        const firstMemory = await createFirstMemory(user.id, newFamilyId, draft.capture, taggedMemberIds);
-        memoryId = firstMemory.memoryId;
-        pendingMediaUpload = firstMemory.pendingMediaUpload;
-      } catch (error) {
-        await rollbackFamily(newFamilyId);
-        return { data: null, error: toServiceError(error, 'Could not finish setting up your journal') };
+      if (commitError) {
+        return { data: null, error: toServiceError(commitError, 'Could not finish setting up your journal') };
       }
 
-      familyId = newFamilyId;
-      isNewFamily = true;
-      // Persisted before step 5: the expensive, non-retryable-without-
-      // duplication part is done, so every later call (including one
-      // triggered by this same screen re-rendering) must skip straight here.
-      await patchOnboardingDraft({ committedFamilyId: familyId });
+      const committed = normalizeRpcRow<{
+        family_id: string;
+        memory_id: string | null;
+        is_new_family: boolean;
+      }>(commitData);
+      if (!committed) {
+        return { data: null, error: { message: 'The onboarding commit was incomplete. Please try again.' } };
+      }
+
+      familyId = committed.family_id;
+      memoryId = committed.memory_id;
+      isNewFamily = committed.is_new_family;
+      captureCommitted = !draft.capture?.mediaUri;
+
+      if (memoryId && draft.capture?.mediaUri) {
+        const { data: members, error: membersError } = await fetchFamilyMembers(familyId);
+        if (membersError || !members || members.length === 0) {
+          return {
+            data: null,
+            error: membersError ?? { message: 'Could not load your family members after setup' },
+          };
+        }
+        const selected = (draft.capture.taggedKidIndexes ?? [])
+          .map((index) => members[index]?.id)
+          .filter((id): id is string => Boolean(id));
+        pendingMediaUpload = buildOnboardingMediaUpload(
+          memoryId,
+          draft.capture,
+          selected.length > 0 ? selected : [members[0].id],
+        );
+      }
+
+      await patchOnboardingDraft({
+        committedFamilyId: familyId,
+        captureCommitted,
+        pendingMediaMemoryId: pendingMediaUpload ? memoryId ?? undefined : undefined,
+      });
     }
   }
 

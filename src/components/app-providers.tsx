@@ -4,6 +4,7 @@ import { AppState } from 'react-native';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import { AuthProvider } from '@/hooks/use-auth';
+import { BillingProvider } from '@/hooks/use-billing';
 import { FamilyProvider } from '@/hooks/use-family';
 import { PendingMemoryUploadsProvider } from '@/hooks/use-pending-memory-uploads';
 import { queryClient } from '@/lib/query-client';
@@ -26,7 +27,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
           <FamilyProvider>
-            <PendingMemoryUploadsProvider>{children}</PendingMemoryUploadsProvider>
+            <BillingProvider>
+              <PendingMemoryUploadsProvider>{children}</PendingMemoryUploadsProvider>
+            </BillingProvider>
           </FamilyProvider>
         </AuthProvider>
       </QueryClientProvider>

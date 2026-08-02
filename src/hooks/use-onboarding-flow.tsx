@@ -22,6 +22,7 @@ import {
   patchOnboardingDraft,
   type OnboardingDraft,
 } from '@/utils/onboarding-progress';
+import { useAuth } from '@/hooks/use-auth';
 
 // Coalesces rapid field edits (typing a kid's name, editing the capture
 // text) into one AsyncStorage write. Shorter than the new-memory draft's
@@ -39,20 +40,49 @@ interface OnboardingFlowContextValue {
 const OnboardingFlowContext = createContext<OnboardingFlowContextValue | null>(null);
 
 export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
+  const { user, isLoading: isAuthLoading } = useAuth();
   const [draft, setDraft] = useState<OnboardingDraft>(() => createEmptyOnboardingDraft());
   const [isHydrated, setIsHydrated] = useState(false);
+  const [isAccountDraftHidden, setIsAccountDraftHidden] = useState(false);
   const isFirstPersistableChangeRef = useRef(true);
 
   useEffect(() => {
+    if (isAuthLoading) {
+      return;
+    }
+
     let isMounted = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- account changes must gate the previous user's draft before rendering it
+    setIsHydrated(false);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- account changes must hide scoped resume data before rendering it
+    setIsAccountDraftHidden(false);
+    isFirstPersistableChangeRef.current = true;
 
     void getOnboardingDraft().then((stored) => {
       if (!isMounted) {
         return;
       }
 
-      if (stored) {
-        setDraft(stored);
+      // Pre-auth progress is intentionally not bound yet: it must survive
+      // the OTP round trip. Once a paywall/committed-family marker exists,
+      // however, it belongs to the account that created that family. Never
+      // show another account's child names, capture, or paywall resume state
+      // after a device-level sign-out/sign-in switch.
+      if (stored?.ownerUserId && !user?.id) {
+        // Keep the signed-in user's resume marker on disk so the same account
+        // can continue after Leave, but never expose its child/capture data to
+        // an unauthenticated session using the device.
+        setIsAccountDraftHidden(true);
+        setDraft(createEmptyOnboardingDraft());
+      } else if (stored?.ownerUserId && user?.id && stored.ownerUserId !== user.id) {
+        void clearOnboardingDraft();
+        setDraft(createEmptyOnboardingDraft());
+      } else {
+        setDraft(
+          stored && user?.id && stored.committedFamilyId && !stored.ownerUserId
+            ? { ...stored, ownerUserId: user.id }
+            : stored ?? createEmptyOnboardingDraft(),
+        );
       }
 
       setIsHydrated(true);
@@ -61,13 +91,13 @@ export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [isAuthLoading, user?.id]);
 
   // Debounced persist on every draft change, once hydration has had its
   // chance to run -- an earlier write would race the hydration read above
   // and could clobber a real stored draft with the fresh-mount default.
   useEffect(() => {
-    if (!isHydrated) {
+    if (!isHydrated || isAccountDraftHidden) {
       return;
     }
 
@@ -83,16 +113,21 @@ export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
     const timeoutId = setTimeout(() => {
       void patchOnboardingDraft({
         step: draft.step,
+        ownerUserId: draft.ownerUserId,
         kidNames: draft.kidNames,
         familyName: draft.familyName,
         capture: draft.capture,
         notificationChoice: draft.notificationChoice,
         committedFamilyId: draft.committedFamilyId,
+        onboardingCommitId: draft.onboardingCommitId,
+        captureCommitted: draft.captureCommitted,
+        pendingMediaMemoryId: draft.pendingMediaMemoryId,
+        paywallMode: draft.paywallMode,
       });
     }, ONBOARDING_DRAFT_PERSIST_DEBOUNCE_MS);
 
     return () => clearTimeout(timeoutId);
-  }, [draft, isHydrated]);
+  }, [draft, isAccountDraftHidden, isHydrated]);
 
   const patch = useCallback((partial: Partial<Omit<OnboardingDraft, 'version'>>) => {
     setDraft((current) => ({ ...current, ...partial }));

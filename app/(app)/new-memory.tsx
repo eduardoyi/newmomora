@@ -1,4 +1,5 @@
 import { navigateBack } from '@/lib/navigation';
+import { router } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -25,6 +26,7 @@ import { colors, fonts, spacing } from '@/constants/theme';
 import { pickJournalingPrompt } from '@/constants/journaling-prompts';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useAuth } from '@/hooks/use-auth';
+import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemoryMutations } from '@/hooks/useMemories';
@@ -73,11 +75,44 @@ const TYPE_CONFIGS = {
 export default function NewMemoryScreen() {
   const { user } = useAuth();
   const { role, familyId } = useFamily();
+  const { status: billingStatus, isLoading: isBillingLoading } = useBilling();
   const { members, isLoading: isLoadingMembers } = useFamilyMembers();
   const { createMemory, isCreating } = useMemoryMutations();
   const { enqueue: enqueuePendingMemoryUpload } = usePendingMemoryUploads();
   const { updateProfile } = useUserProfile();
   const [placeholderPrompt] = useState(() => pickJournalingPrompt());
+
+  useEffect(() => {
+    if (
+      !familyId ||
+      !canEditFamilyContent(role) ||
+      isBillingLoading ||
+      !billingStatus ||
+      billingStatus.has_write_access ||
+      role !== 'owner' ||
+      billingStatus.owner_user_id !== user?.id
+    ) {
+      return;
+    }
+
+    router.replace({ pathname: '/(onboarding)/paywall', params: { mode: 'resubscribe' } });
+  }, [billingStatus, familyId, isBillingLoading, role, user?.id]);
+
+  // Subscription ownership belongs to the family owner. A manager must never
+  // be sent to a purchase screen or charged for an owner's lapsed access.
+  // Keep the manager in the journal/read-only surface until the owner renews.
+  useEffect(() => {
+    if (
+      !familyId ||
+      role !== 'manager' ||
+      isBillingLoading ||
+      !billingStatus ||
+      billingStatus.has_write_access
+    ) {
+      return;
+    }
+    navigateBack();
+  }, [billingStatus, familyId, isBillingLoading, role]);
 
   // Guard on mount: viewers reaching this route directly (FAB is hidden for
   // them) get bounced back rather than seeing a form whose save would be

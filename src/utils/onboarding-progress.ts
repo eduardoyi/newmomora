@@ -13,6 +13,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export const ONBOARDING_DRAFT_STORAGE_KEY = 'momora.onboardingDraft';
 export const ONBOARDING_DRAFT_VERSION = 1;
 
+// A paywall can be mounted and immediately cleared by a purchase/Leave
+// action. Serialize writes and clears so a late debounced/marker write cannot
+// recreate a draft after `clearOnboardingDraft()` has already run.
+let storageMutationChain: Promise<void> = Promise.resolve();
+
+function enqueueStorageMutation<T>(mutation: () => Promise<T>): Promise<T> {
+  const result = storageMutationChain.then(mutation, mutation);
+  storageMutationChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 /**
  * Resume point for the owner-path story/capture/trust arc (S0-S16). The
  * join path (J1-J5) does not resume through this draft's `step` -- see
@@ -39,6 +53,9 @@ export type OnboardingStepId =
   | 'included'
   | 'paywall'
   | 'portrait';
+
+/** Distinguishes first-time purchase copy from the lapsed-owner paywall. */
+export type OnboardingPaywallMode = 'new-owner' | 'resubscribe';
 
 export type OnboardingNotificationChoice = 'eve' | 'late' | 'morn' | 'none';
 
@@ -68,6 +85,8 @@ export interface OnboardingDraftCapture {
 
 export interface OnboardingDraft {
   version: 1;
+  /** Binds post-auth resume data to the Momora account that created it. */
+  ownerUserId?: string;
   step: OnboardingStepId;
   kidNames: string[];
   familyName: string;
@@ -75,6 +94,14 @@ export interface OnboardingDraft {
   notificationChoice: OnboardingNotificationChoice | null;
   /** Set by commitOnboarding (src/services/onboarding.ts) -- makes the commit idempotent across the OTP round trip and app kills. */
   committedFamilyId?: string;
+  /** Stable transaction id for the server-side atomic onboarding commit. */
+  onboardingCommitId?: string;
+  /** True once the captured text/media has been handed to the real family. */
+  captureCommitted?: boolean;
+  /** Stable media-memory id while a captured attachment awaits queue handoff. */
+  pendingMediaMemoryId?: string;
+  /** Set while S15 is visible so a cold launch can resume the paywall. */
+  paywallMode?: OnboardingPaywallMode;
 }
 
 export function createEmptyOnboardingDraft(step: OnboardingStepId = 'welcome'): OnboardingDraft {
@@ -98,8 +125,13 @@ function isOnboardingDraftShape(value: unknown): value is OnboardingDraft {
   return (
     candidate.version === ONBOARDING_DRAFT_VERSION &&
     typeof candidate.step === 'string' &&
+    (candidate.ownerUserId === undefined || typeof candidate.ownerUserId === 'string') &&
     Array.isArray(candidate.kidNames) &&
-    typeof candidate.familyName === 'string'
+    typeof candidate.familyName === 'string' &&
+    (candidate.pendingMediaMemoryId === undefined || typeof candidate.pendingMediaMemoryId === 'string') &&
+    (candidate.paywallMode === undefined ||
+      candidate.paywallMode === 'new-owner' ||
+      candidate.paywallMode === 'resubscribe')
   );
 }
 
@@ -138,25 +170,29 @@ export async function getOnboardingDraft(): Promise<OnboardingDraft | null> {
 export async function patchOnboardingDraft(
   partial: Partial<Omit<OnboardingDraft, 'version'>>,
 ): Promise<OnboardingDraft> {
-  const current = (await getOnboardingDraft()) ?? createEmptyOnboardingDraft();
-  const next: OnboardingDraft = { ...current, ...partial, version: ONBOARDING_DRAFT_VERSION };
+  return enqueueStorageMutation(async () => {
+    const current = (await getOnboardingDraft()) ?? createEmptyOnboardingDraft();
+    const next: OnboardingDraft = { ...current, ...partial, version: ONBOARDING_DRAFT_VERSION };
 
-  try {
-    await AsyncStorage.setItem(ONBOARDING_DRAFT_STORAGE_KEY, JSON.stringify(next));
-  } catch {
-    // Best-effort: losing a write means the app re-derives from the last
-    // successfully persisted draft (or starts over) next launch. Never
-    // blocking the caller matters more than never losing a field.
-  }
+    try {
+      await AsyncStorage.setItem(ONBOARDING_DRAFT_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Best-effort: losing a write means the app re-derives from the last
+      // successfully persisted draft (or starts over) next launch. Never
+      // blocking the caller matters more than never losing a field.
+    }
 
-  return next;
+    return next;
+  });
 }
 
-export async function clearOnboardingDraft(): Promise<void> {
-  try {
-    await AsyncStorage.removeItem(ONBOARDING_DRAFT_STORAGE_KEY);
-  } catch {
-    // Best-effort; a stale draft is re-cleared (or ignored via the
-    // version/shape check) on the next read.
-  }
+export function clearOnboardingDraft(): Promise<void> {
+  return enqueueStorageMutation(async () => {
+    try {
+      await AsyncStorage.removeItem(ONBOARDING_DRAFT_STORAGE_KEY);
+    } catch {
+      // Best-effort; a stale draft is re-cleared (or ignored via the
+      // version/shape check) on the next read.
+    }
+  });
 }

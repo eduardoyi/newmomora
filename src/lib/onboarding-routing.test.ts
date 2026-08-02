@@ -1,4 +1,4 @@
-import { resolvePostAuthDestination } from '@/lib/onboarding-routing';
+import { resolveOwnerPaywallMode, resolvePostAuthDestination } from '@/lib/onboarding-routing';
 import { createEmptyOnboardingDraft } from '@/utils/onboarding-progress';
 
 // onboarding-progress.ts imports AsyncStorage at module scope (for its
@@ -11,12 +11,159 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 
 describe('resolvePostAuthDestination', () => {
+  it('derives the first-time mode only when store history is absent and trial eligibility is true', () => {
+    expect(resolveOwnerPaywallMode({ hasEverHadAccess: false, trialEligible: true })).toBe('new-owner');
+    expect(resolveOwnerPaywallMode({ hasEverHadAccess: false, trialEligible: false })).toBe('resubscribe');
+    expect(resolveOwnerPaywallMode({ hasEverHadAccess: true, trialEligible: true })).toBe('resubscribe');
+  });
+
   it('routes a member of an existing family straight to the journal', () => {
     expect(
       resolvePostAuthDestination({
         memberships: [{ familyId: 'fam-1' }],
         hasPendingInviteCode: false,
         draft: null,
+        intent: 'login',
+      }),
+    ).toEqual({ kind: 'journal' });
+  });
+
+  it('routes an owner with no purchase history to the first-time trial paywall', () => {
+    expect(
+      resolvePostAuthDestination({
+        memberships: [{ familyId: 'fam-1', role: 'owner' }],
+        hasPendingInviteCode: false,
+        draft: null,
+        billing: {
+          familyId: 'fam-1',
+          isOwner: true,
+          hasWriteAccess: false,
+          hasEverHadAccess: false,
+          trialEligible: true,
+        },
+        intent: 'login',
+      }),
+    ).toEqual({ kind: 'resume-paywall', mode: 'new-owner' });
+  });
+
+  it('routes an owner with store history but no access to the no-trial resubscribe paywall', () => {
+    expect(
+      resolvePostAuthDestination({
+        memberships: [{ familyId: 'fam-1', role: 'owner' }],
+        hasPendingInviteCode: false,
+        draft: null,
+        billing: {
+          familyId: 'fam-1',
+          isOwner: true,
+          hasWriteAccess: false,
+          hasEverHadAccess: true,
+          trialEligible: false,
+        },
+        intent: 'login',
+      }),
+    ).toEqual({ kind: 'resume-paywall', mode: 'resubscribe' });
+  });
+
+  it('does not paywall a complimentary or active owner', () => {
+    expect(
+      resolvePostAuthDestination({
+        memberships: [{ familyId: 'fam-1', role: 'owner' }],
+        hasPendingInviteCode: false,
+        draft: null,
+        billing: {
+          familyId: 'fam-1',
+          isOwner: true,
+          hasWriteAccess: true,
+          hasEverHadAccess: false,
+          trialEligible: true,
+        },
+        intent: 'login',
+      }),
+    ).toEqual({ kind: 'journal' });
+  });
+
+  it('does not paywall a joiner when the owner has no access', () => {
+    expect(
+      resolvePostAuthDestination({
+        memberships: [{ familyId: 'fam-1', role: 'manager' }],
+        hasPendingInviteCode: false,
+        draft: null,
+        billing: {
+          familyId: 'fam-1',
+          isOwner: false,
+          hasWriteAccess: false,
+          hasEverHadAccess: false,
+          trialEligible: true,
+        },
+        intent: 'login',
+      }),
+    ).toEqual({ kind: 'journal' });
+  });
+
+  it('resumes an explicitly marked first-time paywall even though the family already exists', () => {
+    expect(
+      resolvePostAuthDestination({
+        memberships: [{ familyId: 'fam-1' }],
+        hasPendingInviteCode: false,
+        draft: { ...createEmptyOnboardingDraft('paywall'), paywallMode: 'new-owner' },
+        intent: 'login',
+      }),
+    ).toEqual({ kind: 'resume-paywall', mode: 'new-owner' });
+  });
+
+  it('resumes a lapsed-owner paywall with its no-trial mode', () => {
+    expect(
+      resolvePostAuthDestination({
+        memberships: [{ familyId: 'fam-1' }],
+        hasPendingInviteCode: false,
+        draft: { ...createEmptyOnboardingDraft('paywall'), paywallMode: 'resubscribe' },
+        intent: 'login',
+      }),
+    ).toEqual({ kind: 'resume-paywall', mode: 'resubscribe' });
+  });
+
+  it('lets loaded server billing correct a stale first-time paywall marker', () => {
+    expect(
+      resolvePostAuthDestination({
+        memberships: [{ familyId: 'fam-1', role: 'owner' }],
+        hasPendingInviteCode: false,
+        draft: { ...createEmptyOnboardingDraft('paywall'), paywallMode: 'new-owner' },
+        billing: {
+          familyId: 'fam-1',
+          isOwner: true,
+          hasWriteAccess: false,
+          hasEverHadAccess: true,
+          trialEligible: false,
+        },
+        intent: 'login',
+      }),
+    ).toEqual({ kind: 'resume-paywall', mode: 'resubscribe' });
+  });
+
+  it('lets loaded server billing correct a stale resubscribe marker for a trial-eligible owner', () => {
+    expect(
+      resolvePostAuthDestination({
+        memberships: [{ familyId: 'fam-1', role: 'owner' }],
+        hasPendingInviteCode: false,
+        draft: { ...createEmptyOnboardingDraft('paywall'), paywallMode: 'resubscribe' },
+        billing: {
+          familyId: 'fam-1',
+          isOwner: true,
+          hasWriteAccess: false,
+          hasEverHadAccess: false,
+          trialEligible: true,
+        },
+        intent: 'login',
+      }),
+    ).toEqual({ kind: 'resume-paywall', mode: 'new-owner' });
+  });
+
+  it('keeps an unmarked stale paywall draft behind the normal membership shortcut', () => {
+    expect(
+      resolvePostAuthDestination({
+        memberships: [{ familyId: 'fam-1' }],
+        hasPendingInviteCode: false,
+        draft: createEmptyOnboardingDraft('paywall'),
         intent: 'login',
       }),
     ).toEqual({ kind: 'journal' });

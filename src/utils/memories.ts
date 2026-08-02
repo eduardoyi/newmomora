@@ -45,6 +45,8 @@ export interface CreateMemoryInput {
   memoryDate: string;
   taggedMemberIds: string[];
   memoryType?: MemoryType;
+  /** Used only for the first onboarding memory; purchase starts it later. */
+  deferIllustration?: boolean;
 }
 
 export interface CreateMediaMemoryInput {
