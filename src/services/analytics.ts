@@ -164,6 +164,18 @@ export interface AnalyticsPersonProperties {
 // every call.
 let client: PostHog | null | undefined;
 
+// Every dashboard filters on `env = prod`; launch funnels are small-N and a
+// few developer/simulator runs would otherwise skew them. Registered at
+// client creation AND after every reset() -- reset clears registered super
+// properties along with the distinct id (verified against a live project:
+// post-sign-out events arrived without `env`, which would silently drop
+// every post-sign-out user from the env-filtered dashboards).
+function registerEnvSuperProperty(instance: PostHog): void {
+  void instance.register({ env: __DEV__ ? 'dev' : 'prod' }).catch((error: unknown) => {
+    console.warn('[analytics] failed to register super properties', error);
+  });
+}
+
 function createClient(): PostHog | null {
   const apiKey = process.env.EXPO_PUBLIC_POSTHOG_API_KEY;
   if (!apiKey) {
@@ -180,11 +192,7 @@ function createClient(): PostHog | null {
       // implementation plan assumed. Using the SDK's actual name.
       captureAppLifecycleEvents: true,
     });
-    // Every dashboard filters on `env = prod`; launch funnels are small-N
-    // and a few developer/simulator runs would otherwise skew them.
-    void instance.register({ env: __DEV__ ? 'dev' : 'prod' }).catch((error: unknown) => {
-      console.warn('[analytics] failed to register super properties', error);
-    });
+    registerEnvSuperProperty(instance);
     return instance;
   } catch (error) {
     console.warn('[analytics] failed to initialize PostHog client', error);
@@ -257,6 +265,10 @@ export function resetAnalytics(): void {
     const posthog = getClient();
     if (!posthog) return;
     posthog.reset();
+    // reset() wipes registered super properties -- without this, every
+    // event after a sign-out loses `env` and drops out of the env-filtered
+    // dashboards (see registerEnvSuperProperty's doc comment).
+    registerEnvSuperProperty(posthog);
   } catch (error) {
     console.warn('[analytics] resetAnalytics failed', error);
   }

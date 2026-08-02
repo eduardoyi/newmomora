@@ -111,13 +111,20 @@ describe('analytics', () => {
       expect(mockPostHogClient.setPersonProperties).toHaveBeenCalledWith({ access_reason: 'trial' });
     });
 
-    it('resetAnalytics forwards to posthog.reset', () => {
+    it('resetAnalytics forwards to posthog.reset and re-registers the env super property', () => {
       const { resetAnalytics } = loadAnalytics();
       const { mockPostHogClient } = loadPostHogMock();
 
       resetAnalytics();
 
       expect(mockPostHogClient.reset).toHaveBeenCalledTimes(1);
+      // posthog.reset() clears registered super properties, so `env` must be
+      // re-registered or post-sign-out events vanish from env-filtered
+      // dashboards: one register at client creation + one after reset.
+      expect(mockPostHogClient.register).toHaveBeenCalledTimes(2);
+      expect(mockPostHogClient.register).toHaveBeenLastCalledWith(
+        expect.objectContaining({ env: expect.any(String) }),
+      );
     });
 
     it('registers the env super property at client creation', () => {
