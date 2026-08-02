@@ -1,11 +1,13 @@
 // See no-family.test.tsx for why screen tests live outside app/.
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { router } from 'expo-router';
 import { Alert, Linking } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import SettingsScreen from '../../app/(app)/(tabs)/settings';
 import { useAuth } from '@/hooks/use-auth';
+import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
@@ -22,6 +24,10 @@ jest.mock('expo-router', () => ({
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
+}));
+
+jest.mock('@/hooks/use-billing', () => ({
+  useBilling: jest.fn(),
 }));
 
 jest.mock('@/hooks/useFamilyInvites', () => ({
@@ -61,6 +67,7 @@ jest.mock('@/services/auth', () => ({
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
+const mockedUseBilling = useBilling as jest.MockedFunction<typeof useBilling>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyInvites = useFamilyInvites as jest.MockedFunction<typeof useFamilyInvites>;
 const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.MockedFunction<
@@ -108,7 +115,17 @@ describe('Settings notifications toggles', () => {
     signOut.mockClear();
     requestRegistration.mockClear();
     requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true, isRegistered: true });
-
+    mockedUseBilling.mockReturnValue({
+      offerings: null,
+      status: null,
+      isConfigured: false,
+      isLoading: false,
+      isOffline: false,
+      purchase: jest.fn(),
+      restore: jest.fn(),
+      startOnboardingIllustration: jest.fn(),
+      refresh: jest.fn(),
+    } as never);
     mockedUseNotificationsRegistration.mockReturnValue({ requestRegistration });
 
     mockedUseAuth.mockReturnValue({
@@ -480,10 +497,124 @@ describe('Settings notifications toggles', () => {
       expect(openUrlSpy).toHaveBeenCalledWith('mailto:hello@usemomora.com');
     });
     expect(queryByText('Send feedback')).toBeNull();
-    expect(queryByText('Export data')).toBeNull();
+    expect(queryByText('Export your memories')).toBeNull();
     expect(queryByText('How illustrations work')).toBeNull();
 
     openUrlSpy.mockRestore();
+  });
+
+  it('lets an owner request a memory export by email', async () => {
+    mockProfile();
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseBilling.mockReturnValue({
+      offerings: null,
+      status: {
+        has_write_access: true,
+        has_ever_had_access: true,
+        access_reason: 'trial',
+        management_url: 'https://apps.apple.com/account/subscriptions',
+      } as never,
+      isConfigured: true,
+      isLoading: false,
+      isOffline: false,
+      purchase: jest.fn(),
+      restore: jest.fn(),
+      startOnboardingIllustration: jest.fn(),
+      refresh: jest.fn(),
+    } as never);
+    const openUrlSpy = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+
+    const { getByTestId, getByText } = renderScreen();
+    fireEvent.press(getByTestId('settings-manage-subscription'));
+    fireEvent.press(getByTestId('settings-export-memories'));
+
+    await waitFor(() => {
+      expect(openUrlSpy).toHaveBeenCalledWith('https://apps.apple.com/account/subscriptions');
+      expect(openUrlSpy).toHaveBeenCalledWith(
+        'mailto:hello@usemomora.com?subject=Request%20a%20download%20of%20all%20my%20memories&body=Hi%20Momora%20support%2C%0A%0AI%20would%20like%20to%20request%20a%20download%20of%20all%20my%20memories.%0A%0AThank%20you.',
+      );
+    });
+    expect(getByText('Request a download of all your memories')).toBeTruthy();
+    openUrlSpy.mockRestore();
+  });
+
+  it('routes an owner without a management URL to the purchase paywall', () => {
+    mockProfile();
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseBilling.mockReturnValue({
+      offerings: null,
+      status: {
+        has_write_access: false,
+        has_ever_had_access: false,
+        access_reason: 'expired',
+        management_url: null,
+      } as never,
+      isConfigured: false,
+      isLoading: false,
+      isOffline: false,
+      purchase: jest.fn(),
+      restore: jest.fn(),
+      startOnboardingIllustration: jest.fn(),
+      refresh: jest.fn(),
+    } as never);
+
+    const { getByTestId } = renderScreen();
+    fireEvent.press(getByTestId('settings-manage-subscription'));
+
+    expect(router.push).toHaveBeenCalledWith('/(onboarding)/paywall');
+  });
+
+  it('shows complimentary access without offering a paywall action', () => {
+    mockProfile();
+    mockedUseFamily.mockReturnValue({
+      family: { id: 'family-1', name: "Rosa's family" },
+      familyId: 'family-1',
+      role: 'owner',
+      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseBilling.mockReturnValue({
+      offerings: null,
+      status: {
+        has_write_access: true,
+        has_ever_had_access: false,
+        access_reason: 'complimentary',
+        management_url: null,
+      } as never,
+      isConfigured: false,
+      isLoading: false,
+      isOffline: false,
+      purchase: jest.fn(),
+      restore: jest.fn(),
+      startOnboardingIllustration: jest.fn(),
+      refresh: jest.fn(),
+    } as never);
+
+    const { getByText, getByTestId } = renderScreen();
+    expect(getByText('Complimentary Momora Plus access')).toBeTruthy();
+    fireEvent.press(getByTestId('settings-manage-subscription'));
+    expect(router.push).not.toHaveBeenCalled();
   });
 
   it('warns an owner that their family journals are hidden immediately and deleted with the account', () => {

@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { useBilling } from '@/hooks/use-billing';
 import { familyMembershipsQueryKey, useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
@@ -45,7 +46,13 @@ const FAQ_URL = 'https://usemomora.com/faq/';
 const PRIVACY_POLICY_URL = 'https://usemomora.com/privacy-policy/';
 const TERMS_OF_SERVICE_URL = 'https://usemomora.com/terms-of-service/';
 const SUPPORT_EMAIL_URL = 'mailto:hello@usemomora.com';
-const APP_VERSION = Constants.expoConfig?.version ?? '1.1.0';
+const MEMORY_EXPORT_REQUEST_SUBJECT = 'Request a download of all my memories';
+const MEMORY_EXPORT_REQUEST_BODY =
+  'Hi Momora support,\n\nI would like to request a download of all my memories.\n\nThank you.';
+const MEMORY_EXPORT_REQUEST_URL = `${SUPPORT_EMAIL_URL}?subject=${encodeURIComponent(
+  MEMORY_EXPORT_REQUEST_SUBJECT,
+)}&body=${encodeURIComponent(MEMORY_EXPORT_REQUEST_BODY)}`;
+const APP_VERSION = Constants.expoConfig?.version ?? '1.2.0';
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -334,6 +341,7 @@ export default function SettingsScreen() {
   const { user, signOut } = useAuth();
   const { role } = useFamily();
   const isViewer = isViewerRole(role);
+  const { status: billingStatus, isLoading: isBillingLoading } = useBilling();
   const {
     profile,
     updateProfile,
@@ -480,6 +488,22 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleManageSubscription = async () => {
+    if (billingStatus?.access_reason === 'complimentary') {
+      return;
+    }
+
+    if (!billingStatus?.management_url) {
+      router.push(
+        billingStatus?.has_ever_had_access
+          ? { pathname: '/(onboarding)/paywall', params: { mode: 'resubscribe' } }
+          : '/(onboarding)/paywall',
+      );
+      return;
+    }
+    await openExternalUrl(billingStatus.management_url);
+  };
+
   const scheduleAccountDeletion = async () => {
     try {
       await deleteAccount();
@@ -604,6 +628,42 @@ export default function SettingsScreen() {
             </SettingsBlock>
   
             <FamilySection />
+
+            {isOwnerRole(role) ? (
+              <SettingsBlock title="Subscription & archive">
+                <SettingsRow
+                  first
+                  chevron={billingStatus?.access_reason !== 'complimentary'}
+                  label="Subscription"
+                  caption={
+                    isBillingLoading
+                      ? 'Checking access…'
+                      : billingStatus?.access_reason === 'complimentary'
+                        ? 'Complimentary Momora Plus access'
+                        : billingStatus?.has_write_access
+                          ? billingStatus.access_reason === 'trial'
+                            ? 'Momora Plus trial is active'
+                            : 'Momora Plus is active'
+                          : billingStatus?.has_ever_had_access
+                            ? 'Your archive is safe. Resubscribe to capture more.'
+                            : 'Start Momora Plus to unlock your journal.'
+                  }
+                  onPress={
+                    billingStatus?.access_reason === 'complimentary'
+                      ? undefined
+                      : () => void handleManageSubscription()
+                  }
+                  testID="settings-manage-subscription"
+                />
+                <SettingsRow
+                  chevron
+                  label="Export your memories"
+                  caption="Request a download of all your memories"
+                  onPress={() => void openExternalUrl(MEMORY_EXPORT_REQUEST_URL)}
+                  testID="settings-export-memories"
+                />
+              </SettingsBlock>
+            ) : null}
   
             <SettingsBlock title="Help">
               <SettingsRow
