@@ -1,7 +1,7 @@
 # Feature: Paid subscriptions
 
 **Status:** `implementation complete; store release pending`
-**Last updated:** 2026-08-02
+**Last updated:** 2026-08-03
 **PRD reference:** [PRD §6.9](../PRD.md#69-paid-access-and-data-export)
 
 ## Overview
@@ -25,11 +25,13 @@ lapse.
   purchase; an owner with prior store history is sent to the no-trial
   resubscribe variant instead.
 - The paywall presents annual Momora Plus by default ($99.99/year). It shows
-  the seven-day-trial copy only after RevenueCat confirms that the current
-  customer is eligible for the annual introductory offer. Monthly purchases,
-  and annual purchases whose eligibility is unknown (including Android until
-  the store confirms it), show the paid-now copy instead; there is no weekly
-  plan.
+  the seven-day-trial copy when the server says the current owner is trial
+  eligible and RevenueCat confirms an eligible seven-day annual offer. On iOS
+  this uses RevenueCat's introductory-eligibility result; on Android it uses
+  the eligible Google Play subscription option's free phase. Monthly
+  purchases, and annual purchases whose store offer metadata is unavailable or
+  has no seven-day free phase, show the paid-now copy instead; there is no
+  weekly plan.
 - Store purchase, restore, and current-price loading are handled by
   RevenueCat. The app does not treat tapping through the paywall as access.
 - A successful first purchase starts the pending onboarding illustration in
@@ -111,18 +113,20 @@ entitlement, an active complimentary grant, or an explicit grace window.
 |-------|------------|------|-------|-------|
 | App Store | `momora_annual_v1` | annual | $99.99/year | 7 days |
 | App Store | `momora_monthly_v1` | monthly | $12.99/month | none |
-| Play Store | `momora:annual` | annual/base plan `annual` | target $99.99/year | 7-day offer target; base plan pending |
-| Play Store | `momora:monthly` | monthly/base plan `monthly` | target $12.99/month | none; base plan pending |
+| Play Store | `momora:annual` | annual/base plan `annual` | $99.99/year | 7-day free-trial offer `annual-7d-trial-v2` (developer-determined) |
+| Play Store | `momora:monthly` | monthly/base plan `monthly` | $12.99/month | none |
 
 RevenueCat entitlement: `momora_plus`; offering: `default`; annual package is
 `$rc_annual` and monthly package is `$rc_monthly`.
 
-Dashboard status on 2026-08-01: the RevenueCat project, entitlement, offering,
-webhook, and SDK keys are configured. The App Store products are still
-`Prepare for Submission`, and Google Play's subscription shell exists but its
-base plans could not be saved because Play Console returned a generic save
-error. Store release remains blocked until those products/base plans are
-submitted and active.
+Dashboard status on 2026-08-03: the RevenueCat project, entitlement, offering,
+webhook, and SDK keys are configured. The Google Play annual/monthly base plans
+and the developer-determined `annual-7d-trial-v2` offer are active; the
+original `annual-7d-trial` offer (new-customer-acquisition eligibility) is
+deactivated — see the note under Constraints & edge cases before recreating
+anything like it. The App Store products are still
+`Prepare for Submission`; public release remains blocked until the Apple
+products are attached to the app version and submitted for review.
 
 ## API & Edge Functions
 
@@ -213,9 +217,44 @@ family status/admission check.
 - The first onboarding illustration is a one-time, server-consumed exemption
   from the owner fair-use pool, but still requires active billing access. It
   cannot be replayed by repeatedly marking a memory as onboarding-attributed.
+- RevenueCat's cross-platform introductory-eligibility API is iOS-only and
+  returns `UNKNOWN` on Android. The Android path must inspect the eligible
+  Google Play `subscriptionOptions` for the configured single-cycle seven-day
+  free phase. `defaultOption.freePhase` is the compatibility fallback when
+  the native response does not include the option list; Play Billing Lab can
+  expose an eligible offer in `subscriptionOptions` while leaving that
+  convenience property pointed at the base plan. The purchase path then
+  passes the exact trial option for trial copy and the exact base-plan option
+  for paid-now/resubscribe copy; it must not let the SDK silently choose
+  another offer. If that metadata is absent or does not contain the
+  configured seven-day free phase, the UI must use paid-now copy.
+- The Google Play annual trial must use the **Developer determined** offer
+  eligibility (current offer: `annual-7d-trial-v2`). New-customer-acquisition
+  eligibility is keyed to the *Google account's* purchase history for the
+  `momora` subscription — which the Momora server cannot see — so Google
+  silently strips the offer from `subscriptionOptions` for any Google account
+  with prior (including sandbox) purchase history, and the paywall shows
+  paid-now copy even when the server says `trial_eligible: true`. With a
+  developer-determined offer Google always returns it, the server's
+  `trial_eligible` stays the sole authority for showing the trial, and Google
+  is guaranteed to honor the trial the paywall advertised. Accepted trade-off:
+  a person who re-trials by creating a second Momora owner account on the same
+  Google account is no longer blocked by Google on Android (iOS still blocks
+  this via Apple-ID intro eligibility); the server's per-owner
+  `trial_eligible`/`has_ever_had_access` remains the enforcement point.
+- Dev builds log a `[billing:android-trial]` diagnostic (product identifier,
+  every subscription option, and a per-option `trialRejectionReason`) whenever
+  Android computes trial eligibility as anything other than `eligible`; the
+  happy path logs nothing. When the paywall unexpectedly shows paid-now copy,
+  read that log first: "base plan, not an offer" as the only
+  option means Google filtered the offer for this account/device (stale Play
+  Store catalog cache — force-stop, clear Play Store cache, reboot — or offer
+  misconfiguration), while a populated option with a rejection reason means an
+  offer-metadata mismatch.
 - Store dashboard setup and Supabase secrets must be verified separately for
-  development/sandbox and production. Do not enable sandbox access in the
-  production database.
+  development/sandbox and production. Keep the production
+  `allow_sandbox_access` flag disabled outside a short, explicitly controlled
+  QA window.
 
 ## Dependencies
 
@@ -234,7 +273,7 @@ family status/admission check.
 | `supabase/functions/_shared/billing.test.ts` | Admission error mapping and retryable usage limits |
 | `supabase/functions/billing-reconcile/index.test.ts` | Store/environment/product snapshot normalization |
 | `supabase/functions/revenuecat-webhook/index.test.ts` | Webhook normalization, Google base-plan IDs and auth |
-| `src/services/billing.test.ts` | Exact product selection, trial eligibility and pending confirmation |
+| `src/services/billing.test.ts` | Exact product selection, iOS/Google Play trial eligibility, explicit Google Play option purchases, and pending confirmation |
 | `src/services/export.test.ts` | Export worker download, native sharing and cache cleanup |
 
 ### Integration tests
@@ -250,8 +289,53 @@ family status/admission check.
 
 ### E2E (Maestro)
 
-The store purchase path must be run with Apple sandbox and Play internal-test
-accounts on development clients; no automated flow purchases a real product.
+The store purchase path must be run with Apple sandbox accounts (development
+clients are fine on iOS) and, on Android, only on a Play-delivered build — see
+the next section; no automated flow purchases a real product.
+
+### Android billing on-device testing (hard requirements, learned 2026-08-04)
+
+- **Sideloaded builds can never complete a purchase.** Play App Signing means
+  the delivered app carries Google's app-signing certificate; our upload key is
+  a different key and Google will not release the signing key. Any locally
+  built APK — dev client included, even signed with the upload keystore — gets
+  `DEVELOPER_ERROR` ("Please ensure the app is signed correctly" /
+  "This version of the application is not configured for billing"). Catalog
+  and trial-eligibility queries DO work in sideloaded dev clients, so the
+  split is: dev client + Metro for paywall/eligibility iteration,
+  Play-installed internal-testing build for the actual purchase flow.
+- **Billing validates the tester account's Play-entitled version, not the
+  installed binary.** If the Google account resolves to a track whose release
+  predates the billing permission (old closed track, or production while it is
+  still pre-billing), every purchase fails with "version not configured for
+  billing" no matter which binary is installed. The Play listing is the
+  oracle: it must show the internal-testing badge and the billing-enabled
+  version for that account before purchases can work. Keep test accounts
+  opted into exactly one track (internal testing) and keep stale closed
+  tracks paused with no tester lists attached.
+- **Automatic protection ("Installer check", Play Console → Protected with
+  Play) must stay OFF.** Google injects runtime licensing checks into served
+  AABs; license testing is documented as unsupported with it, and it breaks
+  sandbox purchases. Protection is baked per-version at upload: versions
+  uploaded while it was on (≤ versionCode 39) remain poisoned forever — only
+  a new AAB uploaded after disabling is served clean.
+- **Test on a single-Google-account device.** With multiple accounts on the
+  phone, Play binds the app's delivery/billing context to an arbitrary one
+  (listing shows "associated with a different account: …") and re-rolls it on
+  every uninstall — producing instant internal-testing install failures
+  (Finsky error 1010) and billing checks against the wrong account's entitled
+  version. Either remove non-tester Google accounts from the device while
+  testing, or make every account on the device a license+internal tester.
+- **Propagation is real and layered.** Offer/track/license-tester changes take
+  minutes-to-hours server-side, and the device caches on top: after any
+  Play-side change, force-stop Play Store, clear its cache (and data if
+  desperate), reboot, and let the Play Store app sync before retesting.
+  Play-side state changes only help after they propagate — clearing device
+  caches *before* propagation just reloads the stale state.
+- The dev build profile signs with the local upload keystore
+  (`credentialsSource: "local"` in eas.json) so dev-client installs coexist
+  cleanly with this workflow; older EAS-keystore dev clients must be
+  uninstalled once before installing a new one.
 
 ### Edge Function tests (Deno)
 
@@ -279,6 +363,9 @@ npm run test:edge
 
 | Date | Change |
 |------|--------|
+| 2026-08-04 | Unblocked Android sandbox purchases: paused the stale "Security Enhancements" closed track that pinned tester accounts to pre-billing v1.1.1, disabled Play automatic protection (incompatible with license testing; requires a fresh AAB ≥ build 40), and documented the Android on-device billing test requirements. Discovered live v1.1.1 cannot onboard new users under `all_families` enforcement (pre-RPC client inserts hit billing RLS) — production needs 1.2.0 or an enforcement decision. |
+| 2026-08-03 | Fixed Android paid-now paywall for trial-eligible owners: replaced the new-customer-acquisition Google Play offer with developer-determined `annual-7d-trial-v2` (Google was filtering the offer by Google-account history the server cannot see) and added the dev-only `[billing:android-trial]` eligibility diagnostic log. |
+| 2026-08-03 | Made annual trial copy consistent across stores by reading the eligible Google Play subscription option list, purchasing the exact displayed trial/base-plan option, and adding Android eligibility regression coverage. |
 | 2026-08-02 | Closed the remaining paywall race: subscription cards and trial/no-trial copy now wait for a refreshed, owner-matched billing status; RevenueCat identity transitions are serialized and stale modes cannot select a product before verification. |
 | 2026-08-02 | Hardened paywall hand-off and front-door routing: serialized same-user RevenueCat transitions, owner-only membership guards, durable media queue markers, account-bound resume state, fail-closed billing lookup UI, and no-offering retry UI |
 | 2026-08-02 | Added private owner-wide complimentary access grants, onboarding paywall bypass, Settings status, and operator runbook |

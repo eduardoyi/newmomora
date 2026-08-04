@@ -15,6 +15,7 @@ import {
   restoreBillingPurchases,
   startPendingOnboardingIllustration,
   type BillingOfferings,
+  type BillingPurchaseOptions,
   type BillingServiceError,
 } from '@/services/billing';
 import type { CustomerInfo, PurchasesPackage } from 'react-native-purchases';
@@ -30,7 +31,7 @@ interface BillingContextValue {
   isOffline: boolean;
   billingStatusError: BillingServiceError | Error | null;
   offeringsError: Error | null;
-  purchase: (packageToPurchase: PurchasesPackage) => Promise<CustomerInfo>;
+  purchase: (packageToPurchase: PurchasesPackage, options?: BillingPurchaseOptions) => Promise<CustomerInfo>;
   restore: () => Promise<CustomerInfo>;
   startOnboardingIllustration: (memoryId?: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -180,9 +181,15 @@ export function BillingProvider({ children }: { children: ReactNode }) {
   }, [isConfigured, reconcileAndRefresh]);
 
   const purchaseMutation = useMutation({
-    mutationFn: async (packageToPurchase: PurchasesPackage) => {
+    mutationFn: async ({
+      packageToPurchase,
+      options,
+    }: {
+      packageToPurchase: PurchasesPackage;
+      options?: BillingPurchaseOptions;
+    }) => {
       if (!user) throw new Error('You must be signed in to subscribe.');
-      return purchaseBillingPackage(packageToPurchase, user.id);
+      return purchaseBillingPackage(packageToPurchase, user.id, options);
     },
     onSuccess: async () => {
       await statusQuery.refetch();
@@ -214,7 +221,8 @@ export function BillingProvider({ children }: { children: ReactNode }) {
   const refetchStatus = statusQuery.refetch;
 
   const purchase = useCallback(
-    (packageToPurchase: PurchasesPackage) => purchaseAsync(packageToPurchase),
+    (packageToPurchase: PurchasesPackage, options?: BillingPurchaseOptions) =>
+      purchaseAsync({ packageToPurchase, options }),
     [purchaseAsync],
   );
   const restore = useCallback(() => restoreAsync(), [restoreAsync]);

@@ -427,7 +427,7 @@ export default function PaywallScreen() {
     // keeps that from being misreported as a purchase failure.
     let purchaseCompleted = false;
     try {
-      const customerInfo = await purchase(selectedPackage);
+      const customerInfo = await purchase(selectedPackage, { useAnnualTrial: showAnnualTrial });
       if (!customerInfo.entitlements.active[MOMORA_ENTITLEMENT_ID]) {
         throw new Error('Your purchase is still being confirmed. Please try again in a moment.');
       }
@@ -615,14 +615,14 @@ export default function PaywallScreen() {
           >
             <View style={styles.planCardText}>
               <OnbTitle size={17}>
-                {hasAnnualTrial ? 'Try it FREE for 7 days' : `Momora Plus · ${annualPrice}/year`}
+                {hasAnnualTrial ? 'Try it FREE for 7 days' : 'Annual (Save 36%)'}
               </OnbTitle>
               <OnbBody muted size={13} style={styles.planCardSubtext}>
                 {hasAnnualTrial
                   ? `Then ${annualPrice}/year (just ${annualMonthlyEquivalent ?? 'the annual rate'}/month)`
                   : annualMonthlyEquivalent
-                    ? `${annualMonthlyEquivalent}/month equivalent`
-                    : 'Annual subscription'}
+                    ? `${annualPrice}/year (just ${annualMonthlyEquivalent}/month)`
+                    : `${annualPrice}/year`}
               </OnbBody>
             </View>
             <View style={styles.planCardCheck}>

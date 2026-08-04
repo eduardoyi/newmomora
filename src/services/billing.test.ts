@@ -33,6 +33,7 @@ jest.mock('react-native-purchases', () => ({
     getCustomerInfo: jest.fn(),
     getAppUserID: jest.fn(),
     purchasePackage: jest.fn(),
+    purchaseSubscriptionOption: jest.fn(),
     restorePurchases: jest.fn(),
     addCustomerInfoUpdateListener: jest.fn(),
     removeCustomerInfoUpdateListener: jest.fn(),
@@ -154,6 +155,248 @@ describe('billing service', () => {
     expect(result?.annual.product.identifier).toBe('momora_annual_v1');
     expect(result?.monthly?.product.identifier).toBe('momora_monthly_v1');
     expect(result?.annualTrialEligibility).toBe('eligible');
+  });
+
+  it('uses the eligible Google Play default option for the annual trial', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY = 'android_public_key';
+    const androidAnnual = {
+      ...annual,
+      product: {
+        ...annual.product,
+        identifier: 'momora:annual',
+        defaultOption: {
+          storeProductId: 'momora:annual',
+          productId: 'momora',
+          tags: [],
+          freePhase: {
+            billingPeriod: { unit: 'DAY', value: 7, iso8601: 'P7D' },
+            billingCycleCount: 1,
+            recurrenceMode: 3,
+            offerPaymentMode: 'FREE_TRIAL',
+          },
+        },
+      },
+    } as never;
+    await configureRevenueCat('android-trial-user');
+    mockPurchases.getOfferings.mockResolvedValue({
+      current: { identifier: 'default', availablePackages: [androidAnnual] },
+      all: { default: { identifier: 'default', availablePackages: [androidAnnual] } },
+    } as never);
+
+    const result = await fetchBillingOfferings();
+
+    expect(result?.annualTrialEligibility).toBe('eligible');
+    expect(mockPurchases.checkTrialOrIntroductoryPriceEligibility).not.toHaveBeenCalled();
+  });
+
+  it('uses an eligible Google Play trial in subscriptionOptions when defaultOption is the base plan', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY = 'android_public_key';
+    const basePlanOption = {
+      id: 'annual',
+      storeProductId: 'momora:annual',
+      productId: 'momora',
+      isBasePlan: true,
+      tags: [],
+      freePhase: null,
+    } as never;
+    const trialOption = {
+      id: 'annual-7d-trial',
+      storeProductId: 'momora:annual',
+      productId: 'momora',
+      isBasePlan: false,
+      tags: [],
+      freePhase: {
+        billingPeriod: { unit: 'DAY', value: 7, iso8601: 'P7D' },
+        billingCycleCount: 1,
+        recurrenceMode: 3,
+        offerPaymentMode: 'FREE_TRIAL',
+      },
+    } as never;
+    const androidAnnual = {
+      ...annual,
+      product: {
+        ...annual.product,
+        identifier: 'momora:annual',
+        defaultOption: basePlanOption,
+        subscriptionOptions: [basePlanOption, trialOption],
+      },
+    } as never;
+    await configureRevenueCat('android-billing-lab-user');
+    mockPurchases.getOfferings.mockResolvedValue({
+      current: { identifier: 'default', availablePackages: [androidAnnual] },
+      all: { default: { identifier: 'default', availablePackages: [androidAnnual] } },
+    } as never);
+
+    const result = await fetchBillingOfferings();
+
+    expect(result?.annualTrialEligibility).toBe('eligible');
+
+    (mockPurchases.getAppUserID as jest.Mock).mockResolvedValue('android-billing-lab-user');
+    mockedInvokeEdgeFunction.mockResolvedValue({ data: { active: true }, error: null });
+    mockPurchases.purchaseSubscriptionOption.mockResolvedValue({
+      customerInfo: { originalAppUserId: 'android-billing-lab-user' },
+    } as never);
+    await purchaseBillingPackage(androidAnnual, 'android-billing-lab-user', { useAnnualTrial: true });
+    expect(mockPurchases.purchaseSubscriptionOption).toHaveBeenCalledWith(trialOption);
+  });
+
+  it('does not select a developer-determined ignored trial offer', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY = 'android_public_key';
+    const androidAnnual = {
+      ...annual,
+      product: {
+        ...annual.product,
+        identifier: 'momora:annual',
+        subscriptionOptions: [
+          {
+            id: 'annual-7d-trial',
+            storeProductId: 'momora:annual',
+            productId: 'momora',
+            isBasePlan: false,
+            tags: ['rc-ignore-offer'],
+            freePhase: {
+              billingPeriod: { unit: 'DAY', value: 7, iso8601: 'P7D' },
+              billingCycleCount: 1,
+              recurrenceMode: 3,
+              offerPaymentMode: 'FREE_TRIAL',
+            },
+          },
+        ],
+        defaultOption: null,
+      },
+    } as never;
+    await configureRevenueCat('android-ignored-offer-user');
+    mockPurchases.getOfferings.mockResolvedValue({
+      current: { identifier: 'default', availablePackages: [androidAnnual] },
+      all: { default: { identifier: 'default', availablePackages: [androidAnnual] } },
+    } as never);
+
+    const result = await fetchBillingOfferings();
+
+    expect(result?.annualTrialEligibility).toBe('ineligible');
+  });
+
+  it('keeps the Android paid-now fallback when the default option has no free phase', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY = 'android_public_key';
+    const androidAnnual = {
+      ...annual,
+      product: {
+        ...annual.product,
+        identifier: 'momora:annual',
+        defaultOption: { storeProductId: 'momora:annual', productId: 'momora', tags: [], freePhase: null },
+      },
+    } as never;
+    await configureRevenueCat('android-paid-now-user');
+    mockPurchases.getOfferings.mockResolvedValue({
+      current: { identifier: 'default', availablePackages: [androidAnnual] },
+      all: { default: { identifier: 'default', availablePackages: [androidAnnual] } },
+    } as never);
+
+    const result = await fetchBillingOfferings();
+
+    expect(result?.annualTrialEligibility).toBe('ineligible');
+    expect(mockPurchases.checkTrialOrIntroductoryPriceEligibility).not.toHaveBeenCalled();
+  });
+
+  it('does not advertise seven days when the free phase spans multiple cycles', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY = 'android_public_key';
+    const androidAnnual = {
+      ...annual,
+      product: {
+        ...annual.product,
+        identifier: 'momora:annual',
+        defaultOption: {
+          storeProductId: 'momora:annual',
+          productId: 'momora',
+          tags: [],
+          freePhase: {
+            billingPeriod: { unit: 'DAY', value: 1, iso8601: 'P1D' },
+            billingCycleCount: 7,
+            recurrenceMode: 2,
+            offerPaymentMode: 'FREE_TRIAL',
+          },
+        },
+      },
+    } as never;
+    await configureRevenueCat('android-multi-cycle-user');
+    mockPurchases.getOfferings.mockResolvedValue({
+      current: { identifier: 'default', availablePackages: [androidAnnual] },
+      all: { default: { identifier: 'default', availablePackages: [androidAnnual] } },
+    } as never);
+
+    const result = await fetchBillingOfferings();
+
+    expect(result?.annualTrialEligibility).toBe('ineligible');
+  });
+
+  it('purchases the exact Google Play option that matches the displayed terms', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY = 'android_public_key';
+    const trialOption = {
+      id: 'annual-7d-trial',
+      storeProductId: 'momora:annual',
+      productId: 'momora',
+      isBasePlan: false,
+      tags: [],
+      freePhase: {
+        billingPeriod: { unit: 'DAY', value: 7, iso8601: 'P7D' },
+        billingCycleCount: 1,
+        recurrenceMode: 3,
+        offerPaymentMode: 'FREE_TRIAL',
+      },
+    } as never;
+    const basePlanOption = {
+      id: 'annual',
+      storeProductId: 'momora:annual',
+      productId: 'momora',
+      isBasePlan: true,
+      tags: [],
+      freePhase: null,
+    } as never;
+    const androidAnnual = {
+      ...annual,
+      product: {
+        ...annual.product,
+        identifier: 'momora:annual',
+        defaultOption: trialOption,
+        subscriptionOptions: [trialOption, basePlanOption],
+      },
+    } as never;
+    await configureRevenueCat('android-purchase-user');
+    (mockPurchases.getAppUserID as jest.Mock).mockResolvedValue('android-purchase-user');
+    mockedInvokeEdgeFunction.mockResolvedValue({ data: { active: true }, error: null });
+    mockPurchases.purchaseSubscriptionOption.mockResolvedValue({
+      customerInfo: { originalAppUserId: 'android-purchase-user', entitlements: { active: { momora_plus: {} } } },
+    } as never);
+
+    await purchaseBillingPackage(androidAnnual, 'android-purchase-user', { useAnnualTrial: true });
+    await purchaseBillingPackage(androidAnnual, 'android-purchase-user', { useAnnualTrial: false });
+
+    expect(mockPurchases.purchaseSubscriptionOption).toHaveBeenNthCalledWith(1, trialOption);
+    expect(mockPurchases.purchaseSubscriptionOption).toHaveBeenNthCalledWith(2, basePlanOption);
+    expect(mockPurchases.purchasePackage).not.toHaveBeenCalled();
+  });
+
+  it('fails closed instead of falling back to an unspecified Android offer', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY = 'android_public_key';
+    const androidAnnual = {
+      ...annual,
+      product: { ...annual.product, identifier: 'momora:annual', defaultOption: null, subscriptionOptions: [] },
+    } as never;
+    await configureRevenueCat('android-missing-option-user');
+    (mockPurchases.getAppUserID as jest.Mock).mockResolvedValue('android-missing-option-user');
+
+    await expect(
+      purchaseBillingPackage(androidAnnual, 'android-missing-option-user', { useAnnualTrial: true }),
+    ).rejects.toThrow('Google Play subscription option is no longer available');
+    expect(mockPurchases.purchaseSubscriptionOption).not.toHaveBeenCalled();
+    expect(mockPurchases.purchasePackage).not.toHaveBeenCalled();
   });
 
   it('does not substitute a package by package type when the allowlisted product is absent', async () => {

@@ -371,6 +371,10 @@ describe('PaywallScreen (S15)', () => {
     await waitFor(() => expect(getByText('Your subscription starts immediately')).toBeTruthy());
     expect(queryByText('Try it FREE for 7 days')).toBeNull();
     expect(queryByText('Then $99.99/year (just $8.33/month)')).toBeNull();
+    expect(getByText('Annual (Save 36%)')).toBeTruthy();
+    expect(getByText('$99.99/year (just $8.33/month)')).toBeTruthy();
+    expect(getByText('Monthly')).toBeTruthy();
+    expect(getByText('$12.99/month')).toBeTruthy();
     expect(queryByText('$0.00 today')).toBeNull();
   });
 
@@ -396,7 +400,7 @@ describe('PaywallScreen (S15)', () => {
     fireEvent.press(getByTestId('onb-paywall-cta-button'));
 
     await waitFor(() => {
-      expect(billing.purchase).toHaveBeenCalledWith(annualPackage);
+      expect(billing.purchase).toHaveBeenCalledWith(annualPackage, { useAnnualTrial: true });
       expect(billing.startOnboardingIllustration).toHaveBeenCalledTimes(1);
       expect(router.replace).toHaveBeenCalledWith(onboardingPortraitRoute);
     });

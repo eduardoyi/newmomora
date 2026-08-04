@@ -6,6 +6,7 @@ import Purchases, {
   type PurchasesOffering,
   type PurchasesOfferings,
   type PurchasesPackage,
+  type SubscriptionOption,
 } from 'react-native-purchases';
 import { Platform } from 'react-native';
 
@@ -152,7 +153,150 @@ export interface BillingOfferings {
   raw: PurchasesOfferings;
 }
 
-async function getAnnualTrialEligibility(productId: string): Promise<AnnualTrialEligibility> {
+export interface BillingPurchaseOptions {
+  useAnnualTrial?: boolean;
+}
+
+function getSevenDayFreeTrialMismatch(option: SubscriptionOption): string | null {
+  const phase = option.freePhase;
+  if (!phase) return 'no free phase';
+
+  // A free phase may be represented as a pricing period with multiple cycles;
+  // only a single, explicitly free trial phase matches the copy we show.
+  if (phase.billingCycleCount != null && phase.billingCycleCount !== 1) {
+    return `billingCycleCount=${phase.billingCycleCount}`;
+  }
+  if (phase.recurrenceMode === 1) return 'recurrenceMode=INFINITE_RECURRING';
+  if (phase.offerPaymentMode != null && phase.offerPaymentMode !== 'FREE_TRIAL') {
+    return `offerPaymentMode=${phase.offerPaymentMode}`;
+  }
+
+  const period = phase.billingPeriod;
+  if (!period) return 'free phase has no billing period';
+
+  // RevenueCat can represent the same Google Play offer as either seven days
+  // or one week depending on the store response. The paywall promises seven
+  // days, so only advertise those exact durations.
+  const isSevenDays =
+    (period.unit === 'DAY' && period.value === 7) ||
+    (period.unit === 'WEEK' && period.value === 1) ||
+    period.iso8601 === 'P7D' ||
+    period.iso8601 === 'P1W';
+  return isSevenDays ? null : `period is ${period.value} ${period.unit} (${period.iso8601}), not 7 days`;
+}
+
+function isSevenDayFreeTrial(option: SubscriptionOption): boolean {
+  return getSevenDayFreeTrialMismatch(option) === null;
+}
+
+function isOptionForProduct(option: SubscriptionOption, product: PurchasesPackage['product']): boolean {
+  // RevenueCat represents newer Google products as `subscription:basePlan`
+  // while older/backwards-compatible products may expose just `subscription`.
+  // The option itself came from this StoreProduct, but keep this check so a
+  // malformed/stale native response cannot make us purchase another product.
+  const storeProductId = option.storeProductId ?? '';
+  const productId = option.productId ?? '';
+  return (
+    storeProductId === product.identifier ||
+    productId === product.identifier ||
+    storeProductId.startsWith(`${product.identifier}:`) ||
+    product.identifier.startsWith(`${productId}:`)
+  );
+}
+
+function getGooglePlaySubscriptionOptions(product: PurchasesPackage['product']): SubscriptionOption[] {
+  return product.subscriptionOptions ?? (product.defaultOption ? [product.defaultOption] : []);
+}
+
+function getGooglePlayTrialOption(packageToPurchase: PurchasesPackage): SubscriptionOption | null {
+  const product = packageToPurchase.product;
+  const eligibleTrial = getGooglePlaySubscriptionOptions(product).find(
+    (option) =>
+      !option.isBasePlan &&
+      isOptionForProduct(option, product) &&
+      !(option.tags ?? []).includes('rc-ignore-offer') &&
+      isSevenDayFreeTrial(option),
+  );
+  return eligibleTrial ?? null;
+}
+
+function getTrialRejectionReason(option: SubscriptionOption, product: PurchasesPackage['product']): string | null {
+  if (option.isBasePlan) return 'base plan, not an offer';
+  if (!isOptionForProduct(option, product)) return `product mismatch (expected ${product.identifier})`;
+  if ((option.tags ?? []).includes('rc-ignore-offer')) return 'tagged rc-ignore-offer';
+  return getSevenDayFreeTrialMismatch(option);
+}
+
+/**
+ * Dev-only paywall diagnostic: when the annual trial is not offered, dumps
+ * exactly what the native Play Billing / RevenueCat layer returned and why
+ * each subscription option was rejected as the 7-day trial. Silent when
+ * eligible so the happy path stays quiet. Product metadata only — never log
+ * customer info here.
+ */
+function logAndroidTrialDiagnostics(annual: PurchasesPackage, eligibility: AnnualTrialEligibility): void {
+  if (!__DEV__ || eligibility === 'eligible') return;
+  const product = annual.product;
+  const diagnostics = {
+    eligibility,
+    packageIdentifier: annual.identifier,
+    productIdentifier: product.identifier,
+    subscriptionOptionsPresent: product.subscriptionOptions != null,
+    subscriptionOptionCount: product.subscriptionOptions?.length ?? null,
+    defaultOptionId: product.defaultOption?.id ?? null,
+    options: getGooglePlaySubscriptionOptions(product).map((option) => ({
+      id: option.id,
+      storeProductId: option.storeProductId,
+      productId: option.productId,
+      isBasePlan: option.isBasePlan,
+      tags: option.tags,
+      trialRejectionReason: getTrialRejectionReason(option, product),
+      freePhase: option.freePhase,
+      pricingPhases: option.pricingPhases?.map((phase) => ({
+        billingPeriod: phase.billingPeriod,
+        recurrenceMode: phase.recurrenceMode,
+        billingCycleCount: phase.billingCycleCount,
+        offerPaymentMode: phase.offerPaymentMode,
+        price: phase.price?.formatted,
+      })),
+    })),
+  };
+  console.warn('[billing:android-trial]', JSON.stringify(diagnostics, null, 2));
+}
+
+function getAndroidAnnualTrialEligibility(annual: PurchasesPackage): AnnualTrialEligibility {
+  // RevenueCat's Android introductory-eligibility API always returns UNKNOWN.
+  // Google puts customer-eligible offers in subscriptionOptions. In normal
+  // operation defaultOption points at the same offer the SDK would select,
+  // but Play Billing Lab can override eligibility without changing that
+  // convenience property, so inspect the complete eligible option list.
+  const eligibility =
+    !annual.product.subscriptionOptions && !annual.product.defaultOption
+      ? 'unknown'
+      : getGooglePlayTrialOption(annual)
+        ? 'eligible'
+        : 'ineligible';
+  logAndroidTrialDiagnostics(annual, eligibility);
+  return eligibility;
+}
+
+function getGooglePlayBasePlanOption(packageToPurchase: PurchasesPackage): SubscriptionOption | null {
+  const product = packageToPurchase.product;
+  const basePlanOption = getGooglePlaySubscriptionOptions(product).find(
+    (option) => option.isBasePlan && isOptionForProduct(option, product),
+  );
+  if (basePlanOption) return basePlanOption;
+
+  const defaultOption = product.defaultOption;
+  return defaultOption?.isBasePlan && isOptionForProduct(defaultOption, product) ? defaultOption : null;
+}
+
+async function getAnnualTrialEligibility(annual: PurchasesPackage): Promise<AnnualTrialEligibility> {
+  if (Platform.OS === 'android') {
+    return getAndroidAnnualTrialEligibility(annual);
+  }
+
+  const productId = annual.product.identifier;
   const purchasesWithEligibility = Purchases as unknown as {
     checkTrialOrIntroductoryPriceEligibility?: (productIdentifiers: string[]) => Promise<Record<string, { status?: number }>>;
   };
@@ -165,8 +309,8 @@ async function getAnnualTrialEligibility(productId: string): Promise<AnnualTrial
     const eligibility = await purchasesWithEligibility.checkTrialOrIntroductoryPriceEligibility([productId]);
     switch (eligibility[productId]?.status) {
       // RevenueCat's documented INTRO_ELIGIBILITY_STATUS values are
-      // eligible=2, ineligible=1, no-offer=3, unknown=0.  Android returns
-      // unknown, so it must not display Apple's free-trial claim.
+      // eligible=2, ineligible=1, no-offer=3, unknown=0. Android uses the
+      // Google Play subscription-option path above instead.
       case 2:
         return 'eligible';
       case 1:
@@ -212,7 +356,7 @@ export async function fetchBillingOfferings(expectedUserId?: string): Promise<Bi
       offering,
       annual,
       monthly: findPackage(offering, MOMORA_MONTHLY_PRODUCT_IDS),
-      annualTrialEligibility: await getAnnualTrialEligibility(annual.product.identifier),
+      annualTrialEligibility: await getAnnualTrialEligibility(annual),
       raw,
     };
   });
@@ -245,6 +389,7 @@ async function assertRevenueCatUserIsCurrent(userId: string): Promise<void> {
 export async function purchaseBillingPackage(
   packageToPurchase: PurchasesPackage,
   userId: string,
+  options: BillingPurchaseOptions = {},
 ): Promise<CustomerInfo> {
   return runRevenueCatOperation(async () => {
     const apiKey = getApiKey();
@@ -257,7 +402,19 @@ export async function purchaseBillingPackage(
     if (![...MOMORA_ANNUAL_PRODUCT_IDS, ...MOMORA_MONTHLY_PRODUCT_IDS].includes(productId as never)) {
       throw new Error('This Momora subscription product is not configured for purchase.');
     }
-    const { customerInfo } = await Purchases.purchasePackage(packageToPurchase);
+    const purchaseResult =
+      Platform.OS === 'android'
+        ? await (async () => {
+            const subscriptionOption = options.useAnnualTrial
+              ? getGooglePlayTrialOption(packageToPurchase)
+              : getGooglePlayBasePlanOption(packageToPurchase);
+            if (!subscriptionOption) {
+              throw new Error('This Google Play subscription option is no longer available. Reload and try again.');
+            }
+            return Purchases.purchaseSubscriptionOption(subscriptionOption);
+          })()
+        : await Purchases.purchasePackage(packageToPurchase);
+    const { customerInfo } = purchaseResult;
     await reconcileAfterStoreChange();
     return customerInfo;
   });
