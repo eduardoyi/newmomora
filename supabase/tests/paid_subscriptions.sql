@@ -2,7 +2,7 @@ begin;
 
 -- Server-side billing tests. These run against the Supabase local database,
 -- where pgTAP supplies the assertion helpers and Auth supplies auth.uid().
-select plan(36);
+select plan(38);
 
 select is(
   has_function_privilege('authenticated', 'public.billing_write_allowed(uuid, uuid)', 'EXECUTE'),
@@ -13,6 +13,23 @@ select is(
   has_function_privilege('authenticated', 'public.billing_write_allowed_for_current_user(uuid)', 'EXECUTE'),
   true,
   'authenticated RLS has the current-user billing wrapper'
+);
+select is(
+  (
+    select p.prosecdef
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname = 'replace_memory_media_assets'
+      and pg_get_function_identity_arguments(p.oid) = 'target_memory_id uuid, assets jsonb'
+  ),
+  true,
+  'media finalization runs as a definer so server-managed memory columns stay protected'
+);
+select is(
+  has_column_privilege('authenticated', 'public.memories', 'media_key', 'UPDATE'),
+  false,
+  'media object keys remain protected from direct client updates'
 );
 select is(
   has_column_privilege('authenticated', 'public.memories', 'onboarding_attributed', 'INSERT'),
