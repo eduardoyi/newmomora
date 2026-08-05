@@ -16,6 +16,8 @@ import {
   buildShareCardTree,
   formatShareCardDateLabel,
   SHARE_CARD_BODY_FONT_SIZE,
+  SHARE_CARD_EMOTION_COLORS,
+  SHARE_CARD_THEME,
   type SatoriNode,
   type ShareCardData,
 } from './layout.ts';
@@ -60,6 +62,7 @@ Deno.test('layout: quote variant (text_only) renders and contains the full capti
     imageAspectRatio: null,
     members: [],
     memberOverflowCount: 0,
+    emotion: null,
   };
 
   const svg = await renderSvg(data);
@@ -79,6 +82,7 @@ Deno.test('layout: spread variant (media) includes an image block sized from the
     imageAspectRatio: 4 / 3,
     members: [],
     memberOverflowCount: 0,
+    emotion: null,
   };
 
   const svg = await renderSvg(data);
@@ -96,6 +100,7 @@ Deno.test('layout: spread variant (illustration) renders with a square-ish image
     imageAspectRatio: 1,
     members: [],
     memberOverflowCount: 0,
+    emotion: null,
   };
 
   const svg = await renderSvg(data);
@@ -111,6 +116,7 @@ Deno.test('layout: media variant with no caption omits the caption block entirel
     imageAspectRatio: 4 / 3,
     members: [],
     memberOverflowCount: 0,
+    emotion: null,
   };
   const withoutCaption: ShareCardData = { ...withCaption, caption: '' };
 
@@ -136,6 +142,7 @@ Deno.test('layout: tagged-member portraits render as an overlapping avatar row, 
       { name: 'Leo', dataUri: null },
     ],
     memberOverflowCount: 3,
+    emotion: null,
   };
 
   const svg = await renderSvg(data);
@@ -193,6 +200,7 @@ Deno.test('layout: caption font-size / card-width ratio matches memory-card.tsx 
     imageAspectRatio: null,
     members: [],
     memberOverflowCount: 0,
+    emotion: null,
   };
 
   const tree = buildShareCardTree(data, BASE_SCALE);
@@ -221,6 +229,7 @@ Deno.test('layout: 720px reduced-scale render is the identical layout at 2/3 siz
     imageAspectRatio: 4 / 3,
     members: [],
     memberOverflowCount: 0,
+    emotion: null,
   };
 
   const svgFull = await renderSvg(data, BASE_SCALE);
@@ -243,4 +252,210 @@ Deno.test('layout: 720px reduced-scale render is the identical layout at 2/3 siz
   // or a missing block), which would be off by tens of percent.
   const slack = Math.max(6, Math.round(expectedReducedHeight * 0.02));
   assertEquals(Math.abs(heightReduced - expectedReducedHeight) <= slack, true);
+});
+
+// Collects every node of `type` in the tree (DFS), for the corner-clip and
+// must-have-image assertions below -- a generalized version of
+// findNodeByFontFamily above.
+function findAllNodesByType(node: SatoriNode, type: string, out: SatoriNode[] = []): SatoriNode[] {
+  if (node.type === type) {
+    out.push(node);
+  }
+  const { children } = node.props;
+  const list: SatoriNode[] = Array.isArray(children)
+    ? children
+    : children && typeof children !== 'string'
+    ? [children]
+    : [];
+  for (const child of list) {
+    findAllNodesByType(child, type, out);
+  }
+  return out;
+}
+
+// ── Bug 2: photo bleeds past the card's rounded top corners ──────────────
+// satori does not clip a child to its parent's borderRadius unless the
+// parent also sets overflow: hidden -- the full-bleed photo (spread) / top
+// accent strip (quote), both flush against the top edge, were drawn as
+// plain rectangles straight over the card's rounded corners. Verified
+// visually via local compose (see this package's implementation report);
+// these are the structural regression guards.
+Deno.test('layout: spread card root sets overflow:hidden so the full-bleed photo clips to the rounded corners', () => {
+  const data: ShareCardData = {
+    variant: 'spread',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'Corner-clip regression guard.',
+    imageDataUri: STUB_IMAGE_DATA_URI,
+    imageAspectRatio: 4 / 3,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const rootStyle = tree.props.style as { overflow?: string; borderRadius?: number };
+  assertEquals(rootStyle.overflow, 'hidden');
+  assertEquals(typeof rootStyle.borderRadius, 'number');
+});
+
+Deno.test('layout: quote card root ALSO sets overflow:hidden so the top accent strip clips to the rounded corners', () => {
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'Corner-clip regression guard (quote variant).',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const rootStyle = tree.props.style as { overflow?: string };
+  assertEquals(rootStyle.overflow, 'hidden');
+});
+
+// ── Bug 3: illustrated memories render NO illustration ────────────────────
+// The card MUST fail loudly (a thrown assertion, not a silently-blank
+// image) if the image node is absent for data representing an illustrated
+// memory -- i.e. imageDataUri is set. Root cause was NOT a missing tree
+// node (satori always embedded it correctly) but resvg-wasm being unable to
+// RASTER real webp bytes; this guard still matters structurally in case a
+// future layout.ts change accidentally drops imageBlockNode for the spread
+// variant (e.g. moving it behind a truthy check that's wrong for some
+// input shape).
+Deno.test('layout: spread variant with imageDataUri set MUST include an <img> node in the tree (must-have-image guard)', () => {
+  const data: ShareCardData = {
+    variant: 'spread',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'She drew this all by herself.',
+    imageDataUri: STUB_IMAGE_DATA_URI,
+    imageAspectRatio: 1,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const imageNodes = findAllNodesByType(tree, 'img');
+  if (imageNodes.length === 0) {
+    throw new Error(
+      'FAIL LOUD: illustrated-memory ShareCardData (imageDataUri set) produced a tree with NO <img> node -- ' +
+        'this is exactly the "blank space where the illustration belongs" bug. imageBlockNode must be present.',
+    );
+  }
+  assertEquals(imageNodes.length, 1);
+  assertEquals(imageNodes[0].props.src, STUB_IMAGE_DATA_URI);
+});
+
+// ── Bug 4: quote card renders GRAY regardless of emotion + no quote marks ─
+Deno.test('layout: quote card accent strip uses the emotion color, not a fixed gray, when emotion is set', () => {
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'Hoy Enzo por fin hizo pupu.',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: 'joy',
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  // The accent strip is the tree's first child -- a bare div with a
+  // borderTopLeftRadius (nothing else in the quote card has that style key).
+  const accent = findAllNodesByType(tree, 'div').find((node) => {
+    const style = node.props.style as { borderTopLeftRadius?: number } | undefined;
+    return typeof style?.borderTopLeftRadius === 'number';
+  });
+  if (!accent) {
+    throw new Error('expected to find the quote card accent strip node');
+  }
+  const accentStyle = accent.props.style as { backgroundColor?: string };
+  assertEquals(accentStyle.backgroundColor, SHARE_CARD_EMOTION_COLORS.joy.soft);
+  assertEquals(accentStyle.backgroundColor === SHARE_CARD_THEME.border, false);
+});
+
+Deno.test('layout: quote card accent strip falls back to the neutral tint when emotion is null (no regression for untagged memories)', () => {
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'No mood recorded for this one.',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const accent = findAllNodesByType(tree, 'div').find((node) => {
+    const style = node.props.style as { borderTopLeftRadius?: number } | undefined;
+    return typeof style?.borderTopLeftRadius === 'number';
+  });
+  if (!accent) {
+    throw new Error('expected to find the quote card accent strip node');
+  }
+  const accentStyle = accent.props.style as { backgroundColor?: string };
+  assertEquals(accentStyle.backgroundColor, SHARE_CARD_THEME.border);
+});
+
+Deno.test('layout: quote card renders a decorative opening-quotation-mark glyph, tinted with the emotion ink color', () => {
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'Everyone was there.',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: 'tender',
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const glyphNode = findAllNodesByType(tree, 'div').find((node) => node.props.children === '“');
+  if (!glyphNode) {
+    throw new Error('expected a decorative opening-quotation-mark (\\u201C) node in the quote card tree');
+  }
+  const style = glyphNode.props.style as { color?: string; fontFamily?: string };
+  assertEquals(style.fontFamily, 'Newsreader-Regular');
+  assertEquals(style.color, SHARE_CARD_EMOTION_COLORS.tender.ink);
+});
+
+Deno.test('layout: quote card glyph falls back to the neutral ink3 tint when emotion is null', () => {
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'No mood recorded for this one either.',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const glyphNode = findAllNodesByType(tree, 'div').find((node) => node.props.children === '“');
+  if (!glyphNode) {
+    throw new Error('expected a decorative opening-quotation-mark (\\u201C) node in the quote card tree');
+  }
+  const style = glyphNode.props.style as { color?: string };
+  assertEquals(style.color, SHARE_CARD_THEME.ink3);
+});
+
+Deno.test('layout: spread card never renders a quote-glyph node (quote-only decoration)', () => {
+  const data: ShareCardData = {
+    variant: 'spread',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'Park day with the ducks.',
+    imageDataUri: STUB_IMAGE_DATA_URI,
+    imageAspectRatio: 4 / 3,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: 'joy',
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const glyphNode = findAllNodesByType(tree, 'div').find((node) => node.props.children === '“');
+  assertEquals(glyphNode, undefined);
 });

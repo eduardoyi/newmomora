@@ -33,6 +33,10 @@ export const colors = {
 
 // Keep keys in sync with EMOTION_PALETTES in supabase/functions/_shared/prompts.ts —
 // that map drives the classifier's allowed labels, this one drives UI color.
+// ALSO keep in sync (hand-mirrored -- Deno Edge Functions can't import from
+// src/) with SHARE_CARD_EMOTION_COLORS in
+// supabase/functions/compose-share-card/layout.ts, which reproduces this
+// table for the share card's quote-variant accent strip + quote-glyph tint.
 export const emotionColors = {
   // Warm / positive
   joy:         { c: '#F5A623', soft: '#FFE7B0', ink: '#8a5b13' },

@@ -148,9 +148,16 @@ with `satori` (JSX → SVG) in
 drift):
 
 - No like/comment icons, no attribution line.
-- No emotion chip — the "Momora." wordmark (`src/components/wordmark.tsx`,
+- No emotion **chip** — the "Momora." wordmark (`src/components/wordmark.tsx`,
   reproduced as Newsreader-medium text + a primary-colored period, not an
-  image asset) sits in that slot instead.
+  image asset) sits in that slot instead. The quote (text-only) variant's
+  accent strip + decorative opening-quotation-mark glyph DO use the memory's
+  emotion color (mirroring `QuoteCard`'s accent tint and the memory detail
+  screen's `MemoryDetailEditorial` glyph) via `layout.ts`'s
+  `SHARE_CARD_EMOTION_COLORS` — a small map KEPT IN SYNC BY HAND with
+  `src/constants/theme.ts`'s `emotionColors` (both files carry the
+  cross-reference comment). `emotion` is selected for this coloring only and
+  is never logged (AGENTS.md logging discipline).
 - Full, **untruncated** caption — the in-app card truncates to ~140 chars;
   the share card never does (bounded in practice: `validateMemoryContent`
   caps content at 5000 chars, so worst case is a very tall card — see

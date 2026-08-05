@@ -11,15 +11,21 @@
 // `memoryId` + a status/code ONLY, never `error.message`, on any path that
 // touches layout/render. DB-layer errors (Supabase client errors) are safe
 // to log by message since they never contain memory content.
+import { init as initWebpDecoder, default as decodeWebp } from 'npm:@jsquash/webp@1.4.0/decode.js';
+import { Image as RasterImage } from 'https://deno.land/x/imagescript@1.3.0/mod.ts';
+
 import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
 import { errorResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, type FamilyRole } from '../_shared/family-access.ts';
+import { capImageMaxEdge, computeResizedDimensions } from '../_shared/image-bytes.ts';
+import { REFERENCE_IMAGE_JPEG_QUALITY } from '../_shared/image-limits.ts';
 import { encodeBytesToBase64 } from '../_shared/openai.ts';
 import { getObjectBytes } from '../_shared/r2.ts';
 import { createUserClient } from '../_shared/supabase-admin.ts';
 import { composeShareCardPng } from './render.ts';
 import { formatShareCardDateLabel, MAX_VISIBLE_MEMBERS, type ShareCardData, type ShareCardMemberPortrait } from './layout.ts';
+import { WEBP_DEC_WASM_B64 } from './assets/webp-dec-wasm-b64.ts';
 
 // deno-lint-ignore no-explicit-any -- untyped Supabase client, matching every other function in this package (see _shared/supabase-admin.ts).
 type AnySupabase = any;
@@ -37,6 +43,11 @@ interface MemoryRow {
   memory_date: string;
   illustration_key: string | null;
   illustration_status: string;
+  /** Only used by the quote (text_only) card's accent strip + quote-glyph
+   * color (see layout.ts's shareCardEmotionColors) -- never logged
+   * (AGENTS.md logging discipline; enum-like label, fine to select/hold in
+   * memory, just not to console.*). */
+  emotion: string | null;
 }
 
 interface FamilyRow {
@@ -226,13 +237,38 @@ export function isUnrasterizableMimeType(mimeType: string): boolean {
 
 // ── Aspect ratio math ───────────────────────────────────────────────────
 // Keep in sync with src/utils/media-aspect.ts (Deno Edge Functions cannot
-// import from src/).
+// import from src/). The client has ONE clamp used for both real media
+// photos AND illustrations (media-aspect.ts's own header comment:
+// "illustration-only cards still use the clamp helpers so extreme generated
+// images do not take over the feed") -- these names/bounds mirror that.
 export const DEFAULT_MEDIA_ASPECT_RATIO = 4 / 3;
-export const MIN_ILLUSTRATION_ASPECT_RATIO = 3 / 4;
-export const MAX_ILLUSTRATION_ASPECT_RATIO = 16 / 9;
+export const MIN_MEDIA_ASPECT_RATIO = 3 / 4;
+export const MAX_MEDIA_ASPECT_RATIO = 16 / 9;
 
-export function clampIllustrationAspectRatio(ratio: number): number {
-  return Math.min(MAX_ILLUSTRATION_ASPECT_RATIO, Math.max(MIN_ILLUSTRATION_ASPECT_RATIO, ratio));
+/**
+ * Clamps to [3/4, 16/9], matching src/utils/media-aspect.ts's
+ * `clampMediaAspectRatio`.
+ *
+ * BUG FIX (device report -- carousel/media share cards render with a photo
+ * far taller or shorter than the in-app card, and the resulting oversized
+ * canvas is believed to be a contributor to WORKER_RESOURCE_LIMIT compose
+ * failures): this clamp used to be named/scoped to "illustration" only and
+ * was applied ONLY on the text_illustration branch below -- a 'media'
+ * memory's `imageAspectRatio` was NEVER clamped, unlike every in-app
+ * surface (MediaVisual/MemoryMediaCarousel always clamp via
+ * `clampMediaAspectRatio`). `memory_media.aspect_ratio` only has a wide DB
+ * CHECK constraint (`between 0.1 and 10`,
+ * 20260713150000_media_aspect_ratios.sql) -- NOT the app's display clamp --
+ * so the raw stored value can be far outside what the app ever shows.
+ * Verified against production data: ~22% of real image assets (152/690)
+ * store an aspect_ratio outside [3/4, 16/9]. An unclamped extreme ratio
+ * inflates the card's image-block height (`imageBlockNode`, layout.ts) well
+ * beyond the in-app card, both looking wrong AND pushing the rendered
+ * canvas closer to the S0 spike's measured pixel ceiling. Applied to BOTH
+ * branches now.
+ */
+export function clampMediaAspectRatio(ratio: number): number {
+  return Math.min(MAX_MEDIA_ASPECT_RATIO, Math.max(MIN_MEDIA_ASPECT_RATIO, ratio));
 }
 
 /** Legacy-row fallback for a null/zero `aspect_ratio` column: decode
@@ -461,14 +497,131 @@ export async function fetchTaggedMembers(
   };
 }
 
+// ── Real-WebP decode (production-incident fix, bug 3) ──────────────────
+// resvg-wasm@2.6.2's bundled `image` crate cannot decode real (i.e. NOT
+// mislabeled -- see resolveImageMimeType above) WebP bytes: a genuine
+// illustration_key's webp silently rasters as a BLANK image block -- no
+// exception anywhere in the pipeline, satori embeds the <image> node with a
+// correct href just fine, resvg just renders nothing for it. Verified
+// against production data: 19/20 sampled illustration_key files are
+// genuine webp (unlike portraits -- see the MIME-sniffing comment above,
+// OpenAI IS honoring `output_format: 'webp'` for illustrations), so this
+// silently broke nearly every illustrated memory's share card ("blank space
+// where the illustration belongs" device report).
+//
+// Fix: decode real webp via @jsquash/webp (a pure-wasm codec verified
+// against this exact production image where both resvg-wasm and
+// imagescript's own decoder failed) and re-encode to JPEG via imagescript
+// (already vendored/proven here for capImageMaxEdge) before embedding.
+// @jsquash/webp's decode() normally fetches its own .wasm file at runtime
+// via `new URL(..., import.meta.url)` -- the exact channel the S0 spike
+// proved dead under `--use-api` deploys (see this file's header comment and
+// webp-dec-wasm-b64.ts). Its `init(module)` accepts a PRE-COMPILED
+// WebAssembly.Module instead, bypassing that fetch -- webp-dec-wasm-b64.ts
+// supplies the bytes, decoded once per isolate (same cold-start-once
+// pattern as render.ts's font/resvg init).
+let webpDecoderInitPromise: Promise<void> | null = null;
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function getWebpDecoder(): Promise<void> {
+  if (!webpDecoderInitPromise) {
+    const wasmBytes = base64ToBytes(WEBP_DEC_WASM_B64);
+    webpDecoderInitPromise = WebAssembly.compile(wasmBytes.buffer as ArrayBuffer)
+      .then((module) => initWebpDecoder(module))
+      .catch((error) => {
+        webpDecoderInitPromise = null;
+        throw error;
+      });
+  }
+  return webpDecoderInitPromise;
+}
+
+/**
+ * Decodes real webp `bytes` and re-encodes to JPEG, capped to `maxEdge` on
+ * its longest side (same budget as capImageMaxEdge below -- avoids decoding
+ * once at full illustration resolution then a second time inside
+ * capImageMaxEdge). Returns null on any decode failure (corrupt bytes, an
+ * unsupported webp feature) so the caller can fail closed rather than embed
+ * bytes resvg silently can't render -- same "don't fail the whole card"
+ * posture as resolveMemberPortraits' single-portrait failure handling.
+ */
+export async function convertWebpToJpeg(bytes: Uint8Array, maxEdge: number): Promise<{ bytes: Uint8Array; contentType: string } | null> {
+  try {
+    await getWebpDecoder();
+    const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const imageData = await decodeWebp(arrayBuffer);
+    const image = new RasterImage(imageData.width, imageData.height);
+    image.bitmap.set(imageData.data);
+    const target = computeResizedDimensions(imageData.width, imageData.height, maxEdge);
+    if (target.width !== imageData.width || target.height !== imageData.height) {
+      image.resize(target.width, target.height);
+    }
+    return { bytes: await image.encodeJPEG(REFERENCE_IMAGE_JPEG_QUALITY), contentType: 'image/jpeg' };
+  } catch (error) {
+    // error.name only (e.g. "Error", "RangeError") -- never error.message,
+    // which for a decode/encode failure could theoretically echo bytes back
+    // (AGENTS.md logging discipline). No memoryId in scope here; the
+    // caller's own catch-all (runShareCardCompose) already logs memoryId
+    // for anything that ultimately fails the whole compose.
+    console.error('compose-share-card webp decode failed', error instanceof Error ? error.name : 'unknown');
+    return null;
+  }
+}
+
+// ── Embedded-image size cap (WORKER_RESOURCE_LIMIT mitigation, bug 1) ──
+// The card's own raster canvas never exceeds SHARE_CARD_FULL_WIDTH
+// (1080px) wide, and -- now that clampMediaAspectRatio bounds every
+// imageAspectRatio to [3/4, 16/9] -- never more than 1080 / (3/4) = 1440px
+// tall either. Any embedded source image larger than that costs resvg
+// decode/raster compute for zero visible benefit. Verified against
+// production data: legacy `memory_media` rows that fall back to the
+// full-resolution `object_key` (no `preview_object_key`, see
+// resolveShareCardSource's `usingPreview` branch) can reach 12 megapixels
+// (3000x4000) -- 10x+ larger than a typical ~1MP generated preview. This is
+// believed to be a material contributor to the WORKER_RESOURCE_LIMIT (546)
+// failures the S0 spike already documented and partially mitigated via
+// reduced-scale + the client's single retry (share-card.ts); capping here
+// reduces the compute those failures track (pixel count) directly, for
+// every image source (media photo, illustration, tagged-member portrait).
+export const SHARE_CARD_MAX_IMAGE_EDGE = 1600;
+
 // ── Data-URI assembly ───────────────────────────────────────────────────
-async function toDataUri(objectKey: string): Promise<{ dataUri: string; bytes: Uint8Array; mimeType: string }> {
-  const bytes = await getObjectBytes(objectKey);
+export async function toDataUri(objectKey: string): Promise<{ dataUri: string; bytes: Uint8Array; mimeType: string }> {
+  const rawBytes = await getObjectBytes(objectKey);
   // resolveImageMimeType (not mimeTypeFromObjectKey) -- see that function's
   // header comment for why trusting the key extension alone crashed every
   // compose that touched a mismatched portrait.
-  const mimeType = resolveImageMimeType(objectKey, bytes);
-  return { dataUri: `data:${mimeType};base64,${encodeBytesToBase64(bytes)}`, bytes, mimeType };
+  const sniffedMimeType = resolveImageMimeType(objectKey, rawBytes);
+
+  if (sniffedMimeType === 'image/webp') {
+    const converted = await convertWebpToJpeg(rawBytes, SHARE_CARD_MAX_IMAGE_EDGE);
+    if (converted) {
+      return {
+        dataUri: `data:${converted.contentType};base64,${encodeBytesToBase64(converted.bytes)}`,
+        bytes: converted.bytes,
+        mimeType: converted.contentType,
+      };
+    }
+    // Decode failed -- fall through to embedding the original bytes. This
+    // is the SAME behavior as before this fix (a blank image block for a
+    // genuine webp), not a new regression; only a successful decode makes
+    // things better.
+  }
+
+  const capped = await capImageMaxEdge(rawBytes, SHARE_CARD_MAX_IMAGE_EDGE, sniffedMimeType);
+  return {
+    dataUri: `data:${capped.contentType};base64,${encodeBytesToBase64(capped.bytes)}`,
+    bytes: capped.bytes,
+    mimeType: capped.contentType,
+  };
 }
 
 async function resolveMemberPortraits(
@@ -542,7 +695,7 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
 
   const { data: memory, error: memoryError } = await supabase
     .from('memories')
-    .select('id, family_id, content, memory_type, memory_date, illustration_key, illustration_status')
+    .select('id, family_id, content, memory_type, memory_date, illustration_key, illustration_status, emotion')
     .eq('id', memoryId)
     .maybeSingle();
 
@@ -581,14 +734,15 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
     if (resolution.source.kind === 'media') {
       const { dataUri, bytes } = await toDataUri(resolution.source.objectKey);
       imageDataUri = dataUri;
-      imageAspectRatio = resolution.source.storedAspectRatio
+      const decoded = resolution.source.storedAspectRatio
         ?? (await aspectRatioFromImageBytes(bytes))
         ?? DEFAULT_MEDIA_ASPECT_RATIO;
+      imageAspectRatio = clampMediaAspectRatio(decoded);
     } else if (resolution.source.kind === 'illustration') {
       const { dataUri, bytes } = await toDataUri(resolution.source.objectKey);
       imageDataUri = dataUri;
       const decoded = await aspectRatioFromImageBytes(bytes);
-      imageAspectRatio = clampIllustrationAspectRatio(decoded ?? 1);
+      imageAspectRatio = clampMediaAspectRatio(decoded ?? 1);
     }
 
     const cardData: ShareCardData = {
@@ -599,6 +753,7 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
       imageAspectRatio,
       members: portraits,
       memberOverflowCount: overflowCount,
+      emotion: row.emotion,
     };
 
     return { png: await composeShareCardPng(cardData), memoryDate: row.memory_date };

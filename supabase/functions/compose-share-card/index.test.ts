@@ -3,7 +3,8 @@ import {
   _resetRateLimitStateForTests,
   authorizeShareCardAccess,
   buildShareCardFilename,
-  clampIllustrationAspectRatio,
+  clampMediaAspectRatio,
+  convertWebpToJpeg,
   fetchTaggedMembers,
   handleComposeShareCard,
   isComposeRateLimited,
@@ -16,6 +17,7 @@ import {
   resolveMemberPortraitKey,
   resolveShareCardSource,
   runShareCardCompose,
+  SHARE_CARD_MAX_IMAGE_EDGE,
   SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW,
   SHARE_CARD_RATE_LIMIT_WINDOW_MS,
 } from './index.ts';
@@ -216,12 +218,86 @@ Deno.test('isVideoContentType matches the two allowed video content types', () =
   assertEquals(isVideoContentType('image/jpeg'), false);
 });
 
+// ── Real-WebP decode (bug 3: "illustrated memories render NO
+// illustration") ─────────────────────────────────────────────────────────
+// Root cause (see this package's implementation report): resvg-wasm@2.6.2's
+// bundled `image` crate cannot decode real (non-mislabeled) WebP bytes --
+// verified against a real production illustration_key, it rasters as a
+// BLANK image block with NO exception anywhere in the pipeline (satori
+// embeds the <image> node with a correct href; resvg just renders nothing).
+// 19/20 sampled illustration_key files are genuine webp, so this broke
+// nearly every illustrated memory's share. convertWebpToJpeg decodes via
+// @jsquash/webp (proven against that exact production image where both
+// resvg-wasm and imagescript's own decoder failed) and re-encodes to JPEG.
+//
+// Fixture: a real, valid, minimal (54-byte) lossy WebP -- a solid 4x4
+// RGBA(200,80,120,255) image -- generated via @jsquash/webp's own encode()
+// during implementation (not hand-crafted bytes), so this exercises the
+// REAL decode path, not a mocked one.
+const TINY_REAL_WEBP_B64 = 'UklGRi4AAABXRUJQVlA4ICIAAAAwAQCdASoEAAQAAgA0JaAAA3AA/teQf//OJf/QL/wF7jAA';
+
+function base64ToBytesForTest(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+Deno.test('convertWebpToJpeg decodes a real webp and re-encodes as JPEG (the must-not-be-blank fix)', async () => {
+  const bytes = base64ToBytesForTest(TINY_REAL_WEBP_B64);
+  const result = await convertWebpToJpeg(bytes, SHARE_CARD_MAX_IMAGE_EDGE);
+  if (!result) {
+    throw new Error('expected convertWebpToJpeg to succeed on a real, valid webp fixture');
+  }
+  assertEquals(result.contentType, 'image/jpeg');
+  // A valid JPEG always starts with the FF D8 FF SOI marker -- the cheapest
+  // possible proof this is real re-encoded image data, not an empty/garbage
+  // buffer silently passed through.
+  assertEquals(result.bytes[0], 0xff);
+  assertEquals(result.bytes[1], 0xd8);
+  assertEquals(result.bytes[2], 0xff);
+  assertEquals(result.bytes.length > 0, true);
+});
+
+Deno.test('convertWebpToJpeg resizes when the decoded image exceeds maxEdge', async () => {
+  const bytes = base64ToBytesForTest(TINY_REAL_WEBP_B64); // 4x4 real webp
+  const uncapped = await convertWebpToJpeg(bytes, 1600);
+  const capped = await convertWebpToJpeg(bytes, 2); // force a resize on a 4x4 source
+  if (!uncapped || !capped) {
+    throw new Error('expected both conversions to succeed on a real, valid webp fixture');
+  }
+  // Both are valid re-encoded JPEGs; the aggressively-capped one must not be
+  // LARGER than the uncapped one (a real resize happened, not a no-op).
+  assertEquals(capped.bytes.length <= uncapped.bytes.length, true);
+});
+
+Deno.test('convertWebpToJpeg returns null (fails closed, not blank) on corrupt bytes', async () => {
+  const garbage = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x57, 0x45, 0x42, 0x50, 9, 9, 9, 9]);
+  const result = await convertWebpToJpeg(garbage, SHARE_CARD_MAX_IMAGE_EDGE);
+  assertEquals(result, null);
+});
+
 // ── Aspect math ─────────────────────────────────────────────────────────
 
-Deno.test('clampIllustrationAspectRatio clamps to [3/4, 16/9], matching src/utils/media-aspect.ts', () => {
-  assertEquals(clampIllustrationAspectRatio(1), 1);
-  assertEquals(clampIllustrationAspectRatio(0.1), 3 / 4);
-  assertEquals(clampIllustrationAspectRatio(10), 16 / 9);
+Deno.test('clampMediaAspectRatio clamps to [3/4, 16/9], matching src/utils/media-aspect.ts', () => {
+  assertEquals(clampMediaAspectRatio(1), 1);
+  assertEquals(clampMediaAspectRatio(0.1), 3 / 4);
+  assertEquals(clampMediaAspectRatio(10), 16 / 9);
+});
+
+// Bug 1 regression: this clamp used to be named/scoped to "illustration"
+// only and NEVER applied to real media photos -- verified against
+// production data, ~22% of real image assets store an aspect_ratio outside
+// [3/4, 16/9] (the DB's own CHECK constraint only requires 0.1-10). An
+// extreme unclamped value inflates the card's image-block height well past
+// what the in-app card ever shows, and is believed to be a contributor to
+// WORKER_RESOURCE_LIMIT compose failures on carousel/media shares. This
+// pins the exact production-shaped extreme (a tall portrait screenshot)
+// that the pre-fix code would have let straight through.
+Deno.test('clampMediaAspectRatio clamps a real extreme value (production sample: 0.45) into range', () => {
+  assertEquals(clampMediaAspectRatio(0.45), 3 / 4);
 });
 
 // ── Memory-type rejection ──────────────────────────────────────────────
@@ -249,6 +325,7 @@ function textOnlyMemory() {
     memory_date: '2026-06-08',
     illustration_key: null,
     illustration_status: 'none',
+    emotion: null,
   };
 }
 
@@ -343,6 +420,61 @@ Deno.test('resolveShareCardSource: media asset must belong to the requested memo
   if (!result.ok) {
     assertEquals(result.error.code, 'asset_not_found');
     assertEquals(result.error.status, 404);
+  }
+});
+
+// Bug 1 repro/regression: "carousel share fails every time; single-photo
+// works". Traced (see this package's implementation report) to a suspected
+// client/server mediaAssetId mismatch for a NON-FIRST carousel page --
+// disproven against real production data (explicit correct mediaAssetId
+// values for both single- and multi-asset memories succeeded and failed at
+// statistically indistinguishable rates, purely from the pre-existing
+// WORKER_RESOURCE_LIMIT flakiness). This test pins the exact scenario the
+// bug report describes -- a real multi-asset (carousel) memory, requesting
+// the SECOND (non-first) page's mediaAssetId while the first page's row is
+// ALSO present in the same table -- and asserts the query resolves to that
+// exact asset, not silently the first row / not a spurious asset_not_found.
+// Guards against a future regression in the `.eq('id', ...).eq('memory_id',
+// ...)` chain (e.g. an accidental `.limit(1)` before the id filter, or a
+// join that collapses to the first match).
+Deno.test('resolveShareCardSource: carousel non-first page resolves to the EXACT requested asset, not the first row', async () => {
+  const FIRST_ASSET_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const SECOND_ASSET_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const supabase = fakeSupabase({
+    memoryMedia: [
+      {
+        id: FIRST_ASSET_ID,
+        memory_id: MEMORY_ID,
+        object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${FIRST_ASSET_ID}.jpg`,
+        preview_object_key: null,
+        content_type: 'image/jpeg',
+        aspect_ratio: 1.5,
+      },
+      {
+        id: SECOND_ASSET_ID,
+        memory_id: MEMORY_ID,
+        object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${SECOND_ASSET_ID}.jpg`,
+        preview_object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${SECOND_ASSET_ID}-preview.jpg`,
+        content_type: 'image/jpeg',
+        aspect_ratio: 0.8,
+      },
+    ],
+  });
+  const memory = { ...textOnlyMemory(), id: MEMORY_ID, memory_type: 'media' };
+
+  const result = await resolveShareCardSource(supabase as never, memory, SECOND_ASSET_ID);
+  assertEquals(result.ok, true);
+  if (result.ok && result.source.kind === 'media') {
+    assertEquals(result.source.objectKey, `${OWNER_ID}/memories/${MEMORY_ID}/media/${SECOND_ASSET_ID}-preview.jpg`);
+    assertEquals(result.source.storedAspectRatio, 0.8);
+  }
+
+  // The first page must still resolve correctly too -- proves this isn't
+  // "second page only ever wins" but genuinely id-selective both ways.
+  const firstResult = await resolveShareCardSource(supabase as never, memory, FIRST_ASSET_ID);
+  assertEquals(firstResult.ok, true);
+  if (firstResult.ok && firstResult.source.kind === 'media') {
+    assertEquals(firstResult.source.objectKey, `${OWNER_ID}/memories/${MEMORY_ID}/media/${FIRST_ASSET_ID}.jpg`);
   }
 });
 

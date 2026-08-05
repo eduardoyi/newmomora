@@ -61,6 +61,49 @@ export const SHARE_CARD_THEME = {
 export const SHARE_CARD_RADIUS_LG = 16;
 export const SHARE_CARD_SPACING_MD = 16;
 
+// ── Emotion colors ───────────────────────────────────────────────────────
+// KEEP IN SYNC with src/constants/theme.ts `emotionColors` (Deno Edge
+// Functions cannot import from src/) -- that's the source of truth; if you
+// add/change an emotion there, mirror it here too. If theme.ts adds an
+// emotion this map doesn't know about yet, `shareCardEmotionColors` falls
+// back to null (the quote card's existing neutral tint), same as the
+// client's own `getEmotionColors` unknown-emotion behavior.
+//
+// BUG FIX (device report -- text-only/quote share cards render with a GRAY
+// accent strip regardless of the memory's mood): this function used to
+// never select `emotion` at all -- a documented v1 simplification ("the
+// share card never loads `emotion`, dropped along with the emotion chip")
+// that the user has now overruled specifically for the quote card's accent
+// strip + quote-glyph tint (the emotion CHIP itself stays dropped; the
+// wordmark keeps that slot, per S3). `emotion` is fetched for this
+// coloring only -- per AGENTS.md logging discipline, it is never logged
+// (it flows straight from a DB select into a color-table lookup, never into
+// a console.* call anywhere in this package).
+export const SHARE_CARD_EMOTION_COLORS: Record<string, { c: string; soft: string; ink: string }> = {
+  joy: { c: '#F5A623', soft: '#FFE7B0', ink: '#8a5b13' },
+  funny: { c: '#F07E3A', soft: '#FCDCC0', ink: '#8a4416' },
+  calm: { c: '#6BB58A', soft: '#D6EDDE', ink: '#3f6a4c' },
+  wonder: { c: '#4F8FCC', soft: '#CFE1F4', ink: '#3a5b7a' },
+  tender: { c: '#EC7FA1', soft: '#FBD6E1', ink: '#9c4f68' },
+  mischief: { c: '#9863B8', soft: '#E5D2F1', ink: '#5c4374' },
+  pride: { c: '#E0654E', soft: '#F8D6CC', ink: '#893524' },
+  bittersweet: { c: '#C77FA0', soft: '#EFD7E1', ink: '#743f59' },
+  worry: { c: '#5C7A9B', soft: '#D7E0EA', ink: '#354a63' },
+  weary: { c: '#8F8A86', soft: '#E6E1DD', ink: '#524d49' },
+  sad: { c: '#6A6CA6', soft: '#DCDCEF', ink: '#3f4066' },
+};
+
+/** Returns null for a null/unrecognized emotion -- callers fall back to the
+ * card's fixed neutral tint, matching getEmotionColors' contract. */
+export function shareCardEmotionColors(
+  emotion: string | null | undefined,
+): { c: string; soft: string; ink: string } | null {
+  if (!emotion || !(emotion in SHARE_CARD_EMOTION_COLORS)) {
+    return null;
+  }
+  return SHARE_CARD_EMOTION_COLORS[emotion];
+}
+
 // Mirrors MAX_TIMELINE_MEMBER_AVATARS in src/components/memory-card.tsx.
 export const MAX_VISIBLE_MEMBERS = 6;
 
@@ -87,6 +130,12 @@ export interface ShareCardData {
   members: ShareCardMemberPortrait[];
   /** Count of additional tagged members beyond the visible cap. */
   memberOverflowCount: number;
+  /** Memory's emotion label, or null. Only used by the quote (text-only)
+   * variant's accent strip + quote-glyph tint (shareCardEmotionColors
+   * above) -- the spread variant's emotion CHIP stays dropped per S3 (the
+   * wordmark keeps that slot); this is NOT logged anywhere (AGENTS.md
+   * logging discipline). */
+  emotion: string | null;
 }
 
 const MONTH_LABELS = [
@@ -318,28 +367,72 @@ function buildSpreadCard(data: ShareCardData, width: number, s: (px: number) => 
         backgroundColor: SHARE_CARD_THEME.white,
         border: `1px solid ${SHARE_CARD_THEME.border}`,
         borderRadius: s(SHARE_CARD_RADIUS_LG),
+        // BUG FIX (device report -- photo bleeds past the card's top
+        // rounded corners): satori does not clip a child to its parent's
+        // borderRadius unless the parent also sets overflow: hidden -- the
+        // full-bleed photo (imageBlockNode, first child, flush against the
+        // top edge) was drawn as a plain rectangle straight over the
+        // card's rounded top corners. This is the fix, verified visually
+        // via local compose (see this package's implementation report).
+        overflow: 'hidden',
       },
     },
     children,
   );
 }
 
+/** Decorative opening-quotation-mark glyph, top-left above the caption --
+ * replicates app/(app)/memory/[id]/index.tsx's `MemoryDetailEditorial`
+ * (`styles.editorialQuote`: Newsreader regular, fontSize 56 / lineHeight 56
+ * / height 34 clipped / opacity 0.18 / marginBottom -6, tinted with the
+ * memory's emotion `ink` color, falling back to ink3), converted to this
+ * file's logical units via `s`. */
+function quoteGlyphNode(color: string, s: (px: number) => number): SatoriNode {
+  return h(
+    'div',
+    {
+      style: {
+        display: 'flex',
+        fontFamily: 'Newsreader-Regular',
+        fontSize: s(56),
+        lineHeight: 1,
+        height: s(34),
+        color,
+        opacity: 0.18,
+        paddingLeft: s(18),
+        paddingTop: s(18),
+        marginBottom: s(-6),
+      },
+    },
+    '“',
+  );
+}
+
 function buildQuoteCard(data: ShareCardData, width: number, s: (px: number) => number): SatoriNode {
+  // BUG FIX (device report -- quote card's accent strip + (missing)
+  // quote-glyph render gray/absent regardless of the memory's mood): this
+  // used to be a fixed neutral tint because the function never selected
+  // `emotion` at all (a documented v1 simplification the user has now
+  // overruled for the quote card specifically -- see shareCardEmotionColors'
+  // header comment). `emo` is null for a null/unrecognized emotion, and
+  // every color use below falls back to the original fixed neutral tint in
+  // that case, so an untagged memory looks exactly as it did before this
+  // fix.
+  const emo = shareCardEmotionColors(data.emotion);
+
   const children: SatoriNode[] = [
     // Decorative top accent, structurally mirroring memory-card.tsx's
-    // `quoteAccent` strip. The in-app version tints this with the memory's
-    // emotion color; the share card never loads `emotion` (dropped along
-    // with the emotion chip, per the S3 "no emotion chip" decision), so a
-    // fixed neutral tint is used instead of a per-memory color.
+    // `quoteAccent` strip (which tints with `emo.soft`).
     h('div', {
       style: {
         display: 'flex',
         height: s(3),
-        backgroundColor: SHARE_CARD_THEME.border,
+        backgroundColor: emo?.soft ?? SHARE_CARD_THEME.border,
         borderTopLeftRadius: s(SHARE_CARD_RADIUS_LG),
         borderTopRightRadius: s(SHARE_CARD_RADIUS_LG),
       },
     }),
+    quoteGlyphNode(emo?.ink ?? SHARE_CARD_THEME.ink3, s),
     h(
       'div',
       {
@@ -349,7 +442,7 @@ function buildQuoteCard(data: ShareCardData, width: number, s: (px: number) => n
           fontSize: s(22),
           lineHeight: 1.28,
           color: SHARE_CARD_THEME.ink,
-          padding: `${s(18)}px ${s(18)}px ${s(4)}px ${s(18)}px`,
+          padding: `0px ${s(18)}px ${s(4)}px ${s(18)}px`,
           whiteSpace: 'pre-wrap',
         },
       },
@@ -368,6 +461,10 @@ function buildQuoteCard(data: ShareCardData, width: number, s: (px: number) => n
         backgroundColor: SHARE_CARD_THEME.white,
         border: `1px solid ${SHARE_CARD_THEME.border}`,
         borderRadius: s(SHARE_CARD_RADIUS_LG),
+        // Same corner-clip fix as buildSpreadCard above -- the accent strip
+        // is flush against the top edge and needs the parent's
+        // overflow:hidden to be cropped by the card's rounded corners.
+        overflow: 'hidden',
       },
     },
     children,
