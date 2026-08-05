@@ -438,7 +438,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   streakDotToday: {
-    backgroundColor: 'transparent',
+    backgroundColor: colors.border,
     borderColor: colors.primary,
     borderWidth: 1.5,
   },

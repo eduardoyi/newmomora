@@ -235,7 +235,7 @@ describe('TimelineScreen', () => {
     const dotStyle = StyleSheet.flatten(getByTestId(`timeline-streak-dot-${dayIndex}`).props.style);
 
     expect(dotStyle).toMatchObject({
-      backgroundColor: 'transparent',
+      backgroundColor: colors.border,
       borderColor: colors.primary,
       borderWidth: 1.5,
     });
