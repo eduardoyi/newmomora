@@ -73,10 +73,11 @@ function StreakDots({ memories }: { memories: MemoryWithTags[] }) {
         {dots.map((d, i) => (
           <View
             key={i}
+            testID={`timeline-streak-dot-${i}`}
             style={[
               styles.streakDot,
-              (d.hasMemory || d.isToday) && styles.streakDotFilled,
-              d.isToday && styles.streakDotToday,
+              d.hasMemory && styles.streakDotFilled,
+              d.isToday && !d.hasMemory && styles.streakDotToday,
             ]}
           />
         ))}
@@ -437,10 +438,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   streakDotToday: {
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
+    backgroundColor: colors.border,
+    borderColor: colors.primary,
+    borderWidth: 1.5,
   },
   listContent: {
     gap: 14,

@@ -1,6 +1,8 @@
 import { render, waitFor } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
 import TimelineScreen from '../../app/(app)/(tabs)/timeline';
+import { colors } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers, useOnboardingStatus } from '@/hooks/useFamilyMembers';
 import { useMemories } from '@/hooks/useMemories';
@@ -56,6 +58,10 @@ const memory = {
   commentCount: 0,
   likedByMe: false,
 };
+
+function toLocalDateString(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
 
 describe('TimelineScreen', () => {
   let mockedRefetch: jest.Mock;
@@ -186,5 +192,52 @@ describe('TimelineScreen', () => {
     const list = getByTestId('timeline-memory-list');
 
     expect(list.props.ListFooterComponent).toBeTruthy();
+  });
+
+  it('fills the current day when it has a memory', () => {
+    const today = new Date();
+    const dayIndex = today.getDay() === 0 ? 6 : today.getDay() - 1;
+    mockedUseMemories.mockReturnValue({
+      memories: [{ ...memory, memory_date: toLocalDateString(today) }],
+      isLoading: false,
+      isRefetching: false,
+      isError: false,
+      error: null,
+      refetch: mockedRefetch,
+      fetchNextPage: jest.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+    } as unknown as ReturnType<typeof useMemories>);
+
+    const { getByTestId } = render(<TimelineScreen />);
+    const dotStyle = StyleSheet.flatten(getByTestId(`timeline-streak-dot-${dayIndex}`).props.style);
+
+    expect(dotStyle.backgroundColor).toBe(colors.primary);
+    expect(dotStyle.borderWidth).toBeUndefined();
+  });
+
+  it('renders the current day as an outlined streak dot when it has no memory', () => {
+    const today = new Date();
+    const dayIndex = today.getDay() === 0 ? 6 : today.getDay() - 1;
+    mockedUseMemories.mockReturnValue({
+      memories: [{ ...memory, memory_date: '2000-01-01' }],
+      isLoading: false,
+      isRefetching: false,
+      isError: false,
+      error: null,
+      refetch: mockedRefetch,
+      fetchNextPage: jest.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+    } as unknown as ReturnType<typeof useMemories>);
+
+    const { getByTestId } = render(<TimelineScreen />);
+    const dotStyle = StyleSheet.flatten(getByTestId(`timeline-streak-dot-${dayIndex}`).props.style);
+
+    expect(dotStyle).toMatchObject({
+      backgroundColor: colors.border,
+      borderColor: colors.primary,
+      borderWidth: 1.5,
+    });
   });
 });
