@@ -19,6 +19,8 @@ import type { init as initWebpDecoderType, default as decodeWebpType } from 'npm
 type InitWebpDecoderFn = typeof initWebpDecoderType;
 type DecodeWebpFn = typeof decodeWebpType;
 
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
+
 import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
 import { errorResponse } from '../_shared/errors.ts';
@@ -26,11 +28,12 @@ import type { FamilyRole } from '../_shared/family-access.ts';
 import { capImageMaxEdge, computeResizedDimensions } from '../_shared/image-bytes.ts';
 import { REFERENCE_IMAGE_JPEG_QUALITY } from '../_shared/image-limits.ts';
 import { encodeBytesToBase64 } from '../_shared/openai.ts';
-import { getObjectBytesBatch, type ObjectBytesBatchEntry } from '../_shared/r2.ts';
-import { createUserClient } from '../_shared/supabase-admin.ts';
-import { composeShareCardPng } from './render.ts';
+import { deleteObject, getObjectBytes, getObjectBytesBatch, putObjectBytes, type ObjectBytesBatchEntry } from '../_shared/r2.ts';
+import { buildShareCardKey } from '../_shared/storage-keys.ts';
+import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
+import { composeShareCardPng as composeShareCardPngImpl } from './render.ts';
 import { formatShareCardDateLabel, MAX_VISIBLE_MEMBERS, type ShareCardData, type ShareCardMemberPortrait } from './layout.ts';
-import { loadShareCardAssets, ShareCardAssetsUnavailableError } from './assets-loader.ts';
+import { loadShareCardAssets as loadShareCardAssetsImpl, ShareCardAssetsUnavailableError } from './assets-loader.ts';
 // NOTE: @jsquash/webp (npm module, JS glue code) is intentionally NOT
 // statically imported here -- see the "Real-WebP decode" section below
 // (loadWebpModule) for why: a static import puts the module in EVERY
@@ -65,6 +68,12 @@ const MODULE_EVAL_TIME = performance.now();
 export interface ComposeShareCardRequest {
   memoryId: string;
   mediaAssetId?: string;
+  /** Store-through cache warm mode (docs/plans/share-card-store-through.md,
+   * W2): composes (if needed) + stores, responds 204 with no body, never
+   * streams. Same auth/role/validation as a normal share -- see
+   * handleComposeShareCard's rate-limit and cache-check sections for how
+   * `warm` branches off. */
+  warm?: boolean;
 }
 
 interface MemoryMediaRow {
@@ -74,6 +83,10 @@ interface MemoryMediaRow {
   preview_object_key: string | null;
   content_type: string;
   aspect_ratio: number | null;
+  /** Store-through cache (W2): the per-ASSET stored card key, or null if
+   * this asset has never been shared successfully (or was invalidated --
+   * see the migration's staleness notes). */
+  share_card_key: string | null;
 }
 
 interface FamilyMemberRow {
@@ -121,21 +134,41 @@ interface FamilyMemberRow {
 // (typically a handful of small metadata rows -- ids/keys, not bytes) and
 // the specific asset / tagged-member list is picked out in JS afterward,
 // mirroring how fetchTaggedMembers already worked pre-restructure.
+// `user_id` (W2, store-through cache): the memory's CREATOR, selected so a
+// stored card's key can be built under the creator's prefix regardless of
+// which family member actually triggers the compose -- see
+// resolveShareCardCacheTarget/buildShareCardKey below and the storage
+// migration's own key-prefix rationale. Never logged (an id, but keeping
+// the same discipline as every other identifier in this file).
+// `share_card_key` (both top-level, for text/illustrated memories, and on
+// the embedded `memory_media` rows, for per-asset media cards) is the
+// stored-cache column pair added by
+// 20260805130000_share_card_storage_columns.sql -- see that migration and
+// resolveShareCardCacheTarget for how the two map to a single card slot.
 export const SHARE_CARD_MEMORY_SELECT = `
-  id, family_id, content, memory_type, memory_date, illustration_key, illustration_status, emotion,
+  id, family_id, user_id, content, memory_type, memory_date, illustration_key, illustration_status, emotion, share_card_key,
   families ( id, viewer_sharing_enabled, family_memberships ( user_id, role ) ),
-  memory_media ( id, memory_id, object_key, preview_object_key, content_type, aspect_ratio ),
+  memory_media ( id, memory_id, object_key, preview_object_key, content_type, aspect_ratio, share_card_key ),
   memory_family_members ( family_member_id, family_members ( id, name, illustrated_profile_key, illustrated_profile_status, profile_picture_key ) )
 `;
 
 export interface ShareCardMemoryQueryRow {
   id: string;
   family_id: string;
+  // Store-through cache (W2): the memory's creator. Nullable in the schema
+  // (src/types/database.ts), though every real row is expected to have one
+  // -- resolveOwnerUserIdForCache below fails closed (skips caching, still
+  // streams) on the defensive null case rather than assume it's always
+  // present.
+  user_id: string | null;
   content: string | null;
   memory_type: string;
   memory_date: string;
   illustration_key: string | null;
   illustration_status: string;
+  // Store-through cache (W2): the per-MEMORY stored card key (text_only /
+  // text_illustration cards). See resolveShareCardCacheTarget.
+  share_card_key: string | null;
   /** Only used by the quote (text_only) card's accent strip + quote-glyph
    * color (see layout.ts's shareCardEmotionColors) -- never logged
    * (AGENTS.md logging discipline; enum-like label, fine to select/hold in
@@ -171,7 +204,38 @@ export interface ShareCardMemoryQueryRow {
 export const SHARE_CARD_RATE_LIMIT_WINDOW_MS = 60_000;
 export const SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW = 10;
 
+// ── Warm-mode rate limit (W2) ────────────────────────────────────────────
+// A SEPARATE, looser bucket from the cold (streaming-share) limit above --
+// warms are system-initiated (client fires them after memory create/edit
+// and after the media queue posts, W3), not a human repeatedly tapping
+// share, so they legitimately happen more often per user. Still real limits
+// (not exempt): a runaway client bug firing warms in a loop must not be able
+// to hammer this function unbounded. Kept as its own Map (not a shared one
+// keyed by a "kind" string) so a burst of warms can never eat into a user's
+// cold-path budget or vice versa.
+export const SHARE_CARD_WARM_RATE_LIMIT_WINDOW_MS = 60_000;
+export const SHARE_CARD_WARM_RATE_LIMIT_MAX_PER_WINDOW = 30;
+
 const recentComposesByUser = new Map<string, number[]>();
+const recentWarmsByUser = new Map<string, number[]>();
+
+function isRateLimitedInStore(
+  store: Map<string, number[]>,
+  userId: string,
+  now: number,
+  windowMs: number,
+  maxPerWindow: number,
+): boolean {
+  const timestamps = (store.get(userId) ?? []).filter((t) => now - t < windowMs);
+  store.set(userId, timestamps);
+  return timestamps.length >= maxPerWindow;
+}
+
+function markRunInStore(store: Map<string, number[]>, userId: string, now: number): void {
+  const timestamps = store.get(userId) ?? [];
+  timestamps.push(now);
+  store.set(userId, timestamps);
+}
 
 export function isComposeRateLimited(
   userId: string,
@@ -179,20 +243,30 @@ export function isComposeRateLimited(
   windowMs = SHARE_CARD_RATE_LIMIT_WINDOW_MS,
   maxPerWindow = SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW,
 ): boolean {
-  const timestamps = (recentComposesByUser.get(userId) ?? []).filter((t) => now - t < windowMs);
-  recentComposesByUser.set(userId, timestamps);
-  return timestamps.length >= maxPerWindow;
+  return isRateLimitedInStore(recentComposesByUser, userId, now, windowMs, maxPerWindow);
 }
 
 export function markComposeRun(userId: string, now = Date.now()): void {
-  const timestamps = recentComposesByUser.get(userId) ?? [];
-  timestamps.push(now);
-  recentComposesByUser.set(userId, timestamps);
+  markRunInStore(recentComposesByUser, userId, now);
+}
+
+export function isWarmRateLimited(
+  userId: string,
+  now = Date.now(),
+  windowMs = SHARE_CARD_WARM_RATE_LIMIT_WINDOW_MS,
+  maxPerWindow = SHARE_CARD_WARM_RATE_LIMIT_MAX_PER_WINDOW,
+): boolean {
+  return isRateLimitedInStore(recentWarmsByUser, userId, now, windowMs, maxPerWindow);
+}
+
+export function markWarmRun(userId: string, now = Date.now()): void {
+  markRunInStore(recentWarmsByUser, userId, now);
 }
 
 // Exposed for tests only (avoids cross-test rate-limit bleed).
 export function _resetRateLimitStateForTests(): void {
   recentComposesByUser.clear();
+  recentWarmsByUser.clear();
 }
 
 // ── Filename ─────────────────────────────────────────────────────────────
@@ -819,8 +893,225 @@ export async function buildTaggedMemberPortraits(
   );
 }
 
+// ── Store-through cache (docs/plans/share-card-store-through.md, W2) ────
+// A stored card exists behind `memories.share_card_key` (text_only /
+// text_illustration) or `memory_media.share_card_key` (media, per asset) --
+// see the 20260805130000 migration. A stored key encodes the layout version
+// it was rendered under (`{designVersion}-{generationId}.png`, built by
+// buildShareCardKey, _shared/storage-keys.ts); this section resolves which
+// column applies to the current request and decides HIT vs MISS.
+
+// LOUD REMINDER: bump this on ANY layout change (layout.ts, render.ts's
+// scale/format choices, or this file's own card-shape assembly) -- it is
+// the ONLY thing that invalidates a stored card. A stored key whose encoded
+// version doesn't match this constant is always treated as a MISS
+// (isFreshShareCardKey below), so old cards regenerate lazily on next share
+// instead of ever being served stale. Currently 2: version 1 is the
+// IMPLICIT pre-cache design (no share_card_key columns existed before this
+// workstream, so there was nothing to compare a key against) -- bumped to 2
+// for this workstream's own batched wordmark tweak (see layout.ts's
+// SHARE_CARD_WORDMARK_FONT_SIZE/SHARE_CARD_WORDMARK_OPACITY).
+export const DESIGN_VERSION = 2;
+
+const SHARE_CARD_KEY_NAME_PATTERN = /^(\d+)-(.+)\.png$/i;
+
+/** Parses the `{designVersion}-{generationId}` name segment out of a full
+ * share-card object key's filename. Returns null for anything that doesn't
+ * match the shape buildShareCardKey produces (defensive -- a malformed/
+ * legacy value is simply treated as unparsable, never thrown). */
+export function parseShareCardKeyDesignVersion(objectKey: string): number | null {
+  const filename = objectKey.split('/').pop() ?? '';
+  const match = filename.match(SHARE_CARD_KEY_NAME_PATTERN);
+  if (!match) {
+    return null;
+  }
+  const version = Number(match[1]);
+  return Number.isInteger(version) ? version : null;
+}
+
+/** A stored key is fresh (a cache HIT) only when it exists AND its encoded
+ * designVersion equals the current DESIGN_VERSION -- a key from an older
+ * layout version is deliberately treated exactly like "no key at all". */
+export function isFreshShareCardKey(storedKey: string | null | undefined): boolean {
+  if (!storedKey) {
+    return false;
+  }
+  return parseShareCardKeyDesignVersion(storedKey) === DESIGN_VERSION;
+}
+
+/** Which DB column/row a compose's stored card belongs to: per-ASSET
+ * (`memory_media.share_card_key`) for a media memory's specific asset,
+ * per-MEMORY (`memories.share_card_key`) for text_only/text_illustration
+ * (the whole memory has exactly one card either way -- there's no
+ * "asset" to key on). */
+export interface ShareCardCacheTarget {
+  table: 'memories' | 'memory_media';
+  id: string;
+  storedKey: string | null;
+}
+
+export function resolveShareCardCacheTarget(
+  source: ResolvedShareCardSource,
+  row: ShareCardMemoryQueryRow,
+  mediaAssetId: string | undefined,
+): ShareCardCacheTarget {
+  if (source.kind === 'media') {
+    // mediaAssetId is guaranteed to be a real id present in row.memory_media
+    // here: resolveShareCardSourceFromQueryRow only ever returns a 'media'
+    // source after successfully finding this exact asset in that array (see
+    // its `asset = row.memory_media.find(...)` lookup) -- so re-finding it
+    // here can't fail in practice. Re-finding (rather than threading the
+    // asset through ResolvedShareCardSource) keeps that type unchanged for
+    // every existing caller/test.
+    const asset = row.memory_media.find((m) => m.id === mediaAssetId);
+    return { table: 'memory_media', id: mediaAssetId as string, storedKey: asset?.share_card_key ?? null };
+  }
+  return { table: 'memories', id: row.id, storedKey: row.share_card_key };
+}
+
+export interface ShareCardStoreDependencies {
+  putObjectBytes: typeof putObjectBytes;
+  deleteObject: typeof deleteObject;
+  createServiceClient: typeof createServiceClient;
+}
+
+/**
+ * Miss-path store-through: uploads the freshly composed PNG under a new
+ * `{DESIGN_VERSION}-{uuid}` key (ALWAYS under the memory CREATOR's userId
+ * prefix -- `ownerUserId` must be `row.user_id`, never the caller, so a
+ * viewer/manager sharing someone else's memory still writes to the same
+ * prefix the memory's own illustration/media objects already live under --
+ * matching the existing authz-path convention those keys rely on), then
+ * updates `target`'s column via a SERVICE-ROLE client. `memories` and
+ * `memory_media` are technically writable by the ordinary user client too
+ * (see the migration's header comment), but service-role is used here by
+ * CONVENTION -- the same posture generate-illustration already uses for
+ * `illustration_key`/`illustration_generation_id`, columns with an
+ * identical "only server-side code writes this" contract. If the target
+ * previously held a DIFFERENT key (always a stale one at this call site --
+ * a fresh key would have been a cache HIT, never reaching here), the old
+ * object is deleted best-effort so it doesn't linger as orphaned storage.
+ *
+ * Every failure here (R2 put, DB update, stale-object delete) is caught and
+ * logged id-only (AGENTS.md logging discipline -- never memory content, and
+ * this function never even sees the caption) and swallowed: a caching
+ * failure must never fail the share itself. Returns `{ stored: boolean }`
+ * only so tests can assert the outcome directly instead of re-deriving it
+ * from log side effects.
+ */
+export async function storeShareCardAndUpdateCache(
+  target: ShareCardCacheTarget,
+  ownerUserId: string,
+  memoryId: string,
+  png: Uint8Array,
+  deps: ShareCardStoreDependencies,
+): Promise<{ stored: boolean }> {
+  const newKey = buildShareCardKey(ownerUserId, memoryId, `${DESIGN_VERSION}-${crypto.randomUUID()}`);
+
+  try {
+    await deps.putObjectBytes(newKey, png, 'image/png');
+  } catch {
+    console.error('compose-share-card cache store failed', memoryId, target.table);
+    return { stored: false };
+  }
+
+  try {
+    const service = deps.createServiceClient();
+    const { error } = await service.from(target.table).update({ share_card_key: newKey }).eq('id', target.id);
+    if (error) {
+      throw error;
+    }
+  } catch {
+    console.error('compose-share-card cache column update failed', memoryId, target.table);
+    return { stored: false };
+  }
+
+  if (target.storedKey && target.storedKey !== newKey) {
+    try {
+      await deps.deleteObject(target.storedKey);
+    } catch {
+      console.error('compose-share-card stale card delete failed', memoryId, target.table);
+    }
+  }
+
+  return { stored: true };
+}
+
 // ── Request handling ─────────────────────────────────────────────────────
-export async function handleComposeShareCard(req: Request): Promise<Response> {
+
+/** Injectable seam over the single nested query (round 3's
+ * SHARE_CARD_MEMORY_SELECT) -- default implementation is the exact query
+ * handleComposeShareCard always ran; tests override this whole function to
+ * supply a canned row/error without a real Supabase/PostgREST round trip
+ * (the SAME approach generate-illustration's DEFAULT_DEPENDENCIES pattern
+ * uses for its own DB/network seams). */
+export type ShareCardQueryResult = {
+  data: ShareCardMemoryQueryRow | null;
+  error: { message: string } | null;
+};
+
+async function defaultFetchShareCardQueryRow(authHeader: string, memoryId: string): Promise<ShareCardQueryResult> {
+  const supabase: SupabaseClient = createUserClient(authHeader);
+  const { data, error } = await supabase
+    .from('memories')
+    .select(SHARE_CARD_MEMORY_SELECT)
+    .eq('id', memoryId)
+    .maybeSingle();
+  return { data: data as unknown as ShareCardMemoryQueryRow | null, error };
+}
+
+export interface ComposeShareCardDependencies {
+  fetchQueryRow: (authHeader: string, memoryId: string) => Promise<ShareCardQueryResult>;
+  loadShareCardAssets: typeof loadShareCardAssetsImpl;
+  getObjectBytes: typeof getObjectBytes;
+  getObjectBytesBatch: typeof getObjectBytesBatch;
+  putObjectBytes: typeof putObjectBytes;
+  deleteObject: typeof deleteObject;
+  createServiceClient: typeof createServiceClient;
+  composeShareCardPng: typeof composeShareCardPngImpl;
+}
+
+const DEFAULT_COMPOSE_DEPENDENCIES: ComposeShareCardDependencies = {
+  fetchQueryRow: defaultFetchShareCardQueryRow,
+  loadShareCardAssets: loadShareCardAssetsImpl,
+  getObjectBytes,
+  getObjectBytesBatch,
+  putObjectBytes,
+  deleteObject,
+  createServiceClient,
+  composeShareCardPng: composeShareCardPngImpl,
+};
+
+/** Builds the Server-Timing header value + single structured log line for a
+ * cache HIT -- deliberately separate from logComposeTiming below (a hit
+ * never touches satori/resvg/assets, so most of that function's fields
+ * would just be zeros/misleading). Same AGENTS.md logging discipline: ids
+ * and numbers only. */
+function logCacheHitTiming(memoryId: string, bootHintMs: number, dbMs: number, getMs: number, totalMs: number, pngBytes: number): string {
+  console.log('compose-share-card timing', JSON.stringify({
+    memoryId,
+    cache: 'hit',
+    bootHintMs,
+    dbMs,
+    getMs,
+    totalMs,
+    pngBytes,
+  }));
+
+  return [
+    'cache;desc=hit',
+    `boot;dur=${bootHintMs}`,
+    `db;dur=${dbMs}`,
+    `get;dur=${getMs}`,
+    `total;dur=${totalMs}`,
+  ].join(', ');
+}
+
+export async function handleComposeShareCard(
+  req: Request,
+  dependencyOverrides: Partial<ComposeShareCardDependencies> = {},
+): Promise<Response> {
+  const dependencies: ComposeShareCardDependencies = { ...DEFAULT_COMPOSE_DEPENDENCIES, ...dependencyOverrides };
   // See MODULE_EVAL_TIME's header comment: this is "handler entry" for the
   // bootHint delta, captured before any auth/DB/CORS work so it reflects
   // only module-graph-eval time, not request-handling time.
@@ -847,7 +1138,7 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
     return errorResponse('Invalid JSON body', 400, 'invalid_json');
   }
 
-  const { memoryId, mediaAssetId } = body;
+  const { memoryId, mediaAssetId, warm } = body;
 
   if (!memoryId || typeof memoryId !== 'string') {
     return errorResponse('memoryId is required', 400, 'validation_error');
@@ -857,29 +1148,22 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
     return errorResponse('mediaAssetId must be a string', 400, 'validation_error');
   }
 
-  if (isComposeRateLimited(user.id)) {
+  if (warm !== undefined && typeof warm !== 'boolean') {
+    return errorResponse('warm must be a boolean', 400, 'validation_error');
+  }
+
+  // Same auth/role/validation as a normal (cold) share -- warm is not a
+  // relaxed-permissions mode, just a different response shape + a looser
+  // rate bucket (W2 spec: "a viewer with sharing disabled can still WARM?
+  // No -- warms come from creators/editors post-create; keep the same 403
+  // rules, harmless").
+  const isWarm = warm === true;
+
+  if (isWarm ? isWarmRateLimited(user.id) : isComposeRateLimited(user.id)) {
     return errorResponse('Too many share requests -- try again in a moment', 429, 'rate_limited');
   }
 
   const authHeader = req.headers.get('Authorization')!;
-  const supabase = createUserClient(authHeader);
-
-  // ── Round 4: kick off the R2 asset fetch (resvg wasm, webp-dec wasm, all
-  // font TTFs) IMMEDIATELY -- before the DB query -- so it overlaps with
-  // the DB query AND the image fetches below instead of adding to the
-  // critical path serially. See assets-loader.ts / this file's header
-  // comment for the full diagnosis (eviction from the module graph was the
-  // fix for the bodyless-546 failures).
-  const assetsStart = performance.now();
-  const assetsPromise = loadShareCardAssets();
-  // Silences a Deno "uncaught (in promise)" warning on the path where
-  // authorization/resolution rejects the request before this promise is
-  // ever awaited below (e.g. a non-member, or a blocked viewer) -- the
-  // fetch keeps running regardless (module-scope memoization means the
-  // NEXT request in this isolate benefits even if this one didn't need
-  // it); this only silences the warning for the abandoned reference. Real
-  // error handling happens at the `await assetsPromise` site below.
-  assetsPromise.catch(() => {});
 
   // ── Round 3: ONE nested query replaces what was ~5-6 sequential DB round
   // trips (memory row, authorizeShareCardAccess's own 2-3 sequential
@@ -887,12 +1171,18 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
   // fetchTaggedMembers' select) -- see SHARE_CARD_MEMORY_SELECT's header
   // comment for the full diagnosis and the real-schema verification that
   // preceded wiring this in.
+  //
+  // Store-through cache (W2) note: the R2 ASSET fetch (loadShareCardAssets)
+  // used to be kicked off here, before this query, so it could overlap with
+  // it (round 4). It no longer is: a cache HIT must never touch fonts/wasm
+  // at all (that is the entire point of the store-through cache), and
+  // hit-vs-miss can't be known until AFTER this query + the cache check
+  // below, so the asset fetch is now deferred to the confirmed-MISS branch
+  // further down. This trades away some of the (now rarer, once the cache
+  // is warm) miss path's overlap window for a hit path that touches R2
+  // exactly once -- the cached PNG itself.
   const dbStart = performance.now();
-  const { data: queryRow, error: queryError } = await supabase
-    .from('memories')
-    .select(SHARE_CARD_MEMORY_SELECT)
-    .eq('id', memoryId)
-    .maybeSingle();
+  const { data: queryRow, error: queryError } = await dependencies.fetchQueryRow(authHeader, memoryId);
   const dbMs = Math.round(performance.now() - dbStart);
 
   if (queryError) {
@@ -907,7 +1197,7 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
     return errorResponse('Memory not found', 404, 'MEMORY_NOT_FOUND');
   }
 
-  const row = queryRow as unknown as ShareCardMemoryQueryRow;
+  const row = queryRow;
 
   // Both are now SYNC, pure post-processing of the single already-fetched
   // row -- no DB calls, no Promise.all needed (round 2 parallelized two
@@ -925,9 +1215,59 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
     return errorResponse(resolution.error.message, resolution.error.status, resolution.error.code);
   }
 
-  markComposeRun(user.id);
+  if (isWarm) {
+    markWarmRun(user.id);
+  } else {
+    markComposeRun(user.id);
+  }
 
-  return runShareCardCompose(memoryId, async () => {
+  // ── Cache check (W2) ─────────────────────────────────────────────────
+  const cacheTarget = resolveShareCardCacheTarget(resolution.source, row, mediaAssetId);
+
+  if (isFreshShareCardKey(cacheTarget.storedKey)) {
+    if (isWarm) {
+      // Already warm -- nothing to compose or store. No R2/asset access at
+      // all on this path.
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
+
+    const getStart = performance.now();
+    try {
+      const bytes = await dependencies.getObjectBytes(cacheTarget.storedKey as string);
+      const getMs = Math.round(performance.now() - getStart);
+      return new Response(bytes as BodyInit, {
+        status: 200,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'image/png',
+          'Content-Disposition': `attachment; filename="${buildShareCardFilename(row.memory_date)}"`,
+          'Server-Timing': logCacheHitTiming(memoryId, bootHintMs, dbMs, getMs, dbMs + getMs, bytes.length),
+        },
+      });
+    } catch {
+      // The cached object went missing/unreadable (e.g. deleted out from
+      // under the DB row by an out-of-band sweep) -- fall through to a
+      // normal MISS (recompose) below rather than fail the whole share.
+      // id-only log (AGENTS.md logging discipline).
+      console.error('compose-share-card cache hit read failed', memoryId, cacheTarget.table);
+    }
+  }
+
+  // ── MISS: compose via the existing pipeline, then store-through ───────
+  // Kicked off only now that a MISS is confirmed -- see the dbStart
+  // comment above for why this moved off the top of the handler.
+  const assetsStart = performance.now();
+  const assetsPromise = dependencies.loadShareCardAssets();
+  // Silences a Deno "uncaught (in promise)" warning if the work closure
+  // below throws before ever awaiting this (e.g. the hero image fetch
+  // failing closed) -- the fetch keeps running regardless (module-scope
+  // memoization means the NEXT request in this isolate benefits even if
+  // this one didn't need it); this only silences the warning for the
+  // abandoned reference. Real error handling happens at the `await
+  // assetsPromise` site below.
+  assetsPromise.catch(() => {});
+
+  const composeResponse = await runShareCardCompose(memoryId, async () => {
     // "fetch" phase is now R2-only -- tagged members and the media
     // asset/illustration key all came from the single query above, so
     // there is no DB call left in this closure at all. Round 2's two-phase
@@ -938,8 +1278,6 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
     // getObjectBytesBatch call together -- one presign round trip for
     // EVERYTHING this compose needs, not one for the hero and a separate
     // one for portraits (round 2) or N separate ones (round 1 and before).
-    const fetchStart = performance.now();
-
     const { members, overflowCount } = resolveTaggedMembersFromQueryRow(row);
     const portraitKeys = resolvePortraitKeysToFetch(members);
 
@@ -949,14 +1287,11 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
 
     const allImageKeys = heroObjectKey ? [heroObjectKey, ...portraitKeys] : portraitKeys;
 
-    // Awaited together with the (already-in-flight, kicked off before the
-    // DB query) asset fetch -- by the time we reach this Promise.all, the
-    // R2 asset batch has had the ENTIRE db+authz+resolution+tagged-members
-    // window to progress, so this should mostly just wait out whichever of
-    // the two IO operations is slower, not their sum.
+    // Awaited together with the (already-in-flight, kicked off right above)
+    // asset fetch.
     const imageFetchStart = performance.now();
     const [imageBytesByKey, assets] = await Promise.all([
-      getObjectBytesBatch(allImageKeys),
+      dependencies.getObjectBytesBatch(allImageKeys),
       assetsPromise,
     ]);
     const imageFetchMs = Math.round(performance.now() - imageFetchStart);
@@ -1009,7 +1344,7 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
       emotion: row.emotion,
     };
 
-    const { png, initMs, satoriMs, resvgMs, scale } = await composeShareCardPng(cardData, {
+    const { png, initMs, satoriMs, resvgMs, scale } = await dependencies.composeShareCardPng(cardData, {
       resvgWasm: assets.resvgWasm,
       fonts: {
         newsreaderRegular: assets.newsreaderRegular,
@@ -1021,12 +1356,43 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
       },
     });
 
+    // ── Store-through (W2, non-fatal on failure) ─────────────────────────
+    // Runs INSIDE this work closure (not after runShareCardCompose
+    // returns) so both the cold streaming path and the warm 204-only path
+    // below share this exact call site -- and its exact non-fatal-failure
+    // guarantee: storeShareCardAndUpdateCache never throws, so a caching
+    // failure can never turn a successful compose into a failed response.
+    if (row.user_id) {
+      await storeShareCardAndUpdateCache(cacheTarget, row.user_id, memoryId, png, dependencies);
+    } else {
+      // Defensive-only: user_id is nullable in the schema (src/types/
+      // database.ts) but every real memory row has one. Without an owner
+      // there is no valid key prefix to store under -- skip caching, the
+      // share/warm response below still succeeds.
+      console.error('compose-share-card missing owner user_id, skipping cache store', memoryId);
+    }
+
     return {
       png,
       memoryDate: row.memory_date,
       timing: { bootHintMs, dbMs, fetchMs, satoriMs, resvgMs, initMs, scale, fetchCount, imageFetchMs, assetsMs },
     };
   });
+
+  if (isWarm) {
+    if (composeResponse.status !== 200) {
+      // Propagate the same error status/code a cold share would have hit
+      // (e.g. compose_failed, assets_unavailable) -- the client's
+      // fire-and-forget warm hook (W3) ignores the response either way.
+      return composeResponse;
+    }
+    // Drain the PNG body (never inspected -- warm never streams it) so the
+    // underlying Deno resource doesn't leak, then respond 204 no body.
+    await composeResponse.arrayBuffer().catch(() => {});
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  return composeResponse;
 }
 
 export interface ComposeTiming {
@@ -1181,5 +1547,5 @@ export async function runShareCardCompose(
 }
 
 if (import.meta.main) {
-  Deno.serve(handleComposeShareCard);
+  Deno.serve((req) => handleComposeShareCard(req));
 }

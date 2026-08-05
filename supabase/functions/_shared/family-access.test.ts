@@ -13,6 +13,7 @@ import {
   buildMemoryMediaKey,
   buildPortraitVersionAttemptKey,
   buildPortraitVersionPhotoKey,
+  buildShareCardKey,
   parseStorageKey,
 } from './storage-keys.ts';
 
@@ -223,6 +224,25 @@ Deno.test(
   },
 );
 
+// Share card store-through cache (docs/plans/share-card-store-through.md,
+// W1): a share_card key resolves via memories.id -> family_id, same as
+// memory_media/memory_illustration -- it is never resolved via the {uid}
+// prefix.
+Deno.test('resolveStorageKeyFamilyIds resolves share_card keys via memories.id -> family_id', async () => {
+  const supabase = fakeSupabase({
+    families: [],
+    memberships: [],
+    memories: [{ id: MEMORY_ID, family_id: FAMILY_A }],
+  });
+
+  const [resolved] = await resolveStorageKeyFamilyIds(supabase as never, [
+    buildShareCardKey(OWNER_ID, MEMORY_ID, 'v1-55555555-5555-4555-8555-555555555555'),
+  ]);
+
+  assertEquals(resolved.parsed?.kind, 'share_card');
+  assertEquals(resolved.familyId, FAMILY_A);
+});
+
 Deno.test('resolveStorageKeyFamilyIds resolves family-member keys via family_members.family_id', async () => {
   const supabase = fakeSupabase({
     families: [],
@@ -316,8 +336,18 @@ Deno.test('storage read authorization (get-media-url): any member role including
 // get-media-url 400s on every preview key (the feature is dead) and
 // delete-storage-object refuses to delete previews (a leak).
 function fakeSupabaseForReferencedStorageKeys(options: {
-  memories?: Array<{ id: string; media_key: string | null; illustration_key: string | null }>;
-  mediaAssets?: Array<{ memory_id: string; object_key: string; preview_object_key: string | null }>;
+  memories?: Array<{
+    id: string;
+    media_key: string | null;
+    illustration_key: string | null;
+    share_card_key?: string | null;
+  }>;
+  mediaAssets?: Array<{
+    memory_id: string;
+    object_key: string;
+    preview_object_key: string | null;
+    share_card_key?: string | null;
+  }>;
 }) {
   return {
     from(table: string) {
@@ -408,6 +438,98 @@ Deno.test(
       referenced.has(`${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1-preview.jpg`),
       false,
     );
+  },
+);
+
+// Share card store-through cache (docs/plans/share-card-store-through.md,
+// W1): resolveReferencedStorageKeys must admit share_card_key from BOTH
+// memories (memory-level card) and memory_media (per-asset card) -- without
+// this, delete-storage-object would refuse to delete a live cached card
+// (400 on every share-card key) and get-media-url would 400 too.
+Deno.test(
+  'resolveReferencedStorageKeys admits a referenced memories.share_card_key',
+  async () => {
+    const shareCardKey = buildShareCardKey(
+      OWNER_ID,
+      MEMORY_ID,
+      'v1-55555555-5555-4555-8555-555555555555',
+    );
+    const supabase = fakeSupabaseForReferencedStorageKeys({
+      memories: [{ id: MEMORY_ID, media_key: null, illustration_key: null, share_card_key: shareCardKey }],
+      mediaAssets: [],
+    });
+
+    const resolvedKeys = [
+      { objectKey: shareCardKey, parsed: parseStorageKey(shareCardKey), familyId: FAMILY_A },
+    ];
+
+    const referenced = await resolveReferencedStorageKeys(supabase as never, resolvedKeys);
+
+    assertEquals(referenced.has(shareCardKey), true);
+  },
+);
+
+Deno.test(
+  'resolveReferencedStorageKeys admits a referenced memory_media.share_card_key',
+  async () => {
+    const shareCardKey = buildShareCardKey(
+      OWNER_ID,
+      MEMORY_ID,
+      'v1-55555555-5555-4555-8555-555555555555',
+    );
+    const supabase = fakeSupabaseForReferencedStorageKeys({
+      memories: [{ id: MEMORY_ID, media_key: null, illustration_key: null }],
+      mediaAssets: [
+        {
+          memory_id: MEMORY_ID,
+          object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1.jpg`,
+          preview_object_key: null,
+          share_card_key: shareCardKey,
+        },
+      ],
+    });
+
+    const resolvedKeys = [
+      { objectKey: shareCardKey, parsed: parseStorageKey(shareCardKey), familyId: FAMILY_A },
+    ];
+
+    const referenced = await resolveReferencedStorageKeys(supabase as never, resolvedKeys);
+
+    assertEquals(referenced.has(shareCardKey), true);
+  },
+);
+
+Deno.test(
+  'resolveReferencedStorageKeys does not admit a share card key when neither row has one',
+  async () => {
+    const staleShareCardKey = buildShareCardKey(
+      OWNER_ID,
+      MEMORY_ID,
+      'v1-55555555-5555-4555-8555-555555555555',
+    );
+    const supabase = fakeSupabaseForReferencedStorageKeys({
+      memories: [{ id: MEMORY_ID, media_key: null, illustration_key: null, share_card_key: null }],
+      mediaAssets: [
+        {
+          memory_id: MEMORY_ID,
+          object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/asset-1.jpg`,
+          preview_object_key: null,
+          share_card_key: null,
+        },
+      ],
+    });
+
+    const resolvedKeys = [
+      {
+        objectKey: staleShareCardKey,
+        parsed: parseStorageKey(staleShareCardKey),
+        familyId: FAMILY_A,
+      },
+    ];
+
+    const referenced = await resolveReferencedStorageKeys(supabase as never, resolvedKeys);
+
+    assertEquals(referenced.has(staleShareCardKey), false);
   },
 );
 

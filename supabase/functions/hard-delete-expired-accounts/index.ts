@@ -38,7 +38,7 @@ export async function collectFamilyStorageKeys(
 
   const { data: memories, error: memoriesError } = await supabase
     .from('memories')
-    .select('id, media_key, illustration_key')
+    .select('id, media_key, illustration_key, share_card_key')
     .eq('family_id', familyId);
   if (memoriesError) throw new Error(`Memory storage lookup failed: ${memoriesError.message}`);
 
@@ -47,12 +47,13 @@ export async function collectFamilyStorageKeys(
     memoryIds.push(memory.id);
     if (memory.media_key) keys.push(memory.media_key);
     if (memory.illustration_key) keys.push(memory.illustration_key);
+    if (memory.share_card_key) keys.push(memory.share_card_key);
   }
 
   if (memoryIds.length > 0) {
     const { data: mediaAssets, error: mediaAssetsError } = await supabase
       .from('memory_media')
-      .select('object_key, preview_object_key')
+      .select('object_key, preview_object_key, share_card_key')
       .in('memory_id', memoryIds);
     if (mediaAssetsError) {
       throw new Error(`Memory media storage lookup failed: ${mediaAssetsError.message}`);
@@ -61,6 +62,7 @@ export async function collectFamilyStorageKeys(
     for (const asset of mediaAssets ?? []) {
       if (asset.object_key) keys.push(asset.object_key);
       if (asset.preview_object_key) keys.push(asset.preview_object_key);
+      if (asset.share_card_key) keys.push(asset.share_card_key);
     }
   }
 
@@ -246,15 +248,17 @@ export async function deleteOwnedFamilies(
 /**
  * Given a set of candidate keys (typically everything under a `{userId}/`
  * prefix), returns the subset still referenced by a surviving row --
- * `memory_media.object_key`/`preview_object_key`,
- * `memories.media_key`/`illustration_key`, or
+ * `memory_media.object_key`/`preview_object_key`/`share_card_key`,
+ * `memories.media_key`/`illustration_key`/`share_card_key`, or
  * `family_members.profile_picture_key`/`illustrated_profile_key`. Simple
  * `.in()` queries rather than a single `.or()` string, so key values (which
  * can contain `.`/`-`) never need PostgREST filter-syntax escaping.
- * `preview_object_key` is checked as its own reference column (not folded
- * into the `object_key` query) -- a preview key never equals its asset's
- * `object_key`, so without this a live preview would look unreferenced and
- * be deleted as orphan garbage.
+ * `preview_object_key` and `share_card_key` are each checked as their own
+ * reference column (not folded into the `object_key` query) -- neither
+ * value ever equals its row's `object_key`, so without this a live preview
+ * or a live share card would look unreferenced and be deleted as orphan
+ * garbage (docs/plans/share-card-store-through.md, W1, mirroring the C2
+ * preview_object_key fix).
  */
 export async function resolveReferencedKeys(
   supabase: ServiceClient,
@@ -269,8 +273,10 @@ export async function resolveReferencedKeys(
   const [
     mediaAssetRows,
     mediaAssetPreviewRows,
+    mediaAssetShareCardRows,
     memoryMediaKeyRows,
     memoryIllustrationKeyRows,
+    memoryShareCardKeyRows,
     memberPhotoRows,
     memberPortraitRows,
     versionPhotoRows,
@@ -281,8 +287,10 @@ export async function resolveReferencedKeys(
   ] = await Promise.all([
     supabase.from('memory_media').select('object_key').in('object_key', keys),
     supabase.from('memory_media').select('preview_object_key').in('preview_object_key', keys),
+    supabase.from('memory_media').select('share_card_key').in('share_card_key', keys),
     supabase.from('memories').select('media_key').in('media_key', keys),
     supabase.from('memories').select('illustration_key').in('illustration_key', keys),
+    supabase.from('memories').select('share_card_key').in('share_card_key', keys),
     supabase.from('family_members').select('profile_picture_key').in('profile_picture_key', keys),
     supabase
       .from('family_members')
@@ -313,8 +321,10 @@ export async function resolveReferencedKeys(
   const lookupError = [
     mediaAssetRows,
     mediaAssetPreviewRows,
+    mediaAssetShareCardRows,
     memoryMediaKeyRows,
     memoryIllustrationKeyRows,
+    memoryShareCardKeyRows,
     memberPhotoRows,
     memberPortraitRows,
     versionPhotoRows,
@@ -333,11 +343,17 @@ export async function resolveReferencedKeys(
   for (const row of mediaAssetPreviewRows.data ?? []) {
     if (row.preview_object_key) referenced.add(row.preview_object_key);
   }
+  for (const row of mediaAssetShareCardRows.data ?? []) {
+    if (row.share_card_key) referenced.add(row.share_card_key);
+  }
   for (const row of memoryMediaKeyRows.data ?? []) {
     if (row.media_key) referenced.add(row.media_key);
   }
   for (const row of memoryIllustrationKeyRows.data ?? []) {
     if (row.illustration_key) referenced.add(row.illustration_key);
+  }
+  for (const row of memoryShareCardKeyRows.data ?? []) {
+    if (row.share_card_key) referenced.add(row.share_card_key);
   }
   for (const row of memberPhotoRows.data ?? []) {
     if (row.profile_picture_key) referenced.add(row.profile_picture_key);

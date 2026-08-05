@@ -24,6 +24,7 @@ import {
   type MemoryWithTags,
 } from '@/services/memories';
 import { fetchLinkPreviews, notifyFamilyActivity } from '@/services/ai';
+import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -64,6 +65,10 @@ jest.mock('@/services/ai', () => ({
   fetchLinkPreviews: jest.fn(),
 }));
 
+jest.mock('@/services/share-card', () => ({
+  warmShareCardForMemoryFireAndForget: jest.fn(),
+}));
+
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyPortraitVersions = useFamilyPortraitVersions as jest.MockedFunction<
@@ -86,6 +91,9 @@ const mockedNotifyFamilyActivity = notifyFamilyActivity as jest.MockedFunction<
   typeof notifyFamilyActivity
 >;
 const mockedFetchLinkPreviews = fetchLinkPreviews as jest.MockedFunction<typeof fetchLinkPreviews>;
+const mockedWarmShareCard = warmShareCardForMemoryFireAndForget as jest.MockedFunction<
+  typeof warmShareCardForMemoryFireAndForget
+>;
 const mockedFetchMemoryById = fetchMemoryById as jest.MockedFunction<typeof fetchMemoryById>;
 const mockedRetryMemoryIllustration = retryMemoryIllustration as jest.MockedFunction<
   typeof retryMemoryIllustration
@@ -381,6 +389,133 @@ describe('useMemories integration', () => {
       });
 
       warnSpy.mockRestore();
+    });
+  });
+
+  describe('warm-share-card fire-and-forget (docs/plans/share-card-store-through.md, W3)', () => {
+    it('fires warmShareCardForMemoryFireAndForget exactly once with the created memory after a text create', async () => {
+      const created = {
+        id: 'memory-text-1',
+        memory_type: 'text_only',
+        memory_date: '2026-05-26',
+        created_at: 'c1',
+        taggedMembers: [],
+        mediaAssets: [],
+      };
+      mockedCreateMemory.mockResolvedValue({ data: created, error: null });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await result.current.createMemory({
+        content: 'A quiet afternoon',
+        memoryDate: '2026-05-26',
+        taggedMemberIds: [],
+      });
+
+      expect(mockedWarmShareCard).toHaveBeenCalledTimes(1);
+      expect(mockedWarmShareCard).toHaveBeenCalledWith(created);
+    });
+
+    it('does not await the warm hook -- create resolves even while it hangs forever', async () => {
+      mockedWarmShareCard.mockImplementation(() => {
+        // Never-resolving inner work: proves the call site does not await
+        // this function's side effects (it returns void synchronously).
+        void new Promise(() => {});
+      });
+      mockedCreateMemory.mockResolvedValue({
+        data: {
+          id: 'memory-text-hang',
+          memory_type: 'text_only',
+          memory_date: '2026-05-26',
+          created_at: 'c1',
+          taggedMembers: [],
+          mediaAssets: [],
+        },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await expect(
+        result.current.createMemory({
+          content: 'Still saves',
+          memoryDate: '2026-05-26',
+          taggedMemberIds: [],
+        }),
+      ).resolves.toMatchObject({ id: 'memory-text-hang' });
+    });
+
+    it('does not surface a rejection from the warm hook\'s own internal promise chain', async () => {
+      mockedWarmShareCard.mockImplementation(() => {
+        // The real implementation is void-returning and swallows its own
+        // rejections internally (see share-card.test.ts) -- this simulates
+        // that same shape (fire off work, never let a rejection escape the
+        // function itself) to prove the call site doesn't need its own
+        // try/catch around a void call.
+        void Promise.reject(new Error('warm request failed')).catch(() => {});
+      });
+      mockedCreateMemory.mockResolvedValue({
+        data: {
+          id: 'memory-text-reject',
+          memory_type: 'text_only',
+          memory_date: '2026-05-26',
+          created_at: 'c1',
+          taggedMembers: [],
+          mediaAssets: [],
+        },
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await expect(
+        result.current.createMemory({
+          content: 'Still saves',
+          memoryDate: '2026-05-26',
+          taggedMemberIds: [],
+        }),
+      ).resolves.toMatchObject({ id: 'memory-text-reject' });
+    });
+
+    it('fires warmShareCardForMemoryFireAndForget exactly once with the updated memory after an edit', async () => {
+      const updated = {
+        id: 'memory-1',
+        memory_type: 'text_only',
+        memory_date: '2026-05-27',
+        taggedMembers: [],
+        mediaAssets: [],
+      };
+      mockedUpdateMemory.mockResolvedValue({ data: updated, error: null });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await result.current.updateMemory({ memoryId: 'memory-1', memoryDate: '2026-05-27' });
+
+      expect(mockedWarmShareCard).toHaveBeenCalledTimes(1);
+      expect(mockedWarmShareCard).toHaveBeenCalledWith(updated);
+    });
+
+    it('passes the edited media memory (with mediaAssets) so the warm hook can resolve the cover asset', async () => {
+      const updated = {
+        id: 'memory-media-1',
+        memory_type: 'media',
+        media_content_type: 'image/jpeg',
+        taggedMembers: [],
+        mediaAssets: [{ id: 'media-cover', content_type: 'image/jpeg' }],
+      };
+      mockedUpdateMemory.mockResolvedValue({ data: updated, error: null });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await result.current.updateMemory({ memoryId: 'memory-media-1', content: 'New caption' });
+
+      expect(mockedWarmShareCard).toHaveBeenCalledTimes(1);
+      expect(mockedWarmShareCard).toHaveBeenCalledWith(updated);
     });
   });
 

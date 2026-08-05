@@ -158,6 +158,16 @@ export function formatShareCardDateLabel(memoryDateIso: string): string {
   return `${month} ${parsed.getDate()}, ${parsed.getFullYear()}`;
 }
 
+// Batched design tweak (Eduardo, 2026-08-05, docs/plans/share-card-store-through.md
+// W2): the wordmark reads as too prominent sitting in the footer's emotion-chip
+// slot -- 20% smaller (0.8x the previous logical size of 20, i.e. 16) and
+// softened to opacity 0.8 makes it subtler, closer to a signature than a
+// label. This is a LAYOUT change: see index.ts's DESIGN_VERSION (bumped to 2
+// specifically for this tweak) -- stored cards regenerate lazily on next
+// share instead of ever showing the old wordmark from a live cache entry.
+export const SHARE_CARD_WORDMARK_FONT_SIZE = 16;
+export const SHARE_CARD_WORDMARK_OPACITY = 0.8;
+
 function wordmarkNode(size: number): SatoriNode {
   // Replicates src/components/wordmark.tsx: Newsreader medium, tight
   // negative letter-spacing, trailing period in the primary color.
@@ -171,6 +181,7 @@ function wordmarkNode(size: number): SatoriNode {
         fontSize: size,
         color: SHARE_CARD_THEME.ink,
         letterSpacing: size * -0.025,
+        opacity: SHARE_CARD_WORDMARK_OPACITY,
       },
     },
     [
@@ -282,7 +293,7 @@ function footerNode(data: ShareCardData, s: (px: number) => number): SatoriNode 
   }
 
   children.push(h('div', { style: { display: 'flex', flexGrow: 1 } }));
-  children.push(wordmarkNode(s(20)));
+  children.push(wordmarkNode(s(SHARE_CARD_WORDMARK_FONT_SIZE)));
 
   return h(
     'div',

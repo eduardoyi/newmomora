@@ -2,16 +2,29 @@
 
 **Status:** `done`
 **Last updated:** 2026-08-05
-**PRD reference:** [docs/plans/offline-awareness-and-share-cards.md](../plans/offline-awareness-and-share-cards.md) Workstream S
+**PRD reference:** [docs/plans/offline-awareness-and-share-cards.md](../plans/offline-awareness-and-share-cards.md) Workstream S; store-through cache in [docs/plans/share-card-store-through.md](../plans/share-card-store-through.md)
 
 ## Overview
 
 Parents can share a single memory outside the app as a simplified, watermarked
 PNG "card" — composed server-side and handed to the native share sheet
-(Messages, WhatsApp, Photos, AirDrop, whatever the OS offers). Momora never
-hosts a public URL for the card: the Edge Function streams the PNG straight
-back to the requesting device and keeps no copy. This is the "watermarked
-share export" scope PRD §7 previously listed as post-MVP; it has shipped.
+(Messages, WhatsApp, Photos, AirDrop, whatever the OS offers). This is the
+"watermarked share export" scope PRD §7 previously listed as post-MVP; it has
+shipped.
+
+`compose-share-card` never hosts a **public** URL for the card — every read
+still goes through this authenticated function, and only the requesting
+device ever sees the bytes. It does, however, keep a **private, server-owned
+cache** of the composed PNG in R2 (docs/plans/share-card-store-through.md):
+under Supabase Edge Functions' resource policing, a cold compose (satori +
+resvg-wasm, real CPU work) plateaued at only ~50-70% success per attempt —
+see Constraints for the full diagnosis. Storing the successfully-composed
+PNG once and streaming that stored copy on every subsequent share/warm
+absorbs that failure rate almost entirely for the common case (share the same
+memory more than once, or share shortly after a warm hook already primed the
+cache) without changing the client-visible contract at all: the response is
+still raw PNG bytes, still through the same function, still gated by the
+same permission checks on every call.
 
 Shareable: text-only, illustrated, and photo memories. Videos are **never**
 shareable — a mixed photo/video carousel shares whichever page is currently
@@ -57,28 +70,129 @@ flowchart LR
   Service -- "fetch + Bearer + apikey" --> Function["compose-share-card\nEdge Function"]
   Function --> Authz["authorizeShareCardAccess\n(role + viewer_sharing_enabled)"]
   Function --> Resolve["resolveShareCardSource\n(memory type, media asset, video reject)"]
-  Function --> R2[("R2: photo / illustration / portraits")]
-  Function --> Satori["satori (JSX -> SVG)\n+ vendored fonts/emoji"]
+  Function --> Cache{"share_card_key fresh?\n(designVersion matches)"}
+  Cache -- "HIT" --> ReadCache["getObjectBytes\n(stored PNG)"]
+  ReadCache -- "image/png stream\ncache;desc=hit" --> Hook
+  Cache -- "MISS" --> R2Assets[("R2: photo / illustration / portraits")]
+  R2Assets --> Satori["satori (JSX -> SVG)\n+ vendored fonts/emoji"]
   Satori --> Resvg["@resvg/resvg-wasm\n(SVG -> PNG)"]
-  Resvg -- "image/png stream" --> Hook
+  Resvg --> Store["putObjectBytes + service-role\nUPDATE share_card_key"]
+  Store -- "image/png stream" --> Hook
   Hook --> FS["expo-file-system/legacy\nwriteAsStringAsync (base64) -> cacheDirectory"]
   FS --> Sharing["expo-sharing.shareAsync"]
+
+  Warm["warmShareCardForMemoryFireAndForget\nsrc/services/share-card.ts\n(after create/edit/media-post)"] -. "warm:true, fire-and-forget" .-> Function
 ```
 
 The client never uses `supabase.functions.invoke` for this call — see
 Constraints. `useShareMemoryCard` (`src/hooks/useShareMemoryCard.ts`) owns
 the whole tap-to-share-sheet flow so it's unit-testable independent of the
 icon UI; `src/services/share-card.ts` owns the raw `fetch` + the mandated
-single retry on HTTP 546.
+single retry on HTTP 546 for the cold (streaming) path, and the fire-and-
+forget warm hooks for the store-through cache (see below).
+
+### Store-through cache
+
+`compose-share-card` (`supabase/functions/compose-share-card/index.ts`) now
+checks a per-memory (`memories.share_card_key`) or per-asset
+(`memory_media.share_card_key`, media memories only — one card per carousel
+page, keyed by the `memory_media` row) cache before doing any real work:
+
+1. **Resolve the cache target.** `resolveShareCardCacheTarget` picks the
+   `memories` row (text_only/text_illustration) or the specific
+   `memory_media` row (`mediaAssetId`, media) whose `share_card_key` applies
+   to this request.
+2. **Freshness check (`isFreshShareCardKey`).** A stored key is a HIT only
+   if it exists **and** its encoded `{designVersion}` (parsed from the key's
+   `{designVersion}-{generationId}.png` filename segment,
+   `parseShareCardKeyDesignVersion`) equals the function's current
+   `DESIGN_VERSION` constant. A key from an older layout version is treated
+   exactly like "no key at all" — never served stale.
+3. **HIT** → `getObjectBytes` the stored PNG and stream it (cold path) or
+   respond 204 immediately (warm path) — no R2 asset fetch (fonts/wasm), no
+   satori, no resvg. `Server-Timing: cache;desc=hit, boot;dur=…, db;dur=…,
+   get;dur=…, total;dur=…`.
+4. **MISS** (no key, stale-version key, or the stored object's own read
+   failed — e.g. swept out-of-band) → compose exactly as before, then
+   `putObjectBytes` the PNG under a fresh
+   `{ownerUserId}/memories/{memoryId}/share-card/{DESIGN_VERSION}-{uuid}.png`
+   key (`buildShareCardKey`, `ownerUserId` = the memory's **creator**,
+   never the caller — same prefix convention as every other object under
+   that memory), update the target row's `share_card_key` via a
+   **service-role** client (`storeShareCardAndUpdateCache`), and
+   best-effort-delete the previous stored object if the column held a
+   different (now-stale) key. Every step here is **non-fatal on failure**
+   (logged id-only, never throws) — a caching problem can never turn a
+   successful compose into a failed share.
+
+**`DESIGN_VERSION` is the ONLY invalidation mechanism.** There is no
+separate "clear the cache" admin action — bump the exported `DESIGN_VERSION`
+constant in `compose-share-card/index.ts` on ANY layout change (`layout.ts`,
+`render.ts`'s scale/format choices, or the card-shape assembly in
+`index.ts` itself), and every existing stored card becomes a miss on its
+next request, regenerating lazily under the new version. Content-level
+staleness (the memory's caption/date/emotion changed, or a media memory's
+assets were replaced) is handled separately by a DB trigger, not
+`DESIGN_VERSION` — see the storage/deletion coverage summary below.
+
+**Warm hooks** (docs/plans/share-card-store-through.md, W3): rather than
+wait for a user to tap share (paying the cold-path compose cost live, in
+front of them), the client proactively asks the function to compose-and-
+store — never stream — right after the moments a card is likely to go
+stale or not exist yet:
+
+| Call site | File | What it warms |
+|-----------|------|----------------|
+| Text/illustrated memory create success | `src/hooks/useMemories.ts`, `useMemoryMutations`' `createMutation.onSuccess` (next to `notifyFamilyActivityFireAndForget`) | Per-memory card (`memoryId` only) |
+| Media memory post success | `src/hooks/use-pending-memory-uploads.tsx`, the queue's post-create step (next to `notifyFamilyActivityFireAndForget`) | The **cover asset only** (`mediaAssets[0].id`, position 0) — not every carousel page; non-cover pages stay cold-path (rare shares, the 546 retry still exists) |
+| Memory edit success | `src/hooks/useMemories.ts`, `useMemoryMutations`' `updateMutation.onSuccess` | Memory-level or cover-asset, branching on the edited memory's `memory_type` — an edit can touch ANY memory type, unlike create |
+
+All three call `warmShareCardForMemoryFireAndForget`
+(`src/services/share-card.ts`), which branches on `memory_type` and delegates to
+`warmShareCardFireAndForget(memoryId, mediaAssetId?)` — a raw `fetch` POST
+with `warm: true`, same headers as the cold path. Like
+`notifyFamilyActivityFireAndForget`, it is **never awaited** on the save
+path and swallows every failure (missing session, network error, non-2xx,
+thrown exception) down to a `console.warn` — invisible to the user, no
+retry (a warm is speculative/best-effort; the cold-path compose is the real
+safety net if a warm never lands). `compose-share-card` enforces this with
+its own **separate, looser rate bucket** for `warm: true` requests
+(30/minute/user vs. the cold path's 10/minute/user) so a burst of warms can
+never eat into a user's real share budget, or vice versa.
+
+**Storage & deletion coverage.** Both `share_card_key` columns participate
+in the same object-lifetime machinery every other memory-scoped R2 key
+does — see [docs/plans/share-card-store-through.md](../plans/share-card-store-through.md)'s
+W1 checklist for the authoritative list; in summary: the schema migration
++ generated types, a DB trigger that clears `memories.share_card_key` on
+content/memory_date/emotion UPDATE (`memory_media.share_card_key` needs no
+equivalent trigger — `replace_memory_media_assets` always inserts fresh
+rows, which start `null`), `_shared/storage-keys.ts`'s
+`buildShareCardKey`/key-pattern (so `parseStorageKey` classifies it),
+`_shared/family-access.ts`'s `resolveReferencedStorageKeys` and
+`hard-delete-expired-accounts`'s `resolveReferencedKeys`/
+`collectFamilyStorageKeys` (both admit both columns, so a live card is
+never orphan-swept and an owner-deletion sweep does delete it), and the
+client's `deleteMemoryStorageKeys` (`src/services/memories.ts`, both on
+memory delete and on media-asset replacement). No client grant exists on
+either column — both are written **only** by `compose-share-card`'s
+service-role client.
 
 ## Data model
 
 | Table / field | Role in this feature |
 |----------------|----------------------|
 | `families.viewer_sharing_enabled` | `boolean not null default true`. Owner/manager-editable (Settings → Family). Enforced server-side in `compose-share-card`, not just hidden client-side — see Permission matrix. |
+| `memories.share_card_key` | `text null`. Store-through cache key for a text_only/text_illustration memory's card (`{ownerUserId}/memories/{memoryId}/share-card/{designVersion}-{generationId}.png`). Written only by `compose-share-card`'s service-role client; cleared by a trigger on content/memory_date/emotion UPDATE. |
+| `memory_media.share_card_key` | `text null`. Same shape, per-ASSET — one cached card per carousel page for a `media` memory. Written only by `compose-share-card`'s service-role client; no trigger needed (`replace_memory_media_assets` always inserts fresh rows, which start `null`). |
 
-No new tables. `compose-share-card` writes nothing to R2 or Postgres; it only
-reads `memories`, `memory_media`, `family_members`, and `families`.
+No new tables. `compose-share-card` reads `memories`, `memory_media`,
+`family_members`, and `families`; it now also **writes** the two
+`share_card_key` columns and their R2 objects (via a service-role client,
+docs/plans/share-card-store-through.md) — narrowly scoped, non-fatal on
+failure, and the only exception to this function's original "reads only"
+posture. See Architecture's "Store-through cache" section above for the
+full read/write flow and TECH_SPEC §2.1/§2.4 for the column/trigger DDL.
 
 ### Permission matrix
 
@@ -99,14 +213,22 @@ Constraints).
 
 | Function / endpoint | Input | Output | Auth |
 |---------------------|-------|--------|------|
-| `compose-share-card` | `{ memoryId: string, mediaAssetId?: string }` | `200 image/png` (`Content-Disposition: attachment; filename="momora-<mon>-<d>-<yyyy>.png"`) | JWT; active member of the memory's family |
+| `compose-share-card` | `{ memoryId: string, mediaAssetId?: string, warm?: boolean }` | Cold: `200 image/png` (`Content-Disposition: attachment; filename="momora-<mon>-<d>-<yyyy>.png"`, `Server-Timing` cache marker — see below). Warm (`warm: true`): `204` no body. | JWT; active member of the memory's family — identical for warm and cold |
+
+`Server-Timing` carries a `cache;desc=hit` field (cold path only) when the
+response was served from the store-through cache — its absence means the
+request was a miss and paid the full compose. See TECH_SPEC §4.20 for the
+exact field list on each path.
 
 Status codes: `400` unsupported memory type / video asset / missing
-`mediaAssetId` for a media memory; `403` non-member or viewer-blocked family;
-`404` memory or media asset not found; `415` legacy HEIC/HEIF asset (not
-rasterizable); `429` rate-limited (10 composes/minute/user, in-isolate); `500`
-internal error; platform `546` (`WORKER_RESOURCE_LIMIT`, resource exhaustion
-— see Constraints).
+`mediaAssetId` for a media memory / non-boolean `warm`; `403` non-member or
+viewer-blocked family (same rules on warm and cold); `404` memory or media
+asset not found; `415` legacy HEIC/HEIF asset (not rasterizable); `429`
+rate-limited — 10 composes/minute/user (cold, in-isolate) OR 30 warms/
+minute/user (warm, a **separate** in-isolate bucket); `500` internal error;
+platform `546` (`WORKER_RESOURCE_LIMIT`, resource exhaustion — see
+Constraints; the client retries this once on the cold path only, never on
+warm).
 
 See [TECH_SPEC.md §4.20](../TECH_SPEC.md#420-compose-share-card) for the full
 contract and [§2.1](../TECH_SPEC.md#21-tables) for the schema entry.
@@ -116,13 +238,14 @@ contract and [§2.1](../TECH_SPEC.md#21-tables) for the schema entry.
 | Layer | Files | Responsibility |
 |-------|-------|----------------|
 | Hooks | `src/hooks/useShareMemoryCard.ts` | Orchestrates compose → write temp file → `Sharing.shareAsync` → best-effort cleanup; maps errors to the UX above |
-| Services | `src/services/share-card.ts` | Raw `fetch` to the function with bearer + apikey headers; owns the single 546 retry |
+| Services | `src/services/share-card.ts` | Raw `fetch` to the function with bearer + apikey headers; owns the single 546 retry (cold, `composeShareCard`) and the fire-and-forget cache warm (`warmShareCardFireAndForget`, `warmShareCardForMemoryFireAndForget`) |
 | Utils | `src/utils/base64.ts`, `src/utils/share-card-filename.ts` | Dependency-free `Uint8Array` → base64 encoder; client temp-filename builder |
 | Components | `src/components/memory-engagement-bar.tsx` | Share icon, spinner, visibility/disabled logic |
 | Components (lifted state) | `src/components/memory-card.tsx`, `app/(app)/memory/[id]/index.tsx` | Lift the carousel's current page (`onActiveIndexChange`) so the bar knows which `mediaAssetId` to send |
 | Components (carousel) | `src/components/memory-media-carousel.tsx` | `onActiveIndexChange` — fires once on mount with the initial page, then on every settled page change (`handleScrollEnd`, unifying `onMomentumScrollEnd`/`onScrollEndDrag`) |
 | Hooks (permission) | `src/hooks/use-family.tsx`, `src/services/family.ts` | Exposes `family.viewerSharingEnabled` (from `fetchMyFamilyMemberships`'s `families` join) |
 | Settings | `app/(app)/(tabs)/settings.tsx` | "Viewers can share memories" toggle (owner/manager only) |
+| Warm hooks (call sites) | `src/hooks/useMemories.ts` (`createMutation`/`updateMutation` `onSuccess`), `src/hooks/use-pending-memory-uploads.tsx` (post-create step) | Fire `warmShareCardForMemoryFireAndForget(memory)` after a text/illustrated create, a media post, or any edit — see Architecture's "Store-through cache" section for the full table |
 
 ### How to invoke from another feature
 
@@ -205,11 +328,19 @@ overlap — is intentionally pixel-matched where satori's CSS subset allows it
   re-verify with that same "does it produce real path data, not tofu"
   render check, not just cmap presence — a codepoint can be in `cmap`
   without GSUB support for the sequence it's part of.
-- **Everything else already private-by-default.** No R2 writes, no public
-  URLs, no stored copy of the composed PNG anywhere — the function streams
-  the response and forgets it. The client's own copy is a temp file in
-  `cacheDirectory`, best-effort deleted right after the share sheet resolves
-  (OS-managed regardless).
+- **Everything else already private-by-default.** No public URL is ever
+  minted for a card — every read still goes through the authenticated
+  function, which re-checks the same permission matrix on every request,
+  including a cache hit. The store-through cache (docs/plans/
+  share-card-store-through.md) IS a private, server-owned copy of the
+  composed PNG in R2 now — see Architecture and Data model above for what's
+  written and by whom (service-role client only, no client grant) — but it
+  changes nothing about who can ever read the bytes: the object key lives
+  under the memory creator's existing R2 prefix (same authorization
+  boundary every other memory object already uses) and is deleted whenever
+  the memory/asset itself is (see the storage/deletion coverage summary).
+  The client's own copy is a temp file in `cacheDirectory`, best-effort
+  deleted right after the share sheet resolves (OS-managed regardless).
 
 ## Extension guide
 
@@ -236,6 +367,19 @@ overlap — is intentionally pixel-matched where satori's CSS subset allows it
   (`src/services/share-card.ts`) — it's the client half of the S0 spike's
   measured mitigation; removing it (or retrying more than once) either
   reopens the failure rate or turns a rare platform hiccup into hammering.
+- The `DESIGN_VERSION` bump discipline (`compose-share-card/index.ts`) — it
+  is the ONLY thing that invalidates a stored card; forgetting to bump it
+  after a layout change silently serves the OLD design from cache
+  indefinitely (nothing else ever re-checks staleness).
+- The two independent rate-limit buckets (cold `SHARE_CARD_RATE_LIMIT_*` vs.
+  warm `SHARE_CARD_WARM_RATE_LIMIT_*`) — do not merge them into one shared
+  counter; a warm burst must never be able to exhaust a user's real share
+  budget, and vice versa.
+- `warmShareCardFireAndForget`'s no-retry, swallow-everything contract
+  (`src/services/share-card.ts`) — mirrors `notifyFamilyActivityFireAndForget`
+  on purpose; a warm hook that retries or surfaces failures turns a
+  best-effort optimization into user-visible noise for zero benefit (the
+  cold path is still the safety net).
 
 **What audio sharing would need** (audio memories are specced but unshipped
 — see [audio-memories.md](./audio-memories.md)): `compose-share-card`
@@ -360,6 +504,27 @@ the photo/illustration path.
   actually explained by module-eval cost is for the orchestrator's
   post-deploy measurement to confirm — see this package's implementation
   report for the exact prediction being tested.
+  **Decision (2026-08-05, docs/plans/share-card-store-through.md): absorb
+  the remaining failures behind a store-through cache instead of chasing
+  round 4+ of boot/module-eval diagnosis.** Every round above reduced the
+  546 rate but never eliminated it — resvg's own raster CPU cost (~850ms at
+  1080px) is treated as an irreducible floor under Supabase's current edge
+  resource policing, verified against a trivial control function on the
+  SAME project passing 15/15 under identical load. Rather than keep
+  shrinking the odds of any ONE compose failing, a stored card removes the
+  compose from the hot path entirely for every request after the first:
+  once a memory's card is cached (via a warm hook or a successful cold
+  share), every subsequent share/warm is a `getObjectBytes` — near-zero
+  CPU, immune to the pixel-count/boot-cost policing described above. The
+  **updated failure-rate story**: cold-path (first-ever compose for a
+  card) success is still bounded by everything documented above (~50-70%
+  per attempt, retried once); warm-path and any repeat share of an
+  already-cached card is expected close to 100%, with `total;dur` under
+  ~500ms (the cache-hit `Server-Timing` phases above are just `db` + `get`
+  — no satori/resvg at all). In practice, warm hooks firing after every
+  create/edit/media-post mean most real shares hit a warm cache rather than
+  the cold path — see post-deploy measurement notes in
+  docs/plans/share-card-store-through.md for the actual observed split.
 - **Long captions produce tall PNGs.** `validateMemoryContent` caps content
   at 5000 chars, so the worst case is a ~1080×6000px (or 720×4000px reduced)
   card. Most share targets downscale on their end; this is accepted, not a
@@ -393,19 +558,24 @@ the photo/illustration path.
 |------|--------|
 | `src/utils/base64.test.ts` | `bytesToBase64` against RFC 4648 vectors and a byte round-trip |
 | `src/utils/share-card-filename.test.ts` | Client temp-filename format, id-fragment stripping/truncation/fallback, unparseable-date fallback |
-| `src/services/share-card.test.ts` | Auth requirement, bearer+apikey headers, non-retryable error mapping, **546 retry-once** (success on retry, and no third attempt when 546 repeats), thrown-fetch → `network_error`, non-JSON error body fallback |
+| `src/services/share-card.test.ts` | Auth requirement, bearer+apikey headers, non-retryable error mapping, **546 retry-once** (success on retry, and no third attempt when 546 repeats), thrown-fetch → `network_error`, non-JSON error body fallback; `warmShareCardFireAndForget` never returns a promise, POSTs `warm:true` (with/without `mediaAssetId`), never retries, swallows a non-2xx/thrown-error/no-session outcome to `console.warn`; `warmShareCardForMemoryFireAndForget` resolves memory-level vs. position-0-cover-asset per `memory_type`, skips a media memory with no assets |
 | `src/hooks/useShareMemoryCard.test.tsx` | Full tap flow with mocked service/FS/Sharing: temp-file write + share + best-effort cleanup, `isSharing` in-flight state, re-entrancy guard, sharing-unavailable device message, offline message, **403 → message + family-membership invalidation**, 429 friendly message, generic-error fallback, cleanup-on-write-failure |
 | `src/components/memory-engagement-bar.test.tsx` | `enableShare` prop gating, the full visibility matrix (viewer×toggle, owner/manager always-on, missing-flag-defaults-true), video-page disabled + spinner-disabled states, tap delegates `(memory, currentMediaAssetId)` to `shareMemoryCard` |
 | `src/components/memory-media-carousel.test.tsx` | `onActiveIndexChange` fires once on mount (default and requested initial index) and on `handleScrollEnd` (momentum end / drag-without-momentum), never on per-frame `onScroll` |
 | `src/components/memory-card.test.tsx` | Active carousel page threaded into `currentMediaAssetId`/`isCurrentPageVideo`; text-only/illustrated memories pass `enableShare` without a `mediaAssetId` |
+| `src/hooks/useMemories.integration.test.tsx` (`warm-share-card fire-and-forget`) | `createMutation`/`updateMutation` `onSuccess` each fire `warmShareCardForMemoryFireAndForget` exactly once with the create/updated memory; the mutation resolves without awaiting a hanging/rejecting warm mock |
+| `src/hooks/use-pending-memory-uploads.test.tsx` (`warm-share-card fire-and-forget`) | The queue's post-create step fires `warmShareCardForMemoryFireAndForget` exactly once with the posted media memory (cover-asset resolution happens inside the shared helper); the pending upload still clears without awaiting a hanging/rejecting warm mock |
 
 ### Edge Function tests (Deno)
 
 | File | Covers |
 |------|--------|
-| `supabase/functions/compose-share-card/index.test.ts` | Authz matrix (owner/manager/viewer×toggle/non-member), video rejection, asset-ownership rejection, rate limiting, no-content-in-logs on a layout failure, filename header |
+| `supabase/functions/compose-share-card/index.test.ts` | Authz matrix (owner/manager/viewer×toggle/non-member), video rejection, asset-ownership rejection, rate limiting, no-content-in-logs on a layout failure, filename header; **store-through cache (W2):** `DESIGN_VERSION`/key-parsing/freshness, cache-target resolution (memory vs. per-asset), `storeShareCardAndUpdateCache` (put + column update + stale-object delete, non-fatal on each failure), end-to-end cache HIT (streams stored PNG, never loads fonts/wasm or composes), MISS (composes, stores under the creator prefix + `DESIGN_VERSION`), stale-version key treated as MISS + stale object deleted, warm mode on a fresh cache (204, no-op) and on a MISS (204 after compose+store), the warm rate bucket independent of the cold bucket in both directions |
 | `supabase/functions/compose-share-card/layout.test.ts` | SVG-tree snapshot per memory-type variant (quote/spread), date-label formatting |
 | `supabase/functions/compose-share-card/scale.test.ts` | Reduced-scale pixel-budget boundary, SVG-height parsing |
+| `supabase/functions/_shared/storage-keys.test.ts` | `buildShareCardKey` shape, `parseStorageKey` classifies a share-card key (and rejects a wrong path segment / missing name / non-uuid ids) |
+| `supabase/functions/_shared/family-access.test.ts` | `resolveReferencedStorageKeys` admits a referenced `memories.share_card_key` and `memory_media.share_card_key` (so `delete-storage-object`/`get-media-url` don't 400 a live card) |
+| `supabase/functions/hard-delete-expired-accounts/index.test.ts` | `collectFamilyStorageKeys` includes both `share_card_key` columns on owner-account deletion; `resolveReferencedKeys` does NOT collect a live share-card key as an orphan |
 
 ### Run this feature's tests
 
@@ -417,18 +587,29 @@ npm test -- --runInBand \
   src/hooks/useShareMemoryCard.test.tsx \
   src/components/memory-engagement-bar.test.tsx \
   src/components/memory-media-carousel.test.tsx \
-  src/components/memory-card.test.tsx
-npx deno test --allow-env --allow-net --allow-read=supabase/functions \
-  supabase/functions/compose-share-card/
+  src/components/memory-card.test.tsx \
+  src/hooks/useMemories.integration.test.tsx \
+  src/hooks/use-pending-memory-uploads.test.tsx
+npx deno test --allow-env --allow-net --allow-ffi \
+  --allow-read=supabase/functions,supabase/scripts,src/utils --node-modules-dir=none \
+  supabase/functions/compose-share-card/ \
+  supabase/functions/_shared/storage-keys.test.ts \
+  supabase/functions/_shared/family-access.test.ts \
+  supabase/functions/hard-delete-expired-accounts/
 ```
 
 Device smoke (not automated, needs two test accounts — one manager, one
 viewer): share each memory type, swipe a mixed carousel and confirm the
 shared page follows, confirm a video page dims the icon, flip the family
 toggle off/on as manager and confirm the viewer's icon disappears/reappears.
+**Store-through cache:** share the same memory twice — the second share
+should feel near-instant (no visible compose delay); edit the memory
+(caption or media), then share again — the new card must reflect the edit,
+not a stale cached copy.
 
 ## Changelog
 
 | Date | Change |
 |------|--------|
 | 2026-08-05 | Initial implementation: viewer-sharing setting, `compose-share-card` Edge Function (satori + resvg-wasm, reduced-scale mitigation), client share flow (icon, carousel current-page lifting, `useShareMemoryCard`) |
+| 2026-08-05 | Store-through cache (docs/plans/share-card-store-through.md): `memories.share_card_key`/`memory_media.share_card_key` (W1, schema + storage/deletion coverage across `_shared/storage-keys.ts`, `_shared/family-access.ts`, `hard-delete-expired-accounts`, and the client's delete/replace paths), `compose-share-card` cache hit/miss + non-fatal store-through + `warm: true` mode with its own rate bucket (W2), client `warmShareCardFireAndForget`/`warmShareCardForMemoryFireAndForget` fired after memory create/edit/media-post (W3) — absorbs the 546 failure-rate ceiling for any repeat or pre-warmed share |

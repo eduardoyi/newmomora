@@ -13,6 +13,8 @@ import {
   SHARE_CARD_BODY_FONT_SIZE,
   SHARE_CARD_EMOTION_COLORS,
   SHARE_CARD_THEME,
+  SHARE_CARD_WORDMARK_FONT_SIZE,
+  SHARE_CARD_WORDMARK_OPACITY,
   type SatoriNode,
   type ShareCardData,
 } from './layout.ts';
@@ -240,6 +242,43 @@ Deno.test('layout: caption font-size / card-width ratio matches memory-card.tsx 
   // Math.round() calls to whole raster pixels, so allow a small rounding
   // tolerance rather than requiring bit-for-bit equality.
   assertEquals(Math.abs(actualRatio - expectedRatio) < 0.002, true);
+});
+
+// Batched design tweak (Eduardo, 2026-08-05, docs/plans/share-card-store-through.md
+// W2): the footer wordmark is 20% smaller (0.8x its previous logical size of
+// 20 -> 16) and softened to opacity 0.8. This is a LAYOUT change -- it is
+// exactly why W2's DESIGN_VERSION bumped to 2 (see index.ts), so a card
+// stored under the old wordmark size regenerates lazily instead of ever
+// being served from a live cache entry. Pinned here as a snapshot-style
+// delta so a future accidental revert of either value fails loudly.
+Deno.test('layout: wordmark is 20% smaller (0.8x, i.e. 16) and softened to opacity 0.8 -- W2 batched design tweak', () => {
+  assertEquals(SHARE_CARD_WORDMARK_FONT_SIZE, 16);
+  assertEquals(SHARE_CARD_WORDMARK_FONT_SIZE, 20 * 0.8);
+  assertEquals(SHARE_CARD_WORDMARK_OPACITY, 0.8);
+
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'A caption long enough to exercise the footer.',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  // 'Newsreader-Medium' is unique to the wordmark in this tree -- the quote
+  // glyph uses Newsreader-Regular and the caption uses Newsreader-Italic
+  // (buildQuoteCard, layout.ts), so this unambiguously finds the wordmark
+  // node.
+  const wordmark = findNodeByFontFamily(tree, 'Newsreader-Medium');
+  if (!wordmark) {
+    throw new Error('expected a Newsreader-Medium wordmark node in the tree');
+  }
+  const style = wordmark.props.style as { fontSize: number; opacity?: number };
+  assertEquals(style.fontSize, Math.round(SHARE_CARD_WORDMARK_FONT_SIZE * BASE_SCALE));
+  assertEquals(style.opacity, SHARE_CARD_WORDMARK_OPACITY);
 });
 
 Deno.test('layout: 720px reduced-scale render is the identical layout at 2/3 size, not a reflow', async () => {

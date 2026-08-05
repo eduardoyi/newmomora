@@ -27,6 +27,7 @@ import {
   postMediaMemory,
   type PostMediaMemoryInput,
 } from '@/services/memory-posting';
+import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 import { extractUrls } from '@/utils/links';
 import { isNetworkFailure } from '@/utils/network-errors';
 
@@ -139,6 +140,13 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
             });
         }
         notifyFamilyActivityFireAndForget(memory.id);
+        // Store-through cache warm (docs/plans/share-card-store-through.md,
+        // W3): same fire-and-forget slot as notifyFamilyActivityFireAndForget
+        // above. Media memories always warm the COVER asset (position 0)
+        // only -- warmShareCardForMemoryFireAndForget branches on
+        // memory.memory_type, which is always 'media' for a post that
+        // reaches this queue.
+        warmShareCardForMemoryFireAndForget(memory);
 
         // Inline links (docs/plans/inline-links.md §7): media memories are
         // created outside the useMemories mutations, so the caption's URL

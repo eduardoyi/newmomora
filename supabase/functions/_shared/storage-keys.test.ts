@@ -5,9 +5,11 @@ import {
   buildPortraitVersionPhotoKey,
   buildMemoryMediaAssetKey,
   buildMemoryMediaKey,
+  buildShareCardKey,
   getAllowedContentTypes,
   isAllowedUploadKey,
   isDeletableUserObjectKey,
+  parseStorageKey,
 } from './storage-keys.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -83,6 +85,55 @@ Deno.test('getAllowedContentTypes is pattern-specific', () => {
   assertEquals(familyTypes?.has('image/jpeg'), true);
   assertEquals(familyTypes?.has('video/mp4'), false);
   assertEquals(mediaTypes?.has('video/mp4'), true);
+});
+
+// Share card store-through cache (docs/plans/share-card-store-through.md,
+// W1): buildShareCardKey's `{uuid}/memories/{uuid}/share-card/{name}.png`
+// shape must be classified by parseStorageKey as its own `share_card` kind
+// (not swallowed by the memory_media asset pattern, which lives under a
+// different `media/` path segment), and malformed variants must be rejected
+// outright rather than silently matching a looser pattern.
+Deno.test('buildShareCardKey builds the {uuid}/memories/{uuid}/share-card/{name}.png shape', () => {
+  const key = buildShareCardKey(USER_ID, MEMORY_ID, 'v1-55555555-5555-4555-8555-555555555555');
+  assertEquals(key, `${USER_ID}/memories/${MEMORY_ID}/share-card/v1-55555555-5555-4555-8555-555555555555.png`);
+});
+
+Deno.test('parseStorageKey classifies a share card key as kind share_card', () => {
+  const key = buildShareCardKey(USER_ID, MEMORY_ID, 'v1-55555555-5555-4555-8555-555555555555');
+  assertEquals(parseStorageKey(key), {
+    kind: 'share_card',
+    ownerUserId: USER_ID,
+    entityId: MEMORY_ID,
+  });
+});
+
+Deno.test('parseStorageKey rejects malformed share card key variants', () => {
+  // Wrong extension (only .png is a valid compose output).
+  assertEquals(
+    parseStorageKey(`${USER_ID}/memories/${MEMORY_ID}/share-card/v1-name.jpg`),
+    null,
+  );
+  // Missing name segment entirely.
+  assertEquals(parseStorageKey(`${USER_ID}/memories/${MEMORY_ID}/share-card/.png`), null);
+  // Non-uuid owner prefix.
+  assertEquals(parseStorageKey(`not-a-uuid/memories/${MEMORY_ID}/share-card/v1-name.png`), null);
+  // Non-uuid memory id.
+  assertEquals(parseStorageKey(`${USER_ID}/memories/not-a-uuid/share-card/v1-name.png`), null);
+  // Wrong path segment ("media" instead of "share-card") must not be
+  // reclassified as share_card.
+  assertEquals(
+    parseStorageKey(`${USER_ID}/memories/${MEMORY_ID}/media/v1-name.png`) === null,
+    false,
+  );
+  assertEquals(
+    parseStorageKey(`${USER_ID}/memories/${MEMORY_ID}/media/v1-name.png`)?.kind,
+    'memory_media',
+  );
+  // Path traversal / nested segment inside the name must not match.
+  assertEquals(
+    parseStorageKey(`${USER_ID}/memories/${MEMORY_ID}/share-card/nested/name.png`),
+    null,
+  );
 });
 
 Deno.test('isDeletableUserObjectKey accepts known user object patterns', () => {

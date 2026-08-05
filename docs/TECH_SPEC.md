@@ -243,6 +243,17 @@ create table public.memories (
   media_key text,                            -- R2 object key for user-uploaded photo or video
   media_content_type text,                   -- MIME type e.g. image/jpeg, video/mp4
   link_previews jsonb not null default '{}'::jsonb,  -- { [url]: { title: string|null, fetchedAt } } -- see fetch-link-previews (§4.13)
+  -- Share card store-through cache (2026-08-05,
+  -- docs/plans/share-card-store-through.md, W1): cached compose-share-card
+  -- PNG key for a text-only/illustrated memory's card (per-ASSET card for
+  -- `media` memories lives on memory_media.share_card_key instead). Written
+  -- only by compose-share-card's service-role client -- no client grant is
+  -- added (see the migration's comment for why that's convention, not a
+  -- DB-enforced boundary, on this table). Cleared by the
+  -- clear_memory_share_card_on_content_change trigger (§2.4) whenever
+  -- content/memory_date/emotion change; untouched by illustration-status-only
+  -- writes.
+  share_card_key text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -339,6 +350,16 @@ create table public.memory_media (
   -- assets already at or under the cap (no-upscale guard), and failed
   -- preview uploads (fail-open). See §5.5 and features/media-memories.md.
   preview_object_key text,
+  -- Share card store-through cache (2026-08-05,
+  -- docs/plans/share-card-store-through.md, W1): cached compose-share-card
+  -- PNG key for THIS asset's card (media memories share per-ASSET, unlike
+  -- text-only/illustrated memories which cache on memories.share_card_key).
+  -- Written only by compose-share-card's service-role client. Every row
+  -- this table holds is freshly inserted by replace_memory_media_assets
+  -- (which deletes and re-inserts on any media edit), so a new/replaced
+  -- asset always starts with share_card_key null -- no trigger needed here,
+  -- unlike the memories-table column above.
+  share_card_key text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (memory_id, position),
@@ -541,6 +562,40 @@ create trigger on_auth_user_created
   for each row execute function public.handle_new_user();
 ```
 
+**Share card staleness (2026-08-05,
+`supabase/migrations/20260805130000_share_card_storage_columns.sql`,
+docs/plans/share-card-store-through.md W1):**
+
+```sql
+create or replace function public.clear_memory_share_card_on_content_change()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if old.content is distinct from new.content
+    or old.memory_date is distinct from new.memory_date
+    or old.emotion is distinct from new.emotion then
+    new.share_card_key := null;
+  end if;
+  return new;
+end;
+$$;
+
+create trigger clear_memory_share_card_on_content_change
+  before update of content, memory_date, emotion
+  on public.memories
+  for each row execute function public.clear_memory_share_card_on_content_change();
+```
+
+Scoped to `update of content, memory_date, emotion` specifically so the
+far more frequent illustration-status-only writes (the async pipeline's
+`pending -> generating -> ready/failed` progression) never fire it — Postgres
+only fires an `update of (col, ...)` trigger when one of those columns is in
+the UPDATE statement's target list, independent of whether the value
+actually changed, hence the `is distinct from` guards inside the function
+body too. `memory_media.share_card_key` needs no equivalent trigger:
+`replace_memory_media_assets` (§2.3) deletes and re-inserts every row for a
+memory on any media edit, so a replaced asset's row always starts with
+`share_card_key` null already.
+
 ### 2.5 Constraints
 
 - `memory_family_members`: no global tag cap. The DB trigger permits unlimited tags for `text_only`/`media`, caps `text_illustration` at 6, and rejects switching a text-only row with more than 6 existing tags back to illustrated.
@@ -551,6 +606,7 @@ create trigger on_auth_user_created
 - `memories.illustration_generation_id`: identifies the exact immutable R2 illustration object currently referenced by the row. `illustration_generation_attempt_id` is a transient CAS token owned by one generator attempt.
 - `memories.illustration_generation_started_at`: server-owned recovery clock. It is set when an illustrated memory is parked/claimed, cleared at terminal publication/failure, and is never written by the client. Older/null rows fall back to `updated_at`, then `created_at`, so a memory saved before a dispatch attempt remains recoverable.
 - `memories.link_previews`: `jsonb`, defaults to `{}`; written only by `fetch-link-previews` (service-role client); malformed/absent entries are treated as no preview client-side (see [inline-links.md](./features/inline-links.md))
+- `memories.share_card_key` / `memory_media.share_card_key`: written only by `compose-share-card`'s service-role client (docs/plans/share-card-store-through.md, W1/W2); no client grant exists for either column, but — unlike `families.viewer_sharing_enabled` — this is convention, not a DB-enforced boundary: both tables already carry a blanket table-level `update` grant to `authenticated` from `20260731110000_grant_authenticated_client_table_access.sql`, same as several other server-owned columns already on `memories` (`illustration_key`, `illustration_generation_id`, `usage_limit_epoch`, etc.)
 - `family_member_portrait_versions`: new writes have a non-null date in `[family_members.date_of_birth, acting user's local today]`; only migration may write `legacy_unknown` with a null date. Identity/source fields are immutable and creator attribution may change only to null during auth-user deletion.
 - `family_members.date_of_birth`: cannot move after an existing dated portrait version
 - `family_memberships`: exactly one `role = 'owner'` row per `family_id` (partial unique index); max 50 rows per `family_id` (trigger); `user_id`/`family_id` immutable once inserted (a manager can only ever change `role`, and never to/from `'owner'`)
@@ -1632,46 +1688,112 @@ downloads the short-lived job URL into the cache and opens `expo-sharing`.
 ### 4.20 `compose-share-card`
 
 Composes a shareable memory-card PNG server-side (satori JSX→SVG +
-`@resvg/resvg-wasm` SVG→PNG) and streams it back — never writes to R2 or
-Postgres, so it stays entirely outside the storage-authorization/deletion
-machinery.
+`@resvg/resvg-wasm` SVG→PNG). **Store-through cache**
+(docs/plans/share-card-store-through.md, W2 — see §2.1's
+`memories.share_card_key` / `memory_media.share_card_key` and §2.4's
+clearing trigger for the schema half): a fresh stored card is streamed
+directly from R2 with near-zero CPU; a miss composes as before, then
+`putObjectBytes`s the PNG under a new key and updates the owning row via a
+SERVICE-ROLE client before streaming. This is the one exception to
+"Edge Functions don't write R2/Postgres unprompted" — the write is
+narrowly scoped to these two columns and is always non-fatal (a store
+failure still streams the composed PNG; see below).
 
-- `POST { memoryId: string, mediaAssetId?: string }` — JWT required; caller
-  must be an active member of the memory's family. `mediaAssetId` is
-  required for `media`-type memories (must belong to the memory) and
-  ignored otherwise (`text_illustration` uses `illustration_key`,
-  `text_only` embeds no image).
+- `POST { memoryId: string, mediaAssetId?: string, warm?: boolean }` — JWT
+  required; caller must be an active member of the memory's family.
+  `mediaAssetId` is required for `media`-type memories (must belong to the
+  memory) and ignored otherwise (`text_illustration` uses
+  `illustration_key`, `text_only` embeds no image). `warm: true` (docs/
+  plans/share-card-store-through.md, W3) runs the identical
+  compose-or-cache-hit + store flow but responds **204 with no body** —
+  never streams the PNG — for the client's post-save fire-and-forget cache
+  warm (see docs/features/memory-sharing.md's Architecture section and
+  `src/services/share-card.ts`'s `warmShareCardFireAndForget`/
+  `warmShareCardForMemoryFireAndForget`). Warm uses the SAME auth/role/
+  `viewer_sharing_enabled` checks as a normal share — it is not a relaxed
+  permissions mode, only a different response shape and rate bucket.
+- **Cache HIT** (a stored key exists on the resolved target row/asset AND
+  its encoded `{designVersion}` matches the function's current
+  `DESIGN_VERSION` constant — see below): `getObjectBytes` the stored PNG
+  and stream it, OR (warm) respond 204 immediately — neither path touches
+  R2 assets (fonts/wasm) or satori/resvg at all. **Cache MISS** (no stored
+  key, a stale-version key, or a stored key whose object read failed — e.g.
+  swept out-of-band): compose via the existing pipeline, `putObjectBytes`
+  the PNG under a fresh `{ownerUserId}/memories/{memoryId}/share-card/
+  {DESIGN_VERSION}-{uuid}.png` key (`buildShareCardKey`,
+  `_shared/storage-keys.ts`; `ownerUserId` is always the memory's
+  **creator**, `row.user_id`, never the caller — same prefix convention
+  every other object under that memory already uses), update the target
+  column via a service-role client, best-effort-delete the previous stored
+  object if the column held a different (stale) key, then stream (or,
+  warm, respond 204).
+- `DESIGN_VERSION` (`index.ts`) is a hand-bumped constant — the ONLY thing
+  that invalidates a stored card. Bump it on any layout change
+  (`layout.ts`, `render.ts`'s scale/format, or this file's own card-shape
+  assembly); a stored key whose parsed version no longer matches is always
+  treated as a miss, so old cards regenerate lazily on the next share/warm
+  instead of ever being served stale. Currently `2` (bumped once already,
+  for this workstream's own wordmark-opacity tweak).
+- Store/column-update/stale-delete failures are **non-fatal** on every
+  path: logged id-only (`memoryId` + table name, never `error.message` —
+  same logging discipline as the render path below) and swallowed —
+  `storeShareCardAndUpdateCache` never throws, so a caching failure can
+  never turn a successful compose into a failed response (cold path still
+  streams the PNG; warm still responds 204).
 - **200** `image/png`, `Content-Disposition: attachment;
-  filename="momora-<mon>-<d>-<yyyy>.png"`, `Server-Timing: boot;dur=…,
-  db;dur=…, fetch;dur=…, imgfetch;dur=…;desc="N fetches", init;dur=…,
-  satori;dur=…, resvg;dur=…, total;dur=…` (ms per phase — perf-audit
-  instrumentation added alongside a matching structured `console.log` line
-  per request: `memoryId`, the same phase timings,
-  `Deno.memoryUsage().rss`/`heapUsed`, `scale` (`'full'`|`'reduced'`),
-  `pngBytes`, `fetchCount`, `imageFetchMs` — ids/numbers only, never memory
-  content). `db` is the ONE nested-select query
-  (`SHARE_CARD_MEMORY_SELECT`) that replaces what was ~5-6 sequential DB
-  round trips (memory row, role, `viewer_sharing_enabled`, media asset,
-  tagged members + portraits); `fetch` = `db` + `imgfetch`. The hero image
-  and every tagged member's portrait are fetched from R2 in a single
-  batched call (`getObjectBytesBatch`, `_shared/r2.ts`) rather than
-  sequentially — `imageFetchMs` should track the slowest single fetch, not
-  their sum. `init` is the one-time per-isolate resvg-wasm-compile +
-  font-decode cost (near-zero on a cache hit).
+  filename="momora-<mon>-<d>-<yyyy>.png"`. **204** no body (warm mode
+  only, both on a cache hit and after a successful miss-then-store).
+- `Server-Timing` header:
+  - **Cache hit (cold, non-warm)**: `cache;desc=hit, boot;dur=…, db;dur=…,
+    get;dur=…, total;dur=…` — `get` is the single `getObjectBytes` call;
+    `total` is `db + get`. No `fetch`/`init`/`satori`/`resvg` fields at all
+    on this path (nothing downstream of the cache check ran).
+  - **Cache miss (compose)**: `boot;dur=…, db;dur=…, fetch;dur=…,
+    imgfetch;dur=…;desc="N fetches", assets;dur=…, init;dur=…,
+    satori;dur=…, resvg;dur=…, total;dur=…` — unchanged from the
+    pre-cache contract (no `cache;desc=` marker on this path; a future
+    dashboard can treat "no `cache` field" as "was a miss"). A matching
+    structured `console.log` line ships per request either way: `memoryId`,
+    `cache: 'hit'` (hit path only) or the full phase-timing set (miss
+    path), `Deno.memoryUsage().rss`/`heapUsed` (miss only), `scale`
+    (`'full'`|`'reduced'`, miss only), `pngBytes`, ids/numbers only, never
+    memory content. `db` is the ONE nested-select query
+    (`SHARE_CARD_MEMORY_SELECT`, now also carrying both `share_card_key`
+    columns) that replaces what was ~5-6 sequential DB round trips (memory
+    row, role, `viewer_sharing_enabled`, media asset, tagged members +
+    portraits); on a miss, `fetch` = `db` + `imgfetch`. The hero image and
+    every tagged member's portrait are fetched from R2 in a single batched
+    call (`getObjectBytesBatch`, `_shared/r2.ts`) rather than sequentially
+    — `imageFetchMs` should track the slowest single fetch, not their sum.
+    `init` is the one-time per-isolate resvg-wasm-compile + font-decode
+    cost. `assets` (fonts/wasm) is only fetched on a confirmed miss — never
+    on a hit, by design (the whole point of the cache).
 - **400** `unsupported_memory_type` (rejects `audio` and any unrecognized
   type explicitly) / `validation_error` (missing `mediaAssetId` for a media
-  memory) / `video_not_supported` (the resolved asset is a video).
+  memory, or a non-boolean `warm`) / `video_not_supported` (the resolved
+  asset is a video).
 - **403** `forbidden` (non-member) or `sharing_disabled` (viewer, and the
-  family's `viewer_sharing_enabled = false`).
+  family's `viewer_sharing_enabled = false`) — same on warm and cold.
 - **404** `MEMORY_NOT_FOUND` / `asset_not_found`.
 - **415** `unsupported_image_format` (legacy HEIC/HEIF row — `resvg-wasm`
   can't decode it).
-- **429** `rate_limited` (10 composes/minute/user, in-isolate — same
-  cooldown pattern as `analyze-emotion`).
+- **429** `rate_limited` — TWO separate in-isolate `Map`-backed windows, so
+  a burst of one kind can never eat into the other's budget: cold
+  (streaming) shares get 10/minute/user (`SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW`,
+  same cooldown pattern as `analyze-emotion`); `warm: true` requests get a
+  separate, looser 30/minute/user
+  (`SHARE_CARD_WARM_RATE_LIMIT_MAX_PER_WINDOW`) — warms are
+  system-initiated (client fires them after memory create/edit/media-post,
+  not a human repeatedly tapping share) but still real limits, not exempt.
 - **546** platform `WORKER_RESOURCE_LIMIT` (Supabase's own resource-cap
   response, not something this function returns on purpose) — the client
-  retries exactly once. See docs/features/memory-sharing.md's Constraints
-  section for the reduced-raster-scale mitigation this pairs with.
+  retries exactly once **on the cold path only** (`warmShareCardFireAndForget`
+  is deliberately NOT retried — a warm is speculative/best-effort by
+  design; the cache itself, and any later share/warm attempt, is the real
+  retry mechanism). See docs/features/memory-sharing.md's Constraints
+  section for the reduced-raster-scale mitigation this pairs with, and its
+  Architecture section for how the store-through cache changes the
+  post-deploy failure-rate story.
 
 Auth reuses `_shared/family-access.ts`'s role helpers. Vendored assets
 (resvg `.wasm`, font TTFs, a monochrome NotoEmoji subset) are each
@@ -1683,14 +1805,21 @@ layout (`layout.ts`) is a simplified server-side reproduction of
 `src/components/memory-card.tsx`'s `SpreadCard`/`QuoteCard` — both files
 carry a "KEEP IN SYNC" cross-reference comment. Logging never includes
 `error.message` on a layout/render path (satori errors can embed caption
-text) — only `memoryId` + a fixed status/code.
+text) — only `memoryId` + a fixed status/code; the same discipline extends
+to every store-through cache log line (id + table name only).
 
-Client: raw `fetch()` with a manual `Authorization: Bearer <token>` +
-`apikey` header — **not** `supabase.functions.invoke`, whose
-`FunctionsClient` has no binary branch for `image/png` and corrupts the
-bytes via `response.text()`. See
+Client (cold path, `composeShareCard`): raw `fetch()` with a manual
+`Authorization: Bearer <token>` + `apikey` header — **not**
+`supabase.functions.invoke`, whose `FunctionsClient` has no binary branch
+for `image/png` and corrupts the bytes via `response.text()`. Client (warm
+path, `warmShareCardFireAndForget`/`warmShareCardForMemoryFireAndForget`,
+`src/services/share-card.ts`): the same raw-`fetch` + header shape with
+`warm: true` and no response-body handling (204 has none) — fired
+synchronously, never awaited, every failure swallowed to a `console.warn`
+(mirrors `notifyFamilyActivityFireAndForget`,
+`src/services/memory-posting.ts`). See
 [docs/features/memory-sharing.md](./features/memory-sharing.md) for the
-full contract, permission matrix, and privacy notes.
+full contract, permission matrix, warm-hook call sites, and privacy notes.
 
 ## 5. Client API Flow
 
@@ -1887,8 +2016,23 @@ for UI, moderation, notification, and removed-member semantics.
 7. 429 -> friendly rate-limit message; any other failure -> generic message; best-effort temp-file cleanup always runs
 ```
 
+**5.8a Store-through cache warm** (docs/plans/share-card-store-through.md,
+W3): after a text/illustrated memory create (`useMemories.ts`'s
+`createMutation.onSuccess`), a media memory post (`use-pending-memory-
+uploads.tsx`'s post-create step), or any memory edit (`useMemories.ts`'s
+`updateMutation.onSuccess`), the client fires `warmShareCardForMemoryFireAndForget`
+— same fire-and-forget slot as `notifyFamilyActivityFireAndForget`, never
+awaited, every failure swallowed. It resolves the per-MEMORY card
+(`memoryId` only) for `text_only`/`text_illustration`, or the per-ASSET
+**cover** card (`memoryId` + `mediaAssets[0].id`, position 0 only — not
+every carousel page) for `media`. This POSTs `compose-share-card` with
+`warm: true`, so by the time the user taps share, step 3 above is very
+likely a cache hit (near-instant `getObjectBytes`, immune to the 546
+policing step 4 exists for).
+
 See [docs/features/memory-sharing.md](./features/memory-sharing.md) for the
-full permission matrix, card-layout contract, and privacy rationale.
+full permission matrix, card-layout contract, store-through cache
+architecture, and privacy rationale.
 
 ---
 

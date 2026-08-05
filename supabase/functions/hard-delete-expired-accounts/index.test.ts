@@ -365,8 +365,17 @@ Deno.test('hard-delete keeps the profile retryable and releases only its exact c
 });
 
 function fakeSupabaseForCollect(options: {
-  memories: Array<{ id: string; media_key: string | null; illustration_key: string | null }>;
-  mediaAssets: Array<{ object_key: string; preview_object_key?: string | null }>;
+  memories: Array<{
+    id: string;
+    media_key: string | null;
+    illustration_key: string | null;
+    share_card_key?: string | null;
+  }>;
+  mediaAssets: Array<{
+    object_key: string;
+    preview_object_key?: string | null;
+    share_card_key?: string | null;
+  }>;
   members: Array<{ profile_picture_key: string | null; illustrated_profile_key: string | null }>;
   portraitVersions?: Array<{
     profile_picture_key: string;
@@ -533,6 +542,41 @@ Deno.test(
   },
 );
 
+// Share card store-through cache (docs/plans/share-card-store-through.md,
+// W1): owner-family-deletion cleanup must collect a live share_card_key
+// from BOTH memories (memory-level card) and memory_media (per-asset card),
+// or the cached PNG would be stranded in R2 after the family row is gone.
+Deno.test(
+  'collectFamilyStorageKeys includes share_card_key from both memories and memory_media',
+  async () => {
+    const supabase = fakeSupabaseForCollect({
+      memories: [
+        {
+          id: 'memory-1',
+          media_key: null,
+          illustration_key: null,
+          share_card_key: `${OWNER_ID}/memories/memory-1/share-card/v1-a.png`,
+        },
+      ],
+      mediaAssets: [
+        {
+          object_key: `${OWNER_ID}/memories/memory-1/media/asset-1.jpg`,
+          share_card_key: `${OWNER_ID}/memories/memory-1/share-card/v1-b.png`,
+        },
+      ],
+      members: [],
+    });
+
+    const keys = await collectFamilyStorageKeys(supabase as never, FAMILY_ID);
+
+    assertEquals(keys.sort(), [
+      `${OWNER_ID}/memories/memory-1/media/asset-1.jpg`,
+      `${OWNER_ID}/memories/memory-1/share-card/v1-a.png`,
+      `${OWNER_ID}/memories/memory-1/share-card/v1-b.png`,
+    ]);
+  },
+);
+
 Deno.test('collectFamilyStorageKeys fails closed when portrait enumeration fails', async () => {
   const supabase = fakeSupabaseForCollect({
     memories: [],
@@ -553,8 +597,10 @@ Deno.test('collectFamilyStorageKeys fails closed when portrait enumeration fails
 function fakeSupabaseForReferenced(referencedByTable: {
   memory_media?: string[];
   memory_media_preview?: string[];
+  memory_media_share_card_key?: string[];
   media_key?: string[];
   illustration_key?: string[];
+  memory_share_card_key?: string[];
   profile_picture_key?: string[];
   illustrated_profile_key?: string[];
   version_profile_picture_key?: string[];
@@ -570,9 +616,13 @@ function fakeSupabaseForReferenced(referencedByTable: {
         return {
           select: (col: string) => ({
             in: async (_col: string, keys: string[]) => {
-              const isPreviewQuery = col === 'preview_object_key';
-              const field = isPreviewQuery ? 'preview_object_key' : 'object_key';
-              const fixtureField = isPreviewQuery ? 'memory_media_preview' : 'memory_media';
+              const field = col as 'object_key' | 'preview_object_key' | 'share_card_key';
+              const fixtureField =
+                field === 'preview_object_key'
+                  ? 'memory_media_preview'
+                  : field === 'share_card_key'
+                    ? 'memory_media_share_card_key'
+                    : 'memory_media';
               return {
                 data: keys
                   .filter((key) => (referencedByTable[fixtureField] ?? []).includes(key))
@@ -591,10 +641,11 @@ function fakeSupabaseForReferenced(referencedByTable: {
         return {
           select: (col: string) => ({
             in: async (_col: string, keys: string[]) => {
-              const field = col as 'media_key' | 'illustration_key';
+              const field = col as 'media_key' | 'illustration_key' | 'share_card_key';
+              const fixtureField = field === 'share_card_key' ? 'memory_share_card_key' : field;
               return {
                 data: keys
-                  .filter((key) => (referencedByTable[field] ?? []).includes(key))
+                  .filter((key) => (referencedByTable[fixtureField] ?? []).includes(key))
                   .map((key) => ({ [field]: key })),
                 error: referencedByTable.errorTable === `${table}.${field}`
                   ? { message: 'lookup failed' }
@@ -718,6 +769,50 @@ Deno.test(
     assertEquals(referenced.has(survivingOriginalKey), true);
     assertEquals(referenced.has(survivingPreviewKey), true);
     assertEquals(referenced.has(orphanedKey), false);
+  },
+);
+
+// Share card store-through cache (docs/plans/share-card-store-through.md,
+// W1): a live cached share card -- memory-level OR per-asset -- must never
+// be swept as an orphan during non-owner account cleanup, same as the C2
+// preview_object_key fix above.
+Deno.test(
+  'resolveReferencedKeys: a live memory-level share-card key is NOT collected as an orphan',
+  async () => {
+    const liveShareCardKey = `${OTHER_MEMBER_ID}/memories/memory-5/share-card/v1-a.png`;
+    const orphanedShareCardKey = `${OTHER_MEMBER_ID}/memories/memory-6/share-card/v1-b.png`;
+
+    const supabase = fakeSupabaseForReferenced({
+      memory_share_card_key: [liveShareCardKey],
+    });
+
+    const referenced = await resolveReferencedKeys(supabase as never, [
+      liveShareCardKey,
+      orphanedShareCardKey,
+    ]);
+
+    assertEquals(referenced.has(liveShareCardKey), true);
+    assertEquals(referenced.has(orphanedShareCardKey), false);
+  },
+);
+
+Deno.test(
+  'resolveReferencedKeys: a live per-asset share-card key is NOT collected as an orphan',
+  async () => {
+    const liveShareCardKey = `${OTHER_MEMBER_ID}/memories/memory-5/share-card/v1-c.png`;
+    const orphanedShareCardKey = `${OTHER_MEMBER_ID}/memories/memory-6/share-card/v1-d.png`;
+
+    const supabase = fakeSupabaseForReferenced({
+      memory_media_share_card_key: [liveShareCardKey],
+    });
+
+    const referenced = await resolveReferencedKeys(supabase as never, [
+      liveShareCardKey,
+      orphanedShareCardKey,
+    ]);
+
+    assertEquals(referenced.has(liveShareCardKey), true);
+    assertEquals(referenced.has(orphanedShareCardKey), false);
   },
 );
 

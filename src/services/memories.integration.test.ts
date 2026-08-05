@@ -334,6 +334,7 @@ describe('memories service integration', () => {
       data: {
         media_key: 'user-1/memories/memory-3/media.mp4',
         illustration_key: null,
+        share_card_key: 'user-1/memories/memory-3/share-card/v1-memory.png',
       },
       error: null,
     });
@@ -347,6 +348,7 @@ describe('memories service integration', () => {
         duration_ms: null,
         position: 1,
         preview_object_key: 'user-1/memories/memory-3/media/asset-1-preview.jpg',
+        share_card_key: 'user-1/memories/memory-3/share-card/v1-asset.png',
         created_at: '2026-05-24T00:00:00Z',
         updated_at: '2026-05-24T00:00:00Z',
       }],
@@ -376,6 +378,14 @@ describe('memories service integration', () => {
     // original, not just left as an orphan.
     expect(deleteStorageObject).toHaveBeenCalledWith(
       'user-1/memories/memory-3/media/asset-1-preview.jpg',
+    );
+    // docs/plans/share-card-store-through.md (W1): both the memory-level
+    // cached card and the per-asset cached card must be cleaned up too.
+    expect(deleteStorageObject).toHaveBeenCalledWith(
+      'user-1/memories/memory-3/share-card/v1-memory.png',
+    );
+    expect(deleteStorageObject).toHaveBeenCalledWith(
+      'user-1/memories/memory-3/share-card/v1-asset.png',
     );
   });
 
@@ -736,6 +746,7 @@ describe('memories service integration', () => {
           object_key: 'user-1/memories/memory-edit-preview/media/asset-removed.jpg',
           preview_object_key:
             'user-1/memories/memory-edit-preview/media/asset-removed-preview.jpg',
+          share_card_key: 'user-1/memories/memory-edit-preview/share-card/v1-removed.png',
           content_type: 'image/jpeg',
           duration_ms: null,
           position: 1,
@@ -787,6 +798,11 @@ describe('memories service integration', () => {
     );
     expect(deleteStorageObject).toHaveBeenCalledWith(
       'user-1/memories/memory-edit-preview/media/asset-removed-preview.jpg',
+    );
+    // docs/plans/share-card-store-through.md (W1): the removed asset's
+    // cached share card must be cleaned up alongside it.
+    expect(deleteStorageObject).toHaveBeenCalledWith(
+      'user-1/memories/memory-edit-preview/share-card/v1-removed.png',
     );
     expect(deleteStorageObject).not.toHaveBeenCalledWith(
       'user-1/memories/memory-edit-preview/media/asset-kept.jpg',

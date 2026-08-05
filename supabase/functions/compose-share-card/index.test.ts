@@ -1,29 +1,40 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
+import { buildShareCardKey } from '../_shared/storage-keys.ts';
 import {
   _resetRateLimitStateForTests,
   authorizeShareCardAccessFromQueryRow,
   buildShareCardFilename,
   buildTaggedMemberPortraits,
   clampMediaAspectRatio,
+  type ComposeShareCardDependencies,
   convertWebpToJpeg,
+  DESIGN_VERSION,
   handleComposeShareCard,
   isComposeRateLimited,
+  isFreshShareCardKey,
   isRejectedMemoryType,
   isUnrasterizableMimeType,
   isVideoContentType,
+  isWarmRateLimited,
   markComposeRun,
+  markWarmRun,
   mimeTypeFromObjectKey,
+  parseShareCardKeyDesignVersion,
   resolveCallerRoleFromQueryRow,
   resolveImageMimeType,
   resolveMemberPortraitKey,
   resolvePortraitKeysToFetch,
+  resolveShareCardCacheTarget,
   resolveShareCardSourceFromQueryRow,
   resolveTaggedMembersFromQueryRow,
   runShareCardCompose,
   SHARE_CARD_MAX_IMAGE_EDGE,
   SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW,
   SHARE_CARD_RATE_LIMIT_WINDOW_MS,
+  SHARE_CARD_WARM_RATE_LIMIT_MAX_PER_WINDOW,
   type ShareCardMemoryQueryRow,
+  type ShareCardStoreDependencies,
+  storeShareCardAndUpdateCache,
 } from './index.ts';
 
 const OWNER_ID = '11111111-1111-4111-8111-111111111111';
@@ -48,17 +59,31 @@ function buildQueryRow(overrides: Partial<ShareCardMemoryQueryRow> = {}): ShareC
   return {
     id: MEMORY_ID,
     family_id: FAMILY_A,
+    // Store-through cache (W2): the memory's creator -- defaults to OWNER_ID
+    // so buildShareCardKey's prefix is deterministic in tests that don't
+    // care about ownership specifically.
+    user_id: OWNER_ID,
     content: null,
     memory_type: 'text_only',
     memory_date: '2026-06-08',
     illustration_key: null,
     illustration_status: 'none',
     emotion: null,
+    // No stored card by default -- every cache-related test overrides this
+    // explicitly.
+    share_card_key: null,
     families: { id: FAMILY_A, viewer_sharing_enabled: true, family_memberships: [] },
     memory_media: [],
     memory_family_members: [],
     ...overrides,
   };
+}
+
+/** A family_memberships fixture with the caller present as `role`, for
+ * handler-level tests (W2) that need authorizeShareCardAccessFromQueryRow to
+ * succeed for a specific user id. */
+function ownerFamilies(callerId: string, role: 'owner' | 'manager' | 'viewer' = 'owner') {
+  return { id: FAMILY_A, viewer_sharing_enabled: true, family_memberships: [{ user_id: callerId, role }] };
 }
 
 // ── Rate limiting ("rate-limit row" in the S3 test matrix) ────────────────
@@ -303,6 +328,7 @@ function mediaRow(overrides: Partial<{
   preview_object_key: string | null;
   content_type: string;
   aspect_ratio: number | null;
+  share_card_key: string | null;
 }> = {}) {
   return {
     id: ASSET_ID,
@@ -311,6 +337,8 @@ function mediaRow(overrides: Partial<{
     preview_object_key: null,
     content_type: 'image/jpeg',
     aspect_ratio: 1.5,
+    // Store-through cache (W2): no stored per-asset card by default.
+    share_card_key: null,
     ...overrides,
   };
 }
@@ -816,4 +844,571 @@ Deno.test('runShareCardCompose on failure never logs error.message (no-content-l
   assertEquals(loggedText.includes(secretCaption), false);
   assertEquals(loggedText.includes('grandma'), false);
   assertStringIncludes(loggedText, MEMORY_ID);
+});
+
+// ── Store-through cache (docs/plans/share-card-store-through.md, W2):
+// DESIGN_VERSION / key parsing / cache-target resolution ──────────────────
+
+Deno.test('parseShareCardKeyDesignVersion parses the {designVersion}-{generationId}.png shape', () => {
+  const key = buildShareCardKey(OWNER_ID, MEMORY_ID, `${DESIGN_VERSION}-3fa85f64-5717-4562-b3fc-2c963f66afa6`);
+  assertEquals(parseShareCardKeyDesignVersion(key), DESIGN_VERSION);
+});
+
+Deno.test('parseShareCardKeyDesignVersion returns null for anything that does not match the {version}-{id}.png shape', () => {
+  assertEquals(parseShareCardKeyDesignVersion('not-a-real-key'), null);
+  assertEquals(parseShareCardKeyDesignVersion(`${OWNER_ID}/memories/${MEMORY_ID}/share-card/garbage.png`), null);
+  assertEquals(parseShareCardKeyDesignVersion(`${OWNER_ID}/memories/${MEMORY_ID}/share-card/2.png`), null);
+});
+
+Deno.test('isFreshShareCardKey: null/undefined is never fresh (never a cache hit)', () => {
+  assertEquals(isFreshShareCardKey(null), false);
+  assertEquals(isFreshShareCardKey(undefined), false);
+});
+
+Deno.test('isFreshShareCardKey: a key at the current DESIGN_VERSION is fresh; an older version is treated exactly like no key at all', () => {
+  const fresh = buildShareCardKey(OWNER_ID, MEMORY_ID, `${DESIGN_VERSION}-${crypto.randomUUID()}`);
+  const stale = buildShareCardKey(OWNER_ID, MEMORY_ID, `${DESIGN_VERSION - 1}-${crypto.randomUUID()}`);
+  assertEquals(isFreshShareCardKey(fresh), true);
+  assertEquals(isFreshShareCardKey(stale), false);
+});
+
+Deno.test('resolveShareCardCacheTarget: text/illustration sources resolve to the per-MEMORY column', () => {
+  const row = buildQueryRow({ share_card_key: 'stale-memory-key.png' });
+  const target = resolveShareCardCacheTarget({ kind: 'text' }, row, undefined);
+  assertEquals(target, { table: 'memories', id: MEMORY_ID, storedKey: 'stale-memory-key.png' });
+});
+
+Deno.test('resolveShareCardCacheTarget: a media source resolves to the per-ASSET column of the EXACT requested asset, not a sibling asset on the same memory', () => {
+  const OTHER_ASSET_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const row = buildQueryRow({
+    memory_type: 'media',
+    memory_media: [
+      mediaRow({ id: ASSET_ID, share_card_key: 'asset-key.png' }),
+      mediaRow({ id: OTHER_ASSET_ID, share_card_key: 'other-asset-key.png' }),
+    ],
+  });
+  const target = resolveShareCardCacheTarget(
+    { kind: 'media', objectKey: 'irrelevant', storedAspectRatio: null },
+    row,
+    ASSET_ID,
+  );
+  assertEquals(target, { table: 'memory_media', id: ASSET_ID, storedKey: 'asset-key.png' });
+});
+
+Deno.test('resolveShareCardCacheTarget: a media asset with no stored card yet resolves storedKey to null', () => {
+  const row = buildQueryRow({
+    memory_type: 'media',
+    memory_media: [mediaRow({ id: ASSET_ID, share_card_key: null })],
+  });
+  const target = resolveShareCardCacheTarget(
+    { kind: 'media', objectKey: 'irrelevant', storedAspectRatio: null },
+    row,
+    ASSET_ID,
+  );
+  assertEquals(target.storedKey, null);
+});
+
+// ── Warm-mode rate limit: its own bucket, independent of the cold one ─────
+
+Deno.test('isWarmRateLimited allows up to its own (looser) max and then blocks, independent of the cold compose bucket', () => {
+  _resetRateLimitStateForTests();
+  const userId = 'warm-user-1';
+  const now = 5_000_000;
+
+  for (let i = 0; i < SHARE_CARD_WARM_RATE_LIMIT_MAX_PER_WINDOW; i++) {
+    assertEquals(isWarmRateLimited(userId, now), false);
+    markWarmRun(userId, now);
+  }
+  assertEquals(isWarmRateLimited(userId, now), true);
+  // A burst of warms never eats into this same user's cold-path budget.
+  assertEquals(isComposeRateLimited(userId, now), false);
+});
+
+Deno.test('a burst of cold compose calls never eats into the warm-mode budget either', () => {
+  _resetRateLimitStateForTests();
+  const userId = 'compose-user-1';
+  const now = 6_000_000;
+
+  for (let i = 0; i < SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW; i++) {
+    markComposeRun(userId, now);
+  }
+  assertEquals(isComposeRateLimited(userId, now), true);
+  assertEquals(isWarmRateLimited(userId, now), false);
+});
+
+// ── storeShareCardAndUpdateCache: R2 put + service-role column update + ───
+// best-effort stale-object cleanup, everything non-fatal on failure ───────
+
+interface ServiceUpdateCall {
+  table: string;
+  payload: Record<string, unknown>;
+  column: string;
+  id: string;
+}
+
+function fakeServiceClient(recorder: ServiceUpdateCall[], errorToReturn: { message: string } | null = null) {
+  return {
+    from(table: string) {
+      return {
+        update(payload: Record<string, unknown>) {
+          return {
+            eq(column: string, id: string) {
+              recorder.push({ table, payload, column, id });
+              return Promise.resolve({ error: errorToReturn });
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
+Deno.test('storeShareCardAndUpdateCache: success path puts the PNG, updates ONLY share_card_key on the target row, and skips delete when there was no prior key', async () => {
+  const putCalls: Array<{ key: string; contentType: string }> = [];
+  const deleteCalls: string[] = [];
+  const updateCalls: ServiceUpdateCall[] = [];
+
+  const deps: ShareCardStoreDependencies = {
+    putObjectBytes: async (key, _bytes, contentType) => {
+      putCalls.push({ key, contentType });
+    },
+    deleteObject: async (key) => {
+      deleteCalls.push(key);
+    },
+    createServiceClient: () => fakeServiceClient(updateCalls) as never,
+  };
+
+  const target = { table: 'memories' as const, id: MEMORY_ID, storedKey: null };
+  const result = await storeShareCardAndUpdateCache(target, OWNER_ID, MEMORY_ID, new Uint8Array([1, 2, 3]), deps);
+
+  assertEquals(result.stored, true);
+  assertEquals(putCalls.length, 1);
+  assertEquals(putCalls[0].contentType, 'image/png');
+  assertStringIncludes(putCalls[0].key, `${OWNER_ID}/memories/${MEMORY_ID}/share-card/`);
+  assertStringIncludes(putCalls[0].key, `${DESIGN_VERSION}-`);
+
+  // Service-role update payload shape: exactly one column, matched by `id`.
+  assertEquals(updateCalls.length, 1);
+  assertEquals(updateCalls[0].table, 'memories');
+  assertEquals(updateCalls[0].column, 'id');
+  assertEquals(updateCalls[0].id, MEMORY_ID);
+  assertEquals(Object.keys(updateCalls[0].payload), ['share_card_key']);
+  assertEquals(updateCalls[0].payload.share_card_key, putCalls[0].key);
+
+  assertEquals(deleteCalls.length, 0);
+});
+
+Deno.test('storeShareCardAndUpdateCache: a prior stored key is deleted best-effort AFTER the new one is stored, never the new key itself', async () => {
+  const deleteCalls: string[] = [];
+  const updateCalls: ServiceUpdateCall[] = [];
+  const OLD_KEY = buildShareCardKey(OWNER_ID, MEMORY_ID, `1-${crypto.randomUUID()}`);
+
+  const deps: ShareCardStoreDependencies = {
+    putObjectBytes: async () => {},
+    deleteObject: async (key) => {
+      deleteCalls.push(key);
+    },
+    createServiceClient: () => fakeServiceClient(updateCalls) as never,
+  };
+
+  const target = { table: 'memories' as const, id: MEMORY_ID, storedKey: OLD_KEY };
+  const result = await storeShareCardAndUpdateCache(target, OWNER_ID, MEMORY_ID, new Uint8Array([1]), deps);
+
+  assertEquals(result.stored, true);
+  assertEquals(deleteCalls, [OLD_KEY]);
+  assertEquals(updateCalls[0].payload.share_card_key !== OLD_KEY, true);
+});
+
+Deno.test('storeShareCardAndUpdateCache: a per-ASSET target updates memory_media, not memories', async () => {
+  const updateCalls: ServiceUpdateCall[] = [];
+  const deps: ShareCardStoreDependencies = {
+    putObjectBytes: async () => {},
+    deleteObject: async () => {},
+    createServiceClient: () => fakeServiceClient(updateCalls) as never,
+  };
+
+  const target = { table: 'memory_media' as const, id: ASSET_ID, storedKey: null };
+  await storeShareCardAndUpdateCache(target, OWNER_ID, MEMORY_ID, new Uint8Array([1]), deps);
+
+  assertEquals(updateCalls[0].table, 'memory_media');
+  assertEquals(updateCalls[0].id, ASSET_ID);
+});
+
+Deno.test('storeShareCardAndUpdateCache: R2 put failure is non-fatal -- returns stored:false, never touches the DB or deletes the old object', async () => {
+  const updateCalls: ServiceUpdateCall[] = [];
+  const deleteCalls: string[] = [];
+  const deps: ShareCardStoreDependencies = {
+    putObjectBytes: async () => {
+      throw new Error('R2 unavailable');
+    },
+    deleteObject: async (key) => {
+      deleteCalls.push(key);
+    },
+    createServiceClient: () => fakeServiceClient(updateCalls) as never,
+  };
+
+  const target = { table: 'memories' as const, id: MEMORY_ID, storedKey: 'old-key.png' };
+  const result = await storeShareCardAndUpdateCache(target, OWNER_ID, MEMORY_ID, new Uint8Array([1]), deps);
+
+  assertEquals(result.stored, false);
+  assertEquals(updateCalls.length, 0);
+  assertEquals(deleteCalls.length, 0);
+});
+
+Deno.test('storeShareCardAndUpdateCache: DB column-update failure is non-fatal -- returns stored:false and does not delete the old (still-live) object', async () => {
+  const deleteCalls: string[] = [];
+  const deps: ShareCardStoreDependencies = {
+    putObjectBytes: async () => {},
+    deleteObject: async (key) => {
+      deleteCalls.push(key);
+    },
+    createServiceClient: () => fakeServiceClient([], { message: 'db unavailable' }) as never,
+  };
+
+  const target = { table: 'memories' as const, id: MEMORY_ID, storedKey: 'old-key.png' };
+  const result = await storeShareCardAndUpdateCache(target, OWNER_ID, MEMORY_ID, new Uint8Array([1]), deps);
+
+  assertEquals(result.stored, false);
+  assertEquals(deleteCalls.length, 0);
+});
+
+// ── handleComposeShareCard end-to-end: store-through cache + warm mode ────
+// (W2). Only getAuthenticatedNonAnonymousUser's own `/auth/v1/user` call
+// touches real `fetch` here -- every other dependency (the DB query, R2
+// reads/writes, asset loading, composeShareCardPng) is injected through
+// handleComposeShareCard's dependencyOverrides parameter (mirrors
+// generate-illustration's DEFAULT_DEPENDENCIES pattern, see that package's
+// index.ts/index.test.ts), so these tests never hit a real Supabase/R2
+// endpoint other than that one auth call.
+
+const HANDLER_TEST_ENV = {
+  SUPABASE_URL: 'https://supabase.test',
+  SUPABASE_ANON_KEY: 'test-anon-key',
+} as const;
+
+async function withMockedAuth(callerId: string, run: () => Promise<void>): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const originalEnv = new Map(Object.keys(HANDLER_TEST_ENV).map((key) => [key, Deno.env.get(key)]));
+  for (const [key, value] of Object.entries(HANDLER_TEST_ENV)) {
+    Deno.env.set(key, value);
+  }
+
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    if (url.pathname === '/auth/v1/user') {
+      return new Response(JSON.stringify({
+        id: callerId,
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: 'parent@example.com',
+        app_metadata: {},
+        user_metadata: {},
+        created_at: '2026-07-12T00:00:00.000Z',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    throw new Error(`Unexpected network request in a compose-share-card handler test: ${request.method} ${url}`);
+  };
+
+  try {
+    await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of originalEnv) {
+      if (value === undefined) {
+        Deno.env.delete(key);
+      } else {
+        Deno.env.set(key, value);
+      }
+    }
+  }
+}
+
+function shareRequest(body: Record<string, unknown>): Request {
+  return new Request('http://localhost/compose-share-card', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer test-token', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+const FAKE_PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+const FAKE_ASSETS = {
+  resvgWasm: new Uint8Array(),
+  webpDecWasm: new Uint8Array(),
+  newsreaderRegular: new Uint8Array(),
+  newsreaderItalic: new Uint8Array(),
+  newsreaderMedium: new Uint8Array(),
+  jakartaRegular: new Uint8Array(),
+  jakartaBold: new Uint8Array(),
+  notoEmojiSubset: new Uint8Array(),
+};
+
+/** Every field defaults to a fake that would fail loudly if hit
+ * unexpectedly (or succeeds trivially for the happy path) -- individual
+ * tests override only what they care about via `overrides`. */
+function baseHandlerDeps(overrides: Partial<ComposeShareCardDependencies> = {}): Partial<ComposeShareCardDependencies> {
+  return {
+    getObjectBytesBatch: async () => new Map(),
+    loadShareCardAssets: async () => FAKE_ASSETS,
+    composeShareCardPng: async () => ({ png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const }),
+    putObjectBytes: async () => {},
+    deleteObject: async () => {},
+    createServiceClient: () => fakeServiceClient([]) as never,
+    ...overrides,
+  };
+}
+
+Deno.test('handleComposeShareCard: a fresh cache HIT streams the stored PNG directly, and never loads fonts/wasm or composes', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    const storedKey = buildShareCardKey(OWNER_ID, MEMORY_ID, `${DESIGN_VERSION}-${crypto.randomUUID()}`);
+    const storedBytes = new Uint8Array([9, 9, 9, 9]);
+    const row = buildQueryRow({ families: ownerFamilies(OWNER_ID), share_card_key: storedKey });
+
+    let getObjectBytesKey: string | null = null;
+    let assetLoads = 0;
+    let composeCalls = 0;
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        getObjectBytes: async (key) => {
+          getObjectBytesKey = key;
+          return storedBytes;
+        },
+        loadShareCardAssets: async () => {
+          assetLoads += 1;
+          throw new Error('a cache HIT must never load fonts/wasm');
+        },
+        composeShareCardPng: async () => {
+          composeCalls += 1;
+          throw new Error('a cache HIT must never compose');
+        },
+      }),
+    );
+
+    assertEquals(response.status, 200);
+    assertEquals(getObjectBytesKey, storedKey);
+    assertEquals(assetLoads, 0);
+    assertEquals(composeCalls, 0);
+    assertEquals(response.headers.get('Server-Timing')?.includes('cache;desc=hit'), true);
+    const body = new Uint8Array(await response.arrayBuffer());
+    assertEquals(body, storedBytes);
+  });
+});
+
+Deno.test('handleComposeShareCard: a MISS (no stored key) composes, stores under the CREATOR prefix + DESIGN_VERSION, and streams the PNG', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    const row = buildQueryRow({ families: ownerFamilies(OWNER_ID), share_card_key: null });
+
+    const putCalls: Array<{ key: string }> = [];
+    const updateCalls: ServiceUpdateCall[] = [];
+    let composeCalls = 0;
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        composeShareCardPng: async () => {
+          composeCalls += 1;
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+        },
+        putObjectBytes: async (key) => {
+          putCalls.push({ key });
+        },
+        createServiceClient: () => fakeServiceClient(updateCalls) as never,
+      }),
+    );
+
+    assertEquals(response.status, 200);
+    assertEquals(composeCalls, 1);
+    assertEquals(putCalls.length, 1);
+    assertStringIncludes(putCalls[0].key, `${OWNER_ID}/memories/${MEMORY_ID}/share-card/${DESIGN_VERSION}-`);
+    assertEquals(updateCalls.length, 1);
+    assertEquals(updateCalls[0].table, 'memories');
+    assertEquals(updateCalls[0].id, MEMORY_ID);
+    assertEquals(updateCalls[0].payload.share_card_key, putCalls[0].key);
+
+    const body = new Uint8Array(await response.arrayBuffer());
+    assertEquals(body, FAKE_PNG_BYTES);
+  });
+});
+
+Deno.test('handleComposeShareCard: a stored key from an OLDER DESIGN_VERSION is treated as a MISS, recomposes, and deletes the stale object', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    const staleKey = buildShareCardKey(OWNER_ID, MEMORY_ID, `${DESIGN_VERSION - 1}-${crypto.randomUUID()}`);
+    const row = buildQueryRow({ families: ownerFamilies(OWNER_ID), share_card_key: staleKey });
+
+    let getObjectBytesCalls = 0;
+    const deleteCalls: string[] = [];
+    const updateCalls: ServiceUpdateCall[] = [];
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        getObjectBytes: async () => {
+          getObjectBytesCalls += 1;
+          throw new Error('a stale-version key must never be read as a hit');
+        },
+        deleteObject: async (key) => {
+          deleteCalls.push(key);
+        },
+        createServiceClient: () => fakeServiceClient(updateCalls) as never,
+      }),
+    );
+
+    assertEquals(response.status, 200);
+    assertEquals(getObjectBytesCalls, 0);
+    assertEquals(deleteCalls, [staleKey]);
+    assertEquals(updateCalls[0].payload.share_card_key !== staleKey, true);
+  });
+});
+
+Deno.test('handleComposeShareCard: warm mode on an already-fresh cache is a no-op 204 -- no R2 read, no compose', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    const storedKey = buildShareCardKey(OWNER_ID, MEMORY_ID, `${DESIGN_VERSION}-${crypto.randomUUID()}`);
+    const row = buildQueryRow({ families: ownerFamilies(OWNER_ID), share_card_key: storedKey });
+
+    let getObjectBytesCalls = 0;
+    let composeCalls = 0;
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID, warm: true }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        getObjectBytes: async () => {
+          getObjectBytesCalls += 1;
+          throw new Error('warm-on-already-fresh must never read the cached object');
+        },
+        composeShareCardPng: async () => {
+          composeCalls += 1;
+          throw new Error('warm-on-already-fresh must never compose');
+        },
+      }),
+    );
+
+    assertEquals(response.status, 204);
+    assertEquals(getObjectBytesCalls, 0);
+    assertEquals(composeCalls, 0);
+    const bodyText = await response.text();
+    assertEquals(bodyText, '');
+  });
+});
+
+Deno.test('handleComposeShareCard: warm mode on a MISS composes + stores, and responds 204 with no body', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    const row = buildQueryRow({ families: ownerFamilies(OWNER_ID), share_card_key: null });
+
+    const putCalls: string[] = [];
+    const updateCalls: ServiceUpdateCall[] = [];
+    let composeCalls = 0;
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID, warm: true }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        composeShareCardPng: async () => {
+          composeCalls += 1;
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+        },
+        putObjectBytes: async (key) => {
+          putCalls.push(key);
+        },
+        createServiceClient: () => fakeServiceClient(updateCalls) as never,
+      }),
+    );
+
+    assertEquals(response.status, 204);
+    assertEquals(composeCalls, 1);
+    assertEquals(putCalls.length, 1);
+    assertEquals(updateCalls.length, 1);
+    const bodyText = await response.text();
+    assertEquals(bodyText, '');
+  });
+});
+
+Deno.test('handleComposeShareCard: warm requests are rate-limited on their OWN (looser) bucket, independent of the cold share limit', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    for (let i = 0; i < SHARE_CARD_WARM_RATE_LIMIT_MAX_PER_WINDOW; i++) {
+      markWarmRun(OWNER_ID);
+    }
+    const row = buildQueryRow({ families: ownerFamilies(OWNER_ID), share_card_key: null });
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID, warm: true }),
+      baseHandlerDeps({ fetchQueryRow: async () => ({ data: row, error: null }) }),
+    );
+
+    assertEquals(response.status, 429);
+  });
+});
+
+Deno.test('handleComposeShareCard: a store-through failure (R2 put throws) is non-fatal -- the share still streams the composed PNG', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    const row = buildQueryRow({ families: ownerFamilies(OWNER_ID), share_card_key: null });
+    const updateCalls: ServiceUpdateCall[] = [];
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        putObjectBytes: async () => {
+          throw new Error('R2 unavailable');
+        },
+        createServiceClient: () => fakeServiceClient(updateCalls) as never,
+      }),
+    );
+
+    assertEquals(response.status, 200);
+    assertEquals(updateCalls.length, 0);
+    const body = new Uint8Array(await response.arrayBuffer());
+    assertEquals(body, FAKE_PNG_BYTES);
+  });
+});
+
+Deno.test('handleComposeShareCard: a media memory MISS stores/updates the per-ASSET column (memory_media), not the per-memory column', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    const heroKey = `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.jpg`;
+    const row = buildQueryRow({
+      families: ownerFamilies(OWNER_ID),
+      memory_type: 'media',
+      memory_media: [mediaRow({ id: ASSET_ID, object_key: heroKey, share_card_key: null })],
+      // A stale-looking per-MEMORY key must be completely ignored for a
+      // media source -- only the per-ASSET column matters here.
+      share_card_key: 'irrelevant-per-memory-key.png',
+    });
+
+    const updateCalls: ServiceUpdateCall[] = [];
+    const heroBytes = base64ToBytesForTest(TINY_PNG_B64);
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID, mediaAssetId: ASSET_ID }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        getObjectBytesBatch: async (keys: string[]) => {
+          const map = new Map();
+          if (keys.includes(heroKey)) {
+            map.set(heroKey, { ok: true, bytes: heroBytes });
+          }
+          return map;
+        },
+        createServiceClient: () => fakeServiceClient(updateCalls) as never,
+      }),
+    );
+
+    assertEquals(response.status, 200);
+    assertEquals(updateCalls.length, 1);
+    assertEquals(updateCalls[0].table, 'memory_media');
+    assertEquals(updateCalls[0].id, ASSET_ID);
+  });
 });

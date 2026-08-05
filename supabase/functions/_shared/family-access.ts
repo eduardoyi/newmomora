@@ -113,7 +113,11 @@ export async function resolveStorageKeyFamilyIds(
       continue;
     }
 
-    if (entry.parsed.kind === 'memory_media' || entry.parsed.kind === 'memory_illustration') {
+    if (
+      entry.parsed.kind === 'memory_media' ||
+      entry.parsed.kind === 'memory_illustration' ||
+      entry.parsed.kind === 'share_card'
+    ) {
       memoryIds.add(entry.parsed.entityId);
     } else {
       memberIds.add(entry.parsed.entityId);
@@ -150,7 +154,9 @@ export async function resolveStorageKeyFamilyIds(
     }
 
     const familyId =
-      entry.parsed.kind === 'memory_media' || entry.parsed.kind === 'memory_illustration'
+      entry.parsed.kind === 'memory_media' ||
+      entry.parsed.kind === 'memory_illustration' ||
+      entry.parsed.kind === 'share_card'
         ? memoryFamilyById.get(entry.parsed.entityId) ?? null
         : memberFamilyById.get(entry.parsed.entityId) ?? null;
 
@@ -175,7 +181,11 @@ export async function resolveReferencedStorageKeys(
 
   for (const entry of resolvedKeys) {
     if (!entry.parsed) continue;
-    if (entry.parsed.kind === 'memory_media' || entry.parsed.kind === 'memory_illustration') {
+    if (
+      entry.parsed.kind === 'memory_media' ||
+      entry.parsed.kind === 'memory_illustration' ||
+      entry.parsed.kind === 'share_card'
+    ) {
       memoryIds.add(entry.parsed.entityId);
     } else if (
       entry.parsed.kind === 'portrait_version_photo' ||
@@ -192,19 +202,24 @@ export async function resolveReferencedStorageKeys(
   if (memoryIds.size > 0) {
     const ids = [...memoryIds];
     const [{ data: memories }, { data: assets }] = await Promise.all([
-      supabase.from('memories').select('id, media_key, illustration_key').in('id', ids),
+      supabase
+        .from('memories')
+        .select('id, media_key, illustration_key, share_card_key')
+        .in('id', ids),
       supabase
         .from('memory_media')
-        .select('memory_id, object_key, preview_object_key')
+        .select('memory_id, object_key, preview_object_key, share_card_key')
         .in('memory_id', ids),
     ]);
     for (const row of memories ?? []) {
       if (row.media_key) referenced.add(row.media_key);
       if (row.illustration_key) referenced.add(row.illustration_key);
+      if (row.share_card_key) referenced.add(row.share_card_key);
     }
     for (const row of assets ?? []) {
       if (row.object_key) referenced.add(row.object_key);
       if (row.preview_object_key) referenced.add(row.preview_object_key);
+      if (row.share_card_key) referenced.add(row.share_card_key);
     }
   }
 

@@ -12,6 +12,7 @@ import { memoriesQueryKey, memoriesQueryKeyBase, calendarMemoriesQueryKeyBase } 
 import { fetchLinkPreviews } from '@/services/ai';
 import { runMediaPhotoEmotionAnalysis, type MemoriesPage, type MemoryWithTags } from '@/services/memories';
 import { notifyFamilyActivityFireAndForget, postMediaMemory } from '@/services/memory-posting';
+import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -36,11 +37,18 @@ jest.mock('@/services/memory-posting', () => ({
     assets.some((asset) => !asset.contentType.startsWith('video/')),
 }));
 
+jest.mock('@/services/share-card', () => ({
+  warmShareCardForMemoryFireAndForget: jest.fn(),
+}));
+
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedPostMediaMemory = postMediaMemory as jest.MockedFunction<typeof postMediaMemory>;
 const mockedNotify = notifyFamilyActivityFireAndForget as jest.MockedFunction<
   typeof notifyFamilyActivityFireAndForget
+>;
+const mockedWarmShareCard = warmShareCardForMemoryFireAndForget as jest.MockedFunction<
+  typeof warmShareCardForMemoryFireAndForget
 >;
 const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.MockedFunction<
   typeof runMediaPhotoEmotionAnalysis
@@ -385,6 +393,74 @@ describe('usePendingMemoryUploads', () => {
 
     await waitFor(() => {
       expect(result.current.uploads).toHaveLength(0);
+    });
+  });
+
+  describe('warm-share-card fire-and-forget (docs/plans/share-card-store-through.md, W3)', () => {
+    it('fires warmShareCardForMemoryFireAndForget exactly once with the posted media memory (cover asset resolution happens inside the hook)', async () => {
+      const posted = {
+        id: 'memory-1',
+        memory_type: 'media',
+        mediaAssets: [{ id: 'media-cover' }, { id: 'media-page-2' }],
+      };
+      mockedPostMediaMemory.mockResolvedValue(posted as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+
+      await waitFor(() => {
+        expect(mockedWarmShareCard).toHaveBeenCalledTimes(1);
+      });
+      expect(mockedWarmShareCard).toHaveBeenCalledWith(posted);
+    });
+
+    it('does not await the warm hook -- the queue removes the pending upload even while it hangs forever', async () => {
+      mockedWarmShareCard.mockImplementation(() => {
+        // Never-resolving inner work: proves the queue does not await this
+        // function's side effects (it returns void synchronously).
+        void new Promise(() => {});
+      });
+      mockedPostMediaMemory.mockResolvedValue({
+        id: 'memory-1',
+        memory_type: 'media',
+        mediaAssets: [{ id: 'media-cover' }],
+      } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads).toHaveLength(0);
+      });
+    });
+
+    it("does not surface a rejection from the warm hook's own internal promise chain", async () => {
+      mockedWarmShareCard.mockImplementation(() => {
+        // Simulates the real implementation's own swallow-internally shape
+        // (see share-card.test.ts) -- no rejection escapes the void call.
+        void Promise.reject(new Error('warm request failed')).catch(() => {});
+      });
+      mockedPostMediaMemory.mockResolvedValue({
+        id: 'memory-1',
+        memory_type: 'media',
+        mediaAssets: [{ id: 'media-cover' }],
+      } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads).toHaveLength(0);
+      });
     });
   });
 

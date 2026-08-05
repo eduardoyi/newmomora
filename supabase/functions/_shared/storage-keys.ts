@@ -65,6 +65,16 @@ export function buildMemoryMediaAssetKey(
   return `${userId}/memories/${memoryId}/media/${mediaAssetId}.${ext}`;
 }
 
+// Share card store-through cache (docs/plans/share-card-store-through.md,
+// W1). `name` is `{designVersion}-{generationId}` -- a fresh uuid per
+// compose, joined to an exported layout-version const that compose-share-card
+// bumps on any visual change (W2). Always `.png` (the function's compose
+// output format), unlike media/illustration keys which vary by source
+// extension.
+export function buildShareCardKey(userId: string, memoryId: string, name: string): string {
+  return `${userId}/memories/${memoryId}/share-card/${name}.png`;
+}
+
 export function assertUserOwnedKey(objectKey: string, userId: string): void {
   if (!objectKey.startsWith(`${userId}/`)) {
     throw new Error('Object key must belong to the authenticated user');
@@ -182,7 +192,8 @@ export type StorageKeyKind =
   | 'portrait_version_photo'
   | 'portrait_version_portrait'
   | 'memory_media'
-  | 'memory_illustration';
+  | 'memory_illustration'
+  | 'share_card';
 
 export interface ParsedStorageKey {
   kind: StorageKeyKind;
@@ -209,6 +220,16 @@ const MEMORY_MEDIA_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
 const MEMORY_MEDIA_ASSET_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/media\/[A-Za-z0-9_-]{1,128}\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
+// Share card store-through cache (docs/plans/share-card-store-through.md,
+// W1). Lives under its own `share-card/` path segment, not `media/`, so it
+// never collides with MEMORY_MEDIA_ASSET_FULL_PATTERN above -- but needs its
+// OWN sub-pattern (rather than relying on that one's already-permissive
+// `[A-Za-z0-9_-]{1,128}` char class, which would happily match the
+// `{designVersion}-{generationId}` name too) so parseStorageKey classifies
+// it as `share_card`, not `memory_media`. Always `.png`, matching
+// buildShareCardKey's compose output format.
+const SHARE_CARD_FULL_PATTERN =
+  /^([^/]+)\/memories\/([^/]+)\/share-card\/[A-Za-z0-9_-]{1,128}\.png$/i;
 
 export function parseStorageKey(objectKey: string): ParsedStorageKey | null {
   const versionedIllustrationMatch = objectKey.match(MEMORY_ILLUSTRATION_VERSIONED_FULL_PATTERN);
@@ -300,6 +321,15 @@ export function parseStorageKey(objectKey: string): ParsedStorageKey | null {
       return null;
     }
     return { kind: 'memory_media', ownerUserId, entityId };
+  }
+
+  const shareCardMatch = objectKey.match(SHARE_CARD_FULL_PATTERN);
+  if (shareCardMatch) {
+    const [, ownerUserId, entityId] = shareCardMatch;
+    if (!UUID_PATTERN.test(ownerUserId) || !UUID_PATTERN.test(entityId)) {
+      return null;
+    }
+    return { kind: 'share_card', ownerUserId, entityId };
   }
 
   return null;

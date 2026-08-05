@@ -55,6 +55,7 @@ import {
   uploadMemoryMediaAssets,
   type MemoryMediaMutationAsset,
 } from '@/services/memory-posting';
+import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 import { extractUrls } from '@/utils/links';
 import {
   needsIllustrationRecovery,
@@ -219,6 +220,13 @@ export function useMemoryMutations() {
       invalidateFamilyMemberTagOrdering(queryClient);
       prependMemoryToListCaches(queryClient, familyId, memory);
       notifyFamilyActivityFireAndForget(memory.id);
+      // Store-through cache warm (docs/plans/share-card-store-through.md,
+      // W3): fire-and-forget, same slot as notifyFamilyActivityFireAndForget
+      // above -- createMutation only ever produces text_only/
+      // text_illustration memories (media memories are posted through the
+      // pending-uploads queue, see use-pending-memory-uploads.tsx), so this
+      // always warms the per-MEMORY card.
+      warmShareCardForMemoryFireAndForget(memory);
 
       if (variables.content && extractUrls(variables.content).length > 0) {
         fireLinkPreviewFetch(queryClient, familyId, memory.id);
@@ -297,6 +305,15 @@ export function useMemoryMutations() {
     onSuccess: (memory, variables) => {
       invalidateMemoryQueries(queryClient);
       patchMemoryInCaches(queryClient, familyId, memory.id, memory);
+      // Store-through cache warm (docs/plans/share-card-store-through.md,
+      // W3): an edit changes the memory's content/media, which the DB
+      // trigger already clears `share_card_key` for (staleness rule) -- warm
+      // it again here so the NEXT share is a cache hit instead of paying the
+      // cold-path compose. Memory-level or cover-asset, per the edited
+      // memory's own type (warmShareCardForMemoryFireAndForget branches on
+      // it) -- unlike createMutation above, an edit can touch ANY memory
+      // type, including media.
+      warmShareCardForMemoryFireAndForget(memory);
 
       if (variables.taggedMemberIds !== undefined) {
         invalidateFamilyMemberTagOrdering(queryClient);

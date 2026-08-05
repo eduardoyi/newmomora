@@ -1409,6 +1409,7 @@ export type Database = {
           onboarding_attributed: boolean
           onboarding_media_pending: boolean
           onboarding_media_pending_until: string | null
+          share_card_key: string | null
           updated_at: string
           usage_limit_epoch: number | null
           usage_limit_retry_after: string | null
@@ -1440,6 +1441,7 @@ export type Database = {
           onboarding_attributed?: boolean
           onboarding_media_pending?: boolean
           onboarding_media_pending_until?: string | null
+          share_card_key?: string | null
           updated_at?: string
           usage_limit_epoch?: number | null
           usage_limit_retry_after?: string | null
@@ -1471,6 +1473,7 @@ export type Database = {
           onboarding_attributed?: boolean
           onboarding_media_pending?: boolean
           onboarding_media_pending_until?: string | null
+          share_card_key?: string | null
           updated_at?: string
           usage_limit_epoch?: number | null
           usage_limit_retry_after?: string | null
@@ -1743,6 +1746,7 @@ export type Database = {
           object_key: string
           position: number
           preview_object_key: string | null
+          share_card_key: string | null
           updated_at: string
         }
         Insert: {
@@ -1755,6 +1759,7 @@ export type Database = {
           object_key: string
           position: number
           preview_object_key?: string | null
+          share_card_key?: string | null
           updated_at?: string
         }
         Update: {
@@ -1767,6 +1772,7 @@ export type Database = {
           object_key?: string
           position?: number
           preview_object_key?: string | null
+          share_card_key?: string | null
           updated_at?: string
         }
         Relationships: [

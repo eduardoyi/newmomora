@@ -36,6 +36,11 @@ export interface MemoryMediaAsset {
   /** Derived bandwidth-friendly preview key, or null (video, legacy row,
    * no-upscale guard, or a failed preview upload -- see media-memories.md). */
   preview_object_key: string | null;
+  /** Cached share-card PNG for this asset (per-ASSET card for media
+   * memories), or null -- written only by compose-share-card's service-role
+   * client, never by this client. See
+   * docs/plans/share-card-store-through.md. */
+  share_card_key: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -209,6 +214,7 @@ function buildLegacyMediaAssets(memory: Memory): MemoryMediaAsset[] {
       duration_ms: null,
       aspect_ratio: null,
       preview_object_key: null,
+      share_card_key: null,
       position: 0,
       created_at: memory.created_at,
       updated_at: memory.updated_at,
@@ -232,24 +238,36 @@ async function deleteStorageKeys(keys: string[]) {
   }
 }
 
-/** Flattens each media asset's object_key + preview_object_key (when present)
- * into one list -- every deletion path must clean up the derived preview
- * alongside its original (Workstream C5). */
+/** Flattens each media asset's object_key + preview_object_key + share_card_key
+ * (when present) into one list -- every deletion path must clean up the
+ * derived preview and any cached share card alongside the original
+ * (Workstream C5; share_card_key added in
+ * docs/plans/share-card-store-through.md, W1). */
 function mediaAssetStorageKeys(
-  assets: { object_key: string; preview_object_key?: string | null }[],
+  assets: {
+    object_key: string;
+    preview_object_key?: string | null;
+    share_card_key?: string | null;
+  }[],
 ): string[] {
   return assets.flatMap((asset) =>
-    [asset.object_key, asset.preview_object_key].filter(Boolean) as string[],
+    [asset.object_key, asset.preview_object_key, asset.share_card_key].filter(
+      Boolean,
+    ) as string[],
   );
 }
 
 async function deleteMemoryStorageKeys(
-  memory: Pick<Memory, 'media_key' | 'illustration_key'>,
-  mediaAssets: Pick<MemoryMediaAsset, 'object_key' | 'preview_object_key'>[] = [],
+  memory: Pick<Memory, 'media_key' | 'illustration_key' | 'share_card_key'>,
+  mediaAssets: Pick<
+    MemoryMediaAsset,
+    'object_key' | 'preview_object_key' | 'share_card_key'
+  >[] = [],
 ) {
   await deleteStorageKeys([
     memory.media_key,
     memory.illustration_key,
+    memory.share_card_key,
     ...mediaAssetStorageKeys(mediaAssets),
   ].filter(Boolean) as string[]);
 }
@@ -1216,7 +1234,7 @@ export async function updateMemory(
 export async function deleteMemory(memoryId: string): Promise<{ error: ServiceError | null }> {
   const { data: memory, error: fetchError } = await supabase
     .from('memories')
-    .select('media_key, illustration_key')
+    .select('media_key, illustration_key, share_card_key')
     .eq('id', memoryId)
     .maybeSingle();
 
