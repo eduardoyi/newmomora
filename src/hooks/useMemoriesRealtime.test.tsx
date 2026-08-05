@@ -329,6 +329,33 @@ describe('useMemoriesRealtime', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['generation-status', FAMILY_ID] });
   });
 
+  // O7 (docs/plans/offline-awareness-and-share-cards.md): supabase-js
+  // reconnects the socket itself on a network gap; this is the "catch-up"
+  // path for whatever changed while disconnected. The comment above the
+  // SUBSCRIBED handler in useMemoriesRealtime.ts already documents this as
+  // firing on "initial AND rejoin" -- verify the rejoin case explicitly,
+  // not just the initial subscribe the test above covers.
+  it('forces a fresh generation-status poll reconcile again on a rejoin after an offline gap', () => {
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    renderHook(() => useMemoriesRealtime(FAMILY_ID), { wrapper });
+    fake.setStatus('SUBSCRIBED');
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+
+    // Connectivity drops -- supabase-js flips the channel status away from
+    // SUBSCRIBED (CLOSED here; CHANNEL_ERROR/TIMED_OUT are the other cases
+    // useMemoriesRealtime treats the same way).
+    fake.setStatus('CLOSED');
+    invalidateSpy.mockClear();
+
+    // supabase-js reconnects the socket on its own once the device is back
+    // online and re-fires SUBSCRIBED for the same channel -- the rejoin.
+    fake.setStatus('SUBSCRIBED');
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['generation-status', FAMILY_ID] });
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('cleans up the channel and pending insert timers on unmount', () => {
     const { unmount } = renderHook(() => useMemoriesRealtime(FAMILY_ID), { wrapper });
 

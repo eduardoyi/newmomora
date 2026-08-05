@@ -16,7 +16,7 @@ Memory journal for parents. Capture moments in text or voice; AI generates consi
 - **Privacy:** Private storage, RLS everywhere, signed URLs for images, no public sharing in MVP.
 - **Account deletion:** 15-day grace period before hard delete.
 - **Illustration style:** Single token (`illustration_style: 'default'`) — extensible later.
-- **Released scope:** Paid subscriptions and owner-scoped archive export are shipped; follow [docs/features/subscriptions.md](docs/features/subscriptions.md) and [docs/features/data-export.md](docs/features/data-export.md). Still out of scope: SSO, photo-based illustrations, owner transfer, per-memory privacy, relationship labels, and web app for viewers. (Family sharing itself — multi-user households, roles, invites — shipped; see [docs/features/family-sharing.md](docs/features/family-sharing.md) and [docs/plans/family-sharing.md](docs/plans/family-sharing.md) §15 for its own out-of-scope list.)
+- **Released scope:** Paid subscriptions, owner-scoped archive export, and watermarked memory share cards are shipped; follow [docs/features/subscriptions.md](docs/features/subscriptions.md), [docs/features/data-export.md](docs/features/data-export.md), and [docs/features/memory-sharing.md](docs/features/memory-sharing.md). Still out of scope: SSO, photo-based illustrations, owner transfer, per-memory privacy, relationship labels, and web app for viewers. (Family sharing itself — multi-user households, roles, invites — shipped; see [docs/features/family-sharing.md](docs/features/family-sharing.md) and [docs/plans/family-sharing.md](docs/plans/family-sharing.md) §15 for its own out-of-scope list.)
 
 ---
 

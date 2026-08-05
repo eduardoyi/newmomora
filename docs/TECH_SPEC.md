@@ -258,6 +258,14 @@ create table public.families (
   account_deletion_token uuid,               -- exact owner soft-delete operation
   deletion_fence_token uuid,                 -- exact account-cleanup R2 fence
   deletion_fence_started_at timestamptz,
+  -- Memory share cards (2026-08-05, docs/plans/offline-awareness-and-share-cards.md
+  -- S1): owner/manager can turn off sharing for viewers family-wide; viewers
+  -- share by default. Enforced server-side by compose-share-card, not just
+  -- hidden client-side. Row-level RLS on this table covers the column, but a
+  -- column-level `grant update (viewer_sharing_enabled)` is required too --
+  -- see 20260801170000_paid_subscription_sol_hardening.sql's table-level
+  -- UPDATE revoke.
+  viewer_sharing_enabled boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -1621,6 +1629,54 @@ owner-only RLS for metadata and is expired by the scheduled
 does not accumulate the full archive in Worker memory. The native client
 downloads the short-lived job URL into the cache and opens `expo-sharing`.
 
+### 4.20 `compose-share-card`
+
+Composes a shareable memory-card PNG server-side (satori JSX→SVG +
+`@resvg/resvg-wasm` SVG→PNG) and streams it back — never writes to R2 or
+Postgres, so it stays entirely outside the storage-authorization/deletion
+machinery.
+
+- `POST { memoryId: string, mediaAssetId?: string }` — JWT required; caller
+  must be an active member of the memory's family. `mediaAssetId` is
+  required for `media`-type memories (must belong to the memory) and
+  ignored otherwise (`text_illustration` uses `illustration_key`,
+  `text_only` embeds no image).
+- **200** `image/png`, `Content-Disposition: attachment;
+  filename="momora-<mon>-<d>-<yyyy>.png"`.
+- **400** `unsupported_memory_type` (rejects `audio` and any unrecognized
+  type explicitly) / `validation_error` (missing `mediaAssetId` for a media
+  memory) / `video_not_supported` (the resolved asset is a video).
+- **403** `forbidden` (non-member) or `sharing_disabled` (viewer, and the
+  family's `viewer_sharing_enabled = false`).
+- **404** `MEMORY_NOT_FOUND` / `asset_not_found`.
+- **415** `unsupported_image_format` (legacy HEIC/HEIF row — `resvg-wasm`
+  can't decode it).
+- **429** `rate_limited` (10 composes/minute/user, in-isolate — same
+  cooldown pattern as `analyze-emotion`).
+- **546** platform `WORKER_RESOURCE_LIMIT` (Supabase's own resource-cap
+  response, not something this function returns on purpose) — the client
+  retries exactly once. See docs/features/memory-sharing.md's Constraints
+  section for the reduced-raster-scale mitigation this pairs with.
+
+Auth reuses `_shared/family-access.ts`'s role helpers. Vendored assets
+(resvg `.wasm`, font TTFs, a monochrome NotoEmoji subset) are each
+base64-encoded into their own statically-imported `.ts` module under
+`supabase/functions/compose-share-card/assets/` — the only proven asset
+channel under `--use-api` deploys (`Deno.readFile`/`readDirSync`/
+`fetch(import.meta.url)` do not work for non-module-graph files there). Card
+layout (`layout.ts`) is a simplified server-side reproduction of
+`src/components/memory-card.tsx`'s `SpreadCard`/`QuoteCard` — both files
+carry a "KEEP IN SYNC" cross-reference comment. Logging never includes
+`error.message` on a layout/render path (satori errors can embed caption
+text) — only `memoryId` + a fixed status/code.
+
+Client: raw `fetch()` with a manual `Authorization: Bearer <token>` +
+`apikey` header — **not** `supabase.functions.invoke`, whose
+`FunctionsClient` has no binary branch for `image/png` and corrupts the
+bytes via `response.text()`. See
+[docs/features/memory-sharing.md](./features/memory-sharing.md) for the
+full contract, permission matrix, and privacy notes.
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)
@@ -1803,6 +1859,21 @@ full lifecycle, RPC list, and Edge Function call order.
 
 See [docs/features/likes-and-comments.md](./features/likes-and-comments.md)
 for UI, moderation, notification, and removed-member semantics.
+
+### 5.8 Share a memory card
+
+```
+1. Timeline card / detail screen: share icon visible per the permission matrix (owner/manager always; viewer only if family.viewerSharingEnabled)
+2. Carousel's onActiveIndexChange lifts the current page -> mediaAssetId (media memories only)
+3. Tap: raw fetch POST compose-share-card { memoryId, mediaAssetId? } with Bearer + apikey headers
+4. 546 (platform resource cap) -> retry once, transparently
+5. 200 image/png -> arrayBuffer -> base64 -> write to cacheDirectory -> Sharing.shareAsync
+6. 403 -> inline message + invalidate the family-memberships query (viewerSharingEnabled can be stale)
+7. 429 -> friendly rate-limit message; any other failure -> generic message; best-effort temp-file cleanup always runs
+```
+
+See [docs/features/memory-sharing.md](./features/memory-sharing.md) for the
+full permission matrix, card-layout contract, and privacy rationale.
 
 ---
 

@@ -11,6 +11,7 @@ import {
 } from 'react';
 
 import { useAuthUrlHandler } from '@/hooks/use-auth-url-handler';
+import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { supabase } from '@/lib/supabase';
 import { identifyUser, resetAnalytics } from '@/services/analytics';
 import {
@@ -103,6 +104,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [session]);
 
+  // Persisted-cache purge backstop (O4,
+  // docs/plans/offline-awareness-and-share-cards.md). `signOut()` below
+  // already purges for the ordinary user-initiated case, but a session can
+  // also end WITHOUT ever calling it: supabase-js detects a revoked/expired
+  // token on its own and fires `onAuthStateChange` with a null session
+  // (forced sign-out), and the eventual hard-delete of a scheduled-deletion
+  // account (15-day grace, `hard-delete-expired-accounts` cron) similarly
+  // just stops resolving a session on the next launch. Same
+  // had-then-lost-a-real-session edge as the analytics effect above, but
+  // tracked separately -- purge intent shouldn't depend on whether
+  // analytics happened to be identified. clearPersistedQueryCache() is
+  // idempotent, so this being redundant with an explicit signOut() call is
+  // harmless.
+  const hadRealSessionRef = useRef(false);
+  useEffect(() => {
+    const currentUser = session?.user ?? null;
+    const isRealUser = currentUser !== null && !currentUser.is_anonymous;
+
+    if (isRealUser) {
+      hadRealSessionRef.current = true;
+      return;
+    }
+
+    if (hadRealSessionRef.current) {
+      hadRealSessionRef.current = false;
+      void clearPersistedQueryCache();
+    }
+  }, [session]);
+
   const requestSignInOtp = useCallback(async (email: string): Promise<RequestSignInOtpResult> => {
     const { error } = await supabase.auth.signInWithOtp({
       email: email.trim(),
@@ -158,6 +188,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) {
       throw error;
     }
+
+    // Purge the persisted query cache (O4,
+    // docs/plans/offline-awareness-and-share-cards.md) -- this is THE
+    // central sign-out path (settings.tsx and paywall.tsx both call this
+    // hook's signOut, never supabase.auth.signOut directly). A device
+    // handed to another user must never cold-boot into the previous
+    // user's family/memories.
+    await clearPersistedQueryCache();
   }, []);
 
   const value = useMemo<AuthContextValue>(

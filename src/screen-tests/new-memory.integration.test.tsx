@@ -8,6 +8,7 @@
 // docs/plans/media-exif-capture-date-prefill.md for the full rationale.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import { onlineManager } from '@tanstack/react-query';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams } from 'expo-router';
@@ -812,5 +813,38 @@ describe('NewMemoryScreen -- memory_saved / memory_save_failed analytics', () =>
 
     expect(mockedTrackEvent).toHaveBeenCalledWith('memory_save_failed', { code: 'network_error' });
     expect(mockedTrackEvent).not.toHaveBeenCalledWith('memory_saved', expect.anything());
+  });
+
+  it('shows the friendly offline copy (not the raw error) when Save fails while offline', async () => {
+    // O6 (docs/plans/offline-awareness-and-share-cards.md): createMemory is
+    // a react-query mutation pinned to networkMode 'always' (query-client.ts),
+    // so it fails fast offline with a generic network error -- this screen
+    // overrides that message with reassuring, draft-safe copy whenever
+    // onlineManager reports offline at the moment of the catch.
+    createMemory.mockRejectedValue(new Error('Network request failed'));
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+
+    try {
+      const screen = renderScreen();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Bedtime story time');
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('new-memory-save'));
+      });
+
+      expect(
+        screen.getByText("You're offline — your draft is safe; try again when you're back"),
+      ).toBeTruthy();
+      expect(screen.queryByText('Network request failed')).toBeNull();
+    } finally {
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+    }
   });
 });

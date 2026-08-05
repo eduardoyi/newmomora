@@ -967,6 +967,7 @@ describe('memories service integration', () => {
     const result = await retryMemoryIllustration('memory-4');
 
     expect(result.error?.code).toBe('invalid_memory_type');
+    expect(result.dispatched).toBe(false);
   });
 
   it('routes retry through the server without directly updating illustration status', async () => {
@@ -989,11 +990,67 @@ describe('memories service integration', () => {
     const result = await retryMemoryIllustration('memory-update-denied');
 
     expect(result.error).toBeNull();
+    expect(result.dispatched).toBe(true);
     expect(fetchBuilder.update).not.toHaveBeenCalled();
     expect(generateMemoryIllustration).toHaveBeenCalledWith('memory-update-denied', undefined, {
       forceRegenerate: false,
       requestIntent: 'recovery',
     });
+  });
+
+  it('does not dispatch (and reports dispatched: false) when the server already shows the illustration ready', async () => {
+    // O4 (docs/plans/offline-awareness-and-share-cards.md): the caller may
+    // have a stale-looking cached row (e.g. restored from a 7-day-old
+    // persisted cache), but this function always re-fetches the CURRENT
+    // server row first -- if that's already 'ready', no pipeline call
+    // happens, and the caller must be told so it doesn't optimistically
+    // patch the cache back to 'pending'.
+    const fetchBuilder = createQueryBuilder({
+      data: {
+        memory_type: 'text_illustration',
+        illustration_status: 'ready',
+        updated_at: '2026-05-24T00:00:00Z',
+      },
+      error: null,
+    });
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        return fetchBuilder;
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await retryMemoryIllustration('memory-already-ready');
+
+    expect(result.error).toBeNull();
+    expect(result.dispatched).toBe(false);
+    expect(generateMemoryIllustration).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch a fresh (non-stale) in-progress generation', async () => {
+    const fetchBuilder = createQueryBuilder({
+      data: {
+        memory_type: 'text_illustration',
+        illustration_status: 'generating',
+        illustration_generation_started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+      error: null,
+    });
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        return fetchBuilder;
+      }
+
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await retryMemoryIllustration('memory-fresh-generating');
+
+    expect(result.error).toBeNull();
+    expect(result.dispatched).toBe(false);
+    expect(generateMemoryIllustration).not.toHaveBeenCalled();
   });
 
   it('switches an illustrated memory to text-only without clearing its illustration', async () => {

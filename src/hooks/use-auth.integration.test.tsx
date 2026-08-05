@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 import { AuthProvider, useAuth } from '@/hooks/use-auth';
+import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { supabase } from '@/lib/supabase';
 import { identifyUser, resetAnalytics } from '@/services/analytics';
 
@@ -14,6 +15,12 @@ jest.mock('@/services/analytics', () => ({
   identifyUser: jest.fn(),
   resetAnalytics: jest.fn(),
 }));
+
+jest.mock('@/lib/query-persistence', () => ({
+  clearPersistedQueryCache: jest.fn().mockResolvedValue(undefined),
+}));
+
+const mockedClearPersistedQueryCache = clearPersistedQueryCache as jest.Mock;
 
 jest.mock('@/lib/supabase', () => ({
   supabase: {
@@ -244,6 +251,23 @@ describe('useAuth', () => {
     await expect(result.current.signOut()).rejects.toEqual(
       expect.objectContaining({ message: 'session unavailable' }),
     );
+    // The persisted cache must NOT be purged on a failed sign-out -- the
+    // session is still live.
+    expect(mockedClearPersistedQueryCache).not.toHaveBeenCalled();
+  });
+
+  it('purges the persisted query cache after a successful sign-out (O4, docs/plans/offline-awareness-and-share-cards.md)', async () => {
+    mockedSupabase.auth.signOut.mockResolvedValue({ error: null } as never);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    await result.current.signOut();
+
+    expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -346,6 +370,42 @@ describe('useAuth analytics identity', () => {
     });
 
     expect(mockedResetAnalytics).toHaveBeenCalledTimes(1);
+  });
+
+  it('purges the persisted query cache when a real session ends WITHOUT going through signOut() (O4) -- e.g. a revoked token, or an eventually hard-deleted account', async () => {
+    // This is the backstop the explicit signOut()-path test above doesn't
+    // cover: supabase-js can flip the session to null on its own (a
+    // forced sign-out) via onAuthStateChange, never calling this hook's
+    // signOut() function. A device must still never keep serving a real
+    // user's cached family/memories after their session is gone, however
+    // that happened.
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      authChangeCallback('SIGNED_IN', fakeSession('real-user-1', false));
+    });
+    expect(mockedClearPersistedQueryCache).not.toHaveBeenCalled();
+
+    act(() => {
+      authChangeCallback('SIGNED_OUT', null);
+    });
+
+    expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not purge when an anonymous session appears and disappears with no prior real session', async () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      authChangeCallback('SIGNED_IN', fakeSession('anon-1', true));
+    });
+    act(() => {
+      authChangeCallback('SIGNED_OUT', null);
+    });
+
+    expect(mockedClearPersistedQueryCache).not.toHaveBeenCalled();
   });
 
   it('resets then re-identifies when switching between two different non-anonymous users', async () => {

@@ -7,7 +7,7 @@ import { useMemberMemories, useMemories, useMemory, useMemoryMutations } from '@
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
-import { memoriesQueryKey } from '@/hooks/queryKeys';
+import { memoriesQueryKey, memoryDetailQueryKey } from '@/hooks/queryKeys';
 import {
   createMemory,
   deleteMemory,
@@ -631,6 +631,101 @@ describe('useMemories integration', () => {
       expect(mockedRetryMemoryIllustration).not.toHaveBeenCalled();
     });
 
+    it('does not patch to pending when the fresh fetch is stale-looking but the service reports it did not dispatch', async () => {
+      // Same O4 bug as useMemories' list recovery effect, but on the detail
+      // hook's own recovery effect: the FRESH fetch (not the placeholder)
+      // can still look stale to the client while the server already
+      // resolved it -- retryMemoryIllustration's early-return response
+      // ({error: null, dispatched: false}) must not be treated as license
+      // to patch the cache to 'pending'.
+      const queryClient = createQueryClient();
+      const freshButStale = buildCachedMemory({
+        id: 'memory-fresh-stale-detail',
+        memory_type: 'text_illustration',
+        illustration_status: 'generating',
+        updated_at: '2020-01-01T00:00:00Z',
+      });
+      mockedFetchMemoryById.mockResolvedValue({ data: freshButStale, error: null });
+      mockedRetryMemoryIllustration.mockResolvedValue({ error: null, dispatched: false });
+
+      const { result } = renderHook(() => useMemory('memory-fresh-stale-detail'), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      await waitFor(() => {
+        expect(mockedRetryMemoryIllustration).toHaveBeenCalledWith('memory-fresh-stale-detail');
+      });
+      // Left exactly as the fetch returned it -- no flash to 'pending'.
+      expect(result.current.data?.illustration_status).toBe('generating');
+    });
+
+    it('does not fire illustration recovery off data hydrated directly into the detail cache before this mount has completed its own fetch', async () => {
+      // O4: this is the case `isPlaceholderData` alone does NOT catch --
+      // unlike the list-cache placeholder above (a substitute the query
+      // itself materializes), seeding the DETAIL query's own cache entry
+      // directly is exactly what PersistQueryClientProvider's restore does.
+      // That makes `isPlaceholderData` false immediately (it's real `data`,
+      // not a placeholder), so `isFetchedAfterMount` is the only thing still
+      // protecting a persisted, days-old 'generating' row from tripping
+      // needsIllustrationRecovery before this mount's own network fetch has
+      // resolved.
+      const queryClient = createQueryClient();
+      const hydratedStale = buildCachedMemory({
+        id: 'memory-hydrated-stale',
+        memory_type: 'text_illustration',
+        illustration_status: 'generating',
+        updated_at: '2020-01-01T00:00:00Z',
+      });
+      queryClient.setQueryData(
+        memoryDetailQueryKey('family-1', 'memory-hydrated-stale'),
+        hydratedStale,
+      );
+      // Never resolves within this test -- isFetchedAfterMount must stay
+      // false for as long as this mount's own fetch hasn't settled.
+      mockedFetchMemoryById.mockReturnValue(new Promise(() => {}));
+
+      const { result } = renderHook(() => useMemory('memory-hydrated-stale'), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      // Confirms this really is the case isPlaceholderData would miss.
+      expect(result.current.isPlaceholderData).toBe(false);
+      expect(result.current.data?.illustration_status).toBe('generating');
+
+      // Let any microtask-queued effect run before asserting the negative.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(mockedRetryMemoryIllustration).not.toHaveBeenCalled();
+    });
+
+    it("fires illustration recovery once this mount's own network fetch resolves, even for a row that started out hydrated", async () => {
+      const queryClient = createQueryClient();
+      const hydratedStale = buildCachedMemory({
+        id: 'memory-hydrated-stale-2',
+        memory_type: 'text_illustration',
+        illustration_status: 'generating',
+        updated_at: '2020-01-01T00:00:00Z',
+      });
+      queryClient.setQueryData(
+        memoryDetailQueryKey('family-1', 'memory-hydrated-stale-2'),
+        hydratedStale,
+      );
+      // The fresh fetch confirms the same stale status server-side.
+      mockedFetchMemoryById.mockResolvedValue({ data: hydratedStale, error: null });
+      mockedRetryMemoryIllustration.mockResolvedValue({ error: null, dispatched: true });
+
+      const { result } = renderHook(() => useMemory('memory-hydrated-stale-2'), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      await waitFor(() => {
+        expect(mockedRetryMemoryIllustration).toHaveBeenCalledWith('memory-hydrated-stale-2');
+      });
+      expect(result.current.data?.illustration_status).toBe('pending');
+    });
+
     it("does not seed the detail view from another family's cache", () => {
       const queryClient = createQueryClient();
       queryClient.setQueryData(memoriesQueryKey('family-2'), buildInfiniteMemoriesData([buildCachedMemory()]));
@@ -686,7 +781,7 @@ describe('useMemories integration', () => {
         mediaAssets: [],
       };
       mockedFetchMemoriesPage.mockResolvedValue(pageResult([stale as never]));
-      mockedRetryMemoryIllustration.mockResolvedValue({ error: null });
+      mockedRetryMemoryIllustration.mockResolvedValue({ error: null, dispatched: true });
 
       const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
 
@@ -726,7 +821,7 @@ describe('useMemories integration', () => {
       // retryMemoryIllustration -> runMemoryIllustrationPipeline resolves
       // PORTRAITS_NOT_READY as success (no error), whether or not the
       // portrait is ready yet by the time this retry lands.
-      mockedRetryMemoryIllustration.mockResolvedValue({ error: null });
+      mockedRetryMemoryIllustration.mockResolvedValue({ error: null, dispatched: true });
 
       const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
 
@@ -741,6 +836,38 @@ describe('useMemories integration', () => {
       expect(
         new Date(result.current.memories[0]?.illustration_generation_started_at ?? 0).getTime(),
       ).toBeGreaterThan(Date.now() - 60_000);
+    });
+
+    it('does NOT patch a stale-looking memory to pending when the service reports it did not actually dispatch (already resolved server-side)', async () => {
+      // O4 (docs/plans/offline-awareness-and-share-cards.md): a persisted,
+      // hours-old 'generating' row can look stale locally even though the
+      // server finished long ago. retryMemoryIllustration's early-return
+      // paths (already 'ready', or 'generating' and not stale server-side)
+      // resolve {error: null, dispatched: false} -- patching to 'pending'
+      // on THAT response would flash a finished illustration back to
+      // pending. Only a real dispatch may patch the cache.
+      const staleLooking = {
+        id: 'memory-stale-2',
+        family_id: 'family-1',
+        memory_type: 'text_illustration',
+        content: 'Actually finished server-side',
+        emotion: 'joy',
+        illustration_status: 'generating',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        taggedMembers: [],
+        mediaAssets: [],
+      };
+      mockedFetchMemoriesPage.mockResolvedValue(pageResult([staleLooking as never]));
+      mockedRetryMemoryIllustration.mockResolvedValue({ error: null, dispatched: false });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(mockedRetryMemoryIllustration).toHaveBeenCalledWith('memory-stale-2');
+      });
+      // Cache must be left exactly as it was -- no flash to 'pending'.
+      expect(result.current.memories[0]?.illustration_status).toBe('generating');
     });
   });
 
@@ -984,7 +1111,7 @@ describe('useMemories integration', () => {
           } as never,
         ]),
       );
-      mockedRetryMemoryIllustration.mockResolvedValue({ error: null });
+      mockedRetryMemoryIllustration.mockResolvedValue({ error: null, dispatched: true });
 
       const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
       await waitFor(() => expect(result.current.memories).toHaveLength(1));

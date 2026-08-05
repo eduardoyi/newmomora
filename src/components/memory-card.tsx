@@ -19,6 +19,7 @@ import {
   type IllustrationStatus,
 } from '@/utils/memories';
 import { aspectRatioFromDimensions, clampMediaAspectRatio } from '@/utils/media-aspect';
+import { mediaImageSource } from '@/utils/media-image-source';
 import { isVideoContentType } from '@/utils/media-validation';
 
 interface MemoryCardProps {
@@ -142,8 +143,9 @@ function IllustrationVisual({
       <Image
         contentFit="cover"
         onLoad={handleLoad}
-        source={{ uri: url }}
+        source={mediaImageSource(url, memory.illustration_key)}
         style={[styles.cardImage, { aspectRatio: illustrationRatio }]}
+        testID={`memory-card-${memory.id}-illustration`}
       />
     );
   }
@@ -159,8 +161,9 @@ function IllustrationVisual({
         <>
           <Image
             contentFit="cover"
-            source={{ uri: url }}
+            source={mediaImageSource(url, memory.illustration_key)}
             style={StyleSheet.absoluteFill}
+            testID={`memory-card-${memory.id}-illustration-failed`}
           />
           <View style={styles.failedOverlay}>
             <Text style={styles.failedOverlayText}>Illustration failed — tap to retry</Text>
@@ -180,10 +183,12 @@ function MediaVisual({
   memory,
   isActive,
   onPress,
+  onActiveIndexChange,
 }: {
   memory: MemoryWithTags;
   isActive: boolean;
   onPress?: (mediaIndex: number) => void;
+  onActiveIndexChange?: (index: number) => void;
 }) {
   if (memory.mediaAssets.length > 0) {
     return (
@@ -191,6 +196,7 @@ function MediaVisual({
         assets={memory.mediaAssets}
         cacheVersion={memory.updated_at}
         isActive={isActive}
+        onActiveIndexChange={onActiveIndexChange}
         onPress={onPress}
         preferPreview
         stableLayout
@@ -207,6 +213,12 @@ function MediaVisual({
 }
 
 // ── Spread card (text_illustration + media) ───────────────────────────────────
+// KEEP IN SYNC (S3, docs/plans/offline-awareness-and-share-cards.md) with
+// supabase/functions/compose-share-card/layout.ts, which replicates this
+// card (and QuoteCard/CardFooter/AvatarCluster below) server-side for the
+// share-card PNG. That file's own header comment points back here -- if you
+// change this card's visual design, check whether layout.ts needs the same
+// change, and vice versa.
 function SpreadCard({
   memory,
   onPress,
@@ -223,16 +235,34 @@ function SpreadCard({
   // Tapping the carousel opens the detail screen on that same page; tapping
   // the caption/footer below it has no page context, so it opens on the first.
   const handleMediaPress = (mediaIndex: number) => onPress(memory.id, mediaIndex);
+  // Current carousel page (S4) -- lifted so the share affordance can send
+  // the page the user is actually looking at, and disable itself on a video
+  // page. Only relevant for the 'media' branch below; text_illustration has
+  // no carousel, so this stays at its initial value (unused).
+  const [activeMediaIndex, setActiveMediaIndex] = useState(0);
 
   if (memory.memory_type === 'media') {
+    const activeAsset = memory.mediaAssets[activeMediaIndex] ?? memory.mediaAssets[0] ?? null;
     return (
       <View
         style={styles.card}
         testID={`memory-card-${memory.id}`}
       >
-        <MediaVisual memory={memory} isActive={isVideoActive} onPress={handleMediaPress} />
+        <MediaVisual
+          memory={memory}
+          isActive={isVideoActive}
+          onActiveIndexChange={setActiveMediaIndex}
+          onPress={handleMediaPress}
+        />
         <View style={styles.engagementWrap}>
-          <MemoryEngagementBar memory={memory} onOpenComments={handleOpenComments} iconSize={23} />
+          <MemoryEngagementBar
+            memory={memory}
+            onOpenComments={handleOpenComments}
+            iconSize={23}
+            enableShare
+            currentMediaAssetId={activeAsset?.id ?? null}
+            isCurrentPageVideo={activeAsset ? isVideoContentType(activeAsset.content_type) : false}
+          />
         </View>
         <Pressable
           accessibilityRole="button"
@@ -264,7 +294,13 @@ function SpreadCard({
         <IllustrationVisual memory={memory} isHidden={isIllustrationHidden} />
       </Pressable>}
       <View style={styles.engagementWrap}>
-        <MemoryEngagementBar memory={memory} onOpenComments={handleOpenComments} iconSize={23} />
+        <MemoryEngagementBar
+          memory={memory}
+          onOpenComments={handleOpenComments}
+          iconSize={23}
+          enableShare
+          currentMediaAssetId={null}
+        />
       </View>
       <Pressable
         accessibilityRole="button"
@@ -304,7 +340,13 @@ function QuoteCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
         </View>
       </Pressable>
       <View style={styles.engagementWrapQuote}>
-        <MemoryEngagementBar memory={memory} onOpenComments={handleOpenComments} iconSize={23} />
+        <MemoryEngagementBar
+          memory={memory}
+          onOpenComments={handleOpenComments}
+          iconSize={23}
+          enableShare
+          currentMediaAssetId={null}
+        />
       </View>
       <Pressable accessibilityRole="button" onPress={handlePress}>
         <CardFooter memory={memory} />

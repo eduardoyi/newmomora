@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
@@ -20,7 +20,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useBilling } from '@/hooks/use-billing';
-import { familyMembershipsQueryKey, useFamily } from '@/hooks/use-family';
+import {
+  familyMembershipsQueryKey,
+  useFamily,
+  type FamilyMembershipSummary,
+} from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
@@ -35,7 +39,8 @@ import {
 } from '@/lib/routes';
 import { getDeviceTimezone } from '@/services/auth';
 import { createAndShareDataExport } from '@/services/export';
-import { leaveFamily, updateFamilyName } from '@/services/family';
+import { leaveFamily, updateFamilyName, updateFamilyViewerSharing } from '@/services/family';
+import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { isPendingInviteActive } from '@/utils/invites';
 import { canEditFamilyContent, isOwnerRole, isViewerRole, roleLabel } from '@/utils/roles';
 import { AuthField, AuthInput } from '@/components/auth-screen';
@@ -100,9 +105,70 @@ function FamilySection() {
   const [nameError, setNameError] = useState('');
   const [isLeaving, setIsLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState('');
+  const [viewerSharingError, setViewerSharingError] = useState('');
   // Backs the "Switch" link next to the family name: the picker below
   // renders modal-only (hideTrigger) and this ref is its sole opener.
   const familyPickerRef = useRef<SelectFieldHandle>(null);
+
+  // "Viewers can share memories" (Settings -> Family, docs/plans/
+  // offline-awareness-and-share-cards.md S1/S2). Optimistic update + rollback
+  // against the family-memberships cache -- the same cache useFamily() derives
+  // `family.viewerSharingEnabled` from -- mirrors useMemberManagement's
+  // onMutate/onError/onSettled pattern rather than updateFamilyName's fire-
+  // and-forget (this toggle needs its own error surface for the billing-
+  // lockout case below).
+  const membershipsQueryKey = [...familyMembershipsQueryKey, user?.id];
+  const viewerSharingMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      if (!familyId) {
+        throw new Error('You must have a family to change this setting');
+      }
+
+      const { data, error } = await updateFamilyViewerSharing(familyId, enabled);
+      if (error) {
+        throw new Error(error.message);
+      }
+      if (!data) {
+        // RLS-allowed shape but zero rows matched -- the families UPDATE
+        // policy also requires billing_write_allowed_for_current_user, so a
+        // lapsed-subscription owner/manager cannot flip this toggle (same
+        // gate family rename is subject to).
+        throw new Error(
+          "Your family's subscription isn't active, so this setting can't be changed right now.",
+        );
+      }
+      return enabled;
+    },
+    onMutate: async (enabled: boolean) => {
+      await queryClient.cancelQueries({ queryKey: membershipsQueryKey });
+      const previous = queryClient.getQueryData<FamilyMembershipSummary[]>(membershipsQueryKey);
+
+      if (previous && familyId) {
+        queryClient.setQueryData<FamilyMembershipSummary[]>(
+          membershipsQueryKey,
+          previous.map((membership) =>
+            membership.familyId === familyId
+              ? { ...membership, viewerSharingEnabled: enabled }
+              : membership,
+          ),
+        );
+      }
+
+      setViewerSharingError('');
+      return { previous };
+    },
+    onError: (error, _enabled, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(membershipsQueryKey, context.previous);
+      }
+      setViewerSharingError(
+        error instanceof Error ? error.message : 'Could not update this setting',
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: familyMembershipsQueryKey });
+    },
+  });
 
   useEffect(() => {
     if (!isEditingName) {
@@ -156,6 +222,12 @@ function FamilySection() {
                 if (error) {
                   throw new Error(error.message);
                 }
+                // Purge the persisted cache before refetching memberships --
+                // a device handed to another user, or this user re-invited
+                // later, must never cold-boot into memories from a family
+                // they just left (docs/plans/offline-awareness-and-share-cards.md
+                // O4).
+                await clearPersistedQueryCache();
                 await refetchMemberships();
               } catch (error) {
                 setLeaveError(error instanceof Error ? error.message : 'Could not leave family');
@@ -177,6 +249,14 @@ function FamilySection() {
       await setActiveFamily(nextFamilyId);
     } catch {
       Alert.alert('Could not switch families', 'Please try again.');
+    }
+  };
+
+  const handleToggleViewerSharing = async (value: boolean) => {
+    try {
+      await viewerSharingMutation.mutateAsync(value);
+    } catch {
+      // Surfaced via viewerSharingError, set in the mutation's onError.
     }
   };
 
@@ -308,6 +388,23 @@ function FamilySection() {
         onPress={() => router.push(sharingManageRoute)}
         testID="settings-manage-families"
       />
+
+      {canEditName && (
+        <SettingsRow
+          label="Viewers can share memories"
+          caption="Turn off to stop viewers from sharing memory cards outside the family."
+          right={
+            <Switch
+              disabled={viewerSharingMutation.isPending}
+              onValueChange={(value) => void handleToggleViewerSharing(value)}
+              testID="settings-viewer-sharing-toggle"
+              trackColor={{ false: colors.border, true: colors.primary }}
+              value={family.viewerSharingEnabled ?? true}
+            />
+          }
+        />
+      )}
+      {viewerSharingError ? <Text style={styles.familyNameError}>{viewerSharingError}</Text> : null}
 
       {memberships.length > 1 && (
         <SelectField

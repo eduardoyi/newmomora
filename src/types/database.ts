@@ -1027,6 +1027,7 @@ export type Database = {
           name: string
           owner_id: string
           updated_at: string
+          viewer_sharing_enabled: boolean
         }
         Insert: {
           account_deletion_token?: string | null
@@ -1040,6 +1041,7 @@ export type Database = {
           name: string
           owner_id: string
           updated_at?: string
+          viewer_sharing_enabled?: boolean
         }
         Update: {
           account_deletion_token?: string | null
@@ -1053,6 +1055,7 @@ export type Database = {
           name?: string
           owner_id?: string
           updated_at?: string
+          viewer_sharing_enabled?: boolean
         }
         Relationships: []
       }
@@ -2558,6 +2561,7 @@ export type Database = {
           name: string
           owner_id: string
           updated_at: string
+          viewer_sharing_enabled: boolean
         }
         SetofOptions: {
           from: "*"
@@ -2646,6 +2650,7 @@ export type Database = {
           name: string
           owner_id: string
           updated_at: string
+          viewer_sharing_enabled: boolean
         }
         SetofOptions: {
           from: "*"

@@ -34,6 +34,7 @@ import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
 import { useSuggestedMemoryDate } from '@/hooks/use-suggested-memory-date';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { useIsOnline } from '@/lib/connectivity';
 import { trackEvent, type AnalyticsEventMap } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
@@ -101,6 +102,7 @@ export default function NewMemoryScreen() {
   const { enqueue: enqueuePendingMemoryUpload } = usePendingMemoryUploads();
   const { updateProfile } = useUserProfile();
   const [placeholderPrompt] = useState(() => pickJournalingPrompt());
+  const isOnline = useIsOnline();
 
   useEffect(() => {
     if (
@@ -454,8 +456,16 @@ export default function NewMemoryScreen() {
       hasEnqueuedMediaRef.current = false;
       setIsPostingMedia(false);
       trackEvent('memory_save_failed', { code: 'network_error' });
+      // O6 (docs/plans/offline-awareness-and-share-cards.md): the text path
+      // above awaits createMemory, a react-query mutation now pinned to
+      // networkMode 'always' (see query-client.ts) -- offline, that fails
+      // fast with a generic network error rather than the friendlier,
+      // draft-reassuring copy this surface wants. Draft autosave already
+      // protects the content; there's no queuing of text posts in this pass.
       setErrorMessage(
-        error instanceof Error ? error.message : 'Could not save memory',
+        !isOnline
+          ? "You're offline — your draft is safe; try again when you're back"
+          : error instanceof Error ? error.message : 'Could not save memory',
       );
     }
   };

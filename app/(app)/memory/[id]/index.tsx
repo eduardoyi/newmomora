@@ -35,6 +35,8 @@ import { navigateBack } from '@/lib/navigation';
 import { editMemoryRoute } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
 import { aspectRatioFromDimensions, clampMediaAspectRatio } from '@/utils/media-aspect';
+import { mediaImageSource } from '@/utils/media-image-source';
+import { isVideoContentType } from '@/utils/media-validation';
 import { canEditFamilyContent } from '@/utils/roles';
 import { formatTaggedMemberAge } from '@/utils/family-members';
 import { toLinkPreviewMap } from '@/utils/links';
@@ -242,6 +244,15 @@ function MemoryDetailFramed({
   // legacy or future sizes still render uncropped.
   const [illustrationRatio, setIllustrationRatio] = useState(1);
   const [fullScreenIndex, setFullScreenIndex] = useState<number | null>(null);
+  // Current carousel page (S4, docs/plans/offline-awareness-and-share-cards.md)
+  // -- lifted so the share affordance can send the page the user is looking
+  // at and disable itself on a video page. Initialized from the same page
+  // the carousel opens on.
+  const [activeMediaIndex, setActiveMediaIndex] = useState(initialMediaIndex);
+  const activeMediaAsset = isMedia
+    ? memory.mediaAssets[activeMediaIndex] ?? memory.mediaAssets[0] ?? null
+    : null;
+  const isActiveMediaVideo = activeMediaAsset ? isVideoContentType(activeMediaAsset.content_type) : false;
   const fullScreenItems: FullScreenMediaItem[] = isMedia
     ? memory.mediaAssets.map((asset) => ({
         id: asset.id,
@@ -249,7 +260,12 @@ function MemoryDetailFramed({
         objectKey: asset.object_key,
       }))
     : illustrationUrl
-      ? [{ id: memory.id, contentType: 'image/webp', uri: illustrationUrl }]
+      ? [{
+          id: memory.id,
+          contentType: 'image/webp',
+          objectKey: memory.illustration_key ?? undefined,
+          uri: illustrationUrl,
+        }]
       : [];
 
   return (
@@ -284,6 +300,7 @@ function MemoryDetailFramed({
                   initialIndex={initialMediaIndex}
                   isActive={fullScreenIndex === null}
                   mutedVideos={false}
+                  onActiveIndexChange={setActiveMediaIndex}
                   onPress={setFullScreenIndex}
                   style={styles.framedMedia}
                 />
@@ -326,7 +343,7 @@ function MemoryDetailFramed({
                       setIllustrationRatio(clampMediaAspectRatio(ratio));
                     }
                   }}
-                  source={{ uri: illustrationUrl }}
+                  source={mediaImageSource(illustrationUrl, memory.illustration_key)}
                   style={[styles.framedImage, { aspectRatio: illustrationRatio }]}
                 />
               </Pressable>
@@ -340,6 +357,9 @@ function MemoryDetailFramed({
                 memory={memory}
                 onOpenComments={onOpenComments}
                 iconSize={24}
+                enableShare
+                currentMediaAssetId={activeMediaAsset?.id ?? null}
+                isCurrentPageVideo={isActiveMediaVideo}
               />
             </View>
             {memory.content ? (
@@ -444,6 +464,7 @@ function MemoryDetailEditorial({
               memory={memory}
               onOpenComments={onOpenComments}
               iconSize={24}
+              enableShare
             />
           </View>
           <MemoryMetaFooter

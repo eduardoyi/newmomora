@@ -1238,7 +1238,23 @@ export async function deleteMemory(memoryId: string): Promise<{ error: ServiceEr
   return { error: null };
 }
 
-export async function retryMemoryIllustration(memoryId: string): Promise<{ error: ServiceError | null }> {
+export interface RetryMemoryIllustrationResult {
+  error: ServiceError | null;
+  // O4 (docs/plans/offline-awareness-and-share-cards.md): true only when this
+  // call actually invoked runMemoryIllustrationPipeline below -- false on
+  // every early-return path (already 'ready', or 'generating' and not stale
+  // per the server's OWN clock). Callers must gate their optimistic
+  // "pending" cache patch on this flag, not just on `error` being null:
+  // a persisted, hours-old 'generating' row can look stale to the CLIENT
+  // while the server already finished it, and patching to 'pending' on that
+  // early-return response would flash a finished illustration back to
+  // pending.
+  dispatched: boolean;
+}
+
+export async function retryMemoryIllustration(
+  memoryId: string,
+): Promise<RetryMemoryIllustrationResult> {
   const { data: memory, error: fetchError } = await supabase
     .from('memories')
     .select(
@@ -1248,11 +1264,11 @@ export async function retryMemoryIllustration(memoryId: string): Promise<{ error
     .maybeSingle();
 
   if (fetchError) {
-    return { error: mapSupabaseError(fetchError) };
+    return { error: mapSupabaseError(fetchError), dispatched: false };
   }
 
   if (!memory) {
-    return { error: { message: 'Memory not found', code: 'not_found' } };
+    return { error: { message: 'Memory not found', code: 'not_found' }, dispatched: false };
   }
 
   if (memory.memory_type !== 'text_illustration') {
@@ -1261,18 +1277,19 @@ export async function retryMemoryIllustration(memoryId: string): Promise<{ error
         message: 'Illustration retry is only available for illustrated memories',
         code: 'invalid_memory_type',
       },
+      dispatched: false,
     };
   }
 
   if (memory.illustration_status === 'ready') {
-    return { error: null };
+    return { error: null, dispatched: false };
   }
 
   if (
     memory.illustration_status === 'generating' &&
     !isIllustrationGenerationStale(memory)
   ) {
-    return { error: null };
+    return { error: null, dispatched: false };
   }
 
   // The dispatcher owns state transitions. In particular, a legacy client
@@ -1282,7 +1299,7 @@ export async function retryMemoryIllustration(memoryId: string): Promise<{ error
   const pipelineError = await runMemoryIllustrationPipeline(memoryId, {
     requestIntent: 'recovery',
   });
-  return { error: pipelineError };
+  return { error: pipelineError, dispatched: true };
 }
 
 export async function regenerateMemoryIllustration(

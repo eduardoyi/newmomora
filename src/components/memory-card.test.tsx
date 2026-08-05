@@ -148,6 +148,89 @@ describe('MemoryCard media (Workstream C6)', () => {
   });
 });
 
+describe('MemoryCard share affordance (Workstream S4)', () => {
+  it('passes the active carousel page as the share target and flags video pages', () => {
+    const mockedCarousel = MemoryMediaCarousel as jest.Mock;
+    const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+    mockedCarousel.mockClear();
+    mockedEngagementBar.mockClear();
+
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'media',
+      mediaAssets: [
+        {
+          id: 'asset-1',
+          memory_id: 'memory-1',
+          object_key: 'user-1/memories/memory-1/media/asset-1.jpg',
+          content_type: 'image/jpeg',
+          position: 0,
+          created_at: '2026-07-14T00:00:00.000Z',
+        },
+        {
+          id: 'asset-2',
+          memory_id: 'memory-1',
+          object_key: 'user-1/memories/memory-1/media/asset-2.mp4',
+          content_type: 'video/mp4',
+          position: 1,
+          created_at: '2026-07-14T00:00:00.000Z',
+        },
+      ],
+    } as MemoryWithTags;
+
+    render(<MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />);
+
+    // Initial (photo) page: shareable, enabled.
+    expect(mockedEngagementBar.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        enableShare: true,
+        currentMediaAssetId: 'asset-1',
+        isCurrentPageVideo: false,
+      }),
+    );
+
+    // Carousel reports the swipe over to the video page...
+    act(() => mockedCarousel.mock.calls[0]?.[0].onActiveIndexChange(1));
+
+    // ...and the bar re-renders with the video page disabling share.
+    expect(mockedEngagementBar.mock.calls.at(-1)?.[0]).toEqual(
+      expect.objectContaining({
+        enableShare: true,
+        currentMediaAssetId: 'asset-2',
+        isCurrentPageVideo: true,
+      }),
+    );
+  });
+
+  it('enables share without a mediaAssetId for text-only memories', () => {
+    const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+    mockedEngagementBar.mockClear();
+
+    render(<MemoryCard memory={createMemory(0)} onOpenComments={jest.fn()} onPress={jest.fn()} />);
+
+    expect(mockedEngagementBar.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ enableShare: true, currentMediaAssetId: null }),
+    );
+  });
+
+  it('enables share without a mediaAssetId for illustrated memories', () => {
+    const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+    mockedEngagementBar.mockClear();
+
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'text_illustration',
+      illustration_status: 'ready',
+    } as MemoryWithTags;
+
+    render(<MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />);
+
+    expect(mockedEngagementBar.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ enableShare: true, currentMediaAssetId: null }),
+    );
+  });
+});
+
 describe('MemoryCard failed illustration overlay', () => {
   it('shows a tap-to-retry hint over a retained illustration that failed to regenerate', () => {
     (useMediaUrl as jest.Mock).mockReturnValueOnce({
@@ -166,6 +249,51 @@ describe('MemoryCard failed illustration overlay', () => {
     );
 
     expect(getByText('Illustration failed — tap to retry')).toBeTruthy();
+  });
+});
+
+describe('MemoryCard illustration cacheKey (Workstream O5)', () => {
+  it('pins expo-image cacheKey to the illustration object key, not the signed URL', () => {
+    (useMediaUrl as jest.Mock).mockReturnValueOnce({
+      url: 'https://example.com/illustration.webp?sig=abc',
+    });
+
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'text_illustration',
+      illustration_key: 'user-1/memories/memory-1/illustration.webp',
+      illustration_status: 'ready',
+    } as MemoryWithTags;
+
+    const { getByTestId } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />,
+    );
+
+    expect(getByTestId('memory-card-memory-1-illustration').props.source).toEqual([{
+      uri: 'https://example.com/illustration.webp?sig=abc',
+      cacheKey: 'user-1/memories/memory-1/illustration.webp',
+    }]);
+  });
+
+  it('omits cacheKey when there is no illustration key (defensive -- illustration_key drives the fetch itself)', () => {
+    (useMediaUrl as jest.Mock).mockReturnValueOnce({
+      url: 'https://example.com/illustration.webp',
+    });
+
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'text_illustration',
+      illustration_key: null,
+      illustration_status: 'ready',
+    } as MemoryWithTags;
+
+    const { getByTestId } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />,
+    );
+
+    expect(getByTestId('memory-card-memory-1-illustration').props.source).toEqual([{
+      uri: 'https://example.com/illustration.webp',
+    }]);
   });
 });
 

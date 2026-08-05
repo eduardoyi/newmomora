@@ -19,8 +19,9 @@ import {
   sharingPendingInvitesRoute,
   sharingRedeemRoute,
 } from '@/lib/routes';
+import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { createAndShareDataExport } from '@/services/export';
-import { leaveFamily, updateFamilyName } from '@/services/family';
+import { leaveFamily, updateFamilyName, updateFamilyViewerSharing } from '@/services/family';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -66,10 +67,15 @@ jest.mock('@/hooks/useNotifications', () => ({
 jest.mock('@/services/family', () => ({
   leaveFamily: jest.fn(),
   updateFamilyName: jest.fn(),
+  updateFamilyViewerSharing: jest.fn(),
 }));
 
 jest.mock('@/services/export', () => ({
   createAndShareDataExport: jest.fn(),
+}));
+
+jest.mock('@/lib/query-persistence', () => ({
+  clearPersistedQueryCache: jest.fn().mockResolvedValue(undefined),
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
@@ -82,7 +88,11 @@ const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.MockedFunc
 const mockedUseUserProfile = useUserProfile as jest.MockedFunction<typeof useUserProfile>;
 const mockedCreateAndShareDataExport = createAndShareDataExport as jest.MockedFunction<typeof createAndShareDataExport>;
 const mockedLeaveFamily = leaveFamily as jest.MockedFunction<typeof leaveFamily>;
+const mockedClearPersistedQueryCache = clearPersistedQueryCache as jest.Mock;
 const mockedUpdateFamilyName = updateFamilyName as jest.MockedFunction<typeof updateFamilyName>;
+const mockedUpdateFamilyViewerSharing = updateFamilyViewerSharing as jest.MockedFunction<
+  typeof updateFamilyViewerSharing
+>;
 
 const FUTURE_EXPIRY = '2030-01-01T00:00:00Z';
 const PAST_EXPIRY = '2020-01-01T00:00:00Z';
@@ -361,6 +371,13 @@ describe('Settings Family section', () => {
 
     await waitFor(() => {
       expect(mockedLeaveFamily).toHaveBeenCalledWith('family-1', 'user-1');
+    });
+    // Purge happens before the memberships refetch (O4,
+    // docs/plans/offline-awareness-and-share-cards.md) -- a device handed
+    // to another user, or this user re-invited later, must never cold-boot
+    // into the family they just left.
+    await waitFor(() => {
+      expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
       expect(refetchMemberships).toHaveBeenCalled();
@@ -705,5 +722,155 @@ describe('Settings Family section', () => {
 
     fireEvent.press(getByTestId('settings-manage-families'));
     expect(router.push).toHaveBeenCalledWith(sharingManageRoute);
+  });
+
+  describe('viewer sharing toggle', () => {
+    it('shows the toggle for an owner, defaulting to on when viewerSharingEnabled is unset', () => {
+      mockedUseFamily.mockReturnValue({
+        family: { id: 'family-1', name: "Rosa's family" },
+        familyId: 'family-1',
+        role: 'owner',
+        memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+        isLoading: false,
+        setActiveFamily: jest.fn(),
+        refetchMemberships: jest.fn(),
+        justLostAccess: false,
+      });
+
+      const { getByTestId } = renderScreen();
+
+      expect(getByTestId('settings-viewer-sharing-toggle').props.value).toBe(true);
+    });
+
+    it('reflects viewerSharingEnabled = false and hides the toggle for a viewer', () => {
+      mockedUseFamily.mockReturnValue({
+        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: false },
+        familyId: 'family-1',
+        role: 'manager',
+        memberships: [{ id: 'm1', familyId: 'family-1', role: 'manager', name: "Rosa's family" }],
+        isLoading: false,
+        setActiveFamily: jest.fn(),
+        refetchMemberships: jest.fn(),
+        justLostAccess: false,
+      });
+
+      const { getByTestId, rerender, queryByTestId } = renderScreen();
+      expect(getByTestId('settings-viewer-sharing-toggle').props.value).toBe(false);
+
+      mockedUseFamily.mockReturnValue({
+        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: false },
+        familyId: 'family-1',
+        role: 'viewer',
+        memberships: [{ id: 'm1', familyId: 'family-1', role: 'viewer', name: "Rosa's family" }],
+        isLoading: false,
+        setActiveFamily: jest.fn(),
+        refetchMemberships: jest.fn(),
+        justLostAccess: false,
+      });
+      rerender(
+        <SafeAreaProvider
+          initialMetrics={{
+            frame: { height: 844, width: 390, x: 0, y: 0 },
+            insets: { bottom: 34, left: 0, right: 0, top: 47 },
+          }}
+        >
+          <QueryClientProvider
+            client={new QueryClient({
+              defaultOptions: {
+                queries: { gcTime: Infinity },
+                mutations: { gcTime: Infinity },
+              },
+            })}
+          >
+            <SettingsScreen />
+          </QueryClientProvider>
+        </SafeAreaProvider>,
+      );
+
+      expect(queryByTestId('settings-viewer-sharing-toggle')).toBeNull();
+    });
+
+    it('flips the toggle and calls the service with the family id and new value', async () => {
+      mockedUseFamily.mockReturnValue({
+        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: true },
+        familyId: 'family-1',
+        role: 'owner',
+        memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+        isLoading: false,
+        setActiveFamily: jest.fn(),
+        refetchMemberships: jest.fn(),
+        justLostAccess: false,
+      });
+      mockedUpdateFamilyViewerSharing.mockResolvedValue({
+        data: {
+          id: 'family-1',
+          owner_id: 'user-0',
+          name: "Rosa's family",
+          illustration_style: 'default',
+          deleted_at: null,
+          viewer_sharing_enabled: false,
+          created_at: '2026-05-28T00:00:00Z',
+          updated_at: '2026-08-05T00:00:00Z',
+        } as never,
+        error: null,
+      });
+
+      const { getByTestId } = renderScreen();
+
+      fireEvent(getByTestId('settings-viewer-sharing-toggle'), 'valueChange', false);
+
+      await waitFor(() => {
+        expect(mockedUpdateFamilyViewerSharing).toHaveBeenCalledWith('family-1', false);
+      });
+    });
+
+    it('shows a billing-lockout error when the update matches zero rows (lapsed subscription)', async () => {
+      mockedUseFamily.mockReturnValue({
+        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: true },
+        familyId: 'family-1',
+        role: 'owner',
+        memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+        isLoading: false,
+        setActiveFamily: jest.fn(),
+        refetchMemberships: jest.fn(),
+        justLostAccess: false,
+      });
+      mockedUpdateFamilyViewerSharing.mockResolvedValue({ data: null, error: null });
+
+      const { getByTestId, getByText } = renderScreen();
+
+      fireEvent(getByTestId('settings-viewer-sharing-toggle'), 'valueChange', false);
+
+      await waitFor(() => {
+        expect(
+          getByText("Your family's subscription isn't active, so this setting can't be changed right now."),
+        ).toBeTruthy();
+      });
+    });
+
+    it('shows a generic error message when the service call fails', async () => {
+      mockedUseFamily.mockReturnValue({
+        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: true },
+        familyId: 'family-1',
+        role: 'owner',
+        memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
+        isLoading: false,
+        setActiveFamily: jest.fn(),
+        refetchMemberships: jest.fn(),
+        justLostAccess: false,
+      });
+      mockedUpdateFamilyViewerSharing.mockResolvedValue({
+        data: null,
+        error: { message: 'Network request failed' },
+      });
+
+      const { getByTestId, getByText } = renderScreen();
+
+      fireEvent(getByTestId('settings-viewer-sharing-toggle'), 'valueChange', false);
+
+      await waitFor(() => {
+        expect(getByText('Network request failed')).toBeTruthy();
+      });
+    });
   });
 });

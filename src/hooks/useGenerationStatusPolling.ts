@@ -5,6 +5,7 @@ import { useFamily } from '@/hooks/use-family';
 import { calendarMemoriesQueryKeyBase } from '@/hooks/queryKeys';
 import { isMemoriesListQueryKey, patchMemoryInCaches } from '@/hooks/memory-cache';
 import { useIsRealtimeLive } from '@/hooks/realtime-status';
+import { useIsOnline } from '@/lib/connectivity';
 import { shouldReportIllustrationOutcome } from '@/lib/illustration-outcome-dedupe';
 import { trackEvent } from '@/services/analytics';
 import {
@@ -152,6 +153,19 @@ export function useGenerationStatusPolling() {
   // refetchInterval callbacks are otherwise only re-evaluated on the query's
   // own update or an observer re-render.
   const isRealtimeLive = useIsRealtimeLive(familyId);
+  // O7 (docs/plans/offline-awareness-and-share-cards.md): polling while
+  // offline just burns battery on requests guaranteed to fail (queries stay
+  // paused offline by design -- see query-client.ts's networkMode
+  // comment -- so these would queue rather than fire, but the interval
+  // itself is still pointless work to schedule). Same reactive-hook pattern
+  // as isRealtimeLive above: useIsOnline is useSyncExternalStore-backed, so
+  // a reconnect re-renders THIS hook and makes react-query re-evaluate
+  // refetchInterval below -- that re-evaluation on reconnect is the "wake"
+  // this offline gate needs (a plain onlineManager.isOnline() read with no
+  // reactive subscription would leave the poll idle forever once
+  // refetchInterval returns false, since nothing would prompt react-query
+  // to check it again).
+  const isOnline = useIsOnline();
 
   return useQuery({
     queryKey: ['generation-status', familyId],
@@ -183,7 +197,7 @@ export function useGenerationStatusPolling() {
     // setOptions -- see the comment in useMemories.ts) rather than from this
     // query's own data, since the ids to poll live in OTHER queries' caches.
     refetchInterval: () => {
-      if (!familyId || isRealtimeLive) {
+      if (!familyId || isRealtimeLive || !isOnline) {
         return false;
       }
 

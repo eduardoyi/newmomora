@@ -149,6 +149,44 @@ describe('MemoryMediaCarousel', () => {
     expect(getByText('2 / 2')).toBeTruthy();
   });
 
+  describe('onActiveIndexChange (Workstream S4)', () => {
+    it('reports the default initial index once on mount', () => {
+      const onActiveIndexChange = jest.fn();
+      render(<MemoryMediaCarousel assets={assets} onActiveIndexChange={onActiveIndexChange} />);
+
+      expect(onActiveIndexChange).toHaveBeenCalledTimes(1);
+      expect(onActiveIndexChange).toHaveBeenCalledWith(0);
+    });
+
+    it('reports a requested (clamped) initial index once on mount', () => {
+      const onActiveIndexChange = jest.fn();
+      render(
+        <MemoryMediaCarousel assets={assets} initialIndex={1} onActiveIndexChange={onActiveIndexChange} />,
+      );
+
+      expect(onActiveIndexChange).toHaveBeenCalledTimes(1);
+      expect(onActiveIndexChange).toHaveBeenCalledWith(1);
+    });
+
+    it('reports the new page after a swipe settles (handleScrollEnd), not per-frame', () => {
+      const onActiveIndexChange = jest.fn();
+      const { getByTestId } = render(
+        <MemoryMediaCarousel assets={assets} onActiveIndexChange={onActiveIndexChange} />,
+      );
+      onActiveIndexChange.mockClear(); // Drop the mount call.
+      measureCarousel(getByTestId);
+
+      const scrollView = getByTestId('memory-media-carousel-scroll');
+      // A per-frame scroll event must NOT report a page change.
+      fireEvent(scrollView, 'scroll', { nativeEvent: { contentOffset: { x: 160, y: 0 } } });
+      expect(onActiveIndexChange).not.toHaveBeenCalled();
+
+      // A drag that ends without momentum (onScrollEndDrag) must still report.
+      fireEvent(scrollView, 'scrollEndDrag', { nativeEvent: { contentOffset: { x: 320, y: 0 } } });
+      expect(onActiveIndexChange).toHaveBeenCalledWith(1);
+    });
+  });
+
   it('waits for a measured width before mounting media', () => {
     const { getByTestId, queryByTestId } = render(
       <MemoryMediaCarousel assets={[assets[0]]} stableLayout />,

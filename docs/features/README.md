@@ -43,10 +43,12 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Calendar ribbon | [calendar.md](./calendar.md) | done |
 | Inline links in memory text | [inline-links.md](./inline-links.md) | done |
 | Likes & comments | [likes-and-comments.md](./likes-and-comments.md) | done |
+| Memory sharing | [memory-sharing.md](./memory-sharing.md) | done |
 | Voice journaling | [voice-journaling.md](./voice-journaling.md) | done |
 | Content reporting & account blocking | [content-reporting.md](./content-reporting.md) | done |
 | EAS Update delivery | [eas-update.md](./eas-update.md) | done |
 | Usage limits & AI cost observability | [usage-limits.md](./usage-limits.md) | planned |
+| Offline awareness | [offline.md](./offline.md) | done |
 
 ## Template
 

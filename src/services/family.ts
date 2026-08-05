@@ -29,7 +29,10 @@ export interface FamilyMembershipRow {
   id: string;
   family_id: string;
   role: string;
-  family: Pick<Family, 'id' | 'name' | 'illustration_style' | 'deleted_at'> | null;
+  family: Pick<
+    Family,
+    'id' | 'name' | 'illustration_style' | 'deleted_at' | 'viewer_sharing_enabled'
+  > | null;
 }
 
 /**
@@ -45,7 +48,9 @@ export async function fetchMyFamilyMemberships(userId: string): Promise<{
 }> {
   const { data, error } = await supabase
     .from('family_memberships')
-    .select('id, family_id, role, family:families(id, name, illustration_style, deleted_at)')
+    .select(
+      'id, family_id, role, family:families(id, name, illustration_style, deleted_at, viewer_sharing_enabled)',
+    )
     .eq('user_id', userId)
     .order('created_at', { ascending: true });
 
@@ -130,6 +135,36 @@ export async function updateFamilyName(familyId: string, name: string): Promise<
   const { data, error } = await supabase
     .from('families')
     .update({ name: trimmed })
+    .eq('id', familyId)
+    .select('*')
+    .maybeSingle();
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  return { data, error: null };
+}
+
+/**
+ * Owner/manager-only toggle for whether viewers may share memories from this
+ * family (Settings -> Family, docs/plans/offline-awareness-and-share-cards.md
+ * S1/S2). RLS's "Families: update" policy enforces owner/manager-only AND
+ * `billing_write_allowed_for_current_user` -- a lapsed-subscription owner's
+ * update matches zero rows here the same way `updateFamilyName` does, so the
+ * caller should treat a null `data` with no `error` as "did not apply"
+ * rather than assume success from a 200 response alone.
+ */
+export async function updateFamilyViewerSharing(
+  familyId: string,
+  enabled: boolean,
+): Promise<{
+  data: Family | null;
+  error: ServiceError | null;
+}> {
+  const { data, error } = await supabase
+    .from('families')
+    .update({ viewer_sharing_enabled: enabled })
     .eq('id', familyId)
     .select('*')
     .maybeSingle();

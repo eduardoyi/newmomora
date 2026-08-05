@@ -28,6 +28,7 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
+import { mediaImageSource } from '@/utils/media-image-source';
 import { MAX_ILLUSTRATION_MEMBERS } from '@/utils/memories';
 import { canEditFamilyContent } from '@/utils/roles';
 
@@ -328,7 +329,7 @@ export default function EditMemoryScreen() {
           <View style={styles.mediaWrap}>
             {illustrationUrl ? (
               <Image
-                source={{ uri: illustrationUrl }}
+                source={mediaImageSource(illustrationUrl, memory?.illustration_key)}
                 style={styles.attachmentImage}
                 contentFit="cover"
                 accessibilityLabel="Memory illustration"

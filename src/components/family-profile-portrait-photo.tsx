@@ -11,6 +11,7 @@ import {
   isPortraitInProgress,
   type IllustratedProfileStatus,
 } from '@/utils/family-members';
+import { mediaImageSource } from '@/utils/media-image-source';
 
 export type FamilyProfilePortraitMember = Pick<
   FamilyMember,
@@ -80,10 +81,7 @@ export function FamilyProfilePortraitPhoto({
         <Image
           accessibilityLabel={accessibilityLabel ?? `${member.name} profile photo`}
           contentFit="cover"
-          source={{
-            uri: displayUri,
-            cacheKey: localPhotoUri ? undefined : remoteKey ?? undefined,
-          }}
+          source={mediaImageSource(displayUri, localPhotoUri ? null : remoteKey)}
           style={photoStyle}
         />
       ) : isLoading ? (

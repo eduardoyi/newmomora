@@ -1,0 +1,563 @@
+import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
+import {
+  _resetRateLimitStateForTests,
+  authorizeShareCardAccess,
+  buildShareCardFilename,
+  clampIllustrationAspectRatio,
+  fetchTaggedMembers,
+  handleComposeShareCard,
+  isComposeRateLimited,
+  isRejectedMemoryType,
+  isUnrasterizableMimeType,
+  isVideoContentType,
+  markComposeRun,
+  mimeTypeFromObjectKey,
+  resolveMemberPortraitKey,
+  resolveShareCardSource,
+  runShareCardCompose,
+  SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW,
+  SHARE_CARD_RATE_LIMIT_WINDOW_MS,
+} from './index.ts';
+
+const OWNER_ID = '11111111-1111-4111-8111-111111111111';
+const MANAGER_ID = '22222222-2222-4222-8222-222222222222';
+const VIEWER_ID = '33333333-3333-4333-8333-333333333333';
+const OUTSIDER_ID = '44444444-4444-4444-8444-444444444444';
+const FAMILY_A = '55555555-5555-4555-8555-555555555555';
+const MEMORY_ID = '77777777-7777-4777-8777-777777777777';
+const MEMBER_1 = '88888888-8888-4888-8888-888888888888';
+const MEMBER_2 = '99999999-9999-4999-8999-999999999999';
+const ASSET_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+// ── Minimal thenable query-builder mock, tailored to the .select().eq()/
+// .in()/.maybeSingle() chains this package's functions issue. Doesn't model
+// a real relational join -- callers supply pre-joined row shapes directly,
+// same simplification _shared/family-access.test.ts's fakeSupabase uses. ──
+// deno-lint-ignore no-explicit-any
+function makeTable(rows: Array<Record<string, any>>) {
+  return {
+    // deno-lint-ignore no-explicit-any
+    select(_cols?: string) {
+      let filtered = rows;
+      const builder = {
+        // deno-lint-ignore no-explicit-any
+        eq(col: string, val: any) {
+          filtered = filtered.filter((r) => r[col] === val);
+          return builder;
+        },
+        // deno-lint-ignore no-explicit-any
+        in(col: string, vals: any[]) {
+          filtered = filtered.filter((r) => vals.includes(r[col]));
+          return builder;
+        },
+        async maybeSingle() {
+          return { data: filtered[0] ?? null, error: null };
+        },
+        // deno-lint-ignore no-explicit-any
+        then(resolve: (v: { data: any[]; error: null }) => void) {
+          resolve({ data: filtered, error: null });
+        },
+      };
+      return builder;
+    },
+  };
+}
+
+interface FakeSupabaseOptions {
+  families?: Array<{ id: string; owner_id: string; deleted_at: string | null; viewer_sharing_enabled?: boolean }>;
+  memberships?: Array<{ family_id: string; role: string; user_id: string }>;
+  // deno-lint-ignore no-explicit-any
+  memoryMedia?: any[];
+  // deno-lint-ignore no-explicit-any
+  memoryFamilyMembers?: any[];
+}
+
+function fakeSupabase(options: FakeSupabaseOptions) {
+  const tables: Record<string, ReturnType<typeof makeTable>> = {
+    families: makeTable(options.families ?? []),
+    family_memberships: makeTable(options.memberships ?? []),
+    memory_media: makeTable(options.memoryMedia ?? []),
+    memory_family_members: makeTable(options.memoryFamilyMembers ?? []),
+  };
+
+  return {
+    from(table: string) {
+      const found = tables[table];
+      if (!found) {
+        throw new Error(`Unexpected table ${table}`);
+      }
+      return found;
+    },
+  };
+}
+
+// ── Rate limiting ("rate-limit row" in the S3 test matrix) ────────────────
+
+Deno.test('isComposeRateLimited allows up to the max per window and then blocks', () => {
+  _resetRateLimitStateForTests();
+  const userId = 'rate-user-1';
+  const now = 1_000_000;
+
+  for (let i = 0; i < SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW; i++) {
+    assertEquals(isComposeRateLimited(userId, now), false);
+    markComposeRun(userId, now);
+  }
+
+  assertEquals(isComposeRateLimited(userId, now), true);
+});
+
+Deno.test('isComposeRateLimited resets once the window has elapsed', () => {
+  _resetRateLimitStateForTests();
+  const userId = 'rate-user-2';
+  const now = 2_000_000;
+
+  for (let i = 0; i < SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW; i++) {
+    markComposeRun(userId, now);
+  }
+  assertEquals(isComposeRateLimited(userId, now), true);
+
+  const later = now + SHARE_CARD_RATE_LIMIT_WINDOW_MS + 1;
+  assertEquals(isComposeRateLimited(userId, later), false);
+});
+
+Deno.test('isComposeRateLimited tracks each user independently', () => {
+  _resetRateLimitStateForTests();
+  const now = 3_000_000;
+  for (let i = 0; i < SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW; i++) {
+    markComposeRun('busy-user', now);
+  }
+  assertEquals(isComposeRateLimited('busy-user', now), true);
+  assertEquals(isComposeRateLimited('quiet-user', now), false);
+});
+
+// ── Filename ────────────────────────────────────────────────────────────
+
+Deno.test('buildShareCardFilename matches the locked momora-<mon>-<d>-<yyyy>.png format', () => {
+  assertEquals(buildShareCardFilename('2026-06-08'), 'momora-jun-8-2026.png');
+  assertEquals(buildShareCardFilename('2026-01-01'), 'momora-jan-1-2026.png');
+  assertEquals(buildShareCardFilename('2026-12-31'), 'momora-dec-31-2026.png');
+});
+
+Deno.test('buildShareCardFilename does not zero-pad the day', () => {
+  assertStringIncludes(buildShareCardFilename('2026-06-08'), '-8-');
+});
+
+Deno.test('buildShareCardFilename falls back gracefully for an unparsable date', () => {
+  assertEquals(buildShareCardFilename('not-a-date'), 'momora-memory.png');
+});
+
+// ── MIME / format resolution ───────────────────────────────────────────
+
+Deno.test('mimeTypeFromObjectKey resolves the common extensions', () => {
+  assertEquals(mimeTypeFromObjectKey('u/memories/m/media/a.jpg'), 'image/jpeg');
+  assertEquals(mimeTypeFromObjectKey('u/memories/m/media/a.jpeg'), 'image/jpeg');
+  assertEquals(mimeTypeFromObjectKey('u/memories/m/illustrations/g.webp'), 'image/webp');
+  assertEquals(mimeTypeFromObjectKey('u/family/m/photo.webp'), 'image/webp');
+  assertEquals(mimeTypeFromObjectKey('u/family/m/portraits/v/photo.jpg'), 'image/jpeg');
+  assertEquals(mimeTypeFromObjectKey('u/memories/m/media/a.png'), 'image/png');
+  assertEquals(mimeTypeFromObjectKey('u/memories/m/media/a.heic'), 'image/heic');
+});
+
+Deno.test('isUnrasterizableMimeType flags HEIC/HEIF only', () => {
+  assertEquals(isUnrasterizableMimeType('image/heic'), true);
+  assertEquals(isUnrasterizableMimeType('image/heif'), true);
+  assertEquals(isUnrasterizableMimeType('image/jpeg'), false);
+  assertEquals(isUnrasterizableMimeType('image/webp'), false);
+});
+
+Deno.test('isVideoContentType matches the two allowed video content types', () => {
+  assertEquals(isVideoContentType('video/mp4'), true);
+  assertEquals(isVideoContentType('video/quicktime'), true);
+  assertEquals(isVideoContentType('image/jpeg'), false);
+});
+
+// ── Aspect math ─────────────────────────────────────────────────────────
+
+Deno.test('clampIllustrationAspectRatio clamps to [3/4, 16/9], matching src/utils/media-aspect.ts', () => {
+  assertEquals(clampIllustrationAspectRatio(1), 1);
+  assertEquals(clampIllustrationAspectRatio(0.1), 3 / 4);
+  assertEquals(clampIllustrationAspectRatio(10), 16 / 9);
+});
+
+// ── Memory-type rejection ──────────────────────────────────────────────
+
+Deno.test('isRejectedMemoryType accepts the three shippable types', () => {
+  assertEquals(isRejectedMemoryType('text_only'), false);
+  assertEquals(isRejectedMemoryType('text_illustration'), false);
+  assertEquals(isRejectedMemoryType('media'), false);
+});
+
+Deno.test('isRejectedMemoryType rejects audio and unknown types', () => {
+  assertEquals(isRejectedMemoryType('audio'), true);
+  assertEquals(isRejectedMemoryType('something_else'), true);
+  assertEquals(isRejectedMemoryType(''), true);
+});
+
+// ── resolveShareCardSource (memory-type / media-asset validation) ────────
+
+function textOnlyMemory() {
+  return {
+    id: MEMORY_ID,
+    family_id: FAMILY_A,
+    content: 'hello',
+    memory_type: 'text_only',
+    memory_date: '2026-06-08',
+    illustration_key: null,
+    illustration_status: 'none',
+  };
+}
+
+Deno.test('resolveShareCardSource: audio memory type is rejected explicitly', async () => {
+  const supabase = fakeSupabase({});
+  const result = await resolveShareCardSource(
+    supabase as never,
+    { ...textOnlyMemory(), memory_type: 'audio' },
+    undefined,
+  );
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error.code, 'unsupported_memory_type');
+    assertEquals(result.error.status, 400);
+  }
+});
+
+Deno.test('resolveShareCardSource: unknown memory type is rejected explicitly', async () => {
+  const supabase = fakeSupabase({});
+  const result = await resolveShareCardSource(
+    supabase as never,
+    { ...textOnlyMemory(), memory_type: 'some_future_type' },
+    undefined,
+  );
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.code, 'unsupported_memory_type');
+});
+
+Deno.test('resolveShareCardSource: text_only resolves with no media source', async () => {
+  const supabase = fakeSupabase({});
+  const result = await resolveShareCardSource(supabase as never, textOnlyMemory(), undefined);
+  assertEquals(result.ok, true);
+  if (result.ok) assertEquals(result.source, { kind: 'text' });
+});
+
+Deno.test('resolveShareCardSource: text_illustration not ready is rejected', async () => {
+  const supabase = fakeSupabase({});
+  const memory = {
+    ...textOnlyMemory(),
+    memory_type: 'text_illustration',
+    illustration_status: 'generating',
+    illustration_key: null,
+  };
+  const result = await resolveShareCardSource(supabase as never, memory, undefined);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.code, 'illustration_not_ready');
+});
+
+Deno.test('resolveShareCardSource: ready text_illustration resolves to the illustration key', async () => {
+  const supabase = fakeSupabase({});
+  const memory = {
+    ...textOnlyMemory(),
+    memory_type: 'text_illustration',
+    illustration_status: 'ready',
+    illustration_key: `${OWNER_ID}/memories/${MEMORY_ID}/illustrations/g1.webp`,
+  };
+  const result = await resolveShareCardSource(supabase as never, memory, undefined);
+  assertEquals(result.ok, true);
+  if (result.ok) {
+    assertEquals(result.source, {
+      kind: 'illustration',
+      objectKey: `${OWNER_ID}/memories/${MEMORY_ID}/illustrations/g1.webp`,
+    });
+  }
+});
+
+Deno.test('resolveShareCardSource: media memory requires mediaAssetId', async () => {
+  const supabase = fakeSupabase({});
+  const memory = { ...textOnlyMemory(), memory_type: 'media' };
+  const result = await resolveShareCardSource(supabase as never, memory, undefined);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.code, 'validation_error');
+});
+
+Deno.test('resolveShareCardSource: media asset must belong to the requested memory (asset-ownership)', async () => {
+  const OTHER_MEMORY = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const supabase = fakeSupabase({
+    memoryMedia: [
+      {
+        id: ASSET_ID,
+        memory_id: OTHER_MEMORY, // belongs to a different memory
+        object_key: `${OWNER_ID}/memories/${OTHER_MEMORY}/media/${ASSET_ID}.jpg`,
+        preview_object_key: null,
+        content_type: 'image/jpeg',
+        aspect_ratio: 1.5,
+      },
+    ],
+  });
+  const memory = { ...textOnlyMemory(), id: MEMORY_ID, memory_type: 'media' };
+  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error.code, 'asset_not_found');
+    assertEquals(result.error.status, 404);
+  }
+});
+
+Deno.test('resolveShareCardSource: video content types are rejected', async () => {
+  const supabase = fakeSupabase({
+    memoryMedia: [
+      {
+        id: ASSET_ID,
+        memory_id: MEMORY_ID,
+        object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.mp4`,
+        preview_object_key: null,
+        content_type: 'video/mp4',
+        aspect_ratio: null,
+      },
+    ],
+  });
+  const memory = { ...textOnlyMemory(), memory_type: 'media' };
+  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.code, 'video_not_supported');
+});
+
+Deno.test('resolveShareCardSource: photo media resolves preview_object_key over object_key', async () => {
+  const previewKey = `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}-preview.jpg`;
+  const supabase = fakeSupabase({
+    memoryMedia: [
+      {
+        id: ASSET_ID,
+        memory_id: MEMORY_ID,
+        object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.heic`,
+        preview_object_key: previewKey,
+        content_type: 'image/heic',
+        aspect_ratio: 0.8,
+      },
+    ],
+  });
+  const memory = { ...textOnlyMemory(), memory_type: 'media' };
+  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+  assertEquals(result.ok, true);
+  if (result.ok && result.source.kind === 'media') {
+    assertEquals(result.source.objectKey, previewKey);
+    assertEquals(result.source.storedAspectRatio, 0.8);
+  }
+});
+
+Deno.test('resolveShareCardSource: legacy HEIC row with no preview is rejected as unsupported', async () => {
+  const supabase = fakeSupabase({
+    memoryMedia: [
+      {
+        id: ASSET_ID,
+        memory_id: MEMORY_ID,
+        object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.heic`,
+        preview_object_key: null,
+        content_type: 'image/heic',
+        aspect_ratio: null,
+      },
+    ],
+  });
+  const memory = { ...textOnlyMemory(), memory_type: 'media' };
+  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.code, 'unsupported_image_format');
+});
+
+Deno.test('resolveShareCardSource: asset id that does not exist at all is asset_not_found', async () => {
+  const supabase = fakeSupabase({ memoryMedia: [] });
+  const memory = { ...textOnlyMemory(), memory_type: 'media' };
+  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.code, 'asset_not_found');
+});
+
+// ── authorizeShareCardAccess (authz matrix: owner/manager/viewer×toggle/non-member) ──
+
+Deno.test('authorizeShareCardAccess: owner is always authorized', async () => {
+  const supabase = fakeSupabase({
+    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: false }],
+    memberships: [{ family_id: FAMILY_A, role: 'owner', user_id: OWNER_ID }],
+  });
+  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, OWNER_ID);
+  assertEquals(result.ok, true);
+});
+
+Deno.test('authorizeShareCardAccess: manager is always authorized, independent of the viewer toggle', async () => {
+  const supabase = fakeSupabase({
+    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: false }],
+    memberships: [{ family_id: FAMILY_A, role: 'manager', user_id: MANAGER_ID }],
+  });
+  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, MANAGER_ID);
+  assertEquals(result.ok, true);
+});
+
+Deno.test('authorizeShareCardAccess: viewer is authorized when viewer_sharing_enabled is true', async () => {
+  const supabase = fakeSupabase({
+    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: true }],
+    memberships: [{ family_id: FAMILY_A, role: 'viewer', user_id: VIEWER_ID }],
+  });
+  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, VIEWER_ID);
+  assertEquals(result.ok, true);
+});
+
+Deno.test('authorizeShareCardAccess: viewer is rejected (sharing_disabled) when viewer_sharing_enabled is false', async () => {
+  const supabase = fakeSupabase({
+    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: false }],
+    memberships: [{ family_id: FAMILY_A, role: 'viewer', user_id: VIEWER_ID }],
+  });
+  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, VIEWER_ID);
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error.code, 'sharing_disabled');
+    assertEquals(result.error.status, 403);
+  }
+});
+
+Deno.test('authorizeShareCardAccess: non-member is forbidden', async () => {
+  const supabase = fakeSupabase({
+    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: true }],
+    memberships: [],
+  });
+  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, OUTSIDER_ID);
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error.code, 'forbidden');
+    assertEquals(result.error.status, 403);
+  }
+});
+
+// ── Tagged-member portrait resolution ──────────────────────────────────
+
+Deno.test('resolveMemberPortraitKey prefers the illustrated portrait when ready', () => {
+  const key = resolveMemberPortraitKey({
+    id: MEMBER_1,
+    name: 'Mia',
+    illustrated_profile_key: 'illustrated.webp',
+    illustrated_profile_status: 'ready',
+    profile_picture_key: 'photo.jpg',
+  });
+  assertEquals(key, 'illustrated.webp');
+});
+
+Deno.test('resolveMemberPortraitKey uses the raw photo while a portrait is generating', () => {
+  const key = resolveMemberPortraitKey({
+    id: MEMBER_1,
+    name: 'Mia',
+    illustrated_profile_key: 'stale-illustrated.webp',
+    illustrated_profile_status: 'generating',
+    profile_picture_key: 'photo.jpg',
+  });
+  assertEquals(key, 'photo.jpg');
+});
+
+Deno.test('resolveMemberPortraitKey falls back to the raw photo when there is no illustrated portrait yet', () => {
+  const key = resolveMemberPortraitKey({
+    id: MEMBER_1,
+    name: 'Mia',
+    illustrated_profile_key: null,
+    illustrated_profile_status: 'pending',
+    profile_picture_key: 'photo.jpg',
+  });
+  assertEquals(key, 'photo.jpg');
+});
+
+Deno.test('fetchTaggedMembers caps at MAX_VISIBLE_MEMBERS and reports the overflow count', async () => {
+  const rows = Array.from({ length: 8 }, (_, i) => ({
+    memory_id: MEMORY_ID,
+    family_member_id: `member-${i}`,
+    family_members: {
+      id: `member-${i}`,
+      name: `Kid ${i}`,
+      illustrated_profile_key: null,
+      illustrated_profile_status: 'ready',
+      profile_picture_key: null,
+    },
+  }));
+  const supabase = fakeSupabase({ memoryFamilyMembers: rows });
+  const result = await fetchTaggedMembers(supabase as never, MEMORY_ID);
+  assertEquals(result.members.length, 6);
+  assertEquals(result.overflowCount, 2);
+});
+
+Deno.test('fetchTaggedMembers drops rows whose joined family_members is null (deleted member)', async () => {
+  const supabase = fakeSupabase({
+    memoryFamilyMembers: [
+      {
+        memory_id: MEMORY_ID,
+        family_member_id: MEMBER_1,
+        family_members: {
+          id: MEMBER_1,
+          name: 'Mia',
+          illustrated_profile_key: null,
+          illustrated_profile_status: 'ready',
+          profile_picture_key: null,
+        },
+      },
+      { memory_id: MEMORY_ID, family_member_id: MEMBER_2, family_members: null },
+    ],
+  });
+  const result = await fetchTaggedMembers(supabase as never, MEMORY_ID);
+  assertEquals(result.members.length, 1);
+  assertEquals(result.members[0].id, MEMBER_1);
+});
+
+// ── HTTP handler: unauthenticated + no-content-logging ─────────────────
+
+Deno.test('handleComposeShareCard rejects unauthenticated requests', async () => {
+  const response = await handleComposeShareCard(
+    new Request('http://localhost/compose-share-card', {
+      method: 'POST',
+      body: JSON.stringify({ memoryId: MEMORY_ID }),
+    }),
+  );
+  assertEquals(response.status, 401);
+});
+
+Deno.test('handleComposeShareCard rejects non-POST methods', async () => {
+  const response = await handleComposeShareCard(
+    new Request('http://localhost/compose-share-card', { method: 'GET' }),
+  );
+  assertEquals(response.status, 405);
+});
+
+Deno.test('runShareCardCompose returns a PNG response with the expected filename header', async () => {
+  const png = new Uint8Array([1, 2, 3]);
+  const response = await runShareCardCompose(MEMORY_ID, async () => ({
+    png,
+    memoryDate: '2026-06-08',
+  }));
+
+  assertEquals(response.status, 200);
+  assertEquals(response.headers.get('Content-Type'), 'image/png');
+  assertEquals(
+    response.headers.get('Content-Disposition'),
+    'attachment; filename="momora-jun-8-2026.png"',
+  );
+  const body = new Uint8Array(await response.arrayBuffer());
+  assertEquals(body, png);
+});
+
+Deno.test('runShareCardCompose on failure never logs error.message (no-content-logging)', async () => {
+  const originalConsoleError = console.error;
+  const logged: unknown[][] = [];
+  console.error = (...args: unknown[]) => {
+    logged.push(args);
+  };
+
+  const secretCaption = 'the secret diary entry about grandma';
+  try {
+    const response = await runShareCardCompose(MEMORY_ID, async () => {
+      throw new Error(`satori layout failed while shaping text node "${secretCaption}"`);
+    });
+    assertEquals(response.status, 500);
+    const body = await response.json();
+    assertEquals(body.code, 'compose_failed');
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assertEquals(logged.length > 0, true);
+  const loggedText = logged.map((args) => args.join(' ')).join('\n');
+  assertEquals(loggedText.includes(secretCaption), false);
+  assertEquals(loggedText.includes('grandma'), false);
+  assertStringIncludes(loggedText, MEMORY_ID);
+});

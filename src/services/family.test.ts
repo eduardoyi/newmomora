@@ -1,4 +1,11 @@
-import { deleteFamily, friendlyFamilyLimitError, removeMember, updateMemberRole } from '@/services/family';
+import {
+  deleteFamily,
+  fetchMyFamilyMemberships,
+  friendlyFamilyLimitError,
+  removeMember,
+  updateFamilyViewerSharing,
+  updateMemberRole,
+} from '@/services/family';
 import { supabase } from '@/lib/supabase';
 
 jest.mock('@/lib/supabase', () => ({
@@ -106,6 +113,95 @@ describe('family service member management', () => {
       mockedSupabase.from.mockReturnValue({ delete: del } as never);
 
       const result = await removeMember('family-1', 'user-2');
+
+      expect(result.data).toBeNull();
+      expect(result.error).toEqual({ message: 'permission denied', code: '42501' });
+    });
+  });
+
+  describe('fetchMyFamilyMemberships', () => {
+    it('selects viewer_sharing_enabled alongside the other family fields', async () => {
+      const order = jest.fn().mockResolvedValue({
+        data: [
+          {
+            id: 'membership-1',
+            family_id: 'family-1',
+            role: 'owner',
+            family: {
+              id: 'family-1',
+              name: "Rosa's family",
+              illustration_style: 'default',
+              deleted_at: null,
+              viewer_sharing_enabled: false,
+            },
+          },
+        ],
+        error: null,
+      });
+      const eq = jest.fn().mockReturnValue({ order });
+      const select = jest.fn().mockReturnValue({ eq });
+      mockedSupabase.from.mockReturnValue({ select } as never);
+
+      const result = await fetchMyFamilyMemberships('user-1');
+
+      expect(mockedSupabase.from).toHaveBeenCalledWith('family_memberships');
+      expect(select).toHaveBeenCalledWith(
+        expect.stringContaining('viewer_sharing_enabled'),
+      );
+      expect(eq).toHaveBeenCalledWith('user_id', 'user-1');
+      expect(result.data?.[0].family?.viewer_sharing_enabled).toBe(false);
+    });
+  });
+
+  describe('updateFamilyViewerSharing', () => {
+    it('updates the column scoped to family id and returns the updated row', async () => {
+      const updatedFamily = {
+        id: 'family-1',
+        owner_id: 'user-0',
+        name: "Rosa's family",
+        illustration_style: 'default',
+        deleted_at: null,
+        viewer_sharing_enabled: false,
+        created_at: '2026-05-28T00:00:00Z',
+        updated_at: '2026-08-05T00:00:00Z',
+      };
+      const maybeSingle = jest.fn().mockResolvedValue({ data: updatedFamily, error: null });
+      const select = jest.fn().mockReturnValue({ maybeSingle });
+      const eq = jest.fn().mockReturnValue({ select });
+      const update = jest.fn().mockReturnValue({ eq });
+      mockedSupabase.from.mockReturnValue({ update } as never);
+
+      const result = await updateFamilyViewerSharing('family-1', false);
+
+      expect(mockedSupabase.from).toHaveBeenCalledWith('families');
+      expect(update).toHaveBeenCalledWith({ viewer_sharing_enabled: false });
+      expect(eq).toHaveBeenCalledWith('id', 'family-1');
+      expect(result).toEqual({ data: updatedFamily, error: null });
+    });
+
+    it('returns null data (not an error) when RLS/billing-lockout matches zero rows', async () => {
+      const maybeSingle = jest.fn().mockResolvedValue({ data: null, error: null });
+      const select = jest.fn().mockReturnValue({ maybeSingle });
+      const eq = jest.fn().mockReturnValue({ select });
+      const update = jest.fn().mockReturnValue({ eq });
+      mockedSupabase.from.mockReturnValue({ update } as never);
+
+      const result = await updateFamilyViewerSharing('family-1', false);
+
+      expect(result).toEqual({ data: null, error: null });
+    });
+
+    it('maps a supabase error', async () => {
+      const maybeSingle = jest.fn().mockResolvedValue({
+        data: null,
+        error: { message: 'permission denied', code: '42501' },
+      });
+      const select = jest.fn().mockReturnValue({ maybeSingle });
+      const eq = jest.fn().mockReturnValue({ select });
+      const update = jest.fn().mockReturnValue({ eq });
+      mockedSupabase.from.mockReturnValue({ update } as never);
+
+      const result = await updateFamilyViewerSharing('family-1', true);
 
       expect(result.data).toBeNull();
       expect(result.error).toEqual({ message: 'permission denied', code: '42501' });

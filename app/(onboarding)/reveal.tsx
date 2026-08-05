@@ -37,9 +37,11 @@ import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { onboardingPortraitRouteForMember } from '@/lib/onboarding-routes';
 import { familyRosterRoute, timelineRoute } from '@/lib/routes';
 import { hasNoPortraitYet } from '@/utils/family-members';
+import { mediaImageSource } from '@/utils/media-image-source';
 
 interface LoadedPortraitImageProps {
   name: string;
+  portraitKey: string | null;
   portraitUrl: string;
 }
 
@@ -49,7 +51,7 @@ interface LoadedPortraitImageProps {
  * gives Maestro a selector only after Expo Image has decoded the current
  * portrait.
  */
-function LoadedPortraitImage({ name, portraitUrl }: LoadedPortraitImageProps) {
+function LoadedPortraitImage({ name, portraitKey, portraitUrl }: LoadedPortraitImageProps) {
   const [hasLoaded, setHasLoaded] = useState(false);
 
   return (
@@ -57,7 +59,7 @@ function LoadedPortraitImage({ name, portraitUrl }: LoadedPortraitImageProps) {
       accessibilityLabel={`${name}'s finished portrait`}
       contentFit="cover"
       onLoad={() => setHasLoaded(true)}
-      source={{ uri: portraitUrl }}
+      source={mediaImageSource(portraitUrl, portraitKey)}
       style={styles.cardImage}
       testID={
         hasLoaded
@@ -216,6 +218,7 @@ export default function OnboardingRevealScreen() {
               <LoadedPortraitImage
                 key={portraitUrl}
                 name={name}
+                portraitKey={portraitKey}
                 portraitUrl={portraitUrl}
               />
             ) : (

@@ -43,6 +43,18 @@ interface MemoryMediaCarouselProps {
    */
   initialIndex?: number;
   /**
+   * Fires once on mount with the initial page, then again whenever the
+   * visible page changes -- driven from the SAME `handleScrollEnd` path as
+   * the carousel's own internal `activeIndex` state (it already unifies
+   * `onMomentumScrollEnd`/`onScrollEndDrag`, see below). Deliberately NOT
+   * wired to per-frame `onScroll` (fires continuously mid-drag) and not
+   * momentum-only (a drag that ends without momentum would never report;
+   * see docs/plans/offline-awareness-and-share-cards.md S4). Lifted by
+   * memory-card.tsx and the detail screen so the share affordance knows
+   * which page's mediaAssetId to send.
+   */
+  onActiveIndexChange?: (index: number) => void;
+  /**
    * List-view surfaces (Workstream C6) request the derived preview key when
    * present, falling back to the original. Detail/full-screen callers must
    * leave this false (default) to always render the untouched original.
@@ -352,6 +364,7 @@ export function MemoryMediaCarousel({
   videoTapToToggle = false,
   preferPreview = false,
   initialIndex = 0,
+  onActiveIndexChange,
 }: MemoryMediaCarouselProps) {
   const startIndex = clampIndex(initialIndex, assets.length);
   const [activeIndex, setActiveIndex] = useState(startIndex);
@@ -419,12 +432,21 @@ export function MemoryMediaCarousel({
     setNaturalRatios((prev) => (prev[objectKey] === ratio ? prev : { ...prev, [objectKey]: ratio }));
   }, []);
 
+  // Reports the initial page once on mount -- handleScrollEnd below reports
+  // every subsequent change. `startIndex` is derived once from
+  // `initialIndex` at mount (see the lazy useState above), so this never
+  // needs to re-fire.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { onActiveIndexChange?.(startIndex); }, []);
+
   const handleScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (width <= 0) {
       return;
     }
 
-    setActiveIndex(Math.round(event.nativeEvent.contentOffset.x / width));
+    const nextIndex = Math.round(event.nativeEvent.contentOffset.x / width);
+    setActiveIndex(nextIndex);
+    onActiveIndexChange?.(nextIndex);
   };
 
   const handleTouchStart = (event: GestureResponderEvent) => {

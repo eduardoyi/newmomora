@@ -6,6 +6,7 @@ import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import type { FamilyMember } from '@/services/family-members';
 import { getMemberAvatarImageKey } from '@/utils/family-members';
+import { mediaImageSource } from '@/utils/media-image-source';
 
 const PORTRAIT_TINTS: EmotionName[] = ['tender', 'joy', 'wonder', 'calm', 'mischief'];
 
@@ -61,7 +62,7 @@ export function FamilyMemberAvatar({ member, size = 22, style, testID }: FamilyM
         <Image
           accessibilityLabel={`${member.name} portrait`}
           contentFit="cover"
-          source={{ uri: url, cacheKey: imageKey ?? undefined }}
+          source={mediaImageSource(url, imageKey)}
           style={{ width: size, height: size }}
         />
       ) : (

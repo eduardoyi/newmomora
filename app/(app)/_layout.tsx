@@ -2,6 +2,7 @@ import { Redirect, Stack, useSegments } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
+import { OfflineBanner } from '@/components/offline-banner';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
@@ -125,42 +126,49 @@ export default function AppLayout() {
   }
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="no-family" />
-      <Stack.Screen
-        name="add-family-member"
-        options={{
-          presentation: 'modal',
-        }}
-      />
-      <Stack.Screen
-        name="new-memory"
-        options={{
-          presentation: 'modal',
-        }}
-      />
-      <Stack.Screen name="memory/[id]" />
-      <Stack.Screen
-        name="memory/[id]/edit"
-        options={{ presentation: 'modal' }}
-      />
-      <Stack.Screen name="family/[id]" />
-      <Stack.Screen name="family/[id]/portraits" />
-      <Stack.Screen
-        name="family/[id]/edit"
-        options={{ presentation: 'modal' }}
-      />
-      <Stack.Screen name="sharing/members" />
-      <Stack.Screen
-        name="sharing/invite"
-        options={{ presentation: 'modal' }}
-      />
-      <Stack.Screen name="sharing/pending-invites" />
-      <Stack.Screen name="sharing/approvals" />
-      <Stack.Screen name="sharing/redeem" />
-      <Stack.Screen name="sharing/waiting" />
-    </Stack>
+    // OfflineBanner is a sibling ABOVE the Stack (not inside (tabs)) so it
+    // overlays every screen this layout owns, including the pushed
+    // memory-detail screen -- see the component's own comment for why it's
+    // an absolute overlay rather than a layout-flow element.
+    <View style={styles.stackWrap}>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="no-family" />
+        <Stack.Screen
+          name="add-family-member"
+          options={{
+            presentation: 'modal',
+          }}
+        />
+        <Stack.Screen
+          name="new-memory"
+          options={{
+            presentation: 'modal',
+          }}
+        />
+        <Stack.Screen name="memory/[id]" />
+        <Stack.Screen
+          name="memory/[id]/edit"
+          options={{ presentation: 'modal' }}
+        />
+        <Stack.Screen name="family/[id]" />
+        <Stack.Screen name="family/[id]/portraits" />
+        <Stack.Screen
+          name="family/[id]/edit"
+          options={{ presentation: 'modal' }}
+        />
+        <Stack.Screen name="sharing/members" />
+        <Stack.Screen
+          name="sharing/invite"
+          options={{ presentation: 'modal' }}
+        />
+        <Stack.Screen name="sharing/pending-invites" />
+        <Stack.Screen name="sharing/approvals" />
+        <Stack.Screen name="sharing/redeem" />
+        <Stack.Screen name="sharing/waiting" />
+      </Stack>
+      <OfflineBanner />
+    </View>
   );
 }
 
@@ -170,5 +178,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     flex: 1,
     justifyContent: 'center',
+  },
+  stackWrap: {
+    flex: 1,
   },
 });

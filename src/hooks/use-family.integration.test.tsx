@@ -4,11 +4,16 @@ import type { ReactNode } from 'react';
 
 import { FamilyProvider, useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
+import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { fetchMyFamilyMemberships } from '@/services/family';
 import { fetchUserProfile, updateUserProfile } from '@/services/user-profile';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
+}));
+
+jest.mock('@/lib/query-persistence', () => ({
+  clearPersistedQueryCache: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('@/services/family', () => ({
@@ -38,18 +43,25 @@ jest.mock('@/hooks/useMemoriesRealtime', () => ({
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
+const mockedClearPersistedQueryCache = clearPersistedQueryCache as jest.Mock;
 const mockedFetchMemberships = fetchMyFamilyMemberships as jest.MockedFunction<
   typeof fetchMyFamilyMemberships
 >;
 const mockedFetchUserProfile = fetchUserProfile as jest.MockedFunction<typeof fetchUserProfile>;
 const mockedUpdateUserProfile = updateUserProfile as jest.MockedFunction<typeof updateUserProfile>;
 
-function familyAMembership() {
+function familyAMembership(overrides: { viewer_sharing_enabled?: boolean } = {}) {
   return {
     id: 'membership-a',
     family_id: 'family-a',
     role: 'owner',
-    family: { id: 'family-a', name: "A's family", illustration_style: 'default', deleted_at: null },
+    family: {
+      id: 'family-a',
+      name: "A's family",
+      illustration_style: 'default',
+      deleted_at: null,
+      viewer_sharing_enabled: overrides.viewer_sharing_enabled ?? true,
+    },
   };
 }
 
@@ -116,8 +128,30 @@ describe('FamilyProvider', () => {
 
     expect(result.current.familyId).toBe('family-a');
     expect(result.current.role).toBe('owner');
-    expect(result.current.family).toEqual({ id: 'family-a', name: "A's family" });
+    expect(result.current.family).toEqual({
+      id: 'family-a',
+      name: "A's family",
+      viewerSharingEnabled: true,
+    });
     expect(mockedUpdateUserProfile).not.toHaveBeenCalled();
+  });
+
+  it('threads viewer_sharing_enabled from the membership row into family.viewerSharingEnabled', async () => {
+    mockedFetchUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-a', name: 'Test' } as never,
+      error: null,
+    });
+    mockedFetchMemberships.mockResolvedValue({
+      data: [familyAMembership({ viewer_sharing_enabled: false })],
+      error: null,
+    });
+
+    const { result } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.familyId).toBe('family-a'));
+
+    expect(result.current.family?.viewerSharingEnabled).toBe(false);
+    expect(result.current.memberships[0].viewerSharingEnabled).toBe(false);
   });
 
   it('falls back to the first membership and persists the correction when active_family_id is stale', async () => {
@@ -168,6 +202,25 @@ describe('FamilyProvider', () => {
     await waitFor(() => expect(result.current.memberships).toHaveLength(0));
     expect(result.current.familyId).toBeNull();
     expect(result.current.justLostAccess).toBe(true);
+    // O4 (docs/plans/offline-awareness-and-share-cards.md): the persisted
+    // cache backstop -- being removed from your only family, detected
+    // passively via this membership refetch, must purge exactly like the
+    // explicit leaveFamily() call site in settings.tsx does.
+    await waitFor(() => expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not purge the persisted cache when memberships were never non-empty this session', async () => {
+    mockedFetchUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: null, name: 'Test' } as never,
+      error: null,
+    });
+    mockedFetchMemberships.mockResolvedValue({ data: [], error: null });
+
+    const { result } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.justLostAccess).toBe(false);
+    expect(mockedClearPersistedQueryCache).not.toHaveBeenCalled();
   });
 
   it('does not report justLostAccess for a brand-new user who never had a family', async () => {

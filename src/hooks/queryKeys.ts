@@ -19,6 +19,13 @@ export const familyMemberProfilesQueryKeyBase = 'family-member-profiles' as cons
 export const familyInvitesQueryKeyBase = 'family-invites' as const;
 export const memoryCommentsQueryKeyBase = 'memory-comments' as const;
 export const portraitVersionsQueryKeyBase = 'portrait-versions' as const;
+// Owned by use-family.tsx / useUserProfile.ts respectively -- pulled out to
+// this dependency-free module (rather than left as string literals there)
+// so lib-level code (src/lib/query-persistence.ts) can reference them
+// without importing those hook modules and their heavy transitive chains
+// (use-auth.tsx -> lib/supabase.ts's realtime client, in particular).
+export const familyMembershipsQueryKeyBase = 'family-memberships' as const;
+export const userProfileQueryKeyBase = 'user-profile' as const;
 
 export function memoriesQueryKey(familyId: string | null | undefined) {
   return [memoriesQueryKeyBase, familyId] as const;

@@ -1,8 +1,9 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { onlineManager, useQueryClient } from '@tanstack/react-query';
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -27,6 +28,7 @@ import {
   type PostMediaMemoryInput,
 } from '@/services/memory-posting';
 import { extractUrls } from '@/utils/links';
+import { isNetworkFailure } from '@/utils/network-errors';
 
 export type PendingMemoryUploadStatus = 'posting' | 'failed';
 
@@ -39,6 +41,13 @@ export interface PendingMemoryUpload {
   errorMessage: string | null;
   previewUri: string | null;
   previewContentType: string | null;
+  // O6 (docs/plans/offline-awareness-and-share-cards.md): only meaningful
+  // when status is 'failed'. Distinguishes a failure worth auto-retrying on
+  // reconnect (the device just couldn't reach the server) from a failure
+  // that would fail identically again (content-safety rejection,
+  // validation, usage-limit) -- blind auto-retry would re-fire doomed
+  // posts and double-count `memory_save_failed` analytics.
+  isNetworkFailure: boolean;
 }
 
 interface PendingMemoryUploadsContextValue {
@@ -160,6 +169,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         patchUpload(input.memoryId, {
           status: 'failed',
           errorMessage: error instanceof Error ? error.message : 'Could not save memory',
+          isNetworkFailure: isNetworkFailure(error),
         });
         // Terminal-failure transition (docs/plans/analytics-tracking.md Tier
         // 2) -- the composer's own `memory_saved` already fired when the
@@ -195,6 +205,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
           errorMessage: null,
           previewUri: previewAsset?.fileUri ?? null,
           previewContentType: previewAsset?.contentType ?? null,
+          isNetworkFailure: false,
         },
       ]);
 
@@ -213,11 +224,46 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
 
       // Failed posts had their partial uploads rolled back, so retry restarts
       // from zero -- against the enqueue-time user/family, not the current one.
-      patchUpload(memoryId, { status: 'posting', uploadedAssets: 0, errorMessage: null });
+      patchUpload(memoryId, {
+        status: 'posting',
+        uploadedAssets: 0,
+        errorMessage: null,
+        isNetworkFailure: false,
+      });
       void runUpload(record.input, record.userId, record.familyId);
     },
     [patchUpload, runUpload],
   );
+
+  // O6: auto-retry network-caused failures once per reconnect edge (not on
+  // every render/notification -- the wasOnline ref below tracks the actual
+  // offline->online transition, same pattern as useMemories.ts' reconnect
+  // effect). A ref (not `uploads` as a dependency) keeps this subscribing
+  // once for the provider's lifetime while still reading the CURRENT queue
+  // at the moment of reconnect. Content-safety/validation/usage-limit
+  // failures (isNetworkFailure: false) are left for the user's manual
+  // Retry/Discard -- auto-retrying those would re-fire a doomed post and
+  // double-count `memory_save_failed`.
+  const uploadsRef = useRef(uploads);
+  uploadsRef.current = uploads;
+
+  useEffect(() => {
+    let wasOnline = onlineManager.isOnline();
+
+    const unsubscribe = onlineManager.subscribe(() => {
+      const isOnline = onlineManager.isOnline();
+      if (isOnline && !wasOnline) {
+        for (const upload of uploadsRef.current) {
+          if (upload.status === 'failed' && upload.isNetworkFailure) {
+            retry(upload.memoryId);
+          }
+        }
+      }
+      wasOnline = isOnline;
+    });
+
+    return () => unsubscribe();
+  }, [retry]);
 
   const value = useMemo(
     () => ({ uploads, enqueue, retry, discard: removeUpload }),

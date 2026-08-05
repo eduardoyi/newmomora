@@ -30,6 +30,7 @@ import { editFamilyMemberRoute, memoryDetailRoute, portraitTimelineRoute } from 
 import type { MemoryWithTags } from '@/services/memories';
 import type { ReportTargetType } from '@/services/content-safety';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
+import { mediaImageSource } from '@/utils/media-image-source';
 import { resolvePreferredCoverKey, resolveVideoPosterKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
 import { formatDisplayDate } from '@/utils/memories';
@@ -90,7 +91,7 @@ function MemoryThumb({
   if (memory.memory_type === 'text_illustration' && illustrationUrl) {
     return (
       <Image
-        source={{ uri: illustrationUrl }}
+        source={mediaImageSource(illustrationUrl, illustrationKey)}
         style={styles.thumb}
         contentFit="cover"
       />
@@ -106,10 +107,14 @@ function MemoryThumb({
   }
 
   const displayUri = isVideo ? videoThumbnail : mediaUrl;
+  // A video without a stored poster falls back to a locally-decoded runtime
+  // frame with no R2 object identity -- only pin a cacheKey when the display
+  // bytes actually came from an R2 key (posterKey or the photo's own key).
+  const displayKey = isVideo ? posterKey : photoMediaKey;
   if (isMedia && displayUri) {
     return (
       <View style={styles.thumb}>
-        <Image source={{ uri: displayUri }} style={styles.thumb} contentFit="cover" />
+        <Image source={mediaImageSource(displayUri, displayKey)} style={styles.thumb} contentFit="cover" />
         {isVideo && (
           <View style={styles.playOverlay}>
             <SymbolView
@@ -476,6 +481,7 @@ export default function ViewFamilyMemberScreen() {
           items={[{
             id: member.id,
             contentType: 'image/webp',
+            objectKey: portraitKey ?? undefined,
             uri: portraitUrl,
           }]}
           onClose={() => setIsPortraitFullScreen(false)}

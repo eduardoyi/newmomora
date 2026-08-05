@@ -13,11 +13,13 @@ import { useAuth } from '@/hooks/use-auth';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import {
   calendarMemoriesQueryKeyBase,
+  familyMembershipsQueryKeyBase,
   familyMemberProfilesQueryKeyBase,
   familyMembersQueryKeyBase,
   memoriesQueryKeyBase,
 } from '@/hooks/queryKeys';
 import { useMemoriesRealtime } from '@/hooks/useMemoriesRealtime';
+import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { fetchMyFamilyMemberships } from '@/services/family';
 
 export interface FamilyMembershipSummary {
@@ -25,10 +27,18 @@ export interface FamilyMembershipSummary {
   familyId: string;
   role: string;
   name: string;
+  /**
+   * Whether viewers may share memories from this family (Settings -> Family,
+   * docs/plans/offline-awareness-and-share-cards.md S1/S2). Optional so the
+   * many existing `useFamily()` mocks across the test suite that predate this
+   * flag keep type-checking without updates -- treat a missing value the
+   * same as `true` (the column's own DB default), never as `false`.
+   */
+  viewerSharingEnabled?: boolean;
 }
 
 interface FamilyContextValue {
-  family: { id: string; name: string } | null;
+  family: { id: string; name: string; viewerSharingEnabled?: boolean } | null;
   familyId: string | null;
   role: string | null;
   memberships: FamilyMembershipSummary[];
@@ -51,7 +61,7 @@ interface FamilyContextValue {
   justLostAccess: boolean;
 }
 
-export const familyMembershipsQueryKey = ['family-memberships'] as const;
+export const familyMembershipsQueryKey = [familyMembershipsQueryKeyBase] as const;
 
 const FamilyContext = createContext<FamilyContextValue | null>(null);
 
@@ -97,6 +107,7 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
           familyId: row.family_id,
           role: row.role,
           name: row.family.name,
+          viewerSharingEnabled: row.family.viewer_sharing_enabled,
         });
       }
       return memberships;
@@ -160,6 +171,26 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
 
   const justLostAccess = hadFamilyRef.current && !isMembershipsLoading && memberships.length === 0;
 
+  // Backstop purge (O4, docs/plans/offline-awareness-and-share-cards.md):
+  // covers being removed from your only family while the app stays open
+  // (detected passively via this membership refetch, unlike the explicit
+  // leaveFamily() call site in settings.tsx, which purges immediately on
+  // the user's own leave action). Only fires on the true->false->true edge
+  // (justLostAccess flips from false to true) so it doesn't re-run every
+  // render while the no-family screen stays mounted.
+  const hasPurgedForLostAccessRef = useRef(false);
+  useEffect(() => {
+    if (!justLostAccess) {
+      hasPurgedForLostAccessRef.current = false;
+      return;
+    }
+    if (hasPurgedForLostAccessRef.current) {
+      return;
+    }
+    hasPurgedForLostAccessRef.current = true;
+    void clearPersistedQueryCache();
+  }, [justLostAccess]);
+
   const setActiveFamily = useCallback(
     async (familyId: string) => {
       await updateProfile({ activeFamilyId: familyId });
@@ -179,7 +210,11 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
   const value = useMemo<FamilyContextValue>(
     () => ({
       family: resolvedMembership
-        ? { id: resolvedMembership.familyId, name: resolvedMembership.name }
+        ? {
+            id: resolvedMembership.familyId,
+            name: resolvedMembership.name,
+            viewerSharingEnabled: resolvedMembership.viewerSharingEnabled,
+          }
         : null,
       familyId: resolvedMembership?.familyId ?? null,
       role: resolvedMembership?.role ?? null,

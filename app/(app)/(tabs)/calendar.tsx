@@ -29,6 +29,7 @@ import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
+import { mediaImageSource } from '@/utils/media-image-source';
 import { resolvePreferredCoverKey, resolveVideoPosterKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
@@ -92,12 +93,13 @@ function MemoryStamp({
       : null,
     memory.updated_at,
   );
-  const { url: mediaUrl } = useMediaUrl(
-    // Prefers the derived preview key (Workstream C6); falls back to the
-    // original when absent (legacy row, no-upscale guard, failed upload).
-    isMedia && !isVideo ? resolvePreferredCoverKey(coverAsset, memory.media_key) : null,
-    memory.updated_at,
-  );
+  // Prefers the derived preview key (Workstream C6); falls back to the
+  // original when absent (legacy row, no-upscale guard, failed upload).
+  // Named so the same key that drove the fetch also drives the expo-image
+  // cacheKey below (Workstream O5) -- keying on anything else would pin the
+  // cache to a key that isn't actually what's rendered.
+  const photoMediaKey = isMedia && !isVideo ? resolvePreferredCoverKey(coverAsset, memory.media_key) : null;
+  const { url: mediaUrl } = useMediaUrl(photoMediaKey, memory.updated_at);
   const posterKey = isVideo ? resolveVideoPosterKey(coverAsset) : null;
   const { url: posterUrl } = useMediaUrl(posterKey, memory.updated_at);
   const { url: videoUrl } = useMediaUrl(
@@ -130,7 +132,7 @@ function MemoryStamp({
   if (memory.memory_type === 'text_illustration' && illustrationUrl) {
     return (
       <Image
-        source={{ uri: illustrationUrl }}
+        source={mediaImageSource(illustrationUrl, memory.illustration_key)}
         style={styles.stamp}
         contentFit="cover"
       />
@@ -146,10 +148,15 @@ function MemoryStamp({
   }
 
   const displayUri = isVideo ? videoThumbnail : mediaUrl;
+  // A video without a stored poster falls back to `runtimeVideoThumbnail`, a
+  // locally-decoded frame with no R2 object identity -- only pin a cacheKey
+  // when the display bytes actually came from an R2 key (posterKey or the
+  // photo's own display key).
+  const displayKey = isVideo ? posterKey : photoMediaKey;
   if (isMedia && displayUri) {
     return (
       <View style={styles.stamp}>
-        <Image source={{ uri: displayUri }} style={styles.stamp} contentFit="cover" />
+        <Image source={mediaImageSource(displayUri, displayKey)} style={styles.stamp} contentFit="cover" />
         {isVideo && (
           <View style={styles.stampPlayOverlay}>
             <SymbolView

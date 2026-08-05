@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
-import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
@@ -80,6 +80,7 @@ function createWrapper() {
 describe('usePendingMemoryUploads', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    onlineManager.setOnline(true);
 
     mockedUseAuth.mockReturnValue({
       session: { user: { id: 'user-1' } } as never,
@@ -190,6 +191,7 @@ describe('usePendingMemoryUploads', () => {
       expect(result.current.uploads[0]).toMatchObject({
         status: 'failed',
         errorMessage: 'network down',
+        isNetworkFailure: true,
       });
     });
 
@@ -201,6 +203,88 @@ describe('usePendingMemoryUploads', () => {
       expect(result.current.uploads).toHaveLength(0);
     });
     expect(mockedPostMediaMemory).toHaveBeenCalledTimes(2);
+  });
+
+  it('tags a non-network failure (e.g. content-safety rejection) with isNetworkFailure: false', async () => {
+    mockedPostMediaMemory.mockRejectedValueOnce(
+      new Error('This content violates our community guidelines'),
+    );
+
+    const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+    act(() => {
+      result.current.enqueue(photoInput);
+    });
+
+    await waitFor(() => {
+      expect(result.current.uploads[0]).toMatchObject({
+        status: 'failed',
+        isNetworkFailure: false,
+      });
+    });
+  });
+
+  describe('auto-retry on reconnect (O6, docs/plans/offline-awareness-and-share-cards.md)', () => {
+    afterEach(() => {
+      onlineManager.setOnline(true);
+    });
+
+    it('auto-retries a network-caused failure once, on the offline->online edge', async () => {
+      mockedPostMediaMemory
+        .mockRejectedValueOnce(new Error('Network request failed'))
+        .mockResolvedValueOnce({ id: 'memory-1' } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads[0]).toMatchObject({ status: 'failed', isNetworkFailure: true });
+      });
+      expect(mockedPostMediaMemory).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        onlineManager.setOnline(false);
+      });
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads).toHaveLength(0);
+      });
+      expect(mockedPostMediaMemory).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT auto-retry a safety-rejected (non-network) failure on reconnect', async () => {
+      mockedPostMediaMemory.mockRejectedValueOnce(
+        new Error('This content violates our community guidelines'),
+      );
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads[0]).toMatchObject({ status: 'failed', isNetworkFailure: false });
+      });
+      expect(mockedPostMediaMemory).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        onlineManager.setOnline(false);
+      });
+      act(() => {
+        onlineManager.setOnline(true);
+      });
+
+      // Left exactly as it was -- still failed, no second post attempt.
+      expect(mockedPostMediaMemory).toHaveBeenCalledTimes(1);
+      expect(result.current.uploads[0]).toMatchObject({ status: 'failed', isNetworkFailure: false });
+    });
   });
 
   it('retries against the enqueue-time family even after switching families', async () => {

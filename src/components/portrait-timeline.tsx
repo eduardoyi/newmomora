@@ -25,6 +25,7 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import type { FamilyMember } from '@/services/family-members';
+import { mediaImageSource } from '@/utils/media-image-source';
 import { getLocalTodayIso } from '@/utils/portrait-versions';
 
 export type PortraitDateSource = 'exif' | 'manual' | 'default_today' | 'legacy_unknown';
@@ -203,7 +204,12 @@ function VersionCard({
           testID={`portrait-version-${version.id}-source`}
         >
           {sourceUri ? (
-            <Image contentFit="cover" source={{ uri: sourceUri, cacheKey: version.sourcePhotoKey }} style={styles.visual} />
+            <Image
+              contentFit="cover"
+              source={mediaImageSource(sourceUri, version.sourcePhotoKey)}
+              style={styles.visual}
+              testID={`portrait-version-${version.id}-source-image`}
+            />
           ) : (
             <View style={[styles.visual, styles.photoFallback]}>
               <ActivityIndicator color={colors.ink3} size="small" />
@@ -231,7 +237,12 @@ function VersionCard({
           {hasPortraitKey ? (
             <>
               {portraitUri ? (
-                <Image contentFit="cover" source={{ uri: portraitUri, cacheKey: version.portraitKey ?? undefined }} style={styles.visual} />
+                <Image
+                  contentFit="cover"
+                  source={mediaImageSource(portraitUri, version.portraitKey)}
+                  style={styles.visual}
+                  testID={`portrait-version-${version.id}-portrait-image`}
+                />
               ) : (
                 <View style={[styles.visual, styles.photoFallback]}>
                   <ActivityIndicator color={colors.ink3} size="small" />

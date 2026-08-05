@@ -3,8 +3,16 @@ import { useQuery } from '@tanstack/react-query';
 import { getMediaUrls } from '@/services/media';
 
 /**
- * Bust presigned-URL cache when object bytes change in place (e.g. regenerated
- * memory illustration at the same R2 key). Pass memory.updated_at after saves.
+ * `cacheVersion` busts the presigned-URL react-query cache on edits (pass
+ * `memory.updated_at`/`member.updated_at` after saves) so a stale signed URL
+ * is never served for a row whose fields just changed. It is NOT about
+ * object bytes changing in place -- they never do: regenerated illustrations,
+ * new portrait versions, and media edits all mint a FRESH R2 object key per
+ * attempt, and nothing in this app overwrites an existing key's bytes.
+ * expo-image callers rely on that invariant to key their disk cache on the
+ * object key itself (see src/utils/media-image-source.ts) -- keep it that
+ * way; overwriting bytes under a reused key would silently serve stale
+ * cached images to any client that already has that key cached.
  */
 export function useMediaUrls(keys: string[], cacheVersion?: string | null) {
   const normalizedKeys = keys.filter(Boolean);

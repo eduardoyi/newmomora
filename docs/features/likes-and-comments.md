@@ -16,6 +16,12 @@ Every active role, including viewer, may participate.
 - Timeline and memory detail show an outline heart and comment icon below the
   memory content. A selected heart fills pink, pops briefly, and gives light
   haptic feedback.
+- The same bar also carries a share icon on the timeline card and the memory
+  detail screen (never the full-screen viewer) — see
+  [memory-sharing.md](./memory-sharing.md) for its full behavior, visibility
+  rules, and permission matrix. It's a separate opt-in prop
+  (`enableShare`) on `MemoryEngagementBar`, not a fourth engagement metric —
+  it has no count and isn't part of the like/comment data model below.
 - Counts are passive and appear only when greater than zero. There is no liker
   list.
 - Timeline comment taps navigate to memory detail with `?comments=1`; detail
@@ -164,7 +170,7 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 | File | Covers |
 |------|--------|
 | `src/utils/engagement.test.ts` | Relative/calendar timestamp boundaries |
-| `src/components/memory-engagement-bar.test.tsx` | Hidden zero counts, selected state, action wiring |
+| `src/components/memory-engagement-bar.test.tsx` | Hidden zero counts, selected state, action wiring (share-icon prop gating/visibility/tap wiring documented in [memory-sharing.md](./memory-sharing.md), same file) |
 | `src/components/memory-comments-drawer.test.tsx` | Drawer/composer behavior, keyboard avoidance, handle drag dismissal/snapback, posting and moderation affordances |
 
 ### Integration tests

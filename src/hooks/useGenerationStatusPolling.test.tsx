@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
+import { onlineManager, QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
@@ -301,5 +301,53 @@ describe('useGenerationStatusPolling', () => {
     await jest.advanceTimersByTimeAsync(3000);
 
     await waitFor(() => expect(mockedFetchStatuses).toHaveBeenCalledWith(['memory-1']));
+  });
+
+  // O7 (docs/plans/offline-awareness-and-share-cards.md): offline gating
+  // uses the same reactive-hook wake pattern as the realtime-suppression
+  // pair above (useIsOnline is useSyncExternalStore-backed, not a plain
+  // ref) -- a reconnect must re-render this hook's observer so react-query
+  // re-evaluates refetchInterval, or the poll would stay idle forever once
+  // it returns false.
+  describe('offline gating', () => {
+    afterEach(() => {
+      act(() => onlineManager.setOnline(true));
+    });
+
+    it('stops periodic polling once the device goes offline', async () => {
+      queryClient.setQueryData(
+        memoriesQueryKey(FAMILY_ID),
+        buildInfiniteData([buildMemory({ id: 'memory-1', illustration_status: 'pending' })]),
+      );
+
+      renderHook(() => useGenerationStatusPolling(), { wrapper });
+      await waitFor(() => expect(mockedFetchStatuses).toHaveBeenCalledTimes(1));
+
+      act(() => onlineManager.setOnline(false));
+      mockedFetchStatuses.mockClear();
+
+      await jest.advanceTimersByTimeAsync(10_000);
+      expect(mockedFetchStatuses).not.toHaveBeenCalled();
+    });
+
+    it('wakes and resumes the periodic poll once the device comes back online', async () => {
+      queryClient.setQueryData(
+        memoriesQueryKey(FAMILY_ID),
+        buildInfiniteData([buildMemory({ id: 'memory-1', illustration_status: 'pending' })]),
+      );
+
+      renderHook(() => useGenerationStatusPolling(), { wrapper });
+      await waitFor(() => expect(mockedFetchStatuses).toHaveBeenCalledTimes(1));
+
+      act(() => onlineManager.setOnline(false));
+      mockedFetchStatuses.mockClear();
+      await jest.advanceTimersByTimeAsync(10_000);
+      expect(mockedFetchStatuses).not.toHaveBeenCalled();
+
+      act(() => onlineManager.setOnline(true));
+      await jest.advanceTimersByTimeAsync(3000);
+
+      await waitFor(() => expect(mockedFetchStatuses).toHaveBeenCalledWith(['memory-1']));
+    });
   });
 });

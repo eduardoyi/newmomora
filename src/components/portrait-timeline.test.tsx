@@ -136,6 +136,19 @@ describe('PortraitTimeline', () => {
     ]);
   });
 
+  it('pins expo-image cacheKey to each visual\'s object key (Workstream O5)', () => {
+    const { getByTestId } = render(<PortraitTimeline {...baseProps} />);
+
+    expect(getByTestId('portrait-version-ready-1-source-image').props.source).toEqual([{
+      uri: `https://media.test/${encodeURIComponent(ready.sourcePhotoKey)}`,
+      cacheKey: ready.sourcePhotoKey,
+    }]);
+    expect(getByTestId('portrait-version-ready-1-portrait-image').props.source).toEqual([{
+      uri: `https://media.test/${encodeURIComponent(ready.portraitKey as string)}`,
+      cacheKey: ready.portraitKey,
+    }]);
+  });
+
   it('turns an abandoned generation into a recoverable stalled state', async () => {
     const { getByTestId, getByText } = render(
       <PortraitTimeline {...baseProps} versions={[stalled, ready]} />,

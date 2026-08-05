@@ -1,4 +1,4 @@
-import { focusManager, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager } from '@tanstack/react-query';
 import { useEffect, type ReactNode } from 'react';
 import { AppState } from 'react-native';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -7,7 +7,8 @@ import { AuthProvider } from '@/hooks/use-auth';
 import { BillingProvider } from '@/hooks/use-billing';
 import { FamilyProvider } from '@/hooks/use-family';
 import { PendingMemoryUploadsProvider } from '@/hooks/use-pending-memory-uploads';
-import { queryClient } from '@/lib/query-client';
+import { startConnectivityMonitoring } from '@/lib/connectivity';
+import { PersistedQueryProvider } from '@/lib/query-persistence';
 
 export function AppProviders({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -22,9 +23,16 @@ export function AppProviders({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Reflects device connectivity into react-query's onlineManager for the
+  // whole app session -- see src/lib/connectivity.ts. Everything that reads
+  // online state (the offline banner, O3's reconnect refetch, O6's
+  // fail-fast mutations) depends on this being wired before those consumers
+  // mount, same lifecycle slot as the focusManager wiring above.
+  useEffect(() => startConnectivityMonitoring(), []);
+
   return (
     <KeyboardProvider preload={false}>
-      <QueryClientProvider client={queryClient}>
+      <PersistedQueryProvider>
         <AuthProvider>
           <FamilyProvider>
             <BillingProvider>
@@ -32,7 +40,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
             </BillingProvider>
           </FamilyProvider>
         </AuthProvider>
-      </QueryClientProvider>
+      </PersistedQueryProvider>
     </KeyboardProvider>
   );
 }

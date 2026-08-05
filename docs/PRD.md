@@ -490,6 +490,17 @@ Momora Plus is a transparent hard-paywall subscription for family owners.
 - The first onboarding capture is saved before payment and its first
   illustration starts after successful entitlement activation.
 
+### 6.11 Memory sharing
+
+Parents can export a single memory as a watermarked PNG "card" and hand it to
+the native share sheet (Messages, WhatsApp, Photos, AirDrop, etc.) — Momora
+never hosts a public URL for it. Available for text-only, illustrated, and
+photo memories; videos are never shareable. Owner/manager can always share;
+viewers share by default, gated per family by a manager-controlled Settings
+toggle enforced server-side. See
+[docs/features/memory-sharing.md](./features/memory-sharing.md) for the full
+permission matrix and card design.
+
 ## 7. Explicit MVP Out-of-Scope
 
 The following are **post-MVP**. They must not block or expand MVP scope:

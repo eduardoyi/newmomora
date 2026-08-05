@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { userProfileQueryKeyBase } from '@/hooks/queryKeys';
 import { cancelAccountDeletion, deleteUserAccount } from '@/services/ai';
 import { fetchUserProfile, updateUserProfile, type UpdateUserProfileInput } from '@/services/user-profile';
 
-export const userProfileQueryKey = ['user-profile'] as const;
+export const userProfileQueryKey = [userProfileQueryKeyBase] as const;
 
 export function useUserProfile() {
   const queryClient = useQueryClient();

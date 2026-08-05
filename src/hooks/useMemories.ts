@@ -1,4 +1,5 @@
 import {
+  onlineManager,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -444,6 +445,14 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
     // (pull-to-refresh + the AppState handler) is the intended
     // reconciliation path instead.
     refetchOnWindowFocus: false,
+    // Same A4a trap on the offline->online transition (O3,
+    // docs/plans/offline-awareness-and-share-cards.md): v5's default
+    // `refetchOnReconnect: true` would refetch every currently loaded page
+    // the moment onlineManager flips online, which is exactly the
+    // whole-timeline cost refetchOnWindowFocus:false above already defuses
+    // for focus. The reconnect effect below fires the same trim-to-page-1
+    // reconcile as the AppState handler instead.
+    refetchOnReconnect: false,
   });
 
   const isStaleRef = useRef(query.isStale);
@@ -504,6 +513,34 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
     return () => subscription.remove();
   }, [familyId, refreshFirstPage]);
 
+  // O3: the same trim-to-page-1 reconcile as the AppState handler above,
+  // fired on an offline->online EDGE (not on every onlineManager
+  // notification -- a listener also fires on the online->offline
+  // transition and on redundant same-state notifications from
+  // startConnectivityMonitoring's NetInfo listener). refetchOnReconnect is
+  // false on the query above specifically so this is the only reconnect
+  // reconciliation path, not a second (whole-timeline) one racing it.
+  useEffect(() => {
+    if (!familyId) {
+      return;
+    }
+
+    let wasOnline = onlineManager.isOnline();
+
+    const unsubscribe = onlineManager.subscribe(() => {
+      const isOnline = onlineManager.isOnline();
+      if (isOnline && !wasOnline) {
+        const shouldReconcile = shouldReconcileOnForegroundRef.current;
+        if (isStaleRef.current && (shouldReconcile === undefined || shouldReconcile())) {
+          void refreshFirstPage();
+        }
+      }
+      wasOnline = isOnline;
+    });
+
+    return () => unsubscribe();
+  }, [familyId, refreshFirstPage]);
+
   const rawMemories = useMemo(
     () => query.data?.pages.flatMap((page) => page.memories) ?? [],
     [query.data],
@@ -539,8 +576,16 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
   // completion; this loop only runs on the next identity change of
   // `memories` (event-driven here, not clock-driven -- see the detail
   // screen's effect below for the clock-driven case).
+  //
+  // O4 (docs/plans/offline-awareness-and-share-cards.md): gated on
+  // `query.isFetchedAfterMount` -- restored-from-persistence data is
+  // stale-but-visible by design (see query-persistence.tsx), so `memories`
+  // can populate from hydration alone, before this mount's own network
+  // fetch has resolved. Evaluating recovery against that hydrated-only data
+  // would routinely fire retryMemoryIllustration on cold start for rows
+  // that are perfectly fine server-side; wait for a real fetch this mount.
   useEffect(() => {
-    if (!canRecoverIllustrations) {
+    if (!canRecoverIllustrations || !query.isFetchedAfterMount) {
       return;
     }
 
@@ -559,9 +604,17 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
       // memory query -- the shared A5 poll picks up the real server status from
       // there once it notices the pending row.
       void retryMemoryIllustration(memory.id)
-        .then(({ error }) => {
+        .then(({ error, dispatched }) => {
           if (error) {
             console.warn('Failed to recover stale illustration', memory.id, error.message);
+            return;
+          }
+
+          // O4: a resolved-but-not-dispatched response means the server
+          // already had this row settled (e.g. 'ready') when re-checked --
+          // patching to 'pending' here would flash a finished illustration
+          // back to pending. Only a real dispatch may optimistically patch.
+          if (!dispatched) {
             return;
           }
 
@@ -578,13 +631,23 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
           recoveringIllustrationsRef.current.delete(memory.id);
         });
     }
-  }, [memories, queryClient, familyId, canRecoverIllustrations]);
+  }, [memories, queryClient, familyId, canRecoverIllustrations, query.isFetchedAfterMount]);
 
   // Backfill emotion tags for memories that were never analyzed or whose
   // analysis previously failed (e.g. older text_only entries). One attempt per
   // memory per session; the edge function's cooldown guards against races with
   // the create-time triggers. Same A7 loaded-pages-only bound as above.
+  //
+  // O4: same isFetchedAfterMount gate as the recovery effect above -- a
+  // hydrated-only 'joy' (or null) emotion is potentially stale, but backfill
+  // is idempotent server-side regardless; the gate exists to avoid firing
+  // a burst of emotion re-analysis calls purely off a cold-start hydration
+  // before this mount's own fetch has had a chance to settle.
   useEffect(() => {
+    if (!query.isFetchedAfterMount) {
+      return;
+    }
+
     for (const memory of memories) {
       if (!isEmotionAnalyzable(memory)) {
         continue;
@@ -624,7 +687,7 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
           );
         });
     }
-  }, [memories, queryClient, familyId]);
+  }, [memories, queryClient, familyId, query.isFetchedAfterMount]);
 
   const mutations = useMemoryMutations();
 
@@ -735,7 +798,17 @@ export function useMemory(memoryId: string | undefined) {
     // including a portrait-deferred memory -- each PORTRAITS_NOT_READY retry
     // resolves as success (see runMemoryIllustrationPipeline) and just
     // re-parks the memory at 'pending' until the portrait completes.
-    if (query.isPlaceholderData) {
+    //
+    // O4 (docs/plans/offline-awareness-and-share-cards.md): `isPlaceholderData`
+    // alone does NOT cover restored-from-persistence data -- a row hydrated
+    // by PersistQueryClientProvider (or seeded into the detail cache some
+    // other way) is genuine `data`, not placeholder data, so isPlaceholderData
+    // reads false immediately even though no network fetch has happened yet
+    // this mount. A persisted, days-old 'generating' row would otherwise trip
+    // needsIllustrationRecovery on mount and re-pin an already-finished
+    // illustration back to pending. Gate on `isFetchedAfterMount` too --
+    // only evaluate rows that came from a real network read this mount.
+    if (query.isPlaceholderData || !query.isFetchedAfterMount) {
       return;
     }
 
@@ -756,9 +829,17 @@ export function useMemory(memoryId: string | undefined) {
     // every memory query; the detail query's own 3s
     // illustration polling takes over from there.
     void retryMemoryIllustration(memory.id)
-      .then(({ error }) => {
+      .then(({ error, dispatched }) => {
         if (error) {
           console.warn('Failed to recover stale illustration', memory.id, error.message);
+          return;
+        }
+
+        // O4: see the matching comment in useMemories' recovery effect --
+        // a resolved-but-not-dispatched response means the server already
+        // had this row settled, so patching to 'pending' here would flash a
+        // finished illustration back to pending.
+        if (!dispatched) {
           return;
         }
 
@@ -774,7 +855,14 @@ export function useMemory(memoryId: string | undefined) {
       .finally(() => {
         recoveringIllustrationRef.current = false;
       });
-  }, [query.data, query.isPlaceholderData, queryClient, familyId, canRecoverIllustrations]);
+  }, [
+    query.data,
+    query.isPlaceholderData,
+    query.isFetchedAfterMount,
+    queryClient,
+    familyId,
+    canRecoverIllustrations,
+  ]);
 
   useEffect(() => {
     // Ignore the placeholder entirely: recording its (possibly stale)
@@ -850,6 +938,12 @@ export function useMemberMemories(memberId: string | undefined) {
     enabled: Boolean(user && familyId && memberId),
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
+    // Same A4a-style trap as useMemories' list query above on the
+    // offline->online edge (O3) -- this hook has no trim-refresh handler of
+    // its own (out of scope per the plan), so simply keep v5's default
+    // reconnect refetch from firing a whole-list refetch across every
+    // loaded page.
+    refetchOnReconnect: false,
   });
 
   const rawMemories = useMemo(
