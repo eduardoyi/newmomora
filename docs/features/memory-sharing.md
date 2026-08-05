@@ -194,6 +194,17 @@ overlap — is intentionally pixel-matched where satori's CSS subset allows it
   (`supabase/functions/compose-share-card/assets/font-noto-emoji-subset-b64.ts`)
   and rasterized locally. The accepted tradeoff is monochrome (not color)
   emoji on the card — never a silent "tofu box" (missing-glyph square).
+  **BUG FIX (perf-audit pass, this package's implementation report):** the
+  subset's Unicode range list omitted U+1F1E6-1F1FF (Regional Indicator
+  Symbols) entirely, so flag emoji (composed from PAIRS of these
+  codepoints, e.g. a country flag in a caption) rendered as two literal
+  tofu boxes — a real regression of the "never a silent tofu box" claim
+  above. Fixed by adding that range to the subset build; see the asset
+  file's header comment and `layout.test.ts`'s flag-sequence glyph-path
+  tests for the regression guard. If you extend the emoji ranges again,
+  re-verify with that same "does it produce real path data, not tofu"
+  render check, not just cmap presence — a codepoint can be in `cmap`
+  without GSUB support for the sequence it's part of.
 - **Everything else already private-by-default.** No R2 writes, no public
   URLs, no stored copy of the composed PNG anywhere — the function streams
   the response and forgets it. The client's own copy is a temp file in
@@ -267,6 +278,88 @@ the photo/illustration path.
   caption is still never truncated. The client retries exactly once on 546
   (~98%+ effective success per the spike); a second 546 is a genuine infra
   ceiling, not a client bug.
+  **Refined diagnosis (perf-audit pass, this package's implementation
+  report):** production 546 rates (~70-80%) turned out to be too high to
+  explain by raster pixel count alone — a typical photo-memory card is only
+  ~1.2M px (well under the 2.5M budget, `scale: 'full'`) yet still failed
+  ~46.7% in a 15-shot baseline against the deployed function, and the S0
+  spike itself never observed a warm isolate. The additional, independent
+  contributor is **per-request BOOT/module-eval overhead**: every request
+  cold-starts and pays to (a) parse several MB of base64 asset text at
+  module-graph eval time, (b) compile the resvg wasm module, and (c) have
+  satori load/shape against all five (unsubsetted, at the time) font
+  buffers. Mitigations landed in this pass: the four Latin text fonts are
+  now subsetted to Latin + Latin-Extended + common punctuation (fonttools
+  `pyftsubset`, ~54% smaller); `@jsquash/webp`'s module + wasm asset are now
+  `import()`-ed lazily, only when the resolved source actually sniffs as
+  webp, instead of being paid on every request regardless of source type;
+  and the function now emits a `Server-Timing` header + a structured
+  per-request log line (`memoryId`, `bootHintMs`, `fetchMs`, `satoriMs`,
+  `resvgMs`, `totalMs`, `rss`/`heapUsed`, `scale`, `pngBytes`, `fetchCount`,
+  `imageFetchMs` — ids/numbers only, see the logging-discipline note above)
+  so future regressions can be attributed to a specific phase instead of
+  re-diagnosed from scratch. The reduced-scale pixel-budget mitigation above
+  is unchanged and still real — the causes are independent and all matter.
+  **Round 2 (the instrumentation paid off):** post-deploy `Server-Timing`
+  measurement on the boot-fix build overturned the boot hypothesis itself —
+  `boot` measured 2-3ms (a non-issue), while `fetch` measured ~1.1-1.3s of a
+  ~2-2.2s total, sitting almost exactly on the resource ceiling. Root cause:
+  the hero image's R2 GET and every tagged member's portrait's R2 GET ran
+  **sequentially** — portraits were fetched as a group first
+  (`resolveMemberPortraits`, parallel with each other but not with the
+  hero), THEN the hero image was fetched entirely after that group
+  finished. Fixed (`index.ts`'s `handleComposeShareCard`): the hero fetch
+  is kicked off immediately (nothing blocks it) and now overlaps with the
+  tagged-member DB query; once that query returns, every portrait's R2 GET
+  joins the SAME `Promise.all` as the (likely still in-flight) hero fetch,
+  via a new `getObjectBytesBatch` (`_shared/r2.ts`) that also collapses N
+  separate presign calls (one `S3Client` construction each) into a single
+  multi-key `createPresignedGetUrls` call. `authorizeShareCardAccess` and
+  `resolveShareCardSource` (two independent DB reads) were also switched
+  from sequential `await`s to `Promise.all`. Separately, portraits (stored
+  small, ~25KB) were paying `capImageMaxEdge`'s unconditional full-pixel
+  decode just to confirm no resize was needed — `capImageMaxEdgeIfNeeded`
+  now sniffs dimensions via `npm:image-size` (header-only, no decode) and
+  skips straight to pass-through when already under budget.
+  **Round 3 (round 2 wasn't enough, and 546s died before our own
+  instrumentation could see them):** post-round-2 `Server-Timing` on
+  successes showed `fetch` at ~850-1010ms, of which the (now-batched)
+  image fetch was only ~250ms — the remaining ~600-750ms was DB/auth round
+  trips: `~6` sequential hops survived round 2's fix, because that round
+  only parallelized the memory-row lookup's TWO immediate children
+  (`authorizeShareCardAccess` vs `resolveShareCardSource`) against each
+  other — it didn't reach INSIDE `authorizeShareCardAccess`, whose own
+  `getCallerFamilyRoles` issues its `families` and `family_memberships`
+  reads sequentially, plus a THIRD query for a viewer's
+  `viewer_sharing_enabled`. Separately, some 546s carried NO `Server-Timing`
+  header at all — proof they died before `handleComposeShareCard` even ran,
+  implicating platform-counted "worker boot" resource use, which this
+  function's own `bootHintMs` (captured only after static imports finish)
+  structurally cannot see. Fixed: (1) every one of those reads — memory row,
+  role, `viewer_sharing_enabled`, the media asset, tagged members + their
+  portrait keys — is now ONE PostgREST nested `select` on `memories`
+  (`SHARE_CARD_MEMORY_SELECT`, `index.ts`), run with the user-scoped client
+  so existing RLS enforces membership implicitly; verified against the real
+  schema+RLS before wiring in (single round trip, ~150-200ms, correct
+  nested shape) — `authorizeShareCardAccessFromQueryRow` and
+  `resolveShareCardSourceFromQueryRow` now just post-process that one
+  already-fetched row (sync, no DB call, no `Promise.all` needed anymore).
+  Hero + every portrait's R2 fetch also collapsed into a single
+  `getObjectBytesBatch` call (previously two: one for the hero, one for
+  portraits). (2) `render.ts`'s `getFonts()` (resvg wasm compile + font
+  decode) was ALREADY request-scoped, not module-scope, on inspection — the
+  "dies before Server-Timing" premise doesn't point at that function
+  specifically; what genuinely IS unavoidable module-scope cost is V8
+  parsing the ~4.8MB of base64 STRING LITERALS across the still-statically-
+  imported font/resvg assets as part of this module's own import graph
+  evaluation (round 1 kept these static deliberately — they're needed by
+  nearly every compose, unlike webp's conditional lazy-import). `getFonts()`
+  now reports its cost as its own `initMs`/`init;dur=` Server-Timing phase
+  (previously folded into `satoriMs`), so a first-request cost spike there
+  reads as "init," not "satori is slow." Whether the remaining 546s were
+  actually explained by module-eval cost is for the orchestrator's
+  post-deploy measurement to confirm — see this package's implementation
+  report for the exact prediction being tested.
 - **Long captions produce tall PNGs.** `validateMemoryContent` caps content
   at 5000 chars, so the worst case is a ~1080×6000px (or 720×4000px reduced)
   card. Most share targets downscale on their end; this is accepted, not a

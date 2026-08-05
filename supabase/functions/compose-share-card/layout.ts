@@ -386,7 +386,20 @@ function buildSpreadCard(data: ShareCardData, width: number, s: (px: number) => 
  * (`styles.editorialQuote`: Newsreader regular, fontSize 56 / lineHeight 56
  * / height 34 clipped / opacity 0.18 / marginBottom -6, tinted with the
  * memory's emotion `ink` color, falling back to ink3), converted to this
- * file's logical units via `s`. */
+ * file's logical units via `s`.
+ *
+ * BUG FIX (device report -- the glyph's curled descender overlapped the
+ * ascender of the caption's first line, e.g. touching the top of a capital
+ * "H"/"W"): satori's flexbox `div` clips/positions a fixed-height text box
+ * differently than React Native's `Text`, so a direct port of the RN
+ * height/marginBottom values sat measurably closer to the caption below it
+ * here than in the app. Verified visually (this package's implementation
+ * report, quote-glyph-repro renders): `height` trimmed 34->30 (clips a
+ * touch more of the glyph's own tail) and `marginBottom` flipped from -6
+ * (pulling the caption UP, i.e. closer/overlapping) to +2 (real clearance)
+ * -- across a one-word caption, a single short line, and a two-line
+ * caption, both cap-height ("H") and round-top ("W") first letters now
+ * clear the glyph with visible whitespace. */
 function quoteGlyphNode(color: string, s: (px: number) => number): SatoriNode {
   return h(
     'div',
@@ -396,12 +409,12 @@ function quoteGlyphNode(color: string, s: (px: number) => number): SatoriNode {
         fontFamily: 'Newsreader-Regular',
         fontSize: s(56),
         lineHeight: 1,
-        height: s(34),
+        height: s(30),
         color,
         opacity: 0.18,
         paddingLeft: s(18),
         paddingTop: s(18),
-        marginBottom: s(-6),
+        marginBottom: s(2),
       },
     },
     '“',

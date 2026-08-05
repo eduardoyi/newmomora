@@ -7,11 +7,6 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import satoriImport from 'npm:satori@0.29.0';
 
-import { NEWSREADER_REGULAR_B64 } from './assets/font-newsreader-regular-b64.ts';
-import { NEWSREADER_REGULAR_ITALIC_B64 } from './assets/font-newsreader-regular-italic-b64.ts';
-import { NEWSREADER_MEDIUM_B64 } from './assets/font-newsreader-medium-b64.ts';
-import { JAKARTA_REGULAR_B64 } from './assets/font-jakarta-regular-b64.ts';
-import { JAKARTA_BOLD_B64 } from './assets/font-jakarta-bold-b64.ts';
 import {
   buildShareCardTree,
   formatShareCardDateLabel,
@@ -26,22 +21,49 @@ import { BASE_SCALE, LOGICAL_CARD_WIDTH, REDUCED_SCALE } from './scale.ts';
 // deno-lint-ignore no-explicit-any
 const satori = satoriImport as any;
 
-function b64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
+// Round 4 (this package's implementation report): the font TTFs used to be
+// base64 string modules statically imported here -- now read directly as
+// raw binary from assets/bin/ (the SAME files the upload script pushes to
+// R2 and the manifest's sha256 covers -- see
+// _shared/share-card-assets-manifest.ts). Reading local files is not a
+// mock/fixture stand-in for "the real thing" here; it IS the real thing --
+// assets/bin/ is not imported by the function's module graph (so it adds
+// zero deployed-bundle weight), it exists purely as this upload source +
+// test fixture. No network/R2 access in this test file.
+const ASSETS_BIN_DIR = new URL('./assets/bin/', import.meta.url);
+
+async function readAssetBin(fileName: string): Promise<Uint8Array> {
+  return await Deno.readFile(new URL(fileName, ASSETS_BIN_DIR));
 }
 
 const FONTS = [
-  { name: 'Newsreader-Regular', data: b64ToBytes(NEWSREADER_REGULAR_B64), weight: 400, style: 'normal' as const },
-  { name: 'Newsreader-Italic', data: b64ToBytes(NEWSREADER_REGULAR_ITALIC_B64), weight: 400, style: 'italic' as const },
-  { name: 'Newsreader-Medium', data: b64ToBytes(NEWSREADER_MEDIUM_B64), weight: 500, style: 'normal' as const },
-  { name: 'Jakarta-Regular', data: b64ToBytes(JAKARTA_REGULAR_B64), weight: 400, style: 'normal' as const },
-  { name: 'Jakarta-Bold', data: b64ToBytes(JAKARTA_BOLD_B64), weight: 700, style: 'normal' as const },
+  { name: 'Newsreader-Regular', data: await readAssetBin('newsreader-regular.ttf'), weight: 400, style: 'normal' as const },
+  { name: 'Newsreader-Italic', data: await readAssetBin('newsreader-italic.ttf'), weight: 400, style: 'italic' as const },
+  { name: 'Newsreader-Medium', data: await readAssetBin('newsreader-medium.ttf'), weight: 500, style: 'normal' as const },
+  { name: 'Jakarta-Regular', data: await readAssetBin('jakarta-regular.ttf'), weight: 400, style: 'normal' as const },
+  { name: 'Jakarta-Bold', data: await readAssetBin('jakarta-bold.ttf'), weight: 700, style: 'normal' as const },
+  // Included so satori's automatic glyph-fallback (render.ts's header
+  // comment: no fontFamily ever references "NotoEmoji" directly -- satori
+  // falls back to any loaded font covering a glyph missing from the
+  // requested family) can resolve emoji in these tests exactly like the
+  // real compose pipeline does.
+  { name: 'NotoEmoji', data: await readAssetBin('noto-emoji-subset.ttf'), weight: 400, style: 'normal' as const },
 ];
+
+/** Sums the `d="..."` path-data length across every `<path>` in an SVG
+ * string -- a cheap proxy for "did this glyph actually render an outline",
+ * used by the emoji/flag regression test below. satori renders a whole text
+ * run as path data (not literal `<text>` nodes), and a `.notdef`/tofu glyph
+ * (or a codepoint entirely missing from every loaded font) contributes
+ * little-to-no path data, so a caption padded with real emoji should push
+ * this well past what the same caption's plain text alone would need. */
+function totalSvgPathDataLength(svg: string): number {
+  const pathMatches = svg.match(/<path[^>]*d="([^"]*)"/g) ?? [];
+  return pathMatches.reduce((sum, p) => {
+    const m = p.match(/d="([^"]*)"/);
+    return sum + (m ? m[1].length : 0);
+  }, 0);
+}
 
 async function renderSvg(data: ShareCardData, scale = BASE_SCALE): Promise<string> {
   const tree = buildShareCardTree(data, scale);
@@ -443,6 +465,32 @@ Deno.test('layout: quote card glyph falls back to the neutral ink3 tint when emo
   assertEquals(style.color, SHARE_CARD_THEME.ink3);
 });
 
+// ── Bug fix: quote-glyph descender overlapped the caption's first line ────
+Deno.test('layout: quote card glyph has a non-negative bottom margin (BUG FIX regression guard -- a negative marginBottom previously pulled the caption UP into the glyph\'s clipped descender tail, visually overlapping a capital first letter like "H"/"W"; see quoteGlyphNode\'s doc comment)', () => {
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'Hoy fue un gran día.',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const glyphNode = findAllNodesByType(tree, 'div').find((node) => node.props.children === '“');
+  if (!glyphNode) {
+    throw new Error('expected a decorative opening-quotation-mark (\\u201C) node in the quote card tree');
+  }
+  const style = glyphNode.props.style as { height?: number; marginBottom?: number; fontSize?: number };
+  assertEquals((style.marginBottom ?? -1) >= 0, true);
+  // The glyph's box stays meaningfully shorter than its own fontSize --
+  // it's intentionally clipped so only the glyph's top curl (not its full
+  // em-box / tail) is visible, which is the other half of the fix.
+  assertEquals((style.height ?? Infinity) < (style.fontSize ?? 0), true);
+});
+
 Deno.test('layout: spread card never renders a quote-glyph node (quote-only decoration)', () => {
   const data: ShareCardData = {
     variant: 'spread',
@@ -458,4 +506,56 @@ Deno.test('layout: spread card never renders a quote-glyph node (quote-only deco
   const tree = buildShareCardTree(data, BASE_SCALE);
   const glyphNode = findAllNodesByType(tree, 'div').find((node) => node.props.children === '“');
   assertEquals(glyphNode, undefined);
+});
+
+// ── Bug fix: NotoEmoji subset omitted Regional Indicator codepoints ───────
+// (font-noto-emoji-subset-b64.ts's header comment) -- a flag emoji sequence
+// (a pair of Regional Indicator Symbol codepoints, e.g. \u{1F1EA}\u{1F1F8}
+// for the Spain flag) rendered as two tofu boxes because 0/26 of that
+// Unicode block's glyphs were included in the subset. These tests render
+// through the REAL satori pipeline (renderSvg, real vendored fonts) and
+// assert on emitted glyph path data -- a `.notdef`/tofu glyph contributes
+// near-zero path data (verified against the pre-fix subset: an isolated
+// flag sequence produced ~184 chars of path data, vs. ~4000+ once the fix
+// landed -- this package's implementation report).
+Deno.test('layout: caption with ONLY a flag emoji sequence renders real glyph paths, not tofu', async () => {
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: '\u{1F1EA}\u{1F1F8}',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const svg = await renderSvg(data);
+  const pathDataLength = totalSvgPathDataLength(svg);
+  assertEquals(
+    pathDataLength > 1000,
+    true,
+    `expected substantial glyph path data for a flag sequence, got ${pathDataLength} (tofu/.notdef glyphs contribute near-zero)`,
+  );
+});
+
+Deno.test('layout: caption mixing real text, a flag emoji, and a plain emoji all render real glyph paths', async () => {
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'Trip to Spain \u{1F1EA}\u{1F1F8} was unforgettable \u{1F600}',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const svg = await renderSvg(data);
+  const pathDataLength = totalSvgPathDataLength(svg);
+  assertEquals(
+    pathDataLength > 3000,
+    true,
+    `expected substantial glyph path data for mixed text + emoji, got ${pathDataLength}`,
+  );
 });

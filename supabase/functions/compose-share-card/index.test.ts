@@ -1,11 +1,11 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import {
   _resetRateLimitStateForTests,
-  authorizeShareCardAccess,
+  authorizeShareCardAccessFromQueryRow,
   buildShareCardFilename,
+  buildTaggedMemberPortraits,
   clampMediaAspectRatio,
   convertWebpToJpeg,
-  fetchTaggedMembers,
   handleComposeShareCard,
   isComposeRateLimited,
   isRejectedMemoryType,
@@ -13,13 +13,17 @@ import {
   isVideoContentType,
   markComposeRun,
   mimeTypeFromObjectKey,
+  resolveCallerRoleFromQueryRow,
   resolveImageMimeType,
   resolveMemberPortraitKey,
-  resolveShareCardSource,
+  resolvePortraitKeysToFetch,
+  resolveShareCardSourceFromQueryRow,
+  resolveTaggedMembersFromQueryRow,
   runShareCardCompose,
   SHARE_CARD_MAX_IMAGE_EDGE,
   SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW,
   SHARE_CARD_RATE_LIMIT_WINDOW_MS,
+  type ShareCardMemoryQueryRow,
 } from './index.ts';
 
 const OWNER_ID = '11111111-1111-4111-8111-111111111111';
@@ -32,65 +36,28 @@ const MEMBER_1 = '88888888-8888-4888-8888-888888888888';
 const MEMBER_2 = '99999999-9999-4999-8999-999999999999';
 const ASSET_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-// ── Minimal thenable query-builder mock, tailored to the .select().eq()/
-// .in()/.maybeSingle() chains this package's functions issue. Doesn't model
-// a real relational join -- callers supply pre-joined row shapes directly,
-// same simplification _shared/family-access.test.ts's fakeSupabase uses. ──
-// deno-lint-ignore no-explicit-any
-function makeTable(rows: Array<Record<string, any>>) {
+// ── Round-3 fixture builder ──────────────────────────────────────────────
+// Round 3 replaced every DB-calling helper (authorizeShareCardAccess,
+// resolveShareCardSource, fetchTaggedMembers) with pure functions that
+// post-process the SINGLE nested query's already-fetched row (see
+// SHARE_CARD_MEMORY_SELECT's header comment in index.ts) -- so these tests
+// no longer need a fake Supabase query-builder mock at all. A plain object
+// literal (this builder) is both simpler AND a closer match to what the
+// real functions actually receive at runtime.
+function buildQueryRow(overrides: Partial<ShareCardMemoryQueryRow> = {}): ShareCardMemoryQueryRow {
   return {
-    // deno-lint-ignore no-explicit-any
-    select(_cols?: string) {
-      let filtered = rows;
-      const builder = {
-        // deno-lint-ignore no-explicit-any
-        eq(col: string, val: any) {
-          filtered = filtered.filter((r) => r[col] === val);
-          return builder;
-        },
-        // deno-lint-ignore no-explicit-any
-        in(col: string, vals: any[]) {
-          filtered = filtered.filter((r) => vals.includes(r[col]));
-          return builder;
-        },
-        async maybeSingle() {
-          return { data: filtered[0] ?? null, error: null };
-        },
-        // deno-lint-ignore no-explicit-any
-        then(resolve: (v: { data: any[]; error: null }) => void) {
-          resolve({ data: filtered, error: null });
-        },
-      };
-      return builder;
-    },
-  };
-}
-
-interface FakeSupabaseOptions {
-  families?: Array<{ id: string; owner_id: string; deleted_at: string | null; viewer_sharing_enabled?: boolean }>;
-  memberships?: Array<{ family_id: string; role: string; user_id: string }>;
-  // deno-lint-ignore no-explicit-any
-  memoryMedia?: any[];
-  // deno-lint-ignore no-explicit-any
-  memoryFamilyMembers?: any[];
-}
-
-function fakeSupabase(options: FakeSupabaseOptions) {
-  const tables: Record<string, ReturnType<typeof makeTable>> = {
-    families: makeTable(options.families ?? []),
-    family_memberships: makeTable(options.memberships ?? []),
-    memory_media: makeTable(options.memoryMedia ?? []),
-    memory_family_members: makeTable(options.memoryFamilyMembers ?? []),
-  };
-
-  return {
-    from(table: string) {
-      const found = tables[table];
-      if (!found) {
-        throw new Error(`Unexpected table ${table}`);
-      }
-      return found;
-    },
+    id: MEMORY_ID,
+    family_id: FAMILY_A,
+    content: null,
+    memory_type: 'text_only',
+    memory_date: '2026-06-08',
+    illustration_key: null,
+    illustration_status: 'none',
+    emotion: null,
+    families: { id: FAMILY_A, viewer_sharing_enabled: true, family_memberships: [] },
+    memory_media: [],
+    memory_family_members: [],
+    ...overrides,
   };
 }
 
@@ -245,9 +212,16 @@ function base64ToBytesForTest(base64: string): Uint8Array {
   return bytes;
 }
 
+// Round 4 (this package's implementation report): convertWebpToJpeg no
+// longer decodes its own wasm bytes from a base64 module -- the caller
+// (index.ts, via assets-loader.ts in production) supplies them. Tests read
+// the SAME real binary the upload script pushes to R2 straight off disk
+// (assets/bin/webp-dec.wasm) -- no network/R2 access in this test file.
+const WEBP_DEC_WASM_BYTES = await Deno.readFile(new URL('./assets/bin/webp-dec.wasm', import.meta.url));
+
 Deno.test('convertWebpToJpeg decodes a real webp and re-encodes as JPEG (the must-not-be-blank fix)', async () => {
   const bytes = base64ToBytesForTest(TINY_REAL_WEBP_B64);
-  const result = await convertWebpToJpeg(bytes, SHARE_CARD_MAX_IMAGE_EDGE);
+  const result = await convertWebpToJpeg(bytes, SHARE_CARD_MAX_IMAGE_EDGE, WEBP_DEC_WASM_BYTES);
   if (!result) {
     throw new Error('expected convertWebpToJpeg to succeed on a real, valid webp fixture');
   }
@@ -263,8 +237,8 @@ Deno.test('convertWebpToJpeg decodes a real webp and re-encodes as JPEG (the mus
 
 Deno.test('convertWebpToJpeg resizes when the decoded image exceeds maxEdge', async () => {
   const bytes = base64ToBytesForTest(TINY_REAL_WEBP_B64); // 4x4 real webp
-  const uncapped = await convertWebpToJpeg(bytes, 1600);
-  const capped = await convertWebpToJpeg(bytes, 2); // force a resize on a 4x4 source
+  const uncapped = await convertWebpToJpeg(bytes, 1600, WEBP_DEC_WASM_BYTES);
+  const capped = await convertWebpToJpeg(bytes, 2, WEBP_DEC_WASM_BYTES); // force a resize on a 4x4 source
   if (!uncapped || !capped) {
     throw new Error('expected both conversions to succeed on a real, valid webp fixture');
   }
@@ -275,7 +249,7 @@ Deno.test('convertWebpToJpeg resizes when the decoded image exceeds maxEdge', as
 
 Deno.test('convertWebpToJpeg returns null (fails closed, not blank) on corrupt bytes', async () => {
   const garbage = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x57, 0x45, 0x42, 0x50, 9, 9, 9, 9]);
-  const result = await convertWebpToJpeg(garbage, SHARE_CARD_MAX_IMAGE_EDGE);
+  const result = await convertWebpToJpeg(garbage, SHARE_CARD_MAX_IMAGE_EDGE, WEBP_DEC_WASM_BYTES);
   assertEquals(result, null);
 });
 
@@ -314,28 +288,35 @@ Deno.test('isRejectedMemoryType rejects audio and unknown types', () => {
   assertEquals(isRejectedMemoryType(''), true);
 });
 
-// ── resolveShareCardSource (memory-type / media-asset validation) ────────
+// ── resolveShareCardSourceFromQueryRow (memory-type / media-asset validation) ──
+// Round 3: reads the candidate asset from `row.memory_media` (already
+// fetched by the single nested query) instead of issuing its own DB call --
+// see resolveShareCardSourceFromQueryRow's doc comment in index.ts. Same
+// exact validation matrix as the pre-round-3 resolveShareCardSource; only
+// the fixture shape changed (a plain query-row object, not a fake Supabase
+// client).
 
-function textOnlyMemory() {
+function mediaRow(overrides: Partial<{
+  id: string;
+  memory_id: string;
+  object_key: string;
+  preview_object_key: string | null;
+  content_type: string;
+  aspect_ratio: number | null;
+}> = {}) {
   return {
-    id: MEMORY_ID,
-    family_id: FAMILY_A,
-    content: 'hello',
-    memory_type: 'text_only',
-    memory_date: '2026-06-08',
-    illustration_key: null,
-    illustration_status: 'none',
-    emotion: null,
+    id: ASSET_ID,
+    memory_id: MEMORY_ID,
+    object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.jpg`,
+    preview_object_key: null,
+    content_type: 'image/jpeg',
+    aspect_ratio: 1.5,
+    ...overrides,
   };
 }
 
-Deno.test('resolveShareCardSource: audio memory type is rejected explicitly', async () => {
-  const supabase = fakeSupabase({});
-  const result = await resolveShareCardSource(
-    supabase as never,
-    { ...textOnlyMemory(), memory_type: 'audio' },
-    undefined,
-  );
+Deno.test('resolveShareCardSourceFromQueryRow: audio memory type is rejected explicitly', () => {
+  const result = resolveShareCardSourceFromQueryRow(buildQueryRow({ memory_type: 'audio' }), undefined);
   assertEquals(result.ok, false);
   if (!result.ok) {
     assertEquals(result.error.code, 'unsupported_memory_type');
@@ -343,79 +324,52 @@ Deno.test('resolveShareCardSource: audio memory type is rejected explicitly', as
   }
 });
 
-Deno.test('resolveShareCardSource: unknown memory type is rejected explicitly', async () => {
-  const supabase = fakeSupabase({});
-  const result = await resolveShareCardSource(
-    supabase as never,
-    { ...textOnlyMemory(), memory_type: 'some_future_type' },
-    undefined,
-  );
+Deno.test('resolveShareCardSourceFromQueryRow: unknown memory type is rejected explicitly', () => {
+  const result = resolveShareCardSourceFromQueryRow(buildQueryRow({ memory_type: 'some_future_type' }), undefined);
   assertEquals(result.ok, false);
   if (!result.ok) assertEquals(result.error.code, 'unsupported_memory_type');
 });
 
-Deno.test('resolveShareCardSource: text_only resolves with no media source', async () => {
-  const supabase = fakeSupabase({});
-  const result = await resolveShareCardSource(supabase as never, textOnlyMemory(), undefined);
+Deno.test('resolveShareCardSourceFromQueryRow: text_only resolves with no media source', () => {
+  const result = resolveShareCardSourceFromQueryRow(buildQueryRow({ memory_type: 'text_only' }), undefined);
   assertEquals(result.ok, true);
   if (result.ok) assertEquals(result.source, { kind: 'text' });
 });
 
-Deno.test('resolveShareCardSource: text_illustration not ready is rejected', async () => {
-  const supabase = fakeSupabase({});
-  const memory = {
-    ...textOnlyMemory(),
-    memory_type: 'text_illustration',
-    illustration_status: 'generating',
-    illustration_key: null,
-  };
-  const result = await resolveShareCardSource(supabase as never, memory, undefined);
+Deno.test('resolveShareCardSourceFromQueryRow: text_illustration not ready is rejected', () => {
+  const row = buildQueryRow({ memory_type: 'text_illustration', illustration_status: 'generating', illustration_key: null });
+  const result = resolveShareCardSourceFromQueryRow(row, undefined);
   assertEquals(result.ok, false);
   if (!result.ok) assertEquals(result.error.code, 'illustration_not_ready');
 });
 
-Deno.test('resolveShareCardSource: ready text_illustration resolves to the illustration key', async () => {
-  const supabase = fakeSupabase({});
-  const memory = {
-    ...textOnlyMemory(),
-    memory_type: 'text_illustration',
-    illustration_status: 'ready',
-    illustration_key: `${OWNER_ID}/memories/${MEMORY_ID}/illustrations/g1.webp`,
-  };
-  const result = await resolveShareCardSource(supabase as never, memory, undefined);
+Deno.test('resolveShareCardSourceFromQueryRow: ready text_illustration resolves to the illustration key', () => {
+  const objectKey = `${OWNER_ID}/memories/${MEMORY_ID}/illustrations/g1.webp`;
+  const row = buildQueryRow({ memory_type: 'text_illustration', illustration_status: 'ready', illustration_key: objectKey });
+  const result = resolveShareCardSourceFromQueryRow(row, undefined);
   assertEquals(result.ok, true);
   if (result.ok) {
-    assertEquals(result.source, {
-      kind: 'illustration',
-      objectKey: `${OWNER_ID}/memories/${MEMORY_ID}/illustrations/g1.webp`,
-    });
+    assertEquals(result.source, { kind: 'illustration', objectKey });
   }
 });
 
-Deno.test('resolveShareCardSource: media memory requires mediaAssetId', async () => {
-  const supabase = fakeSupabase({});
-  const memory = { ...textOnlyMemory(), memory_type: 'media' };
-  const result = await resolveShareCardSource(supabase as never, memory, undefined);
+Deno.test('resolveShareCardSourceFromQueryRow: media memory requires mediaAssetId', () => {
+  const result = resolveShareCardSourceFromQueryRow(buildQueryRow({ memory_type: 'media' }), undefined);
   assertEquals(result.ok, false);
   if (!result.ok) assertEquals(result.error.code, 'validation_error');
 });
 
-Deno.test('resolveShareCardSource: media asset must belong to the requested memory (asset-ownership)', async () => {
-  const OTHER_MEMORY = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-  const supabase = fakeSupabase({
-    memoryMedia: [
-      {
-        id: ASSET_ID,
-        memory_id: OTHER_MEMORY, // belongs to a different memory
-        object_key: `${OWNER_ID}/memories/${OTHER_MEMORY}/media/${ASSET_ID}.jpg`,
-        preview_object_key: null,
-        content_type: 'image/jpeg',
-        aspect_ratio: 1.5,
-      },
-    ],
-  });
-  const memory = { ...textOnlyMemory(), id: MEMORY_ID, memory_type: 'media' };
-  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+// Round 3 note: "ownership" is now enforced STRUCTURALLY by the nested
+// select itself (PostgREST only ever embeds memory_media rows whose FK
+// actually points at this memory), not by an app-level `.eq('memory_id',
+// ...)` filter -- so a foreign-memory's asset can never appear in
+// `row.memory_media` in the first place. This test simulates that: the
+// row's `memory_media` array simply doesn't contain the requested id
+// (as if it belonged to a different memory and was never embedded here),
+// and asserts the same asset_not_found outcome the old ownership check produced.
+Deno.test('resolveShareCardSourceFromQueryRow: an asset id not present in this memory\'s embedded memory_media is asset_not_found (structural ownership guarantee)', () => {
+  const row = buildQueryRow({ memory_type: 'media', memory_media: [mediaRow({ id: 'some-other-assets-id' })] });
+  const result = resolveShareCardSourceFromQueryRow(row, ASSET_ID);
   assertEquals(result.ok, false);
   if (!result.ok) {
     assertEquals(result.error.code, 'asset_not_found');
@@ -432,37 +386,27 @@ Deno.test('resolveShareCardSource: media asset must belong to the requested memo
 // WORKER_RESOURCE_LIMIT flakiness). This test pins the exact scenario the
 // bug report describes -- a real multi-asset (carousel) memory, requesting
 // the SECOND (non-first) page's mediaAssetId while the first page's row is
-// ALSO present in the same table -- and asserts the query resolves to that
-// exact asset, not silently the first row / not a spurious asset_not_found.
-// Guards against a future regression in the `.eq('id', ...).eq('memory_id',
-// ...)` chain (e.g. an accidental `.limit(1)` before the id filter, or a
-// join that collapses to the first match).
-Deno.test('resolveShareCardSource: carousel non-first page resolves to the EXACT requested asset, not the first row', async () => {
+// ALSO present in the embedded array -- and asserts the lookup resolves to
+// that exact asset, not silently the first row / not a spurious
+// asset_not_found. Guards against a future regression in the `.find(m =>
+// m.id === mediaAssetId)` lookup (e.g. an accidental `[0]` instead).
+Deno.test('resolveShareCardSourceFromQueryRow: carousel non-first page resolves to the EXACT requested asset, not the first row', () => {
   const FIRST_ASSET_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
   const SECOND_ASSET_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
-  const supabase = fakeSupabase({
-    memoryMedia: [
-      {
-        id: FIRST_ASSET_ID,
-        memory_id: MEMORY_ID,
-        object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${FIRST_ASSET_ID}.jpg`,
-        preview_object_key: null,
-        content_type: 'image/jpeg',
-        aspect_ratio: 1.5,
-      },
-      {
+  const row = buildQueryRow({
+    memory_type: 'media',
+    memory_media: [
+      mediaRow({ id: FIRST_ASSET_ID, object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${FIRST_ASSET_ID}.jpg` }),
+      mediaRow({
         id: SECOND_ASSET_ID,
-        memory_id: MEMORY_ID,
         object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${SECOND_ASSET_ID}.jpg`,
         preview_object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${SECOND_ASSET_ID}-preview.jpg`,
-        content_type: 'image/jpeg',
         aspect_ratio: 0.8,
-      },
+      }),
     ],
   });
-  const memory = { ...textOnlyMemory(), id: MEMORY_ID, memory_type: 'media' };
 
-  const result = await resolveShareCardSource(supabase as never, memory, SECOND_ASSET_ID);
+  const result = resolveShareCardSourceFromQueryRow(row, SECOND_ASSET_ID);
   assertEquals(result.ok, true);
   if (result.ok && result.source.kind === 'media') {
     assertEquals(result.source.objectKey, `${OWNER_ID}/memories/${MEMORY_ID}/media/${SECOND_ASSET_ID}-preview.jpg`);
@@ -471,48 +415,35 @@ Deno.test('resolveShareCardSource: carousel non-first page resolves to the EXACT
 
   // The first page must still resolve correctly too -- proves this isn't
   // "second page only ever wins" but genuinely id-selective both ways.
-  const firstResult = await resolveShareCardSource(supabase as never, memory, FIRST_ASSET_ID);
+  const firstResult = resolveShareCardSourceFromQueryRow(row, FIRST_ASSET_ID);
   assertEquals(firstResult.ok, true);
   if (firstResult.ok && firstResult.source.kind === 'media') {
     assertEquals(firstResult.source.objectKey, `${OWNER_ID}/memories/${MEMORY_ID}/media/${FIRST_ASSET_ID}.jpg`);
   }
 });
 
-Deno.test('resolveShareCardSource: video content types are rejected', async () => {
-  const supabase = fakeSupabase({
-    memoryMedia: [
-      {
-        id: ASSET_ID,
-        memory_id: MEMORY_ID,
-        object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.mp4`,
-        preview_object_key: null,
-        content_type: 'video/mp4',
-        aspect_ratio: null,
-      },
-    ],
+Deno.test('resolveShareCardSourceFromQueryRow: video content types are rejected', () => {
+  const row = buildQueryRow({
+    memory_type: 'media',
+    memory_media: [mediaRow({ object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.mp4`, content_type: 'video/mp4', aspect_ratio: null })],
   });
-  const memory = { ...textOnlyMemory(), memory_type: 'media' };
-  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+  const result = resolveShareCardSourceFromQueryRow(row, ASSET_ID);
   assertEquals(result.ok, false);
   if (!result.ok) assertEquals(result.error.code, 'video_not_supported');
 });
 
-Deno.test('resolveShareCardSource: photo media resolves preview_object_key over object_key', async () => {
+Deno.test('resolveShareCardSourceFromQueryRow: photo media resolves preview_object_key over object_key', () => {
   const previewKey = `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}-preview.jpg`;
-  const supabase = fakeSupabase({
-    memoryMedia: [
-      {
-        id: ASSET_ID,
-        memory_id: MEMORY_ID,
-        object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.heic`,
-        preview_object_key: previewKey,
-        content_type: 'image/heic',
-        aspect_ratio: 0.8,
-      },
-    ],
+  const row = buildQueryRow({
+    memory_type: 'media',
+    memory_media: [mediaRow({
+      object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.heic`,
+      preview_object_key: previewKey,
+      content_type: 'image/heic',
+      aspect_ratio: 0.8,
+    })],
   });
-  const memory = { ...textOnlyMemory(), memory_type: 'media' };
-  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+  const result = resolveShareCardSourceFromQueryRow(row, ASSET_ID);
   assertEquals(result.ok, true);
   if (result.ok && result.source.kind === 'media') {
     assertEquals(result.source.objectKey, previewKey);
@@ -520,68 +451,58 @@ Deno.test('resolveShareCardSource: photo media resolves preview_object_key over 
   }
 });
 
-Deno.test('resolveShareCardSource: legacy HEIC row with no preview is rejected as unsupported', async () => {
-  const supabase = fakeSupabase({
-    memoryMedia: [
-      {
-        id: ASSET_ID,
-        memory_id: MEMORY_ID,
-        object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.heic`,
-        preview_object_key: null,
-        content_type: 'image/heic',
-        aspect_ratio: null,
-      },
-    ],
+Deno.test('resolveShareCardSourceFromQueryRow: legacy HEIC row with no preview is rejected as unsupported', () => {
+  const row = buildQueryRow({
+    memory_type: 'media',
+    memory_media: [mediaRow({ object_key: `${OWNER_ID}/memories/${MEMORY_ID}/media/${ASSET_ID}.heic`, content_type: 'image/heic', aspect_ratio: null })],
   });
-  const memory = { ...textOnlyMemory(), memory_type: 'media' };
-  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+  const result = resolveShareCardSourceFromQueryRow(row, ASSET_ID);
   assertEquals(result.ok, false);
   if (!result.ok) assertEquals(result.error.code, 'unsupported_image_format');
 });
 
-Deno.test('resolveShareCardSource: asset id that does not exist at all is asset_not_found', async () => {
-  const supabase = fakeSupabase({ memoryMedia: [] });
-  const memory = { ...textOnlyMemory(), memory_type: 'media' };
-  const result = await resolveShareCardSource(supabase as never, memory, ASSET_ID);
+Deno.test('resolveShareCardSourceFromQueryRow: asset id that does not exist at all is asset_not_found', () => {
+  const row = buildQueryRow({ memory_type: 'media', memory_media: [] });
+  const result = resolveShareCardSourceFromQueryRow(row, ASSET_ID);
   assertEquals(result.ok, false);
   if (!result.ok) assertEquals(result.error.code, 'asset_not_found');
 });
 
-// ── authorizeShareCardAccess (authz matrix: owner/manager/viewer×toggle/non-member) ──
+// ── resolveCallerRoleFromQueryRow / authorizeShareCardAccessFromQueryRow
+// (authz matrix: owner/manager/viewer×toggle/non-member) ──────────────────
+// Round 3: role + `viewer_sharing_enabled` both come from the single nested
+// query's embedded `families(family_memberships(...))` relation -- no DB
+// call. Same authz matrix as the pre-round-3 authorizeShareCardAccess.
 
-Deno.test('authorizeShareCardAccess: owner is always authorized', async () => {
-  const supabase = fakeSupabase({
-    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: false }],
-    memberships: [{ family_id: FAMILY_A, role: 'owner', user_id: OWNER_ID }],
+Deno.test('authorizeShareCardAccessFromQueryRow: owner is always authorized', () => {
+  const row = buildQueryRow({
+    families: { id: FAMILY_A, viewer_sharing_enabled: false, family_memberships: [{ user_id: OWNER_ID, role: 'owner' }] },
   });
-  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, OWNER_ID);
+  const result = authorizeShareCardAccessFromQueryRow(row, OWNER_ID);
   assertEquals(result.ok, true);
 });
 
-Deno.test('authorizeShareCardAccess: manager is always authorized, independent of the viewer toggle', async () => {
-  const supabase = fakeSupabase({
-    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: false }],
-    memberships: [{ family_id: FAMILY_A, role: 'manager', user_id: MANAGER_ID }],
+Deno.test('authorizeShareCardAccessFromQueryRow: manager is always authorized, independent of the viewer toggle', () => {
+  const row = buildQueryRow({
+    families: { id: FAMILY_A, viewer_sharing_enabled: false, family_memberships: [{ user_id: MANAGER_ID, role: 'manager' }] },
   });
-  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, MANAGER_ID);
+  const result = authorizeShareCardAccessFromQueryRow(row, MANAGER_ID);
   assertEquals(result.ok, true);
 });
 
-Deno.test('authorizeShareCardAccess: viewer is authorized when viewer_sharing_enabled is true', async () => {
-  const supabase = fakeSupabase({
-    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: true }],
-    memberships: [{ family_id: FAMILY_A, role: 'viewer', user_id: VIEWER_ID }],
+Deno.test('authorizeShareCardAccessFromQueryRow: viewer is authorized when viewer_sharing_enabled is true', () => {
+  const row = buildQueryRow({
+    families: { id: FAMILY_A, viewer_sharing_enabled: true, family_memberships: [{ user_id: VIEWER_ID, role: 'viewer' }] },
   });
-  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, VIEWER_ID);
+  const result = authorizeShareCardAccessFromQueryRow(row, VIEWER_ID);
   assertEquals(result.ok, true);
 });
 
-Deno.test('authorizeShareCardAccess: viewer is rejected (sharing_disabled) when viewer_sharing_enabled is false', async () => {
-  const supabase = fakeSupabase({
-    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: false }],
-    memberships: [{ family_id: FAMILY_A, role: 'viewer', user_id: VIEWER_ID }],
+Deno.test('authorizeShareCardAccessFromQueryRow: viewer is rejected (sharing_disabled) when viewer_sharing_enabled is false', () => {
+  const row = buildQueryRow({
+    families: { id: FAMILY_A, viewer_sharing_enabled: false, family_memberships: [{ user_id: VIEWER_ID, role: 'viewer' }] },
   });
-  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, VIEWER_ID);
+  const result = authorizeShareCardAccessFromQueryRow(row, VIEWER_ID);
   assertEquals(result.ok, false);
   if (!result.ok) {
     assertEquals(result.error.code, 'sharing_disabled');
@@ -589,17 +510,58 @@ Deno.test('authorizeShareCardAccess: viewer is rejected (sharing_disabled) when 
   }
 });
 
-Deno.test('authorizeShareCardAccess: non-member is forbidden', async () => {
-  const supabase = fakeSupabase({
-    families: [{ id: FAMILY_A, owner_id: OWNER_ID, deleted_at: null, viewer_sharing_enabled: true }],
-    memberships: [],
+Deno.test('authorizeShareCardAccessFromQueryRow: caller absent from family_memberships is forbidden (defensive -- RLS should make this unreachable in practice)', () => {
+  const row = buildQueryRow({
+    families: { id: FAMILY_A, viewer_sharing_enabled: true, family_memberships: [] },
   });
-  const result = await authorizeShareCardAccess(supabase as never, FAMILY_A, OUTSIDER_ID);
+  const result = authorizeShareCardAccessFromQueryRow(row, OUTSIDER_ID);
   assertEquals(result.ok, false);
   if (!result.ok) {
     assertEquals(result.error.code, 'forbidden');
     assertEquals(result.error.status, 403);
   }
+});
+
+Deno.test('resolveCallerRoleFromQueryRow: finds the caller among several memberships and ignores the others', () => {
+  const row = buildQueryRow({
+    families: {
+      id: FAMILY_A,
+      viewer_sharing_enabled: true,
+      family_memberships: [
+        { user_id: OWNER_ID, role: 'owner' },
+        { user_id: MANAGER_ID, role: 'manager' },
+        { user_id: VIEWER_ID, role: 'viewer' },
+      ],
+    },
+  });
+  assertEquals(resolveCallerRoleFromQueryRow(row, VIEWER_ID), 'viewer');
+  assertEquals(resolveCallerRoleFromQueryRow(row, MANAGER_ID), 'manager');
+  assertEquals(resolveCallerRoleFromQueryRow(row, OUTSIDER_ID), null);
+});
+
+// Round 3: authorization and resolution are now both SYNC post-processing
+// of the same already-fetched row -- no more Promise.all, so there's no
+// "which settles first" question to guard against (round 2's version of
+// this test is gone). What's still worth pinning: the fixed check order in
+// handleComposeShareCard (authorization checked before resolution) means a
+// non-member/blocked-viewer gets 403, never a 400/404 that would leak the
+// memory's type, when BOTH would fail.
+Deno.test('authorization is checked before resolution, so a blocked viewer never sees a resolution-layer error code', () => {
+  const row = buildQueryRow({
+    memory_type: 'audio', // would also fail resolution (unsupported_memory_type)
+    families: { id: FAMILY_A, viewer_sharing_enabled: false, family_memberships: [{ user_id: VIEWER_ID, role: 'viewer' }] },
+  });
+
+  const authorization = authorizeShareCardAccessFromQueryRow(row, VIEWER_ID);
+  assertEquals(authorization.ok, false);
+  if (!authorization.ok) assertEquals(authorization.error.code, 'sharing_disabled');
+
+  // handleComposeShareCard never even calls resolveShareCardSourceFromQueryRow
+  // once authorization has failed -- but confirming it WOULD also fail here
+  // proves this scenario genuinely exercises the priority order, not a
+  // coincidentally-passing case.
+  const resolution = resolveShareCardSourceFromQueryRow(row, undefined);
+  assertEquals(resolution.ok, false);
 });
 
 // ── Tagged-member portrait resolution ──────────────────────────────────
@@ -637,9 +599,12 @@ Deno.test('resolveMemberPortraitKey falls back to the raw photo when there is no
   assertEquals(key, 'photo.jpg');
 });
 
-Deno.test('fetchTaggedMembers caps at MAX_VISIBLE_MEMBERS and reports the overflow count', async () => {
-  const rows = Array.from({ length: 8 }, (_, i) => ({
-    memory_id: MEMORY_ID,
+// resolveTaggedMembersFromQueryRow: round 3 rewrite of fetchTaggedMembers --
+// same dedupe/cap logic, reads `row.memory_family_members` (already fetched
+// by the single nested query) instead of its own DB call. Sync now.
+
+Deno.test('resolveTaggedMembersFromQueryRow caps at MAX_VISIBLE_MEMBERS and reports the overflow count', () => {
+  const memoryFamilyMembers = Array.from({ length: 8 }, (_, i) => ({
     family_member_id: `member-${i}`,
     family_members: {
       id: `member-${i}`,
@@ -649,17 +614,16 @@ Deno.test('fetchTaggedMembers caps at MAX_VISIBLE_MEMBERS and reports the overfl
       profile_picture_key: null,
     },
   }));
-  const supabase = fakeSupabase({ memoryFamilyMembers: rows });
-  const result = await fetchTaggedMembers(supabase as never, MEMORY_ID);
+  const row = buildQueryRow({ memory_family_members: memoryFamilyMembers });
+  const result = resolveTaggedMembersFromQueryRow(row);
   assertEquals(result.members.length, 6);
   assertEquals(result.overflowCount, 2);
 });
 
-Deno.test('fetchTaggedMembers drops rows whose joined family_members is null (deleted member)', async () => {
-  const supabase = fakeSupabase({
-    memoryFamilyMembers: [
+Deno.test('resolveTaggedMembersFromQueryRow drops rows whose joined family_members is null (deleted member)', () => {
+  const row = buildQueryRow({
+    memory_family_members: [
       {
-        memory_id: MEMORY_ID,
         family_member_id: MEMBER_1,
         family_members: {
           id: MEMBER_1,
@@ -669,12 +633,127 @@ Deno.test('fetchTaggedMembers drops rows whose joined family_members is null (de
           profile_picture_key: null,
         },
       },
-      { memory_id: MEMORY_ID, family_member_id: MEMBER_2, family_members: null },
+      { family_member_id: MEMBER_2, family_members: null },
     ],
   });
-  const result = await fetchTaggedMembers(supabase as never, MEMORY_ID);
+  const result = resolveTaggedMembersFromQueryRow(row);
   assertEquals(result.members.length, 1);
   assertEquals(result.members[0].id, MEMBER_1);
+});
+
+// ── Perf-audit restructure: batched image fetch (this package's
+// implementation report) -- resolvePortraitKeysToFetch / buildTaggedMemberPortraits
+// replace the old resolveMemberPortraits, split so the request handler can
+// fire the hero image fetch and every portrait fetch in the SAME wall-clock
+// window (getObjectBytesBatch, _shared/r2.ts) instead of fetching portraits
+// first and the hero image afterward. These tests exercise
+// buildTaggedMemberPortraits' fail-open CPU-only processing step directly,
+// with a fake "already fetched" bytes Map -- no network/DB needed -- to
+// prove the fail-open guarantee survives the restructure. ─────────────────
+
+// 1x1 transparent PNG -- same fixture layout.test.ts's STUB_IMAGE_DATA_URI
+// uses, decoded to raw bytes here since buildTaggedMemberPortraits takes
+// already-fetched bytes, not a data URI.
+const TINY_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+function member(id: string, name: string, portraitKey: string | null) {
+  return {
+    id,
+    name,
+    illustrated_profile_key: portraitKey,
+    illustrated_profile_status: 'ready',
+    profile_picture_key: null,
+  };
+}
+
+Deno.test('resolvePortraitKeysToFetch returns one key per member that has one, in member order', () => {
+  const keys = resolvePortraitKeysToFetch([
+    member(MEMBER_1, 'Mia', 'mia.jpg'),
+    member(MEMBER_2, 'No Photo Yet', null),
+  ]);
+  assertEquals(keys, ['mia.jpg']);
+});
+
+Deno.test('resolvePortraitKeysToFetch returns an empty array when no tagged member has a portrait key', () => {
+  assertEquals(resolvePortraitKeysToFetch([member(MEMBER_1, 'No Photo', null)]), []);
+});
+
+Deno.test('buildTaggedMemberPortraits: a successfully-fetched portrait produces a real data URI', async () => {
+  const bytes = base64ToBytesForTest(TINY_PNG_B64);
+  const portraits = await buildTaggedMemberPortraits(
+    [member(MEMBER_1, 'Mia', 'mia.jpg')],
+    new Map([['mia.jpg', { ok: true, bytes }]]),
+    WEBP_DEC_WASM_BYTES,
+  );
+  assertEquals(portraits.length, 1);
+  assertEquals(portraits[0].name, 'Mia');
+  assertStringIncludes(portraits[0].dataUri ?? '', 'data:image/png;base64,');
+});
+
+// BUG-SURVIVAL regression test (coordinator's explicit ask): the fail-open
+// guarantee -- one bad portrait must never fail the whole share -- predates
+// this restructure (the old resolveMemberPortraits caught per-portrait
+// errors from its own inline fetch). Verifies it survives moving the fetch
+// OUT of this function entirely (now just reads pre-fetched batch results).
+Deno.test('buildTaggedMemberPortraits: a portrait whose R2 fetch failed (ok:false in the batch) falls back to null dataUri, not a throw', async () => {
+  const portraits = await buildTaggedMemberPortraits(
+    [member(MEMBER_1, 'Mia', 'mia.jpg')],
+    new Map([['mia.jpg', { ok: false, error: new Error('R2 fetch failed with status 404') }]]),
+    WEBP_DEC_WASM_BYTES,
+  );
+  assertEquals(portraits, [{ name: 'Mia', dataUri: null }]);
+});
+
+Deno.test('buildTaggedMemberPortraits: a portrait key entirely MISSING from the batch map (e.g. dropped by a bug upstream) also fails open, not a throw', async () => {
+  const portraits = await buildTaggedMemberPortraits(
+    [member(MEMBER_1, 'Mia', 'mia.jpg')],
+    new Map(), // empty -- 'mia.jpg' was never fetched
+    WEBP_DEC_WASM_BYTES,
+  );
+  assertEquals(portraits, [{ name: 'Mia', dataUri: null }]);
+});
+
+Deno.test('buildTaggedMemberPortraits: a member with no portrait key at all is never looked up in the batch map', async () => {
+  const portraits = await buildTaggedMemberPortraits(
+    [member(MEMBER_1, 'No Photo', null)],
+    new Map([['unrelated-key.jpg', { ok: true, bytes: base64ToBytesForTest(TINY_PNG_B64) }]]),
+    WEBP_DEC_WASM_BYTES,
+  );
+  assertEquals(portraits, [{ name: 'No Photo', dataUri: null }]);
+});
+
+Deno.test('buildTaggedMemberPortraits: ONE failed portrait among several does not affect the others (fail-open is per-member, not all-or-nothing)', async () => {
+  const goodBytes = base64ToBytesForTest(TINY_PNG_B64);
+  const portraits = await buildTaggedMemberPortraits(
+    [
+      member(MEMBER_1, 'Mia', 'mia.jpg'),
+      member(MEMBER_2, 'Leo', 'leo.jpg'),
+    ],
+    new Map([
+      ['mia.jpg', { ok: true, bytes: goodBytes }],
+      ['leo.jpg', { ok: false, error: new Error('network error') }],
+    ]),
+    WEBP_DEC_WASM_BYTES,
+  );
+  assertEquals(portraits.length, 2);
+  assertStringIncludes(portraits[0].dataUri ?? '', 'data:image/png;base64,');
+  assertEquals(portraits[1], { name: 'Leo', dataUri: null });
+});
+
+Deno.test('buildTaggedMemberPortraits: an unrasterizable format (HEIC) falls back to null even though the fetch itself succeeded', async () => {
+  // HEIC magic bytes are irrelevant to resolveImageMimeType's PNG/JPEG/WEBP
+  // sniffing -- it falls back to the KEY's extension for anything else, so
+  // a `.heic`-suffixed key with arbitrary bytes exercises the
+  // isUnrasterizableMimeType branch exactly like a real legacy HEIC portrait
+  // would (compose-share-card's mismatched-extension incident notwithstanding
+  // -- that incident was about the OPPOSITE case, webp-suffixed non-webp
+  // bytes, not covered here).
+  const portraits = await buildTaggedMemberPortraits(
+    [member(MEMBER_1, 'Mia', 'mia.heic')],
+    new Map([['mia.heic', { ok: true, bytes: new Uint8Array([1, 2, 3, 4]) }]]),
+    WEBP_DEC_WASM_BYTES,
+  );
+  assertEquals(portraits, [{ name: 'Mia', dataUri: null }]);
 });
 
 // ── HTTP handler: unauthenticated + no-content-logging ─────────────────

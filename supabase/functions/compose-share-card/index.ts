@@ -11,57 +11,60 @@
 // `memoryId` + a status/code ONLY, never `error.message`, on any path that
 // touches layout/render. DB-layer errors (Supabase client errors) are safe
 // to log by message since they never contain memory content.
-import { init as initWebpDecoder, default as decodeWebp } from 'npm:@jsquash/webp@1.4.0/decode.js';
 import { Image as RasterImage } from 'https://deno.land/x/imagescript@1.3.0/mod.ts';
+// Type-only import -- erased at runtime (no module-graph/boot cost), so the
+// JS module itself is never pulled in unless loadWebpModule's dynamic
+// import() below actually runs. See that function for the runtime load.
+import type { init as initWebpDecoderType, default as decodeWebpType } from 'npm:@jsquash/webp@1.4.0/decode.js';
+type InitWebpDecoderFn = typeof initWebpDecoderType;
+type DecodeWebpFn = typeof decodeWebpType;
 
 import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
 import { errorResponse } from '../_shared/errors.ts';
-import { getCallerFamilyRole, type FamilyRole } from '../_shared/family-access.ts';
+import type { FamilyRole } from '../_shared/family-access.ts';
 import { capImageMaxEdge, computeResizedDimensions } from '../_shared/image-bytes.ts';
 import { REFERENCE_IMAGE_JPEG_QUALITY } from '../_shared/image-limits.ts';
 import { encodeBytesToBase64 } from '../_shared/openai.ts';
-import { getObjectBytes } from '../_shared/r2.ts';
+import { getObjectBytesBatch, type ObjectBytesBatchEntry } from '../_shared/r2.ts';
 import { createUserClient } from '../_shared/supabase-admin.ts';
 import { composeShareCardPng } from './render.ts';
 import { formatShareCardDateLabel, MAX_VISIBLE_MEMBERS, type ShareCardData, type ShareCardMemberPortrait } from './layout.ts';
-import { WEBP_DEC_WASM_B64 } from './assets/webp-dec-wasm-b64.ts';
+import { loadShareCardAssets, ShareCardAssetsUnavailableError } from './assets-loader.ts';
+// NOTE: @jsquash/webp (npm module, JS glue code) is intentionally NOT
+// statically imported here -- see the "Real-WebP decode" section below
+// (loadWebpModule) for why: a static import puts the module in EVERY
+// isolate's boot-time module graph eval regardless of whether a given
+// compose ever touches a real webp source. Dynamic `import()` inside
+// loadWebpModule defers module resolution until a request actually sniffs
+// webp bytes. (The wasm BYTES it compiles come from assets-loader.ts, R2,
+// not from a module -- see this file's header comment.)
 
-// deno-lint-ignore no-explicit-any -- untyped Supabase client, matching every other function in this package (see _shared/supabase-admin.ts).
-type AnySupabase = any;
+// ── Instrumentation (perf-audit fix, this package's implementation report) ─
+// Server-Timing header + a single structured per-request log line, added to
+// measure where the WORKER_RESOURCE_LIMIT (546) budget actually goes.
+// Every field logged below is an id or a number (memoryId, ms timings, byte
+// counts, a scale label) -- NEVER memory content (AGENTS.md logging
+// discipline; same rule this file already enforces on its error paths).
+//
+// ROUND 4 (this package's implementation report): a control experiment (a
+// trivial hello-world function on the SAME project, hammered the same way:
+// 15/15 success -- proving the platform itself was healthy) isolated the
+// cause of ~48% bodyless 546 failures (bodyless: no Server-Timing header at
+// all -- proof they died before this handler ever ran) as this function's
+// own ~7.5MB eszip bundle: ~4.8MB of base64 asset text V8 had to PARSE as
+// part of this module's own graph evaluation on every cold boot (S0: no
+// warm isolate ever observed). Fixed by evicting every binary asset from
+// the module graph entirely -- they're now fetched from R2 at request time
+// (assets-loader.ts) instead of base64-embedded in this module or
+// render.ts. This module now imports NO binary asset, static or dynamic;
+// MODULE_EVAL_TIME below should be capturing a near-trivial module-eval
+// cost, not megabytes of string-literal parsing.
+const MODULE_EVAL_TIME = performance.now();
 
 export interface ComposeShareCardRequest {
   memoryId: string;
   mediaAssetId?: string;
-}
-
-interface MemoryRow {
-  id: string;
-  family_id: string;
-  content: string | null;
-  memory_type: string;
-  memory_date: string;
-  illustration_key: string | null;
-  illustration_status: string;
-  /** Only used by the quote (text_only) card's accent strip + quote-glyph
-   * color (see layout.ts's shareCardEmotionColors) -- never logged
-   * (AGENTS.md logging discipline; enum-like label, fine to select/hold in
-   * memory, just not to console.*). */
-  emotion: string | null;
-}
-
-interface FamilyRow {
-  id: string;
-  // `viewer_sharing_enabled` ships in S1's migration
-  // (docs/plans/offline-awareness-and-share-cards.md S1) and is NOT yet in
-  // src/types/database.ts. This function must not be deployed until that
-  // migration has been applied -- see the deploy sequencing note in this
-  // package's implementation report. Selecting the column directly
-  // (no defensive fallback) is intentional: a fallback that treats a
-  // missing column as "sharing enabled" would silently reopen the toggle
-  // the moment the column exists but a stale deploy lags behind, which is
-  // exactly the security regression S1/S3 exist to prevent. Do not add one.
-  viewer_sharing_enabled: boolean;
 }
 
 interface MemoryMediaRow {
@@ -79,6 +82,81 @@ interface FamilyMemberRow {
   illustrated_profile_key: string | null;
   illustrated_profile_status: string;
   profile_picture_key: string | null;
+}
+
+// ── Single nested query (perf-audit round 3, this package's implementation
+// report) ────────────────────────────────────────────────────────────────
+// Round 2's Server-Timing measurement overturned round 1's boot-overhead
+// hypothesis: successful requests showed `fetch` at ~850-1010ms of which
+// the (already-batched, round 2) image fetch was only ~250ms -- the
+// remainder (~600-750ms) was DB/auth round trips surviving as ~6 sequential
+// hops (edge->Stockholm ~100ms each): the memory row select, then
+// authorizeShareCardAccess's OWN two-to-three sequential queries
+// (getCallerFamilyRoles does `families` THEN `family_memberships`,
+// sequentially -- not parallel with each other, only the round-2 fix
+// parallelized authorizeShareCardAccess AS A WHOLE against
+// resolveShareCardSource; the sequential chain INSIDE
+// authorizeShareCardAccess was invisible to that fix -- plus a THIRD query
+// for a viewer's `viewer_sharing_enabled` check), resolveShareCardSource's
+// `memory_media` select, and fetchTaggedMembers' `memory_family_members`
+// select.
+//
+// Fixed by folding every one of those reads into ONE PostgREST nested
+// select on `memories`, run with the USER-scoped client so existing RLS
+// policies (`is_family_member(family_id)` on every table below) enforce
+// membership implicitly -- a returned row already proves the caller is a
+// family member, exactly as the pre-restructure code's own comment noted
+// ("RLS scopes this query to the caller's families"). Verified against the
+// REAL schema+RLS with a real user session (this package's implementation
+// report) before wiring in: single round trip, ~150-200ms, all four nested
+// relations (`families`+`family_memberships`, `memory_media`,
+// `memory_family_members`+`family_members`) came back correctly shaped.
+//
+// `memory_media` and `memory_family_members` are fetched WITHOUT a
+// row-level filter (no `!inner` + dot-path filter on the embedded
+// resource) -- deliberately: `mediaAssetId` is only present for `media`
+// memories, and an inner-join filter would incorrectly exclude
+// text_only/text_illustration memories (which have zero memory_media
+// rows) from matching at all. Instead every row for the memory is fetched
+// (typically a handful of small metadata rows -- ids/keys, not bytes) and
+// the specific asset / tagged-member list is picked out in JS afterward,
+// mirroring how fetchTaggedMembers already worked pre-restructure.
+export const SHARE_CARD_MEMORY_SELECT = `
+  id, family_id, content, memory_type, memory_date, illustration_key, illustration_status, emotion,
+  families ( id, viewer_sharing_enabled, family_memberships ( user_id, role ) ),
+  memory_media ( id, memory_id, object_key, preview_object_key, content_type, aspect_ratio ),
+  memory_family_members ( family_member_id, family_members ( id, name, illustrated_profile_key, illustrated_profile_status, profile_picture_key ) )
+`;
+
+export interface ShareCardMemoryQueryRow {
+  id: string;
+  family_id: string;
+  content: string | null;
+  memory_type: string;
+  memory_date: string;
+  illustration_key: string | null;
+  illustration_status: string;
+  /** Only used by the quote (text_only) card's accent strip + quote-glyph
+   * color (see layout.ts's shareCardEmotionColors) -- never logged
+   * (AGENTS.md logging discipline; enum-like label, fine to select/hold in
+   * memory, just not to console.*). */
+  emotion: string | null;
+  // Single object (many-to-one from `memories`), null only if the FK is
+  // somehow dangling (never expected in practice -- `families` rows are
+  // never hard-deleted while memories reference them).
+  families: {
+    id: string;
+    // `viewer_sharing_enabled` ships in S1's migration
+    // (docs/plans/offline-awareness-and-share-cards.md S1). Selecting the
+    // column directly (no defensive fallback) is intentional -- see the
+    // ORIGINAL FamilyRow interface's note (this package's implementation
+    // report, round 1): a fallback that treats a missing column as
+    // "sharing enabled" would silently reopen the toggle. Do not add one.
+    viewer_sharing_enabled: boolean;
+    family_memberships: Array<{ user_id: string; role: string }>;
+  } | null;
+  memory_media: MemoryMediaRow[];
+  memory_family_members: Array<{ family_member_id: string; family_members: FamilyMemberRow | null }>;
 }
 
 // ── Rate limiting (repo convention: analyze-emotion's per-caller cooldown,
@@ -316,20 +394,22 @@ export type ResolvedShareCardSource =
 
 /**
  * Resolves which image (if any) the card should embed, and validates the
- * request against the memory row: memory-type rejection, media-asset
- * ownership, video rejection, illustration readiness.
+ * request: memory-type rejection, media-asset ownership, video rejection,
+ * illustration readiness. Round-3 rewrite of the original
+ * `resolveShareCardSource` -- same exact validation logic, but reads the
+ * candidate media asset from the single nested query's `row.memory_media`
+ * array (already fetched) instead of issuing its own `memory_media` select.
  */
-export async function resolveShareCardSource(
-  supabase: AnySupabase,
-  memory: MemoryRow,
+export function resolveShareCardSourceFromQueryRow(
+  row: ShareCardMemoryQueryRow,
   mediaAssetId: string | undefined,
-): Promise<{ ok: true; source: ResolvedShareCardSource } | { ok: false; error: ShareCardValidationError }> {
-  if (isRejectedMemoryType(memory.memory_type)) {
+): { ok: true; source: ResolvedShareCardSource } | { ok: false; error: ShareCardValidationError } {
+  if (isRejectedMemoryType(row.memory_type)) {
     return {
       ok: false,
       error: {
         status: 400,
-        message: memory.memory_type === 'audio'
+        message: row.memory_type === 'audio'
           ? 'Audio memories cannot be shared yet'
           : 'Unsupported memory type for sharing',
         code: 'unsupported_memory_type',
@@ -337,12 +417,12 @@ export async function resolveShareCardSource(
     };
   }
 
-  if (memory.memory_type === 'text_only') {
+  if (row.memory_type === 'text_only') {
     return { ok: true, source: { kind: 'text' } };
   }
 
-  if (memory.memory_type === 'text_illustration') {
-    if (memory.illustration_status !== 'ready' || !memory.illustration_key) {
+  if (row.memory_type === 'text_illustration') {
+    if (row.illustration_status !== 'ready' || !row.illustration_key) {
       return {
         ok: false,
         error: {
@@ -352,7 +432,7 @@ export async function resolveShareCardSource(
         },
       };
     }
-    return { ok: true, source: { kind: 'illustration', objectKey: memory.illustration_key } };
+    return { ok: true, source: { kind: 'illustration', objectKey: row.illustration_key } };
   }
 
   // memory_type === 'media'
@@ -363,20 +443,13 @@ export async function resolveShareCardSource(
     };
   }
 
-  const { data: asset, error } = await supabase
-    .from('memory_media')
-    .select('id, memory_id, object_key, preview_object_key, content_type, aspect_ratio')
-    .eq('id', mediaAssetId)
-    .eq('memory_id', memory.id)
-    .maybeSingle();
-
-  if (error) {
-    console.error('compose-share-card media asset lookup failed', memory.id, 500);
-    return {
-      ok: false,
-      error: { status: 500, message: 'Failed to load media asset', code: 'internal_error' },
-    };
-  }
+  // No server-side filter on the embedded select (see SHARE_CARD_MEMORY_SELECT's
+  // header comment for why) -- pick the exact requested asset out of the
+  // memory's full (small) media list here, same ownership guarantee as the
+  // old `.eq('id', mediaAssetId).eq('memory_id', memory.id)` query since
+  // every row in this array already belongs to this memory by construction
+  // of the nested select.
+  const asset = row.memory_media.find((m) => m.id === mediaAssetId);
 
   if (!asset) {
     return {
@@ -385,19 +458,17 @@ export async function resolveShareCardSource(
     };
   }
 
-  const row = asset as MemoryMediaRow;
-
-  if (isVideoContentType(row.content_type)) {
+  if (isVideoContentType(asset.content_type)) {
     return {
       ok: false,
       error: { status: 400, message: 'Video memories cannot be shared', code: 'video_not_supported' },
     };
   }
 
-  const objectKey = row.preview_object_key ?? row.object_key;
+  const objectKey = asset.preview_object_key ?? asset.object_key;
   // Only the legacy object_key fallback can carry a non-preview content
   // type; the preview variant is always JPEG (backfill-media-previews.ts).
-  const usingPreview = Boolean(row.preview_object_key);
+  const usingPreview = Boolean(asset.preview_object_key);
   const mimeType = usingPreview ? 'image/jpeg' : mimeTypeFromObjectKey(objectKey);
 
   if (isUnrasterizableMimeType(mimeType)) {
@@ -409,43 +480,45 @@ export async function resolveShareCardSource(
 
   return {
     ok: true,
-    source: { kind: 'media', objectKey, storedAspectRatio: row.aspect_ratio },
+    source: { kind: 'media', objectKey, storedAspectRatio: asset.aspect_ratio },
   };
 }
 
 // ── Authorization (role + viewer-sharing-toggle) ───────────────────────
-// Extracted from handleComposeShareCard so the full authz matrix (owner /
-// manager / viewer×toggle / non-member) is unit-testable with a fake
-// supabase client, mirroring how getCallerFamilyRole itself is tested in
-// _shared/family-access.test.ts.
-export async function authorizeShareCardAccess(
-  supabase: AnySupabase,
-  familyId: string,
+// Round-3 rewrite: the original authorizeShareCardAccess made its own
+// getCallerFamilyRole call (itself TWO sequential queries -- `families`
+// then `family_memberships`, see _shared/family-access.ts) plus a THIRD
+// query for a viewer's `viewer_sharing_enabled` -- all now already fetched
+// by the single nested query. `resolveCallerRoleFromQueryRow` is exported
+// separately from the check itself so a caller that only needs the role
+// (none currently, but mirrors the old code's shape) doesn't have to thread
+// a full authz-error type through.
+export function resolveCallerRoleFromQueryRow(row: ShareCardMemoryQueryRow, callerId: string): FamilyRole | null {
+  const membership = row.families?.family_memberships.find((m) => m.user_id === callerId);
+  return (membership?.role as FamilyRole | undefined) ?? null;
+}
+
+export function authorizeShareCardAccessFromQueryRow(
+  row: ShareCardMemoryQueryRow,
   callerId: string,
-): Promise<{ ok: true; role: FamilyRole } | { ok: false; error: ShareCardValidationError }> {
-  const role = await getCallerFamilyRole(supabase, familyId, callerId);
+): { ok: true; role: FamilyRole } | { ok: false; error: ShareCardValidationError } {
+  const role = resolveCallerRoleFromQueryRow(row, callerId);
   if (!role) {
+    // Defensive-only in the real handler path: RLS's `is_family_member()`
+    // check backs BOTH the `memories` SELECT policy (what gated whether
+    // this row was returned at all) and `family_memberships`' own SELECT
+    // policy the embedded relation reads from, so a row reaching this
+    // point implies membership already. Kept as a safety net (and because
+    // it's directly unit-testable with a synthetic row) rather than
+    // asserted away.
     return { ok: false, error: { status: 403, message: 'Not authorized for this memory', code: 'forbidden' } };
   }
 
-  if (role === 'viewer') {
-    const { data: family, error } = await supabase
-      .from('families')
-      .select('id, viewer_sharing_enabled')
-      .eq('id', familyId)
-      .maybeSingle();
-
-    if (error) {
-      console.error('compose-share-card family lookup failed', familyId, 500);
-      return { ok: false, error: { status: 500, message: 'Failed to load family', code: 'internal_error' } };
-    }
-
-    if ((family as FamilyRow | null)?.viewer_sharing_enabled === false) {
-      return {
-        ok: false,
-        error: { status: 403, message: 'Sharing is currently off for this family', code: 'sharing_disabled' },
-      };
-    }
+  if (role === 'viewer' && row.families?.viewer_sharing_enabled === false) {
+    return {
+      ok: false,
+      error: { status: 403, message: 'Sharing is currently off for this family', code: 'sharing_disabled' },
+    };
   }
 
   return { ok: true, role };
@@ -473,23 +546,16 @@ export interface TaggedMembersResult {
   overflowCount: number;
 }
 
-export async function fetchTaggedMembers(
-  supabase: AnySupabase,
-  memoryId: string,
-): Promise<TaggedMembersResult> {
-  const { data, error } = await supabase
-    .from('memory_family_members')
-    .select('family_member_id, family_members(id, name, illustrated_profile_key, illustrated_profile_status, profile_picture_key)')
-    .eq('memory_id', memoryId);
-
-  if (error) {
-    console.error('compose-share-card tagged member lookup failed', memoryId, 500);
-    throw new Error('tagged_member_lookup_failed');
-  }
-
-  const rows = (data ?? [])
-    .map((row: { family_members: FamilyMemberRow | null }) => row.family_members)
-    .filter((member: FamilyMemberRow | null): member is FamilyMemberRow => Boolean(member));
+/**
+ * Round-3 rewrite of the original fetchTaggedMembers -- same dedupe/cap
+ * logic, but reads `row.memory_family_members` (already fetched by the
+ * single nested query) instead of issuing its own
+ * `memory_family_members` select. Pure/sync now: no DB call, no I/O.
+ */
+export function resolveTaggedMembersFromQueryRow(row: ShareCardMemoryQueryRow): TaggedMembersResult {
+  const rows = row.memory_family_members
+    .map((r) => r.family_members)
+    .filter((member): member is FamilyMemberRow => Boolean(member));
 
   return {
     members: rows.slice(0, MAX_VISIBLE_MEMBERS),
@@ -515,33 +581,43 @@ export async function fetchTaggedMembers(
 // (already vendored/proven here for capImageMaxEdge) before embedding.
 // @jsquash/webp's decode() normally fetches its own .wasm file at runtime
 // via `new URL(..., import.meta.url)` -- the exact channel the S0 spike
-// proved dead under `--use-api` deploys (see this file's header comment and
-// webp-dec-wasm-b64.ts). Its `init(module)` accepts a PRE-COMPILED
-// WebAssembly.Module instead, bypassing that fetch -- webp-dec-wasm-b64.ts
-// supplies the bytes, decoded once per isolate (same cold-start-once
-// pattern as render.ts's font/resvg init).
-let webpDecoderInitPromise: Promise<void> | null = null;
+// proved dead under `--use-api` deploys. Its `init(module)` accepts a
+// PRE-COMPILED WebAssembly.Module instead, bypassing that fetch.
+//
+// ROUND 4: the wasm BYTES now arrive as a parameter (`webpDecWasmBytes`,
+// R2-fetched by assets-loader.ts alongside every other asset -- see this
+// file's header comment) instead of a per-request dynamic import of a
+// base64 module. The npm MODULE import (`@jsquash/webp`'s JS glue code)
+// stays a lazy dynamic `import()` here -- that part of round 1's "lazy
+// webp" fix is still worth keeping: a compose whose sniffed source is NOT
+// webp never resolves that module or pays the wasm COMPILE, regardless of
+// whether the bytes themselves were fetched unconditionally as part of the
+// round-4 asset batch (a small, already-parallelized network cost) or not.
+// Memoized per isolate -- once a request DOES need it, subsequent webp
+// sources in the same isolate reuse the already-compiled instance.
+let webpModulePromise: Promise<{ decode: DecodeWebpFn }> | null = null;
 
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+function loadWebpModule(webpDecWasmBytes: Uint8Array): Promise<{ decode: DecodeWebpFn }> {
+  if (!webpModulePromise) {
+    webpModulePromise = (async () => {
+      const { init, default: decode } = await import('npm:@jsquash/webp@1.4.0/decode.js') as {
+        init: InitWebpDecoderFn;
+        default: DecodeWebpFn;
+      };
+      const module = await WebAssembly.compile(webpDecWasmBytes.buffer as ArrayBuffer);
+      await init(module);
+      return { decode };
+    })().catch((error) => {
+      webpModulePromise = null;
+      throw error;
+    });
   }
-  return bytes;
+  return webpModulePromise;
 }
 
-function getWebpDecoder(): Promise<void> {
-  if (!webpDecoderInitPromise) {
-    const wasmBytes = base64ToBytes(WEBP_DEC_WASM_B64);
-    webpDecoderInitPromise = WebAssembly.compile(wasmBytes.buffer as ArrayBuffer)
-      .then((module) => initWebpDecoder(module))
-      .catch((error) => {
-        webpDecoderInitPromise = null;
-        throw error;
-      });
-  }
-  return webpDecoderInitPromise;
+/** Exposed for tests only -- avoids cross-test memoization bleed. */
+export function _resetWebpModuleForTests(): void {
+  webpModulePromise = null;
 }
 
 /**
@@ -553,9 +629,13 @@ function getWebpDecoder(): Promise<void> {
  * bytes resvg silently can't render -- same "don't fail the whole card"
  * posture as resolveMemberPortraits' single-portrait failure handling.
  */
-export async function convertWebpToJpeg(bytes: Uint8Array, maxEdge: number): Promise<{ bytes: Uint8Array; contentType: string } | null> {
+export async function convertWebpToJpeg(
+  bytes: Uint8Array,
+  maxEdge: number,
+  webpDecWasmBytes: Uint8Array,
+): Promise<{ bytes: Uint8Array; contentType: string } | null> {
   try {
-    await getWebpDecoder();
+    const { decode: decodeWebp } = await loadWebpModule(webpDecWasmBytes);
     const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     const imageData = await decodeWebp(arrayBuffer);
     const image = new RasterImage(imageData.width, imageData.height);
@@ -593,16 +673,60 @@ export async function convertWebpToJpeg(bytes: Uint8Array, maxEdge: number): Pro
 // every image source (media photo, illustration, tagged-member portrait).
 export const SHARE_CARD_MAX_IMAGE_EDGE = 1600;
 
+// ── Skip-decode fast path (perf-audit fix, this package's implementation
+// report) ────────────────────────────────────────────────────────────────
+// capImageMaxEdge ALWAYS fully decodes the source image (imagescript
+// Image.decode) just to learn its width/height, even when the bytes are
+// already well under maxEdge and no resize will happen -- the decode (and
+// the encode it does when it DOES resize) is real CPU time paid on every
+// call regardless. Tagged-member portraits are the common case that never
+// needed it: stored small (~25KB, generated/cropped well under 1600px on
+// their longest edge already), so every share with tagged members was
+// paying N unnecessary decode+dimension-check round trips.
+//
+// Fix: sniff dimensions via `npm:image-size` (header-only parse, no pixel
+// decode -- the SAME dependency aspectRatioFromImageBytes above already
+// uses for the identical reason) and skip capImageMaxEdge's decode entirely
+// when the sniffed size is already within budget. Falls through to the full
+// capImageMaxEdge path (which has its own defensive fallback) on any sniff
+// failure or when a resize is actually needed.
+export async function capImageMaxEdgeIfNeeded(
+  bytes: Uint8Array,
+  maxEdge: number,
+  sourceContentType: string,
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+  try {
+    const { imageSize } = await import('npm:image-size@1.1.1');
+    const { width, height } = imageSize(bytes);
+    if (width && height && Math.max(width, height) <= maxEdge) {
+      return { bytes, contentType: sourceContentType };
+    }
+  } catch {
+    // Sniff failed (unsupported/corrupt header) -- fall through; the full
+    // path below still has capImageMaxEdge's own try/catch fallback.
+  }
+  const capped = await capImageMaxEdge(bytes, maxEdge, sourceContentType);
+  return { bytes: capped.bytes, contentType: capped.contentType };
+}
+
 // ── Data-URI assembly ───────────────────────────────────────────────────
-export async function toDataUri(objectKey: string): Promise<{ dataUri: string; bytes: Uint8Array; mimeType: string }> {
-  const rawBytes = await getObjectBytes(objectKey);
+// Split into a pure-CPU processing step (bytesToDataUri) and a
+// fetch-then-process convenience wrapper (toDataUri) so the request handler
+// can batch-fetch multiple objects' BYTES concurrently (see
+// getObjectBytesBatch, _shared/r2.ts) and then run each one's processing
+// independently, instead of each caller doing its own serial fetch+process.
+export async function bytesToDataUri(
+  objectKey: string,
+  rawBytes: Uint8Array,
+  webpDecWasmBytes: Uint8Array,
+): Promise<{ dataUri: string; bytes: Uint8Array; mimeType: string }> {
   // resolveImageMimeType (not mimeTypeFromObjectKey) -- see that function's
   // header comment for why trusting the key extension alone crashed every
   // compose that touched a mismatched portrait.
   const sniffedMimeType = resolveImageMimeType(objectKey, rawBytes);
 
   if (sniffedMimeType === 'image/webp') {
-    const converted = await convertWebpToJpeg(rawBytes, SHARE_CARD_MAX_IMAGE_EDGE);
+    const converted = await convertWebpToJpeg(rawBytes, SHARE_CARD_MAX_IMAGE_EDGE, webpDecWasmBytes);
     if (converted) {
       return {
         dataUri: `data:${converted.contentType};base64,${encodeBytesToBase64(converted.bytes)}`,
@@ -616,7 +740,7 @@ export async function toDataUri(objectKey: string): Promise<{ dataUri: string; b
     // things better.
   }
 
-  const capped = await capImageMaxEdge(rawBytes, SHARE_CARD_MAX_IMAGE_EDGE, sniffedMimeType);
+  const capped = await capImageMaxEdgeIfNeeded(rawBytes, SHARE_CARD_MAX_IMAGE_EDGE, sniffedMimeType);
   return {
     dataUri: `data:${capped.contentType};base64,${encodeBytesToBase64(capped.bytes)}`,
     bytes: capped.bytes,
@@ -624,37 +748,84 @@ export async function toDataUri(objectKey: string): Promise<{ dataUri: string; b
   };
 }
 
-async function resolveMemberPortraits(
-  supabase: AnySupabase,
-  memoryId: string,
-): Promise<{ portraits: ShareCardMemberPortrait[]; overflowCount: number }> {
-  const { members, overflowCount } = await fetchTaggedMembers(supabase, memoryId);
+// ── Tagged-member portraits: batched fetch + fail-open processing ─────────
+// Perf-audit restructure (this package's implementation report): the
+// PREVIOUS resolveMemberPortraits fetched each portrait with its own
+// getObjectBytes() call inside a Promise.all -- portraits were already
+// parallel WITH EACH OTHER, but that whole step ran, as a unit, BEFORE the
+// hero image's fetch (see the old work closure: `await
+// resolveMemberPortraits(...)` was the very first line, hero's `await
+// toDataUri(...)` came after). Split into two pieces so the caller
+// (handleComposeShareCard's work closure) can fire the hero fetch and the
+// portrait BYTE fetches in the same wall-clock window as each other:
+//   1. resolvePortraitKeysToFetch -- pure, sync, no I/O.
+//   2. buildTaggedMemberPortraits -- pure CPU processing (webp decode/cap,
+//      data-URI assembly) given ALREADY-FETCHED bytes (a
+//      getObjectBytesBatch result) -- no I/O of its own, so it's cheap to
+//      unit-test with a fake Map instead of a fake Supabase/R2 backend.
 
-  const portraits = await Promise.all(
+/** Portrait keys for every tagged member that has one, in member order (a
+ * member with no resolvable key -- e.g. no photo uploaded yet -- is simply
+ * absent, not a null placeholder; buildTaggedMemberPortraits re-derives the
+ * same key per member independently, so index alignment is never relied
+ * on). */
+export function resolvePortraitKeysToFetch(members: FamilyMemberRow[]): string[] {
+  return members
+    .map((member) => resolveMemberPortraitKey(member))
+    .filter((key): key is string => Boolean(key));
+}
+
+/**
+ * Builds each tagged member's portrait data URI from an already-fetched
+ * bytes batch (see getObjectBytesBatch, _shared/r2.ts). FAIL-OPEN per
+ * member, preserved exactly from the pre-restructure behavior: a member
+ * with no portrait key, a failed R2 fetch (entry missing/`ok: false` in
+ * `portraitBytesByKey`), an unrasterizable format (HEIC/HEIF), or a
+ * processing failure (corrupt bytes, webp decode error) all fall back to
+ * `{ dataUri: null }` -- the card's initial-letter-circle fallback -- NEVER
+ * throws, so one bad portrait can never fail the whole compose.
+ */
+export async function buildTaggedMemberPortraits(
+  members: FamilyMemberRow[],
+  portraitBytesByKey: Map<string, ObjectBytesBatchEntry>,
+  webpDecWasmBytes: Uint8Array,
+): Promise<ShareCardMemberPortrait[]> {
+  return await Promise.all(
     members.map(async (member): Promise<ShareCardMemberPortrait> => {
       const key = resolveMemberPortraitKey(member);
       if (!key) {
         return { name: member.name, dataUri: null };
       }
+
+      const entry = portraitBytesByKey.get(key);
+      if (!entry || !entry.ok || !entry.bytes) {
+        // R2 fetch failed (or was never attempted) -- fall back, same as a
+        // processing failure below.
+        return { name: member.name, dataUri: null };
+      }
+
       try {
-        const { dataUri, mimeType } = await toDataUri(key);
+        const { dataUri, mimeType } = await bytesToDataUri(key, entry.bytes, webpDecWasmBytes);
         if (isUnrasterizableMimeType(mimeType)) {
           return { name: member.name, dataUri: null };
         }
         return { name: member.name, dataUri };
       } catch {
-        // A single member's portrait failing to load must not fail the
+        // A single member's portrait failing to process must not fail the
         // whole card -- fall back to the initial-letter circle.
         return { name: member.name, dataUri: null };
       }
     }),
   );
-
-  return { portraits, overflowCount };
 }
 
 // ── Request handling ─────────────────────────────────────────────────────
 export async function handleComposeShareCard(req: Request): Promise<Response> {
+  // See MODULE_EVAL_TIME's header comment: this is "handler entry" for the
+  // bootHint delta, captured before any auth/DB/CORS work so it reflects
+  // only module-graph-eval time, not request-handling time.
+  const bootHintMs = Math.round(performance.now() - MODULE_EVAL_TIME);
+
   const corsResponse = handleCors(req);
   if (corsResponse) {
     return corsResponse;
@@ -693,32 +864,63 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
   const authHeader = req.headers.get('Authorization')!;
   const supabase = createUserClient(authHeader);
 
-  const { data: memory, error: memoryError } = await supabase
+  // ── Round 4: kick off the R2 asset fetch (resvg wasm, webp-dec wasm, all
+  // font TTFs) IMMEDIATELY -- before the DB query -- so it overlaps with
+  // the DB query AND the image fetches below instead of adding to the
+  // critical path serially. See assets-loader.ts / this file's header
+  // comment for the full diagnosis (eviction from the module graph was the
+  // fix for the bodyless-546 failures).
+  const assetsStart = performance.now();
+  const assetsPromise = loadShareCardAssets();
+  // Silences a Deno "uncaught (in promise)" warning on the path where
+  // authorization/resolution rejects the request before this promise is
+  // ever awaited below (e.g. a non-member, or a blocked viewer) -- the
+  // fetch keeps running regardless (module-scope memoization means the
+  // NEXT request in this isolate benefits even if this one didn't need
+  // it); this only silences the warning for the abandoned reference. Real
+  // error handling happens at the `await assetsPromise` site below.
+  assetsPromise.catch(() => {});
+
+  // ── Round 3: ONE nested query replaces what was ~5-6 sequential DB round
+  // trips (memory row, authorizeShareCardAccess's own 2-3 sequential
+  // queries, resolveShareCardSource's memory_media select,
+  // fetchTaggedMembers' select) -- see SHARE_CARD_MEMORY_SELECT's header
+  // comment for the full diagnosis and the real-schema verification that
+  // preceded wiring this in.
+  const dbStart = performance.now();
+  const { data: queryRow, error: queryError } = await supabase
     .from('memories')
-    .select('id, family_id, content, memory_type, memory_date, illustration_key, illustration_status, emotion')
+    .select(SHARE_CARD_MEMORY_SELECT)
     .eq('id', memoryId)
     .maybeSingle();
+  const dbMs = Math.round(performance.now() - dbStart);
 
-  if (memoryError) {
+  if (queryError) {
     console.error('compose-share-card memory lookup failed', memoryId, 500);
     return errorResponse('Failed to load memory', 500, 'internal_error');
   }
 
-  if (!memory) {
+  if (!queryRow) {
     // RLS scopes this query to the caller's families, so a non-member's
     // request lands here too -- same 404-for-non-member pattern as
     // analyze-emotion, avoiding leaking whether a memory id exists.
     return errorResponse('Memory not found', 404, 'MEMORY_NOT_FOUND');
   }
 
-  const row = memory as MemoryRow;
+  const row = queryRow as unknown as ShareCardMemoryQueryRow;
 
-  const authorization = await authorizeShareCardAccess(supabase, row.family_id, user.id);
+  // Both are now SYNC, pure post-processing of the single already-fetched
+  // row -- no DB calls, no Promise.all needed (round 2 parallelized two
+  // separate DB calls here; round 3 removed the second call entirely).
+  // Error-priority order (authorization checked before resolution) is
+  // unchanged, so a non-member/blocked-viewer still gets 403 rather than a
+  // 400/404 leaking memory-type info.
+  const authorization = authorizeShareCardAccessFromQueryRow(row, user.id);
   if (!authorization.ok) {
     return errorResponse(authorization.error.message, authorization.error.status, authorization.error.code);
   }
 
-  const resolution = await resolveShareCardSource(supabase, row, mediaAssetId);
+  const resolution = resolveShareCardSourceFromQueryRow(row, mediaAssetId);
   if (!resolution.ok) {
     return errorResponse(resolution.error.message, resolution.error.status, resolution.error.code);
   }
@@ -726,24 +928,75 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
   markComposeRun(user.id);
 
   return runShareCardCompose(memoryId, async () => {
-    const { portraits, overflowCount } = await resolveMemberPortraits(supabase, memoryId);
+    // "fetch" phase is now R2-only -- tagged members and the media
+    // asset/illustration key all came from the single query above, so
+    // there is no DB call left in this closure at all. Round 2's two-phase
+    // "kick off hero, await tagged-members DB query, then batch portraits"
+    // dance is gone too: since tagged members are already in hand
+    // (resolveTaggedMembersFromQueryRow is sync), the hero key and every
+    // portrait key are known immediately, so they go into ONE
+    // getObjectBytesBatch call together -- one presign round trip for
+    // EVERYTHING this compose needs, not one for the hero and a separate
+    // one for portraits (round 2) or N separate ones (round 1 and before).
+    const fetchStart = performance.now();
+
+    const { members, overflowCount } = resolveTaggedMembersFromQueryRow(row);
+    const portraitKeys = resolvePortraitKeysToFetch(members);
+
+    const heroObjectKey = resolution.source.kind === 'media' || resolution.source.kind === 'illustration'
+      ? resolution.source.objectKey
+      : null;
+
+    const allImageKeys = heroObjectKey ? [heroObjectKey, ...portraitKeys] : portraitKeys;
+
+    // Awaited together with the (already-in-flight, kicked off before the
+    // DB query) asset fetch -- by the time we reach this Promise.all, the
+    // R2 asset batch has had the ENTIRE db+authz+resolution+tagged-members
+    // window to progress, so this should mostly just wait out whichever of
+    // the two IO operations is slower, not their sum.
+    const imageFetchStart = performance.now();
+    const [imageBytesByKey, assets] = await Promise.all([
+      getObjectBytesBatch(allImageKeys),
+      assetsPromise,
+    ]);
+    const imageFetchMs = Math.round(performance.now() - imageFetchStart);
+    const assetsMs = Math.round(performance.now() - assetsStart);
+    const fetchCount = allImageKeys.length;
+
+    const portraits = await buildTaggedMemberPortraits(members, imageBytesByKey, assets.webpDecWasm);
 
     let imageDataUri: string | null = null;
     let imageAspectRatio: number | null = null;
 
-    if (resolution.source.kind === 'media') {
-      const { dataUri, bytes } = await toDataUri(resolution.source.objectKey);
-      imageDataUri = dataUri;
-      const decoded = resolution.source.storedAspectRatio
-        ?? (await aspectRatioFromImageBytes(bytes))
-        ?? DEFAULT_MEDIA_ASPECT_RATIO;
-      imageAspectRatio = clampMediaAspectRatio(decoded);
-    } else if (resolution.source.kind === 'illustration') {
-      const { dataUri, bytes } = await toDataUri(resolution.source.objectKey);
-      imageDataUri = dataUri;
-      const decoded = await aspectRatioFromImageBytes(bytes);
-      imageAspectRatio = clampMediaAspectRatio(decoded ?? 1);
+    if (heroObjectKey) {
+      const heroEntry = imageBytesByKey.get(heroObjectKey);
+      if (!heroEntry || !heroEntry.ok || !heroEntry.bytes) {
+        // Fail CLOSED for the hero image (unlike portraits, which fail
+        // open) -- matches the pre-restructure behavior where a direct
+        // `getObjectBytes()` throw on the hero fetch propagated up and
+        // failed the whole compose via runShareCardCompose's catch-all.
+        // No memory content in this message (AGENTS.md logging discipline
+        // -- caught by that same catch-all, which logs memoryId + a fixed
+        // code only, never this message).
+        throw new Error('hero_image_fetch_failed');
+      }
+
+      if (resolution.source.kind === 'media') {
+        const { dataUri, bytes } = await bytesToDataUri(heroObjectKey, heroEntry.bytes, assets.webpDecWasm);
+        imageDataUri = dataUri;
+        const decoded = resolution.source.storedAspectRatio
+          ?? (await aspectRatioFromImageBytes(bytes))
+          ?? DEFAULT_MEDIA_ASPECT_RATIO;
+        imageAspectRatio = clampMediaAspectRatio(decoded);
+      } else if (resolution.source.kind === 'illustration') {
+        const { dataUri, bytes } = await bytesToDataUri(heroObjectKey, heroEntry.bytes, assets.webpDecWasm);
+        imageDataUri = dataUri;
+        const decoded = await aspectRatioFromImageBytes(bytes);
+        imageAspectRatio = clampMediaAspectRatio(decoded ?? 1);
+      }
     }
+
+    const fetchMs = dbMs + imageFetchMs;
 
     const cardData: ShareCardData = {
       variant: row.memory_type === 'text_only' ? 'quote' : 'spread',
@@ -756,8 +1009,119 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
       emotion: row.emotion,
     };
 
-    return { png: await composeShareCardPng(cardData), memoryDate: row.memory_date };
+    const { png, initMs, satoriMs, resvgMs, scale } = await composeShareCardPng(cardData, {
+      resvgWasm: assets.resvgWasm,
+      fonts: {
+        newsreaderRegular: assets.newsreaderRegular,
+        newsreaderItalic: assets.newsreaderItalic,
+        newsreaderMedium: assets.newsreaderMedium,
+        jakartaRegular: assets.jakartaRegular,
+        jakartaBold: assets.jakartaBold,
+        notoEmoji: assets.notoEmojiSubset,
+      },
+    });
+
+    return {
+      png,
+      memoryDate: row.memory_date,
+      timing: { bootHintMs, dbMs, fetchMs, satoriMs, resvgMs, initMs, scale, fetchCount, imageFetchMs, assetsMs },
+    };
   });
+}
+
+export interface ComposeTiming {
+  bootHintMs: number;
+  /** Round 3: the single nested-select's own wall time (auth/membership,
+   * role, viewer-sharing-toggle, media asset, tagged members + portrait
+   * keys -- everything that used to be ~5-6 sequential DB round trips).
+   * Target (coordinator's fix design): <=250ms. */
+  dbMs: number;
+  /** dbMs + imageFetchMs -- kept as the same "everything before
+   * satori/resvg" total the field meant pre-round-3, computed as a sum now
+   * since the DB query (handleComposeShareCard) and the image fetch
+   * (inside runShareCardCompose's closure) are no longer one contiguous
+   * timed span. */
+  fetchMs: number;
+  satoriMs: number;
+  resvgMs: number;
+  scale: 'full' | 'reduced';
+  /** Total R2 GET attempts this request made (hero [0 or 1] + every tagged
+   * member with a resolvable portrait key) -- perf-audit fields added
+   * alongside the fetch-concurrency restructure (this package's
+   * implementation report) so a future regression is visible as "fetchCount
+   * went up" or "imageFetchMs stopped tracking the slowest single fetch",
+   * not re-diagnosed from scratch. */
+  fetchCount: number;
+  /** Wall time of the single batched hero+portraits getObjectBytesBatch
+   * call -- this is the number that should look like "the slowest single
+   * image fetch," not the sum of every fetch, if the concurrency fix is
+   * working. */
+  imageFetchMs: number;
+  /** Round 3: the ONE-TIME per-isolate resvg-wasm-compile cost
+   * (render.ts's ensureResvgInitialized), split out of satoriMs so a
+   * first-request spike here isn't misread as "satori is slow." See
+   * render.ts's ComposeShareCardResult.initMs doc comment. */
+  initMs: number;
+  /** Round 4: wall time of the R2 asset fetch (resvg wasm, webp-dec wasm,
+   * every font TTF), measured from when it was KICKED OFF (before the DB
+   * query, at the very start of the handler) to when it was actually
+   * available. Expected to mostly overlap with dbMs+imageFetchMs (it's
+   * fired in parallel with both) -- if this number is close to
+   * dbMs+imageFetchMs or larger, the overlap isn't working as intended. */
+  assetsMs: number;
+}
+
+/** `Deno.memoryUsage()` guarded defensively -- instrumentation must never be
+ * able to break the actual response if the Edge Function runtime restricts
+ * or omits this API (unverified assumption; no prior usage elsewhere in
+ * this repo to confirm it's always available here). */
+function safeMemoryUsage(): { rss: number; heapUsed: number } | null {
+  try {
+    const usage = Deno.memoryUsage();
+    return { rss: usage.rss, heapUsed: usage.heapUsed };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Logs the single structured per-request timing line + builds the
+ * Server-Timing header value (perf-audit instrumentation, this package's
+ * implementation report). Every field is an id or a number -- NEVER memory
+ * content (AGENTS.md logging discipline, same rule as the catch block
+ * below).
+ */
+function logComposeTiming(memoryId: string, timing: ComposeTiming, totalMs: number, pngBytes: number): string {
+  const mem = safeMemoryUsage();
+  console.log('compose-share-card timing', JSON.stringify({
+    memoryId,
+    bootHintMs: timing.bootHintMs,
+    dbMs: timing.dbMs,
+    fetchMs: timing.fetchMs,
+    initMs: timing.initMs,
+    assetsMs: timing.assetsMs,
+    satoriMs: timing.satoriMs,
+    resvgMs: timing.resvgMs,
+    totalMs,
+    rss: mem?.rss ?? null,
+    heapUsed: mem?.heapUsed ?? null,
+    scale: timing.scale,
+    pngBytes,
+    fetchCount: timing.fetchCount,
+    imageFetchMs: timing.imageFetchMs,
+  }));
+
+  return [
+    `boot;dur=${timing.bootHintMs}`,
+    `db;dur=${timing.dbMs}`,
+    `fetch;dur=${timing.fetchMs}`,
+    `imgfetch;dur=${timing.imageFetchMs};desc="${timing.fetchCount} fetches"`,
+    `assets;dur=${timing.assetsMs}`,
+    `init;dur=${timing.initMs}`,
+    `satori;dur=${timing.satoriMs}`,
+    `resvg;dur=${timing.resvgMs}`,
+    `total;dur=${totalMs}`,
+  ].join(', ');
 }
 
 /**
@@ -769,23 +1133,47 @@ export async function handleComposeShareCard(req: Request): Promise<Response> {
  * the no-content-logging guarantee is unit-testable by injecting a `work`
  * function that throws an error containing caption-like text (see
  * index.test.ts) without needing a live Supabase/R2 backend.
+ *
+ * `timing` is optional so existing/unit-test `work` functions that don't
+ * supply it keep working unchanged (see index.test.ts) -- only the real
+ * handleComposeShareCard path populates it, which is every production
+ * request.
  */
 export async function runShareCardCompose(
   memoryId: string,
-  work: () => Promise<{ png: Uint8Array; memoryDate: string }>,
+  work: () => Promise<{ png: Uint8Array; memoryDate: string; timing?: ComposeTiming }>,
 ): Promise<Response> {
+  const callStart = performance.now();
   try {
-    const { png, memoryDate } = await work();
+    const { png, memoryDate, timing } = await work();
+    const totalMs = Math.round(performance.now() - callStart);
 
-    return new Response(png as BodyInit, {
-      status: 200,
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'image/png',
-        'Content-Disposition': `attachment; filename="${buildShareCardFilename(memoryDate)}"`,
-      },
-    });
+    const headers: Record<string, string> = {
+      ...corsHeaders,
+      'Content-Type': 'image/png',
+      'Content-Disposition': `attachment; filename="${buildShareCardFilename(memoryDate)}"`,
+    };
+
+    if (timing) {
+      headers['Server-Timing'] = logComposeTiming(memoryId, timing, totalMs, png.length);
+    }
+
+    return new Response(png as BodyInit, { status: 200, headers });
   } catch (error) {
+    // Round 4: asset-loading failures (R2 fetch failure, size/hash
+    // mismatch -- see assets-loader.ts) get their OWN error code so a
+    // future dashboard/alert can tell "R2 asset outage" apart from a
+    // generic layout/render failure. `instanceof` never reads
+    // `error.message` (or anything dynamic), so this doesn't weaken the
+    // logging-discipline guarantee below -- ShareCardAssetsUnavailableError
+    // always carries the SAME fixed message regardless of the underlying
+    // cause (missing key, size mismatch, hash mismatch), so there is
+    // nothing content-bearing to accidentally log even if a future edit
+    // read `.message` here.
+    if (error instanceof ShareCardAssetsUnavailableError) {
+      console.error('compose-share-card assets unavailable', memoryId, 500);
+      return errorResponse('Share card assets are temporarily unavailable', 500, 'assets_unavailable');
+    }
     void error; // deliberately unread -- see the doc comment above.
     console.error('compose-share-card compose failed', memoryId, 500);
     return errorResponse('Failed to compose share card', 500, 'compose_failed');

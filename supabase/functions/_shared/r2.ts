@@ -113,6 +113,76 @@ export async function getObjectBytes(objectKey: string, options: R2RequestOption
   return new Uint8Array(await response.arrayBuffer());
 }
 
+export interface ObjectBytesBatchEntry {
+  ok: boolean;
+  bytes?: Uint8Array;
+  error?: unknown;
+}
+
+/**
+ * Batch counterpart to getObjectBytes: presigns every key in ONE
+ * createPresignedGetUrls call (avoids N redundant getR2Config()/new
+ * S3Client() constructions -- one per key under the singular helper), then
+ * fires every GET concurrently via Promise.all. Perf-audit fix (see
+ * compose-share-card's implementation report): that function fetches a
+ * memory's hero image AND every tagged member's portrait, and doing so with
+ * N sequential/serial getObjectBytes() calls was measured as the dominant
+ * per-request cost (~1.15s of a ~2s WORKER_RESOURCE_LIMIT budget).
+ *
+ * Per-key failures (bad/expired presign, non-2xx fetch, network error) are
+ * captured as `{ ok: false, error }` entries rather than rejecting the whole
+ * batch -- callers decide fail-open (e.g. a decorative portrait falls back
+ * to an initial-letter circle) vs fail-closed (e.g. a memory's hero image
+ * should still fail the whole compose) by inspecting their own key's entry,
+ * exactly like getObjectBytes' single-key throw does today for a
+ * fail-closed caller (just re-thrown from the entry instead of caught
+ * mid-flight).
+ */
+export async function getObjectBytesBatch(
+  objectKeys: string[],
+  options: R2RequestOptions = {},
+): Promise<Map<string, ObjectBytesBatchEntry>> {
+  const result = new Map<string, ObjectBytesBatchEntry>();
+  const uniqueKeys = [...new Set(objectKeys)];
+
+  if (uniqueKeys.length === 0) {
+    return result;
+  }
+
+  let urls: Record<string, string>;
+  try {
+    urls = await createPresignedGetUrls(uniqueKeys, 300);
+  } catch (error) {
+    // Presign step failed entirely (e.g. missing R2 env vars) -- every key
+    // fails identically, matching what a single getObjectBytes() call would
+    // do for any one of them.
+    for (const objectKey of uniqueKeys) {
+      result.set(objectKey, { ok: false, error });
+    }
+    return result;
+  }
+
+  await Promise.all(
+    uniqueKeys.map(async (objectKey) => {
+      try {
+        const url = urls[objectKey];
+        if (!url) {
+          throw new Error('Failed to create presigned download URL');
+        }
+        const response = await fetch(url, { signal: options.signal });
+        if (!response.ok) {
+          throw new Error(`R2 fetch failed with status ${response.status}`);
+        }
+        result.set(objectKey, { ok: true, bytes: new Uint8Array(await response.arrayBuffer()) });
+      } catch (error) {
+        result.set(objectKey, { ok: false, error });
+      }
+    }),
+  );
+
+  return result;
+}
+
 export async function readObjectBodyToBytes(body: unknown): Promise<Uint8Array> {
   if (typeof body === 'object' && body !== null && 'transformToWebStream' in body) {
     const webStream = (body as { transformToWebStream: () => ReadableStream<Uint8Array> })

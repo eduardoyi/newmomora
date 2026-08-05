@@ -1642,7 +1642,22 @@ machinery.
   ignored otherwise (`text_illustration` uses `illustration_key`,
   `text_only` embeds no image).
 - **200** `image/png`, `Content-Disposition: attachment;
-  filename="momora-<mon>-<d>-<yyyy>.png"`.
+  filename="momora-<mon>-<d>-<yyyy>.png"`, `Server-Timing: boot;dur=…,
+  db;dur=…, fetch;dur=…, imgfetch;dur=…;desc="N fetches", init;dur=…,
+  satori;dur=…, resvg;dur=…, total;dur=…` (ms per phase — perf-audit
+  instrumentation added alongside a matching structured `console.log` line
+  per request: `memoryId`, the same phase timings,
+  `Deno.memoryUsage().rss`/`heapUsed`, `scale` (`'full'`|`'reduced'`),
+  `pngBytes`, `fetchCount`, `imageFetchMs` — ids/numbers only, never memory
+  content). `db` is the ONE nested-select query
+  (`SHARE_CARD_MEMORY_SELECT`) that replaces what was ~5-6 sequential DB
+  round trips (memory row, role, `viewer_sharing_enabled`, media asset,
+  tagged members + portraits); `fetch` = `db` + `imgfetch`. The hero image
+  and every tagged member's portrait are fetched from R2 in a single
+  batched call (`getObjectBytesBatch`, `_shared/r2.ts`) rather than
+  sequentially — `imageFetchMs` should track the slowest single fetch, not
+  their sum. `init` is the one-time per-isolate resvg-wasm-compile +
+  font-decode cost (near-zero on a cache hit).
 - **400** `unsupported_memory_type` (rejects `audio` and any unrecognized
   type explicitly) / `validation_error` (missing `mediaAssetId` for a media
   memory) / `video_not_supported` (the resolved asset is a video).
