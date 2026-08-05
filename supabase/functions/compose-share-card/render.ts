@@ -17,8 +17,10 @@ import { JAKARTA_BOLD_B64 } from './assets/font-jakarta-bold-b64.ts';
 import { NOTO_EMOJI_SUBSET_B64 } from './assets/font-noto-emoji-subset-b64.ts';
 import { buildShareCardTree, type ShareCardData } from './layout.ts';
 import {
+  BASE_SCALE,
+  REDUCED_SCALE,
   SHARE_CARD_FULL_WIDTH,
-  SHARE_CARD_REDUCED_SCALE,
+  SHARE_CARD_REDUCED_WIDTH,
   parseSvgHeightPx,
   shouldUseReducedScale,
 } from './scale.ts';
@@ -110,7 +112,7 @@ export async function composeShareCardPng(data: ShareCardData): Promise<Uint8Arr
   const fonts = await getFonts();
   const fontList = satoriFontList(fonts);
 
-  const fullTree = buildShareCardTree(data, SHARE_CARD_FULL_WIDTH, 1);
+  const fullTree = buildShareCardTree(data, BASE_SCALE);
   const fullSvg = await satori(fullTree, { width: SHARE_CARD_FULL_WIDTH, fonts: fontList });
   const fullHeight = parseSvgHeightPx(fullSvg);
 
@@ -118,10 +120,9 @@ export async function composeShareCardPng(data: ShareCardData): Promise<Uint8Arr
   let finalWidth = SHARE_CARD_FULL_WIDTH;
 
   if (fullHeight !== null && shouldUseReducedScale(fullHeight)) {
-    const reducedWidth = Math.round(SHARE_CARD_FULL_WIDTH * SHARE_CARD_REDUCED_SCALE);
-    const reducedTree = buildShareCardTree(data, SHARE_CARD_FULL_WIDTH, SHARE_CARD_REDUCED_SCALE);
-    finalSvg = await satori(reducedTree, { width: reducedWidth, fonts: fontList });
-    finalWidth = reducedWidth;
+    const reducedTree = buildShareCardTree(data, REDUCED_SCALE);
+    finalSvg = await satori(reducedTree, { width: SHARE_CARD_REDUCED_WIDTH, fonts: fontList });
+    finalWidth = SHARE_CARD_REDUCED_WIDTH;
   }
 
   const resvg = new Resvg(finalSvg, { fitTo: { mode: 'width', value: finalWidth } });

@@ -19,7 +19,16 @@
 // Deno Edge Functions cannot import from src/, so theme tokens are
 // duplicated in SHARE_CARD_THEME below -- keep those values equal to
 // src/constants/theme.ts's `colors`/`radius`/`spacing` exports by hand.
+//
+// Every pixel value below (font sizes, paddings, radii, avatar sizes) is a
+// LOGICAL (RN dp) value, copied verbatim from memory-card.tsx/theme.ts --
+// NOT a raster pixel value. buildShareCardTree's `scale` argument (see its
+// doc comment) is what converts these to the final raster size; see
+// scale.ts's header comment for why composing directly at a raster width
+// was the bug.
 // ─────────────────────────────────────────────────────────────────────────
+
+import { LOGICAL_CARD_WIDTH } from './scale.ts';
 
 export interface SatoriNode {
   type: string;
@@ -244,6 +253,12 @@ function footerNode(data: ShareCardData, s: (px: number) => number): SatoriNode 
   );
 }
 
+// Mirrors src/components/memory-card.tsx `styles.caption.fontSize` (spread
+// card body copy). Exported so proportion-regression tests can assert the
+// emitted tree's font-size/card-width ratio against this exact value
+// instead of a re-typed magic number that could silently drift.
+export const SHARE_CARD_BODY_FONT_SIZE = 14.5;
+
 function captionNode(caption: string, fontFamily: string, s: (px: number) => number): SatoriNode | null {
   if (!caption.trim()) {
     return null;
@@ -255,7 +270,7 @@ function captionNode(caption: string, fontFamily: string, s: (px: number) => num
       style: {
         display: 'flex',
         fontFamily,
-        fontSize: s(14.5),
+        fontSize: s(SHARE_CARD_BODY_FONT_SIZE),
         lineHeight: 1.52,
         color: SHARE_CARD_THEME.ink,
         paddingLeft: s(SHARE_CARD_SPACING_MD),
@@ -359,15 +374,22 @@ function buildQuoteCard(data: ShareCardData, width: number, s: (px: number) => n
   );
 }
 
-/** Builds the full card tree at the given pixel scale (1 for the 1080px
- * layout, SHARE_CARD_REDUCED_SCALE for the 720px reduced-pixel-count
- * layout -- see scale.ts). `scale` multiplies every pixel dimension so the
- * 720px render is the IDENTICAL layout at 2/3 size, not a reflow -- this is
- * the S0-mandated mitigation (docs/plans/offline-awareness-and-share-cards.md
- * S0/S3): full caption always, never truncated to fit a pixel budget. */
-export function buildShareCardTree(data: ShareCardData, fullWidth: number, scale: number): SatoriNode {
+/**
+ * Builds the full card tree, composed entirely in LOGICAL (dp) units and
+ * then scaled to a raster pixel size by `scale` -- BASE_SCALE for the
+ * primary 1080px output, REDUCED_SCALE for the 720px reduced-pixel-count
+ * output (see scale.ts). The card's own width is `s(LOGICAL_CARD_WIDTH)`,
+ * NOT a raw raster width -- every other pixel value in this file (font
+ * sizes, paddings, radii, avatar sizes) is a logical value too, so `s`
+ * scales the whole card uniformly and proportions are preserved exactly:
+ * this is what keeps the 720px render the IDENTICAL layout at 2/3 size,
+ * not a reflow -- the S0-mandated mitigation
+ * (docs/plans/offline-awareness-and-share-cards.md S0/S3): full caption
+ * always, never truncated to fit a pixel budget.
+ */
+export function buildShareCardTree(data: ShareCardData, scale: number): SatoriNode {
   const s = (px: number) => Math.round(px * scale);
-  const width = s(fullWidth);
+  const width = s(LOGICAL_CARD_WIDTH);
 
   return data.variant === 'quote'
     ? buildQuoteCard(data, width, s)

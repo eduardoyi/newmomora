@@ -1,15 +1,25 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import {
+  BASE_SCALE,
+  LOGICAL_CARD_WIDTH,
   parseSvgHeightPx,
+  REDUCED_SCALE,
   SHARE_CARD_FULL_WIDTH,
   SHARE_CARD_PIXEL_BUDGET,
-  SHARE_CARD_REDUCED_SCALE,
   SHARE_CARD_REDUCED_WIDTH,
   shouldUseReducedScale,
 } from './scale.ts';
 
-Deno.test('SHARE_CARD_REDUCED_SCALE is exactly 720/1080', () => {
-  assertEquals(SHARE_CARD_REDUCED_WIDTH / SHARE_CARD_FULL_WIDTH, SHARE_CARD_REDUCED_SCALE);
+Deno.test('BASE_SCALE converts LOGICAL_CARD_WIDTH to exactly SHARE_CARD_FULL_WIDTH', () => {
+  assertEquals(Math.round(LOGICAL_CARD_WIDTH * BASE_SCALE), SHARE_CARD_FULL_WIDTH);
+});
+
+Deno.test('REDUCED_SCALE converts LOGICAL_CARD_WIDTH to exactly SHARE_CARD_REDUCED_WIDTH', () => {
+  assertEquals(Math.round(LOGICAL_CARD_WIDTH * REDUCED_SCALE), SHARE_CARD_REDUCED_WIDTH);
+});
+
+Deno.test('REDUCED_SCALE / BASE_SCALE is exactly 720/1080 -- the 720px output is the identical layout at 2/3 size', () => {
+  assertEquals(REDUCED_SCALE / BASE_SCALE, SHARE_CARD_REDUCED_WIDTH / SHARE_CARD_FULL_WIDTH);
 });
 
 Deno.test('shouldUseReducedScale stays at 1080 under the pixel budget', () => {

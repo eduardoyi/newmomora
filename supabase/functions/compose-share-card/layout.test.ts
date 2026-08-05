@@ -15,8 +15,11 @@ import { JAKARTA_BOLD_B64 } from './assets/font-jakarta-bold-b64.ts';
 import {
   buildShareCardTree,
   formatShareCardDateLabel,
+  SHARE_CARD_BODY_FONT_SIZE,
+  type SatoriNode,
   type ShareCardData,
 } from './layout.ts';
+import { BASE_SCALE, LOGICAL_CARD_WIDTH, REDUCED_SCALE } from './scale.ts';
 
 // deno-lint-ignore no-explicit-any
 const satori = satoriImport as any;
@@ -38,9 +41,9 @@ const FONTS = [
   { name: 'Jakarta-Bold', data: b64ToBytes(JAKARTA_BOLD_B64), weight: 700, style: 'normal' as const },
 ];
 
-async function renderSvg(data: ShareCardData, width = 1080, scale = 1): Promise<string> {
-  const tree = buildShareCardTree(data, width, scale);
-  return await satori(tree, { width: Math.round(width * scale), fonts: FONTS });
+async function renderSvg(data: ShareCardData, scale = BASE_SCALE): Promise<string> {
+  const tree = buildShareCardTree(data, scale);
+  return await satori(tree, { width: Math.round(LOGICAL_CARD_WIDTH * scale), fonts: FONTS });
 }
 
 // A 1x1 transparent PNG data URI -- enough for satori's <img> layout pass
@@ -144,6 +147,71 @@ Deno.test('layout: tagged-member portraits render as an overlapping avatar row, 
   assertEquals(imageCount, 1);
 });
 
+// Walks the SatoriNode tree (buildShareCardTree's return value -- the exact
+// input satori consumes to produce the SVG) looking for a node whose style
+// declares the given fontFamily. satori converts text to vector <path>
+// elements with no literal font-size attribute in its SVG output, so a
+// proportion check against the *rendered* SVG string isn't feasible;
+// checking the tree instead is checking the same numbers satori embeds
+// (its glyph paths are scaled directly from this fontSize), without the
+// fragility of reverse-engineering font metrics from path geometry.
+function findNodeByFontFamily(node: SatoriNode, fontFamily: string): SatoriNode | null {
+  const style = node.props.style as { fontFamily?: string } | undefined;
+  if (style?.fontFamily === fontFamily) {
+    return node;
+  }
+  const { children } = node.props;
+  const list: SatoriNode[] = Array.isArray(children)
+    ? children
+    : children && typeof children !== 'string'
+    ? [children]
+    : [];
+  for (const child of list) {
+    const found = findNodeByFontFamily(child, fontFamily);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+Deno.test('layout: caption font-size / card-width ratio matches memory-card.tsx -- proportion regression guard', () => {
+  // This is the assertion that would have caught the "huge photo, tiny
+  // caption strip" bug: buildShareCardTree used to compose directly at a
+  // 1080px raster width using memory-card.tsx's dp-scale magic numbers
+  // (e.g. fontSize 14.5) as if they were raster pixels, so the emitted
+  // caption was ~14.5/1080 (~1.3%) of the card width instead of the
+  // in-app card's ~14.5/398 (~3.6%). Composing in logical units
+  // (LOGICAL_CARD_WIDTH) and scaling uniformly to raster afterward fixes
+  // this structurally -- this test pins the invariant so it can't regress
+  // silently.
+  const data: ShareCardData = {
+    variant: 'spread',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'Regression guard for the raster-vs-logical proportions bug.',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [],
+    memberOverflowCount: 0,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const cardWidth = (tree.props.style as { width: number }).width;
+  const caption = findNodeByFontFamily(tree, 'Jakarta-Regular');
+  if (!caption) {
+    throw new Error('expected a Jakarta-Regular caption node in the tree');
+  }
+  const captionFontSize = (caption.props.style as { fontSize: number }).fontSize;
+
+  const actualRatio = captionFontSize / cardWidth;
+  const expectedRatio = SHARE_CARD_BODY_FONT_SIZE / LOGICAL_CARD_WIDTH;
+
+  // Both captionFontSize and cardWidth pass through independent
+  // Math.round() calls to whole raster pixels, so allow a small rounding
+  // tolerance rather than requiring bit-for-bit equality.
+  assertEquals(Math.abs(actualRatio - expectedRatio) < 0.002, true);
+});
+
 Deno.test('layout: 720px reduced-scale render is the identical layout at 2/3 size, not a reflow', async () => {
   const data: ShareCardData = {
     variant: 'spread',
@@ -155,14 +223,24 @@ Deno.test('layout: 720px reduced-scale render is the identical layout at 2/3 siz
     memberOverflowCount: 0,
   };
 
-  const svgFull = await renderSvg(data, 1080, 1);
-  const svgReduced = await renderSvg(data, 1080, 2 / 3);
+  const svgFull = await renderSvg(data, BASE_SCALE);
+  const svgReduced = await renderSvg(data, REDUCED_SCALE);
 
   const heightFull = Number(svgFull.match(/<svg[^>]*\sheight="(\d+)"/)?.[1]);
   const heightReduced = Number(svgReduced.match(/<svg[^>]*\sheight="(\d+)"/)?.[1]);
 
   assertStringIncludes(svgReduced, 'width="720"');
-  // Allow +/-2px slack for independent rounding of width/height at 2/3 scale.
   const expectedReducedHeight = Math.round(heightFull * (2 / 3));
-  assertEquals(Math.abs(heightReduced - expectedReducedHeight) <= 2, true);
+  // Slack scales with height rather than a tight fixed +/-2px: now that the
+  // card is composed in logical units first (the proportions fix), BASE_SCALE
+  // and REDUCED_SCALE are both non-integer multipliers, so EVERY dp value
+  // (not just the reduced pass, as before the fix) picks up independent
+  // per-element rounding, and caption text wraps at a human-scale font size
+  // where a line-break boundary can land a character earlier/later between
+  // the two passes -- a few px of drift here reflects real text reflow
+  // quantization, not a structural difference. 2% (floor 6px) comfortably
+  // covers that while still catching an actual reflow (e.g. a dropped line
+  // or a missing block), which would be off by tens of percent.
+  const slack = Math.max(6, Math.round(expectedReducedHeight * 0.02));
+  assertEquals(Math.abs(heightReduced - expectedReducedHeight) <= slack, true);
 });
