@@ -137,6 +137,10 @@ export default function OnboardingCodeScreen() {
   const [resendMessage, setResendMessage] = useState('');
   const [cooldown, setCooldown] = useState(RESEND_COOLDOWN_SECONDS);
 
+  useEffect(() => {
+    patch({ step: 'code' });
+  }, [patch]);
+
   // No email to verify (e.g. a stale/deep-linked entry) -- bounce back to
   // where a code can be requested.
   useEffect(() => {

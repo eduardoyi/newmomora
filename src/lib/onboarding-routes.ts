@@ -16,6 +16,26 @@ import type { Href } from 'expo-router';
 import type { AnalyticsEventMap } from '@/services/analytics';
 import type { OnboardingPaywallMode, OnboardingStepId } from '@/utils/onboarding-progress';
 
+const POST_AUTH_ONBOARDING_PATHNAMES = new Set([
+  '/trial',
+  '/included',
+  '/paywall',
+  '/portrait',
+  '/reveal',
+  '/join/email',
+  '/join/waiting',
+]);
+
+/**
+ * Returns whether an onboarding route can still be active after a real user
+ * session exists. The owner-path screens before S12B are pre-auth and can be
+ * left behind in the native stack when OTP verification replaces the code
+ * screen. The one exception is S12B itself while its commit is retryable.
+ */
+export function isOnboardingRouteAllowedAfterAuth(pathname: string, draftStep: OnboardingStepId): boolean {
+  return POST_AUTH_ONBOARDING_PATHNAMES.has(pathname) || (pathname === '/code' && draftStep === 'code');
+}
+
 // Owner-path story/capture/trust arc (S0, S4-S8, S9-S11, S13-S16). S1-S3
 // share one screen (`story.tsx`) -- see `onboardingStoryRoute` below.
 export const onboardingWelcomeRoute = '/(onboarding)/welcome' as Href;

@@ -4,11 +4,28 @@
 // optional `source` param. Every import in onboarding-routes.ts is
 // type-only, so this file needs no native-module mocks.
 import {
+  isOnboardingRouteAllowedAfterAuth,
   onboardingAnalyticsStepFromPathname,
   onboardingPaywallRouteForMode,
   onboardingResubscribePaywallRoute,
   onboardingPaywallRoute,
 } from '@/lib/onboarding-routes';
+
+describe('isOnboardingRouteAllowedAfterAuth', () => {
+  it('rejects stale pre-auth screens once the user has a session', () => {
+    expect(isOnboardingRouteAllowedAfterAuth('/welcome', 'welcome')).toBe(false);
+    expect(isOnboardingRouteAllowedAfterAuth('/story', 'story-0')).toBe(false);
+    expect(isOnboardingRouteAllowedAfterAuth('/capture', 'capture')).toBe(false);
+  });
+
+  it('keeps the post-auth arc and an active code retry available', () => {
+    expect(isOnboardingRouteAllowedAfterAuth('/trial', 'welcome')).toBe(true);
+    expect(isOnboardingRouteAllowedAfterAuth('/paywall', 'welcome')).toBe(true);
+    expect(isOnboardingRouteAllowedAfterAuth('/portrait', 'welcome')).toBe(true);
+    expect(isOnboardingRouteAllowedAfterAuth('/code', 'code')).toBe(true);
+    expect(isOnboardingRouteAllowedAfterAuth('/code', 'welcome')).toBe(false);
+  });
+});
 
 describe('onboardingAnalyticsStepFromPathname', () => {
   it('maps a plain grouped route (Expo Router strips the (onboarding) segment)', () => {
