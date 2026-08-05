@@ -152,13 +152,19 @@ All three call `warmShareCardForMemoryFireAndForget`
 `warmShareCardFireAndForget(memoryId, mediaAssetId?)` — a raw `fetch` POST
 with `warm: true`, same headers as the cold path. Like
 `notifyFamilyActivityFireAndForget`, it is **never awaited** on the save
-path and swallows every failure (missing session, network error, non-2xx,
-thrown exception) down to a `console.warn` — invisible to the user, no
-retry (a warm is speculative/best-effort; the cold-path compose is the real
-safety net if a warm never lands). `compose-share-card` enforces this with
-its own **separate, looser rate bucket** for `warm: true` requests
-(30/minute/user vs. the cold path's 10/minute/user) so a burst of warms can
-never eat into a user's real share budget, or vice versa.
+path and swallows every eventual failure down to a `console.warn` —
+invisible to the user. Internally it is **self-healing**
+(docs/plans/share-card-store-through.md's four-part production fix, Part 3):
+`performWarmShareCardWithRetries` retries on HTTP 546 up to
+`SHARE_CARD_WARM_MAX_ATTEMPTS` (3) total attempts, backing off 4s then 8s
+between them, but stops immediately — no further attempts — on a 429 or any
+other outcome (a 429 retry would only burn the warm bucket further, missing
+session/network/4xx/5xx won't be fixed by retrying either). If every attempt
+fails, the cold-path compose (or a later warm/share attempt) is the real
+safety net. `compose-share-card` enforces its own **separate, looser rate
+bucket** for `warm: true` requests (30/minute/user vs. the cold path's
+20/minute/user) so a burst of warms can never eat into a user's real share
+budget, or vice versa.
 
 **Storage & deletion coverage.** Both `share_card_key` columns participate
 in the same object-lifetime machinery every other memory-scoped R2 key
@@ -224,9 +230,12 @@ Status codes: `400` unsupported memory type / video asset / missing
 `mediaAssetId` for a media memory / non-boolean `warm`; `403` non-member or
 viewer-blocked family (same rules on warm and cold); `404` memory or media
 asset not found; `415` legacy HEIC/HEIF asset (not rasterizable); `429`
-rate-limited — 10 composes/minute/user (cold, in-isolate) OR 30 warms/
-minute/user (warm, a **separate** in-isolate bucket); `500` internal error;
-platform `546` (`WORKER_RESOURCE_LIMIT`, resource exhaustion — see
+rate-limited — 20 composes/minute/user (cold, in-isolate; bumped from 10 in
+the four-part production fix — a production probe found the client burns 2
+attempts per cold-path 546 retry, so 10/min could exhaust after a handful of
+taps and surface as an indistinguishable-from-broken wall of 429s) OR 30
+warms/minute/user (warm, a **separate** in-isolate bucket); `500` internal
+error; platform `546` (`WORKER_RESOURCE_LIMIT`, resource exhaustion — see
 Constraints; the client retries this once on the cold path only, never on
 warm).
 
@@ -306,28 +315,50 @@ overlap — is intentionally pixel-matched where satori's CSS subset allows it
   by message since they never contain memory content). See
   `runShareCardCompose`'s doc comment and `index.test.ts`'s
   no-content-in-logs assertion.
-- **Vendored monochrome emoji, not a third-party fetch.** Satori doesn't
-  rasterize color emoji from system fonts. The alternative — fetching
-  twemoji-style color SVGs per emoji codepoint at compose time — was
-  rejected specifically because it would leak caption-derived data (which
-  emoji, and by extension something about the memory's content) to a
-  third-party CDN's request logs, the *only* place in this pipeline where
-  memory-derived content would otherwise leave Supabase/R2/OpenAI. Instead,
-  a **monochrome NotoEmoji subset TTF** is vendored
+- **Self-hosted Twemoji `graphemeImages`, not a third-party fetch —
+  replaces the earlier monochrome-font-only story (four-part production
+  fix, 2026-08-05).** The vendored monochrome NotoEmoji subset TTF
   (`supabase/functions/compose-share-card/assets/font-noto-emoji-subset-b64.ts`)
-  and rasterized locally. The accepted tradeoff is monochrome (not color)
-  emoji on the card — never a silent "tofu box" (missing-glyph square).
-  **BUG FIX (perf-audit pass, this package's implementation report):** the
-  subset's Unicode range list omitted U+1F1E6-1F1FF (Regional Indicator
-  Symbols) entirely, so flag emoji (composed from PAIRS of these
-  codepoints, e.g. a country flag in a caption) rendered as two literal
-  tofu boxes — a real regression of the "never a silent tofu box" claim
-  above. Fixed by adding that range to the subset build; see the asset
-  file's header comment and `layout.test.ts`'s flag-sequence glyph-path
-  tests for the regression guard. If you extend the emoji ranges again,
-  re-verify with that same "does it produce real path data, not tofu"
-  render check, not just cmap presence — a codepoint can be in `cmap`
-  without GSUB support for the sequence it's part of.
+  covers ORDINARY glyph shaping (a single emoji codepoint renders as one
+  glyph), but satori's text shaper never applies emoji LIGATURE rules —
+  regional-indicator PAIRS (flags), ZWJ sequences (families), keycap
+  combining marks — so no font, however complete its glyph coverage, could
+  ever render those correctly through shaping alone (device report: a
+  flag emoji rendered as two literal letters, "E S", not tofu — each
+  regional-indicator glyph shaped fine on its own, they just never combine
+  into a flag). The fix uses satori's OWN mechanism for this,
+  `graphemeImages` (a grapheme-text → image-source map, substituted in
+  place of font shaping for that exact grapheme): `compose-share-card/
+  emoji.ts` extracts distinct emoji graphemes from a caption
+  (`Intl.Segmenter`, grapheme granularity) and maps each to its Twemoji SVG
+  filename (a careful, byte-verified port of twemoji-parser's own
+  `toCodePoints`/`removeVS16s`, MIT license).
+  **Still self-hosted, not fetched from a third party at REQUEST time** —
+  the same privacy reasoning as before still applies (a per-caption-emoji
+  CDN fetch, keyed by codepoint, would leak which emoji — and by extension
+  something about caption content — to that third party's request logs,
+  the *only* place in this pipeline where memory-derived content would
+  otherwise leave Supabase/R2/OpenAI). The Twemoji SVG set is instead
+  uploaded ONCE to this project's own R2 bucket
+  (`supabase/scripts/upload-twemoji-assets.ts`, key prefix
+  `_assets/twemoji/v1/`) and fetched from there like any other R2-hosted
+  asset — in the SAME `getObjectBytesBatch` window as the hero/portrait
+  images, cache-miss path only, with a small bounded per-isolate memo
+  (`MAX_EMOJI_GRAPHEME_MEMO_ENTRIES`, `compose-share-card/index.ts`) so a
+  common emoji isn't re-fetched from R2 on every request in a warm
+  isolate. A missing/failed SVG fails OPEN — the caption falls back to the
+  font's own (incomplete, ligature-less) rendering for that one grapheme,
+  never a broken image, never fails the whole compose. The monochrome
+  NotoEmoji font is still vendored/used as the shaping fallback for any
+  emoji that ISN'T (or fails to be) covered by a `graphemeImages` entry —
+  a codepoint outside both the font subset AND a resolvable Twemoji SVG
+  falls back to a tofu box, same as before this fix.
+  **BUG FIX (perf-audit pass, this package's implementation report,
+  pre-dating the graphemeImages fix above):** the subset's Unicode range
+  list omitted U+1F1E6-1F1FF (Regional Indicator Symbols) entirely, so
+  flag emoji rendered as two literal tofu boxes — fixed by adding that
+  range to the subset build (kept as the shaping-level floor even now that
+  `graphemeImages` normally handles flags at a higher priority).
 - **Everything else already private-by-default.** No public URL is ever
   minted for a card — every read still goes through the authenticated
   function, which re-checks the same permission matrix on every request,
@@ -375,11 +406,23 @@ overlap — is intentionally pixel-matched where satori's CSS subset allows it
   warm `SHARE_CARD_WARM_RATE_LIMIT_*`) — do not merge them into one shared
   counter; a warm burst must never be able to exhaust a user's real share
   budget, and vice versa.
-- `warmShareCardFireAndForget`'s no-retry, swallow-everything contract
+- `warmShareCardFireAndForget`'s swallow-everything, never-awaited contract
   (`src/services/share-card.ts`) — mirrors `notifyFamilyActivityFireAndForget`
-  on purpose; a warm hook that retries or surfaces failures turns a
+  on purpose; a warm hook that surfaces failures to the user turns a
   best-effort optimization into user-visible noise for zero benefit (the
-  cold path is still the safety net).
+  cold path is still the safety net). Its INTERNAL self-healing retry (546
+  only, up to `SHARE_CARD_WARM_MAX_ATTEMPTS`, 4s/8s backoff, stops
+  immediately on 429/anything else) is fine to tune, but never let it retry
+  on 429 — that would burn the warm bucket, not heal anything.
+- `emoji.ts`'s `graphemeToTwemojiFilename` (VS16-drop-unless-ZWJ,
+  no-zero-padding hex codepoints) — a byte-verified port of
+  twemoji-parser's own `toCodePoints`/`removeVS16s`. Do not "simplify" it
+  without re-verifying against the real twemoji-parser source; a subtly
+  wrong mapping doesn't error, it just silently 404s against R2 (fails
+  open to font-shaped rendering) for whichever emoji it got wrong. The R2
+  key prefix (`TWEMOJI_ASSET_PREFIX`, `_assets/twemoji/v1/`) must stay in
+  sync between `emoji.ts` and `upload-twemoji-assets.ts` — a version bump
+  in one without the other silently makes every emoji miss.
 
 **What audio sharing would need** (audio memories are specced but unshipped
 — see [audio-memories.md](./audio-memories.md)): `compose-share-card`
@@ -558,7 +601,7 @@ the photo/illustration path.
 |------|--------|
 | `src/utils/base64.test.ts` | `bytesToBase64` against RFC 4648 vectors and a byte round-trip |
 | `src/utils/share-card-filename.test.ts` | Client temp-filename format, id-fragment stripping/truncation/fallback, unparseable-date fallback |
-| `src/services/share-card.test.ts` | Auth requirement, bearer+apikey headers, non-retryable error mapping, **546 retry-once** (success on retry, and no third attempt when 546 repeats), thrown-fetch → `network_error`, non-JSON error body fallback; `warmShareCardFireAndForget` never returns a promise, POSTs `warm:true` (with/without `mediaAssetId`), never retries, swallows a non-2xx/thrown-error/no-session outcome to `console.warn`; `warmShareCardForMemoryFireAndForget` resolves memory-level vs. position-0-cover-asset per `memory_type`, skips a media memory with no assets |
+| `src/services/share-card.test.ts` | Auth requirement, bearer+apikey headers, non-retryable error mapping (incl. **429 fires exactly one attempt**), **546 retry-once** (success on retry, and no third attempt when 546 repeats), thrown-fetch → `network_error`, non-JSON error body fallback; `warmShareCardFireAndForget` never returns a promise, POSTs `warm:true` (with/without `mediaAssetId`), swallows a non-2xx/thrown-error/no-session outcome to `console.warn`; **self-healing retry:** up to 3 total attempts on repeated 546 with 4s/8s backoff (fake timers), silent give-up (single `console.warn`, no 4th attempt) after 3, immediate stop on 429 (no backoff timer ever scheduled); `warmShareCardForMemoryFireAndForget` resolves memory-level vs. position-0-cover-asset per `memory_type`, skips a media memory with no assets |
 | `src/hooks/useShareMemoryCard.test.tsx` | Full tap flow with mocked service/FS/Sharing: temp-file write + share + best-effort cleanup, `isSharing` in-flight state, re-entrancy guard, sharing-unavailable device message, offline message, **403 → message + family-membership invalidation**, 429 friendly message, generic-error fallback, cleanup-on-write-failure |
 | `src/components/memory-engagement-bar.test.tsx` | `enableShare` prop gating, the full visibility matrix (viewer×toggle, owner/manager always-on, missing-flag-defaults-true), video-page disabled + spinner-disabled states, tap delegates `(memory, currentMediaAssetId)` to `shareMemoryCard` |
 | `src/components/memory-media-carousel.test.tsx` | `onActiveIndexChange` fires once on mount (default and requested initial index) and on `handleScrollEnd` (momentum end / drag-without-momentum), never on per-frame `onScroll` |
@@ -570,12 +613,15 @@ the photo/illustration path.
 
 | File | Covers |
 |------|--------|
-| `supabase/functions/compose-share-card/index.test.ts` | Authz matrix (owner/manager/viewer×toggle/non-member), video rejection, asset-ownership rejection, rate limiting, no-content-in-logs on a layout failure, filename header; **store-through cache (W2):** `DESIGN_VERSION`/key-parsing/freshness, cache-target resolution (memory vs. per-asset), `storeShareCardAndUpdateCache` (put + column update + stale-object delete, non-fatal on each failure), end-to-end cache HIT (streams stored PNG, never loads fonts/wasm or composes), MISS (composes, stores under the creator prefix + `DESIGN_VERSION`), stale-version key treated as MISS + stale object deleted, warm mode on a fresh cache (204, no-op) and on a MISS (204 after compose+store), the warm rate bucket independent of the cold bucket in both directions |
-| `supabase/functions/compose-share-card/layout.test.ts` | SVG-tree snapshot per memory-type variant (quote/spread), date-label formatting |
+| `supabase/functions/compose-share-card/index.test.ts` | Authz matrix (owner/manager/viewer×toggle/non-member), video rejection, asset-ownership rejection, rate limiting, no-content-in-logs on a layout failure, filename header; **store-through cache (W2):** `DESIGN_VERSION`/key-parsing/freshness, cache-target resolution (memory vs. per-asset), `storeShareCardAndUpdateCache` (put + column update + stale-object delete, non-fatal on each failure), end-to-end cache HIT (streams stored PNG, never loads fonts/wasm or composes), MISS (composes, stores under the creator prefix + `DESIGN_VERSION`), stale-version key treated as MISS + stale object deleted, warm mode on a fresh cache (204, no-op) and on a MISS (204 after compose+store), the warm rate bucket independent of the cold bucket in both directions; **emoji `graphemeImages` (Part 4 of the four-part fix):** a caption emoji's Twemoji key joins the SAME `getObjectBytesBatch` window as hero/portrait images, the resolved map reaches `composeShareCardPng` (dependency-injected assertion), no-emoji captions add no key + pass an empty map, a missing/failed SVG fails open (share still succeeds, grapheme just absent), the per-isolate memo skips a second R2 fetch for an already-seen grapheme, `rememberEmojiGraphemeImage`'s FIFO eviction at `MAX_EMOJI_GRAPHEME_MEMO_ENTRIES` |
+| `supabase/functions/compose-share-card/emoji.test.ts` | `graphemeToTwemojiFilename`/`buildTwemojiObjectKey` against the exact twemoji-parser-verified cases (flag pair, VS16-dropped heart, ZWJ family with every codepoint kept, keycap, a ZWJ+VS16 combo that keeps VS16), `isEmojiGrapheme`/`extractDistinctEmojiGraphemes` (mixed caption extraction + dedupe + distinct-flags-stay-distinct, non-emoji text/punctuation excluded), `resolveGraphemeImages` (memo-hit short-circuit, fetch-then-resolve, fail-open on missing/failed/bytes-less entries, one failure never blocks another grapheme's success) |
+| `supabase/functions/compose-share-card/layout.test.ts` | SVG-tree snapshot per memory-type variant (quote/spread), date-label formatting, quote-glyph bottom-margin pinned to the exact `+8` logical-unit value (user-feedback follow-up), flag/mixed-emoji captions still produce real glyph path data (pre-`graphemeImages` shaping floor, not a regression guard for the image substitution itself — see render.test.ts for that) |
+| `supabase/functions/compose-share-card/render.test.ts` | Real PNG output from injected real font/wasm fixture bytes, resvg-wasm-compile memoization, the reduced-scale mitigation at a real pixel boundary; **`graphemeImages` passthrough:** an override for a caption's emoji measurably changes the rendered PNG bytes (proves the parameter reaches satori on both the full AND reduced-scale pass), an empty map behaves identically to omitting it (no accidental substitution) |
 | `supabase/functions/compose-share-card/scale.test.ts` | Reduced-scale pixel-budget boundary, SVG-height parsing |
 | `supabase/functions/_shared/storage-keys.test.ts` | `buildShareCardKey` shape, `parseStorageKey` classifies a share-card key (and rejects a wrong path segment / missing name / non-uuid ids) |
 | `supabase/functions/_shared/family-access.test.ts` | `resolveReferencedStorageKeys` admits a referenced `memories.share_card_key` and `memory_media.share_card_key` (so `delete-storage-object`/`get-media-url` don't 400 a live card) |
 | `supabase/functions/hard-delete-expired-accounts/index.test.ts` | `collectFamilyStorageKeys` includes both `share_card_key` columns on owner-account deletion; `resolveReferencedKeys` does NOT collect a live share-card key as an orphan |
+| `supabase/scripts/backfill-share-cards.test.ts` | Pure helpers only: `shapeMemoryTargets`/`shapeMediaAssetTargets` (row → target shaping, dangling-FK-join defensive drop), `describeTarget` (id-only, no content), `decideWarmRetry` (retries ONLY 546 while under the attempt cap, gives up immediately on 429/4xx/5xx/network-error/attempt-cap-reached, respects a custom `maxAttempts`) |
 
 ### Run this feature's tests
 
@@ -595,8 +641,41 @@ npx deno test --allow-env --allow-net --allow-ffi \
   supabase/functions/compose-share-card/ \
   supabase/functions/_shared/storage-keys.test.ts \
   supabase/functions/_shared/family-access.test.ts \
-  supabase/functions/hard-delete-expired-accounts/
+  supabase/functions/hard-delete-expired-accounts/ \
+  supabase/scripts/backfill-share-cards.test.ts
 ```
+
+**Backfill script.** `supabase/scripts/backfill-share-cards.ts` pre-warms
+every existing share-card-less memory/asset (`share_card_key IS NULL`) by
+calling the DEPLOYED `compose-share-card` warm endpoint as each target's
+family owner (a minted session, `generateLink`/`verifyOtp` — same pattern as
+`seed-demo-account.ts`'s `createUserClient`). Dry-run by default:
+
+```bash
+npm run backfill:share-cards            # dry run
+npm run backfill:share-cards -- --apply # actually warms
+```
+
+Re-runnable (idempotent) — a successful warm sets `share_card_key`, so a
+second run only picks up what's still missing. Never prints secrets or
+memory content (id/count/status-code logs only).
+
+**Twemoji asset upload.** `supabase/scripts/upload-twemoji-assets.ts`
+uploads the full self-hosted Twemoji SVG set (~3,720 files, fetched from
+the `@twemoji/svg` npm package at script runtime — never checked into this
+repo) to R2 under `_assets/twemoji/v1/`, for `compose-share-card/emoji.ts`'s
+`graphemeImages` support. Dry-run by default:
+
+```bash
+deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local \
+  supabase/scripts/upload-twemoji-assets.ts            # dry run
+... upload-twemoji-assets.ts --apply                    # actually uploads
+... upload-twemoji-assets.ts --verify                   # post-apply sample check
+```
+
+One-time (or deliberate-version-bump) — see the script's own header comment
+for the pinned-version rationale and the MIT (package)/CC-BY 4.0 (Twemoji
+graphics) licensing note.
 
 Device smoke (not automated, needs two test accounts — one manager, one
 viewer): share each memory type, swipe a mixed carousel and confirm the
@@ -613,3 +692,4 @@ not a stale cached copy.
 |------|--------|
 | 2026-08-05 | Initial implementation: viewer-sharing setting, `compose-share-card` Edge Function (satori + resvg-wasm, reduced-scale mitigation), client share flow (icon, carousel current-page lifting, `useShareMemoryCard`) |
 | 2026-08-05 | Store-through cache (docs/plans/share-card-store-through.md): `memories.share_card_key`/`memory_media.share_card_key` (W1, schema + storage/deletion coverage across `_shared/storage-keys.ts`, `_shared/family-access.ts`, `hard-delete-expired-accounts`, and the client's delete/replace paths), `compose-share-card` cache hit/miss + non-fatal store-through + `warm: true` mode with its own rate bucket (W2), client `warmShareCardFireAndForget`/`warmShareCardForMemoryFireAndForget` fired after memory create/edit/media-post (W3) — absorbs the 546 failure-rate ceiling for any repeat or pre-warmed share |
+| 2026-08-05 | Four-part production fix (fresh prod probe: ~45-55% cold compose success per attempt, stochastic, and cold-bucket exhaustion masquerading as "retry never works"): quote-glyph `marginBottom` +2 → +8 logical units (`DESIGN_VERSION` 2 → 3, stored cards regenerate lazily), cold rate bucket `SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW` 10 → 20/minute/user (warm stays 30), `warmShareCardFireAndForget` made self-healing (retries on 546 up to 3 total attempts with 4s/8s backoff, stops immediately on 429, still silent/never-awaited), `supabase/scripts/backfill-share-cards.ts` added to pre-warm every existing share-card-less memory/asset via the deployed warm endpoint. **Plus (same round, device report — a flag emoji rendered as "E S"):** self-hosted Twemoji `graphemeImages` support (`compose-share-card/emoji.ts` — grapheme extraction + twemoji-parser-verified filename mapping; `supabase/scripts/upload-twemoji-assets.ts` self-hosts the SVG set to R2, replacing the monochrome-font-only story for flags/ZWJ-sequences/keycaps) — folded into the STILL-UNDEPLOYED `DESIGN_VERSION` 3 rather than a separate bump |

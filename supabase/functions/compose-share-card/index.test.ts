@@ -1,6 +1,9 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import { buildShareCardKey } from '../_shared/storage-keys.ts';
+import { buildTwemojiObjectKey, MAX_EMOJI_GRAPHEME_MEMO_ENTRIES } from './emoji.ts';
 import {
+  _hasEmojiGraphemeImageMemoizedForTests,
+  _resetEmojiGraphemeImageMemoForTests,
   _resetRateLimitStateForTests,
   authorizeShareCardAccessFromQueryRow,
   buildShareCardFilename,
@@ -20,6 +23,7 @@ import {
   markWarmRun,
   mimeTypeFromObjectKey,
   parseShareCardKeyDesignVersion,
+  rememberEmojiGraphemeImage,
   resolveCallerRoleFromQueryRow,
   resolveImageMimeType,
   resolveMemberPortraitKey,
@@ -1411,4 +1415,198 @@ Deno.test('handleComposeShareCard: a media memory MISS stores/updates the per-AS
     assertEquals(updateCalls[0].table, 'memory_media');
     assertEquals(updateCalls[0].id, ASSET_ID);
   });
+});
+
+// ── Emoji grapheme images (emoji fix -- see emoji.ts's header comment for
+// the full "🇪🇸 renders as 'E S'" diagnosis) ─────────────────────────────
+// A caption's Twemoji SVG keys join the SAME getObjectBytesBatch call as
+// the hero/portrait images, and the resulting graphemeImages map is passed
+// through to composeShareCardPng -- these tests exercise that plumbing via
+// dependency injection (baseHandlerDeps' composeShareCardPng override),
+// same pattern as every other handleComposeShareCard test in this file.
+
+const FLAG_ES = '\u{1F1EA}\u{1F1F8}'; // 🇪🇸
+const FAKE_SVG_BYTES = new Uint8Array([0x3c, 0x73, 0x76, 0x67]); // "<svg" (content is irrelevant to these tests)
+
+Deno.test('handleComposeShareCard: a caption emoji is fetched in the SAME batch as other images, and its graphemeImages entry reaches composeShareCardPng', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    _resetEmojiGraphemeImageMemoForTests();
+    const row = buildQueryRow({
+      families: ownerFamilies(OWNER_ID),
+      content: `Trip to Spain ${FLAG_ES} was unforgettable`,
+      share_card_key: null,
+    });
+
+    let batchedKeys: string[] = [];
+    let receivedGraphemeImages: Record<string, string> | undefined;
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        getObjectBytesBatch: async (keys: string[]) => {
+          batchedKeys = keys;
+          const map = new Map();
+          if (keys.includes(buildTwemojiObjectKey(FLAG_ES))) {
+            map.set(buildTwemojiObjectKey(FLAG_ES), { ok: true, bytes: FAKE_SVG_BYTES });
+          }
+          return map;
+        },
+        composeShareCardPng: async (_data, _assets, graphemeImages) => {
+          receivedGraphemeImages = graphemeImages;
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+        },
+      }),
+    );
+
+    assertEquals(response.status, 200);
+    assertEquals(batchedKeys.includes(buildTwemojiObjectKey(FLAG_ES)), true);
+    assertEquals(
+      receivedGraphemeImages,
+      { [FLAG_ES]: `data:image/svg+xml;base64,${btoa(String.fromCharCode(...FAKE_SVG_BYTES))}` },
+    );
+  });
+});
+
+Deno.test('handleComposeShareCard: a caption with no emoji never adds a Twemoji key to the batch fetch, and passes an empty graphemeImages', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    _resetEmojiGraphemeImageMemoForTests();
+    const row = buildQueryRow({
+      families: ownerFamilies(OWNER_ID),
+      content: 'A perfectly ordinary caption, no emoji at all.',
+      share_card_key: null,
+    });
+
+    let batchedKeys: string[] = [];
+    let receivedGraphemeImages: Record<string, string> | undefined;
+
+    await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        getObjectBytesBatch: async (keys: string[]) => {
+          batchedKeys = keys;
+          return new Map();
+        },
+        composeShareCardPng: async (_data, _assets, graphemeImages) => {
+          receivedGraphemeImages = graphemeImages;
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+        },
+      }),
+    );
+
+    assertEquals(batchedKeys.some((k) => k.startsWith('_assets/twemoji/')), false);
+    assertEquals(receivedGraphemeImages, {});
+  });
+});
+
+Deno.test('handleComposeShareCard: a missing/failed Twemoji SVG fetch falls back silently -- the share still succeeds and the grapheme is simply absent', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    _resetEmojiGraphemeImageMemoForTests();
+    const row = buildQueryRow({
+      families: ownerFamilies(OWNER_ID),
+      content: `Trip to Spain ${FLAG_ES} was unforgettable`,
+      share_card_key: null,
+    });
+
+    let receivedGraphemeImages: Record<string, string> | undefined;
+
+    const response = await handleComposeShareCard(
+      shareRequest({ memoryId: MEMORY_ID }),
+      baseHandlerDeps({
+        fetchQueryRow: async () => ({ data: row, error: null }),
+        // Deliberately returns an empty map -- simulates the SVG missing
+        // from R2 / the fetch failing for this key.
+        getObjectBytesBatch: async () => new Map(),
+        composeShareCardPng: async (_data, _assets, graphemeImages) => {
+          receivedGraphemeImages = graphemeImages;
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+        },
+      }),
+    );
+
+    assertEquals(response.status, 200); // compose still succeeds
+    assertEquals(receivedGraphemeImages, {}); // grapheme simply absent, no throw
+    const body = new Uint8Array(await response.arrayBuffer());
+    assertEquals(body, FAKE_PNG_BYTES);
+  });
+});
+
+Deno.test('handleComposeShareCard: a memoized emoji is NOT re-fetched from R2 on a later compose in the same isolate', async () => {
+  await withMockedAuth(OWNER_ID, async () => {
+    _resetRateLimitStateForTests();
+    _resetEmojiGraphemeImageMemoForTests();
+    const row = buildQueryRow({
+      families: ownerFamilies(OWNER_ID),
+      content: `Trip to Spain ${FLAG_ES} was unforgettable`,
+      share_card_key: null,
+    });
+
+    let fetchCallCount = 0;
+    const receivedGraphemeImagesByCall: Array<Record<string, string> | undefined> = [];
+
+    const deps = baseHandlerDeps({
+      fetchQueryRow: async () => ({ data: row, error: null }),
+      getObjectBytesBatch: async (keys: string[]) => {
+        fetchCallCount += 1;
+        const map = new Map();
+        if (keys.includes(buildTwemojiObjectKey(FLAG_ES))) {
+          map.set(buildTwemojiObjectKey(FLAG_ES), { ok: true, bytes: FAKE_SVG_BYTES });
+        }
+        return map;
+      },
+      composeShareCardPng: async (_data, _assets, graphemeImages) => {
+        receivedGraphemeImagesByCall.push(graphemeImages);
+        return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+      },
+    });
+
+    // First compose: memo miss -- fetches the SVG.
+    await handleComposeShareCard(shareRequest({ memoryId: MEMORY_ID }), deps);
+    assertEquals(_hasEmojiGraphemeImageMemoizedForTests(FLAG_ES), true);
+
+    // Second compose, same caption, same (never-reset) isolate memo: must
+    // resolve the SAME graphemeImages entry WITHOUT the batch fetch
+    // including the Twemoji key again.
+    _resetRateLimitStateForTests(); // avoid tripping the cold rate limit
+    let secondBatchedKeys: string[] = [];
+    const depsSecondCall: ComposeShareCardDependencies = {
+      ...deps,
+      getObjectBytesBatch: async (keys: string[]) => {
+        fetchCallCount += 1;
+        secondBatchedKeys = keys;
+        return new Map(); // nothing needs to be fetched -- memo covers it
+      },
+    } as ComposeShareCardDependencies;
+    await handleComposeShareCard(shareRequest({ memoryId: MEMORY_ID }), depsSecondCall);
+
+    assertEquals(secondBatchedKeys.includes(buildTwemojiObjectKey(FLAG_ES)), false);
+    assertEquals(fetchCallCount, 2); // one batch call per compose, neither empty-skipped
+    assertEquals(
+      receivedGraphemeImagesByCall[1],
+      { [FLAG_ES]: `data:image/svg+xml;base64,${btoa(String.fromCharCode(...FAKE_SVG_BYTES))}` },
+    );
+  });
+});
+
+Deno.test('rememberEmojiGraphemeImage: bounded at MAX_EMOJI_GRAPHEME_MEMO_ENTRIES via FIFO eviction', () => {
+  _resetEmojiGraphemeImageMemoForTests();
+
+  for (let i = 0; i < MAX_EMOJI_GRAPHEME_MEMO_ENTRIES; i++) {
+    rememberEmojiGraphemeImage(`grapheme-${i}`, `data:fake-${i}`);
+  }
+  assertEquals(_hasEmojiGraphemeImageMemoizedForTests('grapheme-0'), true);
+
+  // One more insert past the cap must evict the OLDEST entry (FIFO), not
+  // silently grow unbounded.
+  rememberEmojiGraphemeImage('grapheme-overflow', 'data:fake-overflow');
+
+  assertEquals(_hasEmojiGraphemeImageMemoizedForTests('grapheme-0'), false);
+  assertEquals(_hasEmojiGraphemeImageMemoizedForTests('grapheme-1'), true);
+  assertEquals(_hasEmojiGraphemeImageMemoizedForTests('grapheme-overflow'), true);
+
+  _resetEmojiGraphemeImageMemoForTests();
 });

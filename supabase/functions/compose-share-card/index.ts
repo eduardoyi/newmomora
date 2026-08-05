@@ -31,6 +31,12 @@ import { encodeBytesToBase64 } from '../_shared/openai.ts';
 import { deleteObject, getObjectBytes, getObjectBytesBatch, putObjectBytes, type ObjectBytesBatchEntry } from '../_shared/r2.ts';
 import { buildShareCardKey } from '../_shared/storage-keys.ts';
 import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
+import {
+  buildTwemojiObjectKey,
+  extractDistinctEmojiGraphemes,
+  MAX_EMOJI_GRAPHEME_MEMO_ENTRIES,
+  resolveGraphemeImages,
+} from './emoji.ts';
 import { composeShareCardPng as composeShareCardPngImpl } from './render.ts';
 import { formatShareCardDateLabel, MAX_VISIBLE_MEMBERS, type ShareCardData, type ShareCardMemberPortrait } from './layout.ts';
 import { loadShareCardAssets as loadShareCardAssetsImpl, ShareCardAssetsUnavailableError } from './assets-loader.ts';
@@ -202,7 +208,17 @@ export interface ShareCardMemoryQueryRow {
 // cross-isolate coordination) -- acceptable for a "don't hammer this" guard,
 // not a hard billing limit.
 export const SHARE_CARD_RATE_LIMIT_WINDOW_MS = 60_000;
-export const SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW = 10;
+// Bumped 10 -> 20 (four-part production fix, docs/plans/
+// share-card-store-through.md): a fresh production probe found cold
+// composes succeed only ~45-55% per attempt (stochastic
+// WORKER_RESOURCE_LIMIT policing -- see this file's own header comment),
+// and the client burns 2 attempts per tap (composeShareCard's single
+// 546-retry, src/services/share-card.ts) -- at 10/min a user tapping share
+// a handful of times in frustration could exhaust the whole window and see
+// nothing but 429s, which is indistinguishable from "retry never works" in
+// the UI. 20/min gives real headroom for that burn rate while still
+// bounding the most CPU-expensive user-triggered endpoint in the project.
+export const SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW = 20;
 
 // ── Warm-mode rate limit (W2) ────────────────────────────────────────────
 // A SEPARATE, looser bucket from the cold (streaming-share) limit above --
@@ -694,6 +710,48 @@ export function _resetWebpModuleForTests(): void {
   webpModulePromise = null;
 }
 
+// ── Emoji grapheme images (emoji fix -- see emoji.ts's header comment for
+// the full "🇪🇸 renders as 'E S'" diagnosis and design) ───────────────────
+// Per-isolate memo of already-fetched Twemoji SVG data URIs, keyed by the
+// literal grapheme text. Captions across DIFFERENT memories/requests in the
+// same warm isolate very likely reuse the same handful of common emoji, so
+// this avoids re-fetching an unchanged SVG from R2 on every compose -- the
+// SAME "amortize across requests in one isolate" reasoning as
+// webpModulePromise above and render.ts's resvgInitPromise. Bounded at
+// MAX_EMOJI_GRAPHEME_MEMO_ENTRIES (emoji.ts) with simple insertion-order
+// (FIFO) eviction -- a Map preserves insertion order, so the oldest entry
+// is always `.keys().next().value`. Tiny by design (a handful of KB of
+// base64 SVG text at most, even at the cap) -- this is not trying to be a
+// general cache, just cheap insurance against the common case.
+const emojiGraphemeImageMemo = new Map<string, string>();
+
+/** Exported (not test-prefixed) like markComposeRun/markWarmRun above --
+ * real production logic, directly unit-testable. */
+export function rememberEmojiGraphemeImage(grapheme: string, dataUri: string): void {
+  // Re-inserting moves a key to the end of Map iteration order -- all the
+  // "recency" this needs. An already-memoized grapheme re-seen in a later
+  // request is therefore less likely to be the next one evicted.
+  emojiGraphemeImageMemo.delete(grapheme);
+  emojiGraphemeImageMemo.set(grapheme, dataUri);
+  if (emojiGraphemeImageMemo.size > MAX_EMOJI_GRAPHEME_MEMO_ENTRIES) {
+    const oldestKey = emojiGraphemeImageMemo.keys().next().value;
+    if (oldestKey !== undefined) {
+      emojiGraphemeImageMemo.delete(oldestKey);
+    }
+  }
+}
+
+/** Exposed for tests only -- avoids cross-test memo bleed. */
+export function _resetEmojiGraphemeImageMemoForTests(): void {
+  emojiGraphemeImageMemo.clear();
+}
+
+/** Exposed for tests only -- lets a test assert memo hit/eviction state
+ * without reaching into module-private state directly. */
+export function _hasEmojiGraphemeImageMemoizedForTests(grapheme: string): boolean {
+  return emojiGraphemeImageMemo.has(grapheme);
+}
+
 /**
  * Decodes real webp `bytes` and re-encodes to JPEG, capped to `maxEdge` on
  * its longest side (same budget as capImageMaxEdge below -- avoids decoding
@@ -901,17 +959,25 @@ export async function buildTaggedMemberPortraits(
 // buildShareCardKey, _shared/storage-keys.ts); this section resolves which
 // column applies to the current request and decides HIT vs MISS.
 
-// LOUD REMINDER: bump this on ANY layout change (layout.ts, render.ts's
-// scale/format choices, or this file's own card-shape assembly) -- it is
-// the ONLY thing that invalidates a stored card. A stored key whose encoded
-// version doesn't match this constant is always treated as a MISS
-// (isFreshShareCardKey below), so old cards regenerate lazily on next share
-// instead of ever being served stale. Currently 2: version 1 is the
+// LOUD REMINDER: bump this on ANY layout/rendering change (layout.ts,
+// render.ts's scale/format choices, this file's own card-shape assembly,
+// OR what gets embedded as image content -- e.g. emoji.ts's graphemeImages)
+// -- it is the ONLY thing that invalidates a stored card. A stored key
+// whose encoded version doesn't match this constant is always treated as a
+// MISS (isFreshShareCardKey below), so old cards regenerate lazily on next
+// share instead of ever being served stale. Currently 3: version 1 is the
 // IMPLICIT pre-cache design (no share_card_key columns existed before this
-// workstream, so there was nothing to compare a key against) -- bumped to 2
-// for this workstream's own batched wordmark tweak (see layout.ts's
-// SHARE_CARD_WORDMARK_FONT_SIZE/SHARE_CARD_WORDMARK_OPACITY).
-export const DESIGN_VERSION = 2;
+// workstream, so there was nothing to compare a key against); 2 was this
+// workstream's own batched wordmark tweak (layout.ts's
+// SHARE_CARD_WORDMARK_FONT_SIZE/SHARE_CARD_WORDMARK_OPACITY); 3 -- STILL
+// UNDEPLOYED as of this comment, so folded straight into the same version
+// rather than bumping again -- is BOTH the quote-glyph's follow-up
+// marginBottom bump (+2 -> +8 logical units, layout.ts's quoteGlyphNode)
+// AND self-hosted Twemoji `graphemeImages` support (emoji.ts) for
+// flag/ZWJ-sequence/keycap emoji that satori's font-only text shaping can
+// never render correctly on its own (docs/plans/share-card-store-through.md's
+// four-part production fix).
+export const DESIGN_VERSION = 3;
 
 const SHARE_CARD_KEY_NAME_PATTERN = /^(\d+)-(.+)\.png$/i;
 
@@ -1285,7 +1351,21 @@ export async function handleComposeShareCard(
       ? resolution.source.objectKey
       : null;
 
-    const allImageKeys = heroObjectKey ? [heroObjectKey, ...portraitKeys] : portraitKeys;
+    // ── Emoji grapheme images (emoji fix -- emoji.ts's header comment) ───
+    // Distinct emoji graphemes in the caption, split into memo hits (no
+    // fetch needed) and misses (their Twemoji SVG key joins the SAME
+    // getObjectBytesBatch call as the hero/portrait images below -- one
+    // presign round trip for everything this compose needs, same reasoning
+    // as the comment above this block).
+    const captionEmojiGraphemes = extractDistinctEmojiGraphemes(row.content ?? '');
+    const emojiGraphemesToFetch = captionEmojiGraphemes.filter((g) => !emojiGraphemeImageMemo.has(g));
+    const emojiKeysToFetch = emojiGraphemesToFetch.map(buildTwemojiObjectKey);
+
+    const allImageKeys = [
+      ...(heroObjectKey ? [heroObjectKey] : []),
+      ...portraitKeys,
+      ...emojiKeysToFetch,
+    ];
 
     // Awaited together with the (already-in-flight, kicked off right above)
     // asset fetch.
@@ -1299,6 +1379,20 @@ export async function handleComposeShareCard(
     const fetchCount = allImageKeys.length;
 
     const portraits = await buildTaggedMemberPortraits(members, imageBytesByKey, assets.webpDecWasm);
+
+    // FAIL-OPEN per grapheme (resolveGraphemeImages), same posture as
+    // tagged-member portraits: a missing/failed SVG just means satori
+    // falls back to its normal font-shaped (incomplete, ligature-less)
+    // rendering for that one grapheme -- never fails the whole compose.
+    const { graphemeImages, newlyResolved } = resolveGraphemeImages(
+      captionEmojiGraphemes,
+      emojiGraphemeImageMemo,
+      imageBytesByKey,
+      (bytes) => `data:image/svg+xml;base64,${encodeBytesToBase64(bytes)}`,
+    );
+    for (const [grapheme, dataUri] of newlyResolved) {
+      rememberEmojiGraphemeImage(grapheme, dataUri);
+    }
 
     let imageDataUri: string | null = null;
     let imageAspectRatio: number | null = null;
@@ -1354,7 +1448,7 @@ export async function handleComposeShareCard(
         jakartaBold: assets.jakartaBold,
         notoEmoji: assets.notoEmojiSubset,
       },
-    });
+    }, graphemeImages);
 
     // ── Store-through (W2, non-fatal on failure) ─────────────────────────
     // Runs INSIDE this work closure (not after runShareCardCompose

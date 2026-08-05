@@ -524,6 +524,12 @@ Deno.test('layout: quote card glyph has a non-negative bottom margin (BUG FIX re
   }
   const style = glyphNode.props.style as { height?: number; marginBottom?: number; fontSize?: number };
   assertEquals((style.marginBottom ?? -1) >= 0, true);
+  // Follow-up regression guard (user feedback, docs/plans/
+  // share-card-store-through.md's four-part fix): +2 logical units still
+  // read as touching on a real device -- pinned to the exact +8 value
+  // (scaled by BASE_SCALE) so a future edit can't silently drift this back
+  // down without a test failure.
+  assertEquals(style.marginBottom, Math.round(8 * BASE_SCALE));
   // The glyph's box stays meaningfully shorter than its own fontSize --
   // it's intentionally clipped so only the glyph's top curl (not its full
   // em-box / tail) is visible, which is the other half of the fix.

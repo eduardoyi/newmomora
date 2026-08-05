@@ -1779,29 +1779,53 @@ failure still streams the composed PNG; see below).
   can't decode it).
 - **429** `rate_limited` — TWO separate in-isolate `Map`-backed windows, so
   a burst of one kind can never eat into the other's budget: cold
-  (streaming) shares get 10/minute/user (`SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW`,
-  same cooldown pattern as `analyze-emotion`); `warm: true` requests get a
-  separate, looser 30/minute/user
-  (`SHARE_CARD_WARM_RATE_LIMIT_MAX_PER_WINDOW`) — warms are
+  (streaming) shares get 20/minute/user (`SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW`,
+  bumped from 10 in the four-part production fix — a production probe found
+  the client burns 2 attempts per cold-path 546 retry, so 10/min could
+  exhaust after a handful of taps; same cooldown pattern as
+  `analyze-emotion`); `warm: true` requests get a separate, looser
+  30/minute/user (`SHARE_CARD_WARM_RATE_LIMIT_MAX_PER_WINDOW`) — warms are
   system-initiated (client fires them after memory create/edit/media-post,
   not a human repeatedly tapping share) but still real limits, not exempt.
 - **546** platform `WORKER_RESOURCE_LIMIT` (Supabase's own resource-cap
-  response, not something this function returns on purpose) — the client
-  retries exactly once **on the cold path only** (`warmShareCardFireAndForget`
-  is deliberately NOT retried — a warm is speculative/best-effort by
-  design; the cache itself, and any later share/warm attempt, is the real
-  retry mechanism). See docs/features/memory-sharing.md's Constraints
-  section for the reduced-raster-scale mitigation this pairs with, and its
-  Architecture section for how the store-through cache changes the
-  post-deploy failure-rate story.
+  response, not something this function returns on purpose) — the COLD path
+  (`composeShareCard`) retries exactly once. The WARM path
+  (`warmShareCardFireAndForget`) is self-healing (four-part production fix,
+  Part 3): `performWarmShareCardWithRetries` retries internally on 546 up to
+  `SHARE_CARD_WARM_MAX_ATTEMPTS` (3) total attempts with 4s/8s backoff, but
+  stops immediately on 429 or any other outcome (retrying a 429 would only
+  burn the warm bucket further). Both paths ultimately fall back to the
+  store-through cache's cold-path compose (or a later warm/share attempt) as
+  the final safety net if every attempt fails. See
+  docs/features/memory-sharing.md's Constraints section for the
+  reduced-raster-scale mitigation this pairs with, and its Architecture
+  section for how the store-through cache changes the post-deploy
+  failure-rate story.
 
 Auth reuses `_shared/family-access.ts`'s role helpers. Vendored assets
-(resvg `.wasm`, font TTFs, a monochrome NotoEmoji subset) are each
-base64-encoded into their own statically-imported `.ts` module under
-`supabase/functions/compose-share-card/assets/` — the only proven asset
-channel under `--use-api` deploys (`Deno.readFile`/`readDirSync`/
-`fetch(import.meta.url)` do not work for non-module-graph files there). Card
-layout (`layout.ts`) is a simplified server-side reproduction of
+(resvg `.wasm`, webp-dec `.wasm`, font TTFs incl. a monochrome NotoEmoji
+subset — 8 fixed assets total) are fetched from R2 at REQUEST time, ONE
+batched call, memoized per isolate (`assets-loader.ts`'s `loadShareCardAssets`,
+verified against a manifest of expected byte counts + sha256 hashes,
+`_shared/share-card-assets-manifest.ts`) — NOT base64-encoded into a
+statically-imported `.ts` module, which is what this function used to do
+before perf-audit round 4: ~4.8MB of base64 string-literal text V8 had to
+PARSE as part of the function's own module-graph evaluation on every cold
+boot, isolated (via a same-project trivial-function control experiment) as
+the actual cause of ~48% bodyless 546 (`WORKER_RESOURCE_LIMIT`) failures.
+Uploaded by `supabase/scripts/upload-share-card-assets.ts`. Self-hosted
+Twemoji SVGs (emoji fix, four-part production fix Part 4) are a SEPARATE,
+NOT-manifest-based R2-hosted asset set (`_assets/twemoji/v1/`, uploaded by
+`upload-twemoji-assets.ts`) — dynamic per-caption keys (which emoji a given
+compose needs varies), fetched via plain `getObjectBytesBatch` calls in the
+SAME window as hero/portrait images rather than the fixed 8-asset manifest
+batch, since a manifest's whole-set byte/hash verification doesn't fit a
+~3,720-file, request-varying set. See `compose-share-card/emoji.ts`'s
+header comment for the full design (grapheme extraction, twemoji-parser-
+verified filename mapping, `graphemeImages` satori option, per-isolate
+memo) and docs/features/memory-sharing.md's Privacy section for why this
+is self-hosted rather than a third-party CDN fetch. Card layout
+(`layout.ts`) is a simplified server-side reproduction of
 `src/components/memory-card.tsx`'s `SpreadCard`/`QuoteCard` — both files
 carry a "KEEP IN SYNC" cross-reference comment. Logging never includes
 `error.message` on a layout/render path (satori errors can embed caption

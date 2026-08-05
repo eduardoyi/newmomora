@@ -7,7 +7,7 @@
 // (compose-share-card/assets/bin/* -- the upload script's source AND the
 // manifest's sha256-covered content), so composeShareCardPng is exercised
 // with the REAL fonts/wasm, not mocks, while never touching R2/network.
-import { assertEquals } from 'jsr:@std/assert@1';
+import { assertEquals, assertNotEquals } from 'jsr:@std/assert@1';
 
 import {
   composeShareCardPng,
@@ -98,4 +98,44 @@ Deno.test('composeShareCardPng produces the identical layout at 2/3 size for a c
   const result = await composeShareCardPng(textOnlyCardData(longCaption), TEST_ASSETS);
   assertEquals(result.scale, 'reduced');
   assertEquals(result.png[0], 0x89); // still a valid PNG
+});
+
+// ── graphemeImages (emoji fix, docs/plans/share-card-store-through.md's
+// four-part production fix) -- satori's ONLY mechanism for rendering
+// flags/ZWJ-sequences/keycaps correctly (see emoji.ts's header comment).
+// composeShareCardPng returns a RASTERIZED PNG, not the intermediate SVG,
+// so this can't string-search for an embedded `<image>`/data-URI the way a
+// satori-level test could -- instead it proves the parameter has a real
+// effect end-to-end: the SAME caption/data renders to DIFFERENT PNG bytes
+// depending on whether a graphemeImages override is supplied, which can
+// only happen if render.ts is actually threading it into satori (both the
+// full AND, implicitly, the reduced-scale pass share the same code path).
+// A distinctive, deliberately non-photographic SVG (a solid red square) is
+// used as the fixture so there's no ambiguity about whether the override
+// was applied -- a subtler difference could plausibly come from unrelated
+// rendering noise.
+Deno.test('composeShareCardPng: a graphemeImages override for a caption emoji changes the rendered PNG bytes (proves the param reaches satori)', async () => {
+  const flagGrapheme = '\u{1F1EA}\u{1F1F8}'; // matches emoji.ts's isEmojiGrapheme/extraction shape
+  const caption = `Trip to Spain ${flagGrapheme} was unforgettable`;
+  const tinyRedSquareSvgDataUri = `data:image/svg+xml;base64,${
+    btoa('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>')
+  }`;
+
+  const withoutOverride = await composeShareCardPng(textOnlyCardData(caption), TEST_ASSETS);
+  const withOverride = await composeShareCardPng(
+    textOnlyCardData(caption),
+    TEST_ASSETS,
+    { [flagGrapheme]: tinyRedSquareSvgDataUri },
+  );
+
+  assertEquals(withOverride.png[0], 0x89); // still a valid PNG
+  assertNotEquals(Array.from(withOverride.png), Array.from(withoutOverride.png));
+});
+
+Deno.test('composeShareCardPng: an empty graphemeImages object behaves identically to omitting it entirely (no accidental substitution)', async () => {
+  const caption = 'No emoji in this caption at all.';
+  const withEmptyMap = await composeShareCardPng(textOnlyCardData(caption), TEST_ASSETS, {});
+  const withUndefined = await composeShareCardPng(textOnlyCardData(caption), TEST_ASSETS);
+
+  assertEquals(Array.from(withEmptyMap.png), Array.from(withUndefined.png));
 });

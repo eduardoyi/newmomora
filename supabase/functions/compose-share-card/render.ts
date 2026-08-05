@@ -37,6 +37,11 @@ type SatoriFn = (
   options: {
     width: number;
     fonts: Array<{ name: string; data: Uint8Array; weight: number; style: 'normal' | 'italic' }>;
+    /** Grapheme -> image-source (data URI) overrides -- see emoji.ts's
+     * header comment for why this is the ONLY way satori can render
+     * flags/ZWJ-sequence/keycap emoji correctly (no font, however complete
+     * its glyph coverage, can produce them through ordinary text shaping). */
+    graphemeImages?: Record<string, string>;
   },
 ) => Promise<string>;
 
@@ -139,6 +144,14 @@ export interface ComposeShareCardResult {
  * assets-loader.ts); tests pass local fixture bytes directly (see
  * render.test.ts) -- neither touches R2 in a unit test.
  *
+ * `graphemeImages` (emoji fix, docs/plans/share-card-store-through.md's
+ * four-part production fix) -- a grapheme-text -> data-URI map, built by
+ * index.ts from a caption's emoji graphemes (emoji.ts) -- is passed
+ * straight through to BOTH satori passes below (full and, if it runs, the
+ * reduced-scale re-layout) unchanged; satori substitutes these images for
+ * the matching grapheme's font-shaped glyphs wherever it appears in the
+ * tree, independent of scale.
+ *
  * Returns per-phase timings (perf-audit instrumentation, this package's
  * implementation report) alongside the PNG so the caller (index.ts) can emit
  * a Server-Timing header + structured log line without this function
@@ -147,6 +160,7 @@ export interface ComposeShareCardResult {
 export async function composeShareCardPng(
   data: ShareCardData,
   assets: ShareCardRenderAssets,
+  graphemeImages?: Record<string, string>,
 ): Promise<ComposeShareCardResult> {
   const initStart = performance.now();
   await ensureResvgInitialized(assets.resvgWasm);
@@ -155,7 +169,7 @@ export async function composeShareCardPng(
 
   const satoriStart = performance.now();
   const fullTree = buildShareCardTree(data, BASE_SCALE);
-  const fullSvg = await satori(fullTree, { width: SHARE_CARD_FULL_WIDTH, fonts: fontList });
+  const fullSvg = await satori(fullTree, { width: SHARE_CARD_FULL_WIDTH, fonts: fontList, graphemeImages });
   const fullHeight = parseSvgHeightPx(fullSvg);
 
   let finalSvg = fullSvg;
@@ -164,7 +178,7 @@ export async function composeShareCardPng(
 
   if (fullHeight !== null && shouldUseReducedScale(fullHeight)) {
     const reducedTree = buildShareCardTree(data, REDUCED_SCALE);
-    finalSvg = await satori(reducedTree, { width: SHARE_CARD_REDUCED_WIDTH, fonts: fontList });
+    finalSvg = await satori(reducedTree, { width: SHARE_CARD_REDUCED_WIDTH, fonts: fontList, graphemeImages });
     finalWidth = SHARE_CARD_REDUCED_WIDTH;
     scale = 'reduced';
   }

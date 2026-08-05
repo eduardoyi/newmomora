@@ -410,7 +410,16 @@ function buildSpreadCard(data: ShareCardData, width: number, s: (px: number) => 
  * (pulling the caption UP, i.e. closer/overlapping) to +2 (real clearance)
  * -- across a one-word caption, a single short line, and a two-line
  * caption, both cap-height ("H") and round-top ("W") first letters now
- * clear the glyph with visible whitespace. */
+ * clear the glyph with visible whitespace.
+ *
+ * FOLLOW-UP (user feedback, docs/plans/share-card-store-through.md's
+ * four-part fix, 2026-08-05): +2 read as still touching on a real device --
+ * bumped another +6 to +8 total for clearer separation from the caption.
+ * This is a LAYOUT change: see index.ts's `DESIGN_VERSION` (bumped
+ * specifically for this tweak) -- stored cards regenerate lazily on next
+ * share instead of ever showing the tighter old spacing from a live cache
+ * entry. Verified visually via a local compose (this package's
+ * implementation report) against a short, one-line, and two-line caption. */
 function quoteGlyphNode(color: string, s: (px: number) => number): SatoriNode {
   return h(
     'div',
@@ -425,7 +434,7 @@ function quoteGlyphNode(color: string, s: (px: number) => number): SatoriNode {
         opacity: 0.18,
         paddingLeft: s(18),
         paddingTop: s(18),
-        marginBottom: s(2),
+        marginBottom: s(8),
       },
     },
     '“',
