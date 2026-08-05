@@ -13,6 +13,7 @@ import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { createAndShareDataExport } from '@/services/export';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -59,6 +60,14 @@ jest.mock('@/services/family', () => ({
   updateFamilyName: jest.fn(),
 }));
 
+jest.mock('@/services/export', () => ({
+  createAndShareDataExport: jest.fn(),
+}));
+
+jest.mock('@/lib/query-persistence', () => ({
+  clearPersistedQueryCache: jest.fn().mockResolvedValue(undefined),
+}));
+
 // Toggling a reminder on should always send the device's current timezone
 // (not a possibly-stale saved value) -- fix the return value so tests can
 // assert on it precisely.
@@ -66,6 +75,9 @@ jest.mock('@/services/auth', () => ({
   getDeviceTimezone: jest.fn(() => 'America/Denver'),
 }));
 
+const mockedCreateAndShareDataExport = createAndShareDataExport as jest.MockedFunction<
+  typeof createAndShareDataExport
+>;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseBilling = useBilling as jest.MockedFunction<typeof useBilling>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
@@ -503,7 +515,7 @@ describe('Settings notifications toggles', () => {
     openUrlSpy.mockRestore();
   });
 
-  it('lets an owner request a memory export by email', async () => {
+  it('lets an owner manage the subscription and export memories', async () => {
     mockProfile();
     mockedUseFamily.mockReturnValue({
       family: { id: 'family-1', name: "Rosa's family" },
@@ -539,11 +551,9 @@ describe('Settings notifications toggles', () => {
 
     await waitFor(() => {
       expect(openUrlSpy).toHaveBeenCalledWith('https://apps.apple.com/account/subscriptions');
-      expect(openUrlSpy).toHaveBeenCalledWith(
-        'mailto:hello@usemomora.com?subject=Request%20a%20download%20of%20all%20my%20memories&body=Hi%20Momora%20support%2C%0A%0AI%20would%20like%20to%20request%20a%20download%20of%20all%20my%20memories.%0A%0AThank%20you.',
-      );
+      expect(mockedCreateAndShareDataExport).toHaveBeenCalledTimes(1);
     });
-    expect(getByText('Request a download of all your memories')).toBeTruthy();
+    expect(getByText('Download a ZIP of your memories')).toBeTruthy();
     openUrlSpy.mockRestore();
   });
 
