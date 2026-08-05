@@ -12,6 +12,7 @@ import {
   isVideoContentType,
   markComposeRun,
   mimeTypeFromObjectKey,
+  resolveImageMimeType,
   resolveMemberPortraitKey,
   resolveShareCardSource,
   runShareCardCompose,
@@ -156,6 +157,50 @@ Deno.test('mimeTypeFromObjectKey resolves the common extensions', () => {
   assertEquals(mimeTypeFromObjectKey('u/family/m/portraits/v/photo.jpg'), 'image/jpeg');
   assertEquals(mimeTypeFromObjectKey('u/memories/m/media/a.png'), 'image/png');
   assertEquals(mimeTypeFromObjectKey('u/memories/m/media/a.heic'), 'image/heic');
+});
+
+// resolveImageMimeType: regression coverage for the production incident
+// where generate-portrait-illustration uploads real PNG/JPEG bytes under a
+// `.webp`-suffixed R2 key (OpenAI's `output_format: 'webp'` request was not
+// honored), and mimeTypeFromObjectKey alone -- trusting only the extension
+// -- fed satori a declared `image/webp` data URI containing PNG bytes,
+// which throws ("Invalid WebP") and crashed the ENTIRE compose for any
+// memory tagging a member with a mismatched portrait. Verified against
+// production data: 9/9 family members' illustrated_profile_key portraits
+// have this exact mismatch (see the implementation report).
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0]);
+const WEBP_BYTES = new Uint8Array([
+  0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50,
+]);
+const GARBAGE_BYTES = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+
+Deno.test('resolveImageMimeType sniffs real PNG bytes even when the key claims .webp (the incident case)', () => {
+  assertEquals(
+    resolveImageMimeType('u/family/m/illustrated_profile.webp', PNG_BYTES),
+    'image/png',
+  );
+});
+
+Deno.test('resolveImageMimeType sniffs real JPEG bytes even when the key claims .webp', () => {
+  assertEquals(
+    resolveImageMimeType('u/family/m/profile_picture.webp', JPEG_BYTES),
+    'image/jpeg',
+  );
+});
+
+Deno.test('resolveImageMimeType confirms real WebP bytes as image/webp', () => {
+  assertEquals(
+    resolveImageMimeType('u/family/m/photo.webp', WEBP_BYTES),
+    'image/webp',
+  );
+});
+
+Deno.test('resolveImageMimeType falls back to the extension when the signature is unrecognized (e.g. HEIC)', () => {
+  assertEquals(
+    resolveImageMimeType('u/memories/m/media/a.heic', GARBAGE_BYTES),
+    'image/heic',
+  );
 });
 
 Deno.test('isUnrasterizableMimeType flags HEIC/HEIF only', () => {

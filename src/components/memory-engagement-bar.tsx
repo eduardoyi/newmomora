@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { Heart, MessageCircle, Share } from 'lucide-react-native';
+import { Heart, MessageCircle, Send } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -139,7 +139,7 @@ export function MemoryEngagementBar({
           {isSharing ? (
             <ActivityIndicator color={colors.ink2} size="small" />
           ) : (
-            <Share color={colors.ink2} size={iconSize} strokeWidth={1.9} />
+            <Send color={colors.ink2} size={iconSize} strokeWidth={1.9} />
           )}
         </Pressable>
       ) : null}

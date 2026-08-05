@@ -145,6 +145,75 @@ export function mimeTypeFromObjectKey(objectKey: string): string {
   return EXTENSION_MIME_MAP[ext] ?? 'image/jpeg';
 }
 
+// ── Real-bytes MIME sniffing (production-incident fix) ─────────────────
+// Root cause of the "every share on a photo memory fails" incident (see
+// this package's implementation report): generate-portrait-illustration
+// requests `output_format: 'webp'` from OpenAI's image-edits endpoint and
+// uploads the result under a `.webp`-suffixed R2 key, but OpenAI has been
+// observed to silently return PNG (or JPEG, for profile_picture_key) bytes
+// anyway -- verified against production data: 9/9 family members'
+// illustrated_profile_key portraits are real PNG bytes under `.webp` keys.
+// mimeTypeFromObjectKey derives the data-URI mime type from the KEY
+// EXTENSION alone, so toDataUri was declaring `image/webp` for a data URI
+// that actually contained PNG bytes. satori validates an `<img>` data URI's
+// bytes against its declared mime type for WebP specifically and throws
+// ("Invalid WebP") on the mismatch -- crashing the ENTIRE compose (500
+// compose_failed) for ANY memory that tags a member with a mismatched
+// portrait, regardless of memory type (text-only and illustrated memories
+// call resolveMemberPortraits too, not just media memories).
+//
+// Fix: sniff the REAL format from the fetched bytes' magic-byte signature
+// and trust that over the extension. Only PNG/JPEG/WEBP are sniffed (the
+// three formats resvg-wasm can rasterize per this file's header comment);
+// anything unrecognized (e.g. HEIC) falls back to the extension-derived
+// mime type so isUnrasterizableMimeType's HEIC rejection still works.
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
+
+function bytesStartWith(bytes: Uint8Array, signature: number[]): boolean {
+  if (bytes.length < signature.length) {
+    return false;
+  }
+  for (let i = 0; i < signature.length; i++) {
+    if (bytes[i] !== signature[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** RIFF....WEBP container signature. */
+function isWebpSignature(bytes: Uint8Array): boolean {
+  if (bytes.length < 12) {
+    return false;
+  }
+  return (
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  );
+}
+
+/**
+ * Resolves the real MIME type of `bytes` from their magic-byte signature,
+ * falling back to the object key's extension when the signature isn't one
+ * of the three sniffed formats. This is the authoritative resolver for any
+ * data URI this function builds from fetched bytes -- see the header
+ * comment above for why trusting the extension alone caused a production
+ * incident.
+ */
+export function resolveImageMimeType(objectKey: string, bytes: Uint8Array): string {
+  if (bytesStartWith(bytes, PNG_SIGNATURE)) {
+    return 'image/png';
+  }
+  if (bytesStartWith(bytes, JPEG_SIGNATURE)) {
+    return 'image/jpeg';
+  }
+  if (isWebpSignature(bytes)) {
+    return 'image/webp';
+  }
+  return mimeTypeFromObjectKey(objectKey);
+}
+
 /** resvg-wasm@2.6.2 was verified (manual spike, see plan report) to decode
  * PNG/JPEG/WEBP data URIs, but HEIC/HEIF are not supported by the `image`
  * crate it's built on. HEIC can only reach this function via a legacy media
@@ -395,7 +464,10 @@ export async function fetchTaggedMembers(
 // ── Data-URI assembly ───────────────────────────────────────────────────
 async function toDataUri(objectKey: string): Promise<{ dataUri: string; bytes: Uint8Array; mimeType: string }> {
   const bytes = await getObjectBytes(objectKey);
-  const mimeType = mimeTypeFromObjectKey(objectKey);
+  // resolveImageMimeType (not mimeTypeFromObjectKey) -- see that function's
+  // header comment for why trusting the key extension alone crashed every
+  // compose that touched a mismatched portrait.
+  const mimeType = resolveImageMimeType(objectKey, bytes);
   return { dataUri: `data:${mimeType};base64,${encodeBytesToBase64(bytes)}`, bytes, mimeType };
 }
 
