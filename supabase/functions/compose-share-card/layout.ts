@@ -202,11 +202,17 @@ function memberAvatarNode(member: ShareCardMemberPortrait, size: number, marginL
   };
 
   if (member.dataUri) {
+    // Belt-and-braces (same objectFit: 'cover' fix as imageBlockNode above)
+    // -- portrait avatars are square boxes and portraitBytesToDataUri
+    // (index.ts) already downscales to a small edge without changing
+    // aspect ratio, so a squished portrait is unlikely in practice, but a
+    // non-square LEGACY portrait source would otherwise stretch into this
+    // circle exactly like the hero-image bug did.
     return h('img', {
       src: member.dataUri,
       width: size,
       height: size,
-      style: commonStyle,
+      style: { ...commonStyle, objectFit: 'cover' },
     });
   }
 
@@ -344,13 +350,32 @@ function captionNode(caption: string, fontFamily: string, s: (px: number) => num
   );
 }
 
+/**
+ * BUG FIX (device report -- a tall photo renders visibly SQUISHED
+ * (stretched short/wide) on the share card, while the SAME photo in-app
+ * shows cropped-to-fit, undistorted): `clampMediaAspectRatio`
+ * (index.ts) is correct and stays -- it bounds the image BLOCK's aspect
+ * ratio into [3/4, 16/9] as part of the pixel-budget mitigation (an
+ * unclamped extreme ratio inflates the card's height). The bug was never
+ * the clamp itself -- it's that satori's `<img>` defaults to STRETCHING
+ * its source non-uniformly to exactly fill the given width/height, so a
+ * source image whose TRUE aspect ratio differs from the (clamped) block's
+ * aspect ratio got squashed into it. The in-app card
+ * (MediaVisual/MemoryMediaCarousel) always renders with RN's `resizeMode:
+ * 'cover'` -- crop-to-fill, preserving the source's own aspect ratio --
+ * never a stretch. `objectFit: 'cover'` (satori supports the CSS
+ * `object-fit` property on `<img>`) reproduces that exact semantic:
+ * verified empirically (this package's implementation report) that it
+ * scales the embedded image UNIFORMLY to cover the box then clips the
+ * overflow, not a non-uniform width/height stretch.
+ */
 function imageBlockNode(data: ShareCardData, width: number): SatoriNode {
   const height = Math.round(width / (data.imageAspectRatio ?? 4 / 3));
   return h('img', {
     src: data.imageDataUri,
     width,
     height,
-    style: { display: 'flex' },
+    style: { display: 'flex', objectFit: 'cover' },
   });
 }
 

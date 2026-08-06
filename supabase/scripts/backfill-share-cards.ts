@@ -38,11 +38,18 @@
  *                        then media assets)
  *   --memory-id <uuid>  scope to a single memory (pilot run)
  *
- * Re-runnable: candidate selection is `share_card_key IS NULL`, and a
- * successful warm always sets that column (compose-share-card's
+ * Re-runnable: candidate selection is `share_card_key IS NULL` OR the
+ * stored key's encoded design version no longer matches the function's
+ * CURRENT `DESIGN_VERSION` (imported directly from compose-share-card/
+ * index.ts, via `isFreshShareCardKey` -- never re-implemented/duplicated,
+ * so this script's notion of "stale" can't drift from the function's own).
+ * A successful warm always sets a FRESH key (compose-share-card's
  * storeShareCardAndUpdateCache) -- so a second run only ever picks up
- * targets that are still missing a card (including ones that gave up on a
- * prior run).
+ * targets that are still missing a card or still stale (including ones
+ * that gave up on a prior run, and including every row left behind by a
+ * `DESIGN_VERSION` bump that shipped after the LAST backfill run -- that
+ * bump alone does not proactively re-warm anything; re-running this script
+ * is what does).
  *
  * Requires SUPABASE_URL (or EXPO_PUBLIC_SUPABASE_URL), SUPABASE_ANON_KEY
  * (or EXPO_PUBLIC_SUPABASE_ANON_KEY), SUPABASE_SERVICE_ROLE_KEY -- same
@@ -55,6 +62,7 @@
  */
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
+import { isFreshShareCardKey } from '../functions/compose-share-card/index.ts';
 import { ALLOWED_IMAGE_CONTENT_TYPES } from '../../src/utils/media-validation.ts';
 
 const DATABASE_PAGE_SIZE = 500;
@@ -80,31 +88,61 @@ export interface ShareCardBackfillTarget {
 export interface MemoryTargetRow {
   id: string;
   family_id: string;
+  /** Selected (previously filtered server-side via `.is(..., null)`) so
+   * `shapeMemoryTargets` can apply the SAME missing-OR-stale predicate
+   * `fetchMediaAssetTargets`'s sibling does -- see this file's header
+   * comment and `isFreshShareCardKey`'s import for why staleness (not just
+   * nullness) now has to be checked here too. */
+  share_card_key: string | null;
 }
 
 export interface MediaAssetTargetRow {
   id: string;
   memory_id: string;
   content_type: string;
+  /** See `MemoryTargetRow.share_card_key`'s doc comment -- same reasoning. */
+  share_card_key: string | null;
   /** Nested via `memories!inner(family_id)` -- null only if the FK is
    * somehow dangling (never expected; defensive-only, same posture as
    * compose-share-card's own row shapes). */
   memories: { family_id: string } | null;
 }
 
-/** Shapes `memories` rows (text_only/text_illustration, `share_card_key IS
- * NULL`) into per-MEMORY warm targets. Pure/sync -- no DB/network. */
-export function shapeMemoryTargets(rows: MemoryTargetRow[]): ShareCardBackfillTarget[] {
-  return rows.map((row) => ({ kind: 'memory', memoryId: row.id, familyId: row.family_id }));
+/**
+ * BUG FIX (backfill gap, device-verified): candidate selection used to be
+ * `share_card_key IS NULL` only. A `DESIGN_VERSION` bump (compose-share-card/
+ * index.ts) makes an EXISTING stored card stale -- `isFreshShareCardKey`
+ * treats a version-mismatched key exactly like no key at all for a real
+ * share/warm request -- but that key column is NON-null, so the null-only
+ * selection silently skipped every version-stale row: a `DESIGN_VERSION`
+ * bump never proactively re-warmed anything: it only ever gets picked up
+ * lazily, one real share at a time. `isFreshShareCardKey` is IMPORTED
+ * (not re-implemented) from compose-share-card/index.ts specifically so
+ * this script's notion of "stale" can never drift from the function's own
+ * -- the same real, live `DESIGN_VERSION` constant backs both.
+ */
+export function needsWarming(shareCardKey: string | null): boolean {
+  return !isFreshShareCardKey(shareCardKey);
 }
 
-/** Shapes `memory_media` rows (image content types only, `share_card_key IS
- * NULL`) into per-ASSET warm targets. Drops any row whose nested `memories`
- * join came back null (dangling FK -- defensive, never expected) rather
- * than throwing, since one bad row must never abort the whole backfill. */
+/** Shapes `memories` rows (text_only/text_illustration) into per-MEMORY warm
+ * targets -- a row qualifies when its `share_card_key` is missing OR stale
+ * (`needsWarming` above). Pure/sync -- no DB/network. */
+export function shapeMemoryTargets(rows: MemoryTargetRow[]): ShareCardBackfillTarget[] {
+  return rows
+    .filter((row) => needsWarming(row.share_card_key))
+    .map((row) => ({ kind: 'memory', memoryId: row.id, familyId: row.family_id }));
+}
+
+/** Shapes `memory_media` rows (image content types only) into per-ASSET warm
+ * targets -- a row qualifies when its `share_card_key` is missing OR stale
+ * (`needsWarming` above). Drops any row whose nested `memories` join came
+ * back null (dangling FK -- defensive, never expected) rather than
+ * throwing, since one bad row must never abort the whole backfill. */
 export function shapeMediaAssetTargets(rows: MediaAssetTargetRow[]): ShareCardBackfillTarget[] {
   return rows
     .filter((row): row is MediaAssetTargetRow & { memories: { family_id: string } } => row.memories !== null)
+    .filter((row) => needsWarming(row.share_card_key))
     .map((row) => ({ kind: 'asset', memoryId: row.memory_id, assetId: row.id, familyId: row.memories.family_id }));
 }
 
@@ -353,14 +391,27 @@ async function processTarget(
   return { stored: false };
 }
 
+// Selection deliberately does NOT filter `share_card_key` server-side
+// anymore (see `needsWarming`'s doc comment above): a version-stale key is
+// NON-null, so a `.is(..., null)` filter would silently exclude it. Every
+// candidate-typed row (text_only/text_illustration memory, or image
+// memory_media row) is fetched -- still paginated the same way -- and
+// `shapeMemoryTargets`/`shapeMediaAssetTargets` do the missing-OR-stale
+// filtering client-side via the imported `isFreshShareCardKey`. This is a
+// deliberate simplicity/safety tradeoff over a `share_card_key.not.like.
+// '%/{version}-%'`-style server-side filter: the extra rows fetched here
+// carry only small columns (ids, a key string), and a hand-written
+// PostgREST OR/LIKE filter is exactly the kind of thing that's easy to get
+// subtly wrong (escaping, operator precedence) without a live database to
+// verify against -- not worth the risk for an occasional, manually-run
+// backfill script.
 async function fetchMemoryTargets(admin: SupabaseClient, memoryIdFilter?: string): Promise<MemoryTargetRow[]> {
   const rows: MemoryTargetRow[] = [];
   for (let offset = 0; ; offset += DATABASE_PAGE_SIZE) {
     let query = admin
       .from('memories')
-      .select('id, family_id')
+      .select('id, family_id, share_card_key')
       .in('memory_type', ['text_only', 'text_illustration'])
-      .is('share_card_key', null)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .range(offset, offset + DATABASE_PAGE_SIZE - 1);
@@ -387,8 +438,7 @@ async function fetchMediaAssetTargets(admin: SupabaseClient, memoryIdFilter?: st
   for (let offset = 0; ; offset += DATABASE_PAGE_SIZE) {
     let query = admin
       .from('memory_media')
-      .select('id, memory_id, content_type, memories!inner(family_id)')
-      .is('share_card_key', null)
+      .select('id, memory_id, content_type, share_card_key, memories!inner(family_id)')
       .in('content_type', imageContentTypes)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })

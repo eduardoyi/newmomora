@@ -1756,13 +1756,22 @@ failure still streams the composed PNG; see below).
   `graphemeImages` — or this file's own card-shape assembly); a stored key
   whose parsed version no longer matches is always treated as a miss, so
   old cards regenerate lazily on the next share/warm instead of ever being
-  served stale. Currently `3` (bumped for the wordmark-opacity tweak, the
-  quote-glyph margin follow-up, and folded-in self-hosted-Twemoji emoji
-  support — see docs/features/memory-sharing.md's changelog). The pixel
-  BUDGET/SCALE the card renders at is explicitly NOT part of this contract
-  — `buildShareCardKey` only ever embeds `DESIGN_VERSION` + a fresh uuid,
-  never a scale value, so the tail fix's continuous-scaling rewrite (below)
-  needed no version bump and does not invalidate any already-stored card.
+  served stale. Currently `4` (bumped for the wordmark-opacity tweak, the
+  quote-glyph margin follow-up, folded-in self-hosted-Twemoji emoji
+  support, and — a REAL bump, version 4 — the `objectFit: 'cover'` fix:
+  every clamped-aspect image block on an older-version card was squished,
+  not cropped, and must regenerate; see docs/features/memory-sharing.md's
+  changelog). The pixel BUDGET/SCALE the card renders at, and portrait/hero
+  RE-ENCODING (JPEG vs PNG, downscaling), are explicitly NOT part of this
+  contract — `buildShareCardKey` only ever embeds `DESIGN_VERSION` + a
+  fresh uuid, never a scale value or an encoding choice, so neither the
+  tail fix's continuous-scaling rewrite nor its portrait/hero re-encode
+  pass needed a version bump or invalidated any already-stored card.
+  `supabase/scripts/backfill-share-cards.ts` selects BOTH `share_card_key
+  IS NULL` and version-stale rows now (previously null-only, which meant a
+  `DESIGN_VERSION` bump never proactively re-warmed anything) — it imports
+  `isFreshShareCardKey` directly from this module rather than
+  re-implementing the staleness check, so the two can't drift.
 - Store/column-update/stale-delete failures are **non-fatal** on every
   path: logged id-only (`memoryId` + table name, never `error.message` —
   same logging discipline as the render path below) and swallowed —

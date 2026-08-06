@@ -421,6 +421,138 @@ Deno.test('layout: spread variant with imageDataUri set MUST include an <img> no
   assertEquals(imageNodes[0].props.src, STUB_IMAGE_DATA_URI);
 });
 
+// ── BUG FIX (device report -- a tall photo renders SQUISHED on the share
+// card while the in-app card shows it correctly CROPPED, undistorted):
+// `objectFit: 'cover'` reproduces the in-app card's RN `resizeMode: 'cover'`
+// semantics -- see imageBlockNode's doc comment (layout.ts) for the full
+// diagnosis. These tests cover both halves of the task: (1) the tree-level
+// style declaration is present on both the hero AND portrait `<img>` nodes,
+// and (2) a REAL satori render, at a block ratio that mismatches the
+// source's own aspect ratio, actually crops instead of stretching --
+// verified against the satori SVG's own embedded `<image>` geometry, the
+// same signal this package's implementation report's local-compose
+// verification (a tall 9:16-ish photo, clamped to the 3:4 block) measured.
+
+Deno.test('layout: hero image node declares objectFit: cover in its style', () => {
+  const data: ShareCardData = {
+    variant: 'spread',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'She drew this all by herself.',
+    imageDataUri: STUB_IMAGE_DATA_URI,
+    imageAspectRatio: 1,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const [imageNode] = findAllNodesByType(tree, 'img');
+  const style = imageNode.props.style as { objectFit?: string };
+  assertEquals(style.objectFit, 'cover');
+});
+
+Deno.test('layout: tagged-member portrait image node declares objectFit: cover in its style (belt-and-braces for a non-square legacy portrait)', () => {
+  const data: ShareCardData = {
+    variant: 'quote',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'Everyone was there.',
+    imageDataUri: null,
+    imageAspectRatio: null,
+    members: [{ name: 'Mia', dataUri: STUB_IMAGE_DATA_URI }],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const tree = buildShareCardTree(data, BASE_SCALE);
+  const [imageNode] = findAllNodesByType(tree, 'img');
+  const style = imageNode.props.style as { objectFit?: string };
+  assertEquals(style.objectFit, 'cover');
+});
+
+/** Parses the embedded `<image x=".." y=".." width=".." height=".." >`
+ * element satori emits for an `objectFit`-affected `<img>` (there is
+ * exactly one per render in these tests -- a single spread-card hero, no
+ * portraits). Real satori output, not a mock. */
+function parseEmbeddedImageGeometry(svg: string): { x: number; y: number; width: number; height: number } {
+  const match = svg.match(/<image x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="([\d.]+)"/);
+  if (!match) {
+    throw new Error('expected an <image> element with x/y/width/height attributes in the rendered SVG');
+  }
+  return { x: Number(match[1]), y: Number(match[2]), width: Number(match[3]), height: Number(match[4]) };
+}
+
+/** A REAL tall (~9:16, aspect_ratio ~0.56) PNG fixture -- small (40x71) so
+ * the test stays fast, but a genuinely non-square source is essential
+ * here: satori's `cover` math needs the source's REAL intrinsic aspect
+ * ratio to differ from the block's (clamped) aspect ratio for cropping to
+ * be observable at all (the 1x1 STUB_IMAGE_DATA_URI used elsewhere in this
+ * file is square and would exercise the OPPOSITE overflow axis). */
+async function buildTallPhotoDataUri(): Promise<string> {
+  const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
+  const width = 40;
+  const height = Math.round(width / 0.5625); // ~71, a real 9:16-ish tall photo
+  const image = new Image(width, height);
+  image.fill(0xd63e78ff);
+  const bytes = await image.encode();
+  return `data:image/png;base64,${btoa(String.fromCharCode(...bytes))}`;
+}
+
+Deno.test('layout: a hero image whose block ratio differs from its intrinsic ratio is CROPPED (cover), not squished (stretch) -- real satori render against a real tall (9:16-ish, aspect_ratio ~0.56) photo fixture', async () => {
+  // Block: clampMediaAspectRatio's MIN (3/4 = 0.75) -- exactly what a true
+  // ~0.56 tall photo's aspect_ratio clamps to (index.ts's
+  // clampMediaAspectRatio). The fixture's OWN true aspect (~0.5625) is
+  // deliberately narrower/taller than the block (0.75) -- the exact
+  // mismatch the device report's bug depended on.
+  const blockAspectRatio = 3 / 4;
+  const data: ShareCardData = {
+    variant: 'spread',
+    dateLabel: formatShareCardDateLabel('2026-06-08'),
+    caption: 'A tall photo, clamped to a wider block.',
+    imageDataUri: await buildTallPhotoDataUri(),
+    imageAspectRatio: blockAspectRatio,
+    members: [],
+    memberOverflowCount: 0,
+    emotion: null,
+  };
+
+  const svg = await renderSvg(data);
+  const geometry = parseEmbeddedImageGeometry(svg);
+  const cardWidth = Math.round(LOGICAL_CARD_WIDTH * BASE_SCALE);
+  const blockHeight = Math.round(cardWidth / blockAspectRatio);
+
+  // A plain stretch (no objectFit, the pre-fix "squished" bug) embeds the
+  // image at EXACTLY the box's own width/height: x=0, y=0, width=cardWidth,
+  // height=blockHeight -- non-uniform scaling, the source's own aspect
+  // ratio thrown away. `cover` instead scales the source UNIFORMLY to
+  // cover the box: since the fixture (~0.5625) is narrower/taller than the
+  // block (0.75), the binding constraint is WIDTH (matches the box
+  // exactly), and the scaled HEIGHT overflows -- cropped top/bottom via
+  // the parent's clip-path/mask, with a negative y offset. Exactly this
+  // package's implementation report's isolated satori verification (a
+  // 400x711 real source in a 398x531 box: embedded at height=707.445,
+  // y=-88.2225, both non-trivial deviations from a plain 0/0/398/531
+  // stretch) -- reproduced here at the full-tree/real-render level.
+  // Width matches the box, modulo the card's own 1px rounded-corner
+  // border/clip inset (verified against the real rendered SVG, this
+  // package's implementation report -- every top-level shape in the card
+  // is inset by exactly 1px for the border stroke, e.g. the visible
+  // `<rect x="1" y="1" ...>` border rect elsewhere in the same SVG) -- NOT
+  // an objectFit artifact, so it's tolerated with a tiny bound rather than
+  // asserted as exactly 0/cardWidth.
+  assertEquals(Math.abs(geometry.width - cardWidth) <= 2, true);
+  assertEquals(Math.abs(geometry.x) <= 2, true);
+  assertEquals(geometry.height > blockHeight, true);
+  assertEquals(geometry.y < 0, true);
+  // Quantitative, not just directional: cover's scale factor is
+  // cardWidth / fixtureWidth (40) -- the SAME scale must produce BOTH the
+  // (exact) width match and the (overflowing) height, proving this is one
+  // uniform scale, not independent width/height stretching.
+  const expectedScale = cardWidth / 40;
+  const expectedHeight = Math.round(71 * expectedScale);
+  const slack = Math.max(2, Math.round(expectedHeight * 0.01));
+  assertEquals(Math.abs(geometry.height - expectedHeight) <= slack, true);
+});
+
 // ── Bug 4: quote card renders GRAY regardless of emotion + no quote marks ─
 Deno.test('layout: quote card accent strip uses the emotion color, not a fixed gray, when emotion is set', () => {
   const data: ShareCardData = {

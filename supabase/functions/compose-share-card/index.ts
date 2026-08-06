@@ -1093,18 +1093,21 @@ export async function buildTaggedMemberPortraits(
 // change) -- it is the ONLY thing that invalidates a stored card. A stored
 // key whose encoded version doesn't match this constant is always treated
 // as a MISS (isFreshShareCardKey below), so old cards regenerate lazily on
-// next share instead of ever being served stale. Currently 3: version 1 is
+// next share instead of ever being served stale. Currently 4: version 1 is
 // the IMPLICIT pre-cache design (no share_card_key columns existed before
 // this workstream, so there was nothing to compare a key against); 2 was
 // this workstream's own batched wordmark tweak (layout.ts's
-// SHARE_CARD_WORDMARK_FONT_SIZE/SHARE_CARD_WORDMARK_OPACITY); 3 -- STILL
-// UNDEPLOYED as of this comment, so folded straight into the same version
-// rather than bumping again -- is BOTH the quote-glyph's follow-up
-// marginBottom bump (+2 -> +8 logical units, layout.ts's quoteGlyphNode)
-// AND self-hosted Twemoji `graphemeImages` support (emoji.ts) for
-// flag/ZWJ-sequence/keycap emoji that satori's font-only text shaping can
-// never render correctly on its own (docs/plans/share-card-store-through.md's
-// four-part production fix).
+// SHARE_CARD_WORDMARK_FONT_SIZE/SHARE_CARD_WORDMARK_OPACITY); 3 was BOTH
+// the quote-glyph's follow-up marginBottom bump (+2 -> +8 logical units,
+// layout.ts's quoteGlyphNode) AND self-hosted Twemoji `graphemeImages`
+// support (emoji.ts) for flag/ZWJ-sequence/keycap emoji that satori's
+// font-only text shaping can never render correctly on its own
+// (docs/plans/share-card-store-through.md's four-part production fix); 4
+// is the `objectFit: 'cover'` fix (device report -- a tall photo rendered
+// visibly SQUISHED/stretched on the share card while the in-app card
+// showed it correctly cropped) -- a REAL visible-content change (every
+// clamped-aspect image block on every already-stored card up to version 3
+// is squished and must regenerate), unlike the entries below.
 //
 // NOT bumped for the tail fix's portrait/hero re-encode (bytesToDataUri's
 // legacy-PNG branch, portraitBytesToDataUri) -- deliberately, per the
@@ -1122,7 +1125,7 @@ export async function buildTaggedMemberPortraits(
 // buildShareCardKey's call site below (storeShareCardAndUpdateCache),
 // which only ever embeds DESIGN_VERSION + a fresh uuid, never a scale
 // value or an encoding choice.
-export const DESIGN_VERSION = 3;
+export const DESIGN_VERSION = 4;
 
 const SHARE_CARD_KEY_NAME_PATTERN = /^(\d+)-(.+)\.png$/i;
 
