@@ -25,7 +25,7 @@ import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { corsHeaders, handleCors } from '../_shared/cors.ts';
 import { errorResponse } from '../_shared/errors.ts';
 import type { FamilyRole } from '../_shared/family-access.ts';
-import { capImageMaxEdge, computeResizedDimensions } from '../_shared/image-bytes.ts';
+import { capImageMaxEdge, capImageMaxEdgeAsJpeg, computeResizedDimensions } from '../_shared/image-bytes.ts';
 import { REFERENCE_IMAGE_JPEG_QUALITY } from '../_shared/image-limits.ts';
 import { encodeBytesToBase64 } from '../_shared/openai.ts';
 import { deleteObject, getObjectBytes, getObjectBytesBatch, putObjectBytes, type ObjectBytesBatchEntry } from '../_shared/r2.ts';
@@ -512,15 +512,29 @@ export function resolveShareCardSourceFromQueryRow(
   }
 
   if (row.memory_type === 'text_illustration') {
-    if (row.illustration_status !== 'ready' || !row.illustration_key) {
-      return {
-        ok: false,
-        error: {
-          status: 400,
-          message: 'Illustration is not ready to share yet',
-          code: 'illustration_not_ready',
-        },
-      };
+    // BUG FIX (production data profiling, this package's implementation
+    // report -- the "47 deterministic 546s" investigation's tail finding):
+    // 5 real text_illustration memories have illustration_status
+    // 'pending'/'generating'/'failed' and a null illustration_key, and
+    // previously 400'd here (`illustration_not_ready`) -- making the
+    // memory permanently unshareable until (if ever) a generation
+    // succeeds. That contradicts this app's "text always saved" ethos
+    // (AGENTS.md/PRD): the memory's CONTENT was saved successfully;
+    // illustration generation is a separate, best-effort async step (see
+    // src/services/memories.ts's runMemoryIllustrationPipeline) that can
+    // legitimately fail/stay pending forever without the memory itself
+    // being broken. Fix: `illustration_key` presence is the ONLY signal
+    // that matters here (mirrors resolveMemberPortraitKey's existing
+    // "degrade gracefully while an image is in flight" pattern, same
+    // file) -- a null key falls back to the QUOTE-variant card (the
+    // caller derives `cardData.variant` from `source.kind`, not
+    // `memory_type`, specifically so this degrade renders as an
+    // intentional quote card, not a broken spread-with-no-image) instead
+    // of erroring. `illustration_status` is no longer consulted at all:
+    // if a key IS present (even mid-regeneration, where a prior
+    // successful key can still be live), it's used.
+    if (!row.illustration_key) {
+      return { ok: true, source: { kind: 'text' } };
     }
     return { ok: true, source: { kind: 'illustration', objectKey: row.illustration_key } };
   }
@@ -841,6 +855,40 @@ export async function capImageMaxEdgeIfNeeded(
   return { bytes: capped.bytes, contentType: capped.contentType };
 }
 
+// ── Legacy oversized-PNG re-encode (production data profiling, this
+// package's implementation report -- the "47 deterministic 546s"
+// investigation's root cause) ───────────────────────────────────────────
+// The original continuous-scaling hypothesis for the deterministic 546
+// class was WRONG (verified: zero improvement). Real root cause, isolated
+// via production data profiling (a 39-memory profile of failing vs.
+// succeeding shares): failing memories have 3-4 tagged members vs. 2 for
+// successes, and family portraits commonly store as ~2-2.2MB PNGs UNDER A
+// `.webp` KEY (the SAME MIME-labeling incident resolveImageMimeType's
+// sniffing already works around) at ~1024x1024 -- already under
+// SHARE_CARD_MAX_IMAGE_EDGE (1600), so `capImageMaxEdgeIfNeeded`'s
+// skip-if-small-enough fast path (its own header comment above) checks
+// DIMENSIONS ONLY and let the ORIGINAL ~2.2MB PNG bytes straight through,
+// base64-inflated to ~2.9MB, embedded once PER TAGGED MEMBER: 2 members
+// stayed under budget, 3-4 meant 7-10MB of embedded SVG text --
+// deterministically blowing the isolate's resource budget every time,
+// independent of any pixel-count/scale math (hence why the scaling
+// rewrite alone did nothing). Legacy 2.2MB PNG illustrations (mislabeled
+// under a `.webp` key, same incident -- sniffed in 3 of 8 failing memories'
+// hero images) stack on top of the portrait cost for text_illustration
+// shares.
+//
+// Fix has two parts (this function covers the HERO half; portraits are
+// `portraitBytesToDataUri` below, which is stricter):
+//   - Portraits ALWAYS force a small JPEG re-encode regardless of size --
+//     see portraitBytesToDataUri.
+//   - A hero image gets the SAME oversized-PNG treatment ONLY when it's a
+//     large legacy PNG (genuine WebPs already convert via
+//     convertWebpToJpeg/jsquash above, and generated previews are already
+//     JPEG per backfill-media-previews.ts) -- re-encoding EVERY hero
+//     unconditionally would pay a real decode cost for the common case
+//     (an already-small preview) for no benefit.
+export const LEGACY_PNG_REENCODE_THRESHOLD_BYTES = 500 * 1024; // ~500KB
+
 // ── Data-URI assembly ───────────────────────────────────────────────────
 // Split into a pure-CPU processing step (bytesToDataUri) and a
 // fetch-then-process convenience wrapper (toDataUri) so the request handler
@@ -872,10 +920,84 @@ export async function bytesToDataUri(
     // things better.
   }
 
+  // Legacy oversized-PNG re-encode (see this section's header comment
+  // above) -- deliberately keyed on RAW BYTE SIZE, not dimensions:
+  // capImageMaxEdgeIfNeeded's fast path already handles dimensions, but a
+  // ~2.2MB PNG already at/under 1600px sails through that check untouched.
+  // JPEG's lossy compression collapses a multi-MB PNG to a fraction of the
+  // size even with NO resizing at all, so this check alone (independent of
+  // whatever capImageMaxEdgeAsJpeg's own resize decision ends up being) is
+  // what actually fixes the payload.
+  if (sniffedMimeType === 'image/png' && rawBytes.length > LEGACY_PNG_REENCODE_THRESHOLD_BYTES) {
+    const capped = await capImageMaxEdgeAsJpeg(rawBytes, SHARE_CARD_MAX_IMAGE_EDGE);
+    return {
+      dataUri: `data:${capped.contentType};base64,${encodeBytesToBase64(capped.bytes)}`,
+      bytes: capped.bytes,
+      mimeType: capped.contentType,
+    };
+  }
+
   const capped = await capImageMaxEdgeIfNeeded(rawBytes, SHARE_CARD_MAX_IMAGE_EDGE, sniffedMimeType);
   return {
     dataUri: `data:${capped.contentType};base64,${encodeBytesToBase64(capped.bytes)}`,
     bytes: capped.bytes,
+    mimeType: capped.contentType,
+  };
+}
+
+// ── Portrait-specific data-URI assembly (production data profiling fix --
+// see the section header comment above `bytesToDataUri` for the full
+// diagnosis) ─────────────────────────────────────────────────────────────
+// Tagged-member portraits render as small (~44 raster px at BASE_SCALE --
+// `s(22)` circles, avatarClusterNode, layout.ts) circular avatars -- there
+// is never a legitimate reason to embed a multi-megapixel/multi-MB source
+// image for one. Unlike the hero image (bytesToDataUri above, which stays
+// conservative -- only forcing a re-encode for a confirmed-oversized
+// legacy PNG, to avoid paying a decode cost on the common small-preview
+// case), portraits ALWAYS force a small JPEG re-encode regardless of
+// source size/format: they're numerous (up to MAX_VISIBLE_MEMBERS = 6 per
+// card) and small enough on-card that there is no quality tradeoff to
+// protect the way there is for a hero photo.
+/** Portraits render far smaller than the hero image -- 256px is already
+ * generous headroom over their ~44px on-card display size, and produces a
+ * JPEG comfortably under the ~50KB per-portrait target (verified in
+ * index.test.ts against a realistic ~2.2MB source fixture). */
+export const PORTRAIT_MAX_IMAGE_EDGE = 256;
+
+export async function portraitBytesToDataUri(
+  objectKey: string,
+  rawBytes: Uint8Array,
+  webpDecWasmBytes: Uint8Array,
+): Promise<{ dataUri: string; mimeType: string }> {
+  const sniffedMimeType = resolveImageMimeType(objectKey, rawBytes);
+
+  if (isUnrasterizableMimeType(sniffedMimeType)) {
+    // Explicit, not relying on capImageMaxEdgeAsJpeg's decode to happen to
+    // throw for a known-bad format -- same up-front rejection bytesToDataUri's
+    // caller (buildTaggedMemberPortraits) used to apply AFTER processing;
+    // checking first avoids a doomed decode attempt entirely.
+    throw new Error('portrait_unrasterizable');
+  }
+
+  if (sniffedMimeType === 'image/webp') {
+    const converted = await convertWebpToJpeg(rawBytes, PORTRAIT_MAX_IMAGE_EDGE, webpDecWasmBytes);
+    if (converted) {
+      return {
+        dataUri: `data:${converted.contentType};base64,${encodeBytesToBase64(converted.bytes)}`,
+        mimeType: converted.contentType,
+      };
+    }
+    // Real-webp decode failed -- fall through to the force-JPEG path below
+    // on the ORIGINAL bytes, same fail-open posture bytesToDataUri has for
+    // this case (a blank/unprocessed embed at worst, never a throw here --
+    // capImageMaxEdgeAsJpeg below can still fail this path closed, which
+    // the caller, buildTaggedMemberPortraits, turns into "no portrait for
+    // this member" rather than a whole-card failure).
+  }
+
+  const capped = await capImageMaxEdgeAsJpeg(rawBytes, PORTRAIT_MAX_IMAGE_EDGE);
+  return {
+    dataUri: `data:${capped.contentType};base64,${encodeBytesToBase64(capped.bytes)}`,
     mimeType: capped.contentType,
   };
 }
@@ -937,13 +1059,17 @@ export async function buildTaggedMemberPortraits(
       }
 
       try {
-        const { dataUri, mimeType } = await bytesToDataUri(key, entry.bytes, webpDecWasmBytes);
-        if (isUnrasterizableMimeType(mimeType)) {
-          return { name: member.name, dataUri: null };
-        }
+        // portraitBytesToDataUri (NOT the shared bytesToDataUri used for
+        // the hero image) -- ALWAYS forces a small JPEG re-encode
+        // regardless of source size/format; see its header comment for the
+        // production-data-profiling diagnosis this responds to (a
+        // multi-MB portrait source sailing through the hero-oriented
+        // dimension-only fast path untouched, per member).
+        const { dataUri } = await portraitBytesToDataUri(key, entry.bytes, webpDecWasmBytes);
         return { name: member.name, dataUri };
       } catch {
-        // A single member's portrait failing to process must not fail the
+        // A single member's portrait failing to process (incl. an
+        // unrasterizable format, e.g. legacy HEIC) must not fail the
         // whole card -- fall back to the initial-letter circle.
         return { name: member.name, dataUri: null };
       }
@@ -959,16 +1085,18 @@ export async function buildTaggedMemberPortraits(
 // buildShareCardKey, _shared/storage-keys.ts); this section resolves which
 // column applies to the current request and decides HIT vs MISS.
 
-// LOUD REMINDER: bump this on ANY layout/rendering change (layout.ts,
-// render.ts's scale/format choices, this file's own card-shape assembly,
-// OR what gets embedded as image content -- e.g. emoji.ts's graphemeImages)
-// -- it is the ONLY thing that invalidates a stored card. A stored key
-// whose encoded version doesn't match this constant is always treated as a
-// MISS (isFreshShareCardKey below), so old cards regenerate lazily on next
-// share instead of ever being served stale. Currently 3: version 1 is the
-// IMPLICIT pre-cache design (no share_card_key columns existed before this
-// workstream, so there was nothing to compare a key against); 2 was this
-// workstream's own batched wordmark tweak (layout.ts's
+// LOUD REMINDER: bump this whenever a stored card's OUTPUT would look
+// MEANINGFULLY DIFFERENT to a user -- layout.ts, render.ts's scale/format
+// choices, this file's own card-shape assembly, or what gets embedded as
+// NEW visible image content (e.g. emoji.ts's graphemeImages: a flag
+// literally didn't render before, now it does -- a real, wanted visual
+// change) -- it is the ONLY thing that invalidates a stored card. A stored
+// key whose encoded version doesn't match this constant is always treated
+// as a MISS (isFreshShareCardKey below), so old cards regenerate lazily on
+// next share instead of ever being served stale. Currently 3: version 1 is
+// the IMPLICIT pre-cache design (no share_card_key columns existed before
+// this workstream, so there was nothing to compare a key against); 2 was
+// this workstream's own batched wordmark tweak (layout.ts's
 // SHARE_CARD_WORDMARK_FONT_SIZE/SHARE_CARD_WORDMARK_OPACITY); 3 -- STILL
 // UNDEPLOYED as of this comment, so folded straight into the same version
 // rather than bumping again -- is BOTH the quote-glyph's follow-up
@@ -977,6 +1105,23 @@ export async function buildTaggedMemberPortraits(
 // flag/ZWJ-sequence/keycap emoji that satori's font-only text shaping can
 // never render correctly on its own (docs/plans/share-card-store-through.md's
 // four-part production fix).
+//
+// NOT bumped for the tail fix's portrait/hero re-encode (bytesToDataUri's
+// legacy-PNG branch, portraitBytesToDataUri) -- deliberately, per the
+// distinction above: this changes HOW an image is encoded/compressed
+// (JPEG vs PNG, downscaled to a small edge) to fix a payload-size bug, not
+// WHAT is displayed -- the same photo/illustration renders into the same
+// small avatar circle or hero slot either way, visually indistinguishable
+// at final render size (a portrait was always downsampled from source
+// into a ~44px circle; embedding a smaller/JPEG source changes nothing a
+// viewer could actually see). A stored card composed under the OLD path
+// is not stale or wrong to keep serving -- it just happens to have been
+// composed from a larger source image. Same reasoning already applied to
+// the continuous-scaling rewrite (scale.ts): the pixel BUDGET/SCALE a card
+// renders at was never part of this key's contract either -- see
+// buildShareCardKey's call site below (storeShareCardAndUpdateCache),
+// which only ever embeds DESIGN_VERSION + a fresh uuid, never a scale
+// value or an encoding choice.
 export const DESIGN_VERSION = 3;
 
 const SHARE_CARD_KEY_NAME_PATTERN = /^(\d+)-(.+)\.png$/i;
@@ -1396,6 +1541,13 @@ export async function handleComposeShareCard(
 
     let imageDataUri: string | null = null;
     let imageAspectRatio: number | null = null;
+    // Wall time of hero-image PROCESSING (webp decode, or the legacy
+    // oversized-PNG re-encode above) -- separate from imageFetchMs (network
+    // only). Normally near-zero; the legacy-PNG branch's `Image.decode` of
+    // a ~1024^2 source is the one case this is expected to show real cost
+    // (accepted -- see bytesToDataUri's LEGACY_PNG_REENCODE_THRESHOLD_BYTES
+    // comment for why the payload win is worth it).
+    const heroProcessStart = performance.now();
 
     if (heroObjectKey) {
       const heroEntry = imageBytesByKey.get(heroObjectKey);
@@ -1424,11 +1576,17 @@ export async function handleComposeShareCard(
         imageAspectRatio = clampMediaAspectRatio(decoded ?? 1);
       }
     }
+    const heroProcessMs = Math.round(performance.now() - heroProcessStart);
 
     const fetchMs = dbMs + imageFetchMs;
 
     const cardData: ShareCardData = {
-      variant: row.memory_type === 'text_only' ? 'quote' : 'spread',
+      // Derived from the RESOLVED source, not `row.memory_type` directly --
+      // a text_illustration memory with no illustration_key yet resolves to
+      // `{ kind: 'text' }` (resolveShareCardSourceFromQueryRow's null-key
+      // fallback above) and must render as an intentional quote card, not
+      // a spread card missing its image.
+      variant: resolution.source.kind === 'text' ? 'quote' : 'spread',
       dateLabel: formatShareCardDateLabel(row.memory_date),
       caption: row.content ?? '',
       imageDataUri,
@@ -1469,7 +1627,7 @@ export async function handleComposeShareCard(
     return {
       png,
       memoryDate: row.memory_date,
-      timing: { bootHintMs, dbMs, fetchMs, satoriMs, resvgMs, initMs, scale, fetchCount, imageFetchMs, assetsMs },
+      timing: { bootHintMs, dbMs, fetchMs, satoriMs, resvgMs, initMs, scale, fetchCount, imageFetchMs, assetsMs, heroProcessMs },
     };
   });
 
@@ -1504,7 +1662,15 @@ export interface ComposeTiming {
   fetchMs: number;
   satoriMs: number;
   resvgMs: number;
-  scale: 'full' | 'reduced';
+  /** Continuous output scale (render.ts's `ComposeShareCardResult.scale` --
+   * see scale.ts's `resolveShareCardOutputScale`) -- replaces the old
+   * `'full' | 'reduced'` label (tail fix, docs/plans/
+   * share-card-store-through.md's four-part production fix). NOT part of
+   * the stored-key contract (buildShareCardKey only ever embeds
+   * DESIGN_VERSION + a fresh uuid, never a scale) -- a scale-formula change
+   * does not need a DESIGN_VERSION bump, and does not invalidate any
+   * already-stored card. */
+  scale: number;
   /** Total R2 GET attempts this request made (hero [0 or 1] + every tagged
    * member with a resolvable portrait key) -- perf-audit fields added
    * alongside the fetch-concurrency restructure (this package's
@@ -1529,6 +1695,15 @@ export interface ComposeTiming {
    * fired in parallel with both) -- if this number is close to
    * dbMs+imageFetchMs or larger, the overlap isn't working as intended. */
   assetsMs: number;
+  /** Production data profiling fix: wall time of hero-image PROCESSING
+   * (webp decode via convertWebpToJpeg, or the legacy oversized-PNG
+   * force-re-encode, `bytesToDataUri`'s `LEGACY_PNG_REENCODE_THRESHOLD_BYTES`
+   * branch) -- separate from `imageFetchMs` (network only). Normally
+   * near-zero (no hero, or a small/already-JPEG hero); the legacy-PNG
+   * branch's real decode+encode cost is the one case this is expected to
+   * show up, an accepted tradeoff for collapsing a multi-MB embedded
+   * payload down. */
+  heroProcessMs: number;
 }
 
 /** `Deno.memoryUsage()` guarded defensively -- instrumentation must never be
@@ -1569,6 +1744,7 @@ function logComposeTiming(memoryId: string, timing: ComposeTiming, totalMs: numb
     pngBytes,
     fetchCount: timing.fetchCount,
     imageFetchMs: timing.imageFetchMs,
+    heroProcessMs: timing.heroProcessMs,
   }));
 
   return [
@@ -1576,10 +1752,11 @@ function logComposeTiming(memoryId: string, timing: ComposeTiming, totalMs: numb
     `db;dur=${timing.dbMs}`,
     `fetch;dur=${timing.fetchMs}`,
     `imgfetch;dur=${timing.imageFetchMs};desc="${timing.fetchCount} fetches"`,
+    `heroprocess;dur=${timing.heroProcessMs}`,
     `assets;dur=${timing.assetsMs}`,
     `init;dur=${timing.initMs}`,
     `satori;dur=${timing.satoriMs}`,
-    `resvg;dur=${timing.resvgMs}`,
+    `resvg;dur=${timing.resvgMs};desc="scale ${timing.scale.toFixed(3)}"`,
     `total;dur=${totalMs}`,
   ].join(', ');
 }

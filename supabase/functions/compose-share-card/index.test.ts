@@ -1,6 +1,7 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import { buildShareCardKey } from '../_shared/storage-keys.ts';
 import { buildTwemojiObjectKey, MAX_EMOJI_GRAPHEME_MEMO_ENTRIES } from './emoji.ts';
+import { BASE_SCALE } from './scale.ts';
 import {
   _hasEmojiGraphemeImageMemoizedForTests,
   _resetEmojiGraphemeImageMemoForTests,
@@ -8,6 +9,7 @@ import {
   authorizeShareCardAccessFromQueryRow,
   buildShareCardFilename,
   buildTaggedMemberPortraits,
+  bytesToDataUri,
   clampMediaAspectRatio,
   type ComposeShareCardDependencies,
   convertWebpToJpeg,
@@ -19,10 +21,13 @@ import {
   isUnrasterizableMimeType,
   isVideoContentType,
   isWarmRateLimited,
+  LEGACY_PNG_REENCODE_THRESHOLD_BYTES,
   markComposeRun,
   markWarmRun,
   mimeTypeFromObjectKey,
   parseShareCardKeyDesignVersion,
+  PORTRAIT_MAX_IMAGE_EDGE,
+  portraitBytesToDataUri,
   rememberEmojiGraphemeImage,
   resolveCallerRoleFromQueryRow,
   resolveImageMimeType,
@@ -368,16 +373,39 @@ Deno.test('resolveShareCardSourceFromQueryRow: text_only resolves with no media 
   if (result.ok) assertEquals(result.source, { kind: 'text' });
 });
 
-Deno.test('resolveShareCardSourceFromQueryRow: text_illustration not ready is rejected', () => {
-  const row = buildQueryRow({ memory_type: 'text_illustration', illustration_status: 'generating', illustration_key: null });
-  const result = resolveShareCardSourceFromQueryRow(row, undefined);
-  assertEquals(result.ok, false);
-  if (!result.ok) assertEquals(result.error.code, 'illustration_not_ready');
-});
+// BUG FIX (production data profiling, this package's implementation
+// report -- "5 text_illustration memories with NULL illustration_key
+// (status failed/pending/generating) fail instead of degrading"): a null
+// illustration_key used to 400 (`illustration_not_ready`) regardless of
+// status -- making the memory permanently unshareable. Now it falls back
+// to the quote-variant card (`{ kind: 'text' }`) instead of erroring, for
+// EVERY non-ready status a real row can have (illustration_status's CHECK
+// constraint: 'none' | 'pending' | 'generating' | 'ready' | 'failed').
+for (const status of ['pending', 'generating', 'failed'] as const) {
+  Deno.test(`resolveShareCardSourceFromQueryRow: text_illustration with a NULL illustration_key (status '${status}') degrades to the quote-variant card instead of erroring`, () => {
+    const row = buildQueryRow({ memory_type: 'text_illustration', illustration_status: status, illustration_key: null });
+    const result = resolveShareCardSourceFromQueryRow(row, undefined);
+    assertEquals(result.ok, true);
+    if (result.ok) assertEquals(result.source, { kind: 'text' });
+  });
+}
 
 Deno.test('resolveShareCardSourceFromQueryRow: ready text_illustration resolves to the illustration key', () => {
   const objectKey = `${OWNER_ID}/memories/${MEMORY_ID}/illustrations/g1.webp`;
   const row = buildQueryRow({ memory_type: 'text_illustration', illustration_status: 'ready', illustration_key: objectKey });
+  const result = resolveShareCardSourceFromQueryRow(row, undefined);
+  assertEquals(result.ok, true);
+  if (result.ok) {
+    assertEquals(result.source, { kind: 'illustration', objectKey });
+  }
+});
+
+Deno.test('resolveShareCardSourceFromQueryRow: a NON-ready status with a PRESENT illustration_key still uses it (key presence, not status, is authoritative -- mirrors resolveMemberPortraitKey\'s in-flight-degrade pattern)', () => {
+  // A prior successful generation can leave a valid key in place while a
+  // NEW regeneration is in flight (status flips back to 'generating') --
+  // that still-live key should keep being shared, not suddenly 400.
+  const objectKey = `${OWNER_ID}/memories/${MEMORY_ID}/illustrations/g1.webp`;
+  const row = buildQueryRow({ memory_type: 'text_illustration', illustration_status: 'generating', illustration_key: objectKey });
   const result = resolveShareCardSourceFromQueryRow(row, undefined);
   assertEquals(result.ok, true);
   if (result.ok) {
@@ -688,6 +716,38 @@ Deno.test('resolveTaggedMembersFromQueryRow drops rows whose joined family_membe
 // already-fetched bytes, not a data URI.
 const TINY_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
+// ── Realistic large-PNG fixture (production data profiling fix, this
+// package's implementation report) ──────────────────────────────────────
+// Production family portraits/legacy illustrations commonly store as
+// ~2-2.2MB PNGs at ~1024x1024. Smooth low-frequency gradients (like real
+// photo content -- skin tones, out-of-focus background) PLUS modest
+// per-pixel jitter (like real sensor noise/texture) approximate a real
+// photo's compressibility much more closely than either a flat fill
+// (compresses trivially under EITHER format, understating the fix) or
+// pure per-pixel noise (adversarially INCOMPRESSIBLE under JPEG's DCT --
+// verified empirically, this package's implementation report: a pure-noise
+// 1024x1024 fixture's "already small enough, just re-encode" JPEG pass
+// came out LARGER than the source PNG, which no real photo would do).
+// Built once (module scope) and reused across every large-fixture test
+// below -- encoding a 1024x1024 image is real CPU work, not worth
+// repeating per test.
+async function buildRealisticLargePng(size: number): Promise<Uint8Array> {
+  const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
+  const image = new Image(size, size);
+  const clamp = (v: number) => Math.max(0, Math.min(255, v));
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const r = clamp(Math.floor(128 + 100 * Math.sin(x / 47) * Math.cos(y / 53)) + ((x * 7 + y * 3) % 16));
+      const g = clamp(Math.floor(128 + 100 * Math.sin((x + 80) / 61) * Math.cos((y + 40) / 44)) + ((x * 5 + y * 11) % 16));
+      const b = clamp(Math.floor(128 + 100 * Math.sin((x + 160) / 39) * Math.cos((y + 90) / 58)) + ((x * 3 + y * 13) % 16));
+      image.setPixelAt(x + 1, y + 1, (r << 24) | (g << 16) | (b << 8) | 0xff);
+    }
+  }
+  return await image.encode();
+}
+
+const LARGE_PORTRAIT_PNG_BYTES = await buildRealisticLargePng(1024);
+
 function member(id: string, name: string, portraitKey: string | null) {
   return {
     id,
@@ -710,7 +770,13 @@ Deno.test('resolvePortraitKeysToFetch returns an empty array when no tagged memb
   assertEquals(resolvePortraitKeysToFetch([member(MEMBER_1, 'No Photo', null)]), []);
 });
 
-Deno.test('buildTaggedMemberPortraits: a successfully-fetched portrait produces a real data URI', async () => {
+Deno.test('buildTaggedMemberPortraits: a successfully-fetched portrait produces a real JPEG data URI, ALWAYS re-encoded regardless of source format', async () => {
+  // Source is a real PNG (TINY_PNG_B64) -- production data profiling fix
+  // (this package's implementation report): portraits ALWAYS force a JPEG
+  // re-encode now (portraitBytesToDataUri, index.ts), unlike the shared
+  // hero-image path, which preserves format when no resize is needed. A
+  // PNG-in, JPEG-out data URI here is the whole point of the fix, not an
+  // incidental format change.
   const bytes = base64ToBytesForTest(TINY_PNG_B64);
   const portraits = await buildTaggedMemberPortraits(
     [member(MEMBER_1, 'Mia', 'mia.jpg')],
@@ -719,7 +785,7 @@ Deno.test('buildTaggedMemberPortraits: a successfully-fetched portrait produces 
   );
   assertEquals(portraits.length, 1);
   assertEquals(portraits[0].name, 'Mia');
-  assertStringIncludes(portraits[0].dataUri ?? '', 'data:image/png;base64,');
+  assertStringIncludes(portraits[0].dataUri ?? '', 'data:image/jpeg;base64,');
 });
 
 // BUG-SURVIVAL regression test (coordinator's explicit ask): the fail-open
@@ -768,7 +834,7 @@ Deno.test('buildTaggedMemberPortraits: ONE failed portrait among several does no
     WEBP_DEC_WASM_BYTES,
   );
   assertEquals(portraits.length, 2);
-  assertStringIncludes(portraits[0].dataUri ?? '', 'data:image/png;base64,');
+  assertStringIncludes(portraits[0].dataUri ?? '', 'data:image/jpeg;base64,');
   assertEquals(portraits[1], { name: 'Leo', dataUri: null });
 });
 
@@ -786,6 +852,128 @@ Deno.test('buildTaggedMemberPortraits: an unrasterizable format (HEIC) falls bac
     WEBP_DEC_WASM_BYTES,
   );
   assertEquals(portraits, [{ name: 'Mia', dataUri: null }]);
+});
+
+// ── Production data profiling fix: portrait downscale + payload regression
+// (docs/plans/share-card-store-through.md's four-part production fix, tail
+// fix's root-cause correction -- "47 deterministic 546s", this package's
+// implementation report) ──────────────────────────────────────────────────
+// Root cause (a 39-memory production profile): failing memories have 3-4
+// tagged members vs. 2 for successes; family portraits commonly store as
+// ~2-2.2MB PNGs (often under a `.webp` KEY -- the same MIME-labeling
+// incident resolveImageMimeType's sniffing already works around) at
+// ~1024x1024 -- already under SHARE_CARD_MAX_IMAGE_EDGE (1600), so the
+// hero-oriented `capImageMaxEdgeIfNeeded` fast path let the ORIGINAL bytes
+// straight through untouched, base64-inflated ~33% into the SVG, PER
+// TAGGED MEMBER: 2 members stayed under budget, 3-4 didn't, independent of
+// any pixel-count/scale math (the earlier continuous-scaling rewrite
+// measured ZERO improvement on this class for exactly that reason).
+// portraitBytesToDataUri (index.ts) fixes this by ALWAYS forcing a small
+// JPEG re-encode, regardless of source size/format.
+
+Deno.test('portraitBytesToDataUri: a realistic ~3.2MB portrait PNG collapses to a small JPEG data URI capped at PORTRAIT_MAX_IMAGE_EDGE, well under the ~50KB target', async () => {
+  const { dataUri, mimeType } = await portraitBytesToDataUri('member.png', LARGE_PORTRAIT_PNG_BYTES, WEBP_DEC_WASM_BYTES);
+
+  assertEquals(mimeType, 'image/jpeg');
+  assertStringIncludes(dataUri, 'data:image/jpeg;base64,');
+
+  // Confirms the actual edge cap, not just "smaller" -- 1024px source down
+  // to PORTRAIT_MAX_IMAGE_EDGE (256).
+  const base64Body = dataUri.slice(dataUri.indexOf(',') + 1);
+  const jpegBytes = Uint8Array.from(atob(base64Body), (c) => c.charCodeAt(0));
+  const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
+  const decoded = await Image.decode(jpegBytes);
+  assertEquals(Math.max(decoded.width, decoded.height), PORTRAIT_MAX_IMAGE_EDGE);
+
+  // The actual regression target: total data URI (base64 text) size, not
+  // raw JPEG bytes -- base64 is what actually lands in the SVG/satori
+  // payload. Comfortably under 50KB despite a ~3.2MB source PNG
+  // (LARGE_PORTRAIT_PNG_BYTES) -- close to production's real ~2-2.2MB
+  // portrait size.
+  assertEquals(dataUri.length < 50_000, true);
+  // ...and a dramatic reduction versus the ORIGINAL source size -- this is
+  // the collapse that fixes the failing class, not an incidental detail.
+  assertEquals(dataUri.length < LARGE_PORTRAIT_PNG_BYTES.length / 10, true);
+});
+
+Deno.test('buildTaggedMemberPortraits: a big PNG fixture in the batch produces a small embedded JPEG in the resulting portrait -- end to end through the actual call site', async () => {
+  const portraits = await buildTaggedMemberPortraits(
+    [member(MEMBER_1, 'Mia', 'mia.png')],
+    new Map([['mia.png', { ok: true, bytes: LARGE_PORTRAIT_PNG_BYTES }]]),
+    WEBP_DEC_WASM_BYTES,
+  );
+  assertEquals(portraits.length, 1);
+  const dataUri = portraits[0].dataUri ?? '';
+  assertStringIncludes(dataUri, 'data:image/jpeg;base64,');
+  assertEquals(dataUri.length < 50_000, true);
+});
+
+Deno.test('payload regression: a 4-tagged-member card (the exact failing class -- 3-4 members, production profile) keeps total embedded portrait data-URI bytes well under ~1.5MB', async () => {
+  const members = [
+    member(MEMBER_1, 'Mia', 'mia.png'),
+    member(MEMBER_2, 'Leo', 'leo.png'),
+    member('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'Ana', 'ana.png'),
+    member('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'Sam', 'sam.png'),
+  ];
+  // Each member gets its OWN large fixture bytes (same underlying image,
+  // real distinct Map entries) -- mirrors 4 real tagged members each with
+  // their own ~1MB+ portrait, not one shared/cached decode.
+  const portraitBytesByKey = new Map(
+    members.map((m) => [m.illustrated_profile_key as string, { ok: true, bytes: LARGE_PORTRAIT_PNG_BYTES }]),
+  );
+
+  const portraits = await buildTaggedMemberPortraits(members, portraitBytesByKey, WEBP_DEC_WASM_BYTES);
+
+  assertEquals(portraits.length, 4);
+  const totalDataUriBytes = portraits.reduce((sum, p) => sum + (p.dataUri?.length ?? 0), 0);
+
+  // The ORIGINAL failing-class math: 4 members x ~2.2MB PNG x ~1.33
+  // (base64 inflation) = ~11.7MB embedded -- deterministically over any
+  // resource budget. Post-fix: comfortably under 1.5MB total for all 4.
+  assertEquals(totalDataUriBytes < 1.5 * 1024 * 1024, true);
+  // Every portrait actually resolved (none silently dropped) -- the
+  // regression guard is meaningless if it's just measuring 4 failed/null
+  // portraits.
+  assertEquals(portraits.every((p) => p.dataUri !== null), true);
+});
+
+// ── Legacy oversized-PNG hero re-encode (same root-cause fix, HERO half --
+// bytesToDataUri, not portraitBytesToDataUri) ───────────────────────────
+// "Legacy 2.2MB PNG illustrations (mislabeled under a .webp key) stack on
+// top" -- sniffed in 3 of 8 failing memories' hero images. Conservative
+// (unlike portraits): only forces a re-encode for a CONFIRMED-oversized
+// PNG (> LEGACY_PNG_REENCODE_THRESHOLD_BYTES, ~500KB) -- an already-small
+// preview/generated image (the common case) is untouched, avoiding a real
+// decode cost where there's no payload problem to fix.
+
+Deno.test('bytesToDataUri: a legacy oversized PNG (sniffed image/png, over the 500KB threshold) is force-re-encoded to JPEG, capped at SHARE_CARD_MAX_IMAGE_EDGE', async () => {
+  assertEquals(LARGE_PORTRAIT_PNG_BYTES.length > LEGACY_PNG_REENCODE_THRESHOLD_BYTES, true); // sanity -- fixture actually exercises this branch
+
+  const { dataUri, mimeType, bytes } = await bytesToDataUri('illustration.png', LARGE_PORTRAIT_PNG_BYTES, WEBP_DEC_WASM_BYTES);
+
+  assertEquals(mimeType, 'image/jpeg');
+  assertStringIncludes(dataUri, 'data:image/jpeg;base64,');
+  // Source was 1024x1024 (<= SHARE_CARD_MAX_IMAGE_EDGE, 1600) -- no
+  // resizing needed, so this proves the re-encode happened based on FILE
+  // SIZE alone, the exact gap capImageMaxEdgeIfNeeded's dimension-only
+  // fast path left open.
+  const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
+  const decoded = await Image.decode(bytes);
+  assertEquals(decoded.width, 1024);
+  assertEquals(decoded.height, 1024);
+  assertEquals(bytes.length < LARGE_PORTRAIT_PNG_BYTES.length / 4, true);
+});
+
+Deno.test('bytesToDataUri: a SMALL PNG (under the 500KB threshold) is left on the existing capImageMaxEdgeIfNeeded fast path, not force-re-encoded (no regression for the common case)', async () => {
+  const smallPngBytes = base64ToBytesForTest(TINY_PNG_B64);
+  assertEquals(smallPngBytes.length < LEGACY_PNG_REENCODE_THRESHOLD_BYTES, true); // sanity
+
+  const { mimeType, bytes } = await bytesToDataUri('preview.png', smallPngBytes, WEBP_DEC_WASM_BYTES);
+
+  // Untouched -- same bytes, same (original) PNG format, matching
+  // capImageMaxEdgeIfNeeded's existing "already small enough" fast path.
+  assertEquals(mimeType, 'image/png');
+  assertEquals(bytes, smallPngBytes);
 });
 
 // ── HTTP handler: unauthenticated + no-content-logging ─────────────────
@@ -1155,7 +1343,7 @@ function baseHandlerDeps(overrides: Partial<ComposeShareCardDependencies> = {}):
   return {
     getObjectBytesBatch: async () => new Map(),
     loadShareCardAssets: async () => FAKE_ASSETS,
-    composeShareCardPng: async () => ({ png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const }),
+    composeShareCardPng: async () => ({ png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: BASE_SCALE }),
     putObjectBytes: async () => {},
     deleteObject: async () => {},
     createServiceClient: () => fakeServiceClient([]) as never,
@@ -1218,7 +1406,7 @@ Deno.test('handleComposeShareCard: a MISS (no stored key) composes, stores under
         fetchQueryRow: async () => ({ data: row, error: null }),
         composeShareCardPng: async () => {
           composeCalls += 1;
-          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: BASE_SCALE };
         },
         putObjectBytes: async (key) => {
           putCalls.push({ key });
@@ -1320,7 +1508,7 @@ Deno.test('handleComposeShareCard: warm mode on a MISS composes + stores, and re
         fetchQueryRow: async () => ({ data: row, error: null }),
         composeShareCardPng: async () => {
           composeCalls += 1;
-          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: BASE_SCALE };
         },
         putObjectBytes: async (key) => {
           putCalls.push(key);
@@ -1417,6 +1605,45 @@ Deno.test('handleComposeShareCard: a media memory MISS stores/updates the per-AS
   });
 });
 
+// ── NULL illustration_key degrade (production data profiling fix) ───────
+// End-to-end (handler-level, not just resolveShareCardSourceFromQueryRow's
+// unit-level check): a text_illustration memory with no illustration_key
+// yet composes successfully as a QUOTE-variant card -- verified via the
+// `cardData` composeShareCardPng actually receives, not just the resolved
+// source kind.
+for (const status of ['pending', 'generating', 'failed'] as const) {
+  Deno.test(`handleComposeShareCard: a text_illustration memory with a NULL illustration_key (status '${status}') composes the quote variant instead of 400ing`, async () => {
+    await withMockedAuth(OWNER_ID, async () => {
+      _resetRateLimitStateForTests();
+      const row = buildQueryRow({
+        families: ownerFamilies(OWNER_ID),
+        memory_type: 'text_illustration',
+        illustration_status: status,
+        illustration_key: null,
+        content: 'Still saved, even without an illustration yet.',
+        share_card_key: null,
+      });
+
+      let receivedVariant: string | undefined;
+
+      const response = await handleComposeShareCard(
+        shareRequest({ memoryId: MEMORY_ID }),
+        baseHandlerDeps({
+          fetchQueryRow: async () => ({ data: row, error: null }),
+          // deno-lint-ignore no-explicit-any
+          composeShareCardPng: async (data: any) => {
+            receivedVariant = data.variant;
+            return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: BASE_SCALE };
+          },
+        }),
+      );
+
+      assertEquals(response.status, 200);
+      assertEquals(receivedVariant, 'quote');
+    });
+  });
+}
+
 // ── Emoji grapheme images (emoji fix -- see emoji.ts's header comment for
 // the full "🇪🇸 renders as 'E S'" diagnosis) ─────────────────────────────
 // A caption's Twemoji SVG keys join the SAME getObjectBytesBatch call as
@@ -1455,7 +1682,7 @@ Deno.test('handleComposeShareCard: a caption emoji is fetched in the SAME batch 
         },
         composeShareCardPng: async (_data, _assets, graphemeImages) => {
           receivedGraphemeImages = graphemeImages;
-          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: BASE_SCALE };
         },
       }),
     );
@@ -1492,7 +1719,7 @@ Deno.test('handleComposeShareCard: a caption with no emoji never adds a Twemoji 
         },
         composeShareCardPng: async (_data, _assets, graphemeImages) => {
           receivedGraphemeImages = graphemeImages;
-          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: BASE_SCALE };
         },
       }),
     );
@@ -1523,7 +1750,7 @@ Deno.test('handleComposeShareCard: a missing/failed Twemoji SVG fetch falls back
         getObjectBytesBatch: async () => new Map(),
         composeShareCardPng: async (_data, _assets, graphemeImages) => {
           receivedGraphemeImages = graphemeImages;
-          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+          return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: BASE_SCALE };
         },
       }),
     );
@@ -1560,7 +1787,7 @@ Deno.test('handleComposeShareCard: a memoized emoji is NOT re-fetched from R2 on
       },
       composeShareCardPng: async (_data, _assets, graphemeImages) => {
         receivedGraphemeImagesByCall.push(graphemeImages);
-        return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: 'full' as const };
+        return { png: FAKE_PNG_BYTES, initMs: 0, satoriMs: 0, resvgMs: 0, scale: BASE_SCALE };
       },
     });
 

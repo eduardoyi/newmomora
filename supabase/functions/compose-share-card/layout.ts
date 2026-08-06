@@ -507,13 +507,17 @@ function buildQuoteCard(data: ShareCardData, width: number, s: (px: number) => n
 /**
  * Builds the full card tree, composed entirely in LOGICAL (dp) units and
  * then scaled to a raster pixel size by `scale` -- BASE_SCALE for the
- * primary 1080px output, REDUCED_SCALE for the 720px reduced-pixel-count
- * output (see scale.ts). The card's own width is `s(LOGICAL_CARD_WIDTH)`,
- * NOT a raw raster width -- every other pixel value in this file (font
- * sizes, paddings, radii, avatar sizes) is a logical value too, so `s`
- * scales the whole card uniformly and proportions are preserved exactly:
- * this is what keeps the 720px render the IDENTICAL layout at 2/3 size,
- * not a reflow -- the S0-mandated mitigation
+ * primary 1080px output, or scale.ts's `resolveShareCardOutputScale`'s
+ * CONTINUOUS budget-fit scale (tail fix, docs/plans/
+ * share-card-store-through.md's four-part production fix -- replaced the
+ * original fixed REDUCED_SCALE/720px second tier) for a caption long
+ * enough to need scaling down. The card's own width is
+ * `s(LOGICAL_CARD_WIDTH)`, NOT a raw raster width -- every other pixel
+ * value in this file (font sizes, paddings, radii, avatar sizes) is a
+ * logical value too, so `s` scales the whole card uniformly and
+ * proportions are preserved exactly: this is what keeps ANY scaled-down
+ * render the IDENTICAL layout at a smaller size, not a reflow -- the
+ * original S0-mandated mitigation
  * (docs/plans/offline-awareness-and-share-cards.md S0/S3): full caption
  * always, never truncated to fit a pixel budget.
  */

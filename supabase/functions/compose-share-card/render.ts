@@ -25,11 +25,10 @@ import { initWasm, Resvg } from 'npm:@resvg/resvg-wasm@2.6.2';
 import { buildShareCardTree, type ShareCardData } from './layout.ts';
 import {
   BASE_SCALE,
-  REDUCED_SCALE,
-  SHARE_CARD_FULL_WIDTH,
-  SHARE_CARD_REDUCED_WIDTH,
   parseSvgHeightPx,
-  shouldUseReducedScale,
+  resolveShareCardOutputScale,
+  resolveShareCardOutputWidthPx,
+  SHARE_CARD_FULL_WIDTH,
 } from './scale.ts';
 
 type SatoriFn = (
@@ -124,19 +123,31 @@ export interface ComposeShareCardResult {
   satoriMs: number;
   /** Raster-phase cost: `new Resvg(...).render()` only. */
   resvgMs: number;
-  /** Which pass's output was used -- mirrors shouldUseReducedScale's decision. */
-  scale: 'full' | 'reduced';
+  /** The CONTINUOUS output scale actually used, relative to
+   * LOGICAL_CARD_WIDTH (scale.ts's `resolveShareCardOutputScale`) --
+   * replaces the old `'full' | 'reduced'` two-tier enum (tail fix,
+   * docs/plans/share-card-store-through.md's four-part production fix).
+   * `BASE_SCALE` (~2.714) for a short card, continuously smaller for a
+   * longer one, floored at `MIN_OUTPUT_SCALE` (~1.206, scale.ts) for an
+   * extreme-length caption. Logged as-is (a number, not a label) by the
+   * caller's Server-Timing/structured-log instrumentation. */
+  scale: number;
 }
 
 /**
- * Renders `data` to a PNG. Implements the S0-mandated two-pass reduced-scale
- * mitigation: lay out once at 1080px, and if the resulting height would push
- * total pixel count past the measured CPU/memory ceiling, re-lay-out the
- * IDENTICAL content at 720px (2/3 scale of every dimension) instead of
- * truncating anything. Satori (layout) is comparatively cheap -- the S0
- * spike found the CPU/memory ceiling is resvg's raster step, tracking pixel
- * count -- so doing the layout pass twice in the worst case is an accepted
- * cost, not a second expensive operation.
+ * Renders `data` to a PNG. Implements the CONTINUOUS pixel-budget
+ * mitigation (scale.ts's `resolveShareCardOutputScale` -- see its doc
+ * comment and SHARE_CARD_PIXEL_BUDGET's for the full diagnosis/design):
+ * lay out once at the primary 1080px width to MEASURE the card's logical
+ * height, then compute the exact scale needed to keep total raster pixel
+ * count under budget (clamped to never exceed the primary 1080px width,
+ * never render narrower than the quality floor). Re-lays-out the
+ * IDENTICAL content at that computed scale when it differs from the
+ * primary one -- never truncates the caption to fit. Satori (layout) is
+ * comparatively cheap -- the original S0 spike found the CPU/memory
+ * ceiling is resvg's raster step, tracking pixel count -- so doing the
+ * layout pass twice in the worst case is an accepted cost, not a second
+ * expensive operation.
  *
  * `assets` -- resvg wasm bytes + every font buffer -- are passed in rather
  * than fetched/decoded here (round 4: this file no longer knows where bytes
@@ -147,10 +158,10 @@ export interface ComposeShareCardResult {
  * `graphemeImages` (emoji fix, docs/plans/share-card-store-through.md's
  * four-part production fix) -- a grapheme-text -> data-URI map, built by
  * index.ts from a caption's emoji graphemes (emoji.ts) -- is passed
- * straight through to BOTH satori passes below (full and, if it runs, the
- * reduced-scale re-layout) unchanged; satori substitutes these images for
- * the matching grapheme's font-shaped glyphs wherever it appears in the
- * tree, independent of scale.
+ * straight through to BOTH satori passes below (the primary pass and, if
+ * it runs, the budget-fit re-layout) unchanged; satori substitutes these
+ * images for the matching grapheme's font-shaped glyphs wherever it
+ * appears in the tree, independent of scale.
  *
  * Returns per-phase timings (perf-audit instrumentation, this package's
  * implementation report) alongside the PNG so the caller (index.ts) can emit
@@ -170,17 +181,33 @@ export async function composeShareCardPng(
   const satoriStart = performance.now();
   const fullTree = buildShareCardTree(data, BASE_SCALE);
   const fullSvg = await satori(fullTree, { width: SHARE_CARD_FULL_WIDTH, fonts: fontList, graphemeImages });
-  const fullHeight = parseSvgHeightPx(fullSvg);
+  const fullHeightPx = parseSvgHeightPx(fullSvg);
 
   let finalSvg = fullSvg;
   let finalWidth = SHARE_CARD_FULL_WIDTH;
-  let scale: 'full' | 'reduced' = 'full';
+  // Defensive fallback (parseSvgHeightPx returning null is not expected in
+  // practice -- satori always emits a numeric height attribute): if the
+  // measured height can't be determined at all, keep the primary-scale
+  // output as-is rather than guessing.
+  let scale = BASE_SCALE;
 
-  if (fullHeight !== null && shouldUseReducedScale(fullHeight)) {
-    const reducedTree = buildShareCardTree(data, REDUCED_SCALE);
-    finalSvg = await satori(reducedTree, { width: SHARE_CARD_REDUCED_WIDTH, fonts: fontList, graphemeImages });
-    finalWidth = SHARE_CARD_REDUCED_WIDTH;
-    scale = 'reduced';
+  if (fullHeightPx !== null) {
+    const logicalHeight = fullHeightPx / BASE_SCALE;
+    const outputScale = resolveShareCardOutputScale(logicalHeight);
+
+    // Only re-layout when the budget-fit scale actually differs from the
+    // primary pass already rendered above -- the common case (a short
+    // card) skips a redundant second satori call entirely, same
+    // optimization the old two-tier system had for a card that never
+    // needed REDUCED_SCALE. Epsilon guards against a spurious re-layout
+    // from float rounding when resolveShareCardOutputScale's clamp lands
+    // it back at exactly BASE_SCALE.
+    if (Math.abs(outputScale - BASE_SCALE) > 1e-9) {
+      const scaledTree = buildShareCardTree(data, outputScale);
+      finalWidth = resolveShareCardOutputWidthPx(outputScale);
+      finalSvg = await satori(scaledTree, { width: finalWidth, fonts: fontList, graphemeImages });
+      scale = outputScale;
+    }
   }
   const satoriMs = performance.now() - satoriStart;
 

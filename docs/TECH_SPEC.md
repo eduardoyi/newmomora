@@ -1728,12 +1728,18 @@ failure still streams the composed PNG; see below).
   object if the column held a different (stale) key, then stream (or,
   warm, respond 204).
 - `DESIGN_VERSION` (`index.ts`) is a hand-bumped constant — the ONLY thing
-  that invalidates a stored card. Bump it on any layout change
-  (`layout.ts`, `render.ts`'s scale/format, or this file's own card-shape
-  assembly); a stored key whose parsed version no longer matches is always
-  treated as a miss, so old cards regenerate lazily on the next share/warm
-  instead of ever being served stale. Currently `2` (bumped once already,
-  for this workstream's own wordmark-opacity tweak).
+  that invalidates a stored card. Bump it on any layout/rendering-content
+  change (`layout.ts`, what gets embedded as image content — e.g. emoji.ts's
+  `graphemeImages` — or this file's own card-shape assembly); a stored key
+  whose parsed version no longer matches is always treated as a miss, so
+  old cards regenerate lazily on the next share/warm instead of ever being
+  served stale. Currently `3` (bumped for the wordmark-opacity tweak, the
+  quote-glyph margin follow-up, and folded-in self-hosted-Twemoji emoji
+  support — see docs/features/memory-sharing.md's changelog). The pixel
+  BUDGET/SCALE the card renders at is explicitly NOT part of this contract
+  — `buildShareCardKey` only ever embeds `DESIGN_VERSION` + a fresh uuid,
+  never a scale value, so the tail fix's continuous-scaling rewrite (below)
+  needed no version bump and does not invalidate any already-stored card.
 - Store/column-update/stale-delete failures are **non-fatal** on every
   path: logged id-only (`memoryId` + table name, never `error.message` —
   same logging discipline as the render path below) and swallowed —
@@ -1749,15 +1755,24 @@ failure still streams the composed PNG; see below).
     `total` is `db + get`. No `fetch`/`init`/`satori`/`resvg` fields at all
     on this path (nothing downstream of the cache check ran).
   - **Cache miss (compose)**: `boot;dur=…, db;dur=…, fetch;dur=…,
-    imgfetch;dur=…;desc="N fetches", assets;dur=…, init;dur=…,
-    satori;dur=…, resvg;dur=…, total;dur=…` — unchanged from the
-    pre-cache contract (no `cache;desc=` marker on this path; a future
-    dashboard can treat "no `cache` field" as "was a miss"). A matching
-    structured `console.log` line ships per request either way: `memoryId`,
-    `cache: 'hit'` (hit path only) or the full phase-timing set (miss
-    path), `Deno.memoryUsage().rss`/`heapUsed` (miss only), `scale`
-    (`'full'`|`'reduced'`, miss only), `pngBytes`, ids/numbers only, never
-    memory content. `db` is the ONE nested-select query
+    imgfetch;dur=…;desc="N fetches", heroprocess;dur=…, assets;dur=…,
+    init;dur=…, satori;dur=…, resvg;dur=…;desc="scale X.XXX", total;dur=…`
+    — otherwise unchanged from the pre-cache contract (no `cache;desc=`
+    marker on this path; a future dashboard can treat "no `cache` field" as
+    "was a miss"). `heroprocess` (tail fix, pass 2) is hero-image
+    PROCESSING wall time (webp decode, or the legacy-oversized-PNG force
+    re-encode) — separate from `imgfetch` (network only); near-zero except
+    on the legacy-PNG branch, which pays a real decode+encode cost by
+    design (see §4.20's compose-share-card entry).
+    `resvg`'s `desc` carries the CONTINUOUS output scale (tail fix, scale.ts's
+    `resolveShareCardOutputScale` — replaced the old fixed `'full'`/
+    `'reduced'` two-tier label; see §4.20's compose-share-card entry for the
+    formula). A matching structured `console.log` line ships per request
+    either way: `memoryId`, `cache: 'hit'` (hit path only) or the full
+    phase-timing set (miss path), `Deno.memoryUsage().rss`/`heapUsed` (miss
+    only), `scale` (a NUMBER, miss only — same continuous value as the
+    header), `pngBytes`, ids/numbers only, never memory content. `db` is the
+    ONE nested-select query
     (`SHARE_CARD_MEMORY_SELECT`, now also carrying both `share_card_key`
     columns) that replaces what was ~5-6 sequential DB round trips (memory
     row, role, `viewer_sharing_enabled`, media asset, tagged members +
@@ -1796,11 +1811,46 @@ failure still streams the composed PNG; see below).
   stops immediately on 429 or any other outcome (retrying a 429 would only
   burn the warm bucket further). Both paths ultimately fall back to the
   store-through cache's cold-path compose (or a later warm/share attempt) as
-  the final safety net if every attempt fails. See
-  docs/features/memory-sharing.md's Constraints section for the
-  reduced-raster-scale mitigation this pairs with, and its Architecture
-  section for how the store-through cache changes the post-deploy
-  failure-rate story.
+  the final safety net if every attempt fails.
+  **Continuous pixel-budget scaling (tail fix):** backfill telemetry across
+  823 real targets found 47 DETERMINISTIC 546s (6/6 attempts each) — long
+  captions exceeding budget even at the original two-tier system's fixed
+  720px fallback. `scale.ts`'s `resolveShareCardOutputScale` replaced that
+  two-tier system: `outputScale = min(BASE_SCALE, max(MIN_OUTPUT_SCALE,
+  sqrt(SHARE_CARD_PIXEL_BUDGET / (LOGICAL_CARD_WIDTH * logicalHeight))))`,
+  where `logicalHeight` is derived from a first satori pass at the primary
+  1080px width. `SHARE_CARD_PIXEL_BUDGET` is now `1,900,000` (was
+  `2,500,000`, which came from the original S0 spike, not live telemetry).
+  `MIN_OUTPUT_SCALE` (a 480px `MIN_RASTER_WIDTH` legibility floor) means the
+  budget is KNOWINGLY not guaranteed for the very longest captions — a real
+  `validateMemoryContent`-capped (5000-char) caption measures to ~2.60M px
+  at the floor, ~37% over budget, though still ~2.25x smaller than the OLD
+  fixed-720 fallback would have produced for the same content. See
+  `scale.ts`'s and `render.test.ts`'s doc comments for the full derivation
+  and exact measured numbers, and docs/features/memory-sharing.md's
+  Constraints section for the product-level writeup.
+  **CORRECTION -- real root cause (tail fix, pass 2, production data
+  profiling):** the scaling rewrite above measured ZERO improvement on the
+  47-failure class. Real cause: 3-4 tagged members' portraits (vs. 2 for
+  successes) commonly store as ~2-2.2MB PNGs already under
+  `SHARE_CARD_MAX_IMAGE_EDGE`, so the dimension-only fast path embedded
+  them untouched -- 7-10MB of SVG text per compose, independent of raster
+  scale. Fixed by making portraits ALWAYS force a small (256px)
+  JPEG re-encode (`portraitBytesToDataUri`, `capImageMaxEdgeAsJpeg` in
+  `_shared/image-bytes.ts`) and legacy oversized (>500KB) PNG hero images
+  force a JPEG re-encode too (`bytesToDataUri`'s new
+  `LEGACY_PNG_REENCODE_THRESHOLD_BYTES` branch, still capped at 1600px).
+  Also: a `text_illustration` memory with a NULL `illustration_key`
+  (any status) now resolves to the quote-variant card instead of 400ing
+  (`resolveShareCardSourceFromQueryRow`) -- key presence, not
+  `illustration_status`, is authoritative. Neither change bumps
+  `DESIGN_VERSION` -- re-encoding changes compression, not displayed
+  content, and the null-illustration fallback only affects memories that
+  previously errored, not any card that already composed successfully.
+  Server-Timing/the structured log line gained a `heroProcessMs` field
+  (hero-image PROCESSING wall time, separate from `imageFetchMs`'s
+  network-only measurement) -- expected near-zero except on the legacy-PNG
+  re-encode branch, which pays a real decode+encode cost by design.
 
 Auth reuses `_shared/family-access.ts`'s role helpers. Vendored assets
 (resvg `.wasm`, webp-dec `.wasm`, font TTFs incl. a monochrome NotoEmoji

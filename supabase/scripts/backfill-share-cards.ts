@@ -304,6 +304,11 @@ async function attemptWarmRequest(
 
 interface ProcessResult {
   stored: boolean;
+  /** Status of the final attempt when giving up -- lets the caller detect
+   * an expired minted session (401) and retry once with a fresh token.
+   * Mirrors attemptWarmRequest's return ('network_error' for fetch-level
+   * failures, which the 401 refresh deliberately ignores). */
+  lastStatus?: number | 'network_error';
 }
 
 /** Warms one target with bounded retries (decideWarmRetry), pacing every
@@ -341,7 +346,7 @@ async function processTarget(
       continue;
     }
     console.error(`${describeTarget(target)}: gave up after ${attempt} attempt(s), last status ${status}`);
-    return { stored: false };
+    return { stored: false, lastStatus: status };
   }
   // Unreachable given BACKFILL_WARM_MAX_ATTEMPTS bounds the loop above, but
   // TypeScript needs an exhaustive return.
@@ -462,7 +467,21 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const result = await processTarget(accessToken, anonKey, target, lastRequestAt);
+    let result = await processTarget(accessToken, anonKey, target, lastRequestAt);
+
+    // Minted access tokens expire after ~1h; a long run outlives them (the
+    // first production run 401'd on 704 targets exactly this way). On a 401
+    // give-up, evict this family's cached session, mint a fresh one, and
+    // retry the target once.
+    if (!result.stored && result.lastStatus === 401) {
+      ownerTokenCache.delete(target.familyId);
+      const freshToken = await getOrMintFamilyOwnerAccessToken(admin, target.familyId, ownerTokenCache);
+      if (freshToken) {
+        console.log(`${describeTarget(target)}: 401 with stale session, re-minted token, retrying`);
+        result = await processTarget(freshToken, anonKey, target, lastRequestAt);
+      }
+    }
+
     if (result.stored) {
       storedCount += 1;
     } else {

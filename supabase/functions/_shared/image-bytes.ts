@@ -90,3 +90,45 @@ export async function capIllustrationReferenceImage(
 ): Promise<CappedImageBytes> {
   return capImageMaxEdge(bytes, MAX_ILLUSTRATION_REFERENCE_EDGE, sourceContentType);
 }
+
+/**
+ * Like `capImageMaxEdge`, but ALWAYS decodes and re-encodes to JPEG at
+ * `quality` -- even when the source is already at or under `maxEdge` and
+ * `capImageMaxEdge`'s own fast path would return the ORIGINAL bytes/format
+ * unchanged (the right behavior for `capImageMaxEdge`'s existing callers,
+ * which only care about capping DIMENSIONS). This variant is for callers
+ * that need FILE SIZE reduction via JPEG re-compression regardless of
+ * whether resizing happens at all -- e.g. compose-share-card's tagged-
+ * member portraits and legacy oversized-PNG illustrations (production
+ * data profiling found ~2-2.2MB source PNGs already at/under 1600px on
+ * their longest edge, so the dimension-only fast path let their full
+ * multi-MB byte size straight through into the composed SVG unchanged --
+ * see compose-share-card/index.ts's `portraitBytesToDataUri` and
+ * `bytesToDataUri` for the full diagnosis).
+ *
+ * Does NOT catch its own decode/encode errors (unlike `capImageMaxEdge`,
+ * which fails open to the original bytes) -- callers here specifically
+ * need FILE SIZE guarantees, so silently falling back to a multi-MB
+ * original would defeat the point; let the caller's own fail-open policy
+ * (e.g. compose-share-card's per-portrait "omit this one, don't fail the
+ * whole card" posture) decide what to do on failure instead.
+ */
+export async function capImageMaxEdgeAsJpeg(
+  bytes: Uint8Array,
+  maxEdge: number,
+  quality: number = REFERENCE_IMAGE_JPEG_QUALITY,
+): Promise<CappedImageBytes> {
+  const { Image } = await loadImageScript();
+  const image = await Image.decode(bytes);
+  const target = computeResizedDimensions(image.width, image.height, maxEdge);
+
+  if (target.width !== image.width || target.height !== image.height) {
+    image.resize(target.width, target.height);
+  }
+
+  return {
+    bytes: await image.encodeJPEG(quality),
+    contentType: 'image/jpeg',
+    extension: 'jpg',
+  };
+}

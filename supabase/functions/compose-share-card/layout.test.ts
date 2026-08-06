@@ -18,7 +18,7 @@ import {
   type SatoriNode,
   type ShareCardData,
 } from './layout.ts';
-import { BASE_SCALE, LOGICAL_CARD_WIDTH, REDUCED_SCALE } from './scale.ts';
+import { BASE_SCALE, LOGICAL_CARD_WIDTH } from './scale.ts';
 
 // deno-lint-ignore no-explicit-any
 const satori = satoriImport as any;
@@ -281,11 +281,22 @@ Deno.test('layout: wordmark is 20% smaller (0.8x, i.e. 16) and softened to opaci
   assertEquals(style.opacity, SHARE_CARD_WORDMARK_OPACITY);
 });
 
-Deno.test('layout: 720px reduced-scale render is the identical layout at 2/3 size, not a reflow', async () => {
+// Not tied to REDUCED_SCALE (scale.ts's OLD fixed 720px tier, removed by
+// the tail fix's continuous-scaling rewrite, docs/plans/
+// share-card-store-through.md's four-part production fix) -- this test's
+// actual point is a structural property of buildShareCardTree/`s()` itself
+// (ANY two scale factors produce the identical layout, just resized), which
+// is orthogonal to whichever specific scale scale.ts's budget-fit formula
+// picks. An arbitrary smaller scale (2/3 of BASE_SCALE, chosen only so the
+// two renders clearly differ in size) exercises the same invariant scale.ts's
+// continuous formula now relies on.
+const ARBITRARY_SMALLER_SCALE = BASE_SCALE * (2 / 3);
+
+Deno.test('layout: a smaller scale renders the identical layout at proportionally smaller size, not a reflow', async () => {
   const data: ShareCardData = {
     variant: 'spread',
     dateLabel: formatShareCardDateLabel('2026-06-08'),
-    caption: 'A caption long enough to matter for the reduced-scale render.',
+    caption: 'A caption long enough to matter for the smaller-scale render.',
     imageDataUri: STUB_IMAGE_DATA_URI,
     imageAspectRatio: 4 / 3,
     members: [],
@@ -294,25 +305,26 @@ Deno.test('layout: 720px reduced-scale render is the identical layout at 2/3 siz
   };
 
   const svgFull = await renderSvg(data, BASE_SCALE);
-  const svgReduced = await renderSvg(data, REDUCED_SCALE);
+  const svgSmaller = await renderSvg(data, ARBITRARY_SMALLER_SCALE);
 
   const heightFull = Number(svgFull.match(/<svg[^>]*\sheight="(\d+)"/)?.[1]);
-  const heightReduced = Number(svgReduced.match(/<svg[^>]*\sheight="(\d+)"/)?.[1]);
+  const heightSmaller = Number(svgSmaller.match(/<svg[^>]*\sheight="(\d+)"/)?.[1]);
 
-  assertStringIncludes(svgReduced, 'width="720"');
-  const expectedReducedHeight = Math.round(heightFull * (2 / 3));
+  const expectedWidth = Math.round(LOGICAL_CARD_WIDTH * ARBITRARY_SMALLER_SCALE);
+  assertStringIncludes(svgSmaller, `width="${expectedWidth}"`);
+  const expectedSmallerHeight = Math.round(heightFull * (2 / 3));
   // Slack scales with height rather than a tight fixed +/-2px: now that the
-  // card is composed in logical units first (the proportions fix), BASE_SCALE
-  // and REDUCED_SCALE are both non-integer multipliers, so EVERY dp value
-  // (not just the reduced pass, as before the fix) picks up independent
-  // per-element rounding, and caption text wraps at a human-scale font size
-  // where a line-break boundary can land a character earlier/later between
-  // the two passes -- a few px of drift here reflects real text reflow
-  // quantization, not a structural difference. 2% (floor 6px) comfortably
-  // covers that while still catching an actual reflow (e.g. a dropped line
-  // or a missing block), which would be off by tens of percent.
-  const slack = Math.max(6, Math.round(expectedReducedHeight * 0.02));
-  assertEquals(Math.abs(heightReduced - expectedReducedHeight) <= slack, true);
+  // card is composed in logical units first (the proportions fix), the two
+  // scales are both non-integer multipliers, so EVERY dp value picks up
+  // independent per-element rounding, and caption text wraps at a
+  // human-scale font size where a line-break boundary can land a character
+  // earlier/later between the two passes -- a few px of drift here
+  // reflects real text reflow quantization, not a structural difference.
+  // 2% (floor 6px) comfortably covers that while still catching an actual
+  // reflow (e.g. a dropped line or a missing block), which would be off by
+  // tens of percent.
+  const slack = Math.max(6, Math.round(expectedSmallerHeight * 0.02));
+  assertEquals(Math.abs(heightSmaller - expectedSmallerHeight) <= slack, true);
 });
 
 // Collects every node of `type` in the tree (DFS), for the corner-clip and

@@ -459,17 +459,76 @@ the photo/illustration path.
   It's Supabase Edge Functions' own `WORKER_RESOURCE_LIMIT` response when a
   compose exceeds the isolate's memory/CPU budget. The S0 spike measured
   this tracks **total rendered pixel count**, not caption length or photo
-  bytes: cards whose 1080px-wide layout would exceed ~2.5M total pixels
-  render the identical layout at 720px width instead (`shouldUseReducedScale`
-  / `SHARE_CARD_REDUCED_SCALE` in `compose-share-card/scale.ts`) — the full
-  caption is still never truncated. The client retries exactly once on 546
-  (~98%+ effective success per the spike); a second 546 is a genuine infra
-  ceiling, not a client bug.
+  bytes — the full caption is never truncated to fit a budget, ever; the
+  mitigation is scaling the ENTIRE card down instead. The client retries
+  exactly once on 546 (~98%+ effective success per the original spike); a
+  second 546 is a genuine infra ceiling, not a client bug.
+  **Tail fix (docs/plans/share-card-store-through.md's four-part production
+  fix, backfill telemetry across 823 real targets):** 771 stored
+  successfully; 5 permanent 400s (legacy/invalid rows, expected); 47 failed
+  546 DETERMINISTICALLY (6/6 attempts each — impossible under the ~50%
+  stochastic per-attempt rate the retry/warm machinery assumes). Pattern:
+  whole carousels with long captions exceeded the platform's real budget
+  even at the original two-tier system's fixed 720px fallback — a SINGLE
+  extra fallback tier cannot scale to arbitrarily long captions. Fixed by
+  replacing the original 1080/720 two-tier system (`shouldUseReducedScale`/
+  `REDUCED_SCALE`, removed) with CONTINUOUS scaling
+  (`resolveShareCardOutputScale`, `compose-share-card/scale.ts`): after the
+  primary 1080px pass measures the card's logical height, the exact scale
+  needed to hit the budget is computed directly —
+  `outputScale = min(BASE_SCALE, max(MIN_OUTPUT_SCALE, sqrt(budget /
+  (logicalWidth * logicalHeight))))` — for ANY caption length, not just the
+  one length the old 720px tier happened to help. The budget itself was
+  also lowered, 2,500,000 → 1,900,000 px, to match what real production
+  successes actually measured (the old number came from the original S0
+  spike, not live telemetry). A `MIN_RASTER_WIDTH` (480px) quality floor
+  caps how far scaling-down can go — legibility over budget compliance —
+  which means the budget guarantee is KNOWINGLY not held for the very
+  longest captions: a real caption at `validateMemoryContent`'s 5000-char
+  cap measures to ~2.60M px at the floor, ~37% over the new budget, still
+  ~2.25x SMALLER than the old fixed-720 fallback would have produced for
+  the same content (which was itself ~2.3x over the OLD budget — exactly
+  the deterministic-failure pattern the telemetry found). This is an
+  explicit, disclosed, accepted risk for a narrow tail of the longest
+  captions, not an unexamined regression — see `scale.ts`'s and
+  `render.test.ts`'s doc comments for the exact numbers. Scale is NOT part
+  of the stored-key contract (`buildShareCardKey` only ever embeds
+  `DESIGN_VERSION` + a fresh uuid, never a scale value) — this rewrite did
+  not need a `DESIGN_VERSION` bump and does not invalidate any
+  already-stored card.
+  **CORRECTION — the continuous-scaling hypothesis above was WRONG for the
+  47-failure class (measured ZERO improvement); the real root cause was
+  isolated via production data profiling (a 39-memory profile of failing
+  vs. succeeding shares):** failing memories have 3-4 tagged members vs. 2
+  for successes, and family portraits commonly store as ~2-2.2MB PNGs
+  (often under a mislabeled `.webp` key — the same MIME-labeling incident
+  `resolveImageMimeType`'s sniffing already works around) at ~1024px —
+  already under `SHARE_CARD_MAX_IMAGE_EDGE` (1600), so the dimension-only
+  `capImageMaxEdgeIfNeeded` fast path let the ORIGINAL multi-MB bytes
+  straight through, embedded once PER TAGGED MEMBER: 3-4 members meant
+  7-10MB of embedded SVG text, deterministically over budget — independent
+  of raster pixel count/scale entirely, which is exactly why the rewrite
+  above didn't help. Fix: portraits now ALWAYS force-downscale + re-encode
+  to JPEG at 256px (`portraitBytesToDataUri`, `capImageMaxEdgeAsJpeg` in
+  `_shared/image-bytes.ts`), and legacy oversized (>500KB) PNG hero images
+  also force-re-encode to JPEG at the existing 1600px cap
+  (`bytesToDataUri`'s `LEGACY_PNG_REENCODE_THRESHOLD_BYTES` branch). No
+  `DESIGN_VERSION` bump here either — re-encoding changes HOW an image is
+  compressed, not WHAT is displayed (a portrait was always downsampled
+  into a ~44px avatar circle regardless of source resolution). Also fixed
+  in this pass: a `text_illustration` memory with a NULL
+  `illustration_key` (any non-ready status) now degrades to the
+  quote-variant card instead of 400ing (`resolveShareCardSourceFromQueryRow`).
+  See the changelog below and `index.ts`'s `portraitBytesToDataUri`/
+  `bytesToDataUri` doc comments for the full diagnosis and measured
+  numbers.
   **Refined diagnosis (perf-audit pass, this package's implementation
   report):** production 546 rates (~70-80%) turned out to be too high to
   explain by raster pixel count alone — a typical photo-memory card is only
-  ~1.2M px (well under the 2.5M budget, `scale: 'full'`) yet still failed
-  ~46.7% in a 15-shot baseline against the deployed function, and the S0
+  ~1.2M px (well under the budget/scale as measured at the time — the
+  original 2.5M budget and `'full'`/`'reduced'` label, both since replaced
+  by the tail fix above) yet still failed ~46.7% in a 15-shot baseline
+  against the deployed function, and the S0
   spike itself never observed a warm isolate. The additional, independent
   contributor is **per-request BOOT/module-eval overhead**: every request
   cold-starts and pays to (a) parse several MB of base64 asset text at
@@ -485,8 +544,10 @@ the photo/illustration path.
   `resvgMs`, `totalMs`, `rss`/`heapUsed`, `scale`, `pngBytes`, `fetchCount`,
   `imageFetchMs` — ids/numbers only, see the logging-discipline note above)
   so future regressions can be attributed to a specific phase instead of
-  re-diagnosed from scratch. The reduced-scale pixel-budget mitigation above
-  is unchanged and still real — the causes are independent and all matter.
+  re-diagnosed from scratch (the `scale` field is now a number, not a
+  `'full'`/`'reduced'` label — see the tail fix above). The pixel-budget
+  mitigation above is still real, just continuous now instead of two-tier
+  — the causes are independent and all matter.
   **Round 2 (the instrumentation paid off):** post-deploy `Server-Timing`
   measurement on the boot-fix build overturned the boot hypothesis itself —
   `boot` measured 2-3ms (a non-issue), while `fetch` measured ~1.1-1.3s of a
@@ -613,11 +674,12 @@ the photo/illustration path.
 
 | File | Covers |
 |------|--------|
-| `supabase/functions/compose-share-card/index.test.ts` | Authz matrix (owner/manager/viewer×toggle/non-member), video rejection, asset-ownership rejection, rate limiting, no-content-in-logs on a layout failure, filename header; **store-through cache (W2):** `DESIGN_VERSION`/key-parsing/freshness, cache-target resolution (memory vs. per-asset), `storeShareCardAndUpdateCache` (put + column update + stale-object delete, non-fatal on each failure), end-to-end cache HIT (streams stored PNG, never loads fonts/wasm or composes), MISS (composes, stores under the creator prefix + `DESIGN_VERSION`), stale-version key treated as MISS + stale object deleted, warm mode on a fresh cache (204, no-op) and on a MISS (204 after compose+store), the warm rate bucket independent of the cold bucket in both directions; **emoji `graphemeImages` (Part 4 of the four-part fix):** a caption emoji's Twemoji key joins the SAME `getObjectBytesBatch` window as hero/portrait images, the resolved map reaches `composeShareCardPng` (dependency-injected assertion), no-emoji captions add no key + pass an empty map, a missing/failed SVG fails open (share still succeeds, grapheme just absent), the per-isolate memo skips a second R2 fetch for an already-seen grapheme, `rememberEmojiGraphemeImage`'s FIFO eviction at `MAX_EMOJI_GRAPHEME_MEMO_ENTRIES` |
+| `supabase/functions/compose-share-card/index.test.ts` | Authz matrix (owner/manager/viewer×toggle/non-member), video rejection, asset-ownership rejection, rate limiting, no-content-in-logs on a layout failure, filename header; **store-through cache (W2):** `DESIGN_VERSION`/key-parsing/freshness, cache-target resolution (memory vs. per-asset), `storeShareCardAndUpdateCache` (put + column update + stale-object delete, non-fatal on each failure), end-to-end cache HIT (streams stored PNG, never loads fonts/wasm or composes), MISS (composes, stores under the creator prefix + `DESIGN_VERSION`), stale-version key treated as MISS + stale object deleted, warm mode on a fresh cache (204, no-op) and on a MISS (204 after compose+store), the warm rate bucket independent of the cold bucket in both directions; **emoji `graphemeImages` (Part 4 of the four-part fix):** a caption emoji's Twemoji key joins the SAME `getObjectBytesBatch` window as hero/portrait images, the resolved map reaches `composeShareCardPng` (dependency-injected assertion), no-emoji captions add no key + pass an empty map, a missing/failed SVG fails open (share still succeeds, grapheme just absent), the per-isolate memo skips a second R2 fetch for an already-seen grapheme, `rememberEmojiGraphemeImage`'s FIFO eviction at `MAX_EMOJI_GRAPHEME_MEMO_ENTRIES`; **tail-fix pass 2 (production data profiling):** `portraitBytesToDataUri` collapses a realistic ~3.2MB portrait to a <50KB JPEG data URI capped at `PORTRAIT_MAX_IMAGE_EDGE`, the payload-regression guard (4 tagged members, total embedded bytes well under 1.5MB, none dropped), `bytesToDataUri`'s legacy-oversized-PNG branch re-encodes only over the 500KB threshold (small PNGs untouched, no regression for the common case), `resolveShareCardSourceFromQueryRow`/handler-level tests for the NULL-`illustration_key` quote-variant degrade across all three non-ready statuses (pending/generating/failed) plus the "key present despite non-ready status still used" case |
+| `supabase/functions/_shared/image-bytes.test.ts` | `computeResizedDimensions` boundary cases; `capImageMaxEdge` (unchanged: preserves format/skips re-encode when no resize needed, downscales+JPEGs when it does); **`capImageMaxEdgeAsJpeg` (tail-fix pass 2):** ALWAYS re-encodes to JPEG even with no resize needed (the exact gap `capImageMaxEdge` leaves for callers that need file-size reduction), downscales the same as `capImageMaxEdge` when needed, and — against a realistic non-flat-color fixture — produces a payload at least 4x smaller than the source PNG |
 | `supabase/functions/compose-share-card/emoji.test.ts` | `graphemeToTwemojiFilename`/`buildTwemojiObjectKey` against the exact twemoji-parser-verified cases (flag pair, VS16-dropped heart, ZWJ family with every codepoint kept, keycap, a ZWJ+VS16 combo that keeps VS16), `isEmojiGrapheme`/`extractDistinctEmojiGraphemes` (mixed caption extraction + dedupe + distinct-flags-stay-distinct, non-emoji text/punctuation excluded), `resolveGraphemeImages` (memo-hit short-circuit, fetch-then-resolve, fail-open on missing/failed/bytes-less entries, one failure never blocks another grapheme's success) |
 | `supabase/functions/compose-share-card/layout.test.ts` | SVG-tree snapshot per memory-type variant (quote/spread), date-label formatting, quote-glyph bottom-margin pinned to the exact `+8` logical-unit value (user-feedback follow-up), flag/mixed-emoji captions still produce real glyph path data (pre-`graphemeImages` shaping floor, not a regression guard for the image substitution itself — see render.test.ts for that) |
-| `supabase/functions/compose-share-card/render.test.ts` | Real PNG output from injected real font/wasm fixture bytes, resvg-wasm-compile memoization, the reduced-scale mitigation at a real pixel boundary; **`graphemeImages` passthrough:** an override for a caption's emoji measurably changes the rendered PNG bytes (proves the parameter reaches satori on both the full AND reduced-scale pass), an empty map behaves identically to omitting it (no accidental substitution) |
-| `supabase/functions/compose-share-card/scale.test.ts` | Reduced-scale pixel-budget boundary, SVG-height parsing |
+| `supabase/functions/compose-share-card/render.test.ts` | Real PNG output from injected real font/wasm fixture bytes, resvg-wasm-compile memoization; **`graphemeImages` passthrough:** an override for a caption's emoji measurably changes the rendered PNG bytes (proves the parameter reaches satori on both satori passes), an empty map behaves identically to omitting it (no accidental substitution); **continuous scale (tail fix):** a short card renders at exactly `BASE_SCALE`/1080px, a moderately-long caption scales down continuously to a real (non-floor) scale and lands under budget, a REAL 5000-char (`validateMemoryContent` cap) caption clamps to the `MIN_RASTER_WIDTH` floor at ~2.60M px (~37% over the 1.9M budget, honestly asserted, not hidden) — ~2.25x smaller than the OLD fixed-720 fallback would have produced for the same measured height |
+| `supabase/functions/compose-share-card/scale.test.ts` | `resolveShareCardOutputScale`: exact `sqrt(budget/(w×h))` formula match, BASE_SCALE cap for short cards (incl. exact boundary), monotonic non-increasing scale as height grows, `MIN_OUTPUT_SCALE` floor clamp (incl. exact crossover boundary), defensive fallback on invalid input, custom width/budget params; the 47-failure-class regression (a real caption's measured ~4497 logical height sits past the floor crossover, and the resulting output is still ≥2x smaller than the OLD fixed-720 fallback for the same content); `resolveShareCardOutputWidthPx` rounding; SVG-height parsing |
 | `supabase/functions/_shared/storage-keys.test.ts` | `buildShareCardKey` shape, `parseStorageKey` classifies a share-card key (and rejects a wrong path segment / missing name / non-uuid ids) |
 | `supabase/functions/_shared/family-access.test.ts` | `resolveReferencedStorageKeys` admits a referenced `memories.share_card_key` and `memory_media.share_card_key` (so `delete-storage-object`/`get-media-url` don't 400 a live card) |
 | `supabase/functions/hard-delete-expired-accounts/index.test.ts` | `collectFamilyStorageKeys` includes both `share_card_key` columns on owner-account deletion; `resolveReferencedKeys` does NOT collect a live share-card key as an orphan |
@@ -693,3 +755,5 @@ not a stale cached copy.
 | 2026-08-05 | Initial implementation: viewer-sharing setting, `compose-share-card` Edge Function (satori + resvg-wasm, reduced-scale mitigation), client share flow (icon, carousel current-page lifting, `useShareMemoryCard`) |
 | 2026-08-05 | Store-through cache (docs/plans/share-card-store-through.md): `memories.share_card_key`/`memory_media.share_card_key` (W1, schema + storage/deletion coverage across `_shared/storage-keys.ts`, `_shared/family-access.ts`, `hard-delete-expired-accounts`, and the client's delete/replace paths), `compose-share-card` cache hit/miss + non-fatal store-through + `warm: true` mode with its own rate bucket (W2), client `warmShareCardFireAndForget`/`warmShareCardForMemoryFireAndForget` fired after memory create/edit/media-post (W3) — absorbs the 546 failure-rate ceiling for any repeat or pre-warmed share |
 | 2026-08-05 | Four-part production fix (fresh prod probe: ~45-55% cold compose success per attempt, stochastic, and cold-bucket exhaustion masquerading as "retry never works"): quote-glyph `marginBottom` +2 → +8 logical units (`DESIGN_VERSION` 2 → 3, stored cards regenerate lazily), cold rate bucket `SHARE_CARD_RATE_LIMIT_MAX_PER_WINDOW` 10 → 20/minute/user (warm stays 30), `warmShareCardFireAndForget` made self-healing (retries on 546 up to 3 total attempts with 4s/8s backoff, stops immediately on 429, still silent/never-awaited), `supabase/scripts/backfill-share-cards.ts` added to pre-warm every existing share-card-less memory/asset via the deployed warm endpoint. **Plus (same round, device report — a flag emoji rendered as "E S"):** self-hosted Twemoji `graphemeImages` support (`compose-share-card/emoji.ts` — grapheme extraction + twemoji-parser-verified filename mapping; `supabase/scripts/upload-twemoji-assets.ts` self-hosts the SVG set to R2, replacing the monochrome-font-only story for flags/ZWJ-sequences/keycaps) — folded into the STILL-UNDEPLOYED `DESIGN_VERSION` 3 rather than a separate bump |
+| 2026-08-06 | Tail fix, pass 1 (backfill telemetry across 823 real targets: 771 stored, 5 permanent 400s, 47 DETERMINISTIC 546s — impossible under the ~50% stochastic rate, traced to long-caption carousels exceeding budget even at the old fixed-720 fallback): replaced the two-tier 1080/720 (`shouldUseReducedScale`/`REDUCED_SCALE`) mitigation with CONTINUOUS scaling (`resolveShareCardOutputScale`, `compose-share-card/scale.ts`) — `outputScale = min(BASE_SCALE, max(MIN_OUTPUT_SCALE, sqrt(budget/(logicalWidth×logicalHeight))))`; `SHARE_CARD_PIXEL_BUDGET` 2,500,000 → 1,900,000; new `MIN_RASTER_WIDTH` (480px) legibility floor. No `DESIGN_VERSION` bump — scale is not part of the stored-key contract. **SUPERSEDED BELOW: this hypothesis measured ZERO improvement on the actual failing class** — the real discriminator was never caption/pixel-count math. |
+| 2026-08-06 | Tail fix, pass 2 (real root cause, isolated via production data profiling — a 39-memory profile of failing vs. succeeding shares): failing memories have 3-4 tagged members vs. 2 for successes; family portraits commonly store as ~2-2.2MB PNGs (often under a mislabeled `.webp` key) at ~1024px — already under `SHARE_CARD_MAX_IMAGE_EDGE` (1600), so the dimension-only fast path (`capImageMaxEdgeIfNeeded`) embedded the ORIGINAL multi-MB bytes untouched, per tagged member: 3-4 members meant 7-10MB of embedded SVG text, deterministically over budget regardless of raster scale. Fix: **portraits ALWAYS force-downscale + re-encode to JPEG at 256px** (`portraitBytesToDataUri`, new `capImageMaxEdgeAsJpeg` in `_shared/image-bytes.ts` — unlike `capImageMaxEdge`, never skips the re-encode just because dimensions are already small); **legacy oversized PNGs (>500KB) in the HERO slot also force-re-encode to JPEG**, capped at the existing 1600 edge (`bytesToDataUri`'s `LEGACY_PNG_REENCODE_THRESHOLD_BYTES` branch — conservative: only large legacy PNGs, not every hero, to avoid paying a decode cost on the common already-small-preview case); **a `text_illustration` memory with a NULL `illustration_key` (any non-ready status) now degrades to the quote-variant card instead of 400ing** (`resolveShareCardSourceFromQueryRow` — key presence, not status, is authoritative; mirrors `resolveMemberPortraitKey`'s existing in-flight-degrade pattern). Verified against a realistic ~3.2MB fixture: single portrait collapses to a ~25KB JPEG data URI; four tagged members' total embedded payload stays well under 1.5MB (was theoretically ~11.7MB pre-fix for the same content). No `DESIGN_VERSION` bump — re-encoding changes HOW an image is compressed, not WHAT is displayed (a portrait was always downsampled into a ~44px avatar circle regardless of source resolution); the null-illustration degrade is a validation/availability fix, not a rendering-pixel change to any card that previously composed successfully. |
