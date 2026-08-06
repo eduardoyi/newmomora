@@ -2,6 +2,8 @@ import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
+import { resolveRealImageBytesForStorage } from '../_shared/image-bytes.ts';
+import { MAX_ILLUSTRATION_REFERENCE_EDGE } from '../_shared/image-limits.ts';
 import { stripUrls } from '../_shared/link-preview.ts';
 import { normalizeEmotionLabel } from '../_shared/media-emotion.ts';
 import { chatJson, editImageWithReferences } from '../_shared/openai.ts';
@@ -114,8 +116,11 @@ export function getIllustrationImageRequestOptions(_referenceCount: number) {
     // always sent explicitly; we deliberately do not trade quality down to
     // `low`.
     quality: 'medium' as const,
-    // Illustration keys and R2 metadata are .webp/image-webp. Request the
-    // same format instead of storing default PNG bytes under that identity.
+    // Requesting webp keeps the common case cheap/small. OpenAI has been
+    // observed to ignore this and return PNG bytes anyway; the real
+    // returned bytes are sniffed and, if mismatched, re-encoded and stored
+    // under a matching extension -- see resolveRealImageBytesForStorage's
+    // call site below, and `_shared/image-bytes.ts`'s header comment.
     outputFormat: 'webp' as const,
     outputCompression: 85,
     // Workflow retries are sequential. Parallel hedging sometimes pays twice
@@ -294,6 +299,13 @@ interface CommitIllustrationGenerationInput {
   oldKey: string | null;
   newKey: string;
   bytes: Uint8Array;
+  /** Defaults to 'image/webp' for existing call sites. The real generator
+   * passes the SNIFFED content type (see `resolveRealImageBytesForStorage`)
+   * so the R2 object's metadata always matches its actual bytes -- OpenAI
+   * has been observed to ignore `output_format: 'webp'` and return PNG
+   * bytes anyway (see this file's header comment history / git log around
+   * 6fc17d7). */
+  contentType?: string;
   put: (key: string, bytes: Uint8Array, contentType: string) => Promise<void>;
   remove: (key: string) => Promise<void>;
   commitDatabase: () => Promise<boolean>;
@@ -309,12 +321,13 @@ export async function commitIllustrationGeneration({
   oldKey,
   newKey,
   bytes,
+  contentType = 'image/webp',
   put,
   remove,
   commitDatabase,
   reconcileDatabase,
 }: CommitIllustrationGenerationInput): Promise<void> {
-  await put(newKey, bytes, 'image/webp');
+  await put(newKey, bytes, contentType);
 
   let didCommit = false;
   try {
@@ -957,7 +970,11 @@ export async function handleGenerateIllustration(
     );
 
     const illustrationGenerationId = dependencies.createId();
-    const illustrationKey = buildMemoryIllustrationKey(callerId, memoryId, illustrationGenerationId);
+    // The final key's EXTENSION is decided after generation, once the real
+    // returned bytes are sniffed (see below) -- OpenAI has been observed to
+    // ignore `output_format: 'webp'` and return PNG bytes anyway. This id is
+    // still minted here: it is the immutable, never-reused generation
+    // identity regardless of which extension the key ends up with.
     const normalizedEmotion = normalizeEmotion(memory.emotion);
     const resolvedPalette =
       analyzedPalette ??
@@ -1129,6 +1146,29 @@ export async function handleGenerateIllustration(
     throwIfAborted(generationController.signal);
     logGenerationPhase(memoryId, generationPhase, imagePhaseStartedAt);
 
+    // Sniff the REAL returned bytes before minting the final key: OpenAI has
+    // been observed to ignore `output_format: 'webp'` and return PNG bytes
+    // anyway (production incident -- satori "Invalid WebP" crash, then a
+    // multi-MB PNG payload once the crash itself was defended against by
+    // sniffing on the read side; see compose-share-card's
+    // resolveImageMimeType header comment). Fixing this at the source means
+    // the key's extension always matches what actually gets uploaded, and a
+    // PNG mismatch is re-encoded down from ~2MB to the ~150-350KB range
+    // instead of being stored as-is. This is safe to decide here (rather
+    // than before generation) because, unlike the portrait pipeline, the
+    // illustration key is never pre-committed to the DB before this point --
+    // the CAS claim above only guards `illustration_generation_attempt_id`.
+    const resolvedOutput = await resolveRealImageBytesForStorage(
+      illustrationBytes,
+      MAX_ILLUSTRATION_REFERENCE_EDGE,
+    );
+    const illustrationKey = buildMemoryIllustrationKey(
+      callerId,
+      memoryId,
+      illustrationGenerationId,
+      resolvedOutput.extension,
+    );
+
     // Do not pass an abort signal into immutable upload/CAS finalization. The
     // timer has reserved intended publication headroom so a
     // provider timeout cannot leave an ambiguous publication result.
@@ -1138,7 +1178,8 @@ export async function handleGenerateIllustration(
     await commitIllustrationGeneration({
       oldKey: memory.illustration_key,
       newKey: illustrationKey,
-      bytes: illustrationBytes,
+      bytes: resolvedOutput.bytes,
+      contentType: resolvedOutput.contentType,
       put: dependencies.putObjectBytes,
       remove: dependencies.deleteObject,
       commitDatabase: async () => {

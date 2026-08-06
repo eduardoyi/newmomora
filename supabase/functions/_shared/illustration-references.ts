@@ -1,5 +1,5 @@
 import { describeAgeAtDate } from './age.ts';
-import { capIllustrationReferenceImage } from './image-bytes.ts';
+import { capIllustrationReferenceImage, sniffImageFormat } from './image-bytes.ts';
 import type { ReferenceImageInput } from './openai.ts';
 import { normalizeAdditionalInfo } from './prompts.ts';
 
@@ -68,6 +68,12 @@ export async function prepareIllustrationReferences(
     const attempts: Array<{ key: string; contentType: string; extension: string }> = [];
 
     if (member.illustrated_profile_key) {
+      // `contentType` here is a DEFAULT, not a guarantee: a portrait key can
+      // be `.webp`-suffixed while holding real PNG/JPEG bytes (OpenAI has
+      // been observed to ignore `output_format: 'webp'` -- see
+      // `_shared/image-bytes.ts`'s header comment), or `.jpg`-suffixed after
+      // the source-of-the-mismatch fix re-encodes a mismatch. The loop below
+      // sniffs the actually-fetched bytes and prefers that over this guess.
       attempts.push({
         key: member.illustrated_profile_key,
         contentType: 'image/webp',
@@ -86,7 +92,9 @@ export async function prepareIllustrationReferences(
     for (const attempt of attempts) {
       try {
         const bytes = await getObjectBytes(attempt.key, { signal: options.signal });
-        const capped = await capIllustrationReferenceImage(bytes, attempt.contentType);
+        const sniffedFormat = sniffImageFormat(bytes);
+        const sourceContentType = sniffedFormat ? `image/${sniffedFormat}` : attempt.contentType;
+        const capped = await capIllustrationReferenceImage(bytes, sourceContentType);
         const referenceIndex = referenceImages.length + 1;
 
         characterReferences.push({

@@ -35,21 +35,38 @@ export function buildPortraitVersionPhotoKey(
   return `${userId}/family/${familyMemberId}/portraits/${portraitVersionId}/photo.jpg`;
 }
 
+/**
+ * `extension` defaults to `webp` (the requested/expected OpenAI output
+ * format). It exists so callers that have already sniffed the REAL bytes
+ * returned by OpenAI (see `_shared/image-bytes.ts`'s
+ * `resolveRealImageBytesForStorage` -- OpenAI has been observed to ignore
+ * `output_format: 'webp'` and return PNG/JPEG bytes anyway) can mint a key
+ * whose extension actually matches what gets uploaded, instead of a
+ * `.webp`-suffixed key holding PNG bytes. Also used by
+ * supabase/scripts/backfill-portrait-reencode.ts to mint a fresh
+ * correctly-named key for an existing mismatched object (never overwrites
+ * the old one -- see that script's header).
+ */
 export function buildPortraitVersionAttemptKey(
   userId: string,
   familyMemberId: string,
   portraitVersionId: string,
   attemptId: string,
+  extension: 'webp' | 'jpg' = 'webp',
 ): string {
-  return `${userId}/family/${familyMemberId}/portraits/${portraitVersionId}/portrait/${attemptId}.webp`;
+  return `${userId}/family/${familyMemberId}/portraits/${portraitVersionId}/portrait/${attemptId}.${extension}`;
 }
 
+/** See `buildPortraitVersionAttemptKey`'s header comment -- same rationale
+ * for the optional `extension` parameter (defaults to the requested webp
+ * format; pass 'jpg' once the real returned bytes have been sniffed). */
 export function buildMemoryIllustrationKey(
   userId: string,
   memoryId: string,
   generationId: string,
+  extension: 'webp' | 'jpg' = 'webp',
 ): string {
-  return `${userId}/memories/${memoryId}/illustrations/${generationId}.webp`;
+  return `${userId}/memories/${memoryId}/illustrations/${generationId}.${extension}`;
 }
 
 export function buildMemoryMediaKey(userId: string, memoryId: string, ext: string): string {
@@ -139,8 +156,12 @@ export function getAllowedContentTypes(objectKey: string, userId: string): Set<s
 export function isMemoryIllustrationKey(objectKey: string, userId: string): boolean {
   const prefix = `${userId}/memories/`;
   const legacyMatch = objectKey.match(/^([^/]+)\/memories\/([^/]+)\/illustration\.webp$/);
+  // Accepts `.jpg` alongside the requested `.webp`: a real-bytes mismatch
+  // (see `_shared/image-bytes.ts`'s header comment) is re-encoded to JPEG
+  // and stored under a `.jpg`-suffixed key instead of a `.webp` key holding
+  // PNG bytes -- this key must still resolve/authorize/delete correctly.
   const versionedMatch = objectKey.match(
-    /^([^/]+)\/memories\/([^/]+)\/illustrations\/([^/]+)\.webp$/,
+    /^([^/]+)\/memories\/([^/]+)\/illustrations\/([^/]+)\.(?:webp|jpg)$/,
   );
 
   if (!objectKey.startsWith(prefix)) return false;
@@ -210,12 +231,16 @@ export interface ParsedStorageKey {
 const FAMILY_MEMBER_PATTERN = /^([^/]+)\/family\/([^/]+)\/(photo|portrait)\.webp$/;
 const PORTRAIT_VERSION_PHOTO_PATTERN =
   /^([^/]+)\/family\/([^/]+)\/portraits\/([^/]+)\/photo\.jpg$/i;
+// Both patterns below accept `.jpg` alongside the requested `.webp` -- see
+// isMemoryIllustrationKey's comment and `_shared/image-bytes.ts`'s header
+// comment for why: a real-bytes mismatch is re-encoded to JPEG and stored
+// under a `.jpg` key rather than a `.webp` key holding PNG bytes.
 const PORTRAIT_VERSION_PORTRAIT_PATTERN =
-  /^([^/]+)\/family\/([^/]+)\/portraits\/([^/]+)\/portrait\/([^/]+)\.webp$/i;
+  /^([^/]+)\/family\/([^/]+)\/portraits\/([^/]+)\/portrait\/([^/]+)\.(?:webp|jpg)$/i;
 const MEMORY_ILLUSTRATION_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/illustration\.webp$/;
 const MEMORY_ILLUSTRATION_VERSIONED_FULL_PATTERN =
-  /^([^/]+)\/memories\/([^/]+)\/illustrations\/([^/]+)\.webp$/;
+  /^([^/]+)\/memories\/([^/]+)\/illustrations\/([^/]+)\.(?:webp|jpg)$/;
 const MEMORY_MEDIA_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
 const MEMORY_MEDIA_ASSET_FULL_PATTERN =

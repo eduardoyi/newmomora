@@ -15,6 +15,18 @@ ambiguous completion response, leaves the lease intact and skips terminal
 failure/cleanup. Deterministic HEAD recovery must authorize and complete its
 token before publish; it never bypasses an active/unconfirmed upload.
 
+**2026-08-06:** OpenAI's images/edits endpoint has been observed to ignore
+`output_format: 'webp'` and return PNG or JPEG bytes anyway (the same
+incident class fixed Supabase-side in
+`supabase/functions/_shared/image-bytes.ts`). Because the Worker's R2
+`outputKey` is minted Supabase-side and always ends in `.webp`, it can't
+rename the key the way the Supabase fix does — instead `src/image-output.ts`
+sniffs the real bytes before every R2 PUT (`resolveOutputBytesForR2`) and
+re-encodes non-webp bytes to real webp via the `env.IMAGES` binding, failing
+open to the sniffed real content type if re-encoding itself throws. See
+`src/workflow.ts` and `src/portrait-workflow.ts`'s `runImageAttempt` for the
+call sites.
+
 For the design rationale, review findings, production lessons, and the
 portrait-generation migration blueprint, read
 [Durable AI generation workflow playbook](./durable-ai-generation-workflows.md).

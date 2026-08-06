@@ -2,6 +2,7 @@ import { assertEquals } from 'jsr:@std/assert@1';
 import {
   buildFamilyPhotoKey,
   buildMemoryIllustrationKey,
+  buildPortraitVersionAttemptKey,
   buildPortraitVersionPhotoKey,
   buildMemoryMediaAssetKey,
   buildMemoryMediaKey,
@@ -9,6 +10,7 @@ import {
   getAllowedContentTypes,
   isAllowedUploadKey,
   isDeletableUserObjectKey,
+  isMemoryIllustrationKey,
   parseStorageKey,
 } from './storage-keys.ts';
 
@@ -134,6 +136,56 @@ Deno.test('parseStorageKey rejects malformed share card key variants', () => {
     parseStorageKey(`${USER_ID}/memories/${MEMORY_ID}/share-card/nested/name.png`),
     null,
   );
+});
+
+// Byte/extension mismatch fix (docs/features/memories.md changelog, git log
+// around 6fc17d7/e4c9140): OpenAI's images/edits endpoint has been observed
+// to ignore `output_format: 'webp'` and return PNG bytes anyway. Once the
+// generators sniff the real bytes (`_shared/image-bytes.ts`) and re-encode a
+// mismatch to JPEG, the resulting key must carry a `.jpg` extension that
+// every downstream validator/authorizer still recognizes -- these tests pin
+// that the key builders AND the regex-based validators both accept it.
+
+Deno.test('buildMemoryIllustrationKey accepts an explicit jpg extension for re-encoded mismatches', () => {
+  assertEquals(
+    buildMemoryIllustrationKey(USER_ID, MEMORY_ID, GENERATION_ID, 'jpg'),
+    `${USER_ID}/memories/${MEMORY_ID}/illustrations/${GENERATION_ID}.jpg`,
+  );
+});
+
+Deno.test('buildPortraitVersionAttemptKey defaults to webp and accepts an explicit jpg extension', () => {
+  assertEquals(
+    buildPortraitVersionAttemptKey(USER_ID, MEMBER_ID, VERSION_ID, GENERATION_ID),
+    `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/portrait/${GENERATION_ID}.webp`,
+  );
+  assertEquals(
+    buildPortraitVersionAttemptKey(USER_ID, MEMBER_ID, VERSION_ID, GENERATION_ID, 'jpg'),
+    `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/portrait/${GENERATION_ID}.jpg`,
+  );
+});
+
+Deno.test('isMemoryIllustrationKey and parseStorageKey recognize a jpg-suffixed versioned illustration key', () => {
+  const jpgKey = buildMemoryIllustrationKey(USER_ID, MEMORY_ID, GENERATION_ID, 'jpg');
+
+  assertEquals(isMemoryIllustrationKey(jpgKey, USER_ID), true);
+  assertEquals(parseStorageKey(jpgKey), {
+    kind: 'memory_illustration',
+    ownerUserId: USER_ID,
+    entityId: MEMORY_ID,
+  });
+  assertEquals(isDeletableUserObjectKey(jpgKey, USER_ID), true);
+});
+
+Deno.test('parseStorageKey recognizes a jpg-suffixed portrait attempt key', () => {
+  const jpgKey = buildPortraitVersionAttemptKey(USER_ID, MEMBER_ID, VERSION_ID, GENERATION_ID, 'jpg');
+
+  assertEquals(parseStorageKey(jpgKey), {
+    kind: 'portrait_version_portrait',
+    ownerUserId: USER_ID,
+    entityId: MEMBER_ID,
+    portraitVersionId: VERSION_ID,
+    attemptId: GENERATION_ID,
+  });
 });
 
 Deno.test('isDeletableUserObjectKey accepts known user object patterns', () => {

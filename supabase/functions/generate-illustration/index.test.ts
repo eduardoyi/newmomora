@@ -489,6 +489,121 @@ Deno.test('ambiguous commit and reconciliation errors keep the new object', asyn
   }
   assertEquals(events, ['put:new.webp', 'commit:error', 'reconcile:error']);
 });
+
+Deno.test('illustration commit defaults to image/webp when no contentType is given', async () => {
+  const puts: Array<{ key: string; contentType: string }> = [];
+  await commitIllustrationGeneration({
+    oldKey: null,
+    newKey: 'new.webp',
+    bytes: new Uint8Array([1]),
+    put: async (key, _bytes, contentType) => { puts.push({ key, contentType }); },
+    commitDatabase: async () => true,
+    reconcileDatabase: async () => false,
+    remove: async () => {},
+  });
+  assertEquals(puts, [{ key: 'new.webp', contentType: 'image/webp' }]);
+});
+
+Deno.test('illustration commit forwards a real re-encoded contentType through to put()', async () => {
+  const puts: Array<{ key: string; contentType: string }> = [];
+  await commitIllustrationGeneration({
+    oldKey: null,
+    newKey: 'new.jpg',
+    bytes: new Uint8Array([0xff, 0xd8, 0xff]),
+    contentType: 'image/jpeg',
+    put: async (key, _bytes, contentType) => { puts.push({ key, contentType }); },
+    commitDatabase: async () => true,
+    reconcileDatabase: async () => false,
+    remove: async () => {},
+  });
+  assertEquals(puts, [{ key: 'new.jpg', contentType: 'image/jpeg' }]);
+});
+
+// ── Byte/extension mismatch fix (source-of-the-mismatch fix) ───────────────
+// OpenAI's images/edits endpoint has been observed to ignore
+// `output_format: 'webp'` and return PNG bytes anyway (production incident,
+// see docs/features/memory-sharing.md's changelog and git log around
+// 6fc17d7/e4c9140). These tests pin the exact combination
+// `handleGenerateIllustration`'s legacy path wires together --
+// `resolveRealImageBytesForStorage` (sniff + re-encode) feeding
+// `buildMemoryIllustrationKey`'s extension parameter -- since a full
+// HTTP-mocked success run through `withMockedIllustrationNetwork` would
+// require the shared PATCH-response matching logic (used by ~30 other tests
+// in this file) to also model the final commit PATCH; that is out of
+// proportion to this fix. See `_shared/image-bytes.test.ts` for the
+// standalone `resolveRealImageBytesForStorage` byte-signature coverage.
+Deno.test(
+  'a PNG response from OpenAI is re-encoded to a smaller, correctly-named JPEG key',
+  async () => {
+    const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
+    const size = 256;
+    const image = new Image(size, size);
+    const clamp = (value: number) => Math.max(0, Math.min(255, value));
+    // Smooth per-pixel gradients, like a real photographic illustration --
+    // see `_shared/image-bytes.test.ts`'s matching fixture for why a flat
+    // fill or blocky/periodic pattern would not exercise this regression.
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const r = clamp(Math.floor(128 + 100 * Math.sin(x / 17) * Math.cos(y / 19)));
+        const g = clamp(Math.floor(128 + 100 * Math.sin((x + 30) / 23) * Math.cos((y + 10) / 13)));
+        const b = clamp(Math.floor(128 + 100 * Math.sin((x + 60) / 11) * Math.cos((y + 20) / 29)));
+        image.setPixelAt(x + 1, y + 1, (r << 24) | (g << 16) | (b << 8) | 0xff);
+      }
+    }
+    const mismatchedPngBytes = await image.encode();
+
+    const { resolveRealImageBytesForStorage } = await import('../_shared/image-bytes.ts');
+    const { buildMemoryIllustrationKey } = await import('../_shared/storage-keys.ts');
+    const { MAX_ILLUSTRATION_REFERENCE_EDGE } = await import('../_shared/image-limits.ts');
+
+    const resolved = await resolveRealImageBytesForStorage(
+      mismatchedPngBytes,
+      MAX_ILLUSTRATION_REFERENCE_EDGE,
+    );
+    const illustrationKey = buildMemoryIllustrationKey(
+      USER_ID,
+      MEMORY_ID,
+      '77777777-7777-4777-8777-777777777777',
+      resolved.extension,
+    );
+
+    assertEquals(illustrationKey.endsWith('.jpg'), true);
+    assertEquals(resolved.contentType, 'image/jpeg');
+    assertEquals(resolved.bytes[0] === 0xff && resolved.bytes[1] === 0xd8 && resolved.bytes[2] === 0xff, true);
+    assertEquals(resolved.bytes[0] === 0x89, false); // not PNG's magic byte
+    assertEquals(resolved.bytes.length < mismatchedPngBytes.length / 2, true);
+  },
+);
+
+Deno.test(
+  'genuine webp bytes from OpenAI keep the requested .webp key unchanged',
+  async () => {
+    const realWebpBytes = Uint8Array.from(
+      atob('UklGRi4AAABXRUJQVlA4ICIAAAAwAQCdASoEAAQAAgA0JaAAA3AA/teQf//OJf/QL/wF7jAA'),
+      (character) => character.charCodeAt(0),
+    );
+
+    const { resolveRealImageBytesForStorage } = await import('../_shared/image-bytes.ts');
+    const { buildMemoryIllustrationKey } = await import('../_shared/storage-keys.ts');
+    const { MAX_ILLUSTRATION_REFERENCE_EDGE } = await import('../_shared/image-limits.ts');
+
+    const resolved = await resolveRealImageBytesForStorage(
+      realWebpBytes,
+      MAX_ILLUSTRATION_REFERENCE_EDGE,
+    );
+    const illustrationKey = buildMemoryIllustrationKey(
+      USER_ID,
+      MEMORY_ID,
+      '88888888-8888-4888-8888-888888888888',
+      resolved.extension,
+    );
+
+    assertEquals(illustrationKey.endsWith('.webp'), true);
+    assertEquals(resolved.contentType, 'image/webp');
+    assertEquals(resolved.bytes, realWebpBytes);
+  },
+);
+
 Deno.test('generate-illustration rejects more than six tagged members', async () => {
   const taggedMemberIds = Array.from(
     { length: 7 },

@@ -1,5 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert@1';
-import { computeResizedDimensions } from './image-bytes.ts';
+import { computeResizedDimensions, resolveRealImageBytesForStorage, sniffImageFormat } from './image-bytes.ts';
 
 Deno.test('computeResizedDimensions keeps dimensions when already within max edge', () => {
   assertEquals(computeResizedDimensions(800, 600, 1024), { width: 800, height: 600 });
@@ -107,4 +107,102 @@ Deno.test('capImageMaxEdgeAsJpeg produces a dramatically smaller payload than th
   // noise-inflated) PNG collapsing to a small JPEG once both downscaled to
   // a small edge AND re-encoded lossily.
   assertEquals(capped.bytes.length < pngBytes.length / 4, true);
+});
+
+// ── sniffImageFormat / resolveRealImageBytesForStorage (source-of-the-
+// mismatch fix) ─────────────────────────────────────────────────────────
+// OpenAI's images/edits and images/generations endpoints have been
+// observed to ignore `output_format: 'webp'` and return PNG (or JPEG)
+// bytes anyway -- see generate-portrait-illustration/index.ts and
+// generate-illustration/index.ts for the production-incident history.
+// These pin the magic-byte sniff and the storage decision built on it.
+
+const REAL_TINY_WEBP_BYTES = Uint8Array.from(
+  atob('UklGRi4AAABXRUJQVlA4ICIAAAAwAQCdASoEAAQAAgA0JaAAA3AA/teQf//OJf/QL/wF7jAA'),
+  (character) => character.charCodeAt(0),
+);
+const REAL_TINY_PNG_BYTES = Uint8Array.from(
+  atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='),
+  (character) => character.charCodeAt(0),
+);
+
+Deno.test('sniffImageFormat identifies real png, jpeg, and webp bytes', async () => {
+  const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
+  const jpegImage = new Image(4, 4);
+  jpegImage.fill(0xff0000ff);
+  const jpegBytes = await jpegImage.encodeJPEG(85);
+
+  assertEquals(sniffImageFormat(REAL_TINY_PNG_BYTES), 'png');
+  assertEquals(sniffImageFormat(jpegBytes), 'jpeg');
+  assertEquals(sniffImageFormat(REAL_TINY_WEBP_BYTES), 'webp');
+});
+
+Deno.test('sniffImageFormat returns null for bytes that match no known signature', () => {
+  assertEquals(sniffImageFormat(new Uint8Array([9, 9, 9])), null);
+  assertEquals(sniffImageFormat(new Uint8Array([])), null);
+});
+
+Deno.test('resolveRealImageBytesForStorage passes genuine webp bytes through unchanged', async () => {
+  const resolved = await resolveRealImageBytesForStorage(REAL_TINY_WEBP_BYTES, 1024);
+
+  assertEquals(resolved.extension, 'webp');
+  assertEquals(resolved.contentType, 'image/webp');
+  assertEquals(resolved.reencoded, false);
+  assertEquals(resolved.bytes, REAL_TINY_WEBP_BYTES);
+});
+
+Deno.test('resolveRealImageBytesForStorage stores genuine jpeg bytes as-is under a jpg extension (no second lossy pass)', async () => {
+  const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
+  const jpegImage = new Image(4, 4);
+  jpegImage.fill(0x00ff00ff);
+  const jpegBytes = await jpegImage.encodeJPEG(85);
+
+  const resolved = await resolveRealImageBytesForStorage(jpegBytes, 1024);
+
+  assertEquals(resolved.extension, 'jpg');
+  assertEquals(resolved.contentType, 'image/jpeg');
+  assertEquals(resolved.reencoded, false);
+  assertEquals(resolved.bytes, jpegBytes);
+});
+
+Deno.test('resolveRealImageBytesForStorage re-encodes a PNG mismatch to a smaller JPEG under a jpg extension', async () => {
+  const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
+  const size = 512;
+  const image = new Image(size, size);
+  const clamp = (value: number) => Math.max(0, Math.min(255, value));
+  // Smooth per-pixel gradients, like a real photographic illustration/
+  // portrait -- a flat fill or blocky/periodic pattern compresses trivially
+  // under PNG's lossless DEFLATE too and would not exercise the real-world
+  // ~2MB-illustration-PNG size regression this fix targets (only a genuine
+  // lossy/lossless gap, the same one production data hit, does that).
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const r = clamp(Math.floor(128 + 100 * Math.sin(x / 17) * Math.cos(y / 19)));
+      const g = clamp(Math.floor(128 + 100 * Math.sin((x + 30) / 23) * Math.cos((y + 10) / 13)));
+      const b = clamp(Math.floor(128 + 100 * Math.sin((x + 60) / 11) * Math.cos((y + 20) / 29)));
+      image.setPixelAt(x + 1, y + 1, (r << 24) | (g << 16) | (b << 8) | 0xff);
+    }
+  }
+  const pngBytes = await image.encode();
+
+  const resolved = await resolveRealImageBytesForStorage(pngBytes, 1024);
+
+  assertEquals(resolved.extension, 'jpg');
+  assertEquals(resolved.contentType, 'image/jpeg');
+  assertEquals(resolved.reencoded, true);
+  assertEquals(sniffImageFormat(resolved.bytes), 'jpeg');
+  // The actual regression this fix targets: a multi-hundred-KB (noise-
+  // inflated, approximating a real photographic illustration/portrait) PNG
+  // collapsing to a small JPEG.
+  assertEquals(resolved.bytes.length < pngBytes.length / 4, true);
+});
+
+Deno.test('resolveRealImageBytesForStorage fails open (never throws) on unrecognized bytes', async () => {
+  const sentinelBytes = new Uint8Array([9, 9, 9]);
+  const resolved = await resolveRealImageBytesForStorage(sentinelBytes, 1024);
+
+  assertEquals(resolved.extension, 'webp');
+  assertEquals(resolved.contentType, 'image/webp');
+  assertEquals(resolved.reencoded, false);
+  assertEquals(resolved.bytes, sentinelBytes);
 });

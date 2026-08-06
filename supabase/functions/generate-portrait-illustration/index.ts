@@ -3,7 +3,7 @@ import { getAuthenticatedNonAnonymousUser, getAuthenticatedUser } from '../_shar
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
-import { capImageMaxEdge } from '../_shared/image-bytes.ts';
+import { capImageMaxEdge, resolveRealImageBytesForStorage } from '../_shared/image-bytes.ts';
 import { MAX_PORTRAIT_REFERENCE_EDGE } from '../_shared/image-limits.ts';
 import { editImageWithReferences } from '../_shared/openai.ts';
 import {
@@ -554,7 +554,35 @@ export async function handleGeneratePortraitIllustration(
           : {}),
         usageContext: { attributionScope: 'family', familyId: version.family_id, actorUserId: user.id, usageRequestId, operation: 'portrait' },
       });
-      await dependencies.putObjectBytes(portraitKey, portraitBytes, 'image/webp');
+      // Sniff the REAL returned bytes: OpenAI has been observed to ignore
+      // `output_format: 'webp'` and return PNG bytes anyway (production
+      // incident -- satori "Invalid WebP" crash, then a multi-MB PNG payload
+      // once the crash itself was defended against by sniffing on the read
+      // side; see compose-share-card's resolveImageMimeType header comment
+      // and `_shared/image-bytes.ts`'s resolveRealImageBytesForStorage).
+      //
+      // `portraitKey` itself CANNOT change extension here, unlike the
+      // memory-illustration generator: `claim_family_member_portrait_
+      // generation` (20260722130000_portrait_generation_workflow_jobs.sql)
+      // reconstructs and validates `attempt_key` server-side against a
+      // hardcoded `'...%s.webp'` format BEFORE this function ever runs, and
+      // `finish_family_member_portrait_generation`'s CAS requires the
+      // finishing key to equal that exact claimed key. Changing the
+      // extension here would need the claimed key and the finished key to
+      // diverge, which needs its own migration (tracked separately -- see
+      // this package's implementation report). What we CAN and DO fix
+      // without touching that contract: re-encoding an oversized PNG
+      // mismatch down to a small JPEG (the dominant cost of the incident --
+      // production profiling found ~2-2.2MB per mismatched portrait) and
+      // storing accurate Content-Type metadata for the real bytes, even
+      // though the key stays `.webp`-suffixed. Downstream consumers already
+      // sniff real bytes rather than trust the extension (same header
+      // comment), so this remains safe.
+      const resolvedOutput = await resolveRealImageBytesForStorage(
+        portraitBytes,
+        MAX_PORTRAIT_REFERENCE_EDGE,
+      );
+      await dependencies.putObjectBytes(portraitKey, resolvedOutput.bytes, resolvedOutput.contentType);
       uploadedAttempt = true;
 
       const { error: finishError } = await supabase.rpc('finish_family_member_portrait_generation', {

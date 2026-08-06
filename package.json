@@ -25,6 +25,7 @@
     "backfill:previews": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-media-previews.ts",
     "backfill:video-posters": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-video-posters.ts",
     "backfill:share-cards": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-share-cards.ts",
+    "backfill:portrait-reencode": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-portrait-reencode.ts",
     "test:e2e:family-fixture": "maestro test .maestro/flows/onboarding/add-family-member-with-fixture.yaml",
     "test:e2e:family-picker": "maestro test .maestro/flows/onboarding/add-family-member-with-picker.yaml",
     "test:e2e:onboarding": "bash supabase/scripts/run-onboarding-maestro.sh",

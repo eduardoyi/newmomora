@@ -712,8 +712,8 @@ Momora uses a **single private R2 bucket** (`R2_BUCKET`, e.g. `momora-prod`) wit
 | `{userId}/family/{memberId}/photo.webp` | Private (presigned) | User-uploaded family photos |
 | `{userId}/family/{memberId}/portrait.webp` | Private (presigned) | AI character portraits |
 | `{userId}/family/{memberId}/portraits/{versionId}/photo.jpg` | Private (presigned) | Immutable portrait-version source photo |
-| `{userId}/family/{memberId}/portraits/{versionId}/portrait/{attemptId}.webp` | Private (presigned) | Immutable durable portrait attempt/output |
-| `{userId}/memories/{memoryId}/illustrations/{generationId}.webp` | Private (presigned) | Immutable AI memory-illustration generation (`text_illustration` type) |
+| `{userId}/family/{memberId}/portraits/{versionId}/portrait/{attemptId}.webp` | Private (presigned) | Immutable durable portrait attempt/output. `.webp` is a REQUEST, not a guarantee — see footnote below. |
+| `{userId}/memories/{memoryId}/illustrations/{generationId}.{webp\|jpg}` | Private (presigned) | Immutable AI memory-illustration generation (`text_illustration` type). See footnote below. |
 | `{userId}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | Private (presigned) | Ordered user-uploaded memory photo/video assets (`media` type) |
 | `{userId}/memories/{memoryId}/media.{ext}` | Private (presigned) | Legacy single media object |
 | `_assets/styles/{illustration_style}.png` | Private (Edge Function read) | Style reference images |
@@ -721,6 +721,29 @@ Momora uses a **single private R2 bucket** (`R2_BUCKET`, e.g. `momora-prod`) wit
 Legacy multi-bucket names in older notes map to these prefixes inside one bucket.
 
 Use **WebP** for user-generated and AI output where quality allows (smaller storage + faster loads). PNG acceptable for style references.
+
+**Byte/extension mismatch (both AI-image rows above):** OpenAI's `images/edits`
+endpoint has been observed to ignore a requested `output_format: 'webp'` and
+return PNG (occasionally JPEG) bytes anyway. `generate-illustration` and
+`generate-portrait-illustration` sniff the REAL returned bytes at the point of
+storage (`_shared/image-bytes.ts`'s `sniffImageFormat`/
+`resolveRealImageBytesForStorage`) and, when they don't match, re-encode to
+JPEG (no vendored webp ENCODER exists — `@jsquash/webp` is decode-only, used
+by `compose-share-card`) instead of storing the mismatch as-is. For memory
+illustrations this also corrects the key's extension (`buildMemoryIllustrationKey`
+takes an optional `'webp' | 'jpg'` extension; `illustration_key` may
+legitimately be either). For portraits, `illustrated_profile_key` STAYS
+`.webp`-suffixed even when the real bytes are re-encoded JPEG: the legacy
+`claim_family_member_portrait_generation` RPC
+(`20260722130000_portrait_generation_workflow_jobs.sql`) validates that exact
+extension server-side before generation runs, so the key can't vary by real
+format without a dedicated migration (not part of this fix). Any code reading
+either key must sniff the real bytes rather than trust the extension —
+`compose-share-card`'s `resolveImageMimeType` is the reference implementation.
+`supabase/scripts/backfill-portrait-reencode.ts` cleans up existing mismatched
+rows across `family_member_portrait_versions.illustrated_profile_key`,
+`memories.illustration_key`, and the legacy `family_members.illustrated_profile_key`.
+See docs/features/memory-sharing.md's changelog for the incident history.
 
 ### Access model
 

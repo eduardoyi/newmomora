@@ -62,21 +62,27 @@ function job(overrides: Partial<PortraitWorkflowJobInputV2> = {}): PortraitWorkf
   };
 }
 
-function createEnvironment(workflowJob: PortraitWorkflowJobInput = job(), outputInitial: Record<string, StoredObject> = {}) {
+function createEnvironment(
+  workflowJob: PortraitWorkflowJobInput = job(),
+  outputInitial: Record<string, StoredObject> = {},
+  // Third+ IMAGES.input() call is the output re-encode path
+  // (resolveOutputBytesForR2); the first two are style/source reference loads.
+  reencodedOutputBytes: number[] | null = null,
+) {
   const portraits = createBucket(outputInitial);
   const profiles = createBucket({ [workflowJob.sourcePhotoKey]: { bytes: new Uint8Array([9, 8, 7]).buffer } });
   const styles = createBucket({ [workflowJob.styleReferenceKey]: { bytes: new Uint8Array([6, 5, 4]).buffer } });
   let transformNumber = 0;
   const images = {
-    input: () => {
+    input: vi.fn(() => {
       transformNumber += 1;
-      const bytes = transformNumber === 1 ? [4, 5, 6] : [7, 8, 9];
+      const bytes = transformNumber === 1 ? [4, 5, 6] : transformNumber === 2 ? [7, 8, 9] : (reencodedOutputBytes ?? [7, 8, 9]);
       const transform = {
         transform: () => transform,
         output: async () => ({ image: () => stream(bytes) }),
       };
       return transform;
-    },
+    }),
   };
   const env = {
     CHARACTER_PORTRAITS: portraits,
@@ -91,7 +97,7 @@ function createEnvironment(workflowJob: PortraitWorkflowJobInput = job(), output
     SUPABASE_BRIDGE_URL: 'https://bridge.test/workflow-illustration-bridge',
     SUPABASE_BRIDGE_HMAC_SECRET: 'memory-bridge-secret',
   } as unknown as Env;
-  return { env, portraits, profiles, styles, workflowJob };
+  return { env, portraits, profiles, styles, images, workflowJob };
 }
 
 function fakeStep(): WorkflowStep {
@@ -351,6 +357,32 @@ describe('portrait Workflow', () => {
       outputKey: setup.workflowJob.outputKey,
       uploadToken: UPLOAD_TOKEN,
     }));
+  });
+
+  it('re-encodes PNG-magic OpenAI output to webp via the Images binding before upload', async () => {
+    const setup = createEnvironment(job(), {}, [40, 41, 42]);
+    // PNG magic bytes (0x89 0x50 0x4e 0x47 0x0d 0x0a 0x1a 0x0a) base64-encoded --
+    // OpenAI has been observed to ignore `output_format: 'webp'` and return
+    // real PNG bytes despite the request.
+    const { fetchMock } = bridgeAndOpenAiFetch(setup.workflowJob, {
+      openAiResponses: [Response.json({ data: [{ b64_json: 'iVBORw0KGgo=' }] })],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await workflowWithEnv(setup.env).run(
+      { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>,
+      fakeStep(),
+    );
+
+    expect(result).toMatchObject({ status: 'ready' });
+    expect(setup.portraits.put).toHaveBeenCalledWith(
+      setup.workflowJob.outputKey,
+      expect.any(ArrayBuffer),
+      expect.objectContaining({ httpMetadata: { contentType: 'image/webp' } }),
+    );
+    const [, storedBytes] = setup.portraits.put.mock.calls[0];
+    expect(Array.from(new Uint8Array(storedBytes as ArrayBuffer))).toEqual([40, 41, 42]);
+    expect(setup.images.input).toHaveBeenCalledTimes(3);
   });
 
   it('allows exactly one retryable primary and one high-fidelity fallback, never a text-only call', async () => {

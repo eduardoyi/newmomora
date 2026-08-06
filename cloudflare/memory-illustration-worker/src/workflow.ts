@@ -11,6 +11,7 @@ import {
   reserveMemoryProviderAttempt,
   reserveMemoryProviderAttemptV1,
 } from './bridge';
+import { resolveOutputBytesForR2 } from './image-output';
 import { editImageWithUsage, ImageProviderError } from './openai';
 import { IMAGE_PRICING_VERSION, priceImageUsage } from './pricing';
 import { loadIllustrationReferences } from './references';
@@ -195,6 +196,7 @@ async function uploadOutputWithLease(
   jobId: string,
   outputKey: string,
   bytes: ArrayBuffer,
+  contentType: string,
   model: IllustrationModel,
 ): Promise<void> {
   await uploadWithLease({
@@ -204,7 +206,7 @@ async function uploadOutputWithLease(
     existingObject: async () => Boolean(await env.MEMORY_ILLUSTRATIONS.head(outputKey)),
     put: async () => {
       const stored = await env.MEMORY_ILLUSTRATIONS.put(outputKey, bytes, {
-        httpMetadata: { contentType: 'image/webp' },
+        httpMetadata: { contentType },
         customMetadata: { model },
       });
       if (!stored) throw new Error('R2_PUT_OUTCOME_AMBIGUOUS');
@@ -264,7 +266,12 @@ async function runImageAttempt(
       throw error;
     }
     queueImageUsageBestEffort(env, job, provider, model, attemptNumber, result.usage, true);
-    await uploadOutputWithLease(env, job.jobId, job.outputKey, result.bytes, model);
+    // Resolved ONCE here, not inside uploadOutputWithLease's `put` -- that
+    // callback may be retried by the lease helper and must reuse the exact
+    // same bytes/contentType across attempts (see portrait-workflow.ts's
+    // matching comment on its own runImageAttempt).
+    const resolved = await resolveOutputBytesForR2(env, result.bytes);
+    await uploadOutputWithLease(env, job.jobId, job.outputKey, resolved.bytes, resolved.contentType, model);
     return { outputKey: job.outputKey, model };
   } finally {
     clearTimeout(timeout);

@@ -226,7 +226,7 @@ For `media` type: the client generates a `memoryId` UUID upfront, presigns a PUT
 |---------------|------|
 | `memories.memory_type` | `text_illustration` \| `text_only` \| `media` — drives AI pipeline and UI rendering |
 | `memories.content` | Required (non-empty) for `text_illustration` and `text_only`; optional caption for `media` |
-| `memories.illustration_key` | R2 object key — set only for `text_illustration` |
+| `memories.illustration_key` | R2 object key — set only for `text_illustration`. Extension matches the REAL stored bytes, not necessarily `.webp`: OpenAI's images/edits endpoint has been observed to ignore the requested `output_format: 'webp'` and return PNG bytes anyway, so `generate-illustration` sniffs the real bytes and stores a re-encoded `.jpg` key when they mismatch (`_shared/image-bytes.ts`'s `resolveRealImageBytesForStorage`; see [memory-sharing.md's changelog](./memory-sharing.md#changelog) for the incident this fixed and `supabase/scripts/backfill-portrait-reencode.ts` for existing-row cleanup). Never assume `.webp` from the column name alone — sniff bytes, same as `compose-share-card`'s `resolveImageMimeType` already does on read. |
 | `memories.illustration_status` | `none` \| `pending` \| `generating` \| `ready` \| `failed`; newly created non-illustration rows use `none`, while a text-only row may retain the status of a hidden illustration |
 | `memories.illustration_generation_started_at` | Server-owned recovery clock. Null legacy rows recover from `updated_at`, then `created_at`; the client never writes it to Postgres (it may optimistically mirror an accepted dispatch in its local cache). |
 | `memories.media_key` | Cover/cache R2 object key for the first media asset |

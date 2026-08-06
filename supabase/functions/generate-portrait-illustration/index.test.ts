@@ -632,6 +632,49 @@ function baseRetriggerDependencies() {
   };
 }
 
+// ── Byte/extension mismatch fixtures (source-of-the-mismatch fix) ──────────
+// OpenAI's images/edits endpoint has been observed to ignore
+// `output_format: 'webp'` and return PNG bytes anyway. These fixtures let
+// tests below exercise the REAL sniff-and-reencode path in
+// `completeGeneration` rather than the sentinel `[9, 9, 9]` bytes used by
+// every other retrigger-harness test (which deliberately fail open, since
+// they're not real image bytes).
+async function buildRealisticPng(size: number): Promise<Uint8Array> {
+  const { Image } = await import("https://deno.land/x/imagescript@1.3.0/mod.ts");
+  const image = new Image(size, size);
+  const clamp = (value: number) => Math.max(0, Math.min(255, value));
+  // Smooth per-pixel gradients, like a real photographic portrait -- a flat
+  // fill or blocky/periodic pattern compresses trivially under PNG's
+  // lossless DEFLATE too and would not exercise the real-world
+  // ~2MB-portrait-PNG size regression this fix targets (see
+  // `_shared/image-bytes.test.ts`'s matching fixture for the same reasoning).
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const r = clamp(Math.floor(128 + 100 * Math.sin(x / 17) * Math.cos(y / 19)));
+      const g = clamp(Math.floor(128 + 100 * Math.sin((x + 30) / 23) * Math.cos((y + 10) / 13)));
+      const b = clamp(Math.floor(128 + 100 * Math.sin((x + 60) / 11) * Math.cos((y + 20) / 29)));
+      image.setPixelAt(x + 1, y + 1, (r << 24) | (g << 16) | (b << 8) | 0xff);
+    }
+  }
+  return await image.encode();
+}
+
+const MISMATCHED_PNG_BYTES = await buildRealisticPng(256);
+
+// Only the 12-byte RIFF....WEBP signature is sniffed -- the real-webp
+// pass-through branch never decodes, so an arbitrary (non-decodable) body
+// after the signature is fine here.
+const FAKE_WEBP_BYTES = new Uint8Array([
+  0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 1, 2, 3, 4,
+]);
+
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
+
+function bytesStartWith(bytes: Uint8Array, signature: number[]): boolean {
+  return signature.every((byte, index) => bytes[index] === byte);
+}
+
 const RETRIGGER_TEST_ENV = {
   SUPABASE_URL: "https://supabase.test",
   SUPABASE_ANON_KEY: "test-anon-key",
@@ -862,6 +905,99 @@ Deno.test(
 
       assertEquals(thrown, undefined);
       assertEquals(putCalls, 1);
+    });
+  },
+);
+
+// ── Byte/extension mismatch fix regression tests ────────────────────────
+
+Deno.test(
+  "generate-portrait-illustration re-encodes a mismatched PNG response to a smaller JPEG payload with accurate Content-Type, keeping the .webp key",
+  async () => {
+    await withRetriggerEnv(async () => {
+      const memoriesCall: MemoriesQueryCall = { eqCalls: [] };
+      const client = buildRetriggerClient([], memoriesCall);
+
+      let putCall: { key: string; bytes: Uint8Array; contentType: string } | undefined;
+      let backgroundTask: Promise<void> | undefined;
+
+      const response = await handleGeneratePortraitIllustration(
+        retriggerRequest(),
+        {
+          ...baseRetriggerDependencies(),
+          createServiceClient: () => client as never,
+          // Real imagescript decode/re-encode, unlike the sentinel
+          // capImageMaxEdge override above -- this exercises the actual
+          // capImageMaxEdgeAsJpeg path resolveRealImageBytesForStorage
+          // calls on a PNG mismatch.
+          editImageWithReferences: async () => MISMATCHED_PNG_BYTES,
+          putObjectBytes: async (key: string, bytes: Uint8Array, contentType: string) => {
+            putCall = { key, bytes, contentType };
+          },
+          fetch: (async () => new Response(null, { status: 200 })) as typeof fetch,
+          waitUntil: (task) => {
+            backgroundTask = task;
+          },
+        },
+      );
+
+      assertEquals(response.status, 200);
+      await backgroundTask;
+
+      assertExists(putCall);
+      // The key stays .webp-suffixed: `claim_family_member_portrait_
+      // generation` validates `attempt_key` against a hardcoded
+      // `'...%s.webp'` format server-side before this function runs, and
+      // `finish_family_member_portrait_generation`'s CAS requires the
+      // finishing key to match exactly -- see completeGeneration's comment
+      // for why extension-correctness for portraits is a tracked follow-up,
+      // not part of this fix.
+      assertEquals(putCall!.key.endsWith(".webp"), true);
+      // The STORED BYTES are real, sniffable JPEG -- never PNG under the
+      // .webp key -- and their Content-Type metadata matches.
+      assertEquals(bytesStartWith(putCall!.bytes, JPEG_SIGNATURE), true);
+      assertEquals(bytesStartWith(putCall!.bytes, PNG_SIGNATURE), false);
+      assertEquals(putCall!.contentType, "image/jpeg");
+      // The actual regression this fix targets: a multi-MB-class PNG
+      // mismatch collapses to a small JPEG instead of being stored as-is.
+      assertEquals(putCall!.bytes.length < MISMATCHED_PNG_BYTES.length / 2, true);
+    });
+  },
+);
+
+Deno.test(
+  "generate-portrait-illustration stores genuine webp bytes unchanged (no re-encode) when OpenAI honors output_format",
+  async () => {
+    await withRetriggerEnv(async () => {
+      const memoriesCall: MemoriesQueryCall = { eqCalls: [] };
+      const client = buildRetriggerClient([], memoriesCall);
+
+      let putCall: { key: string; bytes: Uint8Array; contentType: string } | undefined;
+      let backgroundTask: Promise<void> | undefined;
+
+      const response = await handleGeneratePortraitIllustration(
+        retriggerRequest(),
+        {
+          ...baseRetriggerDependencies(),
+          createServiceClient: () => client as never,
+          editImageWithReferences: async () => FAKE_WEBP_BYTES,
+          putObjectBytes: async (key: string, bytes: Uint8Array, contentType: string) => {
+            putCall = { key, bytes, contentType };
+          },
+          fetch: (async () => new Response(null, { status: 200 })) as typeof fetch,
+          waitUntil: (task) => {
+            backgroundTask = task;
+          },
+        },
+      );
+
+      assertEquals(response.status, 200);
+      await backgroundTask;
+
+      assertExists(putCall);
+      assertEquals(putCall!.key.endsWith(".webp"), true);
+      assertEquals(putCall!.contentType, "image/webp");
+      assertEquals(putCall!.bytes, FAKE_WEBP_BYTES);
     });
   },
 );
