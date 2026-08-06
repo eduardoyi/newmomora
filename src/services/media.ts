@@ -160,6 +160,76 @@ async function invokeMediaUrlChunk(
   return { data, error: null };
 }
 
+// ── Omitted-key self-heal (production gray-box incident) ───────────────────
+// get-media-url resolves each key against its OWNING ROW's CURRENT state
+// (resolveReferencedStorageKeys, get-media-url/index.ts) and OMITS -- never
+// errors -- any key it can't yet resolve/authorize/see-as-referenced. A key
+// requested the instant after its row commits (a fresh memory_media insert,
+// or a memory's illustration_key just having been set by the async
+// pipeline) can lose that visibility race and come back omitted even though
+// the row is genuinely fine a moment later -- indistinguishable, from this
+// client's point of view, from a key that's truly gone (the incident that
+// motivated the server's per-key tolerance in the first place). Before this
+// fix, useMediaUrls' react-query layer had no way to tell the two apart: an
+// omitted key is still a 200 SUCCESS response, so it was cached for the full
+// 50-minute staleTime with zero retry -- a real gray box in the current
+// session, healed only by an app restart (fresh queryClient). Retrying just
+// the OMITTED SUBSET a few times with a short backoff, INSIDE the batcher,
+// before ever resolving the caller, gives the common case (a row that
+// committed a few hundred ms ago) a real chance to resolve -- and still
+// falls through to the same omission-as-before behavior for a key that's
+// genuinely gone, just a bounded ~1.4s later instead of instantly.
+//
+// Client-only fix (src/services/media.ts): ships to already-installed apps
+// only via an EAS OTA update, not a server deploy -- get-media-url itself is
+// unchanged.
+const MISSING_KEY_MAX_ATTEMPTS = 3;
+/** Backoff BEFORE each retry -- index 0 is the wait before attempt 2, index
+ * 1 the wait before attempt 3. Short relative to share-card.ts's
+ * SHARE_CARD_WARM_RETRY_BACKOFF_MS: this races ordinary DB write/read
+ * visibility (typically resolved within one round trip), not Supabase
+ * Edge's WORKER_RESOURCE_LIMIT policing window. */
+const MISSING_KEY_RETRY_BACKOFF_MS: readonly number[] = [300, 600];
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function findMissingKeys(requestedKeys: string[], urls: Record<string, string>): string[] {
+  return requestedKeys.filter((key) => !(key in urls));
+}
+
+/**
+ * Retries `missingKeys` (a chunk's omitted subset) up to
+ * `MISSING_KEY_MAX_ATTEMPTS` total attempts, narrowing to whatever's still
+ * missing after each attempt. Returns whatever it managed to resolve --
+ * anything still missing when attempts run out (or a retry itself errors)
+ * is simply absent from the returned map, same as the original omission.
+ */
+async function resolveMissingKeysWithRetries(
+  missingKeys: string[],
+): Promise<Record<string, string>> {
+  let remaining = missingKeys;
+  const resolvedUrls: Record<string, string> = {};
+
+  for (let attempt = 2; attempt <= MISSING_KEY_MAX_ATTEMPTS && remaining.length > 0; attempt++) {
+    await delay(MISSING_KEY_RETRY_BACKOFF_MS[attempt - 2]);
+
+    const result = await invokeMediaUrlChunk(remaining);
+    if (result.error || !result.data) {
+      // A retry that itself errors isn't worth compounding retries on top
+      // of -- stop and let whatever's still missing fall through as an
+      // omission, same as the pre-fix behavior.
+      break;
+    }
+
+    Object.assign(resolvedUrls, result.data.urls);
+    remaining = findMissingKeys(remaining, result.data.urls);
+  }
+
+  return resolvedUrls;
+}
+
 async function flushMediaUrlBatch(): Promise<void> {
   const keys = pendingKeys ? Array.from(pendingKeys) : [];
   const callers = pendingCallers;
@@ -198,6 +268,26 @@ async function flushMediaUrlBatch(): Promise<void> {
     }
     return;
   }
+
+  // Self-heal each chunk's omitted keys (see the block comment above)
+  // BEFORE merging results into caller responses -- a caller must never
+  // observe the pre-retry, incomplete result.
+  await Promise.all(
+    chunks.map(async (chunk, index) => {
+      const result = chunkResults[index];
+      if (result.error || !result.data) {
+        return;
+      }
+
+      const missing = findMissingKeys(chunk, result.data.urls);
+      if (missing.length === 0) {
+        return;
+      }
+
+      const recovered = await resolveMissingKeysWithRetries(missing);
+      Object.assign(result.data.urls, recovered);
+    }),
+  );
 
   for (const caller of callers) {
     const relevantChunkIndexes = new Set(

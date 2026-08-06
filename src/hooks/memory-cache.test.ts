@@ -262,7 +262,7 @@ describe('prependMemoryToListCaches', () => {
     expect(list?.pages[0]?.memories.map((m) => m.id)).toEqual(['memory-1', 'memory-ancient']);
   });
 
-  it('skips a memory that is already present in a loaded page', () => {
+  it('skips a memory that is already present in a loaded page (same completeness)', () => {
     const queryClient = createQueryClient();
     const existing = buildMemory({ id: 'memory-1', memory_date: '2026-05-24', created_at: '2026-05-24T00:00:00.000Z' });
     queryClient.setQueryData(
@@ -275,6 +275,85 @@ describe('prependMemoryToListCaches', () => {
     const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey(FAMILY_ID));
     expect(list?.pages[0]?.memories).toHaveLength(1);
     expect(list?.pages[0]?.memories[0]?.content).toBe('Hello');
+  });
+
+  // Bug A mechanism #2 (gray-box investigation): useMemoriesRealtime's
+  // INSERT handler fail-opens a still-empty-mediaAssets row (see
+  // fetchAndPrependInsertedMemory, useMemoriesRealtime.ts) when a media
+  // memory's memory_media rows are still in flight after its one retry. If
+  // that empty-asset prepend lands BEFORE the posting queue's own later
+  // prepend of the COMPLETE row (use-pending-memory-uploads.tsx,
+  // postMediaMemory resolves after uploadMemoryMediaAssets +
+  // replaceMemoryTags/replaceMemoryMediaAssets all finish), the old
+  // unconditional "already present -> skip" guard permanently strands the
+  // empty row in cache -- a real gray box that only a full app restart
+  // (fresh queryClient) heals. Reproduces with the pre-fix behavior first:
+  // this assertion documents what SHOULD happen (the more-complete row
+  // wins).
+  it('upgrades an already-present row when the incoming one has media assets the cached copy lacks', () => {
+    const queryClient = createQueryClient();
+    const emptyAssetRow = buildMemory({
+      id: 'memory-media-race',
+      memory_type: 'media',
+      memory_date: '2026-05-24',
+      created_at: '2026-05-24T00:00:00.000Z',
+      mediaAssets: [],
+    });
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([{ memories: [emptyAssetRow], nextCursor: null }]),
+    );
+
+    const completeRow = buildMemory({
+      id: 'memory-media-race',
+      memory_type: 'media',
+      memory_date: '2026-05-24',
+      created_at: '2026-05-24T00:00:00.000Z',
+      mediaAssets: [{ id: 'asset-1' } as MemoryWithTags['mediaAssets'][number]],
+    });
+    prependMemoryToListCaches(queryClient, FAMILY_ID, completeRow);
+
+    const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey(FAMILY_ID));
+    expect(list?.pages[0]?.memories).toHaveLength(1);
+    expect(list?.pages[0]?.memories[0]?.mediaAssets).toHaveLength(1);
+    expect(list?.pages[0]?.memories[0]?.mediaAssets[0]?.id).toBe('asset-1');
+  });
+
+  it('upgrades an already-present row when the incoming one has tagged members the cached copy lacks', () => {
+    const queryClient = createQueryClient();
+    const untaggedRow = buildMemory({ id: 'memory-tag-race', taggedMembers: [] });
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([{ memories: [untaggedRow], nextCursor: null }]),
+    );
+
+    const taggedRow = buildMemory({
+      id: 'memory-tag-race',
+      taggedMembers: [{ id: 'member-1' } as MemoryWithTags['taggedMembers'][number]],
+    });
+    prependMemoryToListCaches(queryClient, FAMILY_ID, taggedRow);
+
+    const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey(FAMILY_ID));
+    expect(list?.pages[0]?.memories[0]?.taggedMembers).toHaveLength(1);
+  });
+
+  it('does NOT downgrade an already-present complete row when a less-complete duplicate arrives later', () => {
+    const queryClient = createQueryClient();
+    const completeRow = buildMemory({
+      id: 'memory-media-race-2',
+      memory_type: 'media',
+      mediaAssets: [{ id: 'asset-1' } as MemoryWithTags['mediaAssets'][number]],
+    });
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([{ memories: [completeRow], nextCursor: null }]),
+    );
+
+    const staleEmptyRow = buildMemory({ id: 'memory-media-race-2', memory_type: 'media', mediaAssets: [] });
+    prependMemoryToListCaches(queryClient, FAMILY_ID, staleEmptyRow);
+
+    const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey(FAMILY_ID));
+    expect(list?.pages[0]?.memories[0]?.mediaAssets).toHaveLength(1);
   });
 
   it('only prepends into a member-filtered cache when the memory tags that member', () => {

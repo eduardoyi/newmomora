@@ -284,6 +284,79 @@ describe('getMediaUrls batching', () => {
     expect(mockedInvoke.mock.calls[1][1]?.body.keys).toEqual(['key-b']);
   });
 
+  // Bug A mechanism #1 (production gray-box incident, docs/plans/...):
+  // get-media-url (supabase/functions/get-media-url/index.ts) OMITS -- not
+  // errors -- a key it can't yet resolve/authorize/see-as-referenced,
+  // returning 200 success with that key simply missing from `urls`. A key
+  // requested the instant after its owning row commits (a fresh
+  // memory_media row, or a memory's illustration_key just having been set)
+  // can lose that visibility race and come back omitted even though the
+  // row/key is genuinely fine a moment later. Before this fix, that omitted
+  // result was cached as an unqualified SUCCESS by useMediaUrls' 50-minute
+  // staleTime with no retry -- a real gray box until app restart cleared
+  // the react-query cache. The fix retries the OMITTED SUBSET a bounded
+  // number of times with a short backoff before resolving the caller, so a
+  // key that only lost a brief visibility race is very likely present by
+  // the time getMediaUrls actually resolves.
+  it('retries an omitted key and resolves once a later attempt returns it (visibility race self-heals)', async () => {
+    jest.useFakeTimers();
+    mockedInvoke
+      .mockResolvedValueOnce({
+        data: { urls: { 'key-a': 'https://example.com/a' }, expiresIn: 300 },
+        error: null,
+      } as never)
+      .mockResolvedValueOnce({
+        data: { urls: { 'key-b': 'https://example.com/b' }, expiresIn: 300 },
+        error: null,
+      } as never);
+
+    const call = getMediaUrls(['key-a', 'key-b']);
+    await jest.advanceTimersByTimeAsync(25); // batch window flush -- initial invoke
+    await jest.advanceTimersByTimeAsync(300); // first retry backoff
+    const result = await call;
+
+    expect(result.error).toBeNull();
+    expect(result.data?.urls['key-a']).toBe('https://example.com/a');
+    expect(result.data?.urls['key-b']).toBe('https://example.com/b');
+    // First call requested both; the retry only re-requested the omitted one.
+    expect(mockedInvoke).toHaveBeenCalledTimes(2);
+    expect(mockedInvoke.mock.calls[1][1]?.body.keys).toEqual(['key-b']);
+  });
+
+  it('stops retrying after a bounded number of attempts and resolves with the key still omitted (genuinely gone)', async () => {
+    jest.useFakeTimers();
+    mockedInvoke.mockResolvedValue({
+      data: { urls: {}, expiresIn: 300 },
+      error: null,
+    } as never);
+
+    const call = getMediaUrls(['key-gone']);
+    await jest.advanceTimersByTimeAsync(25); // batch window flush -- initial invoke
+    await jest.advanceTimersByTimeAsync(300); // first retry backoff
+    await jest.advanceTimersByTimeAsync(600); // second retry backoff
+    const result = await call;
+
+    expect(result.error).toBeNull();
+    expect(result.data?.urls['key-gone']).toBeUndefined();
+    // Bounded: the initial request plus a small, fixed number of retries --
+    // not unbounded polling for a key that's genuinely never coming back.
+    expect(mockedInvoke).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry keys that were already present in the first response', async () => {
+    jest.useFakeTimers();
+    mockedInvoke.mockResolvedValue({
+      data: { urls: { 'key-a': 'https://example.com/a' }, expiresIn: 300 },
+      error: null,
+    } as never);
+
+    const call = getMediaUrls(['key-a']);
+    await jest.advanceTimersByTimeAsync(25);
+    await call;
+
+    expect(mockedInvoke).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the empty-keys request un-batched', async () => {
     mockedInvoke.mockResolvedValue({
       data: null,

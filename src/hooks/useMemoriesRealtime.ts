@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { supabase } from '@/lib/supabase';
-import { calendarMemoriesQueryKeyBase } from '@/hooks/queryKeys';
+import { handleIllustrationReadyTransition } from '@/hooks/illustration-ready-transition';
 import {
   findMemoryInListCache,
   patchMemoryInCaches,
@@ -126,8 +126,11 @@ export function useMemoriesRealtime(familyId: string | null | undefined): void {
           });
 
           if (row.illustration_status === 'ready' && wasGenerating) {
-            queryClient.invalidateQueries({ queryKey: ['media-urls'] });
-            queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+            // Mirrors useMemory (useMemories.ts) and applyStatusPatches
+            // (useGenerationStatusPolling.ts) observing the same
+            // transition -- handleIllustrationReadyTransition's dedupe
+            // keeps this to one share-card warm across all three.
+            handleIllustrationReadyTransition(queryClient, row.id, row.illustration_generation_id);
           }
 
           // `illustration_completed` (docs/plans/analytics-tracking.md Tier

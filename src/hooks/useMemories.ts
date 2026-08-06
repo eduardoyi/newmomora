@@ -14,12 +14,12 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
 import { useGenerationStatusPolling } from '@/hooks/useGenerationStatusPolling';
 import {
-  calendarMemoriesQueryKeyBase,
   familyMembersQueryKeyBase,
   memoriesQueryKey,
   memoriesSearchQueryKey,
   memoryDetailQueryKey,
 } from '@/hooks/queryKeys';
+import { handleIllustrationReadyTransition } from '@/hooks/illustration-ready-transition';
 import {
   findMemoryInListCache,
   invalidateMemoryQueries,
@@ -226,7 +226,21 @@ export function useMemoryMutations() {
       // text_illustration memories (media memories are posted through the
       // pending-uploads queue, see use-pending-memory-uploads.tsx), so this
       // always warms the per-MEMORY card.
-      warmShareCardForMemoryFireAndForget(memory);
+      //
+      // A fresh text_illustration memory's illustration is guaranteed still
+      // pending/generating at this exact instant (the async pipeline
+      // dispatches AFTER createMemory() returns -- see
+      // runMemoryIllustrationPipeline), so warming here would compose+cache
+      // a card that renders without the illustration it's supposed to show
+      // -- the production incident 20260806140000_share_card_illustration_key_trigger.sql
+      // documents. Skip it entirely for text_illustration; the central
+      // ready-transition handler (handleIllustrationReadyTransition,
+      // illustration-ready-transition.ts) warms it once the illustration
+      // actually finishes. text_only has no illustration to wait for, so it
+      // still warms immediately.
+      if (memory.memory_type !== 'text_illustration') {
+        warmShareCardForMemoryFireAndForget(memory);
+      }
 
       if (variables.content && extractUrls(variables.content).length > 0) {
         fireLinkPreviewFetch(queryClient, familyId, memory.id);
@@ -903,8 +917,7 @@ export function useMemory(memoryId: string | undefined) {
     }
 
     void refetchMemory();
-    queryClient.invalidateQueries({ queryKey: ['media-urls'] });
-    queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+    handleIllustrationReadyTransition(queryClient, memory.id, memory.illustration_generation_id);
   }, [query.data, query.isPlaceholderData, refetchMemory, queryClient]);
 
   const resolvedMemory = useMemo(() => {

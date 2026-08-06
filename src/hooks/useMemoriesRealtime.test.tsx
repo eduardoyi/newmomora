@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase';
 import { trackEvent } from '@/services/analytics';
 import { fetchMemoryById } from '@/services/memories';
 import type { Memory, MemoriesPage, MemoryWithTags } from '@/services/memories';
+import { warmShareCardFireAndForget } from '@/services/share-card';
 
 jest.mock('@/lib/supabase', () => ({
   supabase: {
@@ -24,10 +25,17 @@ jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
 }));
 
+jest.mock('@/services/share-card', () => ({
+  warmShareCardFireAndForget: jest.fn(),
+}));
+
 const mockedChannel = supabase.channel as jest.MockedFunction<typeof supabase.channel>;
 const mockedRemoveChannel = supabase.removeChannel as jest.MockedFunction<typeof supabase.removeChannel>;
 const mockedFetchMemoryById = fetchMemoryById as jest.MockedFunction<typeof fetchMemoryById>;
 const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
+const mockedWarmShareCardFireAndForget = warmShareCardFireAndForget as jest.MockedFunction<
+  typeof warmShareCardFireAndForget
+>;
 
 const FAMILY_ID = 'family-1';
 
@@ -220,6 +228,49 @@ describe('useMemoriesRealtime', () => {
 
     expect(mockedTrackEvent).toHaveBeenCalledWith('illustration_completed', { outcome: 'failed' });
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['media-urls'] });
+  });
+
+  // Bug B (docs/plans/share-card-store-through.md's incident follow-up,
+  // 20260806140000_share_card_illustration_key_trigger.sql): realtime is
+  // one of three independent observers of a ready transition -- this proves
+  // it fires the central handleIllustrationReadyTransition warm too, not
+  // just its cache invalidations.
+  it('warms the share card when an UPDATE transitions to ready', () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([buildMemoryWithTags({ id: 'memory-warm-rt-1', illustration_status: 'generating' })]),
+    );
+
+    renderHook(() => useMemoriesRealtime(FAMILY_ID), { wrapper });
+
+    fake.emit('UPDATE', {
+      new: buildMemoryRow({
+        id: 'memory-warm-rt-1',
+        illustration_status: 'ready',
+        illustration_key: 'key.webp',
+        illustration_generation_id: 'gen-rt-1',
+      }),
+      old: { id: 'memory-warm-rt-1' },
+    });
+
+    expect(mockedWarmShareCardFireAndForget).toHaveBeenCalledTimes(1);
+    expect(mockedWarmShareCardFireAndForget).toHaveBeenCalledWith('memory-warm-rt-1');
+  });
+
+  it('does not warm the share card when an UPDATE transitions to failed', () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([buildMemoryWithTags({ id: 'memory-warm-rt-failed-1', illustration_status: 'generating' })]),
+    );
+
+    renderHook(() => useMemoriesRealtime(FAMILY_ID), { wrapper });
+
+    fake.emit('UPDATE', {
+      new: buildMemoryRow({ id: 'memory-warm-rt-failed-1', illustration_status: 'failed' }),
+      old: { id: 'memory-warm-rt-failed-1' },
+    });
+
+    expect(mockedWarmShareCardFireAndForget).not.toHaveBeenCalled();
   });
 
   it('does not invalidate media-urls when the row was not previously generating', () => {

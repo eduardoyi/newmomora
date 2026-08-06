@@ -190,14 +190,60 @@ function memoryBelongsToListKey(memory: MemoryWithTags, queryKey: readonly unkno
   return false;
 }
 
+// True when `incoming` carries more mediaAssets or taggedMembers than
+// `cached` for what is otherwise the SAME row (same id). This is the signal
+// used below to decide whether a duplicate prepend should upgrade the
+// cached copy in place rather than no-op.
+function isMoreCompleteMemory(incoming: MemoryWithTags, cached: MemoryWithTags): boolean {
+  return (
+    incoming.mediaAssets.length > cached.mediaAssets.length ||
+    incoming.taggedMembers.length > cached.taggedMembers.length
+  );
+}
+
+function replaceMemoryInPages(
+  data: InfiniteData<MemoriesPage>,
+  memory: MemoryWithTags,
+): InfiniteData<MemoriesPage> {
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      memories: page.memories.map((candidate) => (candidate.id === memory.id ? memory : candidate)),
+    })),
+  };
+}
+
 function insertMemorySorted(
   data: InfiniteData<MemoriesPage>,
   memory: MemoryWithTags,
 ): InfiniteData<MemoriesPage> {
-  // Already present -- skip. A mutation's own onSuccess and a realtime
-  // INSERT (Workstream D) can otherwise race and duplicate the row.
-  if (data.pages.some((page) => page.memories.some((candidate) => candidate.id === memory.id))) {
-    return data;
+  // A mutation's own onSuccess and a realtime INSERT (Workstream D) can
+  // race and duplicate the row -- when the id is already present, UPGRADE
+  // the cached copy in place if the incoming one is more complete (more
+  // mediaAssets/taggedMembers) instead of unconditionally skipping it.
+  //
+  // Bug A mechanism #2 (production gray-box incident): useMemoriesRealtime's
+  // INSERT handler (fetchAndPrependInsertedMemory, useMemoriesRealtime.ts)
+  // fail-opens a still-empty-mediaAssets row after its one retry when a
+  // media memory's memory_media rows are still in flight (the memories row
+  // itself commits before replaceMemoryTags/replaceMemoryMediaAssets do --
+  // see continueCreateMediaMemory, services/memories.ts). If that empty-
+  // asset prepend landed BEFORE the posting queue's own later prepend of
+  // the COMPLETE row (use-pending-memory-uploads.tsx, after postMediaMemory
+  // resolves), the old unconditional "already present -> skip" guard
+  // permanently stranded the empty row in cache -- a real gray box that
+  // only a full app restart (fresh queryClient, no incremental prepend)
+  // healed. An equally-or-less-complete incoming row (the common case --
+  // realtime observing what the queue already prepended, or a stale
+  // duplicate racing behind an already-complete cached row) still no-ops,
+  // same as before this fix.
+  const existing = data.pages
+    .flatMap((page) => page.memories)
+    .find((candidate) => candidate.id === memory.id);
+
+  if (existing) {
+    return isMoreCompleteMemory(memory, existing) ? replaceMemoryInPages(data, memory) : data;
   }
 
   const pages = data.pages.map((page) => ({ ...page, memories: [...page.memories] }));

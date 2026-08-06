@@ -2,6 +2,7 @@ import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-quer
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { handleIllustrationReadyTransition } from '@/hooks/illustration-ready-transition';
 import { calendarMemoriesQueryKeyBase } from '@/hooks/queryKeys';
 import { isMemoriesListQueryKey, patchMemoryInCaches } from '@/hooks/memory-cache';
 import { useIsRealtimeLive } from '@/hooks/realtime-status';
@@ -119,10 +120,12 @@ function applyStatusPatches(
 
     // Mirrors the transition handling in useMemory (useMemories.ts): a
     // memory's illustration just finished, so signed media URLs and the
-    // calendar's cached rows for it need a fresh look.
+    // calendar's cached rows for it need a fresh look, and (deduped against
+    // the detail hook / realtime observing the same transition) the
+    // share-card cache warm fires here too -- see
+    // handleIllustrationReadyTransition's doc comment (memory-cache.ts).
     if (status.illustration_status === 'ready' && isMemoryGenerating(previous)) {
-      queryClient.invalidateQueries({ queryKey: ['media-urls'] });
-      queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+      handleIllustrationReadyTransition(queryClient, status.id, status.illustration_generation_id);
     }
 
     // `illustration_completed` (docs/plans/analytics-tracking.md Tier 2) --

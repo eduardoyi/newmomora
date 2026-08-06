@@ -24,7 +24,7 @@ import {
   type MemoryWithTags,
 } from '@/services/memories';
 import { fetchLinkPreviews, notifyFamilyActivity } from '@/services/ai';
-import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
+import { warmShareCardFireAndForget, warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -67,6 +67,7 @@ jest.mock('@/services/ai', () => ({
 
 jest.mock('@/services/share-card', () => ({
   warmShareCardForMemoryFireAndForget: jest.fn(),
+  warmShareCardFireAndForget: jest.fn(),
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
@@ -93,6 +94,9 @@ const mockedNotifyFamilyActivity = notifyFamilyActivity as jest.MockedFunction<
 const mockedFetchLinkPreviews = fetchLinkPreviews as jest.MockedFunction<typeof fetchLinkPreviews>;
 const mockedWarmShareCard = warmShareCardForMemoryFireAndForget as jest.MockedFunction<
   typeof warmShareCardForMemoryFireAndForget
+>;
+const mockedWarmShareCardFireAndForget = warmShareCardFireAndForget as jest.MockedFunction<
+  typeof warmShareCardFireAndForget
 >;
 const mockedFetchMemoryById = fetchMemoryById as jest.MockedFunction<typeof fetchMemoryById>;
 const mockedRetryMemoryIllustration = retryMemoryIllustration as jest.MockedFunction<
@@ -399,6 +403,62 @@ describe('useMemories integration', () => {
         memory_type: 'text_only',
         memory_date: '2026-05-26',
         created_at: 'c1',
+        taggedMembers: [],
+        mediaAssets: [],
+      };
+      mockedCreateMemory.mockResolvedValue({ data: created, error: null });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await result.current.createMemory({
+        content: 'A quiet afternoon',
+        memoryDate: '2026-05-26',
+        taggedMemberIds: [],
+      });
+
+      expect(mockedWarmShareCard).toHaveBeenCalledTimes(1);
+      expect(mockedWarmShareCard).toHaveBeenCalledWith(created);
+    });
+
+    // Bug B (docs/plans/share-card-store-through.md's incident follow-up,
+    // 20260806140000_share_card_illustration_key_trigger.sql): a fresh
+    // text_illustration memory's illustration is still pending/generating
+    // the instant createMemory() resolves (the async pipeline dispatches
+    // afterward) -- warming here would compose+cache a card that renders
+    // without the illustration. This is the client-side half of the fix;
+    // the ready-transition tests below cover the replacement warm timing.
+    it('does NOT fire warmShareCardForMemoryFireAndForget immediately when creating a text_illustration memory', async () => {
+      const created = {
+        id: 'memory-illustrated-create-1',
+        memory_type: 'text_illustration',
+        memory_date: '2026-05-26',
+        created_at: 'c1',
+        illustration_status: 'pending',
+        taggedMembers: [],
+        mediaAssets: [],
+      };
+      mockedCreateMemory.mockResolvedValue({ data: created, error: null });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await result.current.createMemory({
+        content: 'A little illustrated moment',
+        memoryDate: '2026-05-26',
+        taggedMemberIds: [],
+      });
+
+      expect(mockedWarmShareCard).not.toHaveBeenCalled();
+    });
+
+    it('still fires warmShareCardForMemoryFireAndForget immediately when creating a text_only memory (nothing async to race)', async () => {
+      const created = {
+        id: 'memory-text-only-create-1',
+        memory_type: 'text_only',
+        memory_date: '2026-05-26',
+        created_at: 'c1',
+        illustration_status: 'none',
         taggedMembers: [],
         mediaAssets: [],
       };
@@ -872,6 +932,80 @@ describe('useMemories integration', () => {
 
       expect(result.current.data).toBeUndefined();
       expect(result.current.isLoading).toBe(true);
+    });
+  });
+
+  // Bug B (docs/plans/share-card-store-through.md's incident follow-up,
+  // 20260806140000_share_card_illustration_key_trigger.sql): useMemory's
+  // detail-hook effect is one of three independent observers of an
+  // illustration ready transition (the shared generation-status poll and
+  // useMemoriesRealtime are the other two, covered in their own test
+  // files) -- this proves it fires the central
+  // handleIllustrationReadyTransition warm on that transition, replacing
+  // the premature create-time warm the tests above prove is now skipped.
+  describe('illustration ready transition warms the share card (useMemory)', () => {
+    it('warms the share card once when the detail query observes a pending/generating -> ready transition', async () => {
+      const queryClient = createQueryClient();
+      mockedFetchMemoryById
+        .mockResolvedValueOnce({
+          data: {
+            id: 'memory-ready-transition-1',
+            memory_type: 'text_illustration',
+            illustration_status: 'generating',
+            illustration_generation_id: 'gen-detail-1',
+            taggedMembers: [],
+            mediaAssets: [],
+          } as never,
+          error: null,
+        })
+        .mockResolvedValueOnce({
+          data: {
+            id: 'memory-ready-transition-1',
+            memory_type: 'text_illustration',
+            illustration_status: 'ready',
+            illustration_generation_id: 'gen-detail-1',
+            taggedMembers: [],
+            mediaAssets: [],
+          } as never,
+          error: null,
+        });
+
+      const { result } = renderHook(() => useMemory('memory-ready-transition-1'), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      await waitFor(() => expect(result.current.data?.illustration_status).toBe('generating'));
+      expect(mockedWarmShareCardFireAndForget).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await result.current.refetch();
+      });
+
+      await waitFor(() => expect(result.current.data?.illustration_status).toBe('ready'));
+      expect(mockedWarmShareCardFireAndForget).toHaveBeenCalledTimes(1);
+      expect(mockedWarmShareCardFireAndForget).toHaveBeenCalledWith('memory-ready-transition-1');
+    });
+
+    it('does not warm when the first real fetch already shows ready (no prior pending/generating observed this mount)', async () => {
+      const queryClient = createQueryClient();
+      mockedFetchMemoryById.mockResolvedValue({
+        data: {
+          id: 'memory-already-ready-1',
+          memory_type: 'text_illustration',
+          illustration_status: 'ready',
+          illustration_generation_id: 'gen-detail-2',
+          taggedMembers: [],
+          mediaAssets: [],
+        } as never,
+        error: null,
+      });
+
+      const { result } = renderHook(() => useMemory('memory-already-ready-1'), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+
+      await waitFor(() => expect(result.current.data?.illustration_status).toBe('ready'));
+      expect(mockedWarmShareCardFireAndForget).not.toHaveBeenCalled();
     });
   });
 

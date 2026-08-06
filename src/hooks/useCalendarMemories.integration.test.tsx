@@ -20,6 +20,15 @@ jest.mock('@/services/memories', () => ({
   fetchOldestMemoryDate: jest.fn(),
 }));
 
+// useCalendarMemoriesInRange mounts useGenerationStatusPolling, which (via
+// illustration-ready-transition.ts) can fire a share-card warm on a ready
+// transition -- mock it out so this file never touches the real Supabase
+// client construction (services/share-card.ts -> lib/supabase.ts), which
+// this test environment can't construct (no native AsyncStorage/WebSocket).
+jest.mock('@/services/share-card', () => ({
+  warmShareCardFireAndForget: jest.fn(),
+}));
+
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedFetchMemoriesInDateRange = fetchMemoriesInDateRange as jest.MockedFunction<

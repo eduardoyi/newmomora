@@ -14,6 +14,7 @@ import {
 import { trackEvent } from '@/services/analytics';
 import { fetchMemoryGenerationStatuses } from '@/services/memories';
 import type { MemoriesPage, MemoryWithTags } from '@/services/memories';
+import { warmShareCardFireAndForget } from '@/services/share-card';
 
 jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
@@ -23,6 +24,9 @@ jest.mock('@/services/memories', () => ({
 jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
 }));
+jest.mock('@/services/share-card', () => ({
+  warmShareCardFireAndForget: jest.fn(),
+}));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
@@ -30,6 +34,9 @@ const mockedFetchStatuses = fetchMemoryGenerationStatuses as jest.MockedFunction
   typeof fetchMemoryGenerationStatuses
 >;
 const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
+const mockedWarmShareCardFireAndForget = warmShareCardFireAndForget as jest.MockedFunction<
+  typeof warmShareCardFireAndForget
+>;
 
 const FAMILY_ID = 'family-1';
 
@@ -218,6 +225,61 @@ describe('useGenerationStatusPolling', () => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['media-urls'] }),
     );
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['calendar-memories'] });
+  });
+
+  // Bug B (docs/plans/share-card-store-through.md's incident follow-up,
+  // 20260806140000_share_card_illustration_key_trigger.sql): the poll is
+  // one of three independent observers of a ready transition -- this proves
+  // it fires the central handleIllustrationReadyTransition warm, not just
+  // its cache invalidations.
+  it('warms the share card once when a status transitions to ready', async () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([buildMemory({ id: 'memory-warm-1', illustration_status: 'generating' })]),
+    );
+    mockedFetchStatuses.mockResolvedValue({
+      data: [
+        {
+          id: 'memory-warm-1',
+          illustration_status: 'ready',
+          illustration_key: 'key.webp',
+          illustration_generation_id: 'gen-poll-1',
+          emotion: 'joy',
+          updated_at: '2026-05-24T00:00:01.000Z',
+        },
+      ],
+      error: null,
+    });
+
+    renderHook(() => useGenerationStatusPolling(), { wrapper });
+
+    await waitFor(() => expect(mockedWarmShareCardFireAndForget).toHaveBeenCalledTimes(1));
+    expect(mockedWarmShareCardFireAndForget).toHaveBeenCalledWith('memory-warm-1');
+  });
+
+  it('does not warm the share card on a failed transition', async () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([buildMemory({ id: 'memory-warm-failed-1', illustration_status: 'pending' })]),
+    );
+    mockedFetchStatuses.mockResolvedValue({
+      data: [
+        {
+          id: 'memory-warm-failed-1',
+          illustration_status: 'failed',
+          illustration_key: null,
+          illustration_generation_id: null,
+          emotion: null,
+          updated_at: '2026-05-24T00:00:01.000Z',
+        },
+      ],
+      error: null,
+    });
+
+    renderHook(() => useGenerationStatusPolling(), { wrapper });
+
+    await waitFor(() => expect(mockedFetchStatuses).toHaveBeenCalled());
+    expect(mockedWarmShareCardFireAndForget).not.toHaveBeenCalled();
   });
 
   // Wake-from-idle (subtle per the plan): refetchInterval is only
