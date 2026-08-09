@@ -111,7 +111,7 @@ const frame = {
 const videoFrame = { ...frame, id: 'memory-1:video', kind: 'video', durationMs: 6000 };
 const item = {
   id: 'package-1', familyId: 'family-1', dailySetId: 'daily-1', packageType: 'archive_mix',
-  displayKind: 'From your archive', title: 'A little while ago', era: '2024', tint: 'joy',
+  displayKind: 'From your archive', title: 'A little look back', era: '2024', tint: 'joy',
   memories: [
     { ...frame.memory, id: 'memory-1' }, { ...frame.memory, id: 'memory-2' },
     { ...frame.memory, id: 'memory-3' }, { ...frame.memory, id: 'memory-4' },
@@ -540,7 +540,7 @@ describe('LookingBackViewerScreen route integration', () => {
     const screen = await renderViewer();
     expect(screen.getByTestId('looking-back-complete')).toBeTruthy();
     expect(screen.queryByText('Every one of them is still in your timeline.')).toBeNull();
-    expect(screen.getByText('That was 4 memories from a little while ago.')).toBeTruthy();
+    expect(screen.getByText('That was 4 memories from a little look back.')).toBeTruthy();
     expect(screen.getByText('Back to your timeline')).toBeTruthy();
     expect(screen.getByText('Play it again')).toBeTruthy();
   });
@@ -555,5 +555,29 @@ describe('LookingBackViewerScreen route integration', () => {
     };
     const screen = await renderViewer();
     expect(screen.getByText('That was 4 memories from Enzo at 1.')).toBeTruthy();
+  });
+
+  it('keeps leading From titles grammatical in completion copy', async () => {
+    configurePlayback({ phase: 'complete' });
+    const firstYearPackage = { ...item, packageType: 'member_at_age', title: "From Mara's first year" };
+    packagesValue = { ...packagesValue, viewerPackages: [firstYearPackage], packages: [firstYearPackage] };
+    sessionValue = {
+      ...sessionValue,
+      packageSnapshot: { ...sessionValue.packageSnapshot, value: firstYearPackage },
+    };
+    const screen = await renderViewer();
+    expect(screen.getByText("That was 4 memories from Mara's first year.")).toBeTruthy();
+  });
+
+  it('keeps month titles capitalized in completion copy', async () => {
+    configurePlayback({ phase: 'complete' });
+    const monthPackage = { ...item, packageType: 'month_archive', title: 'From April 2025' };
+    packagesValue = { ...packagesValue, viewerPackages: [monthPackage], packages: [monthPackage] };
+    sessionValue = {
+      ...sessionValue,
+      packageSnapshot: { ...sessionValue.packageSnapshot, value: monthPackage },
+    };
+    const screen = await renderViewer();
+    expect(screen.getByText('That was 4 memories from April 2025.')).toBeTruthy();
   });
 });

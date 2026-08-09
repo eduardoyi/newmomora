@@ -50,7 +50,7 @@ const timelineMemory = {
 };
 const lookingBackPackage = {
   id: 'package-1', familyId: 'family-a', dailySetId: 'set-a', packageType: 'archive_mix',
-  displayKind: 'From your archive', title: 'A little while ago', era: '2024', tint: 'joy',
+  displayKind: 'From your archive', title: 'A little look back', era: '2024', tint: 'joy',
   memories: [{ ...timelineMemory, id: 'old-1' }, { ...timelineMemory, id: 'old-2' }, { ...timelineMemory, id: 'old-3' }, { ...timelineMemory, id: 'old-4' }],
   view: { firstViewedAt: '2026-08-08T09:00:00.000Z' },
 };

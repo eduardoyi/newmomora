@@ -420,10 +420,11 @@ function FallbackClose({ onClose }: { onClose: () => void }) {
 }
 
 function Completion({ item, onReplay, onClose }: { item: LookingBackPackageWithMemories; onReplay: () => void; onClose: () => void }) {
+  const hasLeadingFrom = /^from\s+/i.test(item.title);
   const rawPackageName = item.title.replace(/^from\s+/i, '');
-  // Keep a child's proper name intact, while sentence-style archive titles
-  // read naturally after “from” ("from a year ago", not "from A year ago").
-  const packageName = item.packageType === 'member_at_age'
+  // Keep proper names and date titles intact, while sentence-style archive
+  // titles read naturally after “from” ("from a year ago", not "from A year ago").
+  const packageName = item.packageType === 'member_at_age' || hasLeadingFrom
     ? rawPackageName
     : `${rawPackageName.charAt(0).toLowerCase()}${rawPackageName.slice(1)}`;
   const memoryLabel = item.memories.length === 1 ? 'memory' : 'memories';

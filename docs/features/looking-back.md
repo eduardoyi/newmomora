@@ -1,7 +1,7 @@
 # Feature: Looking Back
 
 **Status:** `in-progress`
-**Last updated:** 2026-08-08
+**Last updated:** 2026-08-09
 **PRD reference:** [Journey C](../PRD.md#journey-c--revisit), [§6.5](../PRD.md#65-memory-organization)
 
 ## Overview
@@ -18,6 +18,9 @@ prompt.
 - The top of a populated Timeline is ordered as date/title, **This week**,
   **Looking back**, then **Recently** and the normal memory feed.
 - Packages are stable for one family-local day. Viewed state is personal.
+- Package titles are recipe-specific: age-zero packages use `From [Name]'s first
+  year`, month packages use `From [Month YYYY]`, and mixed archive packages use
+  `A little look back`.
 - The viewer opens with a title card and an explicit **Start** button. Starting
   begins the memory carousel unpaused; memory frames then auto-advance and
   support tap navigation, hold pause, Open memory, completion and replay.
@@ -209,6 +212,7 @@ LOOKING_BACK_E2E_PASSWORD='<same synthetic local password>' \
 
 | Date | Change |
 |---|---|
+| 2026-08-09 | Added first-year age-zero titles, month-specific archive titles, and `A little look back` for mixed archive packages; kept completion copy grammatical for titles beginning with `From` |
 | 2026-08-08 | Replaced the passive intro instruction with explicit unpaused Start; added bounded preview/original image recovery and video-poster loading treatment; changed completion copy to name the package; and limited daily selection to one package per recipe with soft age-subject rotation |
 | 2026-08-08 | Removed the nested Timeline header bottom safe-area inset that created an oversized Android gap before the first Recent memory |
 | 2026-08-08 | Android stabilization: Timeline section order, preview-backed photo recovery, reliable intro/detail pause ownership, single media fade, fresh reopen, final-frame completion, equal-width progress, and simplified completion copy |

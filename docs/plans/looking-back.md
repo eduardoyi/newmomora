@@ -257,10 +257,10 @@ and documentation:
 | `on_this_day` | One candidate per prior year containing 4–10 memories on that exact month/day; at least one year old | `On this day` / `Two years ago today` |
 | `one_year_ago` | Memories in the seven-day window centered on the date one year ago | `A year ago` / `This week, one year ago` |
 | `around_this_time` | Memories within ±7 calendar days across prior years, leap-day safe | `Around this time` / templated year range |
-| `member_at_age` | Memories tagging one member while their age-at-memory is the same integer age from 0–17 | `Lila at two` / templated year or age |
-| `month_archive` | 4–10 memories from one past calendar month/year | `From your archive` / `August 2025` |
+| `member_at_age` | Memories tagging one member while their age-at-memory is the same integer age from 0–17 | `[Name] at [age]` for ages 1–17 / `From [Name]'s first year` at age 0 |
+| `month_archive` | 4–10 memories from one past calendar month/year | `From your archive` / `From August 2025` |
 | `written_archive` | Text-only memories older than 90 days | `From your archive` / `Small things, written down` |
-| `archive_mix` | Deterministically seeded fallback across eligible older memories | `From your archive` / templated era |
+| `archive_mix` | Deterministically seeded fallback across eligible older memories | `From your archive` / `A little look back` |
 
 V1 deliberately excludes semantic packages such as `Quiet mornings`, `The
 summer of the hose`, locations, milestones, or "best" memories. Momora does

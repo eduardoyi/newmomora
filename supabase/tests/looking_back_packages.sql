@@ -1,6 +1,6 @@
 begin;
 
-select plan(57);
+select plan(59);
 
 insert into auth.users (id, email, is_anonymous)
 values
@@ -133,10 +133,37 @@ insert into public.looking_back_packages (
   current_date - 1,
   'member_at_age',
   '83000000-0000-4000-8000-000000000003',
-  'Looking back', 'Child A at 0', 'From your archive',
+  'Looking back', 'From Child A''s first year', 'From your archive',
   'member_at_age:83000000-0000-4000-8000-000000000003:0',
   repeat('a', 64), 0,
   transaction_timestamp() - interval '1 day'
+);
+-- Keep the current fixture focused on the age-zero title branch by giving the
+-- alternate age candidate a recent recipe exposure.
+insert into public.looking_back_daily_sets (id, family_id, package_date, timezone_name, refresh_after, created_at)
+values (
+  '86400000-0000-4000-8000-000000000003',
+  '82000000-0000-4000-8000-000000000010',
+  current_date - 2,
+  'UTC',
+  (current_date - 1)::timestamp at time zone 'UTC',
+  transaction_timestamp() - interval '2 days'
+);
+insert into public.looking_back_packages (
+  id, daily_set_id, family_id, package_date, package_type,
+  subject_family_member_id, display_kind, display_title, display_era,
+  recipe_identity, signature, position, created_at
+) values (
+  '86400000-0000-4000-8000-000000000004',
+  '86400000-0000-4000-8000-000000000003',
+  '82000000-0000-4000-8000-000000000010',
+  current_date - 2,
+  'archive_mix',
+  null,
+  'From your archive', 'A little look back', 'From your archive',
+  'member_at_age:83000000-0000-4000-8000-000000000004:1',
+  repeat('b', 64), 0,
+  transaction_timestamp() - interval '2 days'
 );
 
 insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
@@ -330,11 +357,18 @@ select ok(
   ),
   'stored signature is computed from the final, de-overlapped item set'
 );
-
 select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000007', true);
 select lives_ok(
   $$select * from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000004')$$,
   'the memory-cooldown fixture materializes a current set'
+);
+select is(
+  (select display_title from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000004'
+     and package_date = current_date
+     and package_type = 'archive_mix'),
+  'A little look back',
+  'archive mixes use the calm rediscovery title'
 );
 select ok(
   not exists (
@@ -381,6 +415,14 @@ select is(
      and package_type = 'member_at_age'),
   '83000000-0000-4000-8000-000000000004'::uuid,
   'the age candidate rotates away from a recently featured member when another is eligible'
+);
+select is(
+  (select display_title from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000010'
+     and package_date = current_date
+     and package_type = 'member_at_age'),
+  'From Child B''s first year',
+  'age-zero packages use first-year copy'
 );
 
 select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000010', true);

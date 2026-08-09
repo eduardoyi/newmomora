@@ -478,7 +478,10 @@ recent `recipe_identity` receives a soft three-day ranking penalty. Within
 preceding three days receive an additional soft penalty before the
 deterministic day hash. Exact final-package (14-day) and included-memory
 (7-day) cooldowns remain hard. Existing daily sets are immutable, so selector
-changes affect only later materialization intervals.
+changes affect only later materialization intervals. Display-title templates
+are `From [Name]'s first year` for age-zero packages, `From [Month YYYY]` for
+month archives, and `A little look back` for mixed archive fallback packages;
+the title-copy migration backfills already-materialized package rows.
 
 ### 2.2 Indexes
 
