@@ -14,11 +14,13 @@ import {
   calendarMemoriesQueryKeyBase,
   familyMembershipsQueryKeyBase,
   familyMembersQueryKeyBase,
+  lookingBackQueryKeyBase,
   memoriesQueryKeyBase,
   portraitVersionsQueryKeyBase,
   userProfileQueryKeyBase,
 } from '@/hooks/queryKeys';
 import { queryClient } from '@/lib/query-client';
+import { clearAllLookingBackPendingViews } from '@/services/looking-back';
 
 // Cold-start offline reads (docs/plans/offline-awareness-and-share-cards.md
 // O4): the whole dehydrated client is stored under this ONE AsyncStorage
@@ -42,7 +44,7 @@ export const PERSISTED_QUERY_CACHE_KEY = 'momora-query-cache';
 // tale this guards against). A buster mismatch makes the library discard
 // the whole persisted cache instead of feeding stale-shaped data into a
 // hook that assumes the new one.
-export const PERSISTED_QUERY_CACHE_BUSTER = 'v1';
+export const PERSISTED_QUERY_CACHE_BUSTER = 'v2';
 
 export const PERSISTED_QUERY_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -62,6 +64,11 @@ const PERSISTABLE_QUERY_KEY_BASES: readonly unknown[] = [
   portraitVersionsQueryKeyBase,
   familyMembershipsQueryKeyBase,
   userProfileQueryKeyBase,
+  // The daily set is bounded (four package DTOs plus at most forty enriched
+  // memories) and account-scoped in its query key. Persisting it preserves
+  // the last known rail during an offline cold start without adding a second
+  // large AsyncStorage row.
+  lookingBackQueryKeyBase,
   // Signed R2 URLs. An expired persisted URL is harmless: expo-image's
   // cacheKey (O5) means a disk-cache hit never touches the network, and a
   // miss just fails the same way an absent URL would -- but EXCLUDING this
@@ -146,7 +153,10 @@ export const asyncStoragePersister = createAsyncStoragePersister({
 // deliberately blunt, safe option.
 export async function clearPersistedQueryCache(): Promise<void> {
   queryClient.clear();
-  await asyncStoragePersister.removeClient();
+  await Promise.all([
+    asyncStoragePersister.removeClient(),
+    clearAllLookingBackPendingViews(),
+  ]);
 }
 
 function RestoreGate({ children }: { children: ReactNode }) {

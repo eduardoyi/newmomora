@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react-native';
+import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -8,8 +8,10 @@ import { useFamily } from '@/hooks/use-family';
 import {
   fetchFamilyMembers,
   createFamilyMemberWithPhoto,
+  deleteFamilyMember,
   updateFamilyMemberWithPhoto,
 } from '@/services/family-members';
+import { lookingBackQueryKey } from '@/hooks/queryKeys';
 import { generatePortraitVersion } from '@/services/portrait-versions';
 
 jest.mock('@/hooks/use-auth', () => ({
@@ -44,23 +46,33 @@ const mockedCreateFamilyMemberWithPhoto = createFamilyMemberWithPhoto as jest.Mo
 const mockedUpdateFamilyMemberWithPhoto = updateFamilyMemberWithPhoto as jest.MockedFunction<
   typeof updateFamilyMemberWithPhoto
 >;
+const mockedDeleteFamilyMember = deleteFamilyMember as jest.MockedFunction<
+  typeof deleteFamilyMember
+>;
 const mockedGeneratePortraitVersion = generatePortraitVersion as jest.MockedFunction<
   typeof generatePortraitVersion
 >;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 
-function createWrapper() {
-  const queryClient = new QueryClient({
+function createWrapper(
+  queryClient = new QueryClient({
     defaultOptions: {
       queries: { gcTime: Infinity, retry: false },
       mutations: { gcTime: Infinity, retry: false },
     },
-  });
-
+  }),
+) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   };
+}
+
+async function flushQueryNotifications() {
+  // TanStack Query batches observer notifications on zero-delay timers. Keep
+  // those mutation/refetch updates inside the surrounding React act scope.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
 describe('useFamilyMembers integration', () => {
@@ -146,11 +158,14 @@ describe('useFamilyMembers integration', () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    await result.current.createMember({
-      name: 'Maya',
-      dateOfBirth: '2020-05-24',
-      photoUri: 'file:///photo.jpg',
-      photoContentType: 'image/jpeg',
+    await act(async () => {
+      await result.current.createMember({
+        name: 'Maya',
+        dateOfBirth: '2020-05-24',
+        photoUri: 'file:///photo.jpg',
+        photoContentType: 'image/jpeg',
+      });
+      await flushQueryNotifications();
     });
 
     expect(mockedCreateFamilyMemberWithPhoto).toHaveBeenCalledWith(
@@ -175,9 +190,12 @@ describe('useFamilyMembers integration', () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    await result.current.updateMember({
-      memberId: 'member-1',
-      name: 'Maya',
+    await act(async () => {
+      await result.current.updateMember({
+        memberId: 'member-1',
+        name: 'Maya',
+      });
+      await flushQueryNotifications();
     });
 
     expect(mockedUpdateFamilyMemberWithPhoto).toHaveBeenCalledWith(
@@ -200,12 +218,15 @@ describe('useFamilyMembers integration', () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    await result.current.updateMember({
-      memberId: 'member-1',
-      photoUri: 'file:///photo.jpg',
-      photoContentType: 'image/jpeg',
-      photoReferenceDate: '2024-01-01',
-      photoDateSource: 'manual',
+    await act(async () => {
+      await result.current.updateMember({
+        memberId: 'member-1',
+        photoUri: 'file:///photo.jpg',
+        photoContentType: 'image/jpeg',
+        photoReferenceDate: '2024-01-01',
+        photoDateSource: 'manual',
+      });
+      await flushQueryNotifications();
     });
 
     expect(mockedGeneratePortraitVersion).toHaveBeenCalledWith('version-2');
@@ -226,14 +247,44 @@ describe('useFamilyMembers integration', () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    await result.current.updateMember({
-      memberId: 'member-1',
-      photoUri: 'file:///replacement.jpg',
-      photoContentType: 'image/jpeg',
+    await act(async () => {
+      await result.current.updateMember({
+        memberId: 'member-1',
+        photoUri: 'file:///replacement.jpg',
+        photoContentType: 'image/jpeg',
+      });
+      await flushQueryNotifications();
     });
 
     await waitFor(() => {
       expect(mockedGeneratePortraitVersion).toHaveBeenCalledWith('version-3');
+    });
+  });
+
+  it('invalidates only the active account-family Looking Back set after member deletion', async () => {
+    mockedFetchFamilyMembers.mockResolvedValue({ data: [], error: null });
+    mockedDeleteFamilyMember.mockResolvedValue({ error: null });
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { gcTime: Infinity, retry: false },
+        mutations: { gcTime: Infinity, retry: false },
+      },
+    });
+    const invalidateQueries = jest.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useFamilyMembers(), {
+      wrapper: createWrapper(queryClient),
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.deleteMember('member-1');
+      await flushQueryNotifications();
+    });
+
+    expect(mockedDeleteFamilyMember).toHaveBeenCalledWith('member-1');
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: lookingBackQueryKey('user-1', 'family-1'),
+      exact: true,
     });
   });
 });

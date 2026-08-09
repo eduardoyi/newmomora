@@ -27,6 +27,9 @@ jest.mock('@/hooks/use-pending-memory-uploads', () => ({
 jest.mock('@/lib/connectivity', () => ({
   startConnectivityMonitoring: jest.fn(() => jest.fn()),
 }));
+jest.mock('@/services/looking-back', () => ({
+  clearAllLookingBackPendingViews: jest.fn(async () => undefined),
+}));
 
 const mockedStartConnectivityMonitoring = startConnectivityMonitoring as jest.MockedFunction<
   typeof startConnectivityMonitoring

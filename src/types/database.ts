@@ -7,11 +7,6 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.5"
-  }
   graphql_public: {
     Tables: {
       [_ in never]: never
@@ -1387,6 +1382,188 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      looking_back_daily_sets: {
+        Row: {
+          created_at: string
+          family_id: string
+          id: string
+          package_date: string
+          refresh_after: string
+          timezone_name: string
+        }
+        Insert: {
+          created_at?: string
+          family_id: string
+          id?: string
+          package_date: string
+          refresh_after: string
+          timezone_name: string
+        }
+        Update: {
+          created_at?: string
+          family_id?: string
+          id?: string
+          package_date?: string
+          refresh_after?: string
+          timezone_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "looking_back_daily_sets_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      looking_back_package_memories: {
+        Row: {
+          created_at: string
+          family_id: string
+          memory_id: string
+          package_id: string
+          position: number
+        }
+        Insert: {
+          created_at?: string
+          family_id: string
+          memory_id: string
+          package_id: string
+          position: number
+        }
+        Update: {
+          created_at?: string
+          family_id?: string
+          memory_id?: string
+          package_id?: string
+          position?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "looking_back_package_memories_memory_family_fkey"
+            columns: ["memory_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "memories"
+            referencedColumns: ["id", "family_id"]
+          },
+          {
+            foreignKeyName: "looking_back_package_memories_package_family_fkey"
+            columns: ["package_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "looking_back_packages"
+            referencedColumns: ["id", "family_id"]
+          },
+        ]
+      }
+      looking_back_package_views: {
+        Row: {
+          completed_at: string | null
+          first_viewed_at: string
+          last_viewed_at: string
+          package_id: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          first_viewed_at?: string
+          last_viewed_at?: string
+          package_id: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          first_viewed_at?: string
+          last_viewed_at?: string
+          package_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "looking_back_package_views_package_id_fkey"
+            columns: ["package_id"]
+            isOneToOne: false
+            referencedRelation: "looking_back_packages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      looking_back_packages: {
+        Row: {
+          created_at: string
+          daily_set_id: string
+          display_era: string
+          display_kind: string
+          display_subtitle: string | null
+          display_title: string
+          family_id: string
+          id: string
+          package_date: string
+          package_type: string
+          position: number
+          recipe_identity: string
+          signature: string
+          subject_family_member_id: string | null
+          tint: string | null
+        }
+        Insert: {
+          created_at?: string
+          daily_set_id: string
+          display_era: string
+          display_kind: string
+          display_subtitle?: string | null
+          display_title: string
+          family_id: string
+          id?: string
+          package_date: string
+          package_type: string
+          position: number
+          recipe_identity: string
+          signature: string
+          subject_family_member_id?: string | null
+          tint?: string | null
+        }
+        Update: {
+          created_at?: string
+          daily_set_id?: string
+          display_era?: string
+          display_kind?: string
+          display_subtitle?: string | null
+          display_title?: string
+          family_id?: string
+          id?: string
+          package_date?: string
+          package_type?: string
+          position?: number
+          recipe_identity?: string
+          signature?: string
+          subject_family_member_id?: string | null
+          tint?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "looking_back_packages_daily_set_family_date_fkey"
+            columns: ["daily_set_id", "family_id", "package_date"]
+            isOneToOne: false
+            referencedRelation: "looking_back_daily_sets"
+            referencedColumns: ["id", "family_id", "package_date"]
+          },
+          {
+            foreignKeyName: "looking_back_packages_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "looking_back_packages_subject_family_fkey"
+            columns: ["subject_family_member_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id", "family_id"]
+          },
+        ]
       }
       memories: {
         Row: {
@@ -2879,12 +3056,37 @@ export type Database = {
           status: string
         }[]
       }
+      get_or_create_looking_back_packages: {
+        Args: { p_family_id: string }
+        Returns: {
+          completed_at: string
+          daily_set_id: string
+          display_era: string
+          display_kind: string
+          display_subtitle: string
+          display_title: string
+          first_viewed_at: string
+          last_viewed_at: string
+          memory_ids: string[]
+          package_date: string
+          package_id: string
+          package_type: string
+          position: number
+          refresh_after: string
+          subject_family_member_id: string
+          tint: string
+        }[]
+      }
       has_family_role: {
         Args: { fam: string; roles: string[] }
         Returns: boolean
       }
       is_anonymous_user: { Args: never; Returns: boolean }
       is_family_member: { Args: { fam: string }; Returns: boolean }
+      looking_back_timezone_is_valid: {
+        Args: { p_timezone: string }
+        Returns: boolean
+      }
       mark_ai_usage_alert_outbox_delivery_unknown: {
         Args: { p_id: string; p_token: string }
         Returns: boolean
@@ -2900,6 +3102,22 @@ export type Database = {
       mark_content_report_email_alert_sent: {
         Args: { p_attempt_token: string; p_report_id: string }
         Returns: boolean
+      }
+      mark_looking_back_package_viewed: {
+        Args: { p_completed?: boolean; p_package_id: string }
+        Returns: {
+          completed_at: string | null
+          first_viewed_at: string
+          last_viewed_at: string
+          package_id: string
+          user_id: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "looking_back_package_views"
+          isOneToOne: true
+          isSetofReturn: false
+        }
       }
       mark_onboarding_voice_cleanup_expected: {
         Args: { p_actor_user_id: string; p_request_id: string }
@@ -3180,6 +3398,27 @@ export type Database = {
       reserve_portrait_generation_provider_attempt: {
         Args: { p_attempt_number: number; p_job_id: string; p_provider: string }
         Returns: boolean
+      }
+      return_looking_back_daily_set: {
+        Args: { p_daily_set_id: string; p_user_id: string }
+        Returns: {
+          completed_at: string
+          daily_set_id: string
+          display_era: string
+          display_kind: string
+          display_subtitle: string
+          display_title: string
+          first_viewed_at: string
+          last_viewed_at: string
+          memory_ids: string[]
+          package_date: string
+          package_id: string
+          package_type: string
+          position: number
+          refresh_after: string
+          subject_family_member_id: string
+          tint: string
+        }[]
       }
       schedule_account_deletion: {
         Args: {

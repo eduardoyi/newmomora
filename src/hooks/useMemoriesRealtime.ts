@@ -10,6 +10,7 @@ import {
   removeMemoryFromListCaches,
 } from '@/hooks/memory-cache';
 import { clearRealtimeStatus, setRealtimeLive } from '@/hooks/realtime-status';
+import { lookingBackQueryKeyBase } from '@/hooks/queryKeys';
 import { shouldReportIllustrationOutcome } from '@/lib/illustration-outcome-dedupe';
 import { trackEvent } from '@/services/analytics';
 import { fetchMemoryById, type Memory } from '@/services/memories';
@@ -124,6 +125,7 @@ export function useMemoriesRealtime(familyId: string | null | undefined): void {
             link_previews: row.link_previews,
             content: row.content,
           });
+          queryClient.invalidateQueries({ queryKey: [lookingBackQueryKeyBase] });
 
           if (row.illustration_status === 'ready' && wasGenerating) {
             // Mirrors useMemory (useMemories.ts) and applyStatusPatches
@@ -181,6 +183,7 @@ export function useMemoriesRealtime(familyId: string | null | undefined): void {
             return;
           }
           removeMemoryFromListCaches(queryClient, familyId, row.id);
+          queryClient.invalidateQueries({ queryKey: [lookingBackQueryKeyBase] });
         },
       )
       .subscribe((status) => {

@@ -219,11 +219,12 @@ None. This feature is entirely client-side.
   under one `AsyncStorage` key (see Persist-size discipline above), so
   there's no cheaper way to evict just one slice. `clearPersistedQueryCache()`
   clears everything, including other families the user still belongs to;
-  they refetch normally on next view. Known gap: being removed from ONE of
-  several families you belong to (not your only family) is not currently
-  detected passively — only an explicit self-leave (`settings.tsx`) or
-  dropping to zero memberships (`use-family.tsx`'s `justLostAccess`)
-  triggers a purge today.
+  they refetch normally on next view. A fallback transition from family A to
+  B purges only when A is absent from the newly resolved memberships (actual
+  access loss); a voluntary switch while A remains authorized preserves its
+  account+family-keyed cache and outbox. Explicit self-leave (`settings.tsx`)
+  and dropping to zero memberships (`use-family.tsx`'s `justLostAccess`) are
+  immediate purge paths too.
 - **`OfflineBanner` is an overlay, not a layout-flow element**, specifically
   to avoid double-counting the top safe-area inset against the calendar's
   own fixed `SafeAreaView(edges: ['top'])` header and the timeline header's

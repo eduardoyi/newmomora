@@ -78,6 +78,10 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 | `invite_redeemed` | `family_id: string` | `app/(app)/sharing/redeem.tsx` (in-app redeem) **and** `app/(onboarding)/join/email.tsx` (J4 join-path redeem) |
 | `invite_resolved` | `outcome: 'approved'\|'rejected'`, `family_id: string` | `app/(app)/sharing/approvals.tsx` |
 | `notification_opened` | `target: NonNullable<PushRouteData['route']>` (literal `memory\|new-memory\|approvals\|timeline` — `new-memory` is hyphenated verbatim, no renaming layer) | `src/hooks/useNotifications.ts` — `routeFromPushData`/`handleNotificationResponse`, plain functions, not the hook body |
+| `looking_back_package_opened` | `package_type`, `memory_count`, `was_revisited` | Timeline rail package press |
+| `looking_back_package_completed` | `package_type`, `memory_count`, `frame_count` | Looking Back viewer completion |
+| `looking_back_memory_opened` | `package_type`, `memory_type` | Looking Back viewer → memory detail |
+| `looking_back_package_replayed` | `package_type`, `memory_count` | Looking Back completion replay |
 
 `family_id` is a UUID, explicitly allowed by the privacy rules — it's the only way to join inviter and joiner (different persons) for the "% of families with ≥2 approved members" dashboard, and can't be backfilled later if omitted.
 

@@ -19,6 +19,12 @@ export const familyMemberProfilesQueryKeyBase = 'family-member-profiles' as cons
 export const familyInvitesQueryKeyBase = 'family-invites' as const;
 export const memoryCommentsQueryKeyBase = 'memory-comments' as const;
 export const portraitVersionsQueryKeyBase = 'portrait-versions' as const;
+// Looking Back is both family- and account-scoped: the package materialization
+// belongs to the family, while reported/blocked visibility and viewed state
+// belong to the current account. Keeping both ids in the key prevents a
+// family switch or a different account on a shared device from inheriting
+// either state.
+export const lookingBackQueryKeyBase = 'looking-back' as const;
 // Owned by use-family.tsx / useUserProfile.ts respectively -- pulled out to
 // this dependency-free module (rather than left as string literals there)
 // so lib-level code (src/lib/query-persistence.ts) can reference them
@@ -52,6 +58,13 @@ export function familyMembersQueryKey(familyId: string | null | undefined) {
 
 export function portraitVersionsQueryKey(familyId: string | null | undefined) {
   return [portraitVersionsQueryKeyBase, familyId] as const;
+}
+
+export function lookingBackQueryKey(
+  userId: string | null | undefined,
+  familyId: string | null | undefined,
+) {
+  return [lookingBackQueryKeyBase, userId, familyId] as const;
 }
 
 export function familyMemberProfilesQueryKey(

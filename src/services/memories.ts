@@ -393,6 +393,61 @@ async function enrichMemories(memories: Memory[]): Promise<MemoryWithTags[]> {
   );
 }
 
+/**
+ * Loads a small, explicitly ordered collection of memories for a feature
+ * that already owns the ids (Looking Back currently permits at most four
+ * packages of ten memories). Unlike a timeline query, this deliberately
+ * does not paginate and missing rows are harmless: a memory may have been
+ * deleted, or no longer be visible through RLS, after its package was
+ * materialized.
+ */
+export const LOOKING_BACK_MEMORY_FETCH_LIMIT = 40;
+
+export async function fetchMemoriesByIds(
+  familyId: string,
+  memoryIds: readonly string[],
+): Promise<{ data: MemoryWithTags[] | null; error: ServiceError | null }> {
+  if (memoryIds.length > LOOKING_BACK_MEMORY_FETCH_LIMIT) {
+    return {
+      data: null,
+      error: {
+        message: `Looking Back can load at most ${LOOKING_BACK_MEMORY_FETCH_LIMIT} memories at once`,
+        code: 'validation_error',
+      },
+    };
+  }
+
+  // A malformed caller cannot cause duplicate enrichment work. The returned
+  // array still follows the first occurrence order from the package RPC.
+  const requestedIds = [...new Set(memoryIds)];
+  if (requestedIds.length === 0) {
+    return { data: [], error: null };
+  }
+
+  const { data, error } = await supabase
+    .from('memories')
+    .select('*')
+    .eq('family_id', familyId)
+    .in('id', requestedIds);
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  const enriched = await enrichMemories(data ?? []);
+  const byId = new Map(enriched.map((memory) => [memory.id, memory]));
+
+  // PostgREST intentionally does not guarantee an `.in` result order. Keep
+  // the materialized package order and quietly omit deleted/RLS-invisible ids.
+  return {
+    data: requestedIds.flatMap((memoryId) => {
+      const memory = byId.get(memoryId);
+      return memory ? [memory] : [];
+    }),
+    error: null,
+  };
+}
+
 function nextCursorFor(memories: Memory[], limit: number): MemoriesPageCursor | null {
   const lastRow = memories[memories.length - 1];
   if (!lastRow || memories.length < limit) {

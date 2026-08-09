@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, StyleSheet, Text } from 'react-native';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,8 +7,52 @@ import { colors, fonts, spacing } from '@/constants/theme';
 import { useIsOnline } from '@/lib/connectivity';
 
 const BACK_ONLINE_DISPLAY_MS = 2000;
+// The viewer is full-screen and its controls cannot be obscured while either
+// OfflineBanner phase is mounted. This is deliberately a conservative content
+// height (text line + vertical breathing room), excluding the safe inset.
+export const OFFLINE_BANNER_CONTENT_CLEARANCE = 24;
 
 type BannerPhase = 'hidden' | 'offline' | 'back-online';
+const OfflineBannerPhaseContext = createContext<BannerPhase>('hidden');
+
+export function useOfflineBannerVisible(): boolean {
+  return useContext(OfflineBannerPhaseContext) !== 'hidden';
+}
+
+export function OfflineBannerProvider({ children }: { children: ReactNode }) {
+  const isOnline = useIsOnline();
+  const [phase, setPhase] = useState<BannerPhase>('hidden');
+  const wasOfflineRef = useRef(false);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const phaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!isOnline) {
+      wasOfflineRef.current = true;
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      if (phaseTimerRef.current) clearTimeout(phaseTimerRef.current);
+      hideTimerRef.current = null;
+      phaseTimerRef.current = setTimeout(() => { setPhase('offline'); phaseTimerRef.current = null; }, 0);
+      AccessibilityInfo.announceForAccessibility("You're offline — showing what's saved.");
+      return;
+    }
+    if (!wasOfflineRef.current) return;
+    wasOfflineRef.current = false;
+    phaseTimerRef.current = setTimeout(() => { setPhase('back-online'); phaseTimerRef.current = null; }, 0);
+    AccessibilityInfo.announceForAccessibility('Back online.');
+    hideTimerRef.current = setTimeout(() => {
+      setPhase('hidden');
+      hideTimerRef.current = null;
+    }, BACK_ONLINE_DISPLAY_MS);
+  }, [isOnline]);
+
+  useEffect(() => () => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    if (phaseTimerRef.current) clearTimeout(phaseTimerRef.current);
+  }, []);
+  const value = useMemo(() => phase, [phase]);
+  return <OfflineBannerPhaseContext.Provider value={value}>{children}</OfflineBannerPhaseContext.Provider>;
+}
 
 // Mounted once around the whole (app) Stack (app/(app)/_layout.tsx), NOT
 // just the tabs -- so a pushed screen (e.g. memory detail) stays covered
@@ -26,48 +70,8 @@ type BannerPhase = 'hidden' | 'offline' | 'back-online';
 // Overlaying avoids that: nothing beneath reflows when the banner shows or
 // hides (no layout jump), it just draws on top for its brief lifetime.
 export function OfflineBanner() {
-  const isOnline = useIsOnline();
   const insets = useSafeAreaInsets();
-  const [phase, setPhase] = useState<BannerPhase>('hidden');
-  // Only show the "Back online" pulse after a REAL offline period this
-  // mount -- not on first mount while already online.
-  const wasOfflineRef = useRef(false);
-  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (!isOnline) {
-      wasOfflineRef.current = true;
-      if (hideTimerRef.current) {
-        clearTimeout(hideTimerRef.current);
-        hideTimerRef.current = null;
-      }
-      setPhase('offline');
-      AccessibilityInfo.announceForAccessibility("You're offline — showing what's saved.");
-      return;
-    }
-
-    if (!wasOfflineRef.current) {
-      return;
-    }
-
-    wasOfflineRef.current = false;
-    setPhase('back-online');
-    AccessibilityInfo.announceForAccessibility('Back online.');
-    hideTimerRef.current = setTimeout(() => {
-      setPhase('hidden');
-      hideTimerRef.current = null;
-    }, BACK_ONLINE_DISPLAY_MS);
-  }, [isOnline]);
-
-  // Cleanup on unmount only -- the effect above already clears/reschedules
-  // the timer on every isOnline transition.
-  useEffect(() => {
-    return () => {
-      if (hideTimerRef.current) {
-        clearTimeout(hideTimerRef.current);
-      }
-    };
-  }, []);
+  const phase = useContext(OfflineBannerPhaseContext);
 
   if (phase === 'hidden') {
     return null;

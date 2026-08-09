@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
@@ -55,8 +55,8 @@ export function useContentSafety() {
     initialData: { reportIds: [], blockIds: [] },
     staleTime: Infinity,
   });
-  const revealedReportIds = new Set(revealsQuery.data.reportIds);
-  const revealedBlockIds = new Set(revealsQuery.data.blockIds);
+  const revealedReportIds = useMemo(() => new Set(revealsQuery.data.reportIds), [revealsQuery.data.reportIds]);
+  const revealedBlockIds = useMemo(() => new Set(revealsQuery.data.blockIds), [revealsQuery.data.blockIds]);
 
   const reportsQuery = useQuery({
     queryKey: contentReportsQueryKey(userId, familyId),
@@ -150,6 +150,27 @@ export function useContentSafety() {
     },
   });
 
+  const getBlockForUser = useCallback((blockedUserId: string | null | undefined) => blockedUserId ? blocksByUser.get(blockedUserId) : undefined, [blocksByUser]);
+  const isUserBlocked = useCallback((blockedUserId: string | null | undefined) => {
+    const block = blockedUserId ? blocksByUser.get(blockedUserId) : undefined;
+    return Boolean(block && !revealedBlockIds.has(block.id));
+  }, [blocksByUser, revealedBlockIds]);
+  const hasActiveReport = useCallback((
+    targetType: ReportTargetType,
+    targetId: string | null | undefined,
+    targetVersionId?: string | null,
+  ) => Boolean(targetId && reportsByTarget.has(targetKey(familyId, targetType, targetId, targetVersionId))), [familyId, reportsByTarget]);
+  const isTargetReported = useCallback((
+    targetType: ReportTargetType,
+    targetId: string | null | undefined,
+    targetVersionId?: string | null,
+  ) => {
+    const report = targetId
+      ? reportsByTarget.get(targetKey(familyId, targetType, targetId, targetVersionId))
+      : undefined;
+    return Boolean(report && !revealedReportIds.has(report.id));
+  }, [familyId, reportsByTarget, revealedReportIds]);
+
   return {
     reports: reportsQuery.data ?? [],
     blocks: blocksQuery.data ?? [],
@@ -162,11 +183,8 @@ export function useContentSafety() {
     isReporting: reportMutation.isPending,
     setAccountBlocked: blockMutation.mutateAsync,
     isUpdatingBlock: blockMutation.isPending,
-    getBlockForUser: (userId: string | null | undefined) => userId ? blocksByUser.get(userId) : undefined,
-    isUserBlocked: (userId: string | null | undefined) => {
-      const block = userId ? blocksByUser.get(userId) : undefined;
-      return Boolean(block && !revealedBlockIds.has(block.id));
-    },
+    getBlockForUser,
+    isUserBlocked,
     revealBlockedUser: (blockedUserId: string) => {
       const block = blocksByUser.get(blockedUserId);
       if (!block) return;
@@ -175,23 +193,8 @@ export function useContentSafety() {
         blockIds: [...new Set([...(current?.blockIds ?? []), block.id])],
       }));
     },
-    hasActiveReport: (
-      targetType: ReportTargetType,
-      targetId: string | null | undefined,
-      targetVersionId?: string | null,
-    ) => Boolean(
-      targetId && reportsByTarget.has(targetKey(familyId, targetType, targetId, targetVersionId))
-    ),
-    isTargetReported: (
-      targetType: ReportTargetType,
-      targetId: string | null | undefined,
-      targetVersionId?: string | null,
-    ) => {
-      const report = targetId
-        ? reportsByTarget.get(targetKey(familyId, targetType, targetId, targetVersionId))
-        : undefined;
-      return Boolean(report && !revealedReportIds.has(report.id));
-    },
+    hasActiveReport,
+    isTargetReported,
     revealTarget: (
       targetType: ReportTargetType,
       targetId: string,

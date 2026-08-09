@@ -23,6 +23,17 @@ jest.mock('@/hooks/useFamilyMembers', () => ({
   useOnboardingStatus: jest.fn(),
 }));
 jest.mock('@/hooks/useMemories', () => ({ useMemories: jest.fn() }));
+jest.mock('@/hooks/useLookingBackPackages', () => ({
+  useLookingBackPackages: () => ({
+    packages: [],
+    isLoading: false,
+    isRefetching: false,
+    refetch: jest.fn(async () => undefined),
+  }),
+}));
+jest.mock('@/hooks/useLookingBackSession', () => ({
+  useLookingBackSession: () => ({ savePackageSnapshot: jest.fn() }),
+}));
 jest.mock('@/hooks/useContentSafety', () => ({
   useContentSafety: () => ({
     isLoading: false, isError: false,
@@ -39,6 +50,9 @@ jest.mock('@/components/memory-fab', () => ({
 }));
 jest.mock('@/components/pending-memory-uploads-banner', () => ({
   PendingMemoryUploadsBanner: () => null,
+}));
+jest.mock('@/components/looking-back/package-rail', () => ({
+  LookingBackPackageRail: () => null,
 }));
 
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;

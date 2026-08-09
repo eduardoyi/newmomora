@@ -1,9 +1,9 @@
 import { onlineManager } from '@tanstack/react-query';
 import { act, render, screen } from '@testing-library/react-native';
-import { AccessibilityInfo } from 'react-native';
+import { AccessibilityInfo, Text } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { OfflineBanner } from '@/components/offline-banner';
+import { OfflineBanner, OfflineBannerProvider, useOfflineBannerVisible } from '@/components/offline-banner';
 
 function renderBanner() {
   return render(
@@ -13,9 +13,13 @@ function renderBanner() {
         insets: { bottom: 34, left: 0, right: 0, top: 47 },
       }}
     >
-      <OfflineBanner />
+      <OfflineBannerProvider><OfflineBanner /></OfflineBannerProvider>
     </SafeAreaProvider>,
   );
+}
+
+function BannerVisibilityProbe() {
+  return <Text testID="offline-banner-visibility">{useOfflineBannerVisible() ? 'visible' : 'hidden'}</Text>;
 }
 
 describe('OfflineBanner', () => {
@@ -26,9 +30,13 @@ describe('OfflineBanner', () => {
   });
 
   afterEach(() => {
+    act(() => { onlineManager.setOnline(true); });
+    // Flush the provider's zero-delay phase handoff while fake timers are
+    // still active; otherwise it fires after `useRealTimers` outside act.
+    act(() => { jest.advanceTimersByTime(0); });
+    act(() => { jest.runOnlyPendingTimers(); });
     jest.clearAllMocks();
     jest.useRealTimers();
-    onlineManager.setOnline(true);
   });
 
   it('renders nothing while online and never went offline', () => {
@@ -42,6 +50,7 @@ describe('OfflineBanner', () => {
     act(() => {
       onlineManager.setOnline(false);
     });
+    act(() => { jest.advanceTimersByTime(0); });
 
     expect(screen.getByTestId('offline-banner')).toBeTruthy();
     expect(screen.getByText("You're offline — showing what's saved.")).toBeTruthy();
@@ -56,9 +65,11 @@ describe('OfflineBanner', () => {
     act(() => {
       onlineManager.setOnline(false);
     });
+    act(() => { jest.advanceTimersByTime(0); });
     act(() => {
       onlineManager.setOnline(true);
     });
+    act(() => { jest.advanceTimersByTime(0); });
 
     expect(screen.getByText('Back online')).toBeTruthy();
     expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith('Back online.');
@@ -86,14 +97,17 @@ describe('OfflineBanner', () => {
     act(() => {
       onlineManager.setOnline(false);
     });
+    act(() => { jest.advanceTimersByTime(0); });
     act(() => {
       onlineManager.setOnline(true);
     });
+    act(() => { jest.advanceTimersByTime(0); });
     expect(screen.getByText('Back online')).toBeTruthy();
 
     act(() => {
       onlineManager.setOnline(false);
     });
+    act(() => { jest.advanceTimersByTime(0); });
     expect(screen.getByText("You're offline — showing what's saved.")).toBeTruthy();
 
     // The stale "Back online" hide timer must not fire and hide the banner
@@ -102,5 +116,22 @@ describe('OfflineBanner', () => {
       jest.advanceTimersByTime(2000);
     });
     expect(screen.getByText("You're offline — showing what's saved.")).toBeTruthy();
+  });
+
+  it('keeps the shared visibility signal through the two-second back-online phase', () => {
+    const rendered = render(
+      <SafeAreaProvider initialMetrics={{ frame: { height: 844, width: 390, x: 0, y: 0 }, insets: { bottom: 34, left: 0, right: 0, top: 47 } }}>
+        <OfflineBannerProvider><BannerVisibilityProbe /><OfflineBanner /></OfflineBannerProvider>
+      </SafeAreaProvider>,
+    );
+    expect(rendered.getByTestId('offline-banner-visibility')).toHaveTextContent('hidden');
+    act(() => { onlineManager.setOnline(false); });
+    act(() => { jest.advanceTimersByTime(0); });
+    expect(rendered.getByTestId('offline-banner-visibility')).toHaveTextContent('visible');
+    act(() => { onlineManager.setOnline(true); });
+    act(() => { jest.advanceTimersByTime(0); });
+    expect(rendered.getByTestId('offline-banner-visibility')).toHaveTextContent('visible');
+    act(() => { jest.advanceTimersByTime(2000); });
+    expect(rendered.getByTestId('offline-banner-visibility')).toHaveTextContent('hidden');
   });
 });

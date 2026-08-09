@@ -144,6 +144,8 @@ flowchart TD
 1. Browse timeline or calendar tile → open memory detail
 2. Search or filter by date range, family member, or emotion
 3. Like a memory or open its comments to respond with the household
+4. When an older archive set is worthwhile, open a calm daily Looking Back
+   package from the Timeline and revisit its memories in an immersive viewer
 
 ---
 
@@ -348,6 +350,7 @@ Triggered after memory save.
 | **Calendar** | Month grid with daily tiles for days that have entries. Tile shows primary illustration for that day |
 | **Search** | Full-text search on memory content |
 | **Filters** | Date range, family member, emotion — composable |
+| **Looking Back** | Optional family-level daily packages of 4–10 older memories; read-only immersive replay with personal viewed state |
 
 **Acceptance criteria**
 
@@ -355,6 +358,8 @@ Triggered after memory save.
 - Memory detail screen: full text, illustration, date, tagged members, emotion, edit/delete actions
 - Filters composable (e.g., member + date range together)
 - Calendar navigates to day's memories or memory detail
+- Looking Back appears only for worthwhile older packages; it never uses
+  streaks, urgency, unread treatment, or a capture/paywall prompt
 
 **Deferred:** Monthly/yearly AI summaries, printable books, streaks/gamification
 

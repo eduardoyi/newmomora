@@ -6,6 +6,7 @@ import {
   fetchMemoriesPage,
   fetchMemoriesPageForMember,
   fetchMemoryById,
+  fetchMemoriesByIds,
   fetchMemoryGenerationStatuses,
   fetchOldestMemoryDate,
   regenerateMemoryIllustration,
@@ -16,6 +17,7 @@ import {
   updateMemory,
   MEMORIES_PAGE_SIZE,
   MEMORIES_SEARCH_LIMIT,
+  LOOKING_BACK_MEMORY_FETCH_LIMIT,
 } from '@/services/memories';
 
 import { supabase } from '@/lib/supabase';
@@ -1436,6 +1438,38 @@ describe('memories service integration', () => {
     expect(data?.id).toBe('memory-1');
     expect(data?.taggedMembers[0]?.name).toBe('Emma');
     expect(data?.mediaAssets[0]?.object_key).toBe('user-1/memories/memory-1/media.jpg');
+  });
+
+  it('fetchMemoriesByIds bounds the Looking Back batch, family-scopes it, preserves requested order, and omits missing rows', async () => {
+    const first = {
+      id: 'memory-1', family_id: 'family-1', memory_date: '2024-01-01', created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z', memory_type: 'text_only', content: 'First',
+      illustration_status: 'none', illustration_key: null, media_key: null, media_content_type: null,
+    };
+    const third = { ...first, id: 'memory-3', content: 'Third' };
+    const memoriesBuilder = createQueryBuilder({ data: [third, first], error: null });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+    const mediaBuilder = createQueryBuilder({ data: [], error: null });
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') return memoriesBuilder;
+      if (table === 'memory_family_members') return tagsBuilder;
+      if (table === 'memory_media') return mediaBuilder;
+      throw new Error(`Unexpected table ${table}`);
+    });
+    (supabase.rpc as jest.Mock).mockResolvedValue({ data: [], error: null });
+
+    const result = await fetchMemoriesByIds('family-1', ['memory-1', 'missing', 'memory-3']);
+
+    expect(result.error).toBeNull();
+    expect(result.data?.map((memory) => memory.id)).toEqual(['memory-1', 'memory-3']);
+    expect(memoriesBuilder.eq).toHaveBeenCalledWith('family_id', 'family-1');
+    expect(memoriesBuilder.in).toHaveBeenCalledWith('id', ['memory-1', 'missing', 'memory-3']);
+
+    const tooMany = await fetchMemoriesByIds(
+      'family-1',
+      Array.from({ length: LOOKING_BACK_MEMORY_FETCH_LIMIT + 1 }, (_, index) => `memory-${index}`),
+    );
+    expect(tooMany.error?.code).toBe('validation_error');
   });
 
   it('fetchMemoriesPage batches tag and media enrichment for large timelines', async () => {

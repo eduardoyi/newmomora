@@ -2,12 +2,13 @@ import { Redirect, Stack, useSegments } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
-import { OfflineBanner } from '@/components/offline-banner';
+import { OfflineBanner, OfflineBannerProvider } from '@/components/offline-banner';
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useNotificationResponseRouting } from '@/hooks/useNotifications';
 import { useAiUsageLimitNotices } from '@/hooks/useAiUsageLimitNotices';
+import { LookingBackSessionProvider } from '@/hooks/useLookingBackSession';
 import { noFamilyRoute } from '@/lib/routes';
 
 export default function AppLayout() {
@@ -130,6 +131,8 @@ export default function AppLayout() {
     // overlays every screen this layout owns, including the pushed
     // memory-detail screen -- see the component's own comment for why it's
     // an absolute overlay rather than a layout-flow element.
+    <LookingBackSessionProvider>
+    <OfflineBannerProvider>
     <View style={styles.stackWrap}>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
@@ -147,6 +150,7 @@ export default function AppLayout() {
           }}
         />
         <Stack.Screen name="memory/[id]" />
+        <Stack.Screen name="looking-back/[id]" options={{ animation: 'none' }} />
         <Stack.Screen
           name="memory/[id]/edit"
           options={{ presentation: 'modal' }}
@@ -169,6 +173,8 @@ export default function AppLayout() {
       </Stack>
       <OfflineBanner />
     </View>
+    </OfflineBannerProvider>
+    </LookingBackSessionProvider>
   );
 }
 

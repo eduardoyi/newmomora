@@ -15,6 +15,7 @@ import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
 import { useGenerationStatusPolling } from '@/hooks/useGenerationStatusPolling';
 import {
   familyMembersQueryKeyBase,
+  lookingBackQueryKeyBase,
   memoriesQueryKey,
   memoriesSearchQueryKey,
   memoryDetailQueryKey,
@@ -66,9 +67,7 @@ import {
   shouldPollForEmotion,
 } from '@/utils/media-emotion-polling';
 import {
-  groupPortraitVersionsByMember,
-  resolveMemberPortraitFields,
-  type FamilyMemberPortraitVersion,
+  resolveMemoryTagPortraits,
 } from '@/utils/portrait-versions';
 
 export type { MemoryMediaMutationAsset } from '@/services/memory-posting';
@@ -138,25 +137,6 @@ function fireLinkPreviewFetch(
       }
     })
     .catch(() => {});
-}
-
-function resolveMemoryTagPortraits(
-  memories: readonly MemoryWithTags[],
-  portraitVersions: readonly FamilyMemberPortraitVersion[],
-): MemoryWithTags[] {
-  const portraitMap = groupPortraitVersionsByMember(portraitVersions);
-  return memories.map((memory) => ({
-    ...memory,
-    taggedMembers: memory.taggedMembers.map((member) => {
-      const versions = portraitMap.get(member.id) ?? [];
-      return versions.length === 0
-        ? member
-        : {
-            ...member,
-            ...resolveMemberPortraitFields(versions, memory.memory_date, member.updated_at),
-          };
-    }),
-  }));
 }
 
 export interface CreateMemoryMutationInput {
@@ -318,6 +298,10 @@ export function useMemoryMutations() {
     },
     onSuccess: (memory, variables) => {
       invalidateMemoryQueries(queryClient);
+      // Looking Back is a fixed daily package, but its live memory rows can
+      // change after materialization. Re-fetching its bounded batch lets the
+      // rail drop a package that now has fewer than four visible memories.
+      queryClient.invalidateQueries({ queryKey: [lookingBackQueryKeyBase] });
       patchMemoryInCaches(queryClient, familyId, memory.id, memory);
       // Store-through cache warm (docs/plans/share-card-store-through.md,
       // W3): an edit changes the memory's content/media, which the DB
@@ -354,6 +338,7 @@ export function useMemoryMutations() {
     },
     onSuccess: (_data, memoryId) => {
       invalidateMemoryQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: [lookingBackQueryKeyBase] });
       invalidateFamilyMemberTagOrdering(queryClient);
       removeMemoryFromListCaches(queryClient, familyId, memoryId);
     },

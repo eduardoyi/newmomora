@@ -3,7 +3,10 @@ import { useMemo } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
-import { familyMembersQueryKey as buildFamilyMembersQueryKey } from '@/hooks/queryKeys';
+import {
+  familyMembersQueryKey as buildFamilyMembersQueryKey,
+  lookingBackQueryKey,
+} from '@/hooks/queryKeys';
 import {
   createFamilyMemberWithPhoto,
   deleteFamilyMember,
@@ -172,6 +175,13 @@ export function useFamilyMembers() {
       queryClient.invalidateQueries({ queryKey: ['portrait-versions'] });
       queryClient.invalidateQueries({ queryKey: ['memories'] });
       queryClient.invalidateQueries({ queryKey: ['media-urls'] });
+      // The backend cascades member_at_age packages when their subject is
+      // deleted. Evict this exact personal/family daily-set query so neither
+      // its cached card nor its persisted display title survives locally.
+      queryClient.invalidateQueries({
+        queryKey: lookingBackQueryKey(user?.id, familyId),
+        exact: true,
+      });
     },
   });
 

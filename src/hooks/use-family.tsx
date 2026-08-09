@@ -71,6 +71,8 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
   const { profile, updateProfile, isLoading: isProfileLoading } = useUserProfile();
   const hadFamilyRef = useRef(false);
   const correctingRef = useRef(false);
+  const previousMembershipFamilyIdsRef = useRef<Set<string> | null>(null);
+  const lastPurgedAccessLossRef = useRef<string | null>(null);
 
   const membershipsQuery = useQuery({
     queryKey: [...familyMembershipsQueryKey, user?.id],
@@ -115,7 +117,7 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
     enabled: Boolean(user),
   });
 
-  const memberships = membershipsQuery.data ?? [];
+  const memberships = useMemo(() => membershipsQuery.data ?? [], [membershipsQuery.data]);
   const isMembershipsLoading = Boolean(user) && membershipsQuery.isLoading;
   const isLoading = isMembershipsLoading || (Boolean(user) && isProfileLoading);
 
@@ -170,6 +172,45 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
   }, [memberships.length]);
 
   const justLostAccess = hadFamilyRef.current && !isMembershipsLoading && memberships.length === 0;
+
+  // Purge private persisted data when ANY previously authorized family
+  // disappears while another membership remains. This covers active-family
+  // fallback and removal from an inactive family alike. First load records a
+  // baseline only; a voluntary A -> B switch does not change the membership
+  // set and therefore preserves A's authorized cache/outbox.
+  const resolvedFamilyId = resolvedMembership?.familyId ?? null;
+  useEffect(() => {
+    if (isMembershipsLoading) return;
+
+    const currentFamilyIds = new Set(memberships.map((membership) => membership.familyId));
+    const previousFamilyIds = previousMembershipFamilyIdsRef.current;
+    previousMembershipFamilyIdsRef.current = currentFamilyIds;
+
+    // Dropping to zero uses the established justLostAccess purge below.
+    if (currentFamilyIds.size === 0) return;
+
+    const removedFamilyIds = previousFamilyIds
+      ? [...previousFamilyIds].filter((familyId) => !currentFamilyIds.has(familyId))
+      : [];
+    const staleActiveFamilyId = activeFamilyId && resolvedFamilyId
+      && activeFamilyId !== resolvedFamilyId && !currentFamilyIds.has(activeFamilyId)
+      ? activeFamilyId
+      : null;
+    const lostFamilyIds = [...new Set([
+      ...removedFamilyIds,
+      ...(staleActiveFamilyId ? [staleActiveFamilyId] : []),
+    ])].sort();
+
+    if (lostFamilyIds.length === 0) {
+      lastPurgedAccessLossRef.current = null;
+      return;
+    }
+
+    const accessLoss = lostFamilyIds.join(':');
+    if (lastPurgedAccessLossRef.current === accessLoss) return;
+    lastPurgedAccessLossRef.current = accessLoss;
+    void clearPersistedQueryCache();
+  }, [activeFamilyId, isMembershipsLoading, memberships, resolvedFamilyId]);
 
   // Backstop purge (O4, docs/plans/offline-awareness-and-share-cards.md):
   // covers being removed from your only family while the app stays open

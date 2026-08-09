@@ -22,10 +22,13 @@ import { MemoryCard } from '@/components/memory-card';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { MemoryFab } from '@/components/memory-fab';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
+import { LookingBackPackageRail } from '@/components/looking-back/package-rail';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useMemories } from '@/hooks/useMemories';
 import { useContentSafety } from '@/hooks/useContentSafety';
+import { useLookingBackPackages } from '@/hooks/useLookingBackPackages';
+import { useLookingBackSession } from '@/hooks/useLookingBackSession';
 import type { MemoryWithTags } from '@/services/memories';
 import { useOnboardingStatus } from '@/hooks/useFamilyMembers';
 import {
@@ -33,14 +36,18 @@ import {
   memoryDetailCommentsRoute,
   memoryDetailRoute,
   newMemoryRoute,
+  lookingBackPackageRoute,
   sharingMembersRoute,
 } from '@/lib/routes';
+import { trackEvent } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
 import { isVideoContentType } from '@/utils/media-validation';
 
 function toLocalDateString(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+const timelineViewabilityConfig: ViewabilityConfig = { viewAreaCoveragePercentThreshold: 60 };
 
 // A8: computed from whatever pages useMemories has loaded so far, not the
 // whole library -- page 1 (40 rows) covers the current week in practice, so
@@ -86,17 +93,32 @@ function StreakDots({ memories }: { memories: MemoryWithTags[] }) {
   );
 }
 
-function TimelineHeader({ memories }: { memories: MemoryWithTags[] }) {
+function TimelineTitle() {
   const now = new Date();
   const dayLabel = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
   return (
-    <View style={styles.header}>
+    <View style={styles.header} testID="timeline-title-section">
       <Text style={styles.eyebrow}>{dayLabel}</Text>
       <Text style={styles.title}>Your moments.</Text>
-      <StreakDots memories={memories} />
     </View>
   );
+}
+
+function TimelineTitleWithStreak({ memories }: { memories: MemoryWithTags[] }) {
+  return <>
+    <TimelineTitle />
+    <View style={styles.streakWrap} testID="timeline-week-section">
+      <StreakDots memories={memories} />
+    </View>
+  </>;
+}
+
+function RecentlySection({ hasLookingBack }: { hasLookingBack: boolean }) {
+  return <View style={[styles.recentlyRow, !hasLookingBack && styles.recentlyRowWithoutRail]} testID="timeline-recently-section">
+    <Text style={styles.sectionLabel}>Recently</Text>
+    <View style={styles.sectionRule} />
+  </View>;
 }
 
 export default function TimelineScreen() {
@@ -136,15 +158,16 @@ export default function TimelineScreen() {
     isFetchingNextPage,
   } = useMemories({ shouldReconcileOnForeground });
   const contentSafety = useContentSafety();
+  const { isUserBlocked } = contentSafety;
+  const lookingBack = useLookingBackPackages({ enabled: !isOnboardingLoading });
+  const { clearCheckpoint, savePackageSnapshot } = useLookingBackSession();
   const visibleMemories = useMemo(
-    () => memories.filter((memory) => !contentSafety.isUserBlocked(memory.user_id)),
-    [contentSafety, memories],
+    () => memories.filter((memory) => !isUserBlocked(memory.user_id)),
+    [isUserBlocked, memories],
   );
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
 
-  const viewabilityConfig = useRef<ViewabilityConfig>({
-    viewAreaCoveragePercentThreshold: 60,
-  }).current;
+  const viewabilityConfig = timelineViewabilityConfig;
 
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
     const firstVideo = viewableItems.find(
@@ -165,6 +188,20 @@ export default function TimelineScreen() {
   const handleOpenComments = useCallback((memoryId: string) => {
     router.push(memoryDetailCommentsRoute(memoryId));
   }, []);
+  const handleOpenLookingBackPackage = useCallback((packageId: string, sourceGeometry: { x: number; y: number; width: number; height: number; windowWidth: number; windowHeight: number } | null) => {
+    const item = lookingBack.packages.find((candidate) => candidate.id === packageId);
+    if (!item) return;
+    // A new Timeline open is always a fresh play, even if a previous route
+    // saved a completed checkpoint before its close transition finished.
+    clearCheckpoint(item.id);
+    savePackageSnapshot(item, sourceGeometry ? { ...sourceGeometry, capturedAtMs: Date.now() } : null);
+    trackEvent('looking_back_package_opened', {
+      package_type: item.packageType,
+      memory_count: item.memories.length,
+      was_revisited: Boolean(item.view.firstViewedAt),
+    });
+    router.push(lookingBackPackageRoute(item.id));
+  }, [clearCheckpoint, lookingBack.packages, savePackageSnapshot]);
 
   // B3: stable renderItem/keyExtractor so FlatList doesn't treat every render
   // as a brand-new render function, and a memoized header element so
@@ -212,12 +249,17 @@ export default function TimelineScreen() {
 
   const listHeader = useMemo(
     () => (
-      <SafeAreaView>
-        <TimelineHeader memories={visibleMemories} />
+      <SafeAreaView edges={['top']} testID="timeline-top-sections">
+        <TimelineTitle />
+        <View style={styles.streakWrap} testID="timeline-week-section">
+          <StreakDots memories={visibleMemories} />
+        </View>
+        <LookingBackPackageRail packages={lookingBack.packages} onOpen={handleOpenLookingBackPackage} />
+        <RecentlySection hasLookingBack={lookingBack.packages.length > 0} />
         <PendingMemoryUploadsBanner />
       </SafeAreaView>
     ),
-    [visibleMemories],
+    [handleOpenLookingBackPackage, lookingBack.packages, visibleMemories],
   );
 
   // fetchNextPage's signature (FetchNextPageOptions) doesn't match FlatList's
@@ -225,6 +267,9 @@ export default function TimelineScreen() {
   const handleEndReached = useCallback(() => {
     void fetchNextPage();
   }, [fetchNextPage]);
+  const handleRefresh = useCallback(() => {
+    void Promise.all([refetch(), lookingBack.refetch()]);
+  }, [lookingBack, refetch]);
 
   const listFooter = isFetchingNextPage ? (
     <View style={styles.listFooterLoading}>
@@ -281,7 +326,7 @@ export default function TimelineScreen() {
       {isLoading ? (
         <>
           <SafeAreaView>
-            <TimelineHeader memories={memories} />
+            <TimelineTitleWithStreak memories={memories} />
           </SafeAreaView>
           <View style={styles.centeredInline}>
             <ActivityIndicator color={colors.primary} size="large" />
@@ -290,11 +335,11 @@ export default function TimelineScreen() {
       ) : isError ? (
         <ScrollView
           refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
+            <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
           }
         >
           <SafeAreaView>
-            <TimelineHeader memories={memories} />
+            <TimelineTitleWithStreak memories={memories} />
           </SafeAreaView>
           <Text style={styles.errorText}>Could not load memories</Text>
         </ScrollView>
@@ -302,12 +347,12 @@ export default function TimelineScreen() {
         <ScrollView
           contentContainerStyle={styles.hiddenOnlyWrap}
           refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
+            <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
           }
           testID="timeline-hidden-content-state"
         >
           <SafeAreaView>
-            <TimelineHeader memories={memories} />
+            <TimelineTitleWithStreak memories={memories} />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.hiddenOnlyTitle}>Blocked-account memories are hidden</Text>
@@ -327,12 +372,12 @@ export default function TimelineScreen() {
         <ScrollView
           style={styles.emptyWrap}
           refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
+            <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
           }
           testID="timeline-empty-state"
         >
           <SafeAreaView>
-              <TimelineHeader memories={visibleMemories} />
+              <TimelineTitleWithStreak memories={visibleMemories} />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.emptyScript}>nothing yet</Text>
@@ -357,7 +402,7 @@ export default function TimelineScreen() {
           onScroll={handleScroll}
           onViewableItemsChanged={onViewableItemsChanged}
           refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
+            <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
           }
           removeClippedSubviews
           renderItem={renderItem}
@@ -394,6 +439,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: 0,
   },
+  streakWrap: { paddingHorizontal: spacing.lg },
   eyebrow: {
     fontFamily: fonts.sansBold,
     fontSize: 11,
@@ -441,6 +487,28 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
     borderColor: colors.primary,
     borderWidth: 1.5,
+  },
+  recentlyRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 9,
+    paddingHorizontal: spacing.lg,
+    paddingTop: 14,
+  },
+  recentlyRowWithoutRail: {
+    paddingTop: 26,
+  },
+  sectionLabel: {
+    color: colors.ink3,
+    fontFamily: fonts.sansBold,
+    fontSize: 10.5,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+  },
+  sectionRule: {
+    backgroundColor: colors.border,
+    flex: 1,
+    height: 1,
   },
   listContent: {
     gap: 14,

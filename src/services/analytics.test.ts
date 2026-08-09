@@ -91,6 +91,17 @@ describe('analytics', () => {
       });
     });
 
+    it('captures Looking Back events with only closed, PII-safe properties', () => {
+      const { trackEvent } = loadAnalytics();
+      const { mockPostHogClient } = loadPostHogMock();
+      trackEvent('looking_back_package_completed', {
+        package_type: 'on_this_day', memory_count: 4, frame_count: 6,
+      });
+      expect(mockPostHogClient.capture).toHaveBeenCalledWith('looking_back_package_completed', {
+        package_type: 'on_this_day', memory_count: 4, frame_count: 6,
+      });
+    });
+
     it('identifyUser calls posthog.identify with the given id and properties', () => {
       const { identifyUser } = loadAnalytics();
       const { mockPostHogClient } = loadPostHogMock();

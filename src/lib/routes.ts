@@ -24,6 +24,10 @@ export function newMemoryRoute(source?: NewMemorySource): Href {
 
 export const timelineRoute = '/(app)/(tabs)/timeline' as Href;
 export const noFamilyRoute = '/(app)/no-family' as Href;
+
+export function lookingBackPackageRoute(packageId: string): Href {
+  return { pathname: '/(app)/looking-back/[id]', params: { id: packageId } } as unknown as Href;
+}
 // The kids roster tab ("The cast") -- app/(app)/(tabs)/family.tsx. Named
 // `familyRosterRoute`, not `familyRoute`, to avoid colliding with the
 // per-member `familyMemberRoute`/`editFamilyMemberRoute` below and with the

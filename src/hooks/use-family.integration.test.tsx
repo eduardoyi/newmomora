@@ -65,6 +65,21 @@ function familyAMembership(overrides: { viewer_sharing_enabled?: boolean } = {})
   };
 }
 
+function familyBMembership() {
+  return {
+    id: 'membership-b',
+    family_id: 'family-b',
+    role: 'manager',
+    family: {
+      id: 'family-b',
+      name: "B's family",
+      illustration_style: 'default',
+      deleted_at: null,
+      viewer_sharing_enabled: true,
+    },
+  };
+}
+
 // Soft-deleted family (delete_family RPC). is_family_member's owner exemption
 // keeps this row RLS-visible (with `row.family` still populated) to the
 // owner even after deletion -- the queryFn must filter it out itself.
@@ -179,6 +194,7 @@ describe('FamilyProvider', () => {
         expect.objectContaining({ activeFamilyId: 'family-a' }),
       );
     });
+    await waitFor(() => expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1));
   });
 
   it('sets justLostAccess once memberships go from non-empty to empty this session', async () => {
@@ -206,6 +222,87 @@ describe('FamilyProvider', () => {
     // cache backstop -- being removed from your only family, detected
     // passively via this membership refetch, must purge exactly like the
     // explicit leaveFamily() call site in settings.tsx does.
+    await waitFor(() => expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1));
+  });
+
+  it('purges private persisted data when the active family is removed but another membership remains', async () => {
+    mockedFetchUserProfile
+      .mockResolvedValueOnce({
+        data: { id: 'user-1', active_family_id: 'family-a', name: 'Test' } as never,
+        error: null,
+      })
+      .mockResolvedValue({
+        data: { id: 'user-1', active_family_id: 'family-b', name: 'Test' } as never,
+        error: null,
+      });
+    mockedFetchMemberships
+      .mockResolvedValueOnce({ data: [familyAMembership(), familyBMembership()], error: null })
+      .mockResolvedValueOnce({ data: [familyBMembership()], error: null });
+    mockedUpdateUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-b' } as never,
+      error: null,
+    });
+
+    const { result } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.familyId).toBe('family-a'));
+
+    await act(async () => {
+      await result.current.refetchMemberships();
+    });
+
+    await waitFor(() => expect(result.current.familyId).toBe('family-b'));
+    expect(result.current.memberships).toHaveLength(1);
+    await waitFor(() => expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1));
+  });
+
+  it('preserves authorized offline data on an explicit active-family switch', async () => {
+    mockedFetchUserProfile
+      .mockResolvedValueOnce({
+        data: { id: 'user-1', active_family_id: 'family-a', name: 'Test' } as never,
+        error: null,
+      })
+      .mockResolvedValue({
+        data: { id: 'user-1', active_family_id: 'family-b', name: 'Test' } as never,
+        error: null,
+      });
+    mockedFetchMemberships.mockResolvedValue({
+      data: [familyAMembership(), familyBMembership()],
+      error: null,
+    });
+    mockedUpdateUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-b' } as never,
+      error: null,
+    });
+
+    const { result } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.familyId).toBe('family-a'));
+
+    await act(async () => {
+      await result.current.setActiveFamily('family-b');
+    });
+
+    await waitFor(() => expect(result.current.familyId).toBe('family-b'));
+    expect(mockedClearPersistedQueryCache).not.toHaveBeenCalled();
+  });
+
+  it('purges private persisted data when a non-active family membership disappears', async () => {
+    mockedFetchUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-b', name: 'Test' } as never,
+      error: null,
+    });
+    mockedFetchMemberships
+      .mockResolvedValueOnce({ data: [familyAMembership(), familyBMembership()], error: null })
+      .mockResolvedValueOnce({ data: [familyBMembership()], error: null });
+
+    const { result } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.familyId).toBe('family-b'));
+
+    await act(async () => {
+      await result.current.refetchMemberships();
+    });
+
+    await waitFor(() => expect(result.current.memberships).toHaveLength(1));
+    expect(result.current.familyId).toBe('family-b');
     await waitFor(() => expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1));
   });
 

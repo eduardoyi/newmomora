@@ -383,6 +383,103 @@ create table public.memory_comments (
 );
 ```
 
+### 2.1a Looking Back packages
+
+Looking Back (`docs/features/looking-back.md`) materializes one immutable,
+family-owned archive package set per owner-local day. It is an archive-read
+surface: membership, including `viewer`, is enough to retrieve it; subscription
+write entitlement is never consulted.
+
+```sql
+create table public.looking_back_daily_sets (
+  id uuid primary key default gen_random_uuid(),
+  family_id uuid not null references public.families on delete cascade,
+  package_date date not null,
+  timezone_name text not null,               -- validated IANA owner snapshot
+  refresh_after timestamptz not null,        -- next midnight in that timezone
+  created_at timestamptz not null default now(),
+  unique (family_id, package_date, refresh_after),
+  unique (id, family_id, package_date)
+);
+
+create table public.looking_back_packages (
+  id uuid primary key default gen_random_uuid(),
+  daily_set_id uuid not null,
+  family_id uuid not null references public.families on delete cascade,
+  package_date date not null,
+  package_type text not null,                -- closed V1 recipe vocabulary
+  subject_family_member_id uuid,             -- required only for member_at_age
+  display_kind text not null,
+  display_title text not null,
+  display_subtitle text,
+  display_era text not null,
+  tint text check (tint is null or tint in (
+    'joy', 'funny', 'calm', 'wonder', 'tender', 'mischief', 'pride',
+    'bittersweet', 'worry', 'weary', 'sad'
+  )),
+  recipe_identity text not null,             -- type/window only; never content
+  signature text not null,                   -- SHA-256 of final memory ids
+  position smallint not null check (position between 0 and 3),
+  created_at timestamptz not null default now(),
+  foreign key (daily_set_id, family_id, package_date)
+    references public.looking_back_daily_sets (id, family_id, package_date)
+    on delete cascade,
+  foreign key (subject_family_member_id, family_id)
+    references public.family_members (id, family_id) on delete cascade,
+  unique (daily_set_id, position),
+  unique (daily_set_id, signature),          -- immutable interval-local
+  unique (id, family_id)
+);
+
+create table public.looking_back_package_memories (
+  package_id uuid not null,
+  family_id uuid not null,
+  memory_id uuid not null,
+  position smallint not null check (position between 0 and 9),
+  created_at timestamptz not null default now(),
+  primary key (package_id, memory_id),
+  foreign key (package_id, family_id)
+    references public.looking_back_packages (id, family_id) on delete cascade,
+  foreign key (memory_id, family_id)
+    references public.memories (id, family_id) on delete cascade,
+  unique (package_id, position)
+);
+
+create table public.looking_back_package_views (
+  package_id uuid not null references public.looking_back_packages on delete cascade,
+  user_id uuid not null references auth.users on delete cascade,
+  first_viewed_at timestamptz not null default now(),
+  last_viewed_at timestamptz not null default now(),
+  completed_at timestamptz,
+  primary key (package_id, user_id)
+);
+```
+
+The `looking_back_daily_sets` parent is also the empty-day sentinel, so a
+second fetch cannot produce a new rail later in the same active owner-local
+interval. `timezone_name` and `refresh_after` are immutable snapshots; a later
+owner timezone change participates only after the old set's `refresh_after`
+passes. A backward timezone move can then collide with an already expired
+displayed `package_date`; the RPC creates a second immutable interval for that
+date instead of returning or mutating stale metadata. Cooldowns are measured
+from package exposure timestamps, rather than local-date strings, so this
+edge case cannot repeat recently exposed memories.
+Composite FKs bind package items and optional age subjects to the same family,
+including when a definer function has a defect. Deleting a subject child
+cascades its derived `member_at_age` package instead of delaying profile
+deletion until retention passes. Retention is 45 days and is
+opportunistically cleaned by materialization; daily-set cascades remove
+packages, items, and personal view rows.
+
+Daily materialization keeps at most one candidate per `package_type`, then
+selects up to four recipe types by the documented deterministic priority. A
+recent `recipe_identity` receives a soft three-day ranking penalty. Within
+`member_at_age`, candidates for a subject featured by an age package in the
+preceding three days receive an additional soft penalty before the
+deterministic day hash. Exact final-package (14-day) and included-memory
+(7-day) cooldowns remain hard. Existing daily sets are immutable, so selector
+changes affect only later materialization intervals.
+
 ### 2.2 Indexes
 
 ```sql
@@ -518,6 +615,30 @@ their own family-membership check. The batch aggregate returns only authorized
 memories and never exposes liker identities. `set_memory_like` is an atomic,
 idempotent set operation; `changed` is true only when a row was inserted or
 deleted, allowing notification delivery to ignore stale/repeated writes.
+
+**Looking Back package access (2026-08-08):**
+
+- `looking_back_daily_sets`, `looking_back_packages`, and
+  `looking_back_package_memories` have `SELECT` policies only, each using
+  `is_family_member(family_id)`. `looking_back_package_views` permits the
+  caller to select only their own view row after the package's exact-family
+  membership check. None of these tables grants direct client DML, and `anon`
+  has no table or RPC privileges.
+- `get_or_create_looking_back_packages(p_family_id uuid)` is a
+  `security definer` authenticated RPC. It rejects anonymous Auth sessions and
+  non-members inside its body, locks materialization, snapshots the owner IANA
+  timezone, returns the existing active daily set or creates it once, and
+  returns package metadata plus ordered `memory_ids` only. An empty result is
+  one sentinel row with a null `package_id` and `{}` ids.
+- `mark_looking_back_package_viewed(p_package_id uuid, p_completed boolean
+  default false)` is a `security definer` authenticated RPC. It validates the
+  exact package family, upserts only `(package_id, auth.uid())`, preserves the
+  earliest first/completed timestamps, and advances `last_viewed_at`. It is
+  safe to repeat from multiple devices or an offline outbox.
+- Both functions set `search_path = public`, are revoked from `PUBLIC`, and
+  granted only to `authenticated`. No entitlement helper is involved, so
+  owners with lapsed write access and household viewers retain archive read
+  access.
 
 ### 2.4 Triggers
 

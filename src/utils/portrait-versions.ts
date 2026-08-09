@@ -1,3 +1,5 @@
+import type { MemoryWithTags } from '@/services/memories';
+
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const EXIF_DATE_TIME_PATTERN = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})$/;
 const MIN_PHOTO_YEAR = 1900;
@@ -291,6 +293,31 @@ export interface PortraitResolvedMemberFields {
   avatarImageKey: string | null;
   avatarStatus: PortraitGenerationStatus | null;
   avatarUpdatedAt: string;
+}
+
+/**
+ * Resolve tagged-member portraits against the date of each memory. This lives
+ * below hooks so compact consumers (Timeline, details, Looking Back) use one
+ * historical-portrait rule without importing a hook module and its side
+ * effects.
+ */
+export function resolveMemoryTagPortraits(
+  memories: readonly MemoryWithTags[],
+  portraitVersions: readonly FamilyMemberPortraitVersion[],
+): MemoryWithTags[] {
+  const portraitMap = groupPortraitVersionsByMember(portraitVersions);
+  return memories.map((memory) => ({
+    ...memory,
+    taggedMembers: memory.taggedMembers.map((member) => {
+      const versions = portraitMap.get(member.id) ?? [];
+      return versions.length === 0
+        ? member
+        : {
+            ...member,
+            ...resolveMemberPortraitFields(versions, memory.memory_date, member.updated_at),
+          };
+    }),
+  }));
 }
 
 export function resolveMemberPortraitFields(

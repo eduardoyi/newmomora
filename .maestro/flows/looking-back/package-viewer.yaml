@@ -1,0 +1,98 @@
+appId: com.memora.app
+---
+# Requires the exact four-memory / five-frame fixture created by
+# supabase/scripts/run-looking-back-maestro.sh. This uses production testIDs
+# and is runnable against an installed dev build, not a placeholder/mock route.
+- runFlow: ../auth/login.yaml
+- extendedWaitUntil:
+    visible:
+      id: looking-back-package-list
+    timeout: 30000
+- tapOn:
+    id: "looking-back-package-${LOOKING_BACK_PACKAGE_ID}"
+- extendedWaitUntil:
+    visible:
+      id: looking-back-viewer
+    timeout: 10000
+- extendedWaitUntil:
+    visible:
+      id: looking-back-intro
+    timeout: 10000
+- assertVisible: "4 memories · A while ago"
+- tapOn:
+    id: looking-back-start
+# Start is explicit so the title card never converts an ordinary tap into a
+# lingering hold pause on the first real memory.
+- extendedWaitUntil:
+    visible:
+      id: looking-back-stage
+    timeout: 10000
+- assertVisible:
+    id: looking-back-open-memory
+- assertVisible: ${LOOKING_BACK_FIRST_FRAME_TEXT}
+# A recognized hold must pause without consuming the tap or changing frames.
+- longPressOn:
+    id: looking-back-stage
+- assertVisible: ${LOOKING_BACK_FIRST_FRAME_TEXT}
+- tapOn:
+    id: "looking-back-open-memory"
+- extendedWaitUntil:
+    visible: ${LOOKING_BACK_FIRST_FRAME_TEXT}
+    timeout: 10000
+- back
+- extendedWaitUntil:
+    visible:
+      id: looking-back-viewer
+    timeout: 10000
+- assertVisible: ${LOOKING_BACK_FIRST_FRAME_TEXT}
+# The seeded contract is exactly four memories / five frames. Starting at
+# frame zero: illustration, photo, video, long text, then completion. The
+# stage center is in the viewer's next-frame zone.
+- tapOn:
+    id: looking-back-stage
+- extendedWaitUntil:
+    visible:
+      id: looking-back-frame-illustration
+    timeout: 10000
+- assertNotVisible:
+    id: looking-back-media-unavailable
+- tapOn:
+    id: looking-back-stage
+- extendedWaitUntil:
+    visible:
+      id: looking-back-frame-photo
+    timeout: 10000
+- assertVisible: "1 of 2"
+- assertNotVisible:
+    id: looking-back-media-unavailable
+- tapOn:
+    id: looking-back-stage
+- extendedWaitUntil:
+    visible:
+      id: looking-back-frame-video
+    timeout: 10000
+- assertVisible:
+    id: looking-back-video
+- assertVisible: "2 of 2"
+- assertNotVisible:
+    id: looking-back-media-unavailable
+- tapOn:
+    id: looking-back-stage
+- tapOn:
+    id: looking-back-stage
+- extendedWaitUntil:
+    visible:
+      id: looking-back-complete
+    timeout: 30000
+- tapOn:
+    id: looking-back-replay
+- extendedWaitUntil:
+    visible: ${LOOKING_BACK_FIRST_FRAME_TEXT}
+    timeout: 10000
+- tapOn:
+    id: looking-back-close
+- extendedWaitUntil:
+    visible:
+      id: looking-back-package-list
+    timeout: 10000
+- assertVisible: "Revisited today"

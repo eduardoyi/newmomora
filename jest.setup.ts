@@ -73,11 +73,14 @@ jest.mock('react-native-reanimated', () => {
     FadeOut: layoutAnimation,
     runOnJS: <Fn,>(fn: Fn) => fn,
     runOnUI: <Fn,>(fn: Fn) => fn,
+    cancelAnimation: () => undefined,
     useAnimatedStyle: (factory: () => unknown) => factory(),
+    useReducedMotion: () => false,
     useEvent: () => () => undefined,
     useSharedValue,
+    withRepeat: (animation: unknown) => animation,
     withSpring: (toValue: unknown) => toValue,
-    withTiming: (toValue: unknown) => toValue,
+    withTiming: jest.fn((toValue: unknown) => toValue),
   };
 });
 

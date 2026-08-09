@@ -6,6 +6,8 @@ import {
   calendarMemoriesQueryKeyBase,
   familyMembershipsQueryKeyBase,
   familyMembersQueryKeyBase,
+  lookingBackQueryKey,
+  lookingBackQueryKeyBase,
   memoriesQueryKeyBase,
   portraitVersionsQueryKeyBase,
   userProfileQueryKeyBase,
@@ -20,11 +22,16 @@ import {
   shouldDehydrateQuery,
 } from '@/lib/query-persistence';
 import { queryClient } from '@/lib/query-client';
+import { enqueuePendingLookingBackView, lookingBackPendingViewStorageKey } from '@/services/looking-back';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- jest.mock factories cannot use ESM imports
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
+
+// query-persistence now clears the Looking Back outbox too. Keep this
+// persistence-only suite independent of Supabase's native realtime setup.
+jest.mock('@/lib/supabase', () => ({ supabase: { rpc: jest.fn() } }));
 
 function buildQuery(queryKey: readonly unknown[], status: 'success' | 'error' | 'pending' = 'success'): Query {
   return { queryKey, state: { status } } as unknown as Query;
@@ -38,6 +45,7 @@ describe('shouldDehydrateQuery (allow-list)', () => {
     ['portrait versions', portraitVersionsQueryKeyBase],
     ['family memberships', familyMembershipsQueryKeyBase],
     ['user profile', userProfileQueryKeyBase],
+    ['Looking Back packages', lookingBackQueryKeyBase],
     ['media-urls', 'media-urls'],
   ])('persists a successful %s query', (_label, base) => {
     expect(shouldDehydrateQuery(buildQuery([base, 'family-1']))).toBe(true);
@@ -59,7 +67,7 @@ describe('shouldDehydrateQuery (allow-list)', () => {
 });
 
 describe('serializePersistedClient', () => {
-  function buildPersistedClient(queries: Array<{ queryKey: readonly unknown[]; data: unknown }>) {
+  function buildPersistedClient(queries: { queryKey: readonly unknown[]; data: unknown }[]) {
     return {
       timestamp: Date.now(),
       buster: PERSISTED_QUERY_CACHE_BUSTER,
@@ -136,6 +144,83 @@ describe('serializePersistedClient', () => {
     expect(restored.clientState.queries[0].state.data).toEqual({ id: 'memory-1', content: 'Hello' });
     expect(restored.clientState.queries[1].state.data).toBe('2026-01-01');
   });
+
+  it('keeps a worst-case four-by-ten enriched Looking Back set comfortably below the Android row limit', () => {
+    const longObjectKey = `user-1/memories/${'asset-path-'.repeat(14)}.webp`;
+    const packages = Array.from({ length: 4 }, (_, packageIndex) => ({
+      id: `package-${packageIndex}`,
+      dailySetId: 'daily-set-1',
+      familyId: 'family-1',
+      packageDate: '2026-08-08',
+      packageType: 'archive_mix',
+      subjectFamilyMemberId: null,
+      displayKind: 'From your archive',
+      title: `Package ${packageIndex}`,
+      subtitle: 'A collection of moments from this time of year',
+      era: 'A few years ago',
+      tint: 'tender',
+      position: packageIndex,
+      refreshAfter: '2026-08-09T00:00:00.000Z',
+      view: { firstViewedAt: null, lastViewedAt: null, completedAt: null },
+      memories: Array.from({ length: 10 }, (_, memoryIndex) => {
+        const memoryId = `memory-${packageIndex}-${memoryIndex}`;
+        return {
+          id: memoryId,
+          family_id: 'family-1',
+          user_id: 'user-1',
+          content: 'A'.repeat(1000),
+          memory_date: '2020-08-08',
+          memory_type: 'media',
+          illustration_status: 'ready',
+          illustration_key: `${longObjectKey}-${memoryId}`,
+          illustration_generation_id: `generation-${memoryId}`,
+          emotion: 'tender',
+          created_at: '2026-08-08T00:00:00.000Z',
+          updated_at: '2026-08-08T00:00:00.000Z',
+          taggedMembers: Array.from({ length: 6 }, (_, memberIndex) => ({
+            id: `member-${memberIndex}`,
+            family_id: 'family-1',
+            name: `Family member ${memberIndex}`,
+            date_of_birth: '2020-01-01',
+            portrait_status: 'ready',
+            portrait_key: `${longObjectKey}-portrait-${memberIndex}`,
+          })),
+          mediaAssets: Array.from({ length: 10 }, (_, assetIndex) => ({
+            id: `${memoryId}-asset-${assetIndex}`,
+            memory_id: memoryId,
+            object_key: `${longObjectKey}-${memoryId}-${assetIndex}`,
+            preview_object_key: `${longObjectKey}-preview-${memoryId}-${assetIndex}`,
+            share_card_key: `${longObjectKey}-share-${memoryId}-${assetIndex}`,
+            content_type: assetIndex % 2 === 0 ? 'image/webp' : 'video/mp4',
+            duration_ms: 15_000,
+            aspect_ratio: 0.75,
+            position: assetIndex,
+            created_at: '2026-08-08T00:00:00.000Z',
+            updated_at: '2026-08-08T00:00:00.000Z',
+          })),
+          likeCount: 999,
+          commentCount: 999,
+          likedByMe: true,
+          isIllustrationHidden: false,
+        };
+      }),
+    }));
+    const serialized = serializePersistedClient(buildPersistedClient([{
+      queryKey: lookingBackQueryKey('user-1', 'family-1'),
+      data: {
+        dailySetId: 'daily-set-1',
+        packageDate: '2026-08-08',
+        refreshAfter: '2026-08-09T00:00:00.000Z',
+        packages,
+      },
+    }]));
+    const serializedBytes = new TextEncoder().encode(serialized).byteLength;
+
+    // AsyncStorage's Android CursorWindow cliff is around 2 MiB. This fixture
+    // intentionally combines every package/memory/media bound at once and
+    // must retain at least a 50% margin for the rest of the persisted cache.
+    expect(serializedBytes).toBeLessThan(1024 * 1024);
+  });
 });
 
 describe('purge / restore integration', () => {
@@ -143,6 +228,10 @@ describe('purge / restore integration', () => {
 
   beforeEach(async () => {
     await AsyncStorage.clear();
+    queryClient.clear();
+  });
+
+  afterEach(() => {
     queryClient.clear();
   });
 
@@ -154,6 +243,18 @@ describe('purge / restore integration', () => {
 
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
     expect(await AsyncStorage.getItem(PERSISTED_QUERY_CACHE_KEY)).toBeNull();
+  });
+
+  it('purges the separate Looking Back viewed-state outbox with account/family cache loss', async () => {
+    await enqueuePendingLookingBackView('user-1', 'family-1', 'package-1');
+    await enqueuePendingLookingBackView('user-1', 'family-2', 'package-2');
+    expect(await AsyncStorage.getItem(lookingBackPendingViewStorageKey('user-1', 'family-1'))).not.toBeNull();
+    expect(await AsyncStorage.getItem(lookingBackPendingViewStorageKey('user-1', 'family-2'))).not.toBeNull();
+
+    await clearPersistedQueryCache();
+
+    expect(await AsyncStorage.getItem(lookingBackPendingViewStorageKey('user-1', 'family-1'))).toBeNull();
+    expect(await AsyncStorage.getItem(lookingBackPendingViewStorageKey('user-1', 'family-2'))).toBeNull();
   });
 
   it('discards a persisted cache written under a different buster', async () => {
@@ -188,18 +289,25 @@ describe('purge / restore integration', () => {
     await AsyncStorage.setItem(PERSISTED_QUERY_CACHE_KEY, '{not valid json');
 
     const restoreClient = new QueryClient();
-    await expect(
-      persistQueryClientRestore({
-        queryClient: restoreClient,
-        persister: asyncStoragePersister,
-        buster: PERSISTED_QUERY_CACHE_BUSTER,
-        maxAge: PERSISTED_QUERY_CACHE_MAX_AGE_MS,
-      }).catch(() => {
-        // Mirrors PersistQueryClientProvider's own .catch(() => onError?.())
-        // -- the library rethrows after cleanup so the host decides what to
-        // do; the app's contract is "swallow it and start empty", not crash.
-      }),
-    ).resolves.toBeUndefined();
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleWarn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(
+        persistQueryClientRestore({
+          queryClient: restoreClient,
+          persister: asyncStoragePersister,
+          buster: PERSISTED_QUERY_CACHE_BUSTER,
+          maxAge: PERSISTED_QUERY_CACHE_MAX_AGE_MS,
+        }).catch(() => {
+          // Mirrors PersistQueryClientProvider's own .catch(() => onError?.())
+          // -- the library rethrows after cleanup so the host decides what to
+          // do; the app's contract is "swallow it and start empty", not crash.
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      consoleError.mockRestore();
+      consoleWarn.mockRestore();
+    }
 
     // The corrupt entry must be gone (removeClient ran) and the query cache
     // must be a clean empty start, not a half-hydrated crash loop.

@@ -24,6 +24,7 @@ import type { BillingAccessReason } from '@/constants/billing';
 import type { PostAuthDestination } from '@/lib/onboarding-routing';
 import type { IllustrationRequestIntent } from '@/services/ai';
 import type { MemoryType } from '@/utils/memories';
+import type { LookingBackPackageType } from '@/services/looking-back';
 import type { OnboardingNotificationChoice, OnboardingPaywallMode, OnboardingStepId } from '@/utils/onboarding-progress';
 import type { FamilyRole } from '@/utils/roles';
 import type { PushRouteData } from '@/hooks/useNotifications';
@@ -116,6 +117,24 @@ export interface AnalyticsEventMap {
   };
   illustration_retry_requested: {
     intent: Extract<IllustrationRequestIntent, 'recovery' | 'manual_regenerate'>;
+  };
+  looking_back_package_opened: {
+    package_type: LookingBackPackageType;
+    memory_count: number;
+    was_revisited: boolean;
+  };
+  looking_back_package_completed: {
+    package_type: LookingBackPackageType;
+    memory_count: number;
+    frame_count: number;
+  };
+  looking_back_memory_opened: {
+    package_type: LookingBackPackageType;
+    memory_type: MemoryType;
+  };
+  looking_back_package_replayed: {
+    package_type: LookingBackPackageType;
+    memory_count: number;
   };
   invite_created: {
     role: 'manager' | 'viewer';
