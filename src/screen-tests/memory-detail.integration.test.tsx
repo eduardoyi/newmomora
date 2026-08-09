@@ -186,6 +186,30 @@ describe('MemoryDetailScreen hierarchy', () => {
     },
   );
 
+  it('shows tagged member age at the memory date', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-09T12:00:00'));
+
+    try {
+      mockedUseMemory.mockReturnValue({
+        data: {
+          ...baseMemory,
+          memory_date: '2025-07-10',
+          taggedMembers: [{ ...taggedMember, date_of_birth: '2022-11-10' }],
+        },
+        isLoading: false,
+        isError: false,
+      });
+
+      const screen = renderScreen();
+
+      expect(screen.getByText('Enzo, 2y 8m')).toBeTruthy();
+      expect(screen.queryByText('Enzo, 3y 8m')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it.each([
     ['opens the media carousel on the page named by the route', '2', 2],
     ['opens on the first asset when no page was passed', undefined, 0],

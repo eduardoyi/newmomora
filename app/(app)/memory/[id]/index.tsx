@@ -154,8 +154,10 @@ function DetailChrome({
 }
 
 // ── Member tag pill ───────────────────────────────────────────────────────────
-function MemberPill({ member }: { member: FamilyMember }) {
-  const age = member.date_of_birth ? formatTaggedMemberAge(member.date_of_birth) : null;
+function MemberPill({ member, memoryDate }: { member: FamilyMember; memoryDate: string }) {
+  const age = member.date_of_birth
+    ? formatTaggedMemberAge(member.date_of_birth, new Date(`${memoryDate}T12:00:00`))
+    : null;
   const contentSafety = useContentSafety();
   const isProfileHidden = contentSafety.isTargetReported('family_member_profile', member.id);
 
@@ -373,7 +375,7 @@ function MemoryDetailFramed({
             {memory.taggedMembers.length > 0 && (
               <View style={styles.memberRow} testID="memory-detail-section-members">
                 {memory.taggedMembers.map((m) => (
-                  <MemberPill key={m.id} member={m} />
+                  <MemberPill key={m.id} member={m} memoryDate={memory.memory_date} />
                 ))}
               </View>
             )}
@@ -455,7 +457,7 @@ function MemoryDetailEditorial({
           {memory.taggedMembers.length > 0 && (
             <View style={styles.memberRow} testID="memory-detail-section-members">
               {memory.taggedMembers.map((m) => (
-                <MemberPill key={m.id} member={m} />
+                <MemberPill key={m.id} member={m} memoryDate={memory.memory_date} />
               ))}
             </View>
           )}
