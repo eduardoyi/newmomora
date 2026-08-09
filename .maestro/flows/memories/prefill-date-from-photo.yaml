@@ -4,7 +4,7 @@ appId: com.memora.app
 # (docs/plans/media-exif-capture-date-prefill.md). Seeds the device gallery
 # with a fixture JPEG carrying a known EXIF DateTimeOriginal/DateTimeDigitized
 # (2024-03-05), attaches it from the new-memory composer, and asserts the
-# date pill picks it up with the "From photo" source hint. Then overrides the
+# date pill picks it up with the "From media" source hint. Then overrides the
 # date through the picker and confirms the override survives to save.
 #
 # Fixture: ../../assets/capture-date-fixture.jpg -- a 48x48 solid-color JPEG
@@ -53,7 +53,7 @@ appId: com.memora.app
     text: ".*2024.*"
 - assertVisible:
     id: new-memory-date-source
-    text: "From photo"
+    text: "From media"
 
 # Override the date through the picker. The native widget differs by
 # platform/OS version (iOS: in-app spinner + Done button; Android: system

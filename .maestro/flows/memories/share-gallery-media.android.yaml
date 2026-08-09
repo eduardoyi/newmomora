@@ -2,12 +2,15 @@ appId: com.memora.app
 tags:
   - android
 ---
-# Native share-sheet flow. Run on an Android emulator with Google Photos and a
-# freshly rebuilt dev client (the intent filter is native configuration).
+# Native warm-share smoke. Momora stays running while Google Photos shares
+# back into it: that is the Pixel failure mode covered by singleTop plus
+# documentLaunchMode="never". Run on an Android emulator with Google Photos and
+# a freshly rebuilt dev client (the manifest is native configuration). The
+# fixture has DateTimeOriginal=2024:03:05; Google Photos/import behavior can
+# strip EXIF, so this is a release smoke rather than a deterministic CI test.
 - runFlow: ../auth/login.yaml
 - addMedia:
-    - ../../assets/profile-fixture.jpg
-- stopApp
+    - ../../assets/capture-date-fixture.jpg
 - launchApp:
     appId: com.google.android.apps.photos
 - tapOn:
@@ -28,3 +31,9 @@ tags:
     timeout: 20000
 - assertVisible:
     id: new-memory-save
+- assertVisible:
+    id: new-memory-date
+    text: ".*2024.*"
+- assertVisible:
+    id: new-memory-date-source
+    text: "From media"

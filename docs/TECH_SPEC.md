@@ -2165,20 +2165,18 @@ fail-open: the memory post still succeeds with `preview_object_key = null`,
 and list surfaces fall back to the original (§5.4a). Originals are never
 resized. See [docs/features/media-memories.md](./features/media-memories.md).
 
-**Client-only capture-date prefill (create screen only):** when the picker
-requests EXIF (`includeCaptureDate`, new-memory composer only — the edit
-composer never sets it), `src/utils/media-capture-date.ts` reads only
-`DateTimeOriginal` → `DateTimeDigitized` → `DateTime` from each library
-photo's EXIF object, strictly validates the Gregorian calendar date, and
-derives a `YYYY-MM-DD` scalar. `src/hooks/use-suggested-memory-date.ts`
-applies the earliest such date across currently attached photos as the
-memory date, with a visible "From photo" hint; manually changing the date
-overrides the suggestion for the rest of that session. No API/schema change:
-the EXIF object surfaced to JS is never retained on the attachment, logged,
-or added to any request payload or persisted record — only the derived
-`YYYY-MM-DD` scalar enters React state, and it is never distinguishable from
-a manually-typed date once saved (`memories.memory_date` stores the same
-column either way).
+**Client-only capture-date prefill (create screen only):** library-picked and
+incoming-shared photos/videos may derive a `YYYY-MM-DD` scalar before save.
+The picker reads only `DateTimeOriginal` → `DateTimeDigitized` → `DateTime`
+from its opted-in library-photo EXIF object, while incoming shares use the
+bounded local-file image/video extractors; both paths feed the same earliest
+valid date rule in `src/hooks/use-suggested-memory-date.ts`. The date pill
+shows a visible "From media" suggestion that a manual date change overrides
+for the rest of the session. No API/schema change: raw EXIF, TIFF, and
+container metadata is never retained on an attachment, logged, or added to a
+request payload or persisted record — only the derived scalar enters React
+state, and it is never distinguishable from a manually typed date once saved
+(`memories.memory_date` stores the same column either way).
 
 **Upload-time EXIF/GPS stripping (image binaries):** every image asset
 uploaded through `uploadMemoryMediaAssets`

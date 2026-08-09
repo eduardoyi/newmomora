@@ -1,7 +1,7 @@
 # Feature: Media memories (photo & video attachments)
 
 **Status:** `done`
-**Last updated:** 2026-07-16
+**Last updated:** 2026-08-09
 **PRD reference:** §6.3 Journal Entries (Memories) — `media` type
 
 ## Overview
@@ -22,22 +22,21 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
   waits for permission/source-chooser UI to dismiss before presenting the
   picker, and reports native launch failures inline instead of silently
   leaving the composer stuck. Concurrent picker launches are ignored.
-- **Capture-date prefill (new-memory composer only):** picking library photos
-  or videos in the create screen derives a `YYYY-MM-DD` suggestion from the
-  earliest valid capture date across the currently attached media. Photos
-  read EXIF from `expo-image-picker`; videos read their own local file's
-  MP4/MOV container metadata (no EXIF, no native module — see below). When a
-  suggestion applies, the date pill shows that date with a muted "From
-  photo" hint next to it (and an `accessibilityHint` on the date field
-  itself) regardless of which media type supplied it. Manually changing the
-  date overrides the suggestion for the rest of that composer session — no
-  later add, remove, reorder, or wholesale attachment replacement (including
-  an incoming share) can overwrite a user-chosen date. Removing every dated
-  asset before any override restores the date the screen started with when
-  it mounted (not a freshly recomputed "today"). Reordering alone never
-  changes the suggested date. Camera captures, web picks, and incoming
-  shared media never carry a capture date, so they never move the date on
-  their own. Missing, stripped, or implausible metadata (wrong types,
+- **Capture-date prefill (new-memory composer only):** supported library
+  picks and incoming shares derive a `YYYY-MM-DD` suggestion from the
+  earliest valid capture date across the currently attached media. Library
+  photos read EXIF from `expo-image-picker`; library videos read their local
+  MP4/MOV container metadata; incoming photos use the bounded JPEG/HEIC EXIF
+  file parser and incoming videos use the same MP4/MOV extractor. When a
+  suggestion applies, the date pill shows that date with a muted "From media"
+  hint (and matching `accessibilityHint`) regardless of source or media type.
+  Manually changing the date overrides the suggestion for the rest of that
+  composer session — no later add, remove, reorder, or wholesale attachment
+  replacement can overwrite a user-chosen date. Removing every dated asset
+  before any override restores the date the screen started with when it
+  mounted (not a freshly recomputed "today"). Reordering alone never changes
+  the suggested date. Camera captures and web picks never carry a capture
+  date. Missing, stripped, or implausible metadata (wrong types,
   impossible calendar dates, dates more than one day in the future) is
   always a silent no-op — never an error that blocks attaching the asset or
   saving the memory. The edit-memory composer never requests EXIF, never
@@ -109,7 +108,7 @@ Key points:
 - **Photo/mixed** memories: `analyze-emotion` runs asynchronously after save/edit; it uses the first ordered image asset + optional caption. Does **not** run `generate-illustration`.
 - **All-video** memories: no `analyze-emotion` call in MVP.
 - `illustration_status` remains `'none'` for all `media` memories.
-- **Capture-date prefill data flow:** for photos, `expo-image-picker` → (`asset.exif`, only when the create screen's `includeCaptureDate` opts in) → `extractCaptureDateIso` derives a `YYYY-MM-DD` scalar per image asset. For videos (same `includeCaptureDate` gate), the picked asset's local `uri` → `extractVideoCaptureDateIso` (`src/utils/video-capture-date.ts`) walks the file's MP4/MOV atom tree via positioned `expo-file-system` reads and derives the same `YYYY-MM-DD` shape. Either result is stored as `MediaAttachment.capturedAtIso` → `useSuggestedMemoryDate` derives the earliest valid one across all attached media (photo or video) via `deriveSuggestedMemoryDate`, which is source-agnostic, and applies it to the date pill unless the user has already overridden it. `capturedAtIso` is presentation-only regardless of source: it is never included in the deferred upload payload (`enqueuePendingMemoryUpload`'s `mediaAssets`), never logged, and neither the raw EXIF object (photos) nor any other atom/box content (videos — track metadata, embedded location atoms, device info) is retained past extraction — only the derived scalar exists in React state.
+- **Capture-date prefill data flow:** a library photo takes `expo-image-picker` → (`asset.exif`, only when the create screen's `includeCaptureDate` opts in) → `extractCaptureDateIso`; a library video takes its local URI → `extractVideoCaptureDateIso`. An incoming share takes `useIncomingMemoryShare` → `prepareSharedMedia` → `extractImageCaptureDateIso` for images or `extractVideoCaptureDateIso` for videos. Each extractor produces only a derived `YYYY-MM-DD` scalar on `MediaAttachment.capturedAtIso`; `useSuggestedMemoryDate` selects the earliest valid scalar across all attached media and applies it unless the user has overridden the date. Incoming metadata work is optional, bounded by one 750 ms batch deadline, and fails open to no suggestion; duplicate selected `contentUri` values fail closed with an actionable attach-from-Momora message to avoid same-filename share corruption. `capturedAtIso` is presentation-only: it is never included in the deferred upload payload (`enqueuePendingMemoryUpload`'s `mediaAssets`), never logged, and raw EXIF/TIFF/container fields or buffers are never retained in React state.
 
 ## Data model
 
@@ -168,10 +167,10 @@ Mobile upload flow uses `upload-media` so the device only talks to Supabase; `ge
 | Layer | Files | Responsibility |
 |-------|-------|----------------|
 | Routes | `app/(app)/new-memory.tsx`, `app/(app)/memory/[id].tsx` | Emergent type logic, media picker trigger, caption field, save flow |
-| Routes | `app/(app)/new-memory.tsx` | Also wires `useSuggestedMemoryDate`, passes `includeCaptureDate` to `MemoryMediaPicker` (create screen only), and renders the "From photo" hint next to the date pill |
+| Routes | `app/(app)/new-memory.tsx` | Wires `useSuggestedMemoryDate`, passes `includeCaptureDate` to `MemoryMediaPicker` (create screen only), accepts incoming prepared attachments, and renders the "From media" hint next to the date pill |
 | Hooks | `src/hooks/useMemories.ts` | List/detail queries, edit/delete mutations; polls for emotion chip |
 | Hooks | `src/hooks/use-pending-memory-uploads.tsx` | Deferred posting queue (provider in `AppProviders`); runs `postMediaMemory`, kicks emotion analysis + family notify, exposes retry/discard |
-| Hooks | `src/hooks/use-suggested-memory-date.ts` | New — single-reducer `{ memoryDate, dateSource }` state machine; derives the earliest EXIF capture date across attached photos, restores the session baseline when none remain, and locks in a user override for the rest of the composer session |
+| Hooks | `src/hooks/use-suggested-memory-date.ts`, `src/hooks/use-incoming-memory-share.ts` | The date state machine derives the earliest valid capture-date scalar from library and incoming media, restores the session baseline when none remain, and locks in a user override. The share hook injects the production image/video extractors before clearing the native payload once. |
 | Services | `src/services/memory-posting.ts` | `postMediaMemory` pipeline: compress (video) → strip EXIF (image) → upload (3-way concurrency, per-asset progress) → insert, rollback on failure; shared `uploadMemoryMediaAssets` also backs the edit flow and incoming-share attachments. Video branch: one `getVideoFrame` call feeds both the persisted `aspect_ratio` and (via the shared `uploadDerivedPreviewAsset` helper) the upload-time poster |
 | Utils | `src/utils/strip-image-metadata.ts` | `stripImageMetadataForUpload` re-encodes image assets via `expo-image-manipulator` to strip EXIF/GPS before upload; videos pass through; fail-closed on re-encode error; also surfaces the re-encoded `width`/`height` so `createImagePreviewForUpload` can reuse them without a second probe call |
 | Utils | `src/utils/create-image-preview.ts` | `createImagePreviewForUpload` generates a derived JPEG preview (longest edge ≤ 1280px, quality 0.8) from an already-stripped image; no-upscale guard returns `null` when the source is already small enough. `createVideoPosterForUpload` — same cap/quality, applied to an extracted video frame, but never returns `null` (always produces a poster; see Architecture) |
@@ -185,12 +184,13 @@ Mobile upload flow uses `upload-media` so the device only talks to Supabase; `ge
 | Components | `src/components/memory-card.tsx` | Conditional render: photo thumbnail vs video thumbnail vs illustration; forwards the tapped carousel page as `onPress(memoryId, mediaIndex)` (caption/footer taps omit it) |
 | Components | `src/components/memory-media-carousel.tsx` | Shared list/detail carousel; `initialIndex` opens on a given page (clamped, applied on the layout pass that gives the pages a width) |
 | Routes | `src/lib/routes.ts` | `memoryDetailRoute(memoryId, mediaIndex?)` — a non-zero index switches to the params form (`?mediaIndex=`); omitted keeps the plain string route |
-| Components | `src/components/memory-media-picker.tsx` | New — wraps `expo-image-picker`; validates size/duration; emits `{ uri, contentType, duration? }`; opt-in `includeCaptureDate` prop passes `exif: true` to the library picker for photos and, for video results, awaits `extractVideoCaptureDateIso(asset.uri)` — either path attaches a derived `capturedAtIso` scalar only (never the camera path, never raw EXIF or container metadata) |
+| Components | `src/components/memory-media-picker.tsx` | Wraps `expo-image-picker`; validates size/duration; opt-in `includeCaptureDate` derives a `capturedAtIso` scalar for library media only. Camera paths never request capture metadata. |
 | Utils | `src/utils/media-capture-date.ts` | New — `extractCaptureDateIso` (strict EXIF `DateTimeOriginal`/`DateTimeDigitized`/`DateTime` parsing + Gregorian validation, `today + 1 day` tolerance) and `deriveSuggestedMemoryDate` (earliest valid `capturedAtIso` across attachments, source-agnostic — also used for video-derived dates) |
 | Utils | `src/utils/video-capture-date.ts` | New — `extractVideoCaptureDateIso` walks a local MP4/MOV file's top-level atom tree via positioned `expo-file-system` reads (byte-access layer is a swappable `ByteReader`, so the parser itself — `extractVideoCaptureDateFromReader` — is unit-testable against an in-memory buffer, `createInMemoryByteReader`, with no filesystem dependency); prefers Apple's `com.apple.quicktime.creationdate` (`moov/meta`/`moov/udta/meta` keys+ilst), falls back to `mvhd.creation_time`; same `today + 1 day`/pre-1990/zero-sentinel guards as the photo extractor; bounded atom-scan budget so a truncated/corrupt file fails closed instead of scanning unboundedly |
+| Utils | `src/utils/image-exif-capture-date.ts`, `src/utils/prepare-shared-media.ts` | Incoming image extractor parses bounded JPEG/HEIC EXIF bytes and returns only a validated date scalar. Shared-media preparation preflights MIME/provider size, verifies Expo's cached copy exists at that size, rejects duplicate selected URIs, runs at most three workers, and gives optional metadata one 750 ms batch deadline. |
 | Components | `src/components/memory-media-preview.tsx` | New — inline form preview with remove button |
 | Components | `src/components/full-screen-media-viewer.tsx` | Shared full-screen image/video viewer; resolves private R2 keys, pages mixed carousels, controls active video playback, and owns the pinch/double-tap zoom for image pages (`ZoomableImage`, gesture-handler + Reanimated) |
-| Native entry | `app/+native-intent.ts`, `app.json` | Registers Momora for image/video shares and routes incoming share intents to the composer |
+| Native entry | `app/+native-intent.ts`, `app.json`, `plugins/withAndroidLaunchMode.js` | Registers Momora for image/video shares and routes incoming share intents to the composer. Android uses `singleTop` plus `documentLaunchMode="never"` so gallery document flags cannot create a second React activity/task; this remains compatible with RevenueCat's documented purchase-verification modes. |
 | Root routing | `src/components/incoming-share-router.tsx`, `app/_layout.tsx` | Cold-start fallback: after auth/family routing settles, detects a persisted native payload and opens the composer if the initial deep link was lost |
 | Hook | `src/hooks/use-incoming-memory-share.ts` | Resolves native payloads, reads video duration, validates limits, and hands attachments to the composer |
 
@@ -240,6 +240,16 @@ To create a `media` memory programmatically:
 - **A new development build is required** after enabling incoming sharing. The
   iOS share extension and Android intent filters are native build artifacts and
   are not added by an over-the-air JavaScript update.
+- **Android must keep one React activity for incoming shares.** Gallery apps
+  can launch `ACTION_SEND` with `NEW_DOCUMENT | MULTIPLE_TASK`. Momora's config
+  plugin sets `MainActivity` to `singleTop` and `documentLaunchMode="never"`,
+  which overrides those document flags and delivers later shares through
+  `onNewIntent`. Do not revert to `standard`: a second `MainActivity` in the
+  existing process can render only an empty native frame because it cannot
+  acquire the active React host. Do not switch to `singleTask` either;
+  RevenueCat requires `standard` or `singleTop` for external purchase
+  verification. Changing either manifest attribute requires a new Android
+  binary; an OTA update cannot repair an already-installed manifest.
 - Incoming shares use Expo's experimental receive-sharing API. On iOS, Expo's
   share extension opens the main Momora target; this should be smoke-tested on
   each supported iOS release before shipping.
@@ -250,7 +260,7 @@ To create a `media` memory programmatically:
   opens the composer. It never clears payloads; only the composer does that.
 - **Illustration pipeline** — `generate-illustration` is not used for `media`. Photo emotion uses `analyze-emotion` only; `illustration_status` stays `'none'`.
 - **Privacy** — user-uploaded photos (and optional captions) are sent to OpenAI for emotion classification, same trust boundary as portrait generation.
-- **Capture-date prefill is create-only and fail-open, for both photos and videos** — `includeCaptureDate` is requested only by `app/(app)/new-memory.tsx`; the edit composer, incoming-share attachments, camera captures, and web picks never carry a capture date, so they never move the date on their own. Missing, stripped, or implausible metadata (wrong types, impossible calendar dates, dates further than one day in the future) is always a silent no-op — never an error that blocks attaching or saving. Only the derived `YYYY-MM-DD` scalar ever enters React state, an attachment, a log line, or a request/queue payload; the raw EXIF object (photos, which can include GPS/device fields) or any other atom/box content (videos — track metadata, embedded location atoms, device info) is discarded immediately after extraction at the picker boundary.
+- **Capture-date prefill is create-only and fail-open, for both photos and videos** — library media uses the create screen's `includeCaptureDate` gate; incoming shares independently run the bounded image/video file extractors in `prepareSharedMedia`. The edit composer, camera captures, and web picks never carry a capture date, so they never move the date on their own. Incoming metadata extraction shares one absolute 750 ms batch deadline and returns no suggestion on timeout, malformed/stripped/implausible metadata, or extractor failure; it never blocks attachment preparation. Selected shared payloads are cheap-validated before native probing, Expo's cached copy must exist and match the provider-reported byte size, and duplicate non-empty `contentUri` values are rejected with an attach-from-Momora message to avoid same-name share corruption. A consumed native payload is cleared and the Expo hook is immediately refreshed so a later share—even the same URI—does not get mistaken for the previous one. Only the derived `YYYY-MM-DD` scalar ever enters React state; it is presentation-only and is never logged or included in a request/queue payload. Raw EXIF/TIFF/container fields and buffers (including GPS/device/track metadata) are discarded immediately after extraction.
 - **Video capture-date parsing has no new native dependency** — `src/utils/video-capture-date.ts` is pure JS: it reads the picked local file directly via `expo-file-system`'s positioned reads (`{ position, length, encoding: Base64 }`), decoding base64 with a small hand-written decoder rather than assuming a global `atob`/`Buffer` (not reliably present under Hermes outside the web platform branch — see `src/utils/local-files.ts`'s existing web-only `btoa` branch for the same reasoning).
 - **`mvhd`'s `creation_time` fallback is a true UTC instant with no offset information, unlike EXIF** — the photo extractor reads a camera-local wall-clock string with no timezone conversion at all (EXIF has no offset tag it uses); the video `mvhd` fallback, when Apple's timezone-aware `creationdate` key is absent, converts its UTC seconds-since-1904 value to the device's *current* local calendar date via `Date`, since the field itself carries no offset. Different mechanism, same tradeoff class: neither can know the camera's timezone at capture time, so both accept a small chance of an off-by-one-day suggestion near a timezone boundary. Apple's `creationdate` key (checked first) does not have this gap when present, since it carries its own explicit UTC offset.
 - **`moov` can be the last atom in the file** — camera-recorded MP4/MOV commonly writes `moov` after `mdat` (no "fast start" reflow). The parser walks the top-level atom tree sequentially and skips non-`moov` atoms by their declared size (including 64-bit `largesize` atoms) without reading their payload, so it finds a trailing `moov` cheaply regardless of how large `mdat` is.
@@ -294,13 +304,15 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 |------|--------|
 | `src/utils/media-validation.test.ts` | File size limit, video duration limit (3 minutes), video pick-time source-size sanity cap (2 GB, distinct from the 100 MB post-compression cap), MIME type allow-list |
 | `src/utils/native-permissions.test.ts` | Existing-grant checks, one-time request, permanent denial, native presentation settling |
-| `src/utils/prepare-shared-media.test.ts` | Incoming payload conversion, unsupported content, duration (3 minutes) and 10-item limits; accepts a shared video source file over the old 100 MB pick-time cap, confirming share-sheet intake picks up `media-validation.ts`'s constants automatically |
+| `src/utils/prepare-shared-media.test.ts` | Incoming payload conversion, unsupported content, duration (3 minutes) and 10-item limits; cheap MIME/size preflight before duration/metadata work, missing/partial cached-copy rejection, duplicate selected-URI rejection, image/video capture-date attachment, bounded three-worker ordering and first-error precedence, one 750 ms batch deadline, and extractor failure/timeout fail-open behavior. Also accepts a shared video source file over the old 100 MB pick-time cap, confirming share-sheet intake picks up `media-validation.ts`'s constants automatically. |
+| `plugins/withAndroidLaunchMode.test.ts` | Android MainActivity uses the RevenueCat-compatible `singleTop` mode and refuses gallery document tasks with `documentLaunchMode="never"`; missing MainActivity fails closed. |
 | `src/services/memories.test.ts` | `createMediaMemory` — success, upload failure, insert failure |
 | `src/services/memory-posting.test.ts` | Upload pipeline — UUID-based keys, per-asset progress, rollback on upload/insert failure; EXIF strip wired before the PUT, HEIC→JPEG contentType/extension consistency, videos skip the strip, strip failure fails closed with no partial upload; **Workstream C3/C4** — preview generated/uploaded for a large image (`{mediaAssetId}-preview.jpg`), no-upscale guard skips upload for a small image, preview generation/upload failures fail open (`previewObjectKey: null`, memory post still succeeds), pass-through assets carry an existing `previewObjectKey` through unchanged; **post-compression size cap** — compressed video within `MAX_VIDEO_BYTES` uploads, over-cap or unknown-size compressed output fails the asset without uploading, image assets never trigger the check, and a mid-batch cap failure rolls back an already-uploaded sibling asset the same way an upload failure does; **video poster generation** — a single `getVideoFrame` call feeds both the persisted aspect ratio and the poster upload, a poster is still produced when the frame is already small (no no-upscale skip for video), no poster is attempted when no frame could be extracted, and poster generation/upload failures fail open (`previewObjectKey: null`) |
 | `src/utils/video-compression.test.ts` | `compressVideoForUpload` — successful transcode; fallback-to-original only when the original is within `MAX_VIDEO_BYTES` (compression failure or empty result); fails with `VIDEO_COMPRESSION_TOO_LARGE_ERROR` when the original exceeds the cap or its size can't be determined |
 | `src/utils/local-files.test.ts` | `getLocalFileSizeBytes` — returns size when present, `null` for a missing file, an info shape with no `size` field, or a thrown error |
 | `src/hooks/use-pending-memory-uploads.test.tsx` | Queue lifecycle — posting → removed on success, failed → retry/discard, photo emotion kick, video skip, family notify |
 | `src/utils/media-capture-date.test.ts` | `extractCaptureDateIso` key priority/fallback, flat-shape-only parsing, colon-format parsing without `Date()` coercion, NUL/whitespace trimming, Gregorian validation (zero fields, invalid month/day, leap years, year floor), deterministic `today`/`today+1` boundary; `deriveSuggestedMemoryDate` earliest-valid-date selection |
+| `src/utils/image-exif-capture-date.test.ts` | Bounded JPEG/TIFF/HEIF capture-date parsing: primary-item association, supported versions, checked ranges and budgets, malformed fail-closed matrix, and GPS-range non-traversal. |
 | `src/utils/video-capture-date.test.ts` | `extractVideoCaptureDateFromReader` against synthesized in-memory atom fixtures (`createInMemoryByteReader`): moov-after-mdat layout, mvhd v0 and v1 (32-/64-bit) `creation_time`, Apple `com.apple.quicktime.creationdate` preferred over `mvhd` (`Z` and colon/non-colon offset forms, `moov/meta` and `moov/udta/meta` nesting), fallback to `mvhd` when the Apple key is absent/malformed/implausible, 64-bit `largesize` atoms (on `moov` itself and on a preceding atom), epoch-zero `creation_time` → null, pre-1990 → null, `today`/`today+1`/`today+2` boundary, no-`moov`/no-metadata → null, truncated/garbage/empty file → null, an atom declaring a body larger than the file → null, and a bounded-scan-budget bailout (asserted via a read-call-count spy) against a file with thousands of fake top-level atoms preceding a (never-reached) `moov` |
 | `src/utils/strip-image-metadata.test.ts` | `stripImageMetadataForUpload` — JPEG/PNG/WEBP keep format, HEIC/HEIF convert to JPEG, videos pass through untouched (no `manipulateAsync` call), re-encode failure rejects (fail-closed), surfaces width/height for downstream preview reuse |
 | `src/utils/video-aspect-ratio.test.ts` | `getVideoFrame` — returns the extracted frame or `null` on failure; `getVideoAspectRatio` — rotation-corrected video-frame ratio extraction and graceful thumbnail failure |
@@ -315,7 +327,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 |------|-----------|
 | `src/services/memories.integration.test.ts` | `media` memory create (mock R2 upload + mock Supabase insert), edit (replace media), delete (R2 + DB); **Workstream C5** — deletion of a memory, a failed create rollback, and a media asset removed on edit all clean up `preview_object_key` alongside `object_key`; `replace_memory_media_assets` RPC payload includes `previewObjectKey` |
 | `src/hooks/useMemories.integration.test.tsx` | Photo create/update triggers emotion analysis; video skips |
-| `src/hooks/use-incoming-memory-share.integration.test.tsx` | Native resolved payload → validated composer attachment → intent cleared |
+| `src/hooks/use-incoming-memory-share.integration.test.tsx` | Production image/video extractor wiring into `prepareSharedMedia`; image/video date scalars reach the composer, extractor failures fail open, duplicate URI error is delivered, and the native intent clears exactly once |
 | `src/components/incoming-share-router.integration.test.tsx` | Cold-start persisted payload fallback, root-route race avoidance, viewer role gate, foreground recheck |
 | `src/utils/media-emotion-polling.test.ts` | Poll window for photo media without emotion |
 | `src/components/full-screen-media-viewer.integration.test.tsx` | Private URL resolution, tapped initial page, full-screen paging, video rendering, modal-local safe-area containment, close action; **zoom** — focal-anchored pinch scaling, pinch-out clamping back to 1x, double-tap in/out anchored on the tap, pan clamped to the content box (not the frame), paging suspended while zoomed and handed back when fitted, and zoom dropped when the viewer moves to another item |
@@ -324,7 +336,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 | `src/hooks/useVideoThumbnail.test.ts` | Rotation-aware thumbnail dimensions and remount-safe video thumbnail caching |
 | `src/components/app-providers.test.tsx` | AppState-to-TanStack-Query focus synchronization for foreground refetches |
 | `src/components/memory-media-picker.test.tsx` | Native launch failure feedback and concurrent-launch guard; `includeCaptureDate` → `exif` option wiring; image EXIF → `capturedAtIso`-only attachment (no raw EXIF/GPS/device fields); absent/malformed EXIF still emits a valid attachment; video wiring (mocked `extractVideoCaptureDateIso`) — called with the video asset's `uri` and its resolved date attached when `includeCaptureDate` is true, never called when `includeCaptureDate` is false or for a photo asset, and a `null` resolution (parse failure) yields a valid attachment with no capture date |
-| `src/screen-tests/new-memory.integration.test.tsx` | Full screen wiring (deliberately under `src/`, not `app/` — see file header): EXIF-dated photo updates the date pill and shows the "From photo" hint; manual date override survives further attach/remove; an incoming-share replacement without metadata follows default/override rules; Save passes only the final `memoryDate` to the posting queue with no EXIF/capture metadata in the payload |
+| `src/screen-tests/new-memory.integration.test.tsx` | Full screen wiring (deliberately under `src/`, not `app/` — see file header): library and incoming dated media update the date pill and show the "From media" hint; an undated share preserves the baseline; manual override survives later attachment changes; Save passes only `memoryDate` to the posting queue with no capture metadata |
 
 ### E2E (Maestro)
 
@@ -332,8 +344,8 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 |------|----------|
 | `.maestro/flows/memories/create-media-memory.yaml` | Pick photo → save → Timeline → detail → full-screen viewer → close |
 | `.maestro/flows/memories/create-video-memory.yaml` | Happy path: pick video → save → open detail → video plays |
-| `.maestro/flows/memories/share-gallery-media.android.yaml` | Stop Momora, then Android gallery share sheet → cold-launched composer opens with attachment |
-| `.maestro/flows/memories/prefill-date-from-photo.yaml` | Native-picker smoke test: seed gallery with a known-EXIF JPEG fixture → attach → assert date + "From photo" hint (locale-agnostic year substring) → override date → hint clears → save succeeds. Native-only; not deterministic across emulators/OS versions, so `src/screen-tests/new-memory.integration.test.tsx` remains the CI regression — run this flow manually on iOS and Android development builds before release. |
+| `.maestro/flows/memories/share-gallery-media.android.yaml` | Android native warm-share smoke: leave Momora running, share the known-date JPEG fixture from Google Photos, then verify the resumed composer has an attachment, a `2024` date label, and the "From media" hint before saving. This exercises the singleTop/document-task repair. Providers may strip EXIF while importing, so it remains a release smoke; deterministic hook/screen tests cover CI. |
+| `.maestro/flows/memories/prefill-date-from-photo.yaml` | Native-picker smoke test: seed gallery with a known-EXIF JPEG fixture → attach → assert date + "From media" hint (locale-agnostic year substring) → override date → hint clears → save succeeds. Native-only; not deterministic across emulators/OS versions, so `src/screen-tests/new-memory.integration.test.tsx` remains the CI regression — run this flow manually on iOS and Android development builds before release. |
 
 ### Edge Function tests (Deno)
 
@@ -361,6 +373,7 @@ npm test -- --testPathPattern=media
 maestro test .maestro/flows/memories/create-media-memory.yaml
 maestro test .maestro/flows/memories/create-video-memory.yaml
 maestro test .maestro/flows/memories/prefill-date-from-photo.yaml
+maestro test .maestro/flows/memories/share-gallery-media.android.yaml
 deno test supabase/functions/get-upload-url/
 deno test supabase/scripts/backfill-video-posters.test.ts
 supabase test db supabase/tests/memory_media_metadata.sql
@@ -384,6 +397,8 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
+| 2026-08-09 | Real Pixel 9a diagnostics reproduced an empty share surface as two simultaneous Momora tasks: a gallery `ACTION_SEND` started a second `MainActivity`, which never mounted React and detached the shared host from the original activity. Android now uses `singleTop` + `documentLaunchMode="never"`; incoming cache copies are verified before attachment; and consumed hook state is refreshed so repeated same-photo shares are processed. This native manifest repair requires a new Android build. |
+| 2026-08-09 | Incoming gallery shares now use the same visible, user-overridable earliest capture-date suggestion as library picks. `useIncomingMemoryShare` wires bounded JPEG/HEIC and video extractors through `prepareSharedMedia`; optional metadata is capped by one 750 ms batch deadline, duplicate selected URIs are rejected to avoid same-name share corruption, and only `capturedAtIso` reaches composer state. Visible and accessibility copy now consistently says "From media." |
 | 2026-07-25 | Added pinch/double-tap zoom to the shared full-screen viewer (image pages only — memory photos, memory illustrations, and family portraits all get it for free). `ZoomableImage` in `full-screen-media-viewer.tsx` composes `Gesture.Race(doubleTap, Gesture.Simultaneous(pinch, pan))`: the pinch anchors the live focal point, pan is `enabled` only while zoomed (paging owns horizontal drags otherwise, and `scrollEnabled` flips off in the same state), and both clamp to the `contain`-fitted content box measured from `onLayout` + expo-image's `onLoad`. The viewer's root is now a `GestureHandlerRootView` because a `Modal` is its own window on Android. Jest needed two setup additions: `react-native-gesture-handler/jestSetup` and a hand-rolled `react-native-reanimated` mock (Reanimated 4 initializes native worklets on import, and its bundled `mock` entry re-imports that same entrypoint). |
 | 2026-07-25 | Fixed: tapping a swiped-to Timeline carousel item opened the detail screen on the memory's *first* asset. `MemoryCard.onPress` now carries the tapped page (`onPress(memoryId, mediaIndex)`), `memoryDetailRoute` takes an optional `mediaIndex`, and `MemoryMediaCarousel` gained an `initialIndex` prop (clamped; the offset is applied on the layout pass that first gives the pages a width, since pages don't mount until then). Callers that have no page context — caption/footer taps, calendar, family profile, notification deep links — are unchanged and still open on the first asset. |
 | 2026-07-16 | Extended new-memory composer capture-date prefill to library videos: `src/utils/video-capture-date.ts` (new, pure JS, no native module) walks a picked video's MP4/MOV atom tree via positioned `expo-file-system` reads, preferring Apple's timezone-aware `com.apple.quicktime.creationdate` (`moov/meta`/`moov/udta/meta`) and falling back to `mvhd.creation_time` (UTC, converted to the device's local date). `memory-media-picker.tsx` now awaits it for video results under the same `includeCaptureDate` gate photos already use; `use-suggested-memory-date.ts` needed no changes since it was already source-agnostic. Same create-only, library-picker-only, fail-open scope and privacy posture as the photo path — see the addendum in `docs/plans/media-exif-capture-date-prefill.md`. |
@@ -396,7 +411,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 | 2026-07-13 | Persisted natural media aspect ratios (including rotation-corrected post-compression video ratios), added a legacy-video backfill, and made timeline rows consume the stored value immediately; cached first-frame thumbnails prevent gray flashes around playback activation |
 | 2026-07-12 | Fixed rotated portrait videos reporting landscape track dimensions and leaving side gutters in timeline/detail cards |
 | 2026-07-12 | Uploaded image binaries (create, edit, and incoming-share) are now re-encoded via `expo-image-manipulator` to strip EXIF/GPS/device metadata before upload, on both Android and iOS (`src/utils/strip-image-metadata.ts`, wired into `uploadMemoryMediaAssets` in `src/services/memory-posting.ts`); fail-closed on re-encode failure. Videos remain out of scope. Closes the gap noted in `docs/plans/media-exif-capture-date-prefill.md` |
-| 2026-07-12 | New-memory composer only: library photo attachments now pre-fill the memory date from the earliest valid EXIF capture date, shown as an overridable "From photo" suggestion (`src/utils/media-capture-date.ts`, `src/hooks/use-suggested-memory-date.ts`); edit-memory composer unaffected |
+| 2026-07-12 | New-memory composer only: library photo attachments began pre-filling the memory date from the earliest valid EXIF capture date, shown as an overridable suggestion (now labeled "From media"; `src/utils/media-capture-date.ts`, `src/hooks/use-suggested-memory-date.ts`); edit-memory composer unaffected |
 | 2026-07-12 | Added full-screen photo/video viewing from memory detail, including mixed-carousel paging from the tapped item |
 | 2026-07-12 | Bounded video buffers, removed adjacent player preloading, and added signed-image URL expiry recovery |
 | 2026-07-12 | Hardened camera/library permission and native picker presentation lifecycle |

@@ -3,6 +3,8 @@ import {
   MAX_VIDEO_BYTES,
   MAX_VIDEO_SOURCE_BYTES,
   validateMediaFile,
+  validateMediaFileCheap,
+  validateVideoDuration,
 } from '@/utils/media-validation';
 
 describe('media validation utils', () => {
@@ -83,6 +85,29 @@ describe('media validation utils', () => {
         contentType: 'application/pdf',
       }),
     ).toMatch(/unsupported/i);
+  });
+
+  it('splits cheap MIME/size validation from required video duration without changing messages', () => {
+    expect(validateMediaFileCheap({
+      sizeBytes: 1024,
+      contentType: 'application/pdf',
+    })).toBe('Unsupported file type. Use JPEG, PNG, HEIC, WEBP, MP4, or MOV.');
+    expect(validateMediaFileCheap({
+      sizeBytes: null,
+      contentType: 'image/jpeg',
+    })).toBe('Could not read file size. Try another photo or video.');
+    expect(validateMediaFileCheap({
+      sizeBytes: 21 * 1024 * 1024,
+      contentType: 'image/jpeg',
+    })).toBe('Photos must be 20 MB or smaller.');
+    expect(validateMediaFileCheap({
+      sizeBytes: MAX_VIDEO_SOURCE_BYTES + 1,
+      contentType: 'video/mp4',
+    })).toBe('This video file is too large. Try recording a shorter clip or a lower camera quality.');
+
+    expect(validateVideoDuration(null)).toBe('Could not read video duration. Try another clip.');
+    expect(validateVideoDuration(180_001)).toBe('Videos must be 3 minutes or shorter.');
+    expect(validateVideoDuration(180_000)).toBeNull();
   });
 
   it('maps content types to extensions', () => {

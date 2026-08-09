@@ -248,7 +248,7 @@ Memories support three formats, derived from what the user provides — no upfro
 
 **Acceptance criteria**
 
-- Memory date defaults to today; backdating allowed. When creating a `media` memory from library photos, the date pre-fills to the earliest valid EXIF capture date across the attached photos, shown as a visible, user-overridable suggestion (labeled "From photo"); it falls back to today when no attached photo has usable capture-date metadata. Manually changing the date always wins for the rest of that composer session. Camera captures, videos, web picks, and incoming shared media never change the date on their own. See [docs/features/media-memories.md](./features/media-memories.md).
+- Memory date defaults to today; backdating allowed. When creating a `media` memory, supported library-picked or incoming-shared photos and videos may pre-fill the date to the earliest valid capture date across the attached media, shown as a visible, user-overridable suggestion (labeled "From media"). It falls back to today when no attachment has usable metadata. Manually changing the date always wins for the rest of that composer session. Camera captures and web picks never change the date on their own. See [docs/features/media-memories.md](./features/media-memories.md).
 - Text content required for `text_illustration` and `text_only`; optional caption for `media` type
 - Optional: tagged family members (multi-select, no global maximum). AI-illustrated memories support at most **6 tagged members**; text-only and media memories may tag the full family roster.
 - **Plain text only** — line breaks for paragraphs; no bold, italic, or rich text

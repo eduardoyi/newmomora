@@ -2,8 +2,11 @@ import { useIncomingShare } from 'expo-sharing';
 import { useEffect, useRef, useState } from 'react';
 
 import type { MediaAttachment } from '@/components/memory-media-picker';
+import { extractImageCaptureDateIso } from '@/utils/image-exif-capture-date';
+import { getLocalFileSizeBytes } from '@/utils/local-files';
 import { prepareSharedMedia } from '@/utils/prepare-shared-media';
 import { getSharedVideoDurationMs } from '@/utils/shared-video-duration';
+import { extractVideoCaptureDateIso } from '@/utils/video-capture-date';
 
 function createAttachmentId(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
@@ -25,10 +28,13 @@ export function useIncomingMemoryShare({ onPrepared }: UseIncomingMemoryShareOpt
     clearSharedPayloads,
     error,
     isResolving,
+    refreshSharePayloads,
     resolvedSharedPayloads,
     sharedPayloads,
   } = useIncomingShare();
   const hasPreparedRef = useRef(false);
+  const latestSharedPayloadsRef = useRef(sharedPayloads);
+  const preparationGenerationRef = useRef(0);
   const onPreparedRef = useRef(onPrepared);
   const [isPreparing, setIsPreparing] = useState(sharedPayloads.length > 0);
 
@@ -37,9 +43,28 @@ export function useIncomingMemoryShare({ onPrepared }: UseIncomingMemoryShareOpt
   }, [onPrepared]);
 
   useEffect(() => {
+    if (latestSharedPayloadsRef.current !== sharedPayloads) {
+      latestSharedPayloadsRef.current = sharedPayloads;
+      preparationGenerationRef.current += 1;
+      hasPreparedRef.current = false;
+    }
+
+    if (sharedPayloads.length === 0 && !isResolving) {
+      hasPreparedRef.current = false;
+      return;
+    }
+
+    const clearAndRefreshSharedPayloads = () => {
+      clearSharedPayloads();
+      // Expo's clear function only clears its native singleton. Refresh the
+      // hook too so a later share of the same URI is not mistaken for the
+      // payload that was already consumed.
+      refreshSharePayloads();
+    };
+
     if (error && !hasPreparedRef.current) {
       hasPreparedRef.current = true;
-      clearSharedPayloads();
+      clearAndRefreshSharedPayloads();
       setIsPreparing(false);
       onPreparedRef.current([], 'Could not open the shared photos or videos. Try sharing them again.');
       return;
@@ -50,20 +75,37 @@ export function useIncomingMemoryShare({ onPrepared }: UseIncomingMemoryShareOpt
     }
 
     hasPreparedRef.current = true;
+    const preparationGeneration = preparationGenerationRef.current;
     setIsPreparing(true);
     void prepareSharedMedia(resolvedSharedPayloads, {
       createId: createAttachmentId,
+      getLocalFileSizeBytes,
+      getImageCaptureDateIso: extractImageCaptureDateIso,
       getVideoDurationMs: getSharedVideoDurationMs,
+      getVideoCaptureDateIso: extractVideoCaptureDateIso,
     }).then(({ attachments, errorMessage }) => {
-      clearSharedPayloads();
+      if (preparationGeneration !== preparationGenerationRef.current) {
+        return;
+      }
+      clearAndRefreshSharedPayloads();
       setIsPreparing(false);
       onPreparedRef.current(attachments, errorMessage);
     }).catch(() => {
-      clearSharedPayloads();
+      if (preparationGeneration !== preparationGenerationRef.current) {
+        return;
+      }
+      clearAndRefreshSharedPayloads();
       setIsPreparing(false);
       onPreparedRef.current([], 'Could not open the shared photos or videos. Try sharing them again.');
     });
-  }, [clearSharedPayloads, error, isResolving, resolvedSharedPayloads]);
+  }, [
+    clearSharedPayloads,
+    error,
+    isResolving,
+    refreshSharePayloads,
+    resolvedSharedPayloads,
+    sharedPayloads,
+  ]);
 
   return isPreparing || isResolving;
 }

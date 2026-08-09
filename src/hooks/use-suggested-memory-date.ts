@@ -42,8 +42,9 @@ function reducer(state: State, action: Action): State {
 }
 
 /**
- * Derives the new-memory date pill's value from attached library photos'
- * EXIF capture dates, while remaining fully overridable by the user.
+ * Derives the new-memory date pill's value from attached media's capture-date
+ * scalar, regardless of whether it came from a library picker or OS share,
+ * while remaining fully overridable by the user.
  *
  * - The session baseline (`today`, at mount) is captured once via a lazy
  *   initializer so it never drifts if the screen stays open across
@@ -51,7 +52,7 @@ function reducer(state: State, action: Action): State {
  * - `memoryDate` and `dateSource` live in one reducer/state object so they
  *   can never be observed in an inconsistent combination.
  * - While `dateSource !== 'user'`, a non-null derived suggestion applies
- *   with source `'media'`; a null suggestion (no dated photo attached)
+ *   with source `'media'`; a null suggestion (no dated media attached)
  *   restores the session baseline with source `'default'`.
  * - `setMemoryDate` is the only way to reach source `'user'`; after that,
  *   attachment changes never touch `memoryDate` again for the life of this

@@ -17,10 +17,9 @@ persistence are required.
 - A new-memory session starts with today's local calendar date, as it does now.
 - Library photos with a valid EXIF capture date suggest the earliest valid
   calendar date across all currently attached photos.
-- Videos, camera captures, web picks, and incoming-share attachments do not
-  change the date unless another attached library photo has a valid extracted
-  date.
-- The suggestion is visible and announced as coming from photo metadata.
+- Camera captures and web picks do not change the date. Library and incoming
+  share support for photos/videos is recorded in the dated addenda below.
+- The suggestion is visible and announced as coming from media metadata.
 - Changing the date through the date picker is a user override. No later add,
   remove, reorder, or wholesale replacement of attachments may overwrite it in
   that screen session.
@@ -225,18 +224,17 @@ Rules:
   `attachedMedia`.
 - Pass `includeCaptureDate` to the create-screen `MemoryMediaPicker`. Do not
   pass it from `app/(app)/memory/[id]/edit.tsx`.
-- When `dateSource === 'media'`, render a muted `From photo` hint beside the
+- When `dateSource === 'media'`, render a muted `From media` hint beside the
   date pill. Give it a stable test ID such as `new-memory-date-source`.
 - Change `datePillWrap` to a row layout with centered alignment and spacing;
   verify narrow screens and dynamic type do not clip the date control or hint.
 - Add optional `accessibilityHint` support to `DatePickerField` and pass
-  `Suggested from photo date` while the source is `media`.
+  `Suggested from media date` while the source is `media`.
 - Prevent duplicate screen-reader output from the adjacent visible hint (for
   example, hide that Text from the accessibility tree while keeping the hint
   on the date Pressable).
-- Keep incoming-share behavior unchanged: its attachments lack
-  `capturedAtIso`, so they retain the session default unless the user already
-  chose another date.
+- Incoming shares may attach the same derived `capturedAtIso` scalar through
+  their dedicated extraction path; no raw metadata reaches composer state.
 
 ### 5. Tests in the same PR
 
@@ -314,7 +312,7 @@ Required mocks (nontrivial — budget for them): `usePendingMemoryUploads`
   `DateTimeOriginal`/`DateTimeDigitized` and document how it was produced.
 - Add `.maestro/flows/memories/prefill-date-from-photo.yaml` (or extend the
   existing media-create flow if fixture selection is deterministic) to seed the
-  gallery, select that image, assert the displayed known date and `From photo`,
+  gallery, select that image, assert the displayed known date and `From media`,
   override the date, and save successfully.
 - The date pill renders via `toLocaleDateString` (`src/utils/dates.ts`), so
   "Mar 5, 2024" only appears on an en-US device. Pin the emulator/simulator
@@ -377,7 +375,11 @@ Also manually verify on physical/simulated iOS and Android with:
 - ~~Video container creation metadata~~ **Done (2026-07-16):** see "Addendum:
   video container capture-date parsing" below.
 - Memory edit-screen date suggestion
-- Incoming-share EXIF extraction
+- ~~Incoming-share EXIF extraction~~ **Done (2026-08-09):** incoming shared
+  JPEG/HEIC photos and MP4/MOV videos now derive the same presentation-only
+  `capturedAtIso` scalar through `useIncomingMemoryShare` and
+  `prepareSharedMedia`; see
+  [incoming-share-capture-date.md](incoming-share-capture-date.md).
 - Server-side EXIF parsing or validation
 - Persisting per-asset capture timestamps
 - Changing the single-date memory model for multi-day selections
@@ -422,11 +424,12 @@ skip `mdat`'s payload by its declared size, never read it.
   `creation_time == 0` (the format's own "unknown" sentinel), a resulting
   local year before 1990, or a resulting local date more than one calendar
   day beyond `today` are all rejected (null), never clamped.
-- **Same scope boundaries as photos:** library picker only (`includeCaptureDate`,
-  create screen only); camera captures, web picks, and incoming-share
-  attachments do not get a video capture date. `use-suggested-memory-date.ts`
-  required no changes -- it already treats `capturedAtIso` generically
-  regardless of which extractor produced it.
+- **Scope after incoming-share support:** library picker extraction remains
+  gated by `includeCaptureDate` and create-screen-only; camera captures and
+  web picks still do not get a date. Incoming shared JPEG/HEIC photos and
+  MP4/MOV videos independently derive the same presentation-only scalar (see
+  [incoming-share-capture-date.md](incoming-share-capture-date.md)).
+  `use-suggested-memory-date.ts` stays source-agnostic.
 - **Same privacy posture:** only the derived `YYYY-MM-DD` scalar is returned
   from `extractVideoCaptureDateIso`; no other atom/box content (track
   metadata, any embedded location atoms, device info) is retained past the

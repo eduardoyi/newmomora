@@ -501,7 +501,7 @@ export default function NewMemoryScreen() {
         {/* Date pill */}
         <View style={styles.datePillWrap}>
           <DatePickerField
-            accessibilityHint={dateSource === 'media' ? 'Suggested from photo date' : undefined}
+            accessibilityHint={dateSource === 'media' ? 'Suggested from media date' : undefined}
             onChange={setMemoryDate}
             placeholder="Today"
             testID="new-memory-date"

@@ -261,7 +261,7 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
 
     const dateField = screen.getByTestId('new-memory-date');
     expect(dateField.props.accessibilityLabel).toContain('2024');
-    expect(dateField.props.accessibilityHint).toBe('Suggested from photo date');
+    expect(dateField.props.accessibilityHint).toBe('Suggested from media date');
   });
 
   it('changing the date, then attaching and removing media, preserves the user date and removes the hint', async () => {
@@ -298,7 +298,7 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
     expect(screen.getByTestId('new-memory-date').props.accessibilityLabel).toBe(userChosenLabel);
   });
 
-  it('an incoming-share replacement without metadata follows the documented default/override behavior', async () => {
+  it('incoming shared capture dates suggest the date, remain user-overridable, and are not posted', async () => {
     let onPrepared:
       | ((attachments: { id: string; capturedAtIso?: string }[], message: string | null) => void)
       | undefined;
@@ -309,38 +309,73 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
 
     const screen = renderScreen();
 
-    // Before any override, a dated photo suggests its date.
-    await attachPhoto(
-      screen,
-      buildImageAsset({ exif: { DateTimeOriginal: '2024:03:05 10:00:00' } }),
-    );
-    expect(screen.queryByTestId('new-memory-date-source', { includeHiddenElements: true })).toBeTruthy();
-
-    // An incoming share wholesale-replaces attachedMedia with an asset that
-    // lacks capturedAtIso (incoming-share extraction is out of scope) --
-    // the suggestion is gone, so the date restores to the session default.
+    // Shared media uses the same presentation-only scalar as a library pick.
     act(() => {
       onPrepared?.(
-        [{ id: 'shared-1', uri: 'file:///shared.jpg', contentType: 'image/jpeg', sizeBytes: 10 } as never],
+        [{
+          id: 'shared-1',
+          uri: 'file:///shared.jpg',
+          contentType: 'image/jpeg',
+          sizeBytes: 10,
+          capturedAtIso: '2024-03-05',
+        } as never],
         null,
       );
     });
 
-    expect(screen.queryByTestId('new-memory-date-source', { includeHiddenElements: true })).toBeNull();
+    expect(screen.getByTestId('new-memory-date-source', { includeHiddenElements: true })).toBeTruthy();
+    expect(screen.getByTestId('new-memory-date').props.accessibilityLabel).toContain('2024');
 
-    // Once the user has overridden the date, an incoming-share replacement
-    // must not touch it.
+    // Once the user has overridden the date, a later incoming-share
+    // replacement must not touch it, even when it has a different date.
     changeDateThroughPicker(screen, new Date(2022, 5, 15));
     const userChosenLabel = screen.getByTestId('new-memory-date').props.accessibilityLabel;
 
     act(() => {
       onPrepared?.(
-        [{ id: 'shared-2', uri: 'file:///shared2.jpg', contentType: 'image/jpeg', sizeBytes: 10 } as never],
+        [{
+          id: 'shared-2',
+          uri: 'file:///shared2.jpg',
+          contentType: 'image/jpeg',
+          sizeBytes: 10,
+          capturedAtIso: '2021-01-01',
+        } as never],
         null,
       );
     });
 
     expect(screen.getByTestId('new-memory-date').props.accessibilityLabel).toBe(userChosenLabel);
+    expect(screen.queryByTestId('new-memory-date-source', { includeHiddenElements: true })).toBeNull();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+    const input = enqueue.mock.calls[0][0];
+    expect(input.memoryDate).toBe('2022-06-15');
+    expect(JSON.stringify(input)).not.toContain('capturedAtIso');
+    expect(input.mediaAssets[0]).not.toHaveProperty('capturedAtIso');
+  });
+
+  it('an undated incoming share preserves the session baseline and does not show a suggestion', () => {
+    let onPrepared:
+      | ((attachments: { id: string; capturedAtIso?: string }[], message: string | null) => void)
+      | undefined;
+    mockedUseIncomingMemoryShare.mockImplementation((options) => {
+      onPrepared = options.onPrepared;
+      return false;
+    });
+
+    const screen = renderScreen();
+    const baselineLabel = screen.getByTestId('new-memory-date').props.accessibilityLabel;
+
+    act(() => {
+      onPrepared?.(
+        [{ id: 'shared-undated', uri: 'file:///shared.jpg', contentType: 'image/jpeg', sizeBytes: 10 } as never],
+        null,
+      );
+    });
+
+    expect(screen.getByTestId('new-memory-date').props.accessibilityLabel).toBe(baselineLabel);
     expect(screen.queryByTestId('new-memory-date-source', { includeHiddenElements: true })).toBeNull();
   });
 

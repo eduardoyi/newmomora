@@ -70,7 +70,12 @@ export function isVideoContentType(contentType: string): boolean {
   return ALLOWED_VIDEO_CONTENT_TYPES.has(contentType);
 }
 
-export function validateMediaFile(input: ValidateMediaFileInput): string | null {
+/**
+ * Checks properties that are available before any file/native I/O. Shared
+ * media uses this as a batch preflight so unsupported or oversized payloads
+ * cannot trigger duration or metadata reads.
+ */
+export function validateMediaFileCheap(input: ValidateMediaFileInput): string | null {
   if (!ALLOWED_MEDIA_CONTENT_TYPES.has(input.contentType)) {
     return 'Unsupported file type. Use JPEG, PNG, HEIC, WEBP, MP4, or MOV.';
   }
@@ -80,14 +85,6 @@ export function validateMediaFile(input: ValidateMediaFileInput): string | null 
   }
 
   if (isVideoContentType(input.contentType)) {
-    if (input.durationMs == null || input.durationMs <= 0) {
-      return 'Could not read video duration. Try another clip.';
-    }
-
-    if (input.durationMs > MAX_VIDEO_DURATION_MS) {
-      return 'Videos must be 3 minutes or shorter.';
-    }
-
     // Pick-time check: a sanity cap on the raw/original file, not the
     // post-compression upload cap (MAX_VIDEO_BYTES) -- compression happens
     // later, in the upload path, which enforces that cap for real. See the
@@ -104,6 +101,31 @@ export function validateMediaFile(input: ValidateMediaFileInput): string | null 
   }
 
   return null;
+}
+
+/** Required validation after the video-duration probe completes. */
+export function validateVideoDuration(durationMs: number | null | undefined): string | null {
+  if (durationMs == null || durationMs <= 0) {
+    return 'Could not read video duration. Try another clip.';
+  }
+
+  if (durationMs > MAX_VIDEO_DURATION_MS) {
+    return 'Videos must be 3 minutes or shorter.';
+  }
+
+  return null;
+}
+
+/** Public composed validator retained for picker callers. */
+export function validateMediaFile(input: ValidateMediaFileInput): string | null {
+  const cheapValidationError = validateMediaFileCheap(input);
+  if (cheapValidationError) {
+    return cheapValidationError;
+  }
+
+  return isVideoContentType(input.contentType)
+    ? validateVideoDuration(input.durationMs)
+    : null;
 }
 
 export function getMediaExtensionFromContentType(contentType: string): string | null {
