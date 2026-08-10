@@ -39,6 +39,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Portrait timeline | [portrait-timeline.md](./portrait-timeline.md) | done |
 | Memories & illustrations | [memories.md](./memories.md) | done |
 | Media memories (photo & video) | [media-memories.md](./media-memories.md) | done |
+| Gallery import (AI-staged camera-roll memories) | [gallery-import.md](./gallery-import.md) | done; production rollout gated |
 | Audio memories | [audio-memories.md](./audio-memories.md) | planned |
 | Calendar ribbon | [calendar.md](./calendar.md) | done |
 | Inline links in memory text | [inline-links.md](./inline-links.md) | done |

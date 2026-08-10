@@ -1,0 +1,47 @@
+appId: com.memora.app
+---
+# Run only in a development client built with both gallery flags enabled. The
+# client-local E2E seam supplies deterministic media and backend state; it is
+# not available in store/release binaries.
+- runFlow: ../auth/login.yaml
+- tapOn: "Settings"
+- tapOn:
+    id: settings-gallery-import
+- assertVisible:
+    id: gallery-import-entry
+- tapOn:
+    id: gallery-import-start
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-review
+    timeout: 30000
+- tapOn:
+    id: gallery-import-review
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-set-aside
+    timeout: 15000
+- tapOn:
+    id: gallery-import-set-aside
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-restore-e2e-candidate-one
+    timeout: 15000
+- tapOn:
+    id: gallery-import-restore-e2e-candidate-one
+- tapOn:
+    id: gallery-import-keep
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-approval
+    timeout: 15000
+- tapOn:
+    id: gallery-import-caption
+- eraseText
+- inputText: "A deliberately edited family moment."
+- tapOn:
+    id: gallery-import-approve
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-set-aside
+    timeout: 30000

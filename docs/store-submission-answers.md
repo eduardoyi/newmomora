@@ -17,6 +17,7 @@ The draft reflects the current repository, Privacy Policy, and Terms of Service:
 - The mobile dependency/config audit found no analytics, crash-reporting, advertising, attribution, App Tracking Transparency, or IDFA SDK. The release now includes RevenueCat's in-app-purchase SDK for Apple/Google subscription processing; declare purchase history/transaction-linked identifiers only if the final store privacy forms ask for them, and verify the final native dependency graph before submission.
 - The website uses Google Tag Manager, but no equivalent analytics SDK is declared in the mobile app. Website-only GTM data is therefore excluded from the app declarations. Recheck the final native dependency graph before submission.
 - Supabase provides authentication/database/functions; Cloudflare R2 stores private media; OpenAI processes requested AI and voice features; Expo/APNs/FCM deliver pushes; Bento delivers transactional email.
+- Gallery import is implemented but remains release-gated. When enabled in a compatible build, it reads permitted photo-library metadata on-device and sends transient downscaled previews to Momora/OpenAI for curation before a parent chooses to retain any full-resolution original. Android and iOS development build `1.3.0` build `46` were physically verified on 2026-08-10; this draft does **not** record a production artifact, Apple/Google console update, or Play broad-photo-access approval.
 - Account and family data is stored against account/family identifiers. Photos, videos, journal text, comments, AI output, and most operational records are therefore linked to an account even though access is private.
 - Voice audio is intended to be processed temporarily and discarded after transcription. Images are re-encoded before upload to remove EXIF/GPS; video-container metadata is not stripped.
 - Account deletion is available in-app and through `https://usemomora.com/delete-account/`, with a 15-day grace period and limited safety/legal retention described in the Privacy Policy.
@@ -47,7 +48,7 @@ For every selected type below, answer **Data Linked to the User: Yes** and **Use
 | Contact Info → Email Address | Yes | App Functionality | Authentication, reviewer access, account support, and transactional family-invite email. |
 | Sensitive Info | Yes, conservative | App Functionality; Product Personalization | Child/family date of birth, gender, and potentially sensitive profile details are used for age-aware portraits/illustrations. Use the closest current console type. |
 | User Content → Emails or Text Messages | Yes | App Functionality | Comments are private in-app group messages. Apple specifically says non-SMS private in-app messages belong here. |
-| User Content → Photos or Videos | Yes | App Functionality; Product Personalization | Required family-profile photo, optional memory photos/videos, AI portrait inputs/outputs, and AI illustrations. |
+| User Content → Photos or Videos | Yes | App Functionality; Product Personalization | Required family-profile photo, optional memory photos/videos, AI portrait inputs/outputs, AI illustrations, and—when the separately gated gallery import is enabled—transient downscaled photo previews curated by OpenAI before a parent approves an original. |
 | User Content → Audio Data | Yes, conservative | App Functionality | Optional voice recordings leave the device for transcription. See the transient-processing gate below. |
 | User Content → Other User Content | Yes | App Functionality; Product Personalization | Memory text/captions, profile notes, report notes/reasons, links, generated prompts, and other free-form journal content. |
 | Identifiers → User ID | Yes | App Functionality | Supabase account IDs, family membership attribution, and report/block ownership. |
@@ -71,6 +72,7 @@ Clarifications:
 
 - Do not declare location merely because infrastructure sees an IP address; Apple says to map IP collection according to how it is actually used. Momora uses it for request security/rate limiting, not location inference.
 - Do not declare raw photo EXIF/GPS metadata: it is read on-device only to derive a date, and only the derived date is transmitted. Apple excludes data processed only on-device. The selected Photos/Videos and Other Data Types entries already cover the uploaded media and stored date.
+- Gallery import does not change the camera roll. Before approval it sends small private downscaled photo previews to Momora/its AI processor for curation; full-resolution originals are uploaded and retained only after the parent explicitly approves a media memory. This is not a basis to omit **Photos or Videos** from App Privacy. Confirm the final production OpenAI retention/processing terms and the published privacy-policy wording before submission.
 - Do not declare mobile analytics or advertising because website GTM is not embedded in the mobile app.
 - Select **Purchases / Purchase History** only if the current App Store Connect form maps RevenueCat's subscription purchase/restore processing to that category; the app does process purchases to grant Momora Plus, but it does not use them for advertising or tracking.
 
@@ -117,7 +119,7 @@ Unless a row says otherwise, use:
 | Personal info → User IDs | Required | App functionality; Account management; Fraud prevention, security, and compliance | Supabase/account and membership identifiers. |
 | Personal info → Other info | Required, conservative | App functionality; Personalization | Device timezone is stored automatically; optional DOB/gender drive age-aware AI output. |
 | Messages → Other in-app messages | Optional | App functionality | Household comments. |
-| Photos and videos → Photos | Required | App functionality; Personalization | A first family-profile photo is required for the core onboarding/portrait flow. |
+| Photos and videos → Photos | Required | App functionality; Personalization | A first family-profile photo is required for onboarding. If gallery import is enabled, permitted photo-library items are processed as transient downscaled previews for AI curation before a parent may approve full-resolution originals into the journal. |
 | Photos and videos → Videos | Optional | App functionality | User chooses whether to attach memory videos. |
 | Audio files → Voice or sound recordings | Optional; **ephemeral: Yes** | App functionality | Voice input is processed in memory for transcription and not intentionally stored. |
 | App activity → Other user-generated content | Optional | App functionality; Personalization; Fraud prevention, security, and compliance | Memory text/captions, profile notes, comments/report notes, links, and AI inputs/output metadata. |
@@ -153,11 +155,40 @@ The draft uses **Shared: No** because Supabase, Cloudflare R2, OpenAI, Expo/APNs
 3. Review pasted-link title fetching. A saved URL is sent server-to-server to the destination website, which is not Momora's service provider. If a user would not reasonably expect that transfer or the saved URL can itself be personal data, either add an appropriate prominent disclosure/consent or mark the applicable **Other user-generated content** row as **Shared** for App functionality. Save the Data Safety form as a draft until this is resolved.
 4. Verify no SDK or provider added after this audit transmits additional data.
 
+### Gallery import: Android Photo and Video Permissions declaration
+
+**HUMAN CONSOLE ACTION REQUIRED — do not mark complete until Google Play has
+approved the real production flow.** Android whole-library gallery import uses
+`READ_MEDIA_IMAGES` (photos only; it does **not** request
+`READ_MEDIA_VIDEO` or `ACCESS_MEDIA_LOCATION`). Submit the Google Play **Photo
+and Video Permissions** declaration only with a reviewable build where this is
+a prominent core feature. The declaration/reviewer materials must state:
+
+- Momora scans the permitted photo library on-device to group possible family
+  events; a system Photo Picker cannot provide the automatic library-wide
+  cluster/curation pass, so it is not represented as an equivalent fallback.
+- Before the system prompt, the app discloses that it uploads transient,
+  downscaled private previews to Momora and OpenAI for curation; it never
+  changes the camera roll; full-resolution originals are uploaded only after
+  explicit parent approval.
+- Provide current reviewer credentials, exact navigation steps, denial/limited
+  access behavior, and a video showing disclosure → permission → scan → review
+  → approval. Test/production tracks declaring broad access are part of the
+  compliance surface; remove/deactivate obsolete noncompliant bundles.
+- The feature must be accurately described in the Play listing, Data Safety
+  form, and Privacy Policy. Android production rollout is blocked until the
+  declaration is approved; approval, a deployment, or a store build has **not**
+  been recorded by this document.
+
+For Apple, no equivalent broad-access declaration is recorded here, but the
+native permission usage text, App Privacy Photos/Videos selection, just-in-time
+disclosure, and final privacy policy must be verified in the shipped archive.
+
 ### Retention and deletion wording
 
 Use this when the console asks for an explanation:
 
-> Momora provides in-app and web account-deletion requests. Deletion enters a 15-day grace period during which the account holder can cancel. When deletion completes, an owner's family journals and their associated content are deleted. In journals owned by someone else, shared content may remain without the deleted account's attribution, as described in the Privacy Policy. Voice audio is not intentionally retained after transcription. Minimal report/security records may be retained or de-identified only as needed for safety, abuse prevention, disputes, or legal obligations.
+> Momora provides in-app and web account-deletion requests. Deletion enters a 15-day grace period during which the account holder can cancel. When deletion completes, an owner's family journals and their associated content are deleted. In journals owned by someone else, shared content may remain without the deleted account's attribution, as described in the Privacy Policy. Voice audio is not intentionally retained after transcription. If gallery import is enabled, unapproved downscaled previews, staged suggestions, and reserved-but-uncommitted originals are transient private data and are removed on cancellation/expiry and during applicable account/family cleanup; full-resolution originals remain only after explicit memory approval and then follow normal journal retention. Minimal report/security records may be retained or de-identified only as needed for safety, abuse prevention, disputes, or legal obligations.
 
 ## 3. Apple age-rating questionnaire
 

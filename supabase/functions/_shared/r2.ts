@@ -1,6 +1,7 @@
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
@@ -54,10 +55,15 @@ export function createR2Client(config: R2Config): S3Client {
   });
 }
 
+export function r2UnhoistableMetadataHeaders(metadata?: Record<string, string>): Set<string> {
+  return new Set(Object.keys(metadata ?? {}).map((key) => `x-amz-meta-${key.toLowerCase()}`));
+}
+
 export async function createPresignedPutUrl(
   objectKey: string,
   contentType: string,
   expiresIn = DEFAULT_UPLOAD_EXPIRES_IN,
+  metadata?: Record<string, string>,
 ): Promise<string> {
   const config = getR2Config();
   const client = createR2Client(config);
@@ -66,9 +72,49 @@ export async function createPresignedPutUrl(
     Bucket: config.bucket,
     Key: objectKey,
     ContentType: contentType,
+    Metadata: metadata,
   });
 
-  return getSignedUrl(client, command, { expiresIn });
+  // By default the AWS presigner hoists `x-amz-meta-*` into query params.
+  // R2 accepts that PUT but does not persist the values as object metadata,
+  // which defeats our post-upload HEAD verification. Keep metadata as signed
+  // request headers and return the same values to the uploader separately.
+  const unhoistableHeaders = r2UnhoistableMetadataHeaders(metadata);
+  return getSignedUrl(client, command, { expiresIn, unhoistableHeaders });
+}
+
+/**
+ * The gallery flow must verify the object that actually reached R2, rather
+ * than trusting upload metadata reflected back by the device.  Keep the
+ * result deliberately small so callers cannot accidentally log object data.
+ */
+export interface R2ObjectHead {
+  contentLength: number | null;
+  contentType: string | null;
+  metadata: Record<string, string>;
+}
+
+export async function headObject(objectKey: string): Promise<R2ObjectHead | null> {
+  const config = getR2Config();
+  const client = createR2Client(config);
+  try {
+    const response = await client.send(new HeadObjectCommand({
+      Bucket: config.bucket,
+      Key: objectKey,
+    }));
+    return {
+      contentLength: typeof response.ContentLength === 'number' ? response.ContentLength : null,
+      contentType: response.ContentType ?? null,
+      metadata: response.Metadata ?? {},
+    };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : '';
+    const status = error && typeof error === 'object' && '$metadata' in error
+      ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode
+      : undefined;
+    if (name === 'NotFound' || name === 'NoSuchKey' || status === 404) return null;
+    throw error;
+  }
 }
 
 export async function createPresignedGetUrls(

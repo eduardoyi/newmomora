@@ -87,6 +87,40 @@ describe('KeyboardStickyShell', () => {
     expect(getByTestId('shell-scroll').props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE + 96);
   });
 
+  it('pins a measured safe-area footer without keyboard translation when explicitly disabled', () => {
+    const { getByTestId, queryByTestId } = renderShell(
+      <KeyboardStickyShell
+        fixedFooterTestID="shell-fixed-footer"
+        footer={<Pressable testID="shell-primary-action" />}
+        footerKeyboardSticky={false}
+        footerTestID="shell-footer"
+        scrollTestID="shell-scroll"
+        stickyFooterTestID="shell-sticky-footer"
+      >
+        <TextInput testID="shell-locked-input" editable={false} />
+      </KeyboardStickyShell>,
+    );
+
+    const fixedFooter = getByTestId('shell-fixed-footer');
+    const footer = getByTestId('shell-footer');
+    const scrollView = getByTestId('shell-scroll');
+    expect(queryByTestId('shell-sticky-footer')).toBeNull();
+    expect(fixedFooter.props.edges).toEqual({ bottom: 'additive', left: 'off', right: 'off', top: 'off' });
+    expect(footer.props.style).toEqual(
+      expect.arrayContaining([expect.objectContaining({ paddingBottom: getStickyFooterBottomPadding(34) })]),
+    );
+
+    let footerAncestor = footer.parent;
+    while (footerAncestor) {
+      expect(footerAncestor).not.toBe(scrollView);
+      footerAncestor = footerAncestor.parent;
+    }
+
+    expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
+    fireEvent(fixedFooter, 'layout', { nativeEvent: { layout: { height: 104 } } });
+    expect(getByTestId('shell-scroll').props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE + 104);
+  });
+
   it('does not reserve a phantom action area on screens without a footer', () => {
     const { getByTestId, queryByTestId } = renderShell(
       <KeyboardStickyShell footerTestID="shell-footer" scrollTestID="shell-scroll" stickyFooterTestID="shell-sticky-footer">

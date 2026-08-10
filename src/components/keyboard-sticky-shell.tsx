@@ -82,6 +82,12 @@ interface KeyboardStickyShellProps {
   scrollTestID?: string;
   footerTestID?: string;
   stickyFooterTestID?: string;
+  /**
+   * Disable keyboard translation for a pinned footer whose screen cannot
+   * open the keyboard (for example, a fully locked recovery state).
+   */
+  footerKeyboardSticky?: boolean;
+  fixedFooterTestID?: string;
 }
 
 export function KeyboardStickyShell({
@@ -96,6 +102,8 @@ export function KeyboardStickyShell({
   scrollTestID,
   footerTestID,
   stickyFooterTestID,
+  footerKeyboardSticky = true,
+  fixedFooterTestID,
 }: KeyboardStickyShellProps) {
   const { bottom: bottomInset } = useSafeAreaInsets();
 
@@ -112,18 +120,26 @@ export function KeyboardStickyShell({
     setFooterHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
   };
 
-  const footerView = footer ? (
-    <KeyboardStickyView offset={{ closed: 0, opened: bottomInset }} testID={stickyFooterTestID}>
-      <SafeAreaView edges={['bottom']} onLayout={handleFooterLayout}>
-        <View
-          style={[footerStyle, { paddingBottom: getStickyFooterBottomPadding(bottomInset) }]}
-          testID={footerTestID}
-        >
-          {footer}
-        </View>
-      </SafeAreaView>
-    </KeyboardStickyView>
+  const measuredFooter = footer ? (
+    <SafeAreaView
+      edges={['bottom']}
+      onLayout={handleFooterLayout}
+      testID={footerKeyboardSticky ? undefined : fixedFooterTestID}
+    >
+      <View
+        style={[footerStyle, { paddingBottom: getStickyFooterBottomPadding(bottomInset) }]}
+        testID={footerTestID}
+      >
+        {footer}
+      </View>
+    </SafeAreaView>
   ) : null;
+
+  const footerView = measuredFooter && footerKeyboardSticky ? (
+    <KeyboardStickyView offset={{ closed: 0, opened: bottomInset }} testID={stickyFooterTestID}>
+      {measuredFooter}
+    </KeyboardStickyView>
+  ) : measuredFooter;
 
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={safeAreaStyle} testID={testID}>

@@ -10,7 +10,8 @@
   "vars": {
     "ENVIRONMENT": "production",
     "SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-illustration-bridge",
-    "PORTRAIT_SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-portrait-bridge"
+    "PORTRAIT_SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-portrait-bridge",
+    "GALLERY_SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-gallery-import-bridge"
   },
   "secrets": {
     "required": [
@@ -18,6 +19,8 @@
       "SUPABASE_BRIDGE_HMAC_SECRET",
       "PORTRAIT_DISPATCH_SIGNING_SECRET",
       "PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET",
+      "GALLERY_DISPATCH_SIGNING_SECRET",
+      "GALLERY_SUPABASE_BRIDGE_HMAC_SECRET",
       "OPENAI_API_KEY"
     ]
   },
@@ -37,6 +40,10 @@
     {
       "binding": "STYLE_REFERENCES",
       "bucket_name": "momora-prod"
+    },
+    {
+      "binding": "GALLERY_IMPORT_PREVIEWS",
+      "bucket_name": "momora-prod"
     }
   ],
   "images": {
@@ -52,6 +59,11 @@
       "binding": "PORTRAIT_GENERATION_WORKFLOW",
       "name": "momora-portrait-generation",
       "class_name": "PortraitGenerationWorkflow"
+    },
+    {
+      "binding": "GALLERY_IMPORT_WORKFLOW",
+      "name": "momora-gallery-import",
+      "class_name": "GalleryImportWorkflow"
     }
   ],
   "env": {
@@ -60,7 +72,8 @@
       "vars": {
         "ENVIRONMENT": "staging",
         "SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/workflow-illustration-bridge",
-        "PORTRAIT_SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/workflow-portrait-bridge"
+        "PORTRAIT_SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/workflow-portrait-bridge",
+        "GALLERY_SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/workflow-gallery-import-bridge"
       },
       "secrets": {
         "required": [
@@ -68,6 +81,8 @@
           "SUPABASE_BRIDGE_HMAC_SECRET",
           "PORTRAIT_DISPATCH_SIGNING_SECRET",
           "PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET",
+          "GALLERY_DISPATCH_SIGNING_SECRET",
+          "GALLERY_SUPABASE_BRIDGE_HMAC_SECRET",
           "OPENAI_API_KEY"
         ]
       },
@@ -87,6 +102,10 @@
         {
           "binding": "STYLE_REFERENCES",
           "bucket_name": "REPLACE_WITH_STAGING_MEMORY_ILLUSTRATIONS_BUCKET"
+        },
+        {
+          "binding": "GALLERY_IMPORT_PREVIEWS",
+          "bucket_name": "REPLACE_WITH_STAGING_MEMORY_ILLUSTRATIONS_BUCKET"
         }
       ],
       "images": {
@@ -102,6 +121,11 @@
           "binding": "PORTRAIT_GENERATION_WORKFLOW",
           "name": "momora-portrait-generation-staging",
           "class_name": "PortraitGenerationWorkflow"
+        },
+        {
+          "binding": "GALLERY_IMPORT_WORKFLOW",
+          "name": "momora-gallery-import-staging",
+          "class_name": "GalleryImportWorkflow"
         }
       ]
     }

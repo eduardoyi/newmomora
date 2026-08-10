@@ -483,6 +483,35 @@ are `From [Name]'s first year` for age-zero packages, `From [Month YYYY]` for
 month archives, and `A little look back` for mixed archive fallback packages;
 the title-copy migration backfills already-materialized package rows.
 
+### 2.1b Gallery import
+
+`20260809130000_gallery_import_foundation.sql` adds a device-bound, RPC-only
+staging domain for gallery import. It is deliberately not a second memory
+writer: `finalize_gallery_import_candidate` is the one atomic route that moves
+an approved staged item into `memories`/`memory_media`/tags.
+
+| Table / column | Canonical contract |
+|---|---|
+| `memories.creation_source` | Server-owned `manual \| onboarding \| gallery_import`; gallery provenance is operational only and is not rendered. |
+| `families.gallery_caption_language`, `gallery_caption_instructions` | Owner-managed BCP 47 locale and optional sanitized instruction (≤500 chars). |
+| `gallery_import_admission_settings` | Singleton server kill/admission configuration: `enabled`, first-30-day allowance, normal monthly allowance, review TTL (1–90 days; default 30), exactly-30-minute digest quiet period, policy epoch, and validated limit template. |
+| `gallery_import_runs` | `(family_id, actor_id)`, capability hash, algorithm/consent/permission snapshots, status `scanning\|processing\|reviewing\|completed\|cancelled\|expired\|failed`, immutable limit snapshot, and expiry/cleanup fence. A due completed run transitions to `expired` only when fenced cleanup claims its transient objects; approved memory/media and receipts are retained. One active run per family. |
+| `gallery_import_chunks`, `gallery_import_assets`, `gallery_import_cluster_results` | Bounded immutable manifest, opaque UUID tokens (never OS IDs), private preview receipt, Workflow ID/status, and per-cluster terminal ledger. |
+| `gallery_import_candidates`, `gallery_import_cluster_receipts` | Staged candidate (caption ≤1,000, 1–10 selected opaque tokens, at most three split groups), status and best-effort same-device/reinstall suppression receipt. No prompt/model response/semantic description is stored. |
+| `gallery_import_provider_attempts` | Private service-only reservation and scalar usage/error state: `reserved\|inflight\|completed\|failed\|ambiguous\|cancelled`; a possible paid ambiguous outcome is never auto-replayed. |
+| `gallery_import_approval_leases` | Candidate-bound stable memory ID, hash of lease token, exact expected/original-uploaded keys, state and cleanup fence for idempotent finalization. |
+| `gallery_import_digest_windows` | Per-family/actor approval aggregation and idempotent cron claim/send state. |
+| `gallery_import_workflow_bridge_nonces` | Service-only HMAC replay nonce with a bounded (default 10-minute) expiry. |
+
+Gallery staging tables have RLS enabled, no direct client grants, and no
+client-readable policies. All client access is through capability-bound,
+security-definer RPCs; all service operations are granted only to the service
+role. Composite run/candidate foreign keys, immutable-manifest/identity
+triggers, and transition validation prevent cross-run/family reassignment.
+The canonical migration also creates indexes for active runs, cleanup,
+candidate reads, clusters, and bridge-nonce expiry; it schedules digest sends
+every five minutes and cleanup hourly through Vault-backed `pg_cron` calls.
+
 ### 2.2 Indexes
 
 ```sql
@@ -839,6 +868,7 @@ Momora uses a **single private R2 bucket** (`R2_BUCKET`, e.g. `momora-prod`) wit
 | `{userId}/family/{memberId}/portraits/{versionId}/portrait/{attemptId}.webp` | Private (presigned) | Immutable durable portrait attempt/output. `.webp` is a REQUEST, not a guarantee — see footnote below. |
 | `{userId}/memories/{memoryId}/illustrations/{generationId}.{webp\|jpg}` | Private (presigned) | Immutable AI memory-illustration generation (`text_illustration` type). See footnote below. |
 | `{userId}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | Private (presigned) | Ordered user-uploaded memory photo/video assets (`media` type) |
+| `{userId}/gallery-import/{runId}/previews/{assetToken}.jpg` | Private, run-bound presigned PUT/5-minute signed GET | Transient 512px JPEG curation preview; never a normal media-upload key and deleted on cancel/expiry cleanup. |
 | `{userId}/memories/{memoryId}/media.{ext}` | Private (presigned) | Legacy single media object |
 | `_assets/styles/{illustration_style}.png` | Private (Edge Function read) | Style reference images |
 
@@ -900,6 +930,16 @@ sequenceDiagram
 | `delete-storage-object` | Delete a single object (rollback, memory delete cleanup) |
 
 AI generation functions (`generate-portrait-illustration`, `generate-illustration`) read/write R2 via S3-compatible API using server credentials.
+
+Gallery preview presigning is intentionally separate from `get-upload-url` and
+`upload-media`: the Edge Function selects the exact `{uid}/gallery-import/...`
+key after JWT, exact-family role, paid-access, run capability, token, type,
+byte/dimension/hash validation. It signs immutable metadata and dispatch HEADs
+the object before accepting a chunk. Approval originals also use server-chosen
+lease keys and a final HEAD check; after atomic finalization they are ordinary
+`memory_media` originals and follow normal retention. Unapproved previews and
+lease originals are fenced for deletion at cancellation/expiry/account/family
+cleanup. The device camera roll is never an R2 deletion target.
 
 ### Family-sharing storage authorization (Phase 3)
 
@@ -2051,6 +2091,40 @@ synchronously, never awaited, every failure swallowed to a `console.warn`
 [docs/features/memory-sharing.md](./features/memory-sharing.md) for the
 full contract, permission matrix, warm-hook call sites, and privacy notes.
 
+### 4.21 Gallery import
+
+The gallery import Edge surface is a capability-bound orchestration layer over
+the `gallery_import_*` RPCs. User endpoints validate a non-anonymous JWT,
+exact-family owner/manager role and paid write access; run/candidate endpoints
+also require the origin device’s high-entropy capability. The capability stays
+in the authenticated local checkpoint and is stored only as a hash in
+`gallery_import_runs`.
+
+| Function | Request / response contract |
+|---|---|
+| `create-gallery-import-run` | `{ familyId, algorithmVersion, consentVersion, permissionMode }` → `{ run, runCapability }`; server snapshots admission limits and expiry. |
+| `register-gallery-import-chunk` | `{ familyId, runId, runCapability, ordinal, clusters }` → `{ chunkId, acceptedAssetTokens, suppressedClusterSignatures }`; manifests carry opaque tokens, date/dimension/favorite metadata only. |
+| `get-gallery-import-upload-url` | Run/token-bound JPEG preview metadata → server-selected PUT URL/key/required hash metadata. Max preview is 512px edge and 1,500,000 bytes. |
+| `dispatch-gallery-import-chunk` | `{ familyId, runId, runCapability, chunkId, previewUploads }` → `{ accepted }`; HEAD-checks every registered object then dispatches signed `{ chunkId }` to the Worker. |
+| `get-gallery-import-run`, `get-gallery-import-candidates` | Capability-bound status or staged cards; candidate previews are individually signed for five minutes. |
+| `set-gallery-import-candidate-skip`, `update-gallery-import-candidate` | Capability-bound skip/undo and draft update. Cards expose caption/date/tokens/tags only—not model reasoning/emotion. |
+| `begin-gallery-import-approval` | `{ candidateId, capability, assets }` → stable `{ leaseId, memoryId, expiresAt, expectedAssets }`. |
+| `get-gallery-import-approval-upload-url`, `record-gallery-import-approval-upload`, `finalize-gallery-import-candidate` | Server-selected original PUT, HEAD/receipt validation, then atomic memory/media/tag/provenance/receipt/digest finalization. |
+| `cancel-gallery-import-run`, `complete-gallery-import-run` | Capability-bound terminal changes; terminal cleanup is fenced and idempotent. |
+| `get-gallery-caption-settings`, `update-gallery-caption-settings` | Owner-only family caption locale/instruction operations. |
+| `cleanup-gallery-imports`, `send-gallery-import-digests` | `POST` with `x-cron-secret`; hourly cleanup/nonces and five-minute digest claim/send respectively. |
+| `workflow-gallery-import-bridge` | Worker-only timestamped HMAC + nonce bridge for private chunk input, attempt reservation/usage, candidate publication, failure, and scrub. |
+
+The shared function handler (`_shared/gallery-import.ts`) owns request
+validation and is wrapped by each user endpoint. `GalleryImportWorkflow` is
+the third durable class in `cloudflare/memory-illustration-worker`: it fetches
+only private preview input through the bridge, validates real bytes, makes one
+schema-constrained `gpt-4o-mini` multi-image vision request per cluster, and
+publishes a complete result idempotently. It may split a cluster into at most
+three groups and never merges clusters. Definite retryable responses can use
+the bounded attempt cap; network/timeout/disconnect outcomes are `ambiguous`
+and are quarantined rather than automatically replayed.
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)
@@ -2262,6 +2336,18 @@ See [docs/features/memory-sharing.md](./features/memory-sharing.md) for the
 full permission matrix, card-layout contract, store-through cache
 architecture, and privacy rationale.
 
+### 5.9 Gallery import
+
+```
+1. Owner/manager reads photo permission, snapshots the allowed on-device corpus, then foreground-scans date metadata and clusters it locally.
+2. Client creates a run and saves `{ runCapability, opaque token -> OS asset ID }` only in a user/family/run-scoped AsyncStorage checkpoint.
+3. For each bounded chunk: create serial 512px JPEG previews first and omit corrupt/iCloud-unavailable assets -> register the remaining manifest -> use its required accepted-token/suppressed-cluster response -> obtain server-chosen PUT URLs only for accepted previews -> PUT direct to R2 -> dispatch after Edge HEAD verification.
+4. Worker obtains HMAC-bridged private input, performs bounded curation, publishes staged rows, and scrubs content-bearing input.
+5. The origin device polls/reconciles capability-bound candidates; Keep opens the composer, Set aside is reversible only inside that run.
+6. Approval reserves a lease/stable memory id. The origin device resolves selected originals, PUTs exact lease keys, records HEAD-verified receipts, then atomically finalizes the media memory.
+7. Cron cleans unapproved expiry/cancellation objects; a separate cron sends one generic family digest after 30 quiet minutes.
+```
+
 ---
 
 ## 6. Style Token Resolution
@@ -2297,6 +2383,8 @@ per family, not per user). No style picker UI.
 | `EXPO_PUBLIC_REVENUECAT_IOS_API_KEY` | RevenueCat public iOS SDK key |
 | `EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY` | RevenueCat public Android SDK key |
 | `EXPO_PUBLIC_EXPORT_WORKER_URL` | HTTPS base URL of the Cloudflare export Worker |
+| `EXPO_PUBLIC_GALLERY_IMPORT_ENABLED` | Explicit client entry/new-run flag; only literal `true` exposes entry UI and permits new-run creation. It does not revoke a locally checkpointed admitted run’s capability-bound resume/review/approval calls. |
+| `EXPO_PUBLIC_E2E_GALLERY_IMPORT_ADAPTER` | Development-only deterministic media-library adapter; guarded by `__DEV__` and forbidden in production builds. |
 
 ### Edge Functions (Supabase secrets)
 
@@ -2327,12 +2415,16 @@ per family, not per user). No style picker UI.
 | `REVENUECAT_SECRET_API_KEY` | RevenueCat project secret used only by `billing-reconcile` |
 | `REVENUECAT_PROJECT_ID` | RevenueCat project identifier used by reconciliation |
 | `REVENUECAT_WEBHOOK_SECRET` | Shared secret expected by `revenuecat-webhook` |
+| `GALLERY_WORKER_URL` | HTTPS base URL of the authenticated Worker `/dispatch/gallery` endpoint. |
+| `GALLERY_DISPATCH_SIGNING_SECRET` | Supabase → gallery Worker timestamped HMAC secret. |
+| `CLOUDFLARE_GALLERY_BRIDGE_SECRET` | Gallery Worker ↔ `workflow-gallery-import-bridge` timestamped HMAC secret. |
 
 ### Cloudflare Worker configuration
 
-The `cloudflare/memory-illustration-worker` project owns both durable memory
-illustration and portrait execution. Its non-secret configuration includes
-`ENVIRONMENT`, `SUPABASE_BRIDGE_URL`, and `PORTRAIT_SUPABASE_BRIDGE_URL`. Its
+The `cloudflare/memory-illustration-worker` project owns durable memory
+illustration, portrait, and gallery-import execution. Its non-secret
+configuration includes `ENVIRONMENT`, `SUPABASE_BRIDGE_URL`,
+`PORTRAIT_SUPABASE_BRIDGE_URL`, and `GALLERY_SUPABASE_BRIDGE_URL`. Its
 Worker secret store contains `OPENAI_API_KEY`,
 `DISPATCH_SIGNING_SECRET` (same value as
 `CLOUDFLARE_ILLUSTRATION_DISPATCH_SECRET`), and `SUPABASE_BRIDGE_HMAC_SECRET`
@@ -2340,11 +2432,18 @@ Worker secret store contains `OPENAI_API_KEY`,
 `PORTRAIT_DISPATCH_SIGNING_SECRET` (same value as
 `CLOUDFLARE_PORTRAIT_DISPATCH_SECRET`) and
 `PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET` (same value as
-`CLOUDFLARE_PORTRAIT_BRIDGE_SECRET`). Bind the same private R2 bucket as
-`MEMORY_ILLUSTRATIONS`, `CHARACTER_PORTRAITS`, `PROFILE_PICTURES`, and
-`STYLE_REFERENCES`, bind Cloudflare Images as `IMAGES`, and bind Workflows as
-`MEMORY_ILLUSTRATION_WORKFLOW` and `PORTRAIT_GENERATION_WORKFLOW`. Do not put
-any of these values in Expo variables or commit `.dev.vars`.
+`CLOUDFLARE_PORTRAIT_BRIDGE_SECRET`), plus
+`GALLERY_DISPATCH_SIGNING_SECRET` (same value as
+`GALLERY_DISPATCH_SIGNING_SECRET` in Supabase) and
+`GALLERY_SUPABASE_BRIDGE_HMAC_SECRET` (same value as
+`CLOUDFLARE_GALLERY_BRIDGE_SECRET`). Bind the same private R2 bucket as
+`MEMORY_ILLUSTRATIONS`, `CHARACTER_PORTRAITS`, `PROFILE_PICTURES`,
+`STYLE_REFERENCES`, and `GALLERY_IMPORT_PREVIEWS`; bind Cloudflare Images as
+`IMAGES`; and bind Workflows as `MEMORY_ILLUSTRATION_WORKFLOW`,
+`PORTRAIT_GENERATION_WORKFLOW`, and `GALLERY_IMPORT_WORKFLOW`. The gallery
+Worker receives only a chunk ID and the narrow HMAC bridge—never a Supabase
+service-role key. Do not put any of these values in Expo variables or commit
+`.dev.vars`.
 
 The `cloudflare/momora-export-worker` deployment binds the private `momora-prod`
 R2 bucket as `MEDIA` and keeps `SUPABASE_ANON_KEY` and

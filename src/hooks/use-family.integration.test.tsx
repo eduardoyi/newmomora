@@ -7,6 +7,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { fetchMyFamilyMemberships } from '@/services/family';
 import { fetchUserProfile, updateUserProfile } from '@/services/user-profile';
+import { clearGalleryImportCheckpointsForScope } from '@/utils/gallery-import-checkpoint';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -42,6 +43,10 @@ jest.mock('@/hooks/useMemoriesRealtime', () => ({
   useMemoriesRealtime: jest.fn(),
 }));
 
+jest.mock('@/utils/gallery-import-checkpoint', () => ({
+  clearGalleryImportCheckpointsForScope: jest.fn().mockResolvedValue(undefined),
+}));
+
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedClearPersistedQueryCache = clearPersistedQueryCache as jest.Mock;
 const mockedFetchMemberships = fetchMyFamilyMemberships as jest.MockedFunction<
@@ -49,6 +54,7 @@ const mockedFetchMemberships = fetchMyFamilyMemberships as jest.MockedFunction<
 >;
 const mockedFetchUserProfile = fetchUserProfile as jest.MockedFunction<typeof fetchUserProfile>;
 const mockedUpdateUserProfile = updateUserProfile as jest.MockedFunction<typeof updateUserProfile>;
+const mockedClearGalleryImportCheckpoints = clearGalleryImportCheckpointsForScope as jest.Mock;
 
 function familyAMembership(overrides: { viewer_sharing_enabled?: boolean } = {}) {
   return {
@@ -195,6 +201,7 @@ describe('FamilyProvider', () => {
       );
     });
     await waitFor(() => expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockedClearGalleryImportCheckpoints).toHaveBeenCalledWith('user-1', 'stale-family'));
   });
 
   it('sets justLostAccess once memberships go from non-empty to empty this session', async () => {
@@ -223,6 +230,7 @@ describe('FamilyProvider', () => {
     // passively via this membership refetch, must purge exactly like the
     // explicit leaveFamily() call site in settings.tsx does.
     await waitFor(() => expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockedClearGalleryImportCheckpoints).toHaveBeenCalledWith('user-1'));
   });
 
   it('purges private persisted data when the active family is removed but another membership remains', async () => {
@@ -253,6 +261,7 @@ describe('FamilyProvider', () => {
     await waitFor(() => expect(result.current.familyId).toBe('family-b'));
     expect(result.current.memberships).toHaveLength(1);
     await waitFor(() => expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockedClearGalleryImportCheckpoints).toHaveBeenCalledWith('user-1', 'family-a'));
   });
 
   it('preserves authorized offline data on an explicit active-family switch', async () => {

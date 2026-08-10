@@ -42,7 +42,7 @@ function createMultiFamilyDeleteSupabase(calls: string[]) {
 
         if (
           table === 'memories' || table === 'family_members' ||
-          table === 'memory_illustration_jobs' || table === 'portrait_generation_jobs'
+          table === 'memory_illustration_jobs' || table === 'portrait_generation_jobs' || table === 'gallery_import_runs'
         ) {
           return {
             select: () => ({
@@ -63,6 +63,12 @@ function createMultiFamilyDeleteSupabase(calls: string[]) {
                 error: null,
               }),
             }),
+          };
+        }
+
+        if (table === 'gallery_import_assets' || table === 'gallery_import_approval_leases') {
+          return {
+            select: () => ({ in: async () => ({ data: [], error: null }) }),
           };
         }
 
@@ -384,6 +390,9 @@ function fakeSupabaseForCollect(options: {
   }>;
   memoryJobs?: Array<{ output_key: string | null }>;
   portraitJobs?: Array<{ output_key: string | null }>;
+  galleryRuns?: Array<{ id: string }>;
+  galleryPreviewAssets?: Array<{ preview_object_key: string | null }>;
+  galleryApprovalLeases?: Array<{ expected_assets: unknown; uploaded_assets: unknown }>;
   portraitVersionsError?: { message: string } | null;
 }) {
   return {
@@ -439,6 +448,18 @@ function fakeSupabaseForCollect(options: {
         };
       }
 
+      if (table === 'gallery_import_runs') {
+        return { select: () => ({ eq: async () => ({ data: options.galleryRuns ?? [], error: null }) }) };
+      }
+
+      if (table === 'gallery_import_assets') {
+        return { select: () => ({ in: async () => ({ data: options.galleryPreviewAssets ?? [], error: null }) }) };
+      }
+
+      if (table === 'gallery_import_approval_leases') {
+        return { select: () => ({ in: async () => ({ data: options.galleryApprovalLeases ?? [], error: null }) }) };
+      }
+
       throw new Error(`Unexpected table ${table}`);
     },
   };
@@ -490,6 +511,20 @@ Deno.test(
     ].sort());
   },
 );
+
+Deno.test('collectFamilyStorageKeys includes transient gallery previews and unfinalized approval originals', async () => {
+  const supabase = fakeSupabaseForCollect({
+    memories: [], mediaAssets: [], members: [],
+    galleryRuns: [{ id: '77777777-7777-4777-8777-777777777777' }],
+    galleryPreviewAssets: [{ preview_object_key: `${OWNER_ID}/gallery-import/77777777-7777-4777-8777-777777777777/previews/88888888-8888-4888-8888-888888888888.jpg` }],
+    galleryApprovalLeases: [{
+      expected_assets: [{ objectKey: `${OWNER_ID}/memories/99999999-9999-4999-8999-999999999999/media/88888888-8888-4888-8888-888888888888.jpg` }],
+      uploaded_assets: [],
+    }],
+  });
+  const keys = await collectFamilyStorageKeys(supabase as never, FAMILY_ID);
+  assertEquals(keys.length, 2);
+});
 
 Deno.test('collectFamilyStorageKeys de-duplicates keys referenced from multiple columns', async () => {
   const sharedKey = `${OWNER_ID}/memories/memory-1/media.jpg`;

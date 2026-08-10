@@ -83,6 +83,21 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 | `looking_back_memory_opened` | `package_type`, `memory_type` | Looking Back viewer → memory detail |
 | `looking_back_package_replayed` | `package_type`, `memory_count` | Looking Back completion replay |
 
+### Gallery import (aggregate, content-free)
+
+| Event | Properties | Fires from |
+|---|---|---|
+| `gallery_import_opened` | `surface: offer\|settings\|timeline\|glyph` | Gallery import entry points |
+| `gallery_import_permission_resolved` | `outcome: full\|limited\|denied\|blocked` | Immediately after the real OS permission result |
+| `gallery_import_run_started` | `permission_mode`, `scanned_asset_count`, `cluster_count` | On device-bound run creation/scan start |
+| `gallery_import_candidate_actioned` | `action: keep\|skip\|restore` | Read-only review deck |
+| `gallery_import_candidate_approved` | `asset_count`, `tagged_count` | Atomic final approval succeeds |
+| `gallery_import_run_cancelled` | `stage: scanning\|processing\|reviewing` | User confirms clearing the run |
+
+No gallery event includes a caption, model response, photo URI, local asset id,
+candidate id, family/member name, image-derived label, or an exact cross-device
+candidate count. The analytics events measure the interaction funnel only.
+
 `family_id` is a UUID, explicitly allowed by the privacy rules — it's the only way to join inviter and joiner (different persons) for the "% of families with ≥2 approved members" dashboard, and can't be backfilled later if omitted.
 
 `Application Installed` / `Application Opened` / other session-lifecycle events arrive automatically via `captureAppLifecycleEvents: true` — no explicit `trackEvent` call needed or present for them.

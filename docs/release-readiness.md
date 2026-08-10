@@ -96,6 +96,80 @@ This is the working must-do list for the next App Store and Google Play release.
 - [x] 🔒 Replace outdated App Store and Google Play phone screenshots that show old UI, pricing, or obsolete flows.
 - [x] 🔒 Replace the old App Store iPad screenshots with current iPad screenshots.
 
+## 4.2 Gallery-import release gate
+
+Gallery import is implemented and the real development path was physically
+verified on Android and iOS with version `1.3.0` build `46`. This is **not** a
+production-artifact, privacy-review, Google Play approval, or store-approval
+record. Keep it out of production release scope until every applicable item
+below is completed.
+
+The 2026-08-10 device pass exercised Android whole-library scanning through a
+completed approval and family digest, plus iOS scanning, set-aside/restore,
+three-original approval, all-card review completion, checkpoint cleanup, and
+timeline/backend visibility. It also exposed and verified fixes for secure
+random generation, bounded iCloud original retrieval, foreground PhotoKit
+uploads, locked-footer accessibility, idempotent approval recovery, and reuse
+of a sent digest window. No memory text, photo content, credentials, or device
+identifiers are retained in this record.
+
+- [ ] Complete and record the Phase 0 decision record: supported devices,
+  `expo-media-library` real-device spike, frozen `gallery-v1` limits/model
+  contract, synthetic/consented benchmark p50/p95 latency/cost, and privacy
+  review. Do not use organic child photos in the benchmark.
+- [ ] 🔒 Submit and obtain Google Play approval for the **Photo and Video
+  Permissions** declaration for `READ_MEDIA_IMAGES` whole-library scanning.
+  The review package must contain the real flow, exact reviewer navigation and
+  credentials, just-in-time disclosure, deny/limited behavior, scan/review/
+  approval video, and an explanation of why Photo Picker is not an equivalent
+  automatic-scan substitute. Do not request `READ_MEDIA_VIDEO` or
+  `ACCESS_MEDIA_LOCATION` for v1. Remove/deactivate obsolete track artifacts
+  that declare noncompliant broad access.
+- [ ] 🔒 Update/review Apple App Privacy, Google Play Data Safety, native
+  permission text, public Privacy Policy, store listing, and reviewer notes:
+  before approval downscaled private previews are sent to Momora/OpenAI for
+  curation; full-resolution originals are retained only after approval;
+  camera-roll data is never changed; no GPS/identity inference/biometrics;
+  unapproved data is transient. Confirm the production OpenAI processing and
+  retention posture with legal/privacy owners.
+- [ ] Deploy the gallery migration, all gallery Edge Functions, cron jobs/Vault
+  secrets, private-R2 authorization, Worker binding/secrets, and `GalleryImportWorkflow`
+  to isolated staging; verify HMAC bridge/nonce protection, object cleanup,
+  no service-role key in Worker, and one end-to-end synthetic fixture run.
+- [x] Produce iOS and Android development builds with `expo-media-library` and
+  a bumped compatible runtime/app version before any gallery OTA. Version
+  `1.3.0` build `46` was installed and exercised on both platforms. Production
+  artifacts and store-track verification remain separate release gates.
+- [ ] Run the full automated matrix: typecheck, lint, Jest, Deno, pgTAP,
+  gallery Worker Vitest, Maestro fixture flows, and the focused device matrix
+  (iOS full/limited/deny/settings/iCloud/HEIC/low-memory/interruption; Android
+  equivalents only after Play approval).
+  - 2026-08-10 verification: TypeScript, quiet lint, Expo dependency check, and
+    diff check passed; Jest passed 1,795/1,795; Deno passed 752 with one ignored;
+    Worker Vitest passed 105/105 with Worker typecheck/types/deploy dry-run.
+    Local pgTAP remained unavailable because another local Supabase stack owned
+    the configured Docker port, so this broader production gate stays open.
+- [ ] Stage rollout: internal fixture-only native builds → consented iOS and
+  Android beta cohorts → measured cost/error/privacy go/no-go → store rollout.
+  Android production remains blocked on Play approval even if beta telemetry is
+  healthy.
+- [ ] Set and verify both kill switches before cohort access:
+  `EXPO_PUBLIC_GALLERY_IMPORT_ENABLED=true` only in the intended compatible
+  client channel and `gallery_import_admission_settings.enabled=true` only for
+  admitted server cohorts. Client flag-off must hide entry/new-run creation but
+  retain an admitted run’s capability-bound resume/review/approval controls;
+  server admission-off must block new admission while leaving admitted scan,
+  dispatch, review, and approval operations available until terminal state or
+  expiry. Record the
+  on-call owner and rollback test.
+- [ ] Verify the 30-minute quiet-period family digest is one generic timeline
+  notification per approval session, respects notification preferences/blocks,
+  and never expands into per-memory notifications or exposes counts.
+- [ ] Verify cancel/expiry/account deletion/family deletion during scanning,
+  processing, review, and approval: exact transient R2 cleanup and local
+  checkpoint/cache removal, with no camera-roll mutation and no deletion of
+  approved originals.
+
 ## 5. Build numbers and release artifacts
 
 - [x] 🔒 Raise and verify the EAS remote build numbers before producing final artifacts.

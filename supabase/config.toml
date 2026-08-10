@@ -426,6 +426,19 @@ verify_jwt = false
 [functions.workflow-portrait-bridge]
 verify_jwt = false
 
+# Gallery workflows authenticate with a separate timestamped raw-body HMAC;
+# their bridge cannot require a Supabase user JWT at the gateway. Gallery
+# maintenance endpoints are invoked by pg_cron with x-cron-secret for the
+# same reason. Each handler performs its own fail-closed authentication.
+[functions.workflow-gallery-import-bridge]
+verify_jwt = false
+
+[functions.cleanup-gallery-imports]
+verify_jwt = false
+
+[functions.send-gallery-import-digests]
+verify_jwt = false
+
 # RevenueCat signs this request with the webhook secret; it intentionally does
 # not use a Supabase user JWT.  The two maintenance functions use x-cron-secret.
 [functions.revenuecat-webhook]

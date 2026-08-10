@@ -154,6 +154,27 @@ export interface AnalyticsEventMap {
   notification_opened: {
     target: NonNullable<PushRouteData['route']>;
   };
+  gallery_import_opened: {
+    surface: 'offer' | 'settings' | 'timeline' | 'glyph';
+  };
+  gallery_import_permission_resolved: {
+    outcome: 'full' | 'limited' | 'denied' | 'blocked';
+  };
+  gallery_import_run_started: {
+    permission_mode: 'full' | 'limited';
+    scanned_asset_count: number;
+    cluster_count: number;
+  };
+  gallery_import_candidate_actioned: {
+    action: 'keep' | 'skip' | 'restore';
+  };
+  gallery_import_candidate_approved: {
+    asset_count: number;
+    tagged_count: number;
+  };
+  gallery_import_run_cancelled: {
+    stage: 'scanning' | 'processing' | 'reviewing';
+  };
 }
 
 // Compile-time safety net: every event's properties must satisfy

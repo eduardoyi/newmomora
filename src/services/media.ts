@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
 import { supabase } from '@/lib/supabase';
+import { isGalleryImportE2eAdapterEnabled } from '@/utils/gallery-import-flags';
 
 export interface ServiceError {
   message: string;
@@ -424,16 +425,21 @@ export async function uploadToPresignedUrl(
   uploadUrl: string,
   fileUri: string,
   contentType: string,
+  signedHeaders?: Record<string, string>,
 ): Promise<{ error: ServiceError | null }> {
+  // `e2e://` is issued solely by the development-only gallery fixture backend.
+  // Production builds compile the guard false and still require a real signed PUT.
+  if (isGalleryImportE2eAdapterEnabled && uploadUrl.startsWith('e2e://gallery-import/')) {
+    return { error: null };
+  }
+  const headers = { 'Content-Type': contentType, ...signedHeaders };
   if (Platform.OS === 'web') {
     const response = await fetch(fileUri);
     const blob = await response.blob();
 
     const uploadResponse = await fetch(uploadUrl, {
       method: 'PUT',
-      headers: {
-        'Content-Type': contentType,
-      },
+      headers,
       body: blob,
     });
 
@@ -451,9 +457,13 @@ export async function uploadToPresignedUrl(
 
   const uploadResult = await FileSystem.uploadAsync(uploadUrl, fileUri, {
     httpMethod: 'PUT',
-    headers: {
-      'Content-Type': contentType,
-    },
+    headers,
+    // Presigned uploads are an explicitly foreground workflow. On iOS the
+    // legacy API otherwise defaults to a background URLSession, whose daemon
+    // may not retain access to the PhotoKit full-size file URL after getUri().
+    // Foreground also matches the UI promise that this work pauses when the
+    // app closes.
+    sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
     uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
   });
 

@@ -12,6 +12,7 @@ import {
 
 import { useAuthUrlHandler } from '@/hooks/use-auth-url-handler';
 import { clearPersistedQueryCache } from '@/lib/query-persistence';
+import { clearGalleryImportCheckpointsForScope } from '@/utils/gallery-import-checkpoint';
 import { supabase } from '@/lib/supabase';
 import { identifyUser, resetAnalytics } from '@/services/analytics';
 import {
@@ -117,19 +118,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // analytics happened to be identified. clearPersistedQueryCache() is
   // idempotent, so this being redundant with an explicit signOut() call is
   // harmless.
-  const hadRealSessionRef = useRef(false);
+  const previousRealUserIdRef = useRef<string | null>(null);
   useEffect(() => {
     const currentUser = session?.user ?? null;
     const isRealUser = currentUser !== null && !currentUser.is_anonymous;
 
     if (isRealUser) {
-      hadRealSessionRef.current = true;
+      previousRealUserIdRef.current = currentUser.id;
       return;
     }
 
-    if (hadRealSessionRef.current) {
-      hadRealSessionRef.current = false;
+    if (previousRealUserIdRef.current) {
+      const previousUserId = previousRealUserIdRef.current;
+      previousRealUserIdRef.current = null;
       void clearPersistedQueryCache();
+      // The capability and OS-asset map must not survive a sign-out onto a
+      // shared device, even though the ordinary query cache is already gone.
+      void clearGalleryImportCheckpointsForScope(previousUserId);
     }
   }, [session]);
 

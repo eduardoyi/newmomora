@@ -32,6 +32,8 @@ export const lookingBackQueryKeyBase = 'looking-back' as const;
 // (use-auth.tsx -> lib/supabase.ts's realtime client, in particular).
 export const familyMembershipsQueryKeyBase = 'family-memberships' as const;
 export const userProfileQueryKeyBase = 'user-profile' as const;
+export const galleryImportQueryKeyBase = 'gallery-import' as const;
+export const galleryCaptionSettingsQueryKeyBase = 'gallery-caption-settings' as const;
 
 export function memoriesQueryKey(familyId: string | null | undefined) {
   return [memoriesQueryKeyBase, familyId] as const;
@@ -83,4 +85,19 @@ export function memoryCommentsQueryKey(
   memoryId: string | undefined,
 ) {
   return [memoryCommentsQueryKeyBase, familyId, memoryId] as const;
+}
+
+export function galleryImportQueryKey(
+  userId: string | null | undefined,
+  familyId: string | null | undefined,
+  runId?: string | null,
+) {
+  return [galleryImportQueryKeyBase, userId, familyId, runId ?? 'active'] as const;
+}
+
+export function galleryCaptionSettingsQueryKey(
+  userId: string | null | undefined,
+  familyId: string | null | undefined,
+) {
+  return [galleryCaptionSettingsQueryKeyBase, userId, familyId] as const;
 }

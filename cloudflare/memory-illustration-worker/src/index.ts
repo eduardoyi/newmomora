@@ -1,7 +1,12 @@
 import { verifySignedBody } from './crypto';
+import { GalleryImportWorkflow } from './gallery-workflow';
 import { PortraitGenerationWorkflow } from './portrait-workflow';
 import { MemoryIllustrationWorkflow } from './workflow';
-import { WORKFLOW_JOB_ID_PATTERN, type WorkflowDispatchPayload } from './types';
+import {
+  WORKFLOW_JOB_ID_PATTERN,
+  type GalleryWorkflowDispatchPayload,
+  type WorkflowDispatchPayload,
+} from './types';
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 
@@ -16,6 +21,11 @@ function isDuplicateWorkflowError(error: unknown): boolean {
 
 interface DispatchTarget {
   workflow: Workflow<WorkflowDispatchPayload>;
+  signingSecret: string;
+}
+
+interface GalleryDispatchTarget {
+  workflow: Workflow<GalleryWorkflowDispatchPayload>;
   signingSecret: string;
 }
 
@@ -60,7 +70,42 @@ async function handleDispatch(
   }
 }
 
-export { MemoryIllustrationWorkflow, PortraitGenerationWorkflow };
+async function handleGalleryDispatch(request: Request, target: GalleryDispatchTarget): Promise<Response> {
+  const rawBody = await request.text();
+  const verified = await verifySignedBody(
+    target.signingSecret,
+    request.headers.get('x-dispatch-timestamp'),
+    request.headers.get('x-dispatch-nonce'),
+    request.headers.get('x-dispatch-signature'),
+    rawBody,
+  );
+  if (!verified) return response({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+
+  let payload: GalleryWorkflowDispatchPayload;
+  try {
+    payload = JSON.parse(rawBody) as GalleryWorkflowDispatchPayload;
+  } catch {
+    return response({ error: 'Invalid request', code: 'INVALID_REQUEST' }, 400);
+  }
+  if (!WORKFLOW_JOB_ID_PATTERN.test(payload.chunkId ?? '')) {
+    return response({ error: 'Invalid request', code: 'INVALID_CHUNK_ID' }, 400);
+  }
+  try {
+    await target.workflow.create({
+      id: payload.chunkId,
+      params: { chunkId: payload.chunkId },
+      retention: { successRetention: '1 day', errorRetention: '1 day' },
+    });
+    return response({ accepted: true, chunkId: payload.chunkId }, 202);
+  } catch (error) {
+    if (isDuplicateWorkflowError(error)) {
+      return response({ accepted: true, chunkId: payload.chunkId, duplicate: true }, 202);
+    }
+    return response({ error: 'Workflow dispatch failed', code: 'DISPATCH_FAILED' }, 502);
+  }
+}
+
+export { GalleryImportWorkflow, MemoryIllustrationWorkflow, PortraitGenerationWorkflow };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -75,6 +120,12 @@ export default {
       return await handleDispatch(request, {
         workflow: env.PORTRAIT_GENERATION_WORKFLOW,
         signingSecret: env.PORTRAIT_DISPATCH_SIGNING_SECRET,
+      });
+    }
+    if (request.method === 'POST' && url.pathname === '/dispatch/gallery') {
+      return await handleGalleryDispatch(request, {
+        workflow: env.GALLERY_IMPORT_WORKFLOW,
+        signingSecret: env.GALLERY_DISPATCH_SIGNING_SECRET,
       });
     }
     if (request.method === 'GET' && url.pathname === '/health') {

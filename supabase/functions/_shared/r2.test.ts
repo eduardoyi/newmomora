@@ -1,5 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert@1';
-import { getObjectBytesBatch, readObjectBodyToBytes } from './r2.ts';
+import { getObjectBytesBatch, r2UnhoistableMetadataHeaders, readObjectBodyToBytes } from './r2.ts';
 
 Deno.test('readObjectBodyToBytes merges web stream chunks', async () => {
   const stream = new ReadableStream<Uint8Array>({
@@ -22,6 +22,12 @@ Deno.test('readObjectBodyToBytes merges web stream chunks', async () => {
 // createPresignedGetUrls call instead of one per key, then fetches every
 // key concurrently) ─────────────────────────────────────────────────────
 const R2_ENV_VARS = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_ENDPOINT', 'R2_BUCKET'];
+
+Deno.test('presigned PUT marks every R2 metadata header as unhoistable', () => {
+  assertEquals([...r2UnhoistableMetadataHeaders({
+    Bytes: '42', SHA256: 'a'.repeat(64),
+  })].sort(), ['x-amz-meta-bytes', 'x-amz-meta-sha256']);
+});
 
 Deno.test('getObjectBytesBatch returns an empty Map for an empty key list without touching R2 config', async () => {
   // Deliberately do NOT set any R2 env vars -- if this function tried to

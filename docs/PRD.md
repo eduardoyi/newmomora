@@ -265,6 +265,32 @@ Memories support three formats, derived from what the user provides — no upfro
 
 ---
 
+### 6.3a Gallery import — AI-staged camera-roll memories
+
+**User story**
+
+- As an eligible family owner or manager, I can explicitly ask Momora to look through the photos I have permitted on this device and suggest a few meaningful memories, so I can begin from moments I already captured rather than a blank page.
+
+**User-facing behavior and acceptance criteria**
+
+- Gallery import is opt-in, device-bound, and available only to owners/managers with active paid access. Viewers see an explanatory disabled Settings row.
+- Before photo permission, Momora clearly explains that it reads photo dates on-device, uploads small private downscaled previews to Momora and its AI provider to curate suggestions, retains full-resolution originals only when the parent approves a memory, and never deletes, edits, or organizes the camera roll.
+- v1 suggests **photos only**. It does not scan/suggest videos, request location, read/upload GPS, infer identities/ages, or perform face recognition/biometric analysis.
+- The permitted photo corpus is snapshotted before a run. Limited/selected access is valid but only includes the photos the person granted; later permission changes apply to a later run.
+- Suggestions are a resumable read-only Keep / Set aside deck. Set aside is recoverable in the active run but is never intentionally resurfaced in a later run. Caption, date, tags, and selected photos are edited only in the follow-on composer.
+- Nothing becomes a journal memory without explicit final approval. Approval creates one ordinary private `media` memory (1–10 assets, no AI illustration) with non-displayed `gallery_import` provenance. The originating device uploads the approved full-size originals only at that step.
+- Scanning/uploading is foreground/resumable; “safe to close” means Momora can resume from a local checkpoint, not that it promises background work after the app is killed. A different device cannot approve an originating device’s suggestions.
+- Imported-memory notifications are batched: each approval restarts a **30-minute quiet period**, then eligible family members receive one generic timeline digest instead of one alert per memory.
+- Previews, staged drafts, and unapproved-original leases expire and are fenced for deletion. Approved originals follow normal private-memory retention and account/family deletion behavior. Raw platform asset IDs, filenames, GPS, prompts, model responses, and semantic descriptions are not persisted or sent to analytics.
+
+**Rollout constraints**
+
+- The feature is implemented behind a client entry-point flag and server admission switch. Turning off the client flag hides entry points and prevents new-run creation but does not revoke an admitted run’s capability-bound resume/review/approval controls. Turning off server admission blocks new runs while already admitted scan, dispatch, review, and approval remain available until terminal state or expiry.
+- Android whole-library scanning is a release gate, not a routine fallback: production Android rollout requires Google Play approval of the real `READ_MEDIA_IMAGES` broad-photo-access declaration and review flow. A user-selected photo picker is a different product and must not be presented as whole-library scanning.
+- The native `expo-media-library` addition requires a new compatible build/runtime version; this feature cannot be delivered safely as an OTA to binaries without that native module. See [gallery-import.md](./features/gallery-import.md) for the authoritative technical/privacy/release details.
+
+---
+
 ### 6.4 Memory Visualization
 
 The core product differentiator. Each memory receives an AI-generated illustration featuring tagged family members as consistent characters.

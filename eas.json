@@ -18,10 +18,22 @@
     "development-device": {
       "developmentClient": true,
       "distribution": "internal",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_GALLERY_IMPORT_ENABLED": "true"
+      },
       "ios": {
         "simulator": false
       },
       "channel": "development-device"
+    },
+    "gallery-import-e2e": {
+      "extends": "development",
+      "env": {
+        "EXPO_PUBLIC_GALLERY_IMPORT_ENABLED": "true",
+        "EXPO_PUBLIC_E2E_GALLERY_IMPORT_ADAPTER": "true"
+      },
+      "channel": "gallery-import-e2e"
     },
     "preview": {
       "distribution": "internal",

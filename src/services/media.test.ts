@@ -19,6 +19,9 @@ const mockedInvoke = supabase.functions.invoke as jest.MockedFunction<typeof sup
 
 jest.mock('expo-file-system/legacy', () => ({
   uploadAsync: jest.fn(),
+  FileSystemSessionType: {
+    FOREGROUND: 0,
+  },
   FileSystemUploadType: {
     BINARY_CONTENT: 0,
   },
@@ -59,6 +62,7 @@ describe('uploadToPresignedUrl', () => {
       'file:///tmp/photo.jpg',
       expect.objectContaining({
         httpMethod: 'PUT',
+        sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
         uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
         headers: { 'Content-Type': 'image/jpeg' },
       }),

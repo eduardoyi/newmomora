@@ -46,6 +46,7 @@ import { canEditFamilyContent, isOwnerRole, isViewerRole, roleLabel } from '@/ut
 import { AuthField, AuthInput } from '@/components/auth-screen';
 import { SelectField, type SelectFieldHandle, type SelectOption } from '@/components/select-field';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
+import { GalleryImportSettingsBlock } from '@/components/gallery-import/gallery-import-settings';
 
 const DEFAULT_REMINDER_TIME = '20:00:00';
 const FAQ_URL = 'https://usemomora.com/faq/';
@@ -747,6 +748,8 @@ export default function SettingsScreen() {
             </SettingsBlock>
   
             <FamilySection />
+
+            <GalleryImportSettingsBlock />
 
             {isOwnerRole(role) ? (
               <SettingsBlock title="Subscription & archive">

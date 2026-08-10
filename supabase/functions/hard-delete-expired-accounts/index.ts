@@ -116,6 +116,39 @@ export async function collectFamilyStorageKeys(
     if (job.output_key) keys.push(job.output_key);
   }
 
+  // Gallery-import previews and approval originals are private family data as
+  // well. The gallery tables cascade with a family delete, so collect their
+  // exact keys *before* finalizing the family deletion fence; otherwise a
+  // cancelled/expired import could strand transient child-photo previews.
+  const { data: galleryRuns, error: galleryRunsError } = await supabase
+    .from('gallery_import_runs')
+    .select('id')
+    .eq('family_id', familyId);
+  if (galleryRunsError) {
+    throw new Error(`Gallery import storage lookup failed: ${galleryRunsError.message}`);
+  }
+  const galleryRunIds = (galleryRuns ?? []).map((run) => run.id);
+  if (galleryRunIds.length > 0) {
+    const [{ data: previewAssets, error: previewError }, { data: approvalLeases, error: leaseError }] = await Promise.all([
+      supabase.from('gallery_import_assets').select('preview_object_key').in('run_id', galleryRunIds),
+      supabase.from('gallery_import_approval_leases').select('expected_assets, uploaded_assets').in('run_id', galleryRunIds),
+    ]);
+    if (previewError || leaseError) {
+      throw new Error('Gallery import storage lookup failed');
+    }
+    for (const asset of previewAssets ?? []) {
+      if (asset.preview_object_key) keys.push(asset.preview_object_key);
+    }
+    for (const lease of approvalLeases ?? []) {
+      for (const list of [lease.expected_assets, lease.uploaded_assets]) {
+        if (!Array.isArray(list)) continue;
+        for (const item of list) {
+          if (item && typeof item === 'object' && typeof item.objectKey === 'string') keys.push(item.objectKey);
+        }
+      }
+    }
+  }
+
   return [...new Set(keys)];
 }
 

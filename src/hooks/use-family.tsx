@@ -6,6 +6,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from 'react';
 
@@ -20,6 +21,7 @@ import {
 } from '@/hooks/queryKeys';
 import { useMemoriesRealtime } from '@/hooks/useMemoriesRealtime';
 import { clearPersistedQueryCache } from '@/lib/query-persistence';
+import { clearGalleryImportCheckpointsForScope } from '@/utils/gallery-import-checkpoint';
 import { fetchMyFamilyMemberships } from '@/services/family';
 
 export interface FamilyMembershipSummary {
@@ -69,7 +71,7 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { profile, updateProfile, isLoading: isProfileLoading } = useUserProfile();
-  const hadFamilyRef = useRef(false);
+  const [hasHadFamily, setHasHadFamily] = useState(false);
   const correctingRef = useRef(false);
   const previousMembershipFamilyIdsRef = useRef<Set<string> | null>(null);
   const lastPurgedAccessLossRef = useRef<string | null>(null);
@@ -167,11 +169,11 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (memberships.length > 0) {
-      hadFamilyRef.current = true;
+      setHasHadFamily(true);
     }
   }, [memberships.length]);
 
-  const justLostAccess = hadFamilyRef.current && !isMembershipsLoading && memberships.length === 0;
+  const justLostAccess = hasHadFamily && !isMembershipsLoading && memberships.length === 0;
 
   // Purge private persisted data when ANY previously authorized family
   // disappears while another membership remains. This covers active-family
@@ -210,7 +212,10 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
     if (lastPurgedAccessLossRef.current === accessLoss) return;
     lastPurgedAccessLossRef.current = accessLoss;
     void clearPersistedQueryCache();
-  }, [activeFamilyId, isMembershipsLoading, memberships, resolvedFamilyId]);
+    for (const lostFamilyId of lostFamilyIds) {
+      if (user?.id) void clearGalleryImportCheckpointsForScope(user.id, lostFamilyId);
+    }
+  }, [activeFamilyId, isMembershipsLoading, memberships, resolvedFamilyId, user?.id]);
 
   // Backstop purge (O4, docs/plans/offline-awareness-and-share-cards.md):
   // covers being removed from your only family while the app stays open
@@ -230,7 +235,8 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
     }
     hasPurgedForLostAccessRef.current = true;
     void clearPersistedQueryCache();
-  }, [justLostAccess]);
+    if (user?.id) void clearGalleryImportCheckpointsForScope(user.id);
+  }, [justLostAccess, user?.id]);
 
   const setActiveFamily = useCallback(
     async (familyId: string) => {

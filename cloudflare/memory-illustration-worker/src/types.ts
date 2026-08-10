@@ -13,7 +13,14 @@ export type BridgeOperation =
   | 'publish'
   | 'fail'
   | 'reconcile'
-  | 'retrigger_memories';
+  | 'retrigger_memories'
+  | 'get_gallery_chunk_input'
+  | 'reserve_gallery_attempt'
+  | 'record_gallery_usage'
+  | 'mark_gallery_attempt_ambiguous'
+  | 'publish_gallery_cluster_result'
+  | 'fail_gallery_chunk'
+  | 'scrub_gallery_chunk';
 
 export interface ReferenceCandidate {
   memberId: string;
@@ -118,6 +125,94 @@ export interface BridgeReconcileResponse {
 
 export interface WorkflowDispatchPayload {
   jobId: string;
+}
+
+/**
+ * Gallery Workflows deliberately receive only a chunk ID.  Library asset IDs,
+ * prompt text, captions, and image bytes must never be stored in Workflow
+ * event/step state.  The narrow bridge returns this input inside the single
+ * sensitive processing step instead.
+ */
+export interface GalleryWorkflowDispatchPayload {
+  chunkId: string;
+}
+
+export type GalleryPreviewContentType = 'image/jpeg';
+
+export interface GalleryPreviewAsset {
+  assetToken: string;
+  previewKey: string;
+  expectedByteLength: number;
+  expectedSha256: string;
+  expectedContentType: GalleryPreviewContentType;
+  previewWidth: number;
+  previewHeight: number;
+  captureDate: string;
+  width: number | null;
+  height: number | null;
+  isFavorite: boolean;
+}
+
+export interface GalleryClusterInput {
+  clusterSignature: string;
+  clusterStartDate: string;
+  clusterEndDate: string;
+  assets: GalleryPreviewAsset[];
+}
+
+/** Private bridge payload: never return this object from a Workflow step. */
+export interface GalleryChunkInput {
+  chunkId: string;
+  runId: string;
+  providerDeadlineAt: string;
+  maxProviderAttempts: number;
+  maxImagesPerCluster: number;
+  captionLocale: string;
+  captionInstructions: string | null;
+  clusters: GalleryClusterInput[];
+}
+
+export interface BridgeGalleryChunkInputResponse {
+  chunk: GalleryChunkInput;
+}
+
+export interface BridgeGalleryAttemptResponse {
+  outcome: 'reserved_now' | 'already_reserved' | 'denied';
+  attemptId: string | null;
+  reservationToken: string | null;
+}
+
+export interface VisionUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+}
+
+export type GalleryEmotion =
+  | 'joy' | 'funny' | 'tender' | 'calm' | 'wonder' | 'mischief' | 'pride'
+  | 'bittersweet' | 'worry' | 'weary' | 'sad' | null;
+
+export type GallerySkipReason =
+  | 'no_candidate'
+  | 'low_confidence'
+  | 'safety_refusal'
+  | 'invalid_provider_output'
+  | 'invalid_preview'
+  | 'provider_refusal';
+
+/** Validated only in memory; this structure is never a persisted step output. */
+export interface GalleryCandidateDraft {
+  caption: string;
+  selectedAssetTokens: string[];
+  memoryDate: string;
+  emotion: GalleryEmotion;
+  confidence: number;
+}
+
+export interface GalleryVisionResult {
+  groups: GalleryCandidateDraft[];
+  skipReason: GallerySkipReason | null;
+  usage: VisionUsage | null;
 }
 
 /**

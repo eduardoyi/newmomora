@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -25,6 +25,7 @@ import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-
 import { LookingBackPackageRail } from '@/components/looking-back/package-rail';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
+import { useAuth } from '@/hooks/use-auth';
 import { useMemories } from '@/hooks/useMemories';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useLookingBackPackages } from '@/hooks/useLookingBackPackages';
@@ -42,6 +43,8 @@ import {
 import { trackEvent } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
 import { isVideoContentType } from '@/utils/media-validation';
+import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
+import { loadLatestGalleryImportCheckpoint, type GalleryImportCheckpoint } from '@/utils/gallery-import-checkpoint';
 
 function toLocalDateString(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -93,14 +96,30 @@ function StreakDots({ memories }: { memories: MemoryWithTags[] }) {
   );
 }
 
+function TimelineImportGlyph() {
+  if (!isGalleryImportFeatureEnabled) return null;
+  return <EnabledTimelineImportGlyph />;
+}
+
+function EnabledTimelineImportGlyph() {
+  const { user } = useAuth();
+  const { familyId, role } = useFamily();
+  const [checkpoint, setCheckpoint] = useState<GalleryImportCheckpoint | null>(null);
+  useEffect(() => {
+    if (!user?.id || !familyId) return;
+    void loadLatestGalleryImportCheckpoint(user.id, familyId).then(setCheckpoint);
+  }, [familyId, role, user?.id]);
+  if (!canEditFamilyContent(role)) return null;
+  return <Pressable accessibilityLabel={checkpoint ? 'Photo suggestions, pick up where you left off' : 'Find memories in your photos'} accessibilityRole="button" onPress={() => checkpoint ? router.push({ pathname: '/(app)/gallery-import/progress' as never, params: { runId: checkpoint.runId } }) : router.push('/(app)/gallery-import' as never)} style={styles.galleryGlyph} testID="timeline-gallery-import-glyph"><Text style={styles.galleryGlyphIcon}>⇩</Text>{checkpoint ? <View style={[styles.galleryGlyphDot, checkpoint.status === 'processing' && styles.galleryGlyphDotWorking]} /> : null}</Pressable>;
+}
+
 function TimelineTitle() {
   const now = new Date();
   const dayLabel = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
   return (
     <View style={styles.header} testID="timeline-title-section">
-      <Text style={styles.eyebrow}>{dayLabel}</Text>
-      <Text style={styles.title}>Your moments.</Text>
+      <View style={styles.headerTitleRow}><View><Text style={styles.eyebrow}>{dayLabel}</Text><Text style={styles.title}>Your moments.</Text></View><TimelineImportGlyph /></View>
     </View>
   );
 }
@@ -386,6 +405,18 @@ export default function TimelineScreen() {
             <Text style={styles.emptyBody}>
               Capture your first moment when you are ready — type, or just speak it.
             </Text>
+            {canEdit && isGalleryImportFeatureEnabled ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push('/(app)/gallery-import' as never)}
+                style={styles.galleryInvite}
+                testID="timeline-gallery-import"
+              >
+                <Text style={styles.galleryInviteEyebrow}>Start with what you have</Text>
+                <Text style={styles.galleryInviteTitle}>Find a few memories in your photos.</Text>
+                <Text style={styles.galleryInviteBody}>Momora suggests photos only for now. You choose what becomes a memory.</Text>
+              </Pressable>
+            ) : null}
           </SafeAreaView>
         </ScrollView>
       ) : (
@@ -439,6 +470,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: 0,
   },
+  headerTitleRow: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'space-between' },
+  galleryGlyph: { alignItems: 'center', backgroundColor: colors.white, borderColor: colors.border, borderRadius: 19, borderWidth: 1, height: 38, justifyContent: 'center', marginTop: 8, position: 'relative', width: 38 },
+  galleryGlyphIcon: { color: colors.ink2, fontFamily: fonts.sansBold, fontSize: 18 },
+  galleryGlyphDot: { backgroundColor: colors.primary, borderColor: colors.white, borderRadius: 6, borderWidth: 2, height: 12, position: 'absolute', right: -1, top: -1, width: 12 },
+  galleryGlyphDotWorking: { backgroundColor: colors.sea },
   streakWrap: { paddingHorizontal: spacing.lg },
   eyebrow: {
     fontFamily: fonts.sansBold,
@@ -592,6 +628,36 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: spacing.xl,
     marginTop: spacing.lg,
+  },
+  galleryInvite: {
+    backgroundColor: colors.white,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.lg,
+    padding: spacing.md,
+  },
+  galleryInviteEyebrow: {
+    color: colors.ink3,
+    fontFamily: fonts.sansBold,
+    fontSize: 10,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  galleryInviteTitle: {
+    color: colors.ink,
+    fontFamily: fonts.display,
+    fontSize: 21,
+    lineHeight: 25,
+    marginTop: 7,
+  },
+  galleryInviteBody: {
+    color: colors.ink2,
+    fontFamily: fonts.sans,
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 5,
   },
   hiddenOnlyWrap: {
     flexGrow: 1,

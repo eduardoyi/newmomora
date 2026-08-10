@@ -1,4 +1,23 @@
 import '@testing-library/jest-native/extend-expect';
+import { WebSocket as NodeWebSocket } from 'ws';
+
+// Supabase Realtime expects a standards-compatible WebSocket transport.
+// React Native supplies it in the app, but Node 20 does not expose one
+// globally. Keep this test-only so production transport selection remains
+// entirely under React Native/Supabase control.
+Object.defineProperty(globalThis, 'WebSocket', {
+  configurable: true,
+  writable: true,
+  value: NodeWebSocket,
+});
+
+// Gallery-import checkpoint cleanup is mounted with the auth/family providers,
+// so AsyncStorage is now a transitive dependency of their ordinary tests too.
+// Keep the native module out of Jest for every suite, not just checkpoint tests.
+jest.mock('@react-native-async-storage/async-storage', () =>
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
 
 process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
 process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';

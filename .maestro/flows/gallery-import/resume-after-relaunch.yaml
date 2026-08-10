@@ -1,0 +1,29 @@
+appId: com.memora.app
+---
+# Start this immediately after a run is admitted in the E2E build. The local
+# checkpoint and local fixture backend survive a process relaunch, so this
+# exercises reconciliation instead of creating a second run.
+- runFlow: ../auth/login.yaml
+- tapOn: "Settings"
+- tapOn:
+    id: settings-gallery-import
+- tapOn:
+    id: gallery-import-start
+- stopApp
+- launchApp
+- tapOn: "Settings"
+- tapOn:
+    id: settings-gallery-import
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-entry
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Continue import"
+    timeout: 15000
+- tapOn:
+    id: gallery-import-start
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-review
+    timeout: 30000

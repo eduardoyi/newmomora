@@ -149,6 +149,10 @@ export default function AppLayout() {
             presentation: 'modal',
           }}
         />
+        <Stack.Screen name="gallery-import/index" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="gallery-import/progress" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="gallery-import/review" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="gallery-import/approve" options={{ presentation: 'modal' }} />
         <Stack.Screen name="memory/[id]" />
         <Stack.Screen name="looking-back/[id]" options={{ animation: 'none' }} />
         <Stack.Screen
