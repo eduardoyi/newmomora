@@ -30,6 +30,48 @@ export interface LookingBackFrame {
   asset?: MemoryMediaAsset;
 }
 
+export interface LookingBackFrameMediaKeys {
+  /** The exact grouping used by StoryFrame's media-URL query. */
+  queryKeys: string[];
+  /** Image-safe keys to warm; raw video objects are deliberately excluded. */
+  warmKeys: string[];
+}
+
+function isHiddenIllustration(frame: LookingBackFrame): boolean {
+  return frame.kind === 'illustration'
+    && Boolean((frame.memory as MemoryWithTags & { isIllustrationHidden?: boolean }).isIllustrationHidden);
+}
+
+/**
+ * Keeps the viewer's URL grouping and byte-warm selection in one place.
+ * StoryFrame needs the original photo/video key for display/recovery, while
+ * expo-image may only warm an illustration, a photo preview (or original when
+ * no preview exists), or a video poster.
+ */
+export function frameMediaKeys(frame: LookingBackFrame): LookingBackFrameMediaKeys {
+  if (frame.kind === 'illustration') {
+    if (isHiddenIllustration(frame)) return { queryKeys: [], warmKeys: [] };
+    const key = frame.memory.illustration_key;
+    return key ? { queryKeys: [key], warmKeys: [key] } : { queryKeys: [], warmKeys: [] };
+  }
+
+  if (frame.kind !== 'photo' && frame.kind !== 'video') {
+    return { queryKeys: [], warmKeys: [] };
+  }
+
+  const objectKey = frame.asset?.object_key;
+  const previewKey = frame.asset?.preview_object_key;
+  const queryKeys = [...new Set([objectKey, previewKey].filter((key): key is string => Boolean(key)))];
+  const warmKey = frame.kind === 'video'
+    ? previewKey && previewKey !== objectKey ? previewKey : undefined
+    : previewKey || objectKey;
+
+  return {
+    queryKeys,
+    warmKeys: warmKey ? [warmKey] : [],
+  };
+}
+
 export function wordCount(value: string | null | undefined): number {
   return (value ?? '').trim().split(/\s+/).filter(Boolean).length;
 }

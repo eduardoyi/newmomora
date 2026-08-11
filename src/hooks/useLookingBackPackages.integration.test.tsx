@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from '@testing-library/react-native';
+import { act, cleanupAsync, renderHook, waitFor } from '@testing-library/react-native';
 import { onlineManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -50,6 +50,14 @@ function createWrapper(client: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
   };
+}
+
+const testQueryClients = new Set<QueryClient>();
+
+function createTestQueryClient(): QueryClient {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  testQueryClients.add(client);
+  return client;
 }
 
 const memories = Array.from({ length: 4 }, (_, index) => ({
@@ -104,8 +112,16 @@ describe('useLookingBackPackages integration', () => {
     });
   });
 
+  afterEach(async () => {
+    await cleanupAsync();
+    for (const client of testQueryClients) client.clear();
+    testQueryClients.clear();
+    onlineManager.setOnline(true);
+  });
+
+
   it('uses an account-plus-family key, preserves RPC order, and hides a package after block filtering drops it below four', async () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
 
     await waitFor(() => expect(mockedFetchMemories).toHaveBeenCalledWith('family-1', [
@@ -130,7 +146,7 @@ describe('useLookingBackPackages integration', () => {
     mockedUseContentSafety.mockReturnValue({
       isLoading: false, isError: false, isUserBlocked: () => false, isTargetReported: () => false,
     } as never);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
     await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
 
@@ -149,7 +165,7 @@ describe('useLookingBackPackages integration', () => {
       isLoading: false, isError: false, isUserBlocked: () => false,
       isTargetReported: (type: string, id: string) => type === 'memory_illustration' && id === 'memory-2',
     } as never);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
 
     await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
@@ -194,7 +210,7 @@ describe('useLookingBackPackages integration', () => {
 
   it('uses the memory-date portrait version and removes a profile-reported subject name from package data', async () => {
     setMemberAtAgeFixture('family_member_profile');
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
 
     await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
@@ -208,7 +224,7 @@ describe('useLookingBackPackages integration', () => {
 
   it('genericizes a member-at-age title when only the resolved historical portrait is reported', async () => {
     setMemberAtAgeFixture('family_member_portrait');
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
 
     await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
@@ -221,7 +237,7 @@ describe('useLookingBackPackages integration', () => {
     mockedFetchPackages.mockResolvedValue({
       data: null, error: { message: 'network', code: 'PGRST000' }, failure: 'unavailable',
     });
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
 
     await waitFor(() => expect(hook.result.current.isSuccess).toBe(true));
@@ -234,7 +250,7 @@ describe('useLookingBackPackages integration', () => {
     mockedUseContentSafety.mockReturnValue({
       isLoading: false, isError: false, isUserBlocked: () => false, isTargetReported: () => false,
     } as never);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
     await waitFor(() => expect(mockedFetchPackages).toHaveBeenCalledTimes(1));
 
@@ -254,7 +270,7 @@ describe('useLookingBackPackages integration', () => {
     mockedFetchPackages
       .mockResolvedValueOnce(packageResponse(new Date(Date.now() - 1000).toISOString()))
       .mockResolvedValue(packageResponse(new Date(Date.now() + 60 * 60 * 1000).toISOString()));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
 
     await waitFor(() => expect(mockedFetchPackages).toHaveBeenCalledTimes(2));
@@ -266,7 +282,7 @@ describe('useLookingBackPackages integration', () => {
     mockedUseContentSafety.mockReturnValue({
       isLoading: false, isError: false, isUserBlocked: () => false, isTargetReported: () => false,
     } as never);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const packageSet = packageResponse().data;
     const [{ memoryIds: _memoryIds, ...packageMetadata }] = packageSet.packages;
     client.setQueryData(lookingBackQueryKey('user-1', 'family-1'), {
@@ -300,7 +316,7 @@ describe('useLookingBackPackages integration', () => {
       lastViewedAt: '2026-08-08T10:05:00.000Z',
       completedAt: '2026-08-08T10:05:00.000Z',
     }]);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
 
     await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
@@ -318,7 +334,7 @@ describe('useLookingBackPackages integration', () => {
       isLoading: false, isError: false, isUserBlocked: () => false, isTargetReported: () => false,
     } as never);
     mockedEnqueuePending.mockRejectedValue(new Error('storage full'));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const client = createTestQueryClient();
     const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
     await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
 

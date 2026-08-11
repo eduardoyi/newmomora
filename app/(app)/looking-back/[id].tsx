@@ -1,6 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useNavigation, router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import { Image } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
 import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Layers3, Volume2, VolumeX, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -17,16 +16,15 @@ import { fonts, getEmotionColors } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useLookingBackPackages, type LookingBackPackageWithMemories } from '@/hooks/useLookingBackPackages';
+import { useLookingBackMediaWarmup } from '@/hooks/useLookingBackMediaWarmup';
 import { useLookingBackPlayback } from '@/hooks/useLookingBackPlayback';
 import { useLookingBackSession, type LookingBackCheckpoint, type LookingBackSourceGeometry } from '@/hooks/useLookingBackSession';
-import { useMediaUrls } from '@/hooks/useMediaUrls';
 import { memoryDetailRoute, timelineRoute } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
 import type { LookingBackPackageType } from '@/services/looking-back';
 import { buildLookingBackChapters, flattenLookingBackFrames } from '@/utils/looking-back-frames';
 import { formatDisplayDate } from '@/utils/memories';
 import { formatAgeCompactFromDob } from '@/utils/family-members';
-import { mediaImageSource } from '@/utils/media-image-source';
 
 const MAT = '#1B1610';
 
@@ -173,29 +171,7 @@ export default function LookingBackViewerScreen() {
     checkpointFor,
     progress,
   } = useLookingBackPlayback({ frames, checkpoint: validCheckpoint, isScreenReaderEnabled: screenReaderEnabled });
-  const prefetchFrames = useMemo(() => [frames[state.frameIndex], frames[state.frameIndex + 1]].filter((frame): frame is NonNullable<typeof frame> => Boolean(frame)), [frames, state.frameIndex]);
-  const prefetchKeys = useMemo(() => prefetchFrames.flatMap((frame) => {
-    const primaryKey = frame.kind === 'illustration' ? frame.memory.illustration_key : frame.asset?.object_key;
-    const previewKey = frame.kind === 'photo' || frame.kind === 'video' ? frame.asset?.preview_object_key : null;
-    return [...new Set([primaryKey, previewKey].filter((key): key is string => Boolean(key)))];
-  }), [prefetchFrames]);
-  const { data: prefetchUrls } = useMediaUrls(prefetchKeys, currentFrame?.memory.updated_at);
-  useEffect(() => {
-    for (const frame of prefetchFrames) {
-      const primaryKey = frame.kind === 'illustration' ? frame.memory.illustration_key : frame.asset?.object_key;
-      const previewKey = frame.kind === 'photo' || frame.kind === 'video' ? frame.asset?.preview_object_key : null;
-      // Do not prefetch raw video through expo-image. Its stored first-frame
-      // JPEG poster is safe to warm and avoids an empty VideoView while the
-      // active player prepares the real source.
-      const imageKeys = frame.kind === 'video' ? [previewKey] : [primaryKey, previewKey];
-      for (const key of [...new Set(imageKeys.filter((candidate): candidate is string => Boolean(candidate)))]) {
-        const url = prefetchUrls?.[key];
-        // Keep prefetch in the same stable cache slot StoryFrame uses. A
-        // signed URL alone becomes a different slot after the next R2 re-sign.
-        if (url) void Image.loadAsync(mediaImageSource(url, key)).catch(() => {});
-      }
-    }
-  }, [prefetchFrames, prefetchUrls]);
+  useLookingBackMediaWarmup({ frames, phase: state.phase, frameIndex: state.frameIndex });
   const checkpointIdentityRef = useRef<Pick<LookingBackCheckpoint, 'familyId' | 'dailySetId' | 'packageId'> | null>(null);
 
   useEffect(() => {

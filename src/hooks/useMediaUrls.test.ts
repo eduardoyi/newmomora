@@ -1,4 +1,4 @@
-import { useMediaUrl } from '@/hooks/useMediaUrls';
+import { mediaUrlsQueryOptions, useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
 
 jest.mock('@/services/media', () => ({
   getMediaUrls: jest.fn(),
@@ -54,5 +54,24 @@ describe('useMediaUrl', () => {
     expect(gcTime).toBe(55 * 60 * 1000);
     expect(gcTime).toBeGreaterThan(staleTime);
     expect(gcTime).toBeLessThan(60 * 60 * 1000);
+  });
+
+  it('shares the hook query key and freshness options with imperative callers', () => {
+    const options = mediaUrlsQueryOptions(
+      ['user-1/photo-preview.jpg', 'user-1/photo.jpg'],
+      'memory-version-1',
+    );
+
+    useMediaUrls(['user-1/photo.jpg', 'user-1/photo-preview.jpg'], 'memory-version-1');
+    const hookOptions = useQuery.mock.calls[0][0];
+
+    expect(options.queryKey).toEqual([
+      'media-urls',
+      'user-1/photo-preview.jpg|user-1/photo.jpg',
+      'memory-version-1',
+    ]);
+    expect(hookOptions.queryKey).toEqual(options.queryKey);
+    expect(hookOptions.staleTime).toBe(options.staleTime);
+    expect(hookOptions.gcTime).toBe(options.gcTime);
   });
 });

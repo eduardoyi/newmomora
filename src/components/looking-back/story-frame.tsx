@@ -17,7 +17,7 @@ import Animated, {
 import { colors, fonts, getEmotionColors } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
 import { useVideoThumbnailResult } from '@/hooks/useVideoThumbnail';
-import type { LookingBackFrame } from '@/utils/looking-back-frames';
+import { frameMediaKeys, type LookingBackFrame } from '@/utils/looking-back-frames';
 import { mediaImageSource } from '@/utils/media-image-source';
 
 function configureVideoPlayer(player: ReturnType<typeof createVideoPlayer>, muted: boolean, isPaused: boolean) {
@@ -205,8 +205,8 @@ export function StoryFrame({
   const previewKey = frame.kind === 'photo' ? frame.asset?.preview_object_key : null;
   const videoPosterKey = frame.kind === 'video' ? frame.asset?.preview_object_key : null;
   const keys = useMemo(
-    () => [...new Set([primaryKey, previewKey, videoPosterKey].filter((key): key is string => Boolean(key)))],
-    [previewKey, primaryKey, videoPosterKey],
+    () => frameMediaKeys(frame).queryKeys,
+    [frame],
   );
   const { data: urls, isLoading, refetch } = useMediaUrls(keys, frame.memory.updated_at);
   const primaryUrl = primaryKey ? urls?.[primaryKey] : undefined;

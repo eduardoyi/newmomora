@@ -1,5 +1,4 @@
 import { act, fireEvent, renderAsync } from '@testing-library/react-native';
-import { Image as ExpoImage } from 'expo-image';
 import { AccessibilityInfo, AppState, View } from 'react-native';
 import { withTiming } from 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -14,7 +13,6 @@ let mockAppStateListener: ((nextState: string) => void) | undefined;
 let mockLastStageSize: { width: number; height: number } | undefined;
 let mockIsTargetReported: jest.Mock;
 let mockIsUserBlocked: jest.Mock;
-const mockImageLoadAsync = jest.fn(() => Promise.resolve());
 
 jest.mock('expo-router', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -43,14 +41,13 @@ const mockUseContentSafety = jest.fn();
 const mockUseLookingBackPackages = jest.fn();
 const mockUseLookingBackSession = jest.fn();
 const mockUseLookingBackPlayback = jest.fn();
-const mockUseMediaUrls = jest.fn();
+const mockUseLookingBackMediaWarmup = jest.fn();
 jest.mock('@/hooks/use-family', () => ({ useFamily: () => mockUseFamily() }));
 jest.mock('@/hooks/useContentSafety', () => ({ useContentSafety: () => mockUseContentSafety() }));
 jest.mock('@/hooks/useLookingBackPackages', () => ({ useLookingBackPackages: () => mockUseLookingBackPackages() }));
 jest.mock('@/hooks/useLookingBackSession', () => ({ useLookingBackSession: () => mockUseLookingBackSession() }));
 jest.mock('@/hooks/useLookingBackPlayback', () => ({ useLookingBackPlayback: (options: unknown) => mockUseLookingBackPlayback(options) }));
-let mockMediaUrls: Record<string, string> = {};
-jest.mock('@/hooks/useMediaUrls', () => ({ useMediaUrls: (...args: unknown[]) => mockUseMediaUrls(...args) }));
+jest.mock('@/hooks/useLookingBackMediaWarmup', () => ({ useLookingBackMediaWarmup: (...args: unknown[]) => mockUseLookingBackMediaWarmup(...args) }));
 jest.mock('@/components/offline-banner', () => ({ OFFLINE_BANNER_CONTENT_CLEARANCE: 54, useOfflineBannerVisible: () => false }));
 jest.mock('@/components/family-member-avatar', () => ({ FamilyMemberAvatar: () => null }));
 jest.mock('@/components/looking-back/story-progress', () => {
@@ -130,6 +127,7 @@ interface PlaybackState {
 let playbackState: PlaybackState;
 let playbackFrame = frame;
 let latestPlaybackOptions: any;
+let latestWarmupOptions: any;
 let dispatch: jest.Mock;
 let pause: jest.Mock;
 let resume: jest.Mock;
@@ -174,9 +172,8 @@ describe('LookingBackViewerScreen route integration', () => {
     mockBeforeRemove = undefined;
     mockAppStateListener = undefined;
     mockLastStageSize = undefined;
-    mockMediaUrls = {};
-    Object.assign(ExpoImage, { loadAsync: mockImageLoadAsync });
-    mockUseMediaUrls.mockImplementation(() => ({ data: mockMediaUrls, isLoading: false }));
+    latestWarmupOptions = undefined;
+    mockUseLookingBackMediaWarmup.mockImplementation((options: unknown) => { latestWarmupOptions = options; });
     mockNavigation.addListener.mockImplementation((event: string, listener: typeof mockBeforeRemove) => {
       if (event === 'beforeRemove') mockBeforeRemove = listener;
       return jest.fn();
@@ -251,30 +248,22 @@ describe('LookingBackViewerScreen route integration', () => {
     expect(packagesValue.markPackageViewed).toHaveBeenCalledWith('package-1');
   });
 
-  it('prefetches the active and next image with the stable source cache key used for display', async () => {
-    jest.useRealTimers();
-    configurePlayback({ phase: 'playing' });
-    const illustratedMemory = {
-      ...frame.memory,
-      id: 'memory-1',
-      memory_type: 'text_illustration',
-      illustration_key: 'family-1/illustrations/memory-1.png',
-      illustration_status: 'ready',
-    };
-    const packageWithIllustration = { ...item, memories: [illustratedMemory, ...item.memories.slice(1)] };
-    sessionValue.packageSnapshot = { ...sessionValue.packageSnapshot, value: packageWithIllustration };
-    packagesValue = { ...packagesValue, viewerPackages: [packageWithIllustration], packages: [packageWithIllustration] };
-    mockMediaUrls = { 'family-1/illustrations/memory-1.png': 'https://signed.example/memory-1.png' };
+  it('wires the complete package, playback phase, and current frame to the viewer-scoped warm-up', async () => {
+    const screen = await renderViewer();
 
-    await renderViewer();
-    await act(async () => { await Promise.resolve(); });
-    expect(mockUseMediaUrls).toHaveBeenCalledWith(
-      expect.arrayContaining(['family-1/illustrations/memory-1.png']),
-      undefined,
-    );
-    expect(mockImageLoadAsync).toHaveBeenCalledWith({
-      uri: 'https://signed.example/memory-1.png',
-      cacheKey: 'family-1/illustrations/memory-1.png',
+    expect(latestWarmupOptions).toEqual({
+      frames: latestPlaybackOptions.frames,
+      phase: 'intro',
+      frameIndex: 0,
+    });
+
+    playbackState = { ...playbackState, phase: 'playing', frameIndex: 1 };
+    await screen.rerenderAsync(viewerTree());
+
+    expect(latestWarmupOptions).toEqual({
+      frames: latestPlaybackOptions.frames,
+      phase: 'playing',
+      frameIndex: 1,
     });
   });
 
