@@ -34,6 +34,14 @@ export const familyMembershipsQueryKeyBase = 'family-memberships' as const;
 export const userProfileQueryKeyBase = 'user-profile' as const;
 export const galleryImportQueryKeyBase = 'gallery-import' as const;
 export const galleryCaptionSettingsQueryKeyBase = 'gallery-caption-settings' as const;
+// Server-authoritative run status and candidate previews for the Timeline
+// entry point (glyph + drawer). Deliberately separate from
+// galleryImportQueryKeyBase's inert query (see useGalleryImport.ts) -- these
+// two are keyed by runId, not familyId, and are NEVER added to the
+// query-persistence allow-list: candidates carry short-lived signed preview
+// URLs that must not survive a cold start on disk.
+export const galleryImportRunStatusQueryKeyBase = 'gallery-import-run-status' as const;
+export const galleryImportCandidatesQueryKeyBase = 'gallery-import-candidates' as const;
 
 export function memoriesQueryKey(familyId: string | null | undefined) {
   return [memoriesQueryKeyBase, familyId] as const;
@@ -100,4 +108,12 @@ export function galleryCaptionSettingsQueryKey(
   familyId: string | null | undefined,
 ) {
   return [galleryCaptionSettingsQueryKeyBase, userId, familyId] as const;
+}
+
+export function galleryImportRunStatusQueryKey(runId: string | null | undefined) {
+  return [galleryImportRunStatusQueryKeyBase, runId ?? 'none'] as const;
+}
+
+export function galleryImportCandidatesQueryKey(runId: string | null | undefined) {
+  return [galleryImportCandidatesQueryKeyBase, runId ?? 'none'] as const;
 }

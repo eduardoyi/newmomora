@@ -139,6 +139,38 @@ export function galleryUploadRequiredHeaders(
   };
 }
 
+/**
+ * Clusters registered with the server but not yet resolved (no caption
+ * written, and not explicitly skipped/refused) -- see
+ * `publish_gallery_cluster_result` and the `gallery_import_cluster_results`
+ * table in the foundation migration: a row is inserted (state 'pending')
+ * the moment a chunk's assets register, and moves out of 'pending' the
+ * instant that cluster's result lands, independent of chunk-level status.
+ *
+ * Round 4, device-tested finding: the client previously counted "+N coming"
+ * from its own LOCAL upload plan (checkpoint.chunks), which goes stale the
+ * moment a run is resumed after a stall/reload -- a real production run
+ * showed "+51 coming" all day from a phantom plan the server had already
+ * moved past. This is server truth instead: cheap (one indexed count against
+ * a join on the chunk's own primary key), and correct across any number of
+ * resumes/devices. Best-effort -- a failure here must never break the run
+ * status response itself; the caller treats `null` as "unknown, don't show
+ * a number".
+ */
+async function countPendingGalleryClusters(context: GalleryImportRequestContext, runId: unknown): Promise<number | null> {
+  try {
+    const { count, error } = await context.serviceClient
+      .from('gallery_import_cluster_results')
+      .select('id, gallery_import_chunks!inner(run_id)', { count: 'exact', head: true })
+      .eq('state', 'pending')
+      .eq('gallery_import_chunks.run_id', runId as string);
+    if (error || typeof count !== 'number') return null;
+    return count;
+  } catch {
+    return null;
+  }
+}
+
 export async function clientRun(context: GalleryImportRequestContext, run: Record<string, unknown>) {
   const { data: stored } = await context.serviceClient.from('gallery_import_runs')
     .select('limit_snapshot').eq('id', run.id).maybeSingle();
@@ -154,6 +186,10 @@ export async function clientRun(context: GalleryImportRequestContext, run: Recor
     // `chunks` array name: a polymorphic field quietly breaks checkpoint and
     // resume callers when a run is reloaded from the server.
     chunkCount: finiteInteger(run.chunks, 0, 500) ? run.chunks : 0,
+    // Additive, optional: older clients that don't read it are unaffected.
+    // null means "server could not compute it right now" -- never rendered
+    // as a number, never treated as 0.
+    pendingClusters: await countPendingGalleryClusters(context, run.id),
     limits: {
       maxClusters: numberAt('maxCandidatesPerRun', 60),
       maxAssetsPerCluster: numberAt('maxImagesPerCluster', 10),

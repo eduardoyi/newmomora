@@ -17,8 +17,16 @@ jest.mock('@/lib/supabase', () => ({
 
 const mockedInvoke = supabase.functions.invoke as jest.MockedFunction<typeof supabase.functions.invoke>;
 
+const mockCancelAsync = jest.fn(async () => undefined);
 jest.mock('expo-file-system/legacy', () => ({
   uploadAsync: jest.fn(),
+  // uploadToPresignedUrl routes through createUploadTask (cancellable, for
+  // the opt-in timeout); the shim forwards to the same uploadAsync mock so
+  // resolution control and call-args assertions stay in one place.
+  createUploadTask: jest.fn((url: string, fileUri: string, options: unknown) => ({
+    uploadAsync: () => (jest.requireMock('expo-file-system/legacy') as { uploadAsync: jest.Mock }).uploadAsync(url, fileUri, options),
+    cancelAsync: mockCancelAsync,
+  })),
   FileSystemSessionType: {
     FOREGROUND: 0,
   },
@@ -40,6 +48,25 @@ describe('uploadToPresignedUrl', () => {
   afterEach(() => {
     Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
     jest.clearAllMocks();
+  });
+
+  it('cancels a hung native upload after timeoutMs and reports upload_timeout', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    // A PUT that never settles -- the device-observed stall ("13 of 318
+    // previews sent" forever). The timeout must cancel and surface an error
+    // instead of freezing the caller's serial loop.
+    mockedUploadAsync.mockImplementation(() => new Promise(() => undefined));
+
+    const result = await uploadToPresignedUrl(
+      'https://upload.example.com/object',
+      'file:///tmp/photo.jpg',
+      'image/jpeg',
+      undefined,
+      { timeoutMs: 25 },
+    );
+
+    expect(result.error?.code).toBe('upload_timeout');
+    expect(mockCancelAsync).toHaveBeenCalled();
   });
 
   it('uploads via FileSystem on native and returns null on success', async () => {

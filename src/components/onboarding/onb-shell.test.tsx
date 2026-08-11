@@ -51,12 +51,13 @@ describe('OnbShell', () => {
     }
     expect(scrollView.props.children).not.toContain(footer);
 
-    // The native `SafeAreaView edges={['bottom']}` between the sticky view
-    // and the footer is the single owner of nav-bar/home-indicator
-    // clearance now (cause B/C); the footer's own JS padding just tops up
-    // the design's usual gap when that native inset is smaller than it.
+    // Nav-bar/home-indicator clearance is applied as JS padding from the
+    // useSafeAreaInsets() context value (inset + a small top-up gap) -- the
+    // former native `SafeAreaView edges={['bottom']}` wrapper resolved its
+    // inset to 0 inside the animated sticky view on device, letting footers
+    // render under the system navigation bar (see keyboard-sticky-shell.tsx).
     expect(footer.props.style).toEqual(
-      expect.arrayContaining([expect.objectContaining({ paddingBottom: spacing.sm })]),
+      expect.arrayContaining([expect.objectContaining({ paddingBottom: 48 + spacing.sm })]),
     );
     expect(scrollView.props.bottomOffset).toBe(FOOTER_KEYBOARD_CLEARANCE);
     expect(FOOTER_KEYBOARD_CLEARANCE).toBeLessThan(spacing.xxl * 2);

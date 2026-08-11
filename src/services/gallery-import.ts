@@ -28,6 +28,13 @@ export interface GalleryImportRun {
   limits: GalleryImportLimits;
   readyCandidates?: number;
   chunkCount?: number;
+  /** Round 4: server-computed count of clusters registered but not yet
+   * resolved (see supabase/functions/_shared/gallery-import.ts's
+   * countPendingGalleryClusters) -- server truth for "+N coming", unlike
+   * the client's own local upload plan, which goes stale across a resume.
+   * `null`/absent means the server could not compute it; never render a
+   * number in that case. */
+  pendingClusters?: number | null;
 }
 
 /** A curation draft. It deliberately contains no model explanation or emotion. */

@@ -16,6 +16,15 @@ function jpeg(): Uint8Array {
   ]);
 }
 
+/** A distinct 1x1 JPEG (same declared dimensions, different bytes/hash than `jpeg()`). */
+function jpegVariant(): Uint8Array {
+  return new Uint8Array([
+    0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01,
+    0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01,
+    0xff, 0xfe, 0x00, 0x04, 0x41, 0x42, 0xff, 0xd9,
+  ]);
+}
+
 async function sha(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', bytes.slice().buffer);
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
@@ -56,6 +65,24 @@ function workflowWith(env: Env): GalleryImportWorkflow {
 function createEnvironment(previewBytes = jpeg()) {
   const previews = {
     get: vi.fn(async () => ({ body: stream(previewBytes), httpMetadata: { contentType: 'image/jpeg' } })),
+  };
+  const env = {
+    GALLERY_IMPORT_PREVIEWS: previews,
+    OPENAI_API_KEY: 'test-key',
+    GALLERY_SUPABASE_BRIDGE_URL: 'https://bridge.test/gallery',
+    GALLERY_SUPABASE_BRIDGE_HMAC_SECRET: 'gallery-bridge',
+    GALLERY_DISPATCH_SIGNING_SECRET: 'gallery-dispatch',
+  } as unknown as Env;
+  return { env, previews };
+}
+
+/** Like `createEnvironment`, but returns distinct bytes per preview key instead of one fixed image. */
+function createKeyedEnvironment(bytesByKey: Record<string, Uint8Array>) {
+  const previews = {
+    get: vi.fn(async (key: string) => {
+      const bytes = bytesByKey[key];
+      return bytes ? { body: stream(bytes), httpMetadata: { contentType: 'image/jpeg' } } : null;
+    }),
   };
   const env = {
     GALLERY_IMPORT_PREVIEWS: previews,
@@ -231,25 +258,31 @@ describe('gallery import workflow', () => {
     expect(JSON.stringify(operations)).not.toContain('private provider explanation');
   });
 
-  it('closes malformed provider output without publishing partial candidates', async () => {
+  it('closes malformed provider output without publishing partial candidates, after its one-shot corrective retry also fails', async () => {
     const chunk = await input();
     const { env } = createEnvironment();
-    const malformed = Response.json({
+    const malformed = () => Response.json({
       choices: [{ message: { content: JSON.stringify({
         groups: [{ caption: 'Impossible.', selected_asset_tokens: [TOKEN], memory_date: '2026-02-31', emotion: 'joy', confidence: 0.9 }],
         skip_reason: null,
       }) } }],
       usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
     });
-    const { fetchMock, operations } = bridgeAndVisionFetch(chunk, [malformed]);
+    // A single malformed reply now gets one corrective retry (see the
+    // "one-shot corrective retry" describe block below); queue it twice to
+    // exercise the pre-existing terminal-skip path once that retry is
+    // also exhausted.
+    const { fetchMock, operations } = bridgeAndVisionFetch(chunk, [malformed(), malformed()]);
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(workflowWith(env).run(
       { payload: { chunkId: CHUNK_ID } } as WorkflowEvent<{ chunkId: string }>, fakeStep(),
     )).resolves.toMatchObject({ status: 'ready', stagedCandidates: 0, skippedClusters: 1 });
-    expect(operations.find((operation) => operation.operation === 'record_gallery_usage')).toMatchObject({
-      usage: { success: false, inputTokens: 9, outputTokens: 3, totalTokens: 12 },
-    });
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(2);
+    expect(operations.filter((operation) => operation.operation === 'record_gallery_usage')).toEqual([
+      expect.objectContaining({ usage: expect.objectContaining({ success: false, inputTokens: 9, outputTokens: 3, totalTokens: 12 }) }),
+      expect.objectContaining({ usage: expect.objectContaining({ success: false, inputTokens: 9, outputTokens: 3, totalTokens: 12 }) }),
+    ]);
     expect(operations.find((operation) => operation.operation === 'publish_gallery_cluster_result')).toMatchObject({
       candidates: [], skipReason: 'invalid_provider_output',
     });
@@ -422,5 +455,203 @@ describe('gallery import workflow', () => {
     expect(operations.filter((operation) => operation.invocation === 2 && operation.clusterSignature === 'a'.repeat(64))).toHaveLength(0);
     expect(operations.filter((operation) => operation.invocation === 2 && operation.operation === 'reserve_gallery_attempt'))
       .toEqual([expect.objectContaining({ attemptNumber: 1 }), expect.objectContaining({ attemptNumber: 2 })]);
+  });
+
+  it("drops an asset that duplicates an earlier asset's expected hash before loading previews or calling the vision request", async () => {
+    const base = await input();
+    const duplicateToken = '123e4567-e89b-42d3-a456-426614174040';
+    const duplicateAsset = {
+      ...base.clusters[0].assets[0],
+      assetToken: duplicateToken,
+      previewKey: `123e4567-e89b-42d3-a456-426614174002/gallery-import/123e4567-e89b-42d3-a456-426614174002/previews/${duplicateToken}.jpg`,
+    };
+    const chunk = { ...base, clusters: [{ ...base.clusters[0], assets: [base.clusters[0].assets[0], duplicateAsset] }] };
+    const { env, previews } = createEnvironment();
+    const { fetchMock, operations } = bridgeAndVisionFetch(chunk, [visionBody()]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(workflowWith(env).run(
+      { payload: { chunkId: CHUNK_ID } } as WorkflowEvent<{ chunkId: string }>, fakeStep(),
+    )).resolves.toMatchObject({ status: 'ready', stagedCandidates: 1, skippedClusters: 0 });
+    expect(previews.get).toHaveBeenCalledTimes(1);
+    expect(operations.find((operation) => operation.operation === 'publish_gallery_cluster_result')).toMatchObject({
+      candidates: [expect.objectContaining({ selectedAssetTokens: [TOKEN] })],
+    });
+  });
+
+  it('drops individual groups below the confidence threshold while keeping accepted groups', async () => {
+    const base = await input({ maxImagesPerCluster: 4 });
+    const tokenB = '123e4567-e89b-42d3-a456-426614174050';
+    const assetA = base.clusters[0].assets[0];
+    const variantBytes = jpegVariant();
+    const assetB = {
+      ...assetA,
+      assetToken: tokenB,
+      previewKey: `123e4567-e89b-42d3-a456-426614174002/gallery-import/123e4567-e89b-42d3-a456-426614174002/previews/${tokenB}.jpg`,
+      expectedByteLength: variantBytes.byteLength,
+      expectedSha256: await sha(variantBytes),
+    };
+    const chunk = { ...base, clusters: [{ ...base.clusters[0], assets: [assetA, assetB] }] };
+    const { env } = createKeyedEnvironment({ [assetA.previewKey]: jpeg(), [assetB.previewKey]: variantBytes });
+    const groups = [
+      { caption: 'Kept above the threshold.', selected_asset_tokens: [TOKEN], memory_date: '2026-07-02', emotion: 'joy', confidence: 0.9 },
+      { caption: 'Dropped below the threshold.', selected_asset_tokens: [tokenB], memory_date: '2026-07-02', emotion: null, confidence: 0.2 },
+    ];
+    const { fetchMock, operations } = bridgeAndVisionFetch(chunk, [visionBody(groups)]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(workflowWith(env).run(
+      { payload: { chunkId: CHUNK_ID } } as WorkflowEvent<{ chunkId: string }>, fakeStep(),
+    )).resolves.toMatchObject({ status: 'ready', stagedCandidates: 1, skippedClusters: 0 });
+    expect(operations.find((operation) => operation.operation === 'publish_gallery_cluster_result')).toMatchObject({
+      skipReason: null,
+      candidates: [expect.objectContaining({ selectedAssetTokens: [TOKEN] })],
+    });
+  });
+
+  it('publishes a low_confidence skip when every group falls below the threshold', async () => {
+    const chunk = await input();
+    const { env } = createEnvironment();
+    const { fetchMock, operations } = bridgeAndVisionFetch(chunk, [visionBody([
+      { caption: 'Too uncertain to keep.', selected_asset_tokens: [TOKEN], memory_date: '2026-07-02', emotion: null, confidence: 0.4 },
+    ])]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(workflowWith(env).run(
+      { payload: { chunkId: CHUNK_ID } } as WorkflowEvent<{ chunkId: string }>, fakeStep(),
+    )).resolves.toMatchObject({ status: 'ready', stagedCandidates: 0, skippedClusters: 1 });
+    expect(operations.find((operation) => operation.operation === 'publish_gallery_cluster_result')).toMatchObject({
+      candidates: [], skipReason: 'low_confidence',
+    });
+  });
+
+  // Regression coverage for the production run that saw a 17%
+  // invalid_provider_output rate: each of these reproduces one suspected
+  // schema-adjacent (not type/enum) validation failure, confirms the
+  // one-shot corrective retry reuses a freshly reserved attempt with a
+  // rule-specific hint appended, and that the corrected response stages
+  // normally instead of silently skipping the cluster.
+  describe('one-shot corrective retry after a validation failure', () => {
+    function providerRequestTexts(fetchMock: ReturnType<typeof bridgeAndVisionFetch>['fetchMock'], callIndex: number): string[] {
+      const providerCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'));
+      const body = JSON.parse(String(providerCalls[callIndex]?.[1]?.body)) as { messages: Array<{ role: string; content: unknown }> };
+      const userContent = body.messages.find((message) => message.role === 'user')?.content as Array<{ type: string; text?: string }>;
+      return userContent.filter((item) => item.type === 'text').map((item) => item.text as string);
+    }
+
+    it('retries once with a corrective hint when memory_date falls outside the cluster range, then stages the corrected response', async () => {
+      const chunk = await input();
+      const { env } = createEnvironment();
+      const badDate = visionBody([{
+        caption: 'With the Lego Spiderman!', selected_asset_tokens: [TOKEN], memory_date: '2026-09-01', emotion: 'joy', confidence: 0.8,
+      }]);
+      const { fetchMock, operations } = bridgeAndVisionFetch(chunk, [badDate, visionBody()]);
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(workflowWith(env).run(
+        { payload: { chunkId: CHUNK_ID } } as WorkflowEvent<{ chunkId: string }>, fakeStep(),
+      )).resolves.toMatchObject({ status: 'ready', stagedCandidates: 1, skippedClusters: 0 });
+
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(2);
+      expect(operations.filter((operation) => operation.operation === 'reserve_gallery_attempt'))
+        .toEqual([expect.objectContaining({ attemptNumber: 1 }), expect.objectContaining({ attemptNumber: 2 })]);
+      expect(operations.filter((operation) => operation.operation === 'record_gallery_usage').map((operation) => (operation.usage as { success: boolean }).success))
+        .toEqual([false, true]);
+
+      const secondRequestTexts = providerRequestTexts(fetchMock, 1);
+      expect(secondRequestTexts).toHaveLength(2);
+      expect(secondRequestTexts[1]).toContain('Your previous response failed validation');
+      expect(secondRequestTexts[1]).toContain("cluster's capture_date values");
+    });
+
+    it('retries once with a corrective hint when emotion deviates from the closed taxonomy, then stages the corrected response', async () => {
+      const chunk = await input();
+      const { env } = createEnvironment();
+      const badEmotion = visionBody([{
+        caption: 'With the Lego Spiderman!', selected_asset_tokens: [TOKEN], memory_date: '2026-07-02', emotion: 'excited', confidence: 0.8,
+      }]);
+      const { fetchMock, operations } = bridgeAndVisionFetch(chunk, [badEmotion, visionBody()]);
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(workflowWith(env).run(
+        { payload: { chunkId: CHUNK_ID } } as WorkflowEvent<{ chunkId: string }>, fakeStep(),
+      )).resolves.toMatchObject({ status: 'ready', stagedCandidates: 1, skippedClusters: 0 });
+
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(2);
+      const secondRequestTexts = providerRequestTexts(fetchMock, 1);
+      expect(secondRequestTexts[1]).toContain('Your previous response failed validation');
+      expect(secondRequestTexts[1]).toContain('joy, funny, tender, calm, wonder, mischief, pride, bittersweet, worry, weary, sad');
+      expect(operations.find((operation) => operation.operation === 'publish_gallery_cluster_result'))
+        .toMatchObject({ skipReason: null, candidates: [expect.objectContaining({ selectedAssetTokens: [TOKEN] })] });
+    });
+
+    it('retries once with a corrective hint when skip_reason is set alongside a non-empty groups array, then stages the corrected response', async () => {
+      const chunk = await input();
+      const { env } = createEnvironment();
+      const skipWithGroups = visionBody(
+        [{ caption: 'With the Lego Spiderman!', selected_asset_tokens: [TOKEN], memory_date: '2026-07-02', emotion: 'joy', confidence: 0.8 }],
+        'low_confidence',
+      );
+      const { fetchMock } = bridgeAndVisionFetch(chunk, [skipWithGroups, visionBody()]);
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(workflowWith(env).run(
+        { payload: { chunkId: CHUNK_ID } } as WorkflowEvent<{ chunkId: string }>, fakeStep(),
+      )).resolves.toMatchObject({ status: 'ready', stagedCandidates: 1, skippedClusters: 0 });
+
+      const secondRequestTexts = providerRequestTexts(fetchMock, 1);
+      expect(secondRequestTexts[1]).toContain('Your previous response failed validation');
+      expect(secondRequestTexts[1]).toContain('skip_reason must be null whenever you return any group');
+    });
+
+    it('retries once with a corrective hint when the caption contains a newline, then stages the corrected response', async () => {
+      const chunk = await input();
+      const { env } = createEnvironment();
+      const newlineCaption = visionBody([{
+        caption: 'With the Lego Spiderman!\nA great afternoon.', selected_asset_tokens: [TOKEN], memory_date: '2026-07-02', emotion: 'joy', confidence: 0.8,
+      }]);
+      const { fetchMock } = bridgeAndVisionFetch(chunk, [newlineCaption, visionBody()]);
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(workflowWith(env).run(
+        { payload: { chunkId: CHUNK_ID } } as WorkflowEvent<{ chunkId: string }>, fakeStep(),
+      )).resolves.toMatchObject({ status: 'ready', stagedCandidates: 1, skippedClusters: 0 });
+
+      const secondRequestTexts = providerRequestTexts(fetchMock, 1);
+      expect(secondRequestTexts[1]).toContain('Your previous response failed validation');
+      expect(secondRequestTexts[1]).toContain('no line breaks, tabs, or other control characters');
+    });
+
+    it('retries at most once: a second validation failure closes the cluster as invalid_provider_output and logs a closed diagnostic', async () => {
+      const chunk = await input({ maxProviderAttempts: 3 });
+      const { env } = createEnvironment();
+      const badDate = visionBody([{
+        caption: 'With the Lego Spiderman!', selected_asset_tokens: [TOKEN], memory_date: '2026-09-01', emotion: 'joy', confidence: 0.8,
+      }]);
+      const stillBadEmotion = visionBody([{
+        caption: 'With the Lego Spiderman!', selected_asset_tokens: [TOKEN], memory_date: '2026-07-02', emotion: 'excited', confidence: 0.8,
+      }]);
+      const { fetchMock, operations } = bridgeAndVisionFetch(chunk, [badDate, stillBadEmotion]);
+      vi.stubGlobal('fetch', fetchMock);
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(workflowWith(env).run(
+        { payload: { chunkId: CHUNK_ID } } as WorkflowEvent<{ chunkId: string }>, fakeStep(),
+      )).resolves.toMatchObject({ status: 'ready', stagedCandidates: 0, skippedClusters: 1 });
+
+      // Exactly two provider calls (first attempt + one corrective retry),
+      // never a third, even though maxProviderAttempts allows it -- the
+      // corrective retry is capped at one regardless of remaining budget.
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(2);
+      expect(operations.find((operation) => operation.operation === 'publish_gallery_cluster_result'))
+        .toMatchObject({ candidates: [], skipReason: 'invalid_provider_output' });
+      expect(warnSpy).toHaveBeenCalledWith('gallery_curation_invalid_provider_output', expect.objectContaining({
+        chunkId: CHUNK_ID,
+        clusterSignature: 'a'.repeat(64),
+        validationFailureCode: 'invalid_emotion',
+        correctiveRetryAttempted: true,
+      }));
+      warnSpy.mockRestore();
+    });
   });
 });

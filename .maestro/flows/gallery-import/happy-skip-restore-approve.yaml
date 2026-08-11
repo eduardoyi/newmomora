@@ -23,12 +23,26 @@ appId: com.memora.app
     timeout: 15000
 - tapOn:
     id: gallery-import-set-aside
+# The set-aside list lives in the "Set aside · N" sheet now, with a
+# "Bring back" action per row (design: GISetAsideSheet).
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-set-aside-pill
+    timeout: 15000
+- tapOn:
+    id: gallery-import-set-aside-pill
 - extendedWaitUntil:
     visible:
       id: gallery-import-restore-e2e-candidate-one
     timeout: 15000
 - tapOn:
     id: gallery-import-restore-e2e-candidate-one
+- tapOn:
+    id: gallery-import-set-aside-sheet-close
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-keep
+    timeout: 15000
 - tapOn:
     id: gallery-import-keep
 - extendedWaitUntil:
@@ -43,5 +57,11 @@ appId: com.memora.app
     id: gallery-import-approve
 - extendedWaitUntil:
     visible:
-      id: gallery-import-set-aside
+      id: gallery-import-approval-success
     timeout: 30000
+- tapOn:
+    id: gallery-import-approval-next
+- extendedWaitUntil:
+    visible:
+      id: gallery-import-set-aside
+    timeout: 15000

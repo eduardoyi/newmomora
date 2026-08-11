@@ -105,9 +105,12 @@ describe('KeyboardStickyShell', () => {
     const footer = getByTestId('shell-footer');
     const scrollView = getByTestId('shell-scroll');
     expect(queryByTestId('shell-sticky-footer')).toBeNull();
-    expect(fixedFooter.props.edges).toEqual({ bottom: 'additive', left: 'off', right: 'off', top: 'off' });
+    // The footer wrapper is a plain View: the bottom inset is applied from
+    // the useSafeAreaInsets() context value instead of a native SafeAreaView
+    // edge, which resolves to 0 inside the animated sticky wrapper on device.
+    expect(fixedFooter.props.edges).toBeUndefined();
     expect(footer.props.style).toEqual(
-      expect.arrayContaining([expect.objectContaining({ paddingBottom: getStickyFooterBottomPadding(34) })]),
+      expect.arrayContaining([expect.objectContaining({ paddingBottom: 34 + getStickyFooterBottomPadding(34) })]),
     );
 
     let footerAncestor = footer.parent;

@@ -24,6 +24,14 @@ export const colors = {
   seaSoft: '#C9ECE9',
   seaInk: '#1f5a56',
 
+  // Amber "needs attention" tone -- gallery-import design handoff tokens.jsx
+  // (EC.sun/sunSoft/sunInk). No prior UI in this app needed a semantic
+  // amber, so it wasn't in this palette before; values are copied verbatim
+  // from the design tokens, not invented.
+  sun: '#F2B441',
+  sunSoft: '#FBE8B8',
+  sunInk: '#7a560f',
+
   // Legacy aliases for backward compat
   background: '#FAFAFD',
   text: '#2C2418',

@@ -21,6 +21,7 @@ const GRID_COLUMNS = 3;
 const GRID_GAP = spacing.sm;
 const DEFAULT_TILE_SIZE = 96;
 const MAX_GRID_HEIGHT = 336;
+const MAX_ATTACHMENTS = 10;
 
 interface MemoryMediaPreviewProps {
   attachments: MediaAttachment[];
@@ -28,6 +29,24 @@ interface MemoryMediaPreviewProps {
   onRemove: (attachmentId: string) => void;
   selectedId: string | null;
   onSelect: (attachmentId: string | null) => void;
+  /** Attachment ids whose preview failed to load (gallery-import: a private
+   * preview URL that 404s/expires). Renders an inline "not available" tile
+   * instead of a broken image. Unused by new-memory/edit-memory. */
+  unavailableIds?: string[];
+  /** Hides remove buttons and the Add tile, and disables reorder-by-drag
+   * (gallery-import: while an approval upload is in flight). Unused by
+   * new-memory/edit-memory. */
+  disabled?: boolean;
+  /** Renders a dashed "Add" tile after the last attachment, up to
+   * MAX_ATTACHMENTS (gallery-import's day-pool photo-chooser seam --
+   * Phase 3). Omitted by new-memory/edit-memory, which attach media through
+   * the toolbar's MemoryMediaPicker instead. */
+  onAddPress?: () => void;
+  /** Fires when a non-video tile's image fails to load, so a caller can mark
+   * it unavailable (gallery-import: a private preview URL that 404s/
+   * expires). Unused by new-memory/edit-memory, whose local file:// and
+   * signed media URIs don't need this. */
+  onImageError?: (attachmentId: string) => void;
 }
 
 function clampIndex(index: number, length: number): number {
@@ -51,8 +70,11 @@ function getTargetIndex(
 interface MemoryMediaTileProps {
   attachment: MediaAttachment;
   attachmentsLength: number;
+  disabled: boolean;
   index: number;
   isSelected: boolean;
+  isUnavailable: boolean;
+  onImageError?: (attachmentId: string) => void;
   onMove: (fromIndex: number, toIndex: number) => void;
   onRemove: (attachmentId: string) => void;
   onSelect: (attachmentId: string | null) => void;
@@ -62,8 +84,11 @@ interface MemoryMediaTileProps {
 function MemoryMediaTile({
   attachment,
   attachmentsLength,
+  disabled,
   index,
   isSelected,
+  isUnavailable,
+  onImageError,
   onMove,
   onRemove,
   onSelect,
@@ -75,9 +100,9 @@ function MemoryMediaTile({
 
   const panResponder = useMemo(
     () => PanResponder.create({
-      onStartShouldSetPanResponder: () => isSelected,
+      onStartShouldSetPanResponder: () => isSelected && !disabled,
       onMoveShouldSetPanResponder: (_event, gestureState) =>
-        isSelected && Math.max(Math.abs(gestureState.dx), Math.abs(gestureState.dy)) > 8,
+        isSelected && !disabled && Math.max(Math.abs(gestureState.dx), Math.abs(gestureState.dy)) > 8,
       onPanResponderGrant: () => {
         setDragOffset({ x: 0, y: 0 });
       },
@@ -104,15 +129,15 @@ function MemoryMediaTile({
         setDragOffset({ x: 0, y: 0 });
       },
     }),
-    [attachmentsLength, index, isSelected, onMove, onSelect, tileSize],
+    [attachmentsLength, disabled, index, isSelected, onMove, onSelect, tileSize],
   );
 
   return (
     <Pressable
-      accessibilityHint="Long press, then drag to reorder"
+      accessibilityHint={disabled ? undefined : 'Long press, then drag to reorder'}
       accessibilityRole="button"
       accessibilityLabel="Attached media"
-      onLongPress={() => onSelect(isSelected ? null : attachment.id)}
+      onLongPress={disabled ? undefined : () => onSelect(isSelected ? null : attachment.id)}
       onPress={() => {
         if (isSelected) {
           onSelect(null);
@@ -133,7 +158,17 @@ function MemoryMediaTile({
       testID={`memory-media-tile-${index}`}
       {...panResponder.panHandlers}
     >
-      {isVideo ? (
+      {isUnavailable ? (
+        <View style={styles.unavailable} testID={`memory-media-unavailable-${index}`}>
+          <SymbolView
+            name={{ ios: 'exclamationmark.triangle', android: 'warning' }}
+            size={16}
+            tintColor={colors.ink2}
+            fallback={<Text style={styles.unavailableFallbackIcon}>!</Text>}
+          />
+          <Text style={styles.unavailableText}>Not available</Text>
+        </View>
+      ) : isVideo ? (
         <View style={styles.videoWrap}>
           {thumbnailUri ? (
             <Image contentFit="cover" source={{ uri: thumbnailUri }} style={styles.image} />
@@ -170,22 +205,30 @@ function MemoryMediaTile({
           ) : null}
         </View>
       ) : (
-        <Image contentFit="cover" source={{ uri: attachment.uri }} style={styles.image} />
+        <Image
+          contentFit="cover"
+          onError={onImageError ? () => onImageError(attachment.id) : undefined}
+          source={{ uri: attachment.uri }}
+          style={styles.image}
+          testID={`memory-media-image-${index}`}
+        />
       )}
 
       <View style={styles.positionBadge}>
         <Text style={styles.positionText}>{index + 1}</Text>
       </View>
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Remove attached media"
-        onPress={() => onRemove(attachment.id)}
-        style={styles.removeButton}
-        testID={`memory-media-remove-${index}`}
-      >
-        <Text style={styles.removeButtonText}>×</Text>
-      </Pressable>
+      {disabled ? null : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Remove attached media"
+          onPress={() => onRemove(attachment.id)}
+          style={styles.removeButton}
+          testID={`memory-media-remove-${index}`}
+        >
+          <Text style={styles.removeButtonText}>×</Text>
+        </Pressable>
+      )}
     </Pressable>
   );
 }
@@ -196,17 +239,22 @@ export function MemoryMediaPreview({
   onRemove,
   selectedId,
   onSelect,
+  unavailableIds,
+  disabled = false,
+  onAddPress,
+  onImageError,
 }: MemoryMediaPreviewProps) {
   const [gridWidth, setGridWidth] = useState(0);
   const tileSize = gridWidth > 0
     ? Math.floor((gridWidth - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS)
     : DEFAULT_TILE_SIZE;
+  const showAddTile = Boolean(onAddPress) && !disabled && attachments.length < MAX_ATTACHMENTS;
 
   return (
     <View style={styles.container} testID="new-memory-media-preview">
       <View style={styles.header}>
         <Text style={styles.headerLabel}>Photos & videos</Text>
-        <Text style={styles.headerCount}>{attachments.length}/10</Text>
+        <Text style={styles.headerCount}>{attachments.length}/{MAX_ATTACHMENTS}</Text>
       </View>
       <View
         onLayout={(event: LayoutChangeEvent) => {
@@ -231,9 +279,12 @@ export function MemoryMediaPreview({
               <MemoryMediaTile
                 attachment={attachment}
                 attachmentsLength={attachments.length}
+                disabled={disabled}
                 index={index}
                 isSelected={isSelected}
+                isUnavailable={Boolean(unavailableIds?.includes(attachment.id))}
                 key={attachment.id}
+                onImageError={onImageError}
                 onMove={onMove}
                 onRemove={onRemove}
                 onSelect={onSelect}
@@ -241,6 +292,23 @@ export function MemoryMediaPreview({
               />
             );
           })}
+          {showAddTile ? (
+            <Pressable
+              accessibilityLabel="Add photos"
+              accessibilityRole="button"
+              onPress={onAddPress}
+              style={[styles.addTile, { height: tileSize, width: tileSize }]}
+              testID="memory-media-add"
+            >
+              <SymbolView
+                name={{ ios: 'plus', android: 'add' }}
+                size={20}
+                tintColor={colors.ink3}
+                fallback={<Text style={styles.addTileFallbackIcon}>+</Text>}
+              />
+              <Text style={styles.addTileText}>Add</Text>
+            </Pressable>
+          ) : null}
         </ScrollView>
       </View>
     </View>
@@ -386,5 +454,47 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
     lineHeight: 18,
+  },
+  unavailable: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    height: '100%',
+    width: '100%',
+    borderStyle: 'dashed',
+    borderColor: colors.borderStrong,
+    borderWidth: 1.5,
+    borderRadius: radius.md,
+  },
+  unavailableFallbackIcon: {
+    fontSize: 16,
+    color: colors.ink2,
+    fontWeight: '700',
+  },
+  unavailableText: {
+    fontFamily: fonts.sansBold,
+    fontSize: 9.5,
+    color: colors.ink3,
+    textAlign: 'center',
+    paddingHorizontal: 4,
+  },
+  addTile: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: colors.surface,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.md,
+    borderStyle: 'dashed',
+    borderWidth: 2,
+  },
+  addTileFallbackIcon: {
+    fontSize: 18,
+    color: colors.ink3,
+  },
+  addTileText: {
+    fontFamily: fonts.sansBold,
+    fontSize: 10,
+    color: colors.ink3,
   },
 });

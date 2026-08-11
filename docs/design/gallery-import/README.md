@@ -39,7 +39,18 @@ These decisions resolve contradictions between the prototype, its notes, and
   questions but never displayed as a badge, label, or filter.
 - Caption language/instruction settings autosave with visible saved/error
   feedback. Language choices come from the shared production locale registry,
-  not the prototype's illustrative subset.
+  not the prototype's illustrative subset. **2026-08-10 product decision**
+  (supersedes the original "comprehensive BCP 47/CLDR list" framing above):
+  device testing showed the full 241-entry registry was overwhelming to
+  scroll (users passing Abkhaz/Afar/Akan before reaching anything relevant),
+  so the picker shows a curated production list (48 entries --
+  `curatedGalleryCaptionLocaleTags` in `src/constants/gallery-caption-locales.ts`)
+  of major world languages plus meaningful regional variants. This is
+  presentation-only: the full registry is still accepted for validation
+  (`normalizeGalleryCaptionLocale` / the Edge Function's BCP-47 shape check),
+  so a family whose saved language falls outside the curated list keeps
+  resolving to its correct human-readable name in the "Current" row and the
+  settings-screen summary, and keeps saving/loading successfully.
 - Viewers see no entry points except the explanatory disabled Settings row.
 - Cross-device copy is generic and exposes neither preview content, device name,
   nor exact candidate count.

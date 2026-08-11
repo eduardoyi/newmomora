@@ -58,6 +58,17 @@ interface MemoryMediaPickerProps {
    * `launchCameraAsync`, which never derives a capture date.
    */
   includeCaptureDate?: boolean;
+  /**
+   * Overrides the button's press behavior entirely, bypassing the built-in
+   * library/camera action sheet -- used by gallery-import's composer, which
+   * wants this exact button (icon, sizing, disabled styling) wired to its
+   * own day-pool photo-chooser sheet instead of the native picker. Only
+   * meaningful with `compact`. Omitted everywhere else.
+   */
+  onPress?: () => void;
+  /** Defaults to the historical hardcoded value so existing screens (which
+   * never pass this) render an unchanged testID. */
+  testID?: string;
 }
 
 function createAttachmentId(): string {
@@ -130,6 +141,8 @@ export function MemoryMediaPicker({
   compact = false,
   remainingSlots = 10,
   includeCaptureDate = false,
+  onPress,
+  testID = 'new-memory-attach-media',
 }: MemoryMediaPickerProps) {
   const isPickerOpeningRef = useRef(false);
 
@@ -313,6 +326,11 @@ export function MemoryMediaPicker({
   };
 
   const handleAttachPress = () => {
+    if (onPress) {
+      onPress();
+      return;
+    }
+
     if (Platform.OS === 'web') {
       void handlePickMedia();
       return;
@@ -367,7 +385,7 @@ export function MemoryMediaPicker({
           disabled && styles.compactBtnDisabled,
           pressed && !disabled && styles.compactBtnPressed,
         ]}
-        testID="new-memory-attach-media"
+        testID={testID}
       >
         <SymbolView
           name={{ ios: 'photo', android: 'photo_library' }}
@@ -390,7 +408,7 @@ export function MemoryMediaPicker({
         disabled && styles.buttonDisabled,
         pressed && !disabled && styles.buttonPressed,
       ]}
-      testID="new-memory-attach-media"
+      testID={testID}
     >
       <SymbolView
         name={{ ios: 'photo.badge.plus', android: 'add_a_photo' }}

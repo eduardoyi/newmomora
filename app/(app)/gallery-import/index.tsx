@@ -1,5 +1,8 @@
-import { GalleryImportEntry } from '@/components/gallery-import/gallery-import-flow';
+import { useLocalSearchParams } from 'expo-router';
+
+import { GalleryImportEntry, type GalleryImportSurface } from '@/components/gallery-import/gallery-import-entry';
 
 export default function GalleryImportEntryRoute() {
-  return <GalleryImportEntry />;
+  const { surface } = useLocalSearchParams<{ surface?: GalleryImportSurface }>();
+  return <GalleryImportEntry surface={surface} />;
 }

@@ -4,23 +4,18 @@ import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Pressable,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { DatePickerField } from '@/components/date-picker-field';
+import { MemoryComposerForm, type MemoryComposerTypeBadge } from '@/components/memory-composer-form';
 import {
   MemoryMediaPicker,
   type MediaAttachment,
 } from '@/components/memory-media-picker';
-import { MemoryMediaPreview } from '@/components/memory-media-preview';
-import { MemoryTagPicker } from '@/components/memory-tag-picker';
 import { VoiceSpeakItModal } from '@/components/voice-speak-it-modal';
 import { colors, fonts, spacing } from '@/constants/theme';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
@@ -177,7 +172,6 @@ export default function EditMemoryScreen() {
   const hasAttachment =
     isMedia ||
     (isIllustrationEnabled && (hasRetainedIllustration || isIllustrationJobInProgress));
-  const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
   const canSave = isMedia ? attachedMedia.length > 0 : content.trim().length > 0;
 
   const voiceMembers = useMemo(
@@ -273,189 +267,113 @@ export default function EditMemoryScreen() {
     );
   }
 
-  return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      {/* ── Header ── */}
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.headerTextBtn} testID="edit-memory-cancel">
-          <Text style={styles.cancelText}>Cancel</Text>
-        </Pressable>
-
-        <View style={[styles.typePill, { backgroundColor: typeCfg.bg, borderColor: typeCfg.border }]}>
-          <Text style={[styles.typePillText, { color: typeCfg.color }]}>· {typeCfg.label}</Text>
-        </View>
-
-        <Pressable
-          onPress={handleSave}
-          disabled={isUpdating || !canSave}
-          style={styles.headerTextBtn}
-          testID="edit-memory-save-btn"
-        >
-          {isUpdating ? (
-            <ActivityIndicator size="small" color={colors.primary} />
-          ) : (
-            <Text style={[styles.saveText, !canSave && styles.saveTextDisabled]}>Save</Text>
-          )}
-        </Pressable>
-      </View>
-
-      {/* ── Body ── */}
-      <KeyboardAvoidingView behavior="padding" style={styles.body}>
-        {/* Date pill */}
-        <View style={styles.datePillWrap}>
-          <DatePickerField
-            onChange={setMemoryDate}
-            value={memoryDate}
-            testID="edit-memory-date"
-          />
-        </View>
-
-        {/* Text area */}
-        <TextInput
-          multiline
-          value={content}
-          onChangeText={handleContentChange}
-          placeholder="What happened on this day?"
-          placeholderTextColor={colors.ink3}
-          style={[styles.textarea, hasAttachment ? styles.textareaCaption : null]}
-          testID="edit-memory-content"
-        />
-        {!hasAttachment && (
-          <Text style={styles.wordCount}>{wordCount} {wordCount === 1 ? 'word' : 'words'}</Text>
-        )}
-
-        {/* Illustration (read-only) */}
-        {isIllustrationEnabled && (hasRetainedIllustration || isIllustrationJobInProgress) && (
-          <View style={styles.mediaWrap}>
-            {illustrationUrl ? (
-              <Image
-                source={mediaImageSource(illustrationUrl, memory?.illustration_key)}
-                style={styles.attachmentImage}
-                contentFit="cover"
-                accessibilityLabel="Memory illustration"
-              />
-            ) : (
-              <View style={styles.attachmentPlaceholder}>
-                <Text style={styles.placeholderIcon}>✦</Text>
-                <Text style={styles.placeholderText}>Illustration generating…</Text>
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Media (read-only) */}
-        {memory.memory_type === 'media' && (
-          <View style={styles.mediaWrap}>
-            <MemoryMediaPreview
-              attachments={attachedMedia}
-              onMove={moveMedia}
-              onRemove={removeMedia}
-              onSelect={setSelectedMediaId}
-              selectedId={selectedMediaId}
-            />
-          </View>
-        )}
-
-        {/* Tag picker */}
-        <MemoryTagPicker
-          members={members}
-          maxSelected={isIllustrationEnabled && hasIllustrationHistory
-            ? MAX_ILLUSTRATION_MEMBERS
-            : undefined}
-          onToggleMember={toggleMember}
-          selectedMemberIds={selectedMemberIds}
-        />
-
-        {errorMessage ? (
-          <Text style={styles.errorText}>{errorMessage}</Text>
-        ) : null}
-      </KeyboardAvoidingView>
-
-      {/* ── Bottom toolbar ── */}
-      <View style={styles.toolbar}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Record voice memory"
-          disabled={isUpdating}
-          onPress={() => setShowVoiceModal(true)}
-          style={({ pressed }) => [
-            styles.toolbarIconBtn,
-            isUpdating && styles.toolbarIconBtnDisabled,
-            pressed && !isUpdating && styles.toolbarIconBtnPressed,
-          ]}
-          testID="edit-memory-voice-trigger"
-        >
-          <SymbolView
-            name={{ ios: 'mic', android: 'mic' }}
-            size={20}
-            tintColor={colors.ink2}
-            fallback={<Text style={styles.toolbarIconFallback}>♪</Text>}
-          />
-        </Pressable>
-
-        {isMedia ? (
-          <MemoryMediaPicker
-            compact
-            disabled={isUpdating || attachedMedia.length >= 10}
-            onError={setErrorMessage}
-            onSelect={appendMedia}
-            remainingSlots={10 - attachedMedia.length}
-          />
-        ) : (
-          <View style={[styles.toolbarIconBtn, styles.toolbarIconBtnDisabled]}>
-            <SymbolView
-              name={{ ios: 'photo', android: 'photo_library' }}
-              size={20}
-              tintColor={colors.ink3}
-              fallback={<Text style={styles.toolbarIconFallback}>▣</Text>}
-            />
-          </View>
-        )}
-
-        {/* AI illustration toggle */}
-        {!isMedia && (
-          <View style={styles.toggleRow}>
-            <View style={styles.toggleCopy}>
-              <Text style={[styles.toggleLabel, !isIllustrationEnabled && styles.toggleLabelOff]}>
-                AI illustration
-              </Text>
-              <Text style={styles.toggleHint}>
-                {isIllustrationOverLimit
-                  ? `Up to ${MAX_ILLUSTRATION_MEMBERS} people per illustration`
-                  : isIllustrationEnabled
-                    ? hasRetainedIllustration
-                      ? 'On — existing illustration'
-                      : isIllustrationJobInProgress
-                        ? 'On — generating'
-                        : 'On — runs after save'
-                    : 'Off — text only'}
-              </Text>
-            </View>
-            <Switch
-              accessibilityLabel="Generate AI illustration"
-              disabled={isIllustrationOverLimit}
-              onValueChange={setIllustrationEnabled}
-              testID="edit-memory-ai-toggle"
-              value={isIllustrationEnabled}
-              trackColor={{ false: colors.border, true: colors.primary }}
-            />
-          </View>
-        )}
-      </View>
-
-      {/* ── Voice modal ── */}
-      <VoiceSpeakItModal
-        familyMembers={voiceMembers}
-        onDismiss={() => setShowVoiceModal(false)}
-        onResult={(result) => {
-          setHasEditedContent(true);
-          setContent(result.cleanedText);
-          applyVoiceResult(result);
-          setShowVoiceModal(false);
-        }}
-        visible={showVoiceModal}
+  const illustrationSlot = isIllustrationEnabled && (hasRetainedIllustration || isIllustrationJobInProgress) ? (
+    illustrationUrl ? (
+      <Image
+        source={mediaImageSource(illustrationUrl, memory?.illustration_key)}
+        style={styles.attachmentImage}
+        contentFit="cover"
+        accessibilityLabel="Memory illustration"
       />
-    </SafeAreaView>
+    ) : (
+      <View style={styles.attachmentPlaceholder}>
+        <Text style={styles.placeholderIcon}>✦</Text>
+        <Text style={styles.placeholderText}>Illustration generating…</Text>
+      </View>
+    )
+  ) : null;
+
+  return (
+    <MemoryComposerForm
+      attachments={attachedMedia}
+      canSave={canSave}
+      cancelTestID="edit-memory-cancel"
+      contentPlaceholder="What happened on this day?"
+      contentTestID="edit-memory-content"
+      contentValue={content}
+      dateTestID="edit-memory-date"
+      dateValue={memoryDate}
+      errorMessage={errorMessage || undefined}
+      hasMediaRegion={hasAttachment}
+      illustrationSlot={illustrationSlot}
+      isSaving={isUpdating}
+      maxSelectedMembers={isIllustrationEnabled && hasIllustrationHistory ? MAX_ILLUSTRATION_MEMBERS : undefined}
+      members={members}
+      onCancel={() => router.back()}
+      onContentChange={handleContentChange}
+      onDateChange={setMemoryDate}
+      onMoveMedia={moveMedia}
+      onRemoveMedia={removeMedia}
+      onSave={handleSave}
+      onSelectMedia={setSelectedMediaId}
+      onToggleMember={toggleMember}
+      onVoicePress={() => setShowVoiceModal(true)}
+      saveTestID="edit-memory-save-btn"
+      selectedMediaId={selectedMediaId}
+      selectedMemberIds={selectedMemberIds}
+      toolbarMediaButton={isMedia ? (
+        <MemoryMediaPicker
+          compact
+          disabled={isUpdating || attachedMedia.length >= 10}
+          onError={setErrorMessage}
+          onSelect={appendMedia}
+          remainingSlots={10 - attachedMedia.length}
+        />
+      ) : (
+        <View style={[styles.toolbarIconBtn, styles.toolbarIconBtnDisabled]}>
+          <SymbolView
+            name={{ ios: 'photo', android: 'photo_library' }}
+            size={20}
+            tintColor={colors.ink3}
+            fallback={<Text style={styles.toolbarIconFallback}>▣</Text>}
+          />
+        </View>
+      )}
+      toolbarTrailingSlot={!isMedia ? (
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleCopy}>
+            <Text style={[styles.toggleLabel, !isIllustrationEnabled && styles.toggleLabelOff]}>
+              AI illustration
+            </Text>
+            <Text style={styles.toggleHint}>
+              {isIllustrationOverLimit
+                ? `Up to ${MAX_ILLUSTRATION_MEMBERS} people per illustration`
+                : isIllustrationEnabled
+                  ? hasRetainedIllustration
+                    ? 'On — existing illustration'
+                    : isIllustrationJobInProgress
+                      ? 'On — generating'
+                      : 'On — runs after save'
+                  : 'Off — text only'}
+            </Text>
+          </View>
+          <Switch
+            accessibilityLabel="Generate AI illustration"
+            disabled={isIllustrationOverLimit}
+            onValueChange={setIllustrationEnabled}
+            testID="edit-memory-ai-toggle"
+            value={isIllustrationEnabled}
+            trackColor={{ false: colors.border, true: colors.primary }}
+          />
+        </View>
+      ) : null}
+      typeBadge={typeCfg as MemoryComposerTypeBadge}
+      voiceDisabled={isUpdating}
+      voiceModalSlot={(
+        <VoiceSpeakItModal
+          familyMembers={voiceMembers}
+          onDismiss={() => setShowVoiceModal(false)}
+          onResult={(result) => {
+            setHasEditedContent(true);
+            setContent(result.cleanedText);
+            applyVoiceResult(result);
+            setShowVoiceModal(false);
+          }}
+          visible={showVoiceModal}
+        />
+      )}
+      voiceTestID="edit-memory-voice-trigger"
+    />
   );
 }
 
@@ -468,74 +386,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 0,
-  },
-  headerTextBtn: {
-    padding: 4,
-    minWidth: 48,
-    alignItems: 'center',
-  },
-  cancelText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 16,
-    color: colors.primary,
-  },
-  saveText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 16,
-    color: colors.primary,
-  },
-  saveTextDisabled: {
-    color: colors.ink3,
-  },
-  typePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingVertical: 5,
-    paddingHorizontal: 11,
-  },
-  typePillText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 12,
-  },
-  body: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingBottom: 8,
-  },
-  datePillWrap: {
-    marginTop: 14,
-    marginBottom: 4,
-  },
-  textarea: {
-    flex: 1,
-    fontFamily: fonts.display,
-    fontSize: 24,
-    lineHeight: 24 * 1.35,
-    color: colors.ink,
-    backgroundColor: 'transparent',
-    textAlignVertical: 'top',
-  },
-  textareaCaption: {
-    flex: 0,
-    flexGrow: 0,
-    minHeight: 96,
-    maxHeight: 200,
-  },
-  mediaWrap: {
-    flex: 1,
-    minHeight: 160,
-    marginBottom: spacing.md,
-    overflow: 'hidden',
   },
   attachmentImage: {
     flex: 1,
@@ -561,23 +411,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.ink3,
   },
-  wordCount: {
-    fontFamily: 'SpaceMono',
-    fontSize: 11,
-    color: colors.ink3,
-    textAlign: 'right',
-    marginBottom: spacing.md,
-  },
-  toolbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 13,
-    paddingBottom: 28,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
   toolbarIconBtn: {
     width: 46,
     height: 46,
@@ -590,9 +423,6 @@ const styles = StyleSheet.create({
   },
   toolbarIconBtnDisabled: {
     opacity: 0.4,
-  },
-  toolbarIconBtnPressed: {
-    opacity: 0.7,
   },
   toolbarIconFallback: {
     fontSize: 20,

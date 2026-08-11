@@ -1,16 +1,33 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
-import { galleryCaptionSettingsQueryKey, galleryImportQueryKey } from '@/hooks/queryKeys';
+import {
+  galleryCaptionSettingsQueryKey,
+  galleryImportCandidatesQueryKey,
+  galleryImportQueryKey,
+  galleryImportRunStatusQueryKey,
+} from '@/hooks/queryKeys';
 import {
   createGalleryImportRun,
   getGalleryCaptionSettings,
+  getGalleryImportCandidates,
+  getGalleryImportRun,
   updateGalleryCaptionSettings,
+  type GalleryImportCandidate,
   type GalleryImportRun,
 } from '@/services/gallery-import';
 import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
 import { GALLERY_IMPORT_ALGORITHM_VERSION } from '@/constants/gallery-import';
+import {
+  deriveGalleryImportEntryStatus,
+  type GalleryImportEntryStatus,
+} from '@/utils/gallery-import-entry-state';
+import {
+  loadLatestGalleryImportCheckpoint,
+  type GalleryImportCheckpoint,
+} from '@/utils/gallery-import-checkpoint';
 
 export function useGalleryImport() {
   const { user } = useAuth();
@@ -90,4 +107,103 @@ export function useGalleryCaptionSettings() {
     error: query.error ?? save.error,
     save: save.mutateAsync,
   };
+}
+
+/**
+ * Drives the Timeline entry point (the small import glyph + its status
+ * drawer). Unlike `useGalleryImport` above, this one DOES reach the server:
+ * it loads this device's local checkpoint (there is no family-wide run
+ * lookup -- see the comment on `useGalleryImport`'s query above) and, when
+ * one exists, asks the server for that run's live status via
+ * `getGalleryImportRun`. `deriveGalleryImportEntryStatus` turns the pair into
+ * the glyph's six-state, single-source-of-truth status.
+ */
+export function useGalleryImportEntryStatus(options: { enabled?: boolean } = {}): GalleryImportEntryStatus & {
+  checkpoint: GalleryImportCheckpoint | null;
+  run: GalleryImportRun | null;
+  isLoading: boolean;
+  refetch: () => Promise<void>;
+} {
+  const enabled = (options.enabled ?? true) && isGalleryImportFeatureEnabled;
+  const { user } = useAuth();
+  const { familyId } = useFamily();
+  const userId = user?.id;
+  const [checkpoint, setCheckpoint] = useState<GalleryImportCheckpoint | null>(null);
+  const [isCheckpointLoading, setIsCheckpointLoading] = useState(true);
+
+  const reloadCheckpoint = useCallback(async () => {
+    if (!enabled || !userId || !familyId) {
+      setCheckpoint(null);
+      setIsCheckpointLoading(false);
+      return;
+    }
+    setIsCheckpointLoading(true);
+    const next = await loadLatestGalleryImportCheckpoint(userId, familyId);
+    setCheckpoint(next);
+    setIsCheckpointLoading(false);
+  }, [enabled, familyId, userId]);
+
+  useEffect(() => {
+    void reloadCheckpoint();
+  }, [reloadCheckpoint]);
+
+  const runQuery = useQuery<GalleryImportRun | null>({
+    queryKey: galleryImportRunStatusQueryKey(checkpoint?.runId),
+    queryFn: async () => {
+      if (!checkpoint) return null;
+      const { data, error } = await getGalleryImportRun({
+        runId: checkpoint.runId,
+        runCapability: checkpoint.runCapability,
+      });
+      if (error) throw new Error(error.message);
+      return data;
+    },
+    enabled: enabled && Boolean(checkpoint),
+    staleTime: 15_000,
+  });
+
+  const status = useMemo(
+    () => deriveGalleryImportEntryStatus(checkpoint, runQuery.data ?? null),
+    [checkpoint, runQuery.data],
+  );
+
+  const refetch = useCallback(async () => {
+    await reloadCheckpoint();
+    await runQuery.refetch();
+  }, [reloadCheckpoint, runQuery]);
+
+  return {
+    checkpoint,
+    run: runQuery.data ?? null,
+    ...status,
+    isLoading: isCheckpointLoading || (Boolean(checkpoint) && runQuery.isLoading),
+    refetch,
+  };
+}
+
+/**
+ * The candidate list behind the status drawer -- thumbnails plus the
+ * kept/ready/set-aside counts the design's resume/expiring copy needs.
+ * Fetched lazily (only while `enabled`, i.e. the drawer is open): candidate
+ * previews are short-lived signed URLs, not something to hold open a
+ * standing subscription for.
+ */
+export function useGalleryImportRunCandidates(
+  checkpoint: GalleryImportCheckpoint | null,
+  enabled: boolean,
+) {
+  return useQuery<GalleryImportCandidate[]>({
+    queryKey: galleryImportCandidatesQueryKey(checkpoint?.runId),
+    queryFn: async () => {
+      if (!checkpoint) return [];
+      const { data, error } = await getGalleryImportCandidates({
+        runId: checkpoint.runId,
+        capability: checkpoint.runCapability,
+      });
+      if (error) throw new Error(error.message);
+      return data?.candidates ?? [];
+    },
+    enabled: isGalleryImportFeatureEnabled && enabled && Boolean(checkpoint),
+    staleTime: 10_000,
+  });
 }

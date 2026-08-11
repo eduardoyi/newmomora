@@ -61,15 +61,51 @@ Deno.test('gallery manifest rejects non-object assets without throwing', () => {
   assertEquals(parseGalleryImportManifest(fixture), null);
 });
 
-Deno.test('gallery run DTO exposes the SQL aggregate as chunkCount, never a polymorphic chunks field', async () => {
-  const serviceClient = {
-    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { limit_snapshot: {} } }) }) }) }),
+// Keyed by table name so a test can override just the pending-clusters count
+// while the run-limits lookup keeps its own simple default.
+function galleryServiceClientStub(pendingClustersCount: number | null = 0) {
+  return {
+    from: (table: string) => {
+      if (table === 'gallery_import_cluster_results') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: async () => (pendingClustersCount === null
+                ? { count: null, error: new Error('boom') }
+                : { count: pendingClustersCount, error: null }),
+            }),
+          }),
+        };
+      }
+      return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { limit_snapshot: {} } }) }) }) };
+    },
   };
-  const result = await clientRun({ serviceClient } as never, {
+}
+
+Deno.test('gallery run DTO exposes the SQL aggregate as chunkCount, never a polymorphic chunks field', async () => {
+  const result = await clientRun({ serviceClient: galleryServiceClientStub() } as never, {
     id: token, familyId: token, status: 'reviewing', chunks: 3,
   });
   assertEquals(result.chunkCount, 3);
   assertEquals('chunks' in result, false);
+});
+
+// Round 4: "+N coming" must be server truth (pending gallery_import_cluster_
+// results rows), never the client's own local upload plan, which goes stale
+// across a resume -- a real production run showed a phantom "+51 coming"
+// all day. See countPendingGalleryClusters's doc comment.
+Deno.test('gallery run DTO carries the server-computed pendingClusters count', async () => {
+  const result = await clientRun({ serviceClient: galleryServiceClientStub(4) } as never, {
+    id: token, familyId: token, status: 'reviewing', chunks: 3,
+  });
+  assertEquals(result.pendingClusters, 4);
+});
+
+Deno.test('gallery run DTO reports pendingClusters as null (not 0) when the count could not be computed', async () => {
+  const result = await clientRun({ serviceClient: galleryServiceClientStub(null) } as never, {
+    id: token, familyId: token, status: 'reviewing', chunks: 3,
+  });
+  assertEquals(result.pendingClusters, null);
 });
 
 Deno.test('gallery uploads return the exact metadata headers required by the R2 signature', () => {

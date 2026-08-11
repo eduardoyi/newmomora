@@ -68,6 +68,13 @@ export function getStickyFooterBottomPadding(bottomInset: number) {
 interface KeyboardStickyShellProps {
   /** Scrollable body content. */
   children: ReactNode;
+  /**
+   * Full-bleed chrome pinned above the scroll view (e.g. a top bar). Unlike
+   * `children`, it is NOT wrapped by `contentContainerStyle`, so a bar that
+   * carries its own edge padding lands exactly there instead of stacking on
+   * the content's horizontal padding.
+   */
+  header?: ReactNode;
   /** Pinned CTA stack, rendered after `children` but outside the scroll view. */
   footer?: ReactNode;
   contentContainerStyle?: StyleProp<ViewStyle>;
@@ -92,6 +99,7 @@ interface KeyboardStickyShellProps {
 
 export function KeyboardStickyShell({
   children,
+  header,
   footer,
   contentContainerStyle,
   keyboardBottomOffset = FOOTER_KEYBOARD_CLEARANCE,
@@ -120,19 +128,25 @@ export function KeyboardStickyShell({
     setFooterHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
   };
 
+  // The bottom inset is applied from the useSafeAreaInsets() context value,
+  // NOT a native `SafeAreaView edges={['bottom']}` wrapper: this footer can
+  // sit inside KeyboardStickyView (an animated/transformed container), where
+  // the native safe-area measurement can resolve to 0 and let the footer's
+  // last rows render under the system navigation bar (device-observed on the
+  // gallery-import trust screen while hook-based surfaces like the tab bar
+  // cleared it fine). The context inset is window-level and transform-immune.
   const measuredFooter = footer ? (
-    <SafeAreaView
-      edges={['bottom']}
+    <View
       onLayout={handleFooterLayout}
       testID={footerKeyboardSticky ? undefined : fixedFooterTestID}
     >
       <View
-        style={[footerStyle, { paddingBottom: getStickyFooterBottomPadding(bottomInset) }]}
+        style={[footerStyle, { paddingBottom: bottomInset + getStickyFooterBottomPadding(bottomInset) }]}
         testID={footerTestID}
       >
         {footer}
       </View>
-    </SafeAreaView>
+    </View>
   ) : null;
 
   const footerView = measuredFooter && footerKeyboardSticky ? (
@@ -143,6 +157,7 @@ export function KeyboardStickyShell({
 
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={safeAreaStyle} testID={testID}>
+      {header}
       <KeyboardAwareScrollView
         // Always-on: with the keyboard closed this is not a behavior change
         // (the library's own `padding` derivation is `enabled ?
@@ -152,7 +167,13 @@ export function KeyboardStickyShell({
         // non-overflowing screens. See file header.
         enabled
         bottomOffset={footer ? keyboardBottomOffset + footerHeight : spacing.lg}
-        contentContainerStyle={contentContainerStyle}
+        // With a footer, its own bottom-inset padding keeps content clear of
+        // the system nav bar. WITHOUT one, the scroll content itself must
+        // carry the inset -- the outer SafeAreaView deliberately excludes
+        // the bottom edge (see file header), so footerless screens otherwise
+        // scroll their last element straight under the gesture bar
+        // (device-observed on the progress screen's privacy link).
+        contentContainerStyle={[contentContainerStyle, footer ? null : { paddingBottom: bottomInset + spacing.lg }]}
         disableScrollOnKeyboardHide={false}
         bounces={false}
         keyboardShouldPersistTaps="handled"

@@ -426,6 +426,7 @@ export async function uploadToPresignedUrl(
   fileUri: string,
   contentType: string,
   signedHeaders?: Record<string, string>,
+  options?: { timeoutMs?: number },
 ): Promise<{ error: ServiceError | null }> {
   // `e2e://` is issued solely by the development-only gallery fixture backend.
   // Production builds compile the guard false and still require a real signed PUT.
@@ -455,7 +456,12 @@ export async function uploadToPresignedUrl(
     return { error: null };
   }
 
-  const uploadResult = await FileSystem.uploadAsync(uploadUrl, fileUri, {
+  // `createUploadTask` (not `uploadAsync`) so an optional timeout can cancel
+  // a hung connection. Without one, a single stalled PUT freezes any serial
+  // upload loop indefinitely with no error -- device-observed as a gallery
+  // preview upload stuck mid-run. `timeoutMs` is opt-in so pre-existing
+  // callers keep their exact behavior.
+  const uploadTask = FileSystem.createUploadTask(uploadUrl, fileUri, {
     httpMethod: 'PUT',
     headers,
     // Presigned uploads are an explicitly foreground workflow. On iOS the
@@ -466,7 +472,25 @@ export async function uploadToPresignedUrl(
     sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
     uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
   });
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = options?.timeoutMs
+    ? new Promise<undefined>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        void Promise.resolve(uploadTask.cancelAsync()).catch(() => undefined);
+        resolve(undefined);
+      }, options.timeoutMs);
+    })
+    : null;
+  const uploadResult = await (timeout
+    ? Promise.race([uploadTask.uploadAsync(), timeout])
+    : uploadTask.uploadAsync())
+    .finally(() => { if (timeoutHandle) clearTimeout(timeoutHandle); });
 
+  if (timedOut || !uploadResult) {
+    return { error: { message: 'Photo upload timed out', code: 'upload_timeout' } };
+  }
   if (uploadResult.status < 200 || uploadResult.status >= 300) {
     return {
       error: {

@@ -14,6 +14,21 @@ import {
 
 export type GalleryPhotoPermissionState = 'full' | 'limited' | 'denied' | 'blocked';
 
+/**
+ * Which asset universe a scan pass drew from. `'camera_album'`: Android,
+ * scoped to the exact-title 'Camera' album (device captures only, per the
+ * 2026-08-11 product decision -- WhatsApp/iMessage/downloads saves are
+ * excluded). `'full_library_fallback'`: no camera album resolved (or
+ * album-scoped querying isn't available), OR this is iOS, which has no
+ * camera-source signal at all and always uses the broader library (a saved
+ * WhatsApp photo only enters the iOS library if the user explicitly saved
+ * it, which is an explicit action, not an automatic sync) -- both cases
+ * share this one value because both mean "not camera-scoped this pass", and
+ * gallery-import-frontier.ts resets rather than mixes coverage across a
+ * corpus-mode change.
+ */
+export type GalleryCorpusMode = 'camera_album' | 'full_library_fallback';
+
 export interface GalleryPhotoPermission {
   granted: boolean;
   canAskAgain: boolean;
@@ -27,13 +42,36 @@ export interface GalleryPhotoMetadata {
   width: number | null;
   height: number | null;
   isFavorite: boolean;
+  /**
+   * True only when the platform positively reports a screenshot subtype
+   * (iOS `PHAssetMediaSubtype.screenshot`). Leave `undefined` when the
+   * platform has no reliable signal (Android) rather than guessing from a
+   * filename or dimensions — an omitted field admits the asset.
+   */
+  isScreenshot?: boolean;
 }
 
 export interface GalleryMediaLibraryAdapter {
   getPermission: () => Promise<GalleryPhotoPermission>;
   requestPermission: () => Promise<GalleryPhotoPermission>;
   presentPermissionPicker?: () => Promise<void>;
-  getPhotoPage: (input: { offset: number; limit: number }) => Promise<GalleryPhotoMetadata[]>;
+  /**
+   * Resolved ONCE, at scan start, before any `getPhotoPage` call -- see
+   * `scanGallerySnapshot`. The real adapter resolves (and caches) the
+   * Android exact-title 'Camera' album here and scopes every subsequent
+   * `getPhotoPage` call to it; iOS omits this method entirely (it never
+   * attempts camera-scoping, see `GalleryCorpusMode`). Optional so a
+   * hand-built test adapter that never implements it defaults to
+   * `'full_library_fallback'` inside `scanGallerySnapshot`.
+   */
+  resolveCorpus?: () => Promise<{ mode: GalleryCorpusMode }>;
+  /**
+   * `newerThanMs`/`olderThanMs` bound the query by `creationTime` (exclusive)
+   * for progressive-deepening's two-phase windowed scan -- see
+   * `scanGallerySnapshot`'s `frontier` option. Omit both for an unbounded
+   * newest-first page, exactly as before deepening existed.
+   */
+  getPhotoPage: (input: { offset: number; limit: number; newerThanMs?: number; olderThanMs?: number }) => Promise<GalleryPhotoMetadata[]>;
   /** True when URI resolution will not trigger a cloud-original download. */
   isAssetAvailableLocally?: (osAssetId: string) => Promise<boolean>;
   resolveAssetUri: (osAssetId: string) => Promise<string>;
@@ -64,8 +102,23 @@ export interface GalleryScanSnapshot {
   clusters: GalleryCluster[];
   scannedAssetCount: number;
   rejectedAssetCount: number;
-  /** True when the bounded newest-first corpus may omit older photos. */
+  /** True when the bounded corpus may omit newer-since-last-run or deeper-
+   * than-frontier photos this pass could not reach. */
   wasTruncated: boolean;
+  /**
+   * True when this pass's oldest-going enumeration -- the only direction on
+   * a fresh (no-frontier) scan, or Phase B's deepening walk when a frontier
+   * is supplied -- ran to natural completion (fewer results than requested,
+   * i.e. no more remain) rather than being cut off by the enumeration
+   * budget. False (conservatively) when that direction never got to run at
+   * all, e.g. Phase A alone consumed the whole budget. Progressive
+   * deepening (gallery-import-frontier.ts) uses this, independent of any
+   * per-run cluster/asset admission cap, to know whether the device-level
+   * photo library's true oldest end has been reached.
+   */
+  reachedLibraryEnd: boolean;
+  /** Which asset universe this pass actually drew from -- see GalleryCorpusMode. */
+  corpusMode: GalleryCorpusMode;
 }
 
 export interface GalleryScanOptions {
@@ -78,6 +131,24 @@ export interface GalleryScanOptions {
   createToken?: () => string;
   onPage?: (progress: { scannedAssetCount: number; rejectedAssetCount: number }) => void;
   yieldToEventLoop?: () => Promise<void>;
+  /**
+   * Progressive-deepening continuation point from a prior run (see
+   * gallery-import-frontier.ts). Omitted/null means a fresh top-of-corpus
+   * newest-first scan, exactly as before deepening existed. When supplied,
+   * Phase A first catches up on anything newer than `coveredThroughNewestMs`,
+   * then Phase B spends the rest of `maxEnumeratedAssets` deepening backward
+   * from `oldestCoveredMs` -- the already-covered range between the two
+   * bounds is never re-walked.
+   *
+   * `corpusMode` records which universe those bounds were built under. This
+   * pass resolves its OWN corpus mode first (see `resolveCorpus`); if it
+   * differs from `frontier.corpusMode` (e.g. the Android camera album
+   * appeared/disappeared between runs), the bounds are ignored and this
+   * pass scans fresh from the top under its own mode instead -- mixing
+   * coverage across corpora would silently skip photos that were never
+   * actually examined under the other mode.
+   */
+  frontier?: { coveredThroughNewestMs: number; oldestCoveredMs: number; corpusMode: GalleryCorpusMode } | null;
 }
 
 function isPlausibleCaptureTime(captureAtMs: number | null, nowMs: number): captureAtMs is number {
@@ -104,6 +175,12 @@ export function createExpoGalleryMediaLibraryAdapter(): GalleryMediaLibraryAdapt
     accessPrivileges: permission.accessPrivileges,
   });
 
+  // Resolved once per adapter instance (== once per scan pass, since a
+  // fresh adapter is created per run/resume call) and reused by every
+  // getPhotoPage call. `undefined` = not yet resolved; `null` = resolved to
+  // "no camera album" (or resolution failed) -- both mean unscoped queries.
+  let cameraAlbum: MediaLibrary.Album | null | undefined;
+
   return {
     getPermission: async () => toPermission(
       await MediaLibrary.getPermissionsAsync(false, ['photo']),
@@ -114,9 +191,43 @@ export function createExpoGalleryMediaLibraryAdapter(): GalleryMediaLibraryAdapt
     presentPermissionPicker: async () => {
       await MediaLibrary.presentPermissionsPicker(['photo']);
     },
-    getPhotoPage: async ({ offset, limit }) => {
-      const metadata = await new MediaLibrary.Query()
-        .eq(MediaLibrary.AssetField.MEDIA_TYPE, MediaLibrary.MediaType.IMAGE)
+    // iOS omits this entirely -- see GalleryCorpusMode -- so the adapter
+    // object itself never carries the key there, and scanGallerySnapshot's
+    // `adapter.resolveCorpus?.() ?? full_library_fallback` applies.
+    resolveCorpus: Platform.OS === 'android' ? async () => {
+      if (cameraAlbum === undefined) {
+        try {
+          // Camera captures land in the DCIM "Camera" bucket as a de-facto
+          // standard across OEMs; exact-title match only in v1 (rare OEM
+          // variants that split capture buckets across multiple album
+          // titles are not handled here). A title match is the SDK's only
+          // lookup surface -- it cannot distinguish the true DCIM/Camera
+          // bucket from an unrelated user-created album also titled
+          // "Camera", a known limitation of this approach.
+          cameraAlbum = await MediaLibrary.Album.get('Camera');
+        } catch {
+          // Missing/incompatible album API on this device/SDK build --
+          // degrade to the full-library fallback rather than throwing.
+          cameraAlbum = null;
+        }
+      }
+      return { mode: cameraAlbum ? 'camera_album' as const : 'full_library_fallback' as const };
+    } : undefined,
+    getPhotoPage: async ({ offset, limit, newerThanMs, olderThanMs }) => {
+      let query = new MediaLibrary.Query()
+        .eq(MediaLibrary.AssetField.MEDIA_TYPE, MediaLibrary.MediaType.IMAGE);
+      // Camera-captures-only corpus (2026-08-11 product decision): once
+      // resolveCorpus has found the Camera album, every page is scoped to
+      // it -- WhatsApp/iMessage/downloads saves elsewhere in the library
+      // are excluded on Android. Unresolved/not-found degrades to an
+      // unscoped (full-library) query, exactly like before this existed.
+      if (cameraAlbum) query = query.album(cameraAlbum);
+      // Progressive deepening's two disjoint windows: query the native store
+      // directly by creationTime rather than paging through (and discarding)
+      // the already-covered middle range client-side.
+      if (typeof newerThanMs === 'number') query = query.gt(MediaLibrary.AssetField.CREATION_TIME, newerThanMs);
+      if (typeof olderThanMs === 'number') query = query.lt(MediaLibrary.AssetField.CREATION_TIME, olderThanMs);
+      const metadata = await query
         .orderBy({ key: MediaLibrary.AssetField.CREATION_TIME, ascending: false })
         .offset(offset)
         .limit(limit)
@@ -124,12 +235,29 @@ export function createExpoGalleryMediaLibraryAdapter(): GalleryMediaLibraryAdapt
 
       // Do not add filename, URI, EXIF, or location here. The new SDK API lets
       // enumeration remain metadata-only and avoids decoding local image bytes.
-      return metadata.map((asset) => ({
+      // mediaSubtypes is the one sanctioned exception: this SDK exposes it only
+      // per asset (there is no batch metadata field for it), so it is read here
+      // with one native call per asset and per-asset failure isolation. Android
+      // has no subtype signal in this SDK; those assets admit conservatively
+      // (isScreenshot left undefined, no filtering) rather than guessing.
+      const isScreenshot = Platform.OS === 'ios'
+        ? await Promise.all(metadata.map(async (asset) => {
+          try {
+            const subtypes = await new MediaLibrary.Asset(asset.id).getMediaSubtypes();
+            return subtypes.includes(MediaLibrary.MediaSubtype.SCREENSHOT);
+          } catch {
+            return false;
+          }
+        }))
+        : null;
+
+      return metadata.map((asset, index) => ({
         id: asset.id,
         creationTime: asset.creationTime,
         width: asset.width,
         height: asset.height,
         isFavorite: asset.isFavorite,
+        isScreenshot: isScreenshot?.[index],
       }));
     },
     isAssetAvailableLocally: async (osAssetId) => Platform.OS !== 'ios'
@@ -280,6 +408,75 @@ export function clusterGalleryAssets(
   });
 }
 
+interface ScanWindowResult {
+  assets: LocalGalleryAsset[];
+  rejectedCount: number;
+  enumeratedCount: number;
+  /** True iff this window was cut off by its budget (more may remain). */
+  wasTruncated: boolean;
+}
+
+async function scanWindow(
+  adapter: GalleryMediaLibraryAdapter,
+  input: {
+    pageSize: number;
+    budget: number;
+    nowMs: number;
+    createToken: () => string;
+    newerThanMs?: number;
+    olderThanMs?: number;
+    onPage?: GalleryScanOptions['onPage'];
+    yieldToEventLoop?: GalleryScanOptions['yieldToEventLoop'];
+    /** For onPage's running totals across a prior window in the same pass. */
+    scannedSoFar: number;
+    rejectedSoFar: number;
+  },
+): Promise<ScanWindowResult> {
+  let offset = 0;
+  let enumeratedCount = 0;
+  let rejectedCount = 0;
+  let wasTruncated = false;
+  const assets: LocalGalleryAsset[] = [];
+
+  while (true) {
+    const remaining = input.budget - enumeratedCount;
+    if (remaining <= 0) {
+      wasTruncated = true;
+      break;
+    }
+    const page = await adapter.getPhotoPage({
+      offset, limit: Math.min(input.pageSize, remaining),
+      newerThanMs: input.newerThanMs, olderThanMs: input.olderThanMs,
+    });
+    if (page.length === 0) break;
+    offset += page.length;
+    enumeratedCount += page.length;
+    for (const asset of page) {
+      if (!isPlausibleCaptureTime(asset.creationTime, input.nowMs)) {
+        rejectedCount += 1;
+        continue;
+      }
+      if (asset.isScreenshot) {
+        rejectedCount += 1;
+        continue;
+      }
+      assets.push({
+        assetToken: input.createToken(),
+        osAssetId: asset.id,
+        captureAtMs: asset.creationTime,
+        width: asset.width,
+        height: asset.height,
+        isFavorite: asset.isFavorite,
+      });
+    }
+    input.onPage?.({ scannedAssetCount: input.scannedSoFar + assets.length, rejectedAssetCount: input.rejectedSoFar + rejectedCount });
+    await input.yieldToEventLoop?.();
+    if (page.length < Math.min(input.pageSize, remaining)) break;
+  }
+
+  return { assets, rejectedCount, enumeratedCount, wasTruncated };
+}
+
 export async function scanGallerySnapshot(
   adapter: GalleryMediaLibraryAdapter,
   options: GalleryScanOptions = {},
@@ -293,39 +490,68 @@ export async function scanGallerySnapshot(
   const pageSize = options.pageSize ?? GALLERY_IMPORT_SCAN_PAGE_SIZE;
   const maxEnumeratedAssets = options.maxEnumeratedAssets ?? GALLERY_IMPORT_MAX_ENUMERATED_ASSETS;
   const createToken = options.createToken ?? defaultCreateToken;
-  let offset = 0;
-  let enumeratedAssetCount = 0;
+
+  // Resolve which corpus this pass draws from BEFORE deciding whether the
+  // supplied frontier's bounds are usable -- they were built under whatever
+  // mode a PRIOR run resolved, which may not match this one (the Android
+  // camera album can appear/disappear between runs). A mismatch means the
+  // already-covered range those bounds describe was never actually walked
+  // under this pass's mode, so treat it exactly like no frontier: a fresh
+  // top-of-corpus scan. gallery-import-frontier.ts is what actually resets
+  // the persisted record once it sees this pass's corpusMode differ.
+  const corpusMode = (await adapter.resolveCorpus?.())?.mode ?? 'full_library_fallback';
+  const suppliedFrontier = options.frontier ?? null;
+  const frontier = suppliedFrontier && suppliedFrontier.corpusMode === corpusMode ? suppliedFrontier : null;
+
+  const scannedAssets: LocalGalleryAsset[] = [];
   let rejectedAssetCount = 0;
   let wasTruncated = false;
-  const scannedAssets: LocalGalleryAsset[] = [];
+  // Whether the oldest-going direction (Phase B, or the single fresh-scan
+  // pass) ran to completion this call -- see GalleryScanSnapshot.reachedLibraryEnd.
+  let reachedLibraryEnd = false;
 
-  while (true) {
-    const remaining = maxEnumeratedAssets - enumeratedAssetCount;
-    if (remaining <= 0) {
-      wasTruncated = true;
-      break;
-    }
-    const page = await adapter.getPhotoPage({ offset, limit: Math.min(pageSize, remaining) });
-    if (page.length === 0) break;
-    offset += page.length;
-    enumeratedAssetCount += page.length;
-    for (const asset of page) {
-      if (!isPlausibleCaptureTime(asset.creationTime, nowMs)) {
-        rejectedAssetCount += 1;
-        continue;
-      }
-      scannedAssets.push({
-        assetToken: createToken(),
-        osAssetId: asset.id,
-        captureAtMs: asset.creationTime,
-        width: asset.width,
-        height: asset.height,
-        isFavorite: asset.isFavorite,
+  if (frontier) {
+    // Phase A: catch up on anything newer than what a prior run already
+    // covered. This never re-walks the already-covered middle range.
+    const phaseA = await scanWindow(adapter, {
+      pageSize, budget: maxEnumeratedAssets, nowMs, createToken,
+      newerThanMs: frontier.coveredThroughNewestMs,
+      onPage: options.onPage, yieldToEventLoop: options.yieldToEventLoop,
+      scannedSoFar: 0, rejectedSoFar: 0,
+    });
+    scannedAssets.push(...phaseA.assets);
+    rejectedAssetCount += phaseA.rejectedCount;
+    const remainingBudget = maxEnumeratedAssets - phaseA.enumeratedCount;
+    if (remainingBudget > 0) {
+      // Phase B: deepen backward from the stored frontier with whatever
+      // budget Phase A left.
+      const phaseB = await scanWindow(adapter, {
+        pageSize, budget: remainingBudget, nowMs, createToken,
+        olderThanMs: frontier.oldestCoveredMs,
+        onPage: options.onPage, yieldToEventLoop: options.yieldToEventLoop,
+        scannedSoFar: scannedAssets.length, rejectedSoFar: rejectedAssetCount,
       });
+      scannedAssets.push(...phaseB.assets);
+      rejectedAssetCount += phaseB.rejectedCount;
+      if (phaseA.wasTruncated || phaseB.wasTruncated) wasTruncated = true;
+      reachedLibraryEnd = !phaseB.wasTruncated;
+    } else {
+      // Phase A alone consumed this run's whole budget; Phase B never ran,
+      // so this pass proves nothing about whether the library's oldest end
+      // has been reached.
+      wasTruncated = true;
+      reachedLibraryEnd = false;
     }
-    options.onPage?.({ scannedAssetCount: scannedAssets.length, rejectedAssetCount });
-    await options.yieldToEventLoop?.();
-    if (page.length < Math.min(pageSize, remaining)) break;
+  } else {
+    const single = await scanWindow(adapter, {
+      pageSize, budget: maxEnumeratedAssets, nowMs, createToken,
+      onPage: options.onPage, yieldToEventLoop: options.yieldToEventLoop,
+      scannedSoFar: 0, rejectedSoFar: 0,
+    });
+    scannedAssets.push(...single.assets);
+    rejectedAssetCount += single.rejectedCount;
+    wasTruncated = single.wasTruncated;
+    reachedLibraryEnd = !single.wasTruncated;
   }
 
   return {
@@ -334,5 +560,7 @@ export async function scanGallerySnapshot(
     scannedAssetCount: scannedAssets.length,
     rejectedAssetCount,
     wasTruncated,
+    reachedLibraryEnd,
+    corpusMode,
   };
 }

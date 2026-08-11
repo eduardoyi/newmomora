@@ -25,6 +25,10 @@ export function newMemoryRoute(source?: NewMemorySource): Href {
 export const timelineRoute = '/(app)/(tabs)/timeline' as Href;
 export const noFamilyRoute = '/(app)/no-family' as Href;
 
+// Family-owner-only caption language/instructions screen, pushed from the
+// Settings tab row (src/components/gallery-import/gallery-import-settings.tsx).
+export const galleryCaptionSettingsRoute = '/(app)/gallery-import/settings' as Href;
+
 export function lookingBackPackageRoute(packageId: string): Href {
   return { pathname: '/(app)/looking-back/[id]', params: { id: packageId } } as unknown as Href;
 }

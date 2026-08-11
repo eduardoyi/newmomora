@@ -1,30 +1,68 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Linking, View } from 'react-native';
 
-import { GALLERY_IMPORT_APPROVAL_STEP_TIMEOUT_MS, GalleryImportApproval, GalleryImportEntry, GalleryImportProgress, GalleryImportReview } from '@/components/gallery-import/gallery-import-flow';
+import {
+  GALLERY_IMPORT_APPROVAL_STEP_TIMEOUT_MS,
+  GalleryImportApproval,
+} from '@/components/gallery-import/gallery-import-approval';
+import { GalleryImportReview } from '@/components/gallery-import/gallery-import-review';
 import * as galleryService from '@/services/gallery-import';
-import { startGalleryImportRunner } from '@/services/gallery-import-runner';
 
 const mockAdapter = { getPermission: jest.fn(), requestPermission: jest.fn(), presentPermissionPicker: jest.fn(), isAssetAvailableLocally: jest.fn(), resolveAssetUri: jest.fn(), getAssetFilename: jest.fn() };
 let mockCheckpoint: any = null;
 
 jest.mock('expo-router', () => ({ router: { back: jest.fn(), push: jest.fn(), replace: jest.fn() } }));
-jest.mock('expo-image', () => { const { View: MockView } = require('react-native'); return { Image: (props: any) => <MockView testID={props.testID} /> }; });
+jest.mock('expo-image', () => { const { View: MockView } = require('react-native'); return { Image: (props: any) => <MockView testID={props.testID} onError={props.onError} /> }; });
 jest.mock('react-native-safe-area-context', () => { const { View: MockView } = require('react-native'); return { SafeAreaView: MockView, useSafeAreaInsets: () => ({ bottom: 28, top: 0, left: 0, right: 0 }) }; });
-jest.mock('@/components/keyboard-sticky-shell', () => { const { View: MockView } = require('react-native'); return { KeyboardStickyShell: ({ children, footer, testID, footerTestID, footerKeyboardSticky = true }: any) => <MockView testID={testID}>{children}<MockView testID={footerKeyboardSticky ? 'mock-keyboard-sticky-footer' : 'mock-fixed-footer'}><MockView testID={footerTestID}>{footer}</MockView></MockView></MockView> }; });
 jest.mock('@/hooks/use-auth', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: () => ({ familyId: 'family-1', role: 'owner' }) }));
-jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: () => ({ members: [{ id: 'child-1', name: 'Ada' }] }) }));
-jest.mock('@/utils/roles', () => ({ canEditFamilyContent: () => true }));
+jest.mock('@/hooks/useFamilyMembers', () => ({
+  useFamilyMembers: () => ({
+    members: [{
+      id: 'child-1', name: 'Ada', nicknames: [], is_user_profile: true,
+      date_of_birth: null, illustrated_profile_key: null, illustrated_profile_status: null, profile_picture_key: null,
+    }],
+  }),
+}));
+jest.mock('@/components/family-member-avatar', () => ({ FamilyMemberAvatar: () => null }));
+jest.mock('@/lib/supabase', () => ({ supabase: { auth: { getSession: jest.fn() }, functions: { invoke: jest.fn() } } }));
+// The screen mounts DatePickerField, which renders this native picker on
+// Android via an imperative `.open({ onChange })` call -- mirrors the mock
+// new-memory.integration.test.tsx uses for the same reason.
+jest.mock('@react-native-community/datetimepicker', () => ({
+  __esModule: true,
+  default: () => null,
+  DateTimePickerAndroid: { open: jest.fn() },
+}));
+// VoiceSpeakItModal transitively imports expo-audio at module scope via
+// useVoiceInput -- stubbed with a lightweight marker so the mic-affordance
+// wiring is still testable without a real native audio module.
+jest.mock('@/components/voice-speak-it-modal', () => {
+  const { Pressable: MockPressable, Text: MockText, View: MockView } = require('react-native');
+  return {
+    VoiceSpeakItModal: ({ visible, onResult, onDismiss }: any) => (visible ? (
+      <MockView testID="mock-voice-modal">
+        <MockPressable onPress={() => onResult({ cleanedText: 'Dictated caption', mentionedMemberIds: [] })} testID="mock-voice-modal-result">
+          <MockText>result</MockText>
+        </MockPressable>
+        <MockPressable onPress={onDismiss} testID="mock-voice-modal-dismiss">
+          <MockText>dismiss</MockText>
+        </MockPressable>
+      </MockView>
+    ) : null),
+  };
+});
 jest.mock('@/utils/gallery-import-e2e-adapter', () => ({ getGalleryImportE2eAdapter: () => undefined }));
-jest.mock('@/utils/gallery-import-scanner', () => ({ createExpoGalleryMediaLibraryAdapter: () => mockAdapter, getGalleryPhotoPermissionState: (value: any) => value.state }));
+jest.mock('@/utils/gallery-import-scanner', () => ({ createExpoGalleryMediaLibraryAdapter: () => mockAdapter }));
 jest.mock('@/utils/gallery-import-original', () => ({ getGalleryImportOriginalUpload: jest.fn(async () => ({ contentType: 'image/jpeg', byteLength: 12, aspectRatio: 1 })) }));
 jest.mock('@/services/media', () => ({ uploadToPresignedUrl: jest.fn(async () => ({ error: null })) }));
 jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
-jest.mock('@/services/gallery-import-runner', () => ({ GalleryImportWaitingForWifiError: class extends Error {}, galleryImportRunnerErrorMessage: (error: any) => error.message, startGalleryImportRunner: jest.fn(), resumeGalleryImportRunner: jest.fn(async () => undefined) }));
-jest.mock('@/services/gallery-import', () => ({ beginGalleryImportApproval: jest.fn(), cancelGalleryImportRun: jest.fn(), completeGalleryImportRun: jest.fn(), finalizeGalleryImportCandidate: jest.fn(), getGalleryImportCandidates: jest.fn(), getGalleryImportRun: jest.fn(), getGalleryImportApprovalUploadUrl: jest.fn(), recordGalleryImportApprovalUpload: jest.fn(), setGalleryImportCandidateSkip: jest.fn(), updateGalleryImportCandidate: jest.fn() }));
+jest.mock('@/services/gallery-import', () => ({
+  beginGalleryImportApproval: jest.fn(), completeGalleryImportRun: jest.fn(), finalizeGalleryImportCandidate: jest.fn(),
+  getGalleryImportCandidates: jest.fn(), getGalleryImportApprovalUploadUrl: jest.fn(), getGalleryImportRun: jest.fn(),
+  recordGalleryImportApprovalUpload: jest.fn(), setGalleryImportCandidateSkip: jest.fn(), updateGalleryImportCandidate: jest.fn(),
+}));
 jest.mock('@/utils/gallery-import-checkpoint', () => ({
-  loadGalleryImportCheckpoint: jest.fn(async () => mockCheckpoint), loadLatestGalleryImportCheckpoint: jest.fn(async () => null), clearGalleryImportCheckpoint: jest.fn(), clearGalleryImportPreviewCache: jest.fn(),
+  loadGalleryImportCheckpoint: jest.fn(async () => mockCheckpoint), clearGalleryImportCheckpoint: jest.fn(), clearGalleryImportPreviewCache: jest.fn(),
   updateGalleryImportCheckpoint: jest.fn(async (_u: string, _f: string, _r: string, update: any) => { mockCheckpoint = update(mockCheckpoint); return mockCheckpoint; }),
 }));
 
@@ -35,122 +73,24 @@ const candidate = { id: 'candidate-1', caption: 'A small day.', memoryDate: '202
 function candidateAt(index: number, status: 'ready' | 'skipped' = 'ready') { return { ...candidate, id: `candidate-${index}`, caption: `Moment ${index}`, status }; }
 function checkpoint(overrides: Record<string, unknown> = {}) { return { version: 2, userId: 'user-1', familyId: 'family-1', runId: 'run-1', runCapability: 'cap', algorithmVersion: 'gallery-v1', status: 'reviewing', assetByToken: { 'asset-1': { assetToken: 'asset-1', osAssetId: 'local-1', captureAtMs: 1, width: 10, height: 10, isFavorite: false } }, uploadedAssetTokens: [], clusterSignatures: [], chunks: [{ ordinal: 0, status: 'dispatched', clusters: [], previewUploads: [] }], deckCursor: 0, approvalOutbox: [], updatedAt: 'now', ...overrides }; }
 
-describe('gallery import flow integration', () => {
+describe('gallery import approval composer', () => {
   beforeEach(() => {
     jest.clearAllMocks(); mockCheckpoint = checkpoint();
-    mockAdapter.getPermission.mockResolvedValue({ state: 'full' }); mockAdapter.requestPermission.mockResolvedValue({ state: 'full' });
     mockAdapter.isAssetAvailableLocally.mockResolvedValue(true);
     mockAdapter.resolveAssetUri.mockResolvedValue('file://original.jpg'); mockAdapter.getAssetFilename.mockResolvedValue('original.jpg');
-    (startGalleryImportRunner as jest.Mock).mockResolvedValue({ runId: 'run-1', scannedAssetCount: 3, clusterCount: 1 });
-    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'reviewing', readyCandidates: 1 }, error: null });
     (galleryService.getGalleryImportCandidates as jest.Mock).mockResolvedValue({ data: { candidates: [candidate] }, error: null });
-    (galleryService.setGalleryImportCandidateSkip as jest.Mock).mockResolvedValue({ data: { candidate: { ...candidate, status: 'skipped' } }, error: null });
+    // Round 4: GalleryImportReview (rendered directly by a couple of tests
+    // below) now polls server run truth too -- a terminal-ish default here
+    // keeps those tests' expectations unaffected by round 4's gate.
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({
+      data: { id: 'run-1', familyId: 'family-1', status: 'reviewing', reviewExpiresAt: null, limits: { maxClusters: 20, maxAssetsPerCluster: 6, maxChunks: 4 }, readyCandidates: 0, pendingClusters: 0 },
+      error: null,
+    });
     (galleryService.updateGalleryImportCandidate as jest.Mock).mockResolvedValue({ data: { candidate }, error: null });
     (galleryService.beginGalleryImportApproval as jest.Mock).mockResolvedValue({ data: { leaseId: 'lease-1', memoryId: 'memory-1', expiresAt: '2099-01-01', expectedAssets: [] }, error: null });
     (galleryService.getGalleryImportApprovalUploadUrl as jest.Mock).mockResolvedValue({ data: { uploadUrl: 'https://upload', requiredHeaders: {} }, error: null });
     (galleryService.recordGalleryImportApprovalUpload as jest.Mock).mockResolvedValue({ data: { recorded: true }, error: null });
     (galleryService.finalizeGalleryImportCandidate as jest.Mock).mockResolvedValue({ data: { memoryId: 'memory-1' }, error: null });
-  });
-
-  it.each(['full', 'limited'] as const)('starts with %s access and exposes the limited-library picker only when applicable', async (state) => {
-    mockAdapter.getPermission.mockResolvedValue({ state });
-    const screen = render(<GalleryImportEntry />);
-    await waitFor(() => state === 'limited' ? expect(screen.getByTestId('gallery-import-choose-more')).toBeTruthy() : expect(screen.queryByTestId('gallery-import-choose-more')).toBeNull());
-    if (state === 'limited') fireEvent.press(screen.getByTestId('gallery-import-choose-more'));
-    fireEvent.press(screen.getByTestId('gallery-import-start'));
-    await waitFor(() => expect(startGalleryImportRunner).toHaveBeenCalled());
-    if (state === 'limited') expect(mockAdapter.presentPermissionPicker).toHaveBeenCalled();
-  });
-
-  it('shows denied and blocked permission recovery without starting a scan, including device settings', async () => {
-    mockAdapter.getPermission.mockResolvedValue({ state: 'denied' }); mockAdapter.requestPermission.mockResolvedValue({ state: 'denied' });
-    const denied = render(<GalleryImportEntry />); fireEvent.press(denied.getByTestId('gallery-import-start'));
-    await waitFor(() => expect(denied.getByText(/not granted/)).toBeTruthy()); expect(startGalleryImportRunner).not.toHaveBeenCalled(); denied.unmount();
-    mockAdapter.getPermission.mockResolvedValue({ state: 'blocked' });
-    const blocked = render(<GalleryImportEntry />);
-    const openSettings = jest.spyOn(Linking, 'openSettings').mockResolvedValue(true);
-    await waitFor(() => expect(blocked.getByTestId('gallery-import-open-settings')).toBeTruthy()); fireEvent.press(blocked.getByTestId('gallery-import-open-settings')); expect(openSettings).toHaveBeenCalled(); fireEvent.press(blocked.getByTestId('gallery-import-start'));
-    await waitFor(() => expect(blocked.getByText(/device settings/)).toBeTruthy()); expect(startGalleryImportRunner).not.toHaveBeenCalled();
-  });
-
-  it('keeps generic terminal/device states free of candidate details', async () => {
-    mockCheckpoint = null; const device = render(<GalleryImportProgress runId="run-1" />); await waitFor(() => expect(device.getByText(/device that started/)).toBeTruthy()); expect(device.queryByText(candidate.caption)).toBeNull(); device.unmount();
-    mockCheckpoint = checkpoint(); (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValueOnce({ data: { status: 'expired', readyCandidates: 0 }, error: null });
-    const expired = render(<GalleryImportProgress runId="run-1" />); await waitFor(() => expect(expired.getByTestId('gallery-import-expired-back')).toBeTruthy()); expect(expired.queryByText(candidate.caption)).toBeNull(); expired.unmount();
-    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValueOnce({ data: { status: 'failed', readyCandidates: 0 }, error: null });
-    const access = render(<GalleryImportProgress runId="run-1" />); await waitFor(() => expect(access.getByTestId('gallery-import-access-lost-back')).toBeTruthy());
-  });
-
-  it('ignores a late status response after progress unmounts', async () => {
-    let resolveFirstStatus: ((value: unknown) => void) | undefined;
-    (galleryService.getGalleryImportRun as jest.Mock).mockImplementationOnce(() => new Promise((resolve) => { resolveFirstStatus = resolve; }));
-    const first = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(galleryService.getGalleryImportRun).toHaveBeenCalledTimes(1));
-    first.unmount();
-
-    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'expired', readyCandidates: 0 }, error: null });
-    const second = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(second.getByTestId('gallery-import-expired-back')).toBeTruthy());
-    await act(async () => { resolveFirstStatus?.({ data: { status: 'reviewing', readyCandidates: 4 }, error: null }); });
-    expect(second.getByTestId('gallery-import-expired-back')).toBeTruthy();
-    expect(galleryService.getGalleryImportRun).toHaveBeenCalledTimes(2);
-  });
-
-  it('keeps the deck read-only and requires explicit set-aside then restore', async () => {
-    const screen = render(<GalleryImportReview runId="run-1" />); await waitFor(() => expect(screen.getByTestId('gallery-import-set-aside')).toBeTruthy());
-    expect(screen.queryByTestId('gallery-import-caption')).toBeNull(); fireEvent.press(screen.getByTestId('gallery-import-set-aside'));
-    await waitFor(() => expect(galleryService.setGalleryImportCandidateSkip).toHaveBeenCalledWith(expect.objectContaining({ skip: true })));
-    await waitFor(() => expect(screen.getByTestId('gallery-import-restore-candidate-1')).toBeTruthy());
-    (galleryService.setGalleryImportCandidateSkip as jest.Mock).mockResolvedValueOnce({ data: { candidate: { ...candidate, status: 'ready' } }, error: null });
-    fireEvent.press(screen.getByTestId('gallery-import-restore-candidate-1'));
-    await waitFor(() => expect(galleryService.setGalleryImportCandidateSkip).toHaveBeenLastCalledWith(expect.objectContaining({ skip: false })));
-  });
-
-  it('advances the deterministic ready queue once per skip and decrements progress on restore', async () => {
-    const ordered = [candidateAt(1), candidateAt(2), candidateAt(3), candidateAt(4)];
-    (galleryService.getGalleryImportCandidates as jest.Mock).mockResolvedValue({ data: { candidates: ordered }, error: null });
-    (galleryService.setGalleryImportCandidateSkip as jest.Mock).mockImplementation(async ({ candidateId, skip }) => ({
-      data: { candidate: { ...ordered.find((item) => item.id === candidateId)!, status: skip ? 'skipped' : 'ready' } },
-      error: null,
-    }));
-    const screen = render(<GalleryImportReview runId="run-1" />);
-    await waitFor(() => expect(screen.getByText('Moment 1')).toBeTruthy());
-    expect(screen.getByTestId('gallery-import-deck-progress').props.accessibilityLabel).toBe('Moment 1 of 4');
-
-    fireEvent.press(screen.getByTestId('gallery-import-set-aside'));
-    await waitFor(() => expect(screen.getByText('Moment 2')).toBeTruthy());
-    expect(screen.getByTestId('gallery-import-deck-progress').props.accessibilityLabel).toBe('Moment 2 of 4');
-
-    fireEvent.press(screen.getByTestId('gallery-import-set-aside'));
-    await waitFor(() => expect(screen.getByText('Moment 3')).toBeTruthy());
-    expect(screen.getByTestId('gallery-import-deck-progress').props.accessibilityLabel).toBe('Moment 3 of 4');
-
-    fireEvent.press(screen.getByTestId('gallery-import-restore-candidate-1'));
-    await waitFor(() => expect(screen.getByText('Moment 1')).toBeTruthy());
-    expect(screen.getByTestId('gallery-import-deck-progress').props.accessibilityLabel).toBe('Moment 2 of 4');
-  });
-
-  it('keeps a 59-card restore list bounded and preserves the unique total after an approval remount', async () => {
-    const remaining = [candidateAt(60), ...Array.from({ length: 59 }, (_, index) => candidateAt(index + 1, 'skipped'))];
-    mockCheckpoint = checkpoint({ deckCursor: 59, deckTotal: 60 });
-    (galleryService.getGalleryImportCandidates as jest.Mock).mockResolvedValue({ data: { candidates: remaining }, error: null });
-    const screen = render(<GalleryImportReview runId="run-1" />);
-    await waitFor(() => expect(screen.getByText('Moment 60')).toBeTruthy());
-    expect(screen.getByTestId('gallery-import-deck-progress').props.accessibilityLabel).toBe('Moment 60 of 60');
-    expect(screen.getByText('Set aside · 59')).toBeTruthy();
-    expect(screen.getByTestId('gallery-import-set-aside-scroll')).toHaveStyle({ maxHeight: 168 });
-    expect(screen.getByTestId('gallery-import-set-aside-scroll').props.nestedScrollEnabled).toBe(true);
-  });
-
-  it.each(['uploading', 'finalizing', 'failed'] as const)('redirects a relaunched review with a %s outbox before rendering deck actions', async (status) => {
-    mockCheckpoint = checkpoint({ approvalOutbox: [{ candidateId: 'candidate-1', leaseId: 'lease-1', memoryId: 'memory-1', assetTokens: ['asset-1'], status }] });
-    const screen = render(<GalleryImportReview runId="run-1" />);
-    await waitFor(() => expect(screen.getByTestId('gallery-import-outbox-redirect')).toBeTruthy());
-    expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/approve', params: { runId: 'run-1', candidateId: 'candidate-1' } });
-    expect(screen.queryByTestId('gallery-import-set-aside')).toBeNull();
-    expect(screen.queryByTestId('gallery-import-keep')).toBeNull();
-    expect(galleryService.getGalleryImportCandidates).not.toHaveBeenCalled();
-    expect(galleryService.setGalleryImportCandidateSkip).not.toHaveBeenCalled();
   });
 
   it('recovers an ambiguous late begin from an approving candidate without editing or completing the run', async () => {
@@ -182,19 +122,23 @@ describe('gallery import flow integration', () => {
     review.unmount();
 
     (galleryService.beginGalleryImportApproval as jest.Mock).mockResolvedValue({ data: { leaseId: 'lease-1', memoryId: 'memory-1', expiresAt: '2099-01-01', expectedAssets: [] }, error: null });
+    // The locked-while-recovering composer (editable: false) is covered by
+    // "requires an explicit failed-outbox retry..." below, where that state
+    // lingers until a manual retry; here recovery runs to completion and
+    // swaps in the kept-confirmation, which this test asserts instead.
     const recoveredApproval = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
     await waitFor(() => expect(galleryService.finalizeGalleryImportCandidate).toHaveBeenCalledTimes(1));
-    expect(recoveredApproval.getByTestId('gallery-import-caption').props.editable).toBe(false);
     expect(galleryService.beginGalleryImportApproval).toHaveBeenCalledTimes(2);
     expect(galleryService.updateGalleryImportCandidate).toHaveBeenCalledTimes(1);
     expect(galleryService.getGalleryImportApprovalUploadUrl).toHaveBeenCalledTimes(1);
     expect(mockCheckpoint.approvalOutbox).toEqual([]);
     expect(mockCheckpoint.deckCursor).toBe(1);
+    await waitFor(() => expect(recoveredApproval.getByTestId('gallery-import-approval-success')).toBeTruthy());
   });
 
   it('auto-resumes an uploading outbox once without beginning or editing a second approval', async () => {
     mockCheckpoint = checkpoint({ approvalOutbox: [{ candidateId: 'candidate-1', leaseId: 'lease-1', memoryId: 'memory-1', assetTokens: ['asset-1'], status: 'uploading' }] });
-    render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
     await waitFor(() => expect(galleryService.finalizeGalleryImportCandidate).toHaveBeenCalledTimes(1));
     expect(galleryService.getGalleryImportApprovalUploadUrl).toHaveBeenCalledTimes(1);
     expect(galleryService.recordGalleryImportApprovalUpload).toHaveBeenCalledTimes(1);
@@ -202,6 +146,7 @@ describe('gallery import flow integration', () => {
     expect(galleryService.beginGalleryImportApproval).not.toHaveBeenCalled();
     expect(mockCheckpoint.approvalOutbox).toEqual([]);
     expect(mockCheckpoint.deckCursor).toBe(1);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-success')).toBeTruthy());
   });
 
   it('auto-finalizes a finalizing approval outbox after relaunch without re-uploading', async () => {
@@ -210,20 +155,21 @@ describe('gallery import flow integration', () => {
     await waitFor(() => expect(galleryService.finalizeGalleryImportCandidate).toHaveBeenCalledTimes(1));
     expect(galleryService.getGalleryImportApprovalUploadUrl).not.toHaveBeenCalled();
     expect(mockCheckpoint.deckCursor).toBe(1);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-success')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-approval-next'));
+    expect(mockRouter.replace).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/review', params: { runId: 'run-1' } });
     screen.unmount();
 
     (galleryService.getGalleryImportCandidates as jest.Mock).mockResolvedValue({ data: { candidates: [candidateAt(2)] }, error: null });
     const review = render(<GalleryImportReview runId="run-1" />);
     await waitFor(() => expect(review.getByText('Moment 2')).toBeTruthy());
-    expect(review.getByTestId('gallery-import-deck-progress').props.accessibilityLabel).toBe('Moment 2 of 2');
+    expect(review.getByTestId('gallery-import-deck-progress').props.accessibilityLabel).toBe('Suggestion 2 of 2');
   });
 
   it('requires an explicit failed-outbox retry and reuses its lease without update or begin', async () => {
     mockCheckpoint = checkpoint({ approvalOutbox: [{ candidateId: 'candidate-1', leaseId: 'lease-1', memoryId: 'memory-1', assetTokens: ['asset-1'], status: 'failed', errorCode: 'client_retryable' }] });
     const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
     await waitFor(() => expect(screen.getByTestId('gallery-import-approval-retry')).toBeTruthy());
-    expect(screen.getByTestId('mock-fixed-footer')).toBeTruthy();
-    expect(screen.queryByTestId('mock-keyboard-sticky-footer')).toBeNull();
     expect(galleryService.getGalleryImportApprovalUploadUrl).not.toHaveBeenCalled();
     expect(galleryService.finalizeGalleryImportCandidate).not.toHaveBeenCalled();
     expect(screen.getByTestId('gallery-import-caption').props.editable).toBe(false);
@@ -346,22 +292,9 @@ describe('gallery import flow integration', () => {
     }
   });
 
-  it('validates and edits the composer photo/tag selections before approval', async () => {
-    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />); await waitFor(() => expect(screen.getByTestId('gallery-import-approve')).toBeTruthy());
-    expect(screen.getByTestId('mock-keyboard-sticky-footer')).toBeTruthy();
-    expect(screen.queryByTestId('mock-fixed-footer')).toBeNull();
-    fireEvent.press(screen.getByTestId('gallery-import-photo-0')); fireEvent.press(screen.getByTestId('gallery-import-approve'));
-    await waitFor(() => expect(screen.getByText(/at least one photo/)).toBeTruthy()); fireEvent.press(screen.getByTestId('gallery-import-photo-0')); fireEvent.press(screen.getByTestId('gallery-import-member-child-1'));
-    expect(screen.getByTestId('gallery-import-member-child-1').props.accessibilityState.checked).toBe(true);
-  });
-
-  it('caps captions at 1,000 characters and rejects impossible calendar dates', async () => {
+  it('caps captions at 1,000 characters', async () => {
     const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />); await waitFor(() => expect(screen.getByTestId('gallery-import-approve')).toBeTruthy());
     expect(screen.getByTestId('gallery-import-caption').props.maxLength).toBe(1_000);
-    fireEvent.changeText(screen.getByTestId('gallery-import-date'), '2026-99-99');
-    fireEvent.press(screen.getByTestId('gallery-import-approve'));
-    await waitFor(() => expect(screen.getByText('Enter a real date in YYYY-MM-DD format.')).toBeTruthy());
-    fireEvent.changeText(screen.getByTestId('gallery-import-date'), '2026-02-28');
     fireEvent.changeText(screen.getByTestId('gallery-import-caption'), 'x'.repeat(1_001));
     fireEvent.press(screen.getByTestId('gallery-import-approve'));
     await waitFor(() => expect(screen.getByText('Keep the caption to 1,000 characters or fewer.')).toBeTruthy());
@@ -375,5 +308,130 @@ describe('gallery import flow integration', () => {
     fireEvent.press(screen.getByTestId('gallery-import-approve'));
     await waitFor(() => expect(screen.getByText(/no longer available/)).toBeTruthy());
     expect(galleryService.beginGalleryImportApproval).not.toHaveBeenCalled();
+  });
+
+  // ── Composer reuse coverage (Job 2 rebuild) ──────────────────────────
+
+  it('renders the shared memory-composer-form component, not a gallery-import fork', async () => {
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    // "new-memory-media-preview" is MemoryMediaPreview's own internal
+    // container testID (src/components/memory-media-preview.tsx) -- the
+    // same component new-memory.tsx and edit.tsx mount. Its presence here
+    // is only possible if this screen renders the literal shared
+    // MemoryComposerForm (src/components/memory-composer-form.tsx), not a
+    // lookalike form with its own grid.
+    await waitFor(() => expect(screen.getByTestId('new-memory-media-preview')).toBeTruthy());
+  });
+
+  it('prefills the date picker with the candidate date, formatted, never raw ISO', async () => {
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-date')).toBeTruthy());
+    const label = screen.getByTestId('gallery-import-date').props.accessibilityLabel as string;
+    expect(label).not.toBe(candidate.memoryDate);
+    expect(label).not.toContain('2025-05-12');
+  });
+
+  it('renders the tag picker with the candidate family members, uncapped', async () => {
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    await waitFor(() => expect(screen.getByTestId('memory-tag-child-1')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('memory-tag-child-1'));
+    expect(screen.getByTestId('memory-tag-child-1').props.accessibilityState.selected).toBe(true);
+  });
+
+  it('shows and uses the restore-draft affordance only after the caption is edited', async () => {
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-caption')).toBeTruthy());
+    expect(screen.queryByTestId('gallery-import-restore-draft')).toBeNull();
+    fireEvent.changeText(screen.getByTestId('gallery-import-caption'), 'Edited words');
+    await waitFor(() => expect(screen.getByTestId('gallery-import-restore-draft')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-restore-draft'));
+    expect(screen.getByTestId('gallery-import-caption').props.value).toBe(candidate.caption);
+    expect(screen.queryByTestId('gallery-import-restore-draft')).toBeNull();
+  });
+
+  it('shows an inline unavailable state for a photo whose preview fails to load, and disables Save once all are unavailable', async () => {
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    await waitFor(() => expect(screen.getByTestId('memory-media-image-0')).toBeTruthy());
+    fireEvent(screen.getByTestId('memory-media-image-0'), 'error');
+    await waitFor(() => expect(screen.getByTestId('memory-media-unavailable-0')).toBeTruthy());
+    expect(screen.getByTestId('gallery-import-photos-unavailable')).toBeTruthy();
+    expect(screen.getByTestId('gallery-import-approve').props.accessibilityState?.disabled ?? screen.getByTestId('gallery-import-approve').props.disabled).toBeTruthy();
+  });
+
+  it('removes a photo tile without re-adding it, and lets submit fail with "choose at least one photo"', async () => {
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    await waitFor(() => expect(screen.getByTestId('memory-media-remove-0')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('memory-media-remove-0'));
+    expect(screen.queryByTestId('memory-media-tile-0')).toBeNull();
+    fireEvent.press(screen.getByTestId('gallery-import-approve'));
+    await waitFor(() => expect(screen.getByText('Choose at least one photo.')).toBeTruthy());
+  });
+
+  it('opens the voice modal from the mic affordance and applies its dictated text to the caption', async () => {
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-voice-trigger')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-voice-trigger'));
+    await waitFor(() => expect(screen.getByTestId('mock-voice-modal')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('mock-voice-modal-result'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-caption').props.value).toBe('Dictated caption'));
+    expect(screen.getByTestId('gallery-import-restore-draft')).toBeTruthy();
+  });
+
+  it('hands the day-pool chooser the current selection through onAddPhotos and applies its ordered result, including local uris and submitted tokens', async () => {
+    const onAddPhotos = jest.fn();
+    mockCheckpoint = checkpoint({
+      assetByToken: {
+        'asset-1': { assetToken: 'asset-1', osAssetId: 'local-1', captureAtMs: 1, width: 10, height: 10, isFavorite: false },
+        'asset-2': { assetToken: 'asset-2', osAssetId: 'local-2', captureAtMs: 2, width: 10, height: 10, isFavorite: false },
+      },
+    });
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" onAddPhotos={onAddPhotos} />);
+    // The Add tile and its testID come from the shared composer's real media
+    // grid (src/components/memory-media-preview.tsx) -- not a gallery-import
+    // fork -- so the same "Add" affordance new-memory/edit-memory could use.
+    await waitFor(() => expect(screen.getByTestId('memory-media-add')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('memory-media-add'));
+    expect(onAddPhotos).toHaveBeenCalledWith(expect.objectContaining({
+      candidate: expect.objectContaining({ id: 'candidate-1', selectedAssetTokens: ['asset-1'] }),
+      selectedAssetTokens: ['asset-1'],
+      setPhotos: expect.any(Function),
+    }));
+
+    // The chooser hands back an ordered selection; the added pool photo
+    // renders from its device uri instead of the missing server preview.
+    act(() => {
+      onAddPhotos.mock.calls[0][0].setPhotos([
+        { assetToken: 'asset-1', uri: 'https://preview' },
+        { assetToken: 'asset-2', uri: 'file://local/os-2' },
+      ]);
+    });
+    await waitFor(() => expect(screen.getByTestId('memory-media-tile-1')).toBeTruthy());
+    expect(screen.queryByTestId('memory-media-unavailable-1')).toBeNull();
+    expect(screen.getByTestId('memory-media-image-1')).toBeTruthy();
+
+    // Submit stages both tokens through the unchanged approval pipeline.
+    fireEvent.press(screen.getByTestId('gallery-import-approve'));
+    await waitFor(() => expect(galleryService.updateGalleryImportCandidate).toHaveBeenCalledWith(expect.objectContaining({
+      assetTokens: ['asset-1', 'asset-2'],
+    })));
+  });
+
+  it('shows the kept confirmation after a successful save, then lets "Next suggestion" return to the deck and "That is enough" exit', async () => {
+    mockCheckpoint = checkpoint({ deckCursor: 3, deckTotal: 10 });
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approve')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-approve'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-success')).toBeTruthy());
+    expect(screen.getByText('Next suggestion · 6 left')).toBeTruthy();
+    // The absolute-positioned action stack pads the live bottom inset (28 in
+    // this suite's safe-area mock) so "That is enough for now" clears the
+    // system nav bar: max(spacing.xl 32, spacing.md 16 + inset 28) = 44.
+    expect(screen.getByTestId('gallery-import-approval-success-actions')).toHaveStyle({ paddingBottom: 44 });
+    // Same established sticky-footer surface (solid background + hairline
+    // top border) every other gallery-import screen's fixed footer uses.
+    expect(screen.getByTestId('gallery-import-approval-success-actions')).toHaveStyle({ borderTopWidth: 1 });
+
+    fireEvent.press(screen.getByTestId('gallery-import-approval-stop'));
+    expect(mockRouter.replace).toHaveBeenCalledWith('/(app)/(tabs)/timeline');
   });
 });

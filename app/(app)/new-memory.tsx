@@ -1,27 +1,14 @@
 import { navigateBack } from '@/lib/navigation';
 import { router, useLocalSearchParams } from 'expo-router';
-import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Pressable,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, StyleSheet, Switch, Text, View } from 'react-native';
 
+import { MemoryComposerForm, type MemoryComposerTypeBadge } from '@/components/memory-composer-form';
 import {
   MemoryMediaPicker,
   type MediaAttachment,
 } from '@/components/memory-media-picker';
-import { MemoryMediaPreview } from '@/components/memory-media-preview';
-import { MemoryTagPicker } from '@/components/memory-tag-picker';
 import { VoiceSpeakItModal } from '@/components/voice-speak-it-modal';
-import { DatePickerField } from '@/components/date-picker-field';
 import { colors, fonts, spacing } from '@/constants/theme';
 import { pickJournalingPrompt } from '@/constants/journaling-prompts';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
@@ -327,7 +314,6 @@ export default function NewMemoryScreen() {
     memoryType === 'text_illustration' ? 'text_illustration' : 'text_only';
   const typeCfg = TYPE_CONFIGS[typeKey];
 
-  const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
   const isSaving = isCreating || isPostingMedia;
   const canSave = memoryType === 'media' ? attachedMedia.length > 0 : content.trim().length > 0;
 
@@ -470,127 +456,59 @@ export default function NewMemoryScreen() {
     }
   };
 
+  const hasMediaRegion = attachedMedia.length > 0;
+  const dateAccessorySlot = dateSource === 'media' ? (
+    // The accessibility announcement lives on the DatePickerField's
+    // accessibilityHint below; this visible label is hidden from the
+    // accessibility tree so screen readers don't announce it twice.
+    <Text
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={styles.dateSourceHint}
+      testID="new-memory-date-source"
+    >
+      From media
+    </Text>
+  ) : null;
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      {/* ── Header ── */}
-      <View style={styles.header}>
-        <Pressable onPress={() => navigateBack()} style={styles.headerTextBtn} testID="new-memory-cancel">
-          <Text style={styles.cancelText}>Cancel</Text>
-        </Pressable>
-
-        <View style={[styles.typePill, { backgroundColor: typeCfg.bg, borderColor: typeCfg.border }]}>
-          <Text style={[styles.typePillText, { color: typeCfg.color }]}>· {typeCfg.label}</Text>
+    <MemoryComposerForm
+      attachments={attachedMedia}
+      belowErrorSlot={isPreparingIncomingShare ? (
+        <View style={styles.sharedMediaLoading} testID="new-memory-shared-media-loading">
+          <ActivityIndicator color={colors.primary} size="small" />
+          <Text style={styles.sharedMediaLoadingText}>Preparing shared media…</Text>
         </View>
-
-        <Pressable
-          onPress={handleSave}
-          disabled={isSaving || !canSave}
-          style={styles.headerTextBtn}
-          testID="new-memory-save"
-        >
-          {isSaving ? (
-            <ActivityIndicator size="small" color={colors.primary} />
-          ) : (
-            <Text style={[styles.saveText, (!canSave) && styles.saveTextDisabled]}>Save</Text>
-          )}
-        </Pressable>
-      </View>
-
-      {/* ── Body: flex layout so textarea grows and tags sit at the bottom ── */}
-      <KeyboardAvoidingView behavior="padding" style={styles.body}>
-        {/* Date pill */}
-        <View style={styles.datePillWrap}>
-          <DatePickerField
-            accessibilityHint={dateSource === 'media' ? 'Suggested from media date' : undefined}
-            onChange={setMemoryDate}
-            placeholder="Today"
-            testID="new-memory-date"
-            value={memoryDate}
-          />
-          {dateSource === 'media' ? (
-            // The accessibility announcement lives on the DatePickerField's
-            // accessibilityHint above; this visible label is hidden from the
-            // accessibility tree so screen readers don't announce it twice.
-            <Text
-              accessibilityElementsHidden
-              importantForAccessibility="no-hide-descendants"
-              style={styles.dateSourceHint}
-              testID="new-memory-date-source"
-            >
-              From media
-            </Text>
-          ) : null}
-        </View>
-
-        {/* Text area — grows to fill space when no media attached */}
-        <TextInput
-          multiline
-          value={content}
-          onChangeText={handleContentChange}
-          placeholder={placeholderPrompt}
-          placeholderTextColor={colors.ink3}
-          style={[styles.textarea, attachedMedia.length > 0 ? styles.textareaCaption : null]}
-          testID="new-memory-content"
-        />
-        {attachedMedia.length === 0 && (
-          <Text style={styles.wordCount}>{wordCount} {wordCount === 1 ? 'word' : 'words'}</Text>
-        )}
-
-        {/* Media preview — fills remaining space when attached */}
-        {attachedMedia.length > 0 ? (
-          <View style={styles.mediaWrap}>
-            <MemoryMediaPreview
-              attachments={attachedMedia}
-              onMove={moveMedia}
-              onRemove={removeMedia}
-              onSelect={setSelectedMediaId}
-              selectedId={selectedMediaId}
-            />
-          </View>
-        ) : null}
-
-        {/* Tag picker — anchored at bottom */}
-        <MemoryTagPicker
-          members={members}
-          onToggleMember={toggleMember}
-          selectedMemberIds={selectedMemberIds}
-        />
-
-        {errorMessage ? (
-          <Text style={styles.errorText}>{errorMessage}</Text>
-        ) : null}
-        {isPreparingIncomingShare ? (
-          <View style={styles.sharedMediaLoading} testID="new-memory-shared-media-loading">
-            <ActivityIndicator color={colors.primary} size="small" />
-            <Text style={styles.sharedMediaLoadingText}>Preparing shared media…</Text>
-          </View>
-        ) : null}
-      </KeyboardAvoidingView>
-
-      {/* ── Bottom toolbar ── */}
-      <View style={styles.toolbar}>
-        {/* Mic — opens the full-screen Speak It modal */}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Record voice memory"
-          disabled={isSaving}
-          onPress={() => setShowVoiceModal(true)}
-          style={({ pressed }) => [
-            styles.toolbarIconBtn,
-            isSaving && styles.toolbarIconBtnDisabled,
-            pressed && !isSaving && styles.toolbarIconBtnPressed,
-          ]}
-          testID="new-memory-voice-trigger"
-        >
-          <SymbolView
-            name={{ ios: 'mic', android: 'mic' }}
-            size={20}
-            tintColor={colors.ink2}
-            fallback={<Text style={styles.toolbarIconFallback}>♪</Text>}
-          />
-        </Pressable>
-
-        {/* Attach */}
+      ) : null}
+      canSave={canSave}
+      cancelTestID="new-memory-cancel"
+      contentPlaceholder={placeholderPrompt}
+      contentTestID="new-memory-content"
+      contentValue={content}
+      dateAccessibilityHint={dateSource === 'media' ? 'Suggested from media date' : undefined}
+      dateAccessorySlot={dateAccessorySlot}
+      datePlaceholder="Today"
+      dateTestID="new-memory-date"
+      dateValue={memoryDate}
+      errorMessage={errorMessage || undefined}
+      hasMediaRegion={hasMediaRegion}
+      isSaving={isSaving}
+      maxSelectedMembers={undefined}
+      members={members}
+      onAddMediaPress={undefined}
+      onCancel={() => navigateBack()}
+      onContentChange={handleContentChange}
+      onDateChange={setMemoryDate}
+      onMoveMedia={moveMedia}
+      onRemoveMedia={removeMedia}
+      onSave={handleSave}
+      onSelectMedia={setSelectedMediaId}
+      onToggleMember={toggleMember}
+      onVoicePress={() => setShowVoiceModal(true)}
+      saveTestID="new-memory-save"
+      selectedMediaId={selectedMediaId}
+      selectedMemberIds={selectedMemberIds}
+      toolbarMediaButton={(
         <MemoryMediaPicker
           compact
           disabled={isSaving || attachedMedia.length >= 10}
@@ -599,175 +517,65 @@ export default function NewMemoryScreen() {
           onSelect={appendMedia}
           remainingSlots={10 - attachedMedia.length}
         />
-
-        {/* AI illustration toggle */}
-        {attachedMedia.length === 0 && (
-          <View style={styles.toggleRow}>
-            <View style={styles.toggleCopy}>
-              <Text style={[styles.toggleLabel, !isIllustrationEnabled && styles.toggleLabelOff]}>
-                AI illustration
-              </Text>
-              <Text style={styles.toggleHint}>
-                {isIllustrationOverLimit
-                  ? `Up to ${MAX_ILLUSTRATION_MEMBERS} people per illustration`
-                  : illustrationEnabled
-                    ? 'On — runs after save'
-                    : 'Off — text only'}
-              </Text>
-            </View>
-            <Switch
-              accessibilityLabel="Generate AI illustration"
-              disabled={isIllustrationOverLimit}
-              onValueChange={setIllustrationEnabled}
-              value={isIllustrationEnabled}
-              trackColor={{ false: colors.border, true: colors.primary }}
-              testID="new-memory-ai-toggle"
-            />
+      )}
+      toolbarTrailingSlot={!hasMediaRegion ? (
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleCopy}>
+            <Text style={[styles.toggleLabel, !isIllustrationEnabled && styles.toggleLabelOff]}>
+              AI illustration
+            </Text>
+            <Text style={styles.toggleHint}>
+              {isIllustrationOverLimit
+                ? `Up to ${MAX_ILLUSTRATION_MEMBERS} people per illustration`
+                : illustrationEnabled
+                  ? 'On — runs after save'
+                  : 'Off — text only'}
+            </Text>
           </View>
-        )}
-      </View>
-
-      {/* ── Voice "Speak It" modal ── */}
-      <VoiceSpeakItModal
-        familyMembers={voiceMembers}
-        onDismiss={() => setShowVoiceModal(false)}
-        onResult={(result) => {
-          usedVoiceRef.current = true;
-          setContent(result.cleanedText);
-          // applyVoiceResult overwrites selectedMemberIds with the mention
-          // match. With no name mentioned ("she took her first steps
-          // today") and a single-member family, the match is empty and
-          // would wipe an existing tag -- fall back to the sole member,
-          // same as the mount-time seed above. Kept at the call site (not
-          // in the hook) since the hook has no member-count policy.
-          const mentionedMemberIds =
-            result.mentionedMemberIds.length === 0 && members.length === 1
-              ? [members[0].id]
-              : result.mentionedMemberIds;
-          applyVoiceResult({ ...result, mentionedMemberIds });
-          setShowVoiceModal(false);
-        }}
-        visible={showVoiceModal}
-      />
-    </SafeAreaView>
+          <Switch
+            accessibilityLabel="Generate AI illustration"
+            disabled={isIllustrationOverLimit}
+            onValueChange={setIllustrationEnabled}
+            value={isIllustrationEnabled}
+            trackColor={{ false: colors.border, true: colors.primary }}
+            testID="new-memory-ai-toggle"
+          />
+        </View>
+      ) : null}
+      typeBadge={typeCfg as MemoryComposerTypeBadge}
+      voiceDisabled={isSaving}
+      voiceModalSlot={(
+        <VoiceSpeakItModal
+          familyMembers={voiceMembers}
+          onDismiss={() => setShowVoiceModal(false)}
+          onResult={(result) => {
+            usedVoiceRef.current = true;
+            setContent(result.cleanedText);
+            // applyVoiceResult overwrites selectedMemberIds with the mention
+            // match. With no name mentioned ("she took her first steps
+            // today") and a single-member family, the match is empty and
+            // would wipe an existing tag -- fall back to the sole member,
+            // same as the mount-time seed above. Kept at the call site (not
+            // in the hook) since the hook has no member-count policy.
+            const mentionedMemberIds =
+              result.mentionedMemberIds.length === 0 && members.length === 1
+                ? [members[0].id]
+                : result.mentionedMemberIds;
+            applyVoiceResult({ ...result, mentionedMemberIds });
+            setShowVoiceModal(false);
+          }}
+          visible={showVoiceModal}
+        />
+      )}
+      voiceTestID="new-memory-voice-trigger"
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 10,
-    paddingBottom: 0,
-  },
-  headerTextBtn: {
-    padding: 4,
-    minWidth: 48,
-    alignItems: 'center',
-  },
-  cancelText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 16,
-    color: colors.primary,
-  },
-  saveText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 16,
-    color: colors.primary,
-  },
-  saveTextDisabled: {
-    color: colors.ink3,
-  },
-  typePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingVertical: 5,
-    paddingHorizontal: 11,
-  },
-  typePillText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 12,
-  },
-  body: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingBottom: 8,
-  },
-  datePillWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: 14,
-    marginBottom: 4,
-  },
   dateSourceHint: {
     fontFamily: fonts.sans,
     fontSize: 12,
-    color: colors.ink3,
-  },
-  textarea: {
-    flex: 1,
-    fontFamily: fonts.display,
-    fontSize: 24,
-    lineHeight: 24 * 1.35,
-    color: colors.ink,
-    backgroundColor: 'transparent',
-    textAlignVertical: 'top',
-  },
-  textareaCaption: {
-    flex: 0,
-    flexGrow: 0,
-    minHeight: 96,
-    maxHeight: 200,
-  },
-  mediaWrap: {
-    flex: 1,
-    minHeight: 160,
-    marginBottom: spacing.md,
-  },
-  wordCount: {
-    fontFamily: 'SpaceMono',
-    fontSize: 11,
-    color: colors.ink3,
-    textAlign: 'right',
-    marginBottom: spacing.md,
-  },
-  toolbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 13,
-    paddingBottom: 28,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  toolbarIconBtn: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toolbarIconBtnDisabled: {
-    opacity: 0.4,
-  },
-  toolbarIconBtnPressed: {
-    opacity: 0.7,
-  },
-  toolbarIconFallback: {
-    fontSize: 20,
     color: colors.ink3,
   },
   toggleRow: {
@@ -803,10 +611,5 @@ const styles = StyleSheet.create({
     color: colors.ink2,
     fontFamily: fonts.sans,
     fontSize: 13,
-  },
-  errorText: {
-    fontFamily: fonts.sans,
-    fontSize: 13,
-    color: colors.error,
   },
 });

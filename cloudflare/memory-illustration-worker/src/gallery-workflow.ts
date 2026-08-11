@@ -18,6 +18,7 @@ import type {
   GalleryClusterInput,
   GalleryPreviewAsset,
   GallerySkipReason,
+  GalleryVisionValidationFailure,
   GalleryWorkflowDispatchPayload,
   VisionUsage,
 } from './types';
@@ -26,6 +27,15 @@ const BRIDGE_ATTEMPTS = 3;
 const BRIDGE_STEP_RETRIES = { limit: 3, delay: '2 seconds', backoff: 'exponential' } as const;
 const MAX_WORKER_IMAGES_PER_CLUSTER = 10;
 const MAX_PREVIEW_BYTES = 1_500_000;
+/**
+ * Groups below this confidence are dropped before publication; a cluster
+ * whose groups are all dropped this way publishes as a `low_confidence` skip
+ * instead of staging a weak card. No settings object reaches the Worker's
+ * chunk input yet (`GalleryChunkInput` carries no per-run admission fields),
+ * so this stays a fixed constant. Promote it to an optional bridge-supplied
+ * override — falling back to this constant — once one does.
+ */
+const DEFAULT_GALLERY_MIN_CONFIDENCE = 0.6;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PREVIEW_KEY_PATTERN = /^[0-9a-f-]{36}\/gallery-import\/[0-9a-f-]{36}\/previews\/[0-9a-f-]{36}\.jpg$/i;
 
@@ -113,6 +123,23 @@ function validCluster(cluster: GalleryClusterInput, maxImages: number): boolean 
     cluster.assets.every((asset) => validAsset(asset, cluster));
 }
 
+/**
+ * Minimum viable server-side dedup: drops later assets within one cluster
+ * that share an earlier asset's expected byte hash, keeping the first
+ * occurrence. This is exact-hash only — perceptual/near-duplicate detection
+ * stays out of scope for this fix.
+ */
+function dedupeClusterAssets(cluster: GalleryClusterInput): GalleryClusterInput {
+  const seenHashes = new Set<string>();
+  const assets = cluster.assets.filter((asset) => {
+    const hash = asset.expectedSha256.toLowerCase();
+    if (seenHashes.has(hash)) return false;
+    seenHashes.add(hash);
+    return true;
+  });
+  return assets.length === cluster.assets.length ? cluster : { ...cluster, assets };
+}
+
 async function loadClusterPreviews(
   env: Env,
   cluster: GalleryClusterInput,
@@ -196,8 +223,17 @@ export async function processGalleryChunk(env: Env, chunkId: string): Promise<Ga
 
   let stagedCandidates = 0;
   let skippedClusters = 0;
-  for (const cluster of chunk.clusters) {
-    if (!validCluster(cluster, chunk.maxImagesPerCluster)) throw new Error('INVALID_GALLERY_CLUSTER_INPUT');
+  for (const rawCluster of chunk.clusters) {
+    if (!validCluster(rawCluster, chunk.maxImagesPerCluster)) throw new Error('INVALID_GALLERY_CLUSTER_INPUT');
+    const cluster = dedupeClusterAssets(rawCluster);
+    if (cluster.assets.length < 1) {
+      // Dedup only drops later duplicates and always keeps one asset per
+      // hash, so an empty cluster cannot occur today; this guards a future
+      // dedup strategy that could remove every asset in a cluster.
+      await publishCluster(env, chunkId, rawCluster.clusterSignature, [], 'invalid_preview');
+      skippedClusters += 1;
+      continue;
+    }
     let previews: ValidatedGalleryPreview[];
     try {
       previews = await loadClusterPreviews(env, cluster);
@@ -209,6 +245,12 @@ export async function processGalleryChunk(env: Env, chunkId: string): Promise<Ga
     }
 
     let published = false;
+    // A schema-conformant-but-invalid response is a DEFINITE completed call
+    // (never ambiguous), so it may reuse this cluster's existing attempt
+    // budget for exactly one corrective retry -- distinct from the 429/5xx
+    // retry path below, which may use the remaining budget without this cap.
+    let malformedRetryUsed = false;
+    let pendingCorrection: GalleryVisionValidationFailure | null = null;
     for (let attemptNumber = 1; attemptNumber <= chunk.maxProviderAttempts; attemptNumber += 1) {
       const reservation = await bridgeRetry(() => reserveGalleryAttempt(env, {
         chunkId, clusterSignature: cluster.clusterSignature, attemptNumber,
@@ -233,9 +275,12 @@ export async function processGalleryChunk(env: Env, chunkId: string): Promise<Ga
       const timeout = setTimeout(() => controller.abort(), Math.min(remaining, 120_000));
       let result: Awaited<ReturnType<typeof curateGalleryCluster>>;
       try {
+        const correctionForThisAttempt = pendingCorrection;
+        pendingCorrection = null;
         try {
           result = await curateGalleryCluster(
             env, cluster, previews, chunk.captionLocale, chunk.captionInstructions, controller.signal,
+            correctionForThisAttempt,
           );
         } catch (error) {
           if (error instanceof GalleryVisionError && error.ambiguous) {
@@ -252,7 +297,15 @@ export async function processGalleryChunk(env: Env, chunkId: string): Promise<Ga
             }
             throw usageError;
           }
-          if (error instanceof GalleryVisionError && error.retryable && attemptNumber < chunk.maxProviderAttempts) continue;
+          if (error instanceof GalleryVisionError && error.code === 'VISION_RETRYABLE' && attemptNumber < chunk.maxProviderAttempts) continue;
+          if (error instanceof GalleryVisionError && error.code === 'VISION_MALFORMED_RESPONSE' &&
+            !malformedRetryUsed && attemptNumber < chunk.maxProviderAttempts) {
+            // Exactly one corrective retry per cluster, regardless of how
+            // much of the shared attempt budget remains.
+            malformedRetryUsed = true;
+            pendingCorrection = error.validationFailureCode;
+            continue;
+          }
           if (error instanceof GalleryVisionError && error.code === 'VISION_REFUSAL') {
             await publishCluster(env, chunkId, cluster.clusterSignature, [], 'provider_refusal');
             skippedClusters += 1;
@@ -260,6 +313,15 @@ export async function processGalleryChunk(env: Env, chunkId: string): Promise<Ga
             break;
           }
           if (error instanceof GalleryVisionError && error.code === 'VISION_MALFORMED_RESPONSE') {
+            // Closed-code diagnostic only -- never the raw response, prompt,
+            // or caption content -- so future prompt/schema tuning has data
+            // on which validation rule the provider keeps missing.
+            console.warn('gallery_curation_invalid_provider_output', {
+              chunkId,
+              clusterSignature: cluster.clusterSignature,
+              validationFailureCode: error.validationFailureCode ?? 'unknown',
+              correctiveRetryAttempted: malformedRetryUsed,
+            });
             await publishCluster(env, chunkId, cluster.clusterSignature, [], 'invalid_provider_output');
             skippedClusters += 1;
             published = true;
@@ -278,15 +340,14 @@ export async function processGalleryChunk(env: Env, chunkId: string): Promise<Ga
           }
           throw error;
         }
-        await publishCluster(
-          env,
-          chunkId,
-          cluster.clusterSignature,
-          result.groups,
-          result.groups.length === 0 ? closedSkipReason(result.skipReason) : null,
-        );
-        stagedCandidates += result.groups.length;
-        if (result.groups.length === 0) skippedClusters += 1;
+        const acceptedGroups = result.groups.filter((group) => group.confidence >= DEFAULT_GALLERY_MIN_CONFIDENCE);
+        const droppedAllForLowConfidence = result.groups.length > 0 && acceptedGroups.length === 0;
+        const skipReason = acceptedGroups.length === 0
+          ? (droppedAllForLowConfidence ? 'low_confidence' : closedSkipReason(result.skipReason))
+          : null;
+        await publishCluster(env, chunkId, cluster.clusterSignature, acceptedGroups, skipReason);
+        stagedCandidates += acceptedGroups.length;
+        if (acceptedGroups.length === 0) skippedClusters += 1;
         published = true;
         break;
       } finally {

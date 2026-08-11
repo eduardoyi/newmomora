@@ -5,7 +5,7 @@ import {
   GALLERY_IMPORT_CHECKPOINT_MAX_BYTES,
   GALLERY_IMPORT_CHECKPOINT_VERSION,
 } from '@/constants/gallery-import';
-import type { LocalGalleryAsset } from '@/utils/gallery-import-scanner';
+import type { GalleryCorpusMode, LocalGalleryAsset } from '@/utils/gallery-import-scanner';
 
 const STORAGE_PREFIX = 'gallery-import-checkpoint';
 const locks = new Map<string, Promise<void>>();
@@ -28,7 +28,15 @@ export interface GalleryImportCheckpointChunk {
   ordinal: number;
   clusters: Array<{ clusterSignature: string; assetTokens: string[] }>;
   chunkId?: string;
-  status: 'planned' | 'registered' | 'uploaded' | 'dispatched';
+  /** 'failed': a register/dispatch call for this chunk was refused or threw
+   * and the runner gave up on this pass. Deliberately distinct from
+   * 'planned' -- see gallery-import-deck.ts's galleryImportStillComingCount,
+   * which reads every non-'dispatched' chunk as still forthcoming. Leaving a
+   * refused chunk 'planned' made the "+N coming" counter promise progress
+   * that would never arrive (device-observed: a 16-chunk run that lost
+   * chunks 5+ to a server race still showed "+51 coming" indefinitely). A
+   * resume attempt retries a 'failed' chunk exactly like a 'planned' one. */
+  status: 'planned' | 'registered' | 'uploaded' | 'dispatched' | 'failed';
   previewUploads: Array<{
     assetToken: string;
     previewWidth: number;
@@ -46,6 +54,9 @@ export interface GalleryImportCheckpoint {
   runCapability: string;
   algorithmVersion: string;
   status: 'scanning' | 'processing' | 'reviewing' | 'paused';
+  /** Snapshotted at run creation (see gallery-import-runner.ts's toCheckpoint).
+   * Optional -- absent on checkpoints saved before this field existed. */
+  permissionMode?: 'full' | 'limited';
   assetByToken: Record<string, GalleryImportCheckpointAsset>;
   uploadedAssetTokens: string[];
   clusterSignatures: string[];
@@ -54,6 +65,31 @@ export interface GalleryImportCheckpoint {
   deckTotal?: number;
   deckCursor: number;
   approvalOutbox: GalleryImportApprovalOutboxItem[];
+  /**
+   * Progressive deepening (gallery-import-frontier.ts): whether this run's
+   * scan reached the true bottom of the photo library without being cut off
+   * by the enumeration budget (GalleryScanSnapshot.reachedLibraryEnd,
+   * captured once at scan time). Read back once every chunk below has left
+   * 'planned' status, to decide whether the persisted frontier's
+   * completedLibrary flag should flip true. Purely additive and optional --
+   * this is why GALLERY_IMPORT_CHECKPOINT_VERSION did NOT need to bump for
+   * it: `isCheckpoint` below only requires the pre-existing fields, so an
+   * older in-flight checkpoint that lacks this key still loads and resumes
+   * normally, it just does not contribute to frontier bookkeeping (safe --
+   * the frontier simply stays wherever it already was for that run).
+   */
+  scanReachedLibraryEnd?: boolean;
+  /**
+   * Progressive deepening: the asset universe (GalleryCorpusMode) this run's
+   * scan actually drew from, captured once at scan time. Read back
+   * alongside `scanReachedLibraryEnd` once every chunk below has settled,
+   * so the frontier merge can detect a corpus-mode change (the Android
+   * camera album appearing/disappearing) and reset instead of mixing
+   * coverage across corpora -- see gallery-import-frontier.ts. Same
+   * additive/optional reasoning as `scanReachedLibraryEnd`: no checkpoint
+   * version bump needed.
+   */
+  scanCorpusMode?: GalleryCorpusMode;
   updatedAt: string;
 }
 

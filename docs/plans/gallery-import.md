@@ -86,6 +86,9 @@ The direction survives, with these corrections promoted to requirements:
 | Candidate text model | One caption/content field; no separate user-facing or persisted title. Operational labels derive a bounded excerpt. |
 | Permission corpus | Photo access is snapshotted before run creation. Later grants apply to a later run. |
 | Import provenance | Persist `gallery_import` creation provenance on the committed memory; never display it. |
+| Import corpus scope | **Camera captures only** (2026-08-11 user decision): "We only care about what pictures people take with the phone. We don't care about WhatsApp, iMessage, downloads, etc." Supersedes any earlier pre-filter wording that treated non-camera saves as in scope. Android scopes both scan phases to the device's exact-title `'Camera'` album, falling back to full-library + date-plausibility scanning when no such album resolves. iOS has no camera-source signal and is unchanged (full library; a saved WhatsApp photo only enters the iOS library via an explicit user save). |
+| Date-less-photo fallback | **Rejected** (2026-08-11, same decision as above). No date-inference fallback for photos without a plausible capture date (e.g. some WhatsApp/forwarded images); `isPlausibleCaptureTime`'s existing date-plausibility filter is unchanged. |
+| Enumeration ceiling / progressive deepening | **2026-08-11.** Raised `GALLERY_IMPORT_MAX_ENUMERATED_ASSETS` 2,000 → 4,000 per scan pass; unchanged `gallery-v1` clustering algorithm and signature hash (the ceiling bounds how much of the corpus one pass reaches, not how a given cluster is formed or hashed). Added a persistent per-user+family progressive-deepening frontier so successive runs walk backward through the whole corpus in bounded bites instead of always re-covering the same newest window; it advances only after a run's chunks are confirmed registered server-side, and resets (never mixes) if the resolved corpus mode changes between runs. |
 
 ## Non-goals (v1)
 
@@ -507,6 +510,21 @@ rejects; do not hand-maintain two lists. Search matches localized display name,
 English display name, native language name where available, region, and tag.
 Language-only choices may coexist with regional choices when CLDR defines both;
 the exact tag is passed to the model.
+
+**2026-08-10 amendment (see docs/design/gallery-import/README.md):** the full
+241-entry registry above is still what's *accepted* (client `normalizeGalleryCaptionLocale`
+and the Edge Function's BCP-47 shape check both key off it, unchanged), but
+device testing showed showing all 241 in the picker was overwhelming to scroll.
+The picker itself now browses/searches a curated ~48-entry presentation subset
+(`curatedGalleryCaptionLocaleTags` in `src/constants/gallery-caption-locales.ts`)
+of major world languages plus meaningful regional variants; "do not hand-maintain
+two lists" above refers to the accept/validate list, not this presentation
+trim. A saved language outside the curated subset still resolves to its real
+name (never a bare tag) wherever it's shown, via the full registry, not the
+curated one. Display names themselves are also a static hand-authored table,
+not CLDR at runtime: Hermes on-device silently echoes the input tag back
+instead of throwing when it lacks ICU locale data, so `Intl.DisplayNames` is
+an enhancement layered over the static table, never its source of truth.
 
 Custom instructions are owner-only, hard-capped (target 500 characters), and
 may shape only language/tone/vocabulary. The server rejects control characters

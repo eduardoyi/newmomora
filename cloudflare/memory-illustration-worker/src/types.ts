@@ -200,6 +200,25 @@ export type GallerySkipReason =
   | 'invalid_preview'
   | 'provider_refusal';
 
+/**
+ * Closed diagnostic code for WHY a model response failed
+ * `validateGalleryVisionOutput` -- never the raw response, caption, or prompt
+ * content. Used to (a) target a one-shot corrective retry with a specific
+ * rule reminder and (b) log which rule failed for later prompt tuning.
+ */
+export type GalleryVisionValidationFailure =
+  | 'malformed_envelope'
+  | 'invalid_caption'
+  | 'invalid_date'
+  | 'date_out_of_range'
+  | 'invalid_emotion'
+  | 'invalid_confidence'
+  | 'invalid_tokens'
+  | 'unknown_token'
+  | 'duplicate_token_across_groups'
+  | 'invalid_skip_reason'
+  | 'skip_reason_with_groups';
+
 /** Validated only in memory; this structure is never a persisted step output. */
 export interface GalleryCandidateDraft {
   caption: string;
