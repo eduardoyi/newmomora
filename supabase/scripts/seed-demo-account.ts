@@ -408,7 +408,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function withRetries<T>(
+export async function withRetries<T>(
   operation: () => Promise<T>,
   retries = 2,
 ): Promise<T> {
@@ -430,13 +430,13 @@ async function withRetries<T>(
   throw lastError;
 }
 
-function createAdmin(): SupabaseClient {
+export function createAdmin(): SupabaseClient {
   return createClient(supabaseUrl(), requireEnv("SUPABASE_SERVICE_ROLE_KEY"), {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
 
-async function findUserByEmail(admin: SupabaseClient, email: string) {
+export async function findUserByEmail(admin: SupabaseClient, email: string) {
   for (let page = 1; page <= 20; page += 1) {
     const { data, error } = await admin.auth.admin.listUsers({
       page,
@@ -490,7 +490,7 @@ async function provisionDemoUser(
   return data.user;
 }
 
-async function createUserClient(
+export async function createUserClient(
   admin: SupabaseClient,
   email: string,
 ): Promise<{ user: SupabaseClient; userId: string }> {
@@ -561,7 +561,7 @@ async function findOrCreateFamily(
   return (data as { id: string }).id;
 }
 
-async function generateImage(
+export async function generateImage(
   prompt: string,
   quality: "medium" | "high",
   referenceImages: Uint8Array[] = [],
@@ -621,7 +621,7 @@ async function generateImage(
   return Uint8Array.from(raw, (character) => character.charCodeAt(0));
 }
 
-async function assertGeneratedImage(bytes: Uint8Array): Promise<void> {
+export async function assertGeneratedImage(bytes: Uint8Array): Promise<void> {
   if (bytes.byteLength > MAX_IMAGE_BYTES) {
     throw new Error("Generated image exceeds 20 MB");
   }
@@ -693,7 +693,7 @@ async function waitForStatus(
   throw new Error("Timed out waiting for generation");
 }
 
-async function invokeUntilReady(
+export async function invokeUntilReady(
   getStatus: () => Promise<string | null>,
   invoke: () => Promise<void>,
   attempts: number,
