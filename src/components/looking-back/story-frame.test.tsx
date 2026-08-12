@@ -110,6 +110,8 @@ describe('StoryFrame video lifecycle', () => {
     expect(screen.getByTestId('looking-back-image').props.source).toEqual([{ uri: 'https://signed/photo-original', cacheKey: 'photo-original' }]);
     expect(screen.getByTestId('looking-back-image').props.transition).toEqual({ duration: 0 });
     expect(onUnavailable).not.toHaveBeenCalled();
+    fireEvent(screen.getByTestId('looking-back-image'), 'display');
+    expect(onReady).toHaveBeenCalledTimes(1);
     fireEvent(screen.getByTestId('looking-back-image'), 'load', { nativeEvent: {} });
     expect(onReady).toHaveBeenCalledTimes(1);
   });

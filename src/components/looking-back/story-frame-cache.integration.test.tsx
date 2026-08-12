@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanupAsync, render, renderHook, waitFor } from '@testing-library/react-native';
+import { act, cleanupAsync, render, renderHook, waitFor } from '@testing-library/react-native';
 import { Image } from 'expo-image';
 import type { ReactNode } from 'react';
 
@@ -107,5 +107,52 @@ describe('StoryFrame media warm-up cache regression', () => {
     expect(mockedGetMediaUrls).toHaveBeenCalledTimes(serviceCallCountBeforeMount);
     expect(screen.queryByTestId('looking-back-media-loading')).toBeNull();
     expect(screen.getByTestId('looking-back-image')).toBeTruthy();
+  });
+
+  it('does not leave the first visible photo on LoadingPlate while the package warm-up query is in flight', async () => {
+    const frame = buildPhotoFrame('frame-0', 'memory-0-version', 'photo-0-original', 'photo-0-preview');
+    let resolveMediaUrls: ((result: Awaited<ReturnType<typeof getMediaUrls>>) => void) | undefined;
+    mockedGetMediaUrls.mockImplementation(() => new Promise((resolve) => {
+      resolveMediaUrls = resolve;
+    }));
+
+    const warmup = renderHook(
+      () => useLookingBackMediaWarmup({ frames: [frame], phase: 'intro', frameIndex: 0 }),
+      { wrapper: wrapperFor(queryClient) },
+    );
+    const screen = render(
+      <QueryClientProvider client={queryClient}>
+        <StoryFrame
+          frame={frame}
+          isPaused={false}
+          muted
+          onBuffering={() => {}}
+          onReady={() => {}}
+          onUnavailable={() => {}}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByTestId('looking-back-media-loading')).toBeTruthy();
+    await waitFor(() => expect(mockedGetMediaUrls).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      resolveMediaUrls?.({
+        data: {
+          urls: {
+            'photo-0-original': 'https://signed.example/photo-0-original',
+            'photo-0-preview': 'https://signed.example/photo-0-preview',
+          },
+          expiresIn: 3600,
+        },
+        error: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('looking-back-media-loading')).toBeNull();
+      expect(screen.getByTestId('looking-back-image')).toBeTruthy();
+    });
+    warmup.unmount();
   });
 });

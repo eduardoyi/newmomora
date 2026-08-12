@@ -220,6 +220,7 @@ function ReliableStoryImage({
   const [sourceIndex, setSourceIndex] = useState(0);
   const [retryCycle, setRetryCycle] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
+  const readySourceRef = useRef<string | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
   const source = sources[Math.min(sourceIndex, Math.max(0, sources.length - 1))];
@@ -250,12 +251,20 @@ function ReliableStoryImage({
     }, IMAGE_RETRY_BACKOFF_MS[retryCycle]);
   }, [onUnavailable, refetch, retryCycle, sourceIndex, sources.length]);
 
+  const handleReady = useCallback(() => {
+    const sourceIdentity = source ? `${source.key}:${retryCycle}` : null;
+    if (!sourceIdentity || readySourceRef.current === sourceIdentity) return;
+    readySourceRef.current = sourceIdentity;
+    onReady();
+  }, [onReady, retryCycle, source]);
+
   if (isRetrying || !source) return <LoadingPlate />;
   return <Image
     key={`${source.key}:${retryCycle}`}
     contentFit="contain"
     onError={handleError}
-    onLoad={onReady}
+    onDisplay={handleReady}
+    onLoad={handleReady}
     priority="high"
     source={mediaImageSource(source.url, source.key)}
     style={[styles.media, isIllustration && styles.illustrationInner]}
