@@ -3,6 +3,8 @@ import { Platform } from 'react-native';
 
 import { StoryFrame } from './story-frame';
 
+import { resetLookingBackImagePreloadForTests } from '@/utils/looking-back-image-preload';
+
 jest.mock('expo-image', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const React = require('react');
@@ -37,6 +39,7 @@ describe('StoryFrame video lifecycle', () => {
   const originalPlatformOs = Platform.OS;
 
   beforeEach(() => {
+    resetLookingBackImagePreloadForTests();
     Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
     listeners.clear();
     jest.clearAllMocks();

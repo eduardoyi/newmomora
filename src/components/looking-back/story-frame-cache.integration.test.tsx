@@ -9,6 +9,7 @@ import { StoryFrame } from './story-frame';
 import { useLookingBackMediaWarmup } from '@/hooks/useLookingBackMediaWarmup';
 import { getMediaUrls } from '@/services/media';
 import type { LookingBackFrame } from '@/utils/looking-back-frames';
+import { resetLookingBackImagePreloadForTests } from '@/utils/looking-back-image-preload';
 
 jest.mock('@/services/media', () => ({
   getMediaUrls: jest.fn(),
@@ -19,7 +20,8 @@ jest.mock('expo-image', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { View } = require('react-native');
   const loadAsync = jest.fn(async () => ({ release: jest.fn() }));
-  const ImageComponent = (props: Record<string, unknown>) => React.createElement(View, props);
+  const ImageComponent = React.memo((props: Record<string, unknown>) => React.createElement(View, props));
+  ImageComponent.displayName = 'MockExpoImage';
   return { Image: Object.assign(ImageComponent, { loadAsync }) };
 });
 jest.mock('expo-video', () => ({
@@ -50,6 +52,25 @@ function buildPhotoFrame(
   } as LookingBackFrame;
 }
 
+function buildVideoFrame(
+  id: string,
+  version: string,
+  objectKey: string,
+  previewKey: string,
+): LookingBackFrame {
+  return {
+    id,
+    index: Number(id.replace(/\D/g, '')) || 0,
+    chapterIndex: 0,
+    assetIndex: 0,
+    assetCount: 1,
+    kind: 'video',
+    durationMs: 4600,
+    memory: { id: `${id}-memory`, updated_at: version },
+    asset: { object_key: objectKey, preview_object_key: previewKey, aspect_ratio: 16 / 9 },
+  } as LookingBackFrame;
+}
+
 function wrapperFor(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -61,6 +82,7 @@ describe('StoryFrame media warm-up cache regression', () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    resetLookingBackImagePreloadForTests();
     Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
     jest.clearAllMocks();
     mockedLoadAsync.mockImplementation(async () => ({ release: jest.fn() }));
@@ -77,6 +99,7 @@ describe('StoryFrame media warm-up cache regression', () => {
   });
 
   afterEach(async () => {
+    resetLookingBackImagePreloadForTests();
     await cleanupAsync();
     queryClient.clear();
     Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatformOs });
@@ -162,6 +185,96 @@ describe('StoryFrame media warm-up cache regression', () => {
     });
     fireEvent(screen.getByTestId('looking-back-image'), 'display');
     expect(onReady).toHaveBeenCalledTimes(1);
+    warmup.unmount();
+  });
+
+  it('keeps the native image source stable across viewer rerenders', async () => {
+    const frame = buildPhotoFrame('frame-0', 'memory-0-version', 'photo-0-original', 'photo-0-preview');
+    const renderFrame = () => (
+      <QueryClientProvider client={queryClient}>
+        <StoryFrame
+          frame={frame}
+          isPaused={false}
+          muted
+          onBuffering={() => {}}
+          onReady={() => {}}
+          onUnavailable={() => {}}
+        />
+      </QueryClientProvider>
+    );
+    const screen = render(renderFrame());
+
+    await waitFor(() => expect(screen.getByTestId('looking-back-image')).toBeTruthy());
+    const firstImage = screen.getByTestId('looking-back-image');
+    const firstSource = firstImage.props.source;
+    const firstStyle = firstImage.props.style;
+
+    screen.rerender(renderFrame());
+
+    expect(screen.getByTestId('looking-back-image').props.source).toBe(firstSource);
+    expect(screen.getByTestId('looking-back-image').props.style).toBe(firstStyle);
+  });
+
+  it('keeps the native video-poster source stable across viewer rerenders', async () => {
+    const frame = buildVideoFrame('frame-0', 'memory-0-version', 'video-0-original', 'video-0-poster');
+    const renderFrame = () => (
+      <QueryClientProvider client={queryClient}>
+        <StoryFrame
+          frame={frame}
+          isPaused={false}
+          muted
+          onBuffering={() => {}}
+          onReady={() => {}}
+          onUnavailable={() => {}}
+        />
+      </QueryClientProvider>
+    );
+    const screen = render(renderFrame());
+
+    await waitFor(() => expect(screen.getByTestId('looking-back-video-placeholder')).toBeTruthy());
+    const firstSource = screen.getByTestId('looking-back-video-placeholder').props.source;
+
+    screen.rerender(renderFrame());
+
+    expect(screen.getByTestId('looking-back-video-placeholder').props.source).toBe(firstSource);
+  });
+
+  it('shares the first visible iOS image load with the concurrent warm-up request', async () => {
+    const frame = buildPhotoFrame('frame-0', 'memory-0-version', 'photo-0-original', 'photo-0-preview');
+    let resolveLoad: ((imageRef: { release: jest.Mock }) => void) | undefined;
+    mockedLoadAsync.mockImplementation(() => new Promise((resolve) => {
+      resolveLoad = resolve as (imageRef: { release: jest.Mock }) => void;
+    }) as ReturnType<typeof Image.loadAsync>);
+
+    const warmup = renderHook(
+      () => useLookingBackMediaWarmup({ frames: [frame], phase: 'intro', frameIndex: 0 }),
+      { wrapper: wrapperFor(queryClient) },
+    );
+    const onReady = jest.fn();
+    const screen = render(
+      <QueryClientProvider client={queryClient}>
+        <StoryFrame
+          frame={frame}
+          isPaused={false}
+          muted
+          onBuffering={() => {}}
+          onReady={onReady}
+          onUnavailable={() => {}}
+        />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('looking-back-image')).toBeTruthy());
+    await waitFor(() => expect(mockedLoadAsync).toHaveBeenCalledTimes(1));
+    expect(onReady).not.toHaveBeenCalled();
+
+    const release = jest.fn();
+    await act(async () => {
+      resolveLoad?.({ release });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
+    expect(release).toHaveBeenCalledTimes(1);
     warmup.unmount();
   });
 

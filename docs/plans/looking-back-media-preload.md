@@ -12,9 +12,10 @@ Facts the plan relies on (verified 2026-08-12):
 
 - **Signing layer.** All media URLs come from the `get-media-url` Edge Function via
   `getMediaUrls` in `src/services/media.ts`. A client-side coalescer (`media.ts:113`)
-  batches every `getMediaUrls` call made within a 25 ms window into deduped chunks of
-  ≤50 keys (`MAX_BATCH_KEYS`, mirrors the server cap), and self-heals omitted keys with
-  bounded retries. Signed URLs expire after 60 min.
+  batches same-turn `getMediaUrls` calls into deduped chunks of ≤50 keys
+  (`MAX_BATCH_KEYS`, mirrors the server cap), and self-heals omitted keys with bounded
+  retries. The coalescer flushes on a microtask because iOS can suspend short timers
+  during the first viewer transition; signed URLs expire after 60 min.
 - **React-query layer.** `useMediaUrls(keys, cacheVersion)` in `src/hooks/useMediaUrls.ts`
   creates ONE query per call keyed on `['media-urls', sortedKeys.join('|'), cacheVersion]`,
   `staleTime` 50 min, `gcTime` 55 min. `cacheVersion` is the owning row's `updated_at`
@@ -146,7 +147,7 @@ increasing foreground generation from its existing `AppState` listener.
     offline warm-up cannot become an unhandled promise rejection. Frame-order issuance
     only *tends to* influence early chunks: the batcher's pending set is module-global
     (`media.ts:132`) and ambient callers (e.g. Timeline thumbs still mounted under the
-    viewer route) can share the same 25 ms flush. Do not build a priority mechanism; the
+    viewer route) can share the same-turn flush. Do not build a priority mechanism; the
     load-bearing property is "no new signing call after a completed warm-up", not chunk
     order.
   - Video frames' raw `object_key` is signed as part of their group (it's the frame's
@@ -294,7 +295,8 @@ currently allows only one visible video player at a time.
   asynchronous query-cache arrival; duration-only frame changes; signed-URL replacement;
   out-of-order replacements; A→B→A lease reuse; parent/child unmount ordering; and rapid
   navigation cannot double-release.
-- `src/services/media.test.ts`: unchanged (batcher untouched).
+- `src/services/media.test.ts`: retain the existing batching/error/retry coverage and add
+  a regression proving a same-turn batch settles without relying on a native timer callback.
 - Full `npm test` as the regression net for the 15 `useMediaUrl(s)` call sites (only the
   internal options extraction touches them).
 
@@ -346,8 +348,8 @@ currently allows only one visible video player at a time.
 - **Grouping drift between warm-up and StoryFrame** would silently reintroduce the bug.
   Mitigated structurally: both derive keys from `frameMediaKeys` and query options from
   `mediaUrlsQueryOptions`; the new focused regression test pins the cache-hit behavior.
-- **Ambient batch interleaving.** Other screens' `useMediaUrl` calls in the same 25 ms
-  window share the flush and can spread keys across chunks. Harmless beyond chunk-order
+- **Ambient batch interleaving.** Other screens' `useMediaUrl` calls in the same JavaScript
+  turn share the flush and can spread keys across chunks. Harmless beyond chunk-order
   aesthetics; explicitly not worth a priority mechanism.
 - **Warm-up bandwidth.** A package has ≤10 memories, but those can expand to 100 media
   frames. Byte warming is therefore a rolling current-plus-two-media-frame window with

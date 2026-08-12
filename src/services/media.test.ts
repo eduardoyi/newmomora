@@ -166,7 +166,7 @@ describe('getMediaUrls batching', () => {
     jest.clearAllMocks();
   });
 
-  it('coalesces concurrent calls made within the batch window into one invocation', async () => {
+  it('coalesces concurrent calls made in one JavaScript turn into one invocation', async () => {
     jest.useFakeTimers();
     mockedInvoke.mockResolvedValue({
       data: {
@@ -192,6 +192,29 @@ describe('getMediaUrls batching', () => {
     expect(resultB.error).toBeNull();
     expect(resultB.data?.urls['key-b']).toBe('https://example.com/b');
     expect(resultB.data?.urls['key-a']).toBe('https://example.com/a');
+  });
+
+  it('flushes a same-turn batch without relying on a native timer callback', async () => {
+    jest.useFakeTimers();
+    mockedInvoke.mockResolvedValue({
+      data: {
+        urls: { 'key-a': 'https://example.com/a' },
+        expiresIn: 300,
+      },
+      error: null,
+    } as never);
+
+    const call = getMediaUrls(['key-a']);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(call).resolves.toEqual({
+      data: { urls: { 'key-a': 'https://example.com/a' }, expiresIn: 300 },
+      error: null,
+    });
+    expect(mockedInvoke).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
   });
 
   it('splits more than 50 merged keys across multiple invocations and combines results for a spanning caller', async () => {
@@ -259,7 +282,7 @@ describe('getMediaUrls batching', () => {
     expect(resultB).toEqual({ data: null, error: { message: 'boom' } });
   });
 
-  it('does not merge sequential calls made outside the batch window', async () => {
+  it('does not merge sequential calls made in later JavaScript turns', async () => {
     jest.useFakeTimers();
     mockedInvoke.mockResolvedValueOnce({
       data: { urls: { 'key-a': 'https://example.com/a' }, expiresIn: 300 },
@@ -311,7 +334,7 @@ describe('getMediaUrls batching', () => {
       } as never);
 
     const call = getMediaUrls(['key-a', 'key-b']);
-    await jest.advanceTimersByTimeAsync(25); // batch window flush -- initial invoke
+    await jest.advanceTimersByTimeAsync(25); // initial invoke flush
     await jest.advanceTimersByTimeAsync(300); // first retry backoff
     const result = await call;
 
@@ -331,7 +354,7 @@ describe('getMediaUrls batching', () => {
     } as never);
 
     const call = getMediaUrls(['key-gone']);
-    await jest.advanceTimersByTimeAsync(25); // batch window flush -- initial invoke
+    await jest.advanceTimersByTimeAsync(25); // initial invoke flush
     await jest.advanceTimersByTimeAsync(300); // first retry backoff
     await jest.advanceTimersByTimeAsync(600); // second retry backoff
     const result = await call;
@@ -341,6 +364,27 @@ describe('getMediaUrls batching', () => {
     // Bounded: the initial request plus a small, fixed number of retries --
     // not unbounded polling for a key that's genuinely never coming back.
     expect(mockedInvoke).toHaveBeenCalledTimes(3);
+  });
+
+  it('settles callers when an omitted-key retry throws unexpectedly', async () => {
+    jest.useFakeTimers();
+    mockedInvoke
+      .mockResolvedValueOnce({
+        data: { urls: {}, expiresIn: 300 },
+        error: null,
+      } as never)
+      .mockRejectedValueOnce(new Error('network down'));
+
+    const call = getMediaUrls(['key-gone']);
+    await jest.advanceTimersByTimeAsync(25); // initial invoke flush
+    await jest.advanceTimersByTimeAsync(300); // first retry backoff
+    const result = await call;
+
+    expect(result).toEqual({
+      data: { urls: {}, expiresIn: 300 },
+      error: null,
+    });
+    expect(mockedInvoke).toHaveBeenCalledTimes(2);
   });
 
   it('does not retry keys that were already present in the first response', async () => {

@@ -1,11 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Image } from 'expo-image';
 import { useEffect, useMemo, useRef } from 'react';
 
 import { mediaUrlsQueryOptions } from '@/hooks/useMediaUrls';
 import type { LookingBackFrame } from '@/utils/looking-back-frames';
 import { frameMediaKeys } from '@/utils/looking-back-frames';
 import { mediaImageSource } from '@/utils/media-image-source';
+import { preloadLookingBackImage } from '@/utils/looking-back-image-preload';
 
 const LOOKAHEAD_MEDIA_FRAME_COUNT = 3;
 const MAX_CONCURRENT_IMAGE_WARMS = 2;
@@ -111,12 +111,8 @@ function drainWarmQueue(run: WarmupRun, coordinator: WarmupCoordinator): void {
     coordinator.activeLoadCount += 1;
     let didWarm = false;
     void Promise.resolve()
-      .then(() => Image.loadAsync(mediaImageSource(url, key)))
-      .then((imageRef) => {
-        // The native reference is only needed long enough to populate the
-        // disk cache. Retaining it while warming a large package can create a
-        // decoded-bitmap spike; the stable cacheKey remains reusable.
-        imageRef.release();
+      .then(() => preloadLookingBackImage(mediaImageSource(url, key)))
+      .then(() => {
         didWarm = true;
         run.warmedKeys.add(key);
         coordinator.warmedKeys.add(key);
@@ -230,7 +226,7 @@ export function useLookingBackMediaWarmup({
       .map(({ frame, queryKeys }) => {
         try {
           // Issue every request synchronously before observing any result so
-          // media.ts's 25 ms coalescer sees the whole package in one window.
+          // media.ts's same-turn coalescer sees the whole package together.
           return queryClient.fetchQuery(
             mediaUrlsQueryOptions(queryKeys, frame.memory.updated_at),
           );

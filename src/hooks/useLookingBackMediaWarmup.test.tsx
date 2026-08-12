@@ -9,6 +9,7 @@ import { getMediaUrls } from '@/services/media';
 import type { LookingBackFrame } from '@/utils/looking-back-frames';
 import { frameMediaKeys } from '@/utils/looking-back-frames';
 import { mediaUrlsQueryOptions } from '@/hooks/useMediaUrls';
+import { resetLookingBackImagePreloadForTests } from '@/utils/looking-back-image-preload';
 
 jest.mock('@/services/media', () => ({
   getMediaUrls: jest.fn(),
@@ -86,6 +87,7 @@ describe('useLookingBackMediaWarmup', () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    resetLookingBackImagePreloadForTests();
     jest.clearAllMocks();
     queryClient = createQueryClient();
     mockedGetMediaUrls.mockImplementation(async (keys) => resolveMediaUrls(keys));
@@ -93,6 +95,7 @@ describe('useLookingBackMediaWarmup', () => {
   });
 
   afterEach(async () => {
+    resetLookingBackImagePreloadForTests();
     await cleanupAsync();
     queryClient.clear();
   });

@@ -113,13 +113,14 @@ export async function getUploadUrl(
 // The family/timeline screens can mount dozens of MemoryThumb rows at once,
 // each calling useMediaUrl -> getMediaUrls with its own key. Without
 // coalescing, that's one 'get-media-url' Edge Function invocation per row.
-// This batches every getMediaUrls call made within BATCH_WINDOW_MS into as
-// few Edge Function invocations as possible: keys are deduped across callers
-// and chunked at MAX_BATCH_KEYS (mirrors the server's MAX_KEYS), and each
-// caller gets back the merged result for whichever chunk(s) its keys landed
-// in -- same { data, error } shape a direct call would have returned.
+// Same-turn calls are flushed together as few Edge Function invocations as
+// possible: keys are deduped across callers and chunked at MAX_BATCH_KEYS
+// (mirrors the server's MAX_KEYS), and each caller gets back the merged result
+// for whichever chunk(s) its keys landed in -- same { data, error } shape a
+// direct call would have returned. A microtask flush is intentional: iOS can
+// suspend short timers while the first viewer transition is settling, which
+// previously left every pending media-URL query unresolved.
 const MAX_BATCH_KEYS = 50;
-const BATCH_WINDOW_MS = 25;
 
 type GetMediaUrlsResult = { data: GetMediaUrlResponse | null; error: ServiceError | null };
 
@@ -130,16 +131,13 @@ interface PendingMediaUrlCaller {
 
 let pendingKeys: Set<string> | null = null;
 let pendingCallers: PendingMediaUrlCaller[] = [];
-let batchTimer: ReturnType<typeof setTimeout> | null = null;
+let flushScheduled = false;
 
 /** Test-only: clears in-flight batcher state between test cases. */
 export function resetMediaUrlBatcherForTests(): void {
-  if (batchTimer) {
-    clearTimeout(batchTimer);
-  }
   pendingKeys = null;
   pendingCallers = [];
-  batchTimer = null;
+  flushScheduled = false;
 }
 
 async function invokeMediaUrlChunk(
@@ -215,7 +213,15 @@ async function resolveMissingKeysWithRetries(
   for (let attempt = 2; attempt <= MISSING_KEY_MAX_ATTEMPTS && remaining.length > 0; attempt++) {
     await delay(MISSING_KEY_RETRY_BACKOFF_MS[attempt - 2]);
 
-    const result = await invokeMediaUrlChunk(remaining);
+    let result: GetMediaUrlsResult;
+    try {
+      result = await invokeMediaUrlChunk(remaining);
+    } catch {
+      // An unexpected retry exception must still resolve the outer batch;
+      // leave the key omitted and let the caller's normal retry path decide
+      // whether to request it again later.
+      break;
+    }
     if (result.error || !result.data) {
       // A retry that itself errors isn't worth compounding retries on top
       // of -- stop and let whatever's still missing fall through as an
@@ -235,7 +241,6 @@ async function flushMediaUrlBatch(): Promise<void> {
   const callers = pendingCallers;
   pendingKeys = null;
   pendingCallers = [];
-  batchTimer = null;
 
   if (keys.length === 0 || callers.length === 0) {
     return;
@@ -338,10 +343,12 @@ export async function getMediaUrls(
     }
     pendingCallers.push({ keys, resolve });
 
-    if (!batchTimer) {
-      batchTimer = setTimeout(() => {
+    if (!flushScheduled) {
+      flushScheduled = true;
+      void Promise.resolve().then(() => {
+        flushScheduled = false;
         void flushMediaUrlBatch();
-      }, BATCH_WINDOW_MS);
+      });
     }
   });
 }

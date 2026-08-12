@@ -78,7 +78,7 @@ There is no Edge Function, AI call, cron or new storage bucket.
 | Hook/service | `src/hooks/useLookingBackPackages.ts`, `src/services/looking-back.ts` | RLS-safe daily data, outbox and cache merge |
 | Timeline | `app/(app)/(tabs)/timeline.tsx`, `src/components/looking-back/package-*.tsx` | Rail and warm-plate cards |
 | Viewer | `app/(app)/looking-back/[id].tsx`, `src/components/looking-back/story-*.tsx` | Playback, media frames, accessibility, detail round trip |
-| Media warm-up | `src/hooks/useLookingBackMediaWarmup.ts`, `src/hooks/useLookingBackVideoPreload.ts`, `src/hooks/useMediaUrls.ts`, `src/utils/looking-back-frames.ts` | Package-wide per-frame URL signing, bounded image-byte lookahead, and viewer-scoped same-player video handoff |
+| Media warm-up | `src/hooks/useLookingBackMediaWarmup.ts`, `src/hooks/useLookingBackVideoPreload.ts`, `src/hooks/useMediaUrls.ts`, `src/utils/looking-back-frames.ts`, `src/utils/looking-back-image-preload.ts` | Package-wide per-frame URL signing, bounded image-byte lookahead, shared in-flight image loads, and viewer-scoped same-player video handoff |
 | Session | `src/hooks/useLookingBackSession.tsx` | Ephemeral checkpoint that survives native-stack remount |
 
 ### How to invoke from another feature
@@ -156,6 +156,7 @@ There is no Edge Function, AI call, cron or new storage bucket.
 | `src/components/looking-back/package-card.test.tsx` | Text and revisited-card treatment, delayed press/open behavior, later-photo cover selection, and legacy raw-video text fallback. |
 | `src/components/looking-back/cover-artwork.test.tsx` | Signed safe-illustration cover rendering and emotion-print fallback after an illustration report. |
 | `src/components/looking-back/story-frame.test.tsx` | Video `readyToPlay`, ready-before-mount visual handoff, stored-poster loading treatment and authoritative duration correction; preview-first photos; display/load readiness; bounded signed-URL/image retry with original fallback; single-surface image fade; and calm unavailable fallback. |
+| `src/utils/looking-back-image-preload.test.ts` | One shared native image load for concurrent warm-up/visible callers, stable cache-key identity across signed-URL changes, and retry after a failed load. |
 | `src/hooks/useLookingBackVideoPreload.test.tsx` | Exact fresh-query admission, asynchronous signing, initial ready-state source fallback, one-upcoming/two-player admission, same-player intro handoff, muted/paused configuration, duration-only frame stability, signed-URL replacement ordering, background release, and lease-safe A→B→A/unmount cleanup. |
 | `src/hooks/useMediaUrls.test.ts` | Stable query key/freshness options shared by mounted and imperative media-URL callers. |
 | `src/hooks/useLookingBackMediaWarmup.test.tsx` | Per-frame URL versions, fresh/stale query behavior, ordered three-frame lookahead, two-load concurrency, raw-video exclusion, reference release, retryable failures, handled rejections, and superseded-run cancellation. |
@@ -169,7 +170,7 @@ There is no Edge Function, AI call, cron or new storage bucket.
 | `src/hooks/useLookingBackPackages.integration.test.tsx` | Account/family cache isolation, safety and four-memory threshold filtering, historical portrait/profile safety, optional-rail failures, refresh/online/offline reconciliation, and viewed/completed optimistic outbox behavior. |
 | `src/screen-tests/looking-back-timeline.integration.test.tsx` | Date/title → This week → Looking back → Recently ordering, `Revisited today`, fresh-session reset before snapshot/route navigation, and rail omission when no package is eligible. |
 | `src/screen-tests/looking-back-viewer.integration.test.tsx` | Route-mounted explicit Start flow, warm-up hook wiring, unpaused media readiness, video readiness/viewed marking, frozen-snapshot report/block reconciliation, fail-closed safety and deep-link states, checkpoint/background/access loss, detail pause/resume, close-once paths, package-name completion copy, screen-reader controls, pause/caption/tap navigation, and video metadata. |
-| `src/components/looking-back/story-frame-cache.integration.test.tsx` | Regression coverage for a warmed later frame, a first visible photo mounted concurrently with package signing, and a first photo whose native callbacks are omitted but imperative image loading completes, verifying no extra URL signing or permanently stuck LoadingPlate. |
+| `src/components/looking-back/story-frame-cache.integration.test.tsx` | Regression coverage for a warmed later frame, a first visible photo mounted concurrently with package signing and native image warm-up, and a first photo whose native callbacks are omitted but imperative image loading completes, verifying no extra URL signing or permanently stuck LoadingPlate. |
 | `src/components/looking-back/story-frame-video-preload.integration.test.tsx` | Composes the real video preload controller with StoryFrame to verify the iOS ready-before-attachment handoff and exact signed-URL refresh boundary. |
 | `src/components/offline-banner.test.tsx` | Offline and two-second back-online clearance signal used by the full-screen viewer |
 

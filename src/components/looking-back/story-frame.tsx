@@ -19,6 +19,7 @@ import { useMediaUrls } from '@/hooks/useMediaUrls';
 import { useVideoThumbnailResult } from '@/hooks/useVideoThumbnail';
 import { frameMediaKeys, type LookingBackFrame } from '@/utils/looking-back-frames';
 import { mediaImageSource } from '@/utils/media-image-source';
+import { preloadLookingBackImage } from '@/utils/looking-back-image-preload';
 
 function configureVideoPlayer(player: VideoPlayer, muted: boolean, isPaused: boolean) {
   player.muted = muted;
@@ -29,6 +30,14 @@ function configureVideoPlayer(player: VideoPlayer, muted: boolean, isPaused: boo
 function StoryVideo({ frameId, player, url, videoKey, posterUrl, posterKey, muted, isPaused, onBuffering, onReady, onUnavailable, onDuration, onAttach, onDetach }: { frameId: string; player: VideoPlayer | null; url: string; videoKey: string; posterUrl?: string; posterKey?: string | null; muted: boolean; isPaused: boolean; onBuffering: (isBuffering: boolean) => void; onReady: () => void; onUnavailable: () => void; onDuration: (durationMs: number) => void; onAttach?: (frameId: string, player: VideoPlayer) => number | null; onDetach?: (frameId: string, player: VideoPlayer, token: number) => void }) {
   const runtimeThumbnail = useVideoThumbnailResult(posterUrl ? null : url, videoKey);
   const placeholderUrl = posterUrl ?? runtimeThumbnail?.uri;
+  const placeholderSource = useMemo(
+    () => placeholderUrl
+      ? posterUrl && posterKey
+        ? mediaImageSource(posterUrl, posterKey)
+        : { uri: placeholderUrl }
+      : null,
+    [placeholderUrl, posterKey, posterUrl],
+  );
   const [renderedFrame, setRenderedFrame] = useState<{ player: VideoPlayer; url: string } | null>(null);
   const [attachedPlayer, setAttachedPlayer] = useState<VideoPlayer | null>(null);
   const readyVisualFallbackRef = useRef(true);
@@ -162,10 +171,10 @@ function StoryVideo({ frameId, player, url, videoKey, posterUrl, posterKey, mute
   const isVideoReady = Boolean(attachedPlayer === player && player && renderedFrame?.player === player && renderedFrame.url === url);
   return <View style={styles.media}>
     {sourceUri}
-    {!isVideoReady && placeholderUrl ? <Image
+    {!isVideoReady && placeholderSource ? <Image
       contentFit="contain"
       pointerEvents="none"
-      source={posterUrl && posterKey ? mediaImageSource(posterUrl, posterKey) : { uri: placeholderUrl }}
+      source={placeholderSource}
       style={StyleSheet.absoluteFill}
       testID="looking-back-video-placeholder"
       transition={0}
@@ -258,6 +267,14 @@ function ReliableStoryImage({
   const sourceIdentity = source ? `${source.key}:${source.url}:${retryCycle}` : null;
   const sourceKey = source?.key ?? null;
   const sourceUrl = source?.url ?? null;
+  const imageSource = useMemo(
+    () => sourceUrl ? mediaImageSource(sourceUrl, sourceKey) : null,
+    [sourceKey, sourceUrl],
+  );
+  const imageStyle = useMemo(
+    () => isIllustration ? [styles.media, styles.illustrationInner] : styles.media,
+    [isIllustration],
+  );
 
   useEffect(() => () => {
     isMountedRef.current = false;
@@ -297,9 +314,8 @@ function ReliableStoryImage({
 
     let cancelled = false;
     const loadingIdentity = sourceIdentity;
-    void Image.loadAsync(mediaImageSource(sourceUrl, sourceKey))
-      .then((imageRef) => {
-        imageRef.release();
+    void preloadLookingBackImage(mediaImageSource(sourceUrl, sourceKey))
+      .then(() => {
         if (!cancelled && failedSourceRef.current !== loadingIdentity) handleReady();
       })
       .catch(() => {
@@ -310,16 +326,23 @@ function ReliableStoryImage({
     };
   }, [handleReady, isRetrying, sourceIdentity, sourceKey, sourceUrl]);
 
+  const handleNativeDisplay = useCallback(() => {
+    handleReady();
+  }, [handleReady]);
+  const handleNativeLoad = useCallback(() => {
+    handleReady();
+  }, [handleReady]);
+
   if (isRetrying || !source) return <LoadingPlate />;
   return <Image
     key={`${source.key}:${retryCycle}`}
     contentFit="contain"
     onError={handleError}
-    onDisplay={handleReady}
-    onLoad={handleReady}
+    onDisplay={handleNativeDisplay}
+    onLoad={handleNativeLoad}
     priority="high"
-    source={mediaImageSource(source.url, source.key)}
-    style={[styles.media, isIllustration && styles.illustrationInner]}
+    source={imageSource!}
+    style={imageStyle}
     testID="looking-back-image"
     transition={0}
   />;
