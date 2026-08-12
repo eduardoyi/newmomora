@@ -90,6 +90,9 @@ export function useLookingBackPackages(options: UseLookingBackPackagesOptions = 
     isUserBlocked,
   } = useContentSafety();
   const portraitVersionsQuery = useFamilyPortraitVersions();
+  const isPortraitDataUnavailable = portraitVersionsQuery.data === undefined
+    || portraitVersionsQuery.isLoading
+    || portraitVersionsQuery.isError;
   const queryClient = useQueryClient();
   const queryKey = lookingBackQueryKey(user?.id, familyId);
   const canLoad = Boolean(enabled && user?.id && familyId);
@@ -163,6 +166,8 @@ export function useLookingBackPackages(options: UseLookingBackPackagesOptions = 
         const portraitResolvedMemories = portraitVersionsQuery.data === undefined
           ? item.memories
           : resolveMemoryTagPortraits(item.memories, portraitVersionsQuery.data);
+        const subjectIds = [item.subjectFamilyMemberId, item.secondarySubjectFamilyMemberId]
+          .filter((memberId): memberId is string => Boolean(memberId));
         const visibleMemories = portraitResolvedMemories.flatMap((memory) => {
           if (
             isUserBlocked(memory.user_id) ||
@@ -173,7 +178,8 @@ export function useLookingBackPackages(options: UseLookingBackPackagesOptions = 
 
           const taggedMembers = memory.taggedMembers.map((member) => ({
             ...member,
-            isLookingBackHidden: isTargetReported('family_member_profile', member.id)
+            isLookingBackHidden: (isPortraitDataUnavailable && subjectIds.includes(member.id))
+              || isTargetReported('family_member_profile', member.id)
               || isTargetReported('family_member_portrait', member.resolvedPortraitVersion?.id),
           }));
           return [{
@@ -189,23 +195,36 @@ export function useLookingBackPackages(options: UseLookingBackPackagesOptions = 
 
         // `packages` below applies the Timeline's four-memory threshold;
         // this collection intentionally does not.
-        const subject = item.subjectFamilyMemberId
-          ? visibleMemories.flatMap((memory) => memory.taggedMembers).find((member) => member.id === item.subjectFamilyMemberId)
-          : null;
-        const subjectHidden = Boolean(item.subjectFamilyMemberId && (
-          isTargetReported('family_member_profile', item.subjectFamilyMemberId)
-          || isTargetReported('family_member_portrait', subject?.resolvedPortraitVersion?.id)
-        ));
+        const taggedMembers = visibleMemories.flatMap((memory) => memory.taggedMembers);
+        const subjectHidden = (isPortraitDataUnavailable && subjectIds.length > 0)
+          || subjectIds.some((memberId) => (
+            isTargetReported('family_member_profile', memberId)
+            || taggedMembers.some((member) => (
+              member.id === memberId
+              && isTargetReported('family_member_portrait', member.resolvedPortraitVersion?.id)
+            ))
+          ));
+        const shouldHideSubjectTitle = subjectHidden && (
+          item.packageType === 'member_at_age'
+          || item.packageType === 'member_birthday'
+          || item.packageType === 'members_together'
+        );
         return {
           ...item,
-          // `member_at_age` titles are generated with the subject name. A
-          // later report must not keep that stale string visible in an open
-          // snapshot or the rail.
-          title: subjectHidden && item.packageType === 'member_at_age' ? 'A family memory' : item.title,
+          // Subject-specific titles are generated with member names. A later
+          // report must not keep those stale names visible in an open snapshot
+          // or the rail.
+          title: shouldHideSubjectTitle
+            ? item.packageType === 'member_birthday'
+              ? 'A birthday memory'
+              : item.packageType === 'members_together'
+                ? 'A shared family memory'
+                : 'A family memory'
+            : item.title,
           memories: visibleMemories as LookingBackMemory[],
         };
       });
-  }, [isContentSafetyError, isContentSafetyLoading, isTargetReported, isUserBlocked, portraitVersionsQuery.data, query.data?.packages]);
+  }, [isContentSafetyError, isContentSafetyLoading, isPortraitDataUnavailable, isTargetReported, isUserBlocked, portraitVersionsQuery.data, query.data?.packages]);
 
   const packages = useMemo(
     () => viewerPackages.filter((item) => item.memories.length >= 4),
@@ -308,6 +327,8 @@ export function useLookingBackPackages(options: UseLookingBackPackagesOptions = 
     dailySetId: query.data?.dailySetId ?? null,
     packageDate: query.data?.packageDate ?? null,
     refreshAfter: query.data?.refreshAfter ?? null,
+    portraitVersions: portraitVersionsQuery.data ?? [],
+    isPortraitDataUnavailable,
     // Package retrieval is intentionally fail-quiet. Its service query is a
     // successful empty result on any optional failure, so callers don't need
     // an error state that competes with the Timeline.

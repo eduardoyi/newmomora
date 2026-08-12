@@ -254,10 +254,13 @@ and documentation:
 
 | Type | Candidate definition | Template direction |
 |---|---|---|
+| `member_birthday` | On a member's birthday (with a ±3-day appearance grace window), memories tagging that member within ±7 days of the birthday anniversary in prior years; at least four memories across two years, one per year before fill | `[Name]’s birthday, through the years` |
 | `on_this_day` | One candidate per prior year containing 4–10 memories on that exact month/day; at least one year old | `On this day` / `Two years ago today` |
 | `one_year_ago` | Memories in the seven-day window centered on the date one year ago | `A year ago` / `This week, one year ago` |
+| `members_together` | Memories older than 90 days tagging the same unordered pair; additional tags allowed; one pair candidate per daily set | `Moments with [X] & [Y]` |
 | `around_this_time` | Memories within ±7 calendar days across prior years, leap-day safe | `Around this time` / templated year range |
 | `member_at_age` | Memories tagging one member while their age-at-memory is the same integer age from 0–17 | `[Name] at [age]` for ages 1–17 / `From [Name]'s first year` at age 0 |
+| `emotion_archive` | One rotating candidate for an exact existing `emotion` label (`funny` or `mischief`), older than 90 days | `The funny ones` / `Tiny troublemakers` |
 | `month_archive` | 4–10 memories from one past calendar month/year | `From your archive` / `From August 2025` |
 | `written_archive` | Text-only memories older than 90 days | `From your archive` / `Small things, written down` |
 | `archive_mix` | Deterministically seeded, age-balanced selection across eligible older memories; up to 4 newer historical, 3 medium, and 3 deep-archive memories before backfill | `From your archive` / `A little look back` |
@@ -265,8 +268,9 @@ and documentation:
 V1 deliberately excludes semantic packages such as `Quiet mornings`, `The
 summer of the hose`, locations, milestones, or "best" memories. Momora does
 not store time-of-day/location/milestone metadata, and inferring those titles
-would violate the no-AI decision. A future version may add a separately
-reviewed semantic recipe without changing package storage.
+would violate the no-AI decision. The birthday, pair, and emotion recipes use
+existing DOB, tag, and classifier metadata only. A future version may add a
+separately reviewed semantic recipe without changing package storage.
 
 Seasons are represented by neutral date ranges/months in V1; do not label a
 June–August package `Summer` without family locale/hemisphere data.
@@ -274,9 +278,16 @@ June–August package `Summer` without family locale/hemisphere data.
 ### 5.2 Eligibility
 
 - Query only the requested active family.
-- `archive_mix`, `written_archive`, `month_archive`, and `member_at_age`
+- `archive_mix`, `written_archive`, `month_archive`, `member_at_age`,
+  `member_birthday`, `members_together`, and `emotion_archive`
   exclude memories newer than 90 days.
-- Anniversary recipes require dates from a prior calendar year.
+- Anniversary recipes require dates from a prior calendar year. Birthday
+  recipes require a member DOB, a current birthday/grace-window match, the
+  member tag, and at least two historical memory years.
+- A pair recipe requires both canonical subject IDs on every selected memory;
+  the package may still include memories tagged with other members.
+- Emotion recipes match the exact stored classifier label. `funny` and
+  `mischief` are not a separate user-authored tag system.
 - Illustrated memories remain eligible when generation is pending/failed;
   they present as text and cannot be chosen as a visual cover until ready.
 - Media rows remain eligible when their DB asset exists even if the bytes are
@@ -306,16 +317,19 @@ For a family-local day:
    candidates below four memories.
 4. Within each recipe type, rank candidates by deterministic daily key after
    applying a 3-day penalty to a recently exposed `recipe_identity`. For
-   `member_at_age`, first apply a soft 3-day penalty to candidates whose
-   subject was recently exposed by another age package. Keep only the best
-   candidate per recipe type, then rank those candidates by recipe priority
-   (`on_this_day`, `one_year_ago`, `member_at_age`, `around_this_time`,
-   `archive_mix`, `month_archive`, `written_archive`). When a viable
-   `archive_mix` exists, no more than three higher-priority thematic packages
-   may consume the set before it is considered. This reserves one daily slot
-   for broad rediscovery without requiring households to have multiple
-   children or recipe types. If the mixed candidate fails after de-overlap or
-   exact-signature cooldown, lower fallbacks may fill the released slot.
+   `member_at_age`, `member_birthday`, and `members_together` receive an
+   additional soft subject/pair penalty. Keep only the best candidate per
+   recipe type, then rank those candidates by recipe priority
+   (`member_birthday`, `on_this_day`, `one_year_ago`, `member_at_age`,
+   `members_together`, `around_this_time`, `emotion_archive`, `archive_mix`,
+   `month_archive`, `written_archive`). The two emotion labels share one
+   `emotion_archive` slot, so both cannot appear in one daily set. When a
+   viable `archive_mix` exists, no more than three higher-priority thematic
+   packages may consume the set before it is considered. This reserves one
+   daily slot for broad rediscovery without requiring households to have
+   multiple children or recipe types. If the mixed candidate fails after
+   de-overlap or exact-signature cooldown, lower fallbacks may fill the
+   released slot.
 5. Greedily consider candidates until four are selected or candidates run out.
    Remove IDs already selected that day and discard candidates below four;
    `archive_mix` re-ranks remaining IDs within each age band so overlap
@@ -465,7 +479,8 @@ interval, not just by `package_date`.
 | `family_id` | `uuid not null` | FK `families on delete cascade` |
 | `package_date` | `date not null` | Owner-timezone local day |
 | `package_type` | constrained `text` | Closed V1 recipe vocabulary |
-| `subject_family_member_id` | nullable `uuid` | Only `member_at_age`; same-family validation |
+| `subject_family_member_id` | nullable `uuid` | Primary subject for `member_at_age`, `member_birthday`, or `members_together`; same-family validation |
+| `secondary_subject_family_member_id` | nullable `uuid` | Required for `members_together`; same-family validation and canonical pair ordering |
 | `display_kind` | `text not null` | Templated, private UI copy |
 | `display_title` | `text not null` | May include member name; never log/track |
 | `display_subtitle` | nullable `text` | Intro copy |
@@ -487,8 +502,10 @@ Constraints/indexes:
 - index `(family_id, recipe_identity, package_date desc)`;
 - index `(family_id, signature, package_date desc)`.
 
-`subject_family_member_id`, when present, uses a same-family composite FK to
-`family_members`; it is not enforced by an application-only check.
+`subject_family_member_id`, and the secondary subject when present, use
+same-family composite FKs to `family_members`; they are not enforced by an
+application-only check. Subject-specific titles are genericized client-side
+when either subject's profile or portrait is reported.
 
 ### 9.3 `looking_back_package_memories`
 
@@ -762,8 +779,14 @@ tests to the end.
    - no same-day memory overlap;
    - final-signature 14-day and memory 7-day hard cooldowns, signature
      recomputation after every trim, and the 3-day recipe ranking penalty;
+   - birthday eligibility/window/year spread and exact title;
+   - pair matching, canonical subject integrity, exact title, and subject
+     deletion cascades;
+   - exact funny/mischief emotion matching, one shared emotion slot, and exact
+     titles;
    - at most one package per recipe type in a daily set and soft rotation away
-     from a recently featured `member_at_age` subject when another qualifies;
+     from recently featured age/birthday subjects or member pairs when another
+     qualifies;
    - consecutive days with enough candidates do not starve solely because all
      seven recipe types were recently used;
    - each recipe and deterministic archive fallback;

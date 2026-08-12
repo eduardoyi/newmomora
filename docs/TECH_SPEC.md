@@ -408,7 +408,8 @@ create table public.looking_back_packages (
   family_id uuid not null references public.families on delete cascade,
   package_date date not null,
   package_type text not null,                -- closed V1 recipe vocabulary
-  subject_family_member_id uuid,             -- required only for member_at_age
+  subject_family_member_id uuid,             -- primary subject for age/birthday/pair recipes
+  secondary_subject_family_member_id uuid,   -- required only for members_together
   display_kind text not null,
   display_title text not null,
   display_subtitle text,
@@ -425,6 +426,8 @@ create table public.looking_back_packages (
     references public.looking_back_daily_sets (id, family_id, package_date)
     on delete cascade,
   foreign key (subject_family_member_id, family_id)
+    references public.family_members (id, family_id) on delete cascade,
+  foreign key (secondary_subject_family_member_id, family_id)
     references public.family_members (id, family_id) on delete cascade,
   unique (daily_set_id, position),
   unique (daily_set_id, signature),          -- immutable interval-local
@@ -464,9 +467,9 @@ displayed `package_date`; the RPC creates a second immutable interval for that
 date instead of returning or mutating stale metadata. Cooldowns are measured
 from package exposure timestamps, rather than local-date strings, so this
 edge case cannot repeat recently exposed memories.
-Composite FKs bind package items and optional age subjects to the same family,
+Composite FKs bind package items and optional recipe subjects to the same family,
 including when a definer function has a defect. Deleting a subject child
-cascades its derived `member_at_age` package instead of delaying profile
+cascades its derived age, birthday, or togetherness package instead of delaying profile
 deletion until retention passes. Retention is 45 days and is
 opportunistically cleaned by materialization; daily-set cascades remove
 packages, items, and personal view rows.
@@ -478,18 +481,25 @@ lower-priority month/written fallbacks and reserves one of the four slots. Its
 candidate order is deterministic but age-stratified: up to four memories from
 90 days–18 months, three from 18–36 months, and three at least 36 months old.
 Missing bands are filled from the remaining eligible IDs, preserving the
-4–10 package bound. The final de-overlap step re-ranks remaining IDs within
-each archive age band so same-day overlap refills that band before global
-backfill; thematic recipes retain their date order. A recent
-`recipe_identity` receives a soft three-day ranking penalty. Within
-`member_at_age`, candidates for a subject featured by an age package in the
-preceding three days receive an additional soft penalty before the
-deterministic day hash. Exact final-package (14-day) and included-memory
+4–10 package bound. Birthday candidates run during a member's ±3-day birthday
+appearance window, require a tagged member, a ±7-day anniversary memory
+window, four memories across at least two historical years, and one memory per
+year before deterministic fill. Togetherness candidates require both canonical
+member tags on every selected memory and retain a second same-family subject.
+Emotion candidates use only the exact stored `funny` or `mischief` labels and
+share one `emotion_archive` slot. The final de-overlap step re-ranks remaining
+IDs within each archive age band so same-day overlap refills that band before
+global backfill; thematic recipes retain their date order. A recent
+`recipe_identity` receives a soft three-day ranking penalty. Age, birthday, and
+pair subjects receive an additional soft penalty when recently featured before
+the deterministic day hash. Exact final-package (14-day) and included-memory
 (7-day) cooldowns remain hard. Existing daily sets are immutable, so selector
 changes affect only later materialization intervals. Display-title templates
-are `From [Name]'s first year` for age-zero packages, `From [Month YYYY]` for
-month archives, and `A little look back` for mixed archive fallback packages;
-the title-copy migration backfills already-materialized package rows.
+are `[Name]’s birthday, through the years`, `Moments with [X] & [Y]`, `The funny
+ones`, `Tiny troublemakers`, `From [Name]'s first year` for age-zero packages,
+`From [Month YYYY]` for month archives, and `A little look back` for mixed
+archive fallback packages; the title-copy migration backfills already-materialized
+package rows.
 
 ### 2.2 Indexes
 

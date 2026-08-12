@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { createVideoPlayer, VideoView } from 'expo-video';
+import { VideoView, type VideoPlayer, type SourceLoadEventPayload, type SourceChangeEventPayload } from 'expo-video';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import Animated, {
@@ -20,40 +20,119 @@ import { useVideoThumbnailResult } from '@/hooks/useVideoThumbnail';
 import { frameMediaKeys, type LookingBackFrame } from '@/utils/looking-back-frames';
 import { mediaImageSource } from '@/utils/media-image-source';
 
-function configureVideoPlayer(player: ReturnType<typeof createVideoPlayer>, muted: boolean, isPaused: boolean) {
+function configureVideoPlayer(player: VideoPlayer, muted: boolean, isPaused: boolean) {
   player.muted = muted;
   player.loop = false;
   if (isPaused) player.pause(); else player.play();
 }
 
-function StoryVideo({ url, videoKey, posterUrl, posterKey, muted, isPaused, onBuffering, onReady, onUnavailable, onDuration }: { url: string; videoKey: string; posterUrl?: string; posterKey?: string | null; muted: boolean; isPaused: boolean; onBuffering: (isBuffering: boolean) => void; onReady: () => void; onUnavailable: () => void; onDuration: (durationMs: number) => void }) {
-  const player = useMemo(() => createVideoPlayer({ uri: url, useCaching: true }), [url]);
+function StoryVideo({ frameId, player, url, videoKey, posterUrl, posterKey, muted, isPaused, onBuffering, onReady, onUnavailable, onDuration, onAttach, onDetach }: { frameId: string; player: VideoPlayer | null; url: string; videoKey: string; posterUrl?: string; posterKey?: string | null; muted: boolean; isPaused: boolean; onBuffering: (isBuffering: boolean) => void; onReady: () => void; onUnavailable: () => void; onDuration: (durationMs: number) => void; onAttach?: (frameId: string, player: VideoPlayer) => number | null; onDetach?: (frameId: string, player: VideoPlayer, token: number) => void }) {
   const runtimeThumbnail = useVideoThumbnailResult(posterUrl ? null : url, videoKey);
   const placeholderUrl = posterUrl ?? runtimeThumbnail?.uri;
-  const [hasRenderedFirstFrame, setHasRenderedFirstFrame] = useState(false);
+  const [renderedFrame, setRenderedFrame] = useState<{ player: VideoPlayer; url: string } | null>(null);
+  const [attachedPlayer, setAttachedPlayer] = useState<VideoPlayer | null>(null);
+  const callbacksRef = useRef({ onBuffering, onReady, onUnavailable, onDuration });
   useEffect(() => {
-    onBuffering(true);
-    const subscription = player.addListener('sourceLoad', () => {
-      if (Number.isFinite(player.duration) && player.duration > 0) onDuration(player.duration * 1000);
+    callbacksRef.current = { onBuffering, onReady, onUnavailable, onDuration };
+  }, [onBuffering, onDuration, onReady, onUnavailable]);
+
+  useEffect(() => {
+    if (!player) {
+      callbacksRef.current.onBuffering(true);
+      return undefined;
+    }
+
+    const handleStatus = (status: VideoPlayer['status']) => {
+      callbacksRef.current.onBuffering(status === 'loading');
+      if (status === 'readyToPlay') {
+        callbacksRef.current.onBuffering(false);
+        callbacksRef.current.onReady();
+        // iOS can finish buffering while the player is detached. In that
+        // case the surface-scoped onFirstFrameRender callback may not fire
+        // again after VideoView attaches, so readyToPlay is the safe visual
+        // fallback for the already-buffered handoff.
+        setRenderedFrame({ player, url });
+      }
+      if (status === 'error') callbacksRef.current.onUnavailable();
+    };
+    const sourceLoadSubscription = player.addListener('sourceLoad', (event: SourceLoadEventPayload) => {
+      const loadedUrl = sourceUriFromEvent(event.videoSource);
+      if (loadedUrl && loadedUrl !== url) return;
+      if (Number.isFinite(event.duration) && event.duration > 0) callbacksRef.current.onDuration(event.duration * 1000);
+      else if (Number.isFinite(player.duration) && player.duration > 0) callbacksRef.current.onDuration(player.duration * 1000);
     });
-    return () => subscription.remove();
-  }, [onBuffering, onDuration, onReady, player]);
-  useEffect(() => {
-    configureVideoPlayer(player, muted, isPaused);
-  }, [isPaused, muted, player]);
-  useEffect(() => () => { player.pause(); player.release(); }, [player]);
-  useEffect(() => {
-    const subscription = player.addListener('statusChange', ({ status }) => {
-      onBuffering(status === 'loading');
-      if (status === 'readyToPlay') { onBuffering(false); onReady(); }
-      if (status === 'error') onUnavailable();
+    const sourceChangeSubscription = player.addListener('sourceChange', (event: SourceChangeEventPayload) => {
+      const changedUrl = sourceUriFromEvent(event.source);
+      if (changedUrl && changedUrl !== url) return;
+      // Keep the poster over an attached player until the newly signed source
+      // actually renders its first frame.
+      setRenderedFrame(null);
+      callbacksRef.current.onBuffering(true);
     });
-    return () => subscription.remove();
-  }, [onBuffering, onReady, onUnavailable, player]);
-  const handleFirstFrame = useCallback(() => setHasRenderedFirstFrame(true), []);
+    const statusSubscription = player.addListener('statusChange', ({ status }) => handleStatus(status));
+
+    // A URL refresh keeps the existing lease and native surface. Reset only
+    // the visual readiness boundary; the manager's source event remains the
+    // authority for admitting the refreshed signed URL.
+    callbacksRef.current.onBuffering(true);
+
+    return () => {
+      sourceLoadSubscription.remove();
+      sourceChangeSubscription.remove();
+      statusSubscription.remove();
+    };
+  }, [player, url]);
+
+  useEffect(() => {
+    if (!player) {
+      return undefined;
+    }
+
+    const leaseToken = onAttach?.(frameId, player) ?? null;
+    if (leaseToken === null) {
+      callbacksRef.current.onBuffering(true);
+      return undefined;
+    }
+
+    // The event subscriptions above are live before playback is started. A
+    // handed-off player may already be ready, so reconcile its current native
+    // state immediately instead of waiting for an event that already fired.
+    callbacksRef.current.onBuffering(player.status === 'loading');
+    if (player.status === 'readyToPlay') {
+      callbacksRef.current.onBuffering(false);
+      callbacksRef.current.onReady();
+      // The player may have reached readyToPlay before this visible lease was
+      // mounted. Do not wait for a first-frame event that already happened on
+      // the detached preload surface.
+      setRenderedFrame({ player, url });
+    }
+    if (player.status === 'error') callbacksRef.current.onUnavailable();
+    if (Number.isFinite(player.duration) && player.duration > 0) callbacksRef.current.onDuration(player.duration * 1000);
+
+    // This state change is the native-surface admission boundary: the manager
+    // has granted the lease, so only the next render may mount VideoView.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAttachedPlayer(player);
+
+    return () => {
+      onDetach?.(frameId, player, leaseToken);
+      // Do not clear a newer player's attachment if React is cleaning up an
+      // older lease during a frame transition.
+      setAttachedPlayer((current) => current === player ? null : current);
+    };
+  }, [frameId, onAttach, onDetach, player]);
+
+  useEffect(() => {
+    if (attachedPlayer) configureVideoPlayer(attachedPlayer, muted, isPaused);
+  }, [attachedPlayer, isPaused, muted]);
+  const handleFirstFrame = useCallback(() => {
+    if (player) setRenderedFrame({ player, url });
+  }, [player, url]);
+  const sourceUri = attachedPlayer === player && player ? <VideoView contentFit="contain" nativeControls={false} onFirstFrameRender={handleFirstFrame} player={player} style={styles.media} testID="looking-back-video" /> : null;
+  const isVideoReady = Boolean(attachedPlayer === player && player && renderedFrame?.player === player && renderedFrame.url === url);
   return <View style={styles.media}>
-    <VideoView contentFit="contain" nativeControls={false} onFirstFrameRender={handleFirstFrame} player={player} style={styles.media} testID="looking-back-video" />
-    {!hasRenderedFirstFrame && placeholderUrl ? <Image
+    {sourceUri}
+    {!isVideoReady && placeholderUrl ? <Image
       contentFit="contain"
       pointerEvents="none"
       source={posterUrl && posterKey ? mediaImageSource(posterUrl, posterKey) : { uri: placeholderUrl }}
@@ -61,11 +140,17 @@ function StoryVideo({ url, videoKey, posterUrl, posterKey, muted, isPaused, onBu
       testID="looking-back-video-placeholder"
       transition={0}
     /> : null}
-    {!hasRenderedFirstFrame ? <View pointerEvents="none" style={styles.videoLoading} testID="looking-back-video-loading">
+    {!isVideoReady ? <View pointerEvents="none" style={styles.videoLoading} testID="looking-back-video-loading">
       <View style={styles.videoLoadingBadge}><Text style={styles.videoLoadingPlay}>▶</Text><Text style={styles.videoLoadingText}>Video · Loading</Text></View>
       <ActivityIndicator color="#F6F1E7" />
     </View> : null}
   </View>;
+}
+
+function sourceUriFromEvent(source: SourceLoadEventPayload['videoSource'] | SourceChangeEventPayload['source']): string | null {
+  if (typeof source === 'string') return source;
+  if (source && typeof source === 'object' && 'uri' in source && typeof source.uri === 'string') return source.uri;
+  return null;
 }
 
 const noopDuration = () => {};
@@ -183,6 +268,9 @@ export function StoryFrame({
   frame,
   muted,
   isPaused,
+  videoPlayer,
+  onVideoAttach,
+  onVideoDetach,
   onReady,
   onUnavailable,
   onBuffering,
@@ -192,6 +280,9 @@ export function StoryFrame({
   frame: LookingBackFrame;
   muted: boolean;
   isPaused: boolean;
+  videoPlayer?: VideoPlayer | null;
+  onVideoAttach?: (frameId: string, player: VideoPlayer) => number | null;
+  onVideoDetach?: (frameId: string, player: VideoPlayer, token: number) => void;
   onReady: () => void;
   onUnavailable: () => void;
   onBuffering: (isBuffering: boolean) => void;
@@ -238,7 +329,7 @@ export function StoryFrame({
 
   const assetAspectRatio = frame.asset?.aspect_ratio && frame.asset.aspect_ratio > 0 ? frame.asset.aspect_ratio : 4 / 3;
   const fittedSize = fitSurface(stageSize, frame.kind === 'illustration' ? 4 / 5 : assetAspectRatio);
-  if (frame.kind === 'video') return <Animated.View entering={FadeIn.duration(reduceMotion ? 0 : 300)} exiting={FadeOut.duration(reduceMotion ? 0 : 300)} key={frame.id} style={[styles.mediaWrap, styles.mediaSurface, fittedSize]} testID="looking-back-frame-video"><StoryVideo isPaused={isPaused} muted={muted} onBuffering={onBuffering} onDuration={onDuration ?? noopDuration} onReady={onReady} onUnavailable={onUnavailable} posterKey={videoPosterKey} posterUrl={videoPosterUrl} url={primaryUrl!} videoKey={primaryKey!} /></Animated.View>;
+  if (frame.kind === 'video') return <Animated.View entering={FadeIn.duration(reduceMotion ? 0 : 300)} key={frame.id} style={[styles.mediaWrap, styles.mediaSurface, fittedSize]} testID="looking-back-frame-video"><StoryVideo frameId={frame.id} isPaused={isPaused} muted={muted} onAttach={onVideoAttach} onBuffering={onBuffering} onDetach={onVideoDetach} onDuration={onDuration ?? noopDuration} onReady={onReady} onUnavailable={onUnavailable} player={videoPlayer ?? null} posterKey={videoPosterKey} posterUrl={videoPosterUrl} url={primaryUrl!} videoKey={primaryKey!} /></Animated.View>;
 
   const isIllustration = frame.kind === 'illustration';
   return <Animated.View entering={FadeIn.duration(reduceMotion ? 0 : 300)} exiting={FadeOut.duration(reduceMotion ? 0 : 300)} key={frame.id} style={[styles.mediaWrap, isIllustration ? styles.illustrationPrint : styles.mediaSurface, fittedSize]} testID={`looking-back-frame-${frame.kind}`}>

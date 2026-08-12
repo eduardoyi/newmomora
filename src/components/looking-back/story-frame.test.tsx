@@ -3,14 +3,16 @@ import { act, fireEvent, render } from '@testing-library/react-native';
 import { StoryFrame } from './story-frame';
 
 const listeners = new Map<string, (event: any) => void>();
-const mockPlayer = { duration: 2, muted: true, loop: false, addListener: jest.fn((name: string, callback: (event: unknown) => void) => { listeners.set(name, callback as (event: any) => void); return { remove: jest.fn() }; }), pause: jest.fn(), play: jest.fn(), release: jest.fn() };
+const mockPlayer = { duration: 2, status: 'idle' as const, muted: true, loop: false, bufferOptions: {}, addListener: jest.fn((name: string, callback: (event: unknown) => void) => { listeners.set(name, callback as (event: any) => void); return { remove: jest.fn() }; }), pause: jest.fn(), play: jest.fn(), replaceAsync: jest.fn(() => Promise.resolve()), release: jest.fn() };
 const mockRefetch = jest.fn(() => Promise.resolve());
+const mockAttach = jest.fn(() => 1);
+const mockDetach = jest.fn();
 
 let mockMediaUrlState = { data: { 'video-key': 'https://signed/video' } as Record<string, string>, isLoading: false };
 const mockUseMediaUrls = jest.fn(() => ({ ...mockMediaUrlState, refetch: mockRefetch }));
 jest.mock('@/hooks/useMediaUrls', () => ({ useMediaUrls: (...args: unknown[]) => mockUseMediaUrls(...args) }));
 jest.mock('@/hooks/useVideoThumbnail', () => ({ useVideoThumbnailResult: jest.fn(() => null) }));
-jest.mock('expo-video', () => ({ createVideoPlayer: jest.fn(() => mockPlayer), VideoView: 'VideoView' }));
+jest.mock('expo-video', () => ({ VideoView: 'VideoView' }));
 
 const videoFrame = {
   id: 'frame', index: 0, chapterIndex: 0, assetIndex: 0, assetCount: 1, kind: 'video', durationMs: 6000,
@@ -22,11 +24,13 @@ describe('StoryFrame video lifecycle', () => {
     listeners.clear();
     jest.clearAllMocks();
     mockPlayer.duration = 2;
+    mockPlayer.status = 'idle';
+    mockAttach.mockImplementation(() => 1);
     mockMediaUrlState = { data: { 'video-key': 'https://signed/video' }, isLoading: false };
   });
   it('marks a video ready after its first rendered frame and corrects its authoritative duration', () => {
     const onReady = jest.fn(); const onDuration = jest.fn();
-    const screen = render(<StoryFrame frame={videoFrame} isPaused={false} muted onBuffering={() => {}} onDuration={onDuration} onReady={onReady} onUnavailable={() => {}} />);
+    const screen = render(<StoryFrame frame={videoFrame} isPaused={false} muted onBuffering={() => {}} onDuration={onDuration} onReady={onReady} onUnavailable={() => {}} onVideoAttach={mockAttach} onVideoDetach={mockDetach} videoPlayer={mockPlayer as any} />);
     act(() => listeners.get('sourceLoad')?.({}));
     expect(onDuration).toHaveBeenCalledWith(2000);
     expect(onReady).not.toHaveBeenCalled();
@@ -34,6 +38,17 @@ describe('StoryFrame video lifecycle', () => {
     expect(onReady).toHaveBeenCalledTimes(1);
     fireEvent(screen.getByTestId('looking-back-video'), 'firstFrameRender');
     expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('attaches the manager-owned player unchanged and reconciles ready-before-mount state', () => {
+    mockPlayer.status = 'readyToPlay';
+    const onReady = jest.fn();
+    const screen = render(<StoryFrame frame={videoFrame} isPaused={false} muted onBuffering={() => {}} onReady={onReady} onUnavailable={() => {}} onVideoAttach={mockAttach} onVideoDetach={mockDetach} videoPlayer={mockPlayer as any} />);
+
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('looking-back-video').props.player).toBe(mockPlayer);
+    expect(screen.queryByTestId('looking-back-video-loading')).toBeNull();
+    expect(mockAttach).toHaveBeenCalledWith('frame', mockPlayer);
   });
 
   it('covers a loading video with its stored first-frame poster and loading affordance', () => {
@@ -48,7 +63,7 @@ describe('StoryFrame video lifecycle', () => {
       ...videoFrame,
       asset: { ...videoFrame.asset, preview_object_key: 'video-poster' },
     } as any;
-    const screen = render(<StoryFrame frame={frameWithPoster} isPaused={false} muted onBuffering={() => {}} onReady={() => {}} onUnavailable={() => {}} />);
+    const screen = render(<StoryFrame frame={frameWithPoster} isPaused={false} muted onBuffering={() => {}} onReady={() => {}} onUnavailable={() => {}} onVideoAttach={mockAttach} onVideoDetach={mockDetach} videoPlayer={mockPlayer as any} />);
 
     expect(mockUseMediaUrls).toHaveBeenCalledWith(['video-key', 'video-poster'], '2026-01-01');
     expect(screen.getByTestId('looking-back-video-placeholder').props.source).toEqual([
@@ -62,7 +77,7 @@ describe('StoryFrame video lifecycle', () => {
   });
   it('maps native video failure to the calm unavailable state', () => {
     const onUnavailable = jest.fn();
-    render(<StoryFrame frame={videoFrame} isPaused={false} muted onBuffering={() => {}} onReady={() => {}} onUnavailable={onUnavailable} />);
+    render(<StoryFrame frame={videoFrame} isPaused={false} muted onBuffering={() => {}} onReady={() => {}} onUnavailable={onUnavailable} onVideoAttach={mockAttach} onVideoDetach={mockDetach} videoPlayer={mockPlayer as any} />);
     act(() => listeners.get('statusChange')?.({ status: 'error' }));
     expect(onUnavailable).toHaveBeenCalledTimes(1);
   });

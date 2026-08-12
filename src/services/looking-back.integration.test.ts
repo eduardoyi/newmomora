@@ -63,10 +63,11 @@ describe('Looking Back service and pending-view outbox', () => {
       data: [
         {
           daily_set_id: 'set-1', package_id: 'package-2', package_date: '2026-08-08',
-          package_type: 'archive_mix', display_kind: 'From your archive', display_title: 'August 2023',
+          package_type: 'members_together', display_kind: 'Shared memories', display_title: 'Moments with Nora & Leo',
           display_subtitle: null, display_era: 'Three years ago', tint: 'joy', position: 1,
           memory_ids: ['m-3', 'm-4'], first_viewed_at: null, last_viewed_at: null, completed_at: null,
-          refresh_after: '2026-08-09T00:00:00.000Z', subject_family_member_id: null,
+          refresh_after: '2026-08-09T00:00:00.000Z', subject_family_member_id: 'member-1',
+          secondary_subject_family_member_id: 'member-2',
         },
         {
           daily_set_id: 'set-1', package_id: 'package-1', package_date: '2026-08-08',
@@ -88,6 +89,11 @@ describe('Looking Back service and pending-view outbox', () => {
     expect(result.data?.packages[0]).toMatchObject({
       familyId: 'family-1', packageType: 'on_this_day', memoryIds: ['m-1', 'm-2'],
       view: { firstViewedAt: '2026-08-08T10:00:00.000Z', completedAt: null },
+    });
+    expect(result.data?.packages[1]).toMatchObject({
+      packageType: 'members_together',
+      subjectFamilyMemberId: 'member-1',
+      secondarySubjectFamilyMemberId: 'member-2',
     });
   });
 

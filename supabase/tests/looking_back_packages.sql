@@ -1,6 +1,6 @@
 begin;
 
-select plan(74);
+select plan(104);
 
 insert into auth.users (id, email, is_anonymous)
 values
@@ -19,7 +19,12 @@ values
   ('81000000-0000-4000-8000-000000000013', 'looking-back-variety@example.test', false),
   ('81000000-0000-4000-8000-000000000014', 'looking-back-cap@example.test', false),
   ('81000000-0000-4000-8000-000000000015', 'looking-back-release@example.test', false),
-  ('81000000-0000-4000-8000-000000000016', 'looking-back-reservation@example.test', false);
+  ('81000000-0000-4000-8000-000000000016', 'looking-back-reservation@example.test', false),
+  ('81000000-0000-4000-8000-000000000017', 'looking-back-themed@example.test', false),
+  ('81000000-0000-4000-8000-000000000018', 'looking-back-funny@example.test', false),
+  ('81000000-0000-4000-8000-000000000019', 'looking-back-mischief@example.test', false),
+  ('81000000-0000-4000-8000-000000000020', 'looking-back-shared-emotion@example.test', false),
+  ('81000000-0000-4000-8000-000000000021', 'looking-back-birthday@example.test', false);
 
 insert into public.user_profiles (id, name, timezone)
 values
@@ -37,7 +42,12 @@ values
   ('81000000-0000-4000-8000-000000000013', 'Looking Back Variety', 'UTC'),
   ('81000000-0000-4000-8000-000000000014', 'Looking Back Cap', 'UTC'),
   ('81000000-0000-4000-8000-000000000015', 'Looking Back Release', 'UTC'),
-  ('81000000-0000-4000-8000-000000000016', 'Looking Back Reservation', 'UTC')
+  ('81000000-0000-4000-8000-000000000016', 'Looking Back Reservation', 'UTC'),
+  ('81000000-0000-4000-8000-000000000017', 'Looking Back Themed', 'UTC'),
+  ('81000000-0000-4000-8000-000000000018', 'Looking Back Funny', 'UTC'),
+  ('81000000-0000-4000-8000-000000000019', 'Looking Back Mischief', 'UTC'),
+  ('81000000-0000-4000-8000-000000000020', 'Looking Back Shared Emotion', 'UTC'),
+  ('81000000-0000-4000-8000-000000000021', 'Looking Back Birthday', 'UTC')
 on conflict (id) do update set timezone = excluded.timezone;
 
 insert into public.families (id, owner_id, name)
@@ -54,7 +64,12 @@ values
   ('82000000-0000-4000-8000-000000000010', '81000000-0000-4000-8000-000000000013', 'Variety Family'),
   ('82000000-0000-4000-8000-000000000014', '81000000-0000-4000-8000-000000000014', 'Cap Family'),
   ('82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015', 'Release Family'),
-  ('82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016', 'Reservation Family');
+  ('82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016', 'Reservation Family'),
+  ('82000000-0000-4000-8000-000000000017', '81000000-0000-4000-8000-000000000017', 'Themed Family'),
+  ('82000000-0000-4000-8000-000000000018', '81000000-0000-4000-8000-000000000018', 'Funny Family'),
+  ('82000000-0000-4000-8000-000000000019', '81000000-0000-4000-8000-000000000019', 'Mischief Family'),
+  ('82000000-0000-4000-8000-000000000020', '81000000-0000-4000-8000-000000000020', 'Shared Emotion Family'),
+  ('82000000-0000-4000-8000-000000000021', '81000000-0000-4000-8000-000000000021', 'Birthday Family');
 
 insert into public.family_memberships (family_id, user_id, role)
 values
@@ -72,7 +87,12 @@ values
   ('82000000-0000-4000-8000-000000000010', '81000000-0000-4000-8000-000000000013', 'owner'),
   ('82000000-0000-4000-8000-000000000014', '81000000-0000-4000-8000-000000000014', 'owner'),
   ('82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015', 'owner'),
-  ('82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016', 'owner');
+  ('82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016', 'owner'),
+  ('82000000-0000-4000-8000-000000000017', '81000000-0000-4000-8000-000000000017', 'owner'),
+  ('82000000-0000-4000-8000-000000000018', '81000000-0000-4000-8000-000000000018', 'owner'),
+  ('82000000-0000-4000-8000-000000000019', '81000000-0000-4000-8000-000000000019', 'owner'),
+  ('82000000-0000-4000-8000-000000000020', '81000000-0000-4000-8000-000000000020', 'owner'),
+  ('82000000-0000-4000-8000-000000000021', '81000000-0000-4000-8000-000000000021', 'owner');
 
 insert into public.family_members (id, family_id, user_id, name, date_of_birth)
 values (
@@ -463,6 +483,129 @@ values (
   'Pacific/Kiritimati', transaction_timestamp() - interval '1 day', transaction_timestamp() - interval '2 days'
 );
 
+-- The themed-recipe fixtures stay isolated from the legacy variety/cooldown
+-- cases above. Birthday memories cover two historical years in their own
+-- family and are tagged only to Ada; togetherness memories use two no-DOB
+-- subjects in a separate family so age selection cannot consume them first.
+-- The final birthday rows are outside the ±7-day anniversary window.
+insert into public.family_members (id, family_id, user_id, name, date_of_birth)
+values
+  ('83000000-0000-4000-8000-000000000005', '82000000-0000-4000-8000-000000000021', '81000000-0000-4000-8000-000000000021', 'Ada', current_date - interval '6 years'),
+  ('83000000-0000-4000-8000-000000000006', '82000000-0000-4000-8000-000000000017', '81000000-0000-4000-8000-000000000017', 'Bea', null),
+  ('83000000-0000-4000-8000-000000000007', '82000000-0000-4000-8000-000000000017', '81000000-0000-4000-8000-000000000017', 'Cleo', null);
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select
+  ('a1000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000021',
+  '81000000-0000-4000-8000-000000000021',
+  'Birthday fixture ' || series,
+  (current_date - make_interval(years => case when series <= 12 then 1 else 2 end))::date
+    + ((series % 3) - 1),
+  'text_only', 'none'
+from generate_series(1, 24) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+values
+  (
+    'a1000000-0000-4000-8000-000000000025',
+    '82000000-0000-4000-8000-000000000021',
+    '81000000-0000-4000-8000-000000000021',
+    'Birthday boundary fixture plus seven',
+    (current_date - interval '1 year')::date + 7,
+    'text_only', 'none'
+  ),
+  (
+    'a1000000-0000-4000-8000-000000000026',
+    '82000000-0000-4000-8000-000000000021',
+    '81000000-0000-4000-8000-000000000021',
+    'Birthday out-of-window fixture plus eight',
+    (current_date - interval '1 year')::date + 8,
+    'text_only', 'none'
+  ),
+  (
+    'a1000000-0000-4000-8000-000000000027',
+    '82000000-0000-4000-8000-000000000021',
+    '81000000-0000-4000-8000-000000000021',
+    'Birthday boundary fixture minus seven',
+    (current_date - interval '2 years')::date - 7,
+    'text_only', 'none'
+  ),
+  (
+    'a1000000-0000-4000-8000-000000000028',
+    '82000000-0000-4000-8000-000000000021',
+    '81000000-0000-4000-8000-000000000021',
+    'Birthday out-of-window fixture minus eight',
+    (current_date - interval '2 years')::date - 8,
+    'text_only', 'none'
+  ),
+  (
+    'a1000000-0000-4000-8000-000000000029',
+    '82000000-0000-4000-8000-000000000021',
+    '81000000-0000-4000-8000-000000000021',
+    'Birthday out-of-window fixture plus twenty',
+    (current_date - interval '1 year')::date + 20,
+    'text_only', 'none'
+  );
+insert into public.memory_family_members (memory_id, family_member_id)
+select id, '83000000-0000-4000-8000-000000000005'
+from public.memories
+where family_id = '82000000-0000-4000-8000-000000000021'
+  and id::text like 'a1000000%';
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select
+  ('a2000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000017',
+  '81000000-0000-4000-8000-000000000017',
+  'Togetherness fixture ' || series,
+  current_date - 500 - series * 10,
+  'text_only', 'none'
+from generate_series(1, 4) as series;
+insert into public.memory_family_members (memory_id, family_member_id)
+select id, member_id
+from public.memories
+cross join (values
+  ('83000000-0000-4000-8000-000000000006'::uuid),
+  ('83000000-0000-4000-8000-000000000007'::uuid)
+) as members(member_id)
+where family_id = '82000000-0000-4000-8000-000000000017'
+  and id::text like 'a2000000%';
+
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status, emotion)
+select
+  ('a3000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000018',
+  '81000000-0000-4000-8000-000000000018',
+  'Funny fixture ' || series,
+  current_date - 400 - series,
+  'text_only', 'none', 'funny'
+from generate_series(1, 5) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status, emotion)
+select
+  ('a4000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000019',
+  '81000000-0000-4000-8000-000000000019',
+  'Mischief fixture ' || series,
+  current_date - 400 - series,
+  'text_only', 'none', 'mischief'
+from generate_series(1, 5) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status, emotion)
+select
+  ('a5000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000020',
+  '81000000-0000-4000-8000-000000000020',
+  'Shared funny fixture ' || series,
+  current_date - 400 - series,
+  'text_only', 'none', 'funny'
+from generate_series(1, 5) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status, emotion)
+select
+  ('a6000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000020',
+  '81000000-0000-4000-8000-000000000020',
+  'Shared mischief fixture ' || series,
+  current_date - 500 - series,
+  'text_only', 'none', 'mischief'
+from generate_series(1, 5) as series;
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000004', true);
 select is(
@@ -496,6 +639,240 @@ select ok(
     where family_id = '82000000-0000-4000-8000-000000000009'
   ),
   'the fresh backward-timezone interval stores its viable deterministic package'
+);
+
+select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000017', true);
+select lives_ok(
+  $$select * from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000017')$$,
+  'a togetherness archive can materialize for its isolated family'
+);
+select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000021', true);
+select lives_ok(
+  $$select * from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000021')$$,
+  'a birthday archive can materialize for its isolated family'
+);
+select is(
+  (select birthday_year
+   from (
+     select years.birthday_year,
+       make_date(years.birthday_year, 12, 31) as birthday_date
+     from generate_series(2025, 2027) as years(birthday_year)
+   ) anniversaries
+   where date '2026-01-02' between birthday_date - 7 and birthday_date + 7
+   order by abs(date '2026-01-02' - birthday_date), birthday_year
+   limit 1),
+  2025,
+  'birthday matching associates a January memory with the prior December anniversary year'
+);
+select ok(
+  (with birthday_years as (
+     select make_date(2026 + offsets.year_offset, 8, 12) as birthday_date
+     from (values (-1), (0), (1)) as offsets(year_offset)
+   )
+   select
+     (select count(*) from birthday_years where abs(date '2026-08-15' - birthday_date) <= 3) = 1
+     and (select count(*) from birthday_years where abs(date '2026-08-16' - birthday_date) <= 3) = 0),
+  'birthday appearance grace includes exactly three days on either side'
+);
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000021'
+     and package_date = current_date and package_type = 'member_birthday'),
+  1::bigint,
+  'the birthday recipe materializes one package on the member birthday'
+);
+select is(
+  (select display_title from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000021'
+     and package_date = current_date and package_type = 'member_birthday'),
+  'Ada’s birthday, through the years',
+  'birthday packages use the agreed title template'
+);
+select is(
+  (select count(*) from public.looking_back_package_memories i
+   join public.looking_back_packages p on p.id = i.package_id
+   where p.family_id = '82000000-0000-4000-8000-000000000021'
+     and p.package_date = current_date and p.package_type = 'member_birthday'),
+  10::bigint,
+  'birthday packages cap a large anniversary archive at ten memories'
+);
+select ok(
+  (select count(distinct extract(year from m.memory_date)) = 2
+   from public.looking_back_package_memories i
+   join public.looking_back_packages p on p.id = i.package_id
+   join public.memories m on m.id = i.memory_id
+   where p.family_id = '82000000-0000-4000-8000-000000000021'
+     and p.package_date = current_date and p.package_type = 'member_birthday')
+  and not exists (
+    select 1
+    from public.looking_back_package_memories i
+    join public.looking_back_packages p on p.id = i.package_id
+    where p.family_id = '82000000-0000-4000-8000-000000000021'
+      and p.package_date = current_date and p.package_type = 'member_birthday'
+      and i.memory_id in (
+        'a1000000-0000-4000-8000-000000000026',
+        'a1000000-0000-4000-8000-000000000028',
+        'a1000000-0000-4000-8000-000000000029'
+      )
+  ),
+  'birthday selection spans two years and excludes memories outside the ±7-day window'
+);
+select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000017', true);
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000017'
+     and package_date = current_date and package_type = 'members_together'),
+  1::bigint,
+  'the togetherness recipe selects one unordered member pair'
+);
+select is(
+  (select display_title from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000017'
+     and package_date = current_date and package_type = 'members_together'),
+  'Moments with Bea & Cleo',
+  'togetherness packages use both member names in the agreed title'
+);
+select is(
+  (select secondary_subject_family_member_id from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000017'
+     and package_date = current_date and package_type = 'members_together'),
+  '83000000-0000-4000-8000-000000000007'::uuid,
+  'togetherness packages persist the canonical secondary subject'
+);
+select ok(
+  not exists (
+    select 1
+    from public.looking_back_package_memories i
+    join public.looking_back_packages p on p.id = i.package_id
+    where p.family_id = '82000000-0000-4000-8000-000000000017'
+      and p.package_date = current_date and p.package_type = 'members_together'
+      and (
+        not exists (
+          select 1 from public.memory_family_members tag
+          where tag.memory_id = i.memory_id
+            and tag.family_member_id = '83000000-0000-4000-8000-000000000006'
+        )
+        or not exists (
+          select 1 from public.memory_family_members tag
+          where tag.memory_id = i.memory_id
+            and tag.family_member_id = '83000000-0000-4000-8000-000000000007'
+        )
+      )
+  ),
+  'every togetherness package memory carries both required member tags'
+);
+
+select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000018', true);
+select lives_ok(
+  $$select * from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000018')$$,
+  'an exact funny emotion archive can materialize'
+);
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000018'
+     and package_date = current_date and package_type = 'emotion_archive'),
+  1::bigint,
+  'funny memories share one emotion archive slot'
+);
+select is(
+  (select display_title from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000018'
+     and package_date = current_date and package_type = 'emotion_archive'),
+  'The funny ones',
+  'funny packages use the agreed title'
+);
+select is(
+  (select tint from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000018'
+     and package_date = current_date and package_type = 'emotion_archive'),
+  'funny',
+  'funny packages preserve the matching emotion tint'
+);
+select ok(
+  not exists (
+    select 1
+    from public.looking_back_package_memories i
+    join public.looking_back_packages p on p.id = i.package_id
+    join public.memories m on m.id = i.memory_id
+    where p.family_id = '82000000-0000-4000-8000-000000000018'
+      and p.package_date = current_date and p.package_type = 'emotion_archive'
+      and m.emotion is distinct from 'funny'
+  ),
+  'funny packages select only memories with the exact funny label'
+);
+
+select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000019', true);
+select lives_ok(
+  $$select * from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000019')$$,
+  'an exact mischief emotion archive can materialize'
+);
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000019'
+     and package_date = current_date and package_type = 'emotion_archive'),
+  1::bigint,
+  'mischief memories share one emotion archive slot'
+);
+select is(
+  (select display_title from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000019'
+     and package_date = current_date and package_type = 'emotion_archive'),
+  'Tiny troublemakers',
+  'mischief packages use the agreed title'
+);
+select is(
+  (select tint from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000019'
+     and package_date = current_date and package_type = 'emotion_archive'),
+  'mischief',
+  'mischief packages preserve the matching emotion tint'
+);
+select ok(
+  not exists (
+    select 1
+    from public.looking_back_package_memories i
+    join public.looking_back_packages p on p.id = i.package_id
+    join public.memories m on m.id = i.memory_id
+    where p.family_id = '82000000-0000-4000-8000-000000000019'
+      and p.package_date = current_date and p.package_type = 'emotion_archive'
+      and m.emotion is distinct from 'mischief'
+  ),
+  'mischief packages select only memories with the exact mischief label'
+);
+
+select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000020', true);
+select lives_ok(
+  $$select * from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000020')$$,
+  'funny and mischief memories share one rotating emotion slot'
+);
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000020'
+     and package_date = current_date and package_type = 'emotion_archive'),
+  1::bigint,
+  'a family with both emotion labels still receives one emotion package'
+);
+select ok(
+  exists (
+    select 1 from public.looking_back_packages
+    where family_id = '82000000-0000-4000-8000-000000000020'
+      and package_date = current_date and package_type = 'emotion_archive'
+      and ((display_title = 'The funny ones' and tint = 'funny')
+        or (display_title = 'Tiny troublemakers' and tint = 'mischief'))
+  ),
+  'the rotating emotion package title and tint agree on the selected label'
+);
+select ok(
+  not exists (
+    select 1
+    from public.looking_back_package_memories i
+    join public.looking_back_packages p on p.id = i.package_id
+    join public.memories m on m.id = i.memory_id
+    where p.family_id = '82000000-0000-4000-8000-000000000020'
+      and p.package_date = current_date and p.package_type = 'emotion_archive'
+      and m.emotion is distinct from p.tint
+  ),
+  'the rotating emotion package selects only memories with its chosen exact label'
 );
 
 select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000001', true);
@@ -949,13 +1326,41 @@ select is(
 );
 
 insert into public.family_members (id, family_id, user_id, name)
-values ('83000000-0000-4000-8000-000000000002', '82000000-0000-4000-8000-000000000002', '81000000-0000-4000-8000-000000000004', 'Other child');
+values
+  ('83000000-0000-4000-8000-000000000002', '82000000-0000-4000-8000-000000000002', '81000000-0000-4000-8000-000000000004', 'Other child'),
+  ('83000000-0000-4000-8000-000000000008', '82000000-0000-4000-8000-000000000002', '81000000-0000-4000-8000-000000000004', 'Other child high');
 insert into public.looking_back_daily_sets (id, family_id, package_date, timezone_name, refresh_after, created_at)
 values ('86100000-0000-4000-8000-000000000001', '82000000-0000-4000-8000-000000000001', current_date - 11, 'UTC', now() - interval '10 days', now() - interval '12 days');
 select throws_ok(
   $$insert into public.looking_back_packages (daily_set_id, family_id, package_date, package_type, subject_family_member_id, display_kind, display_title, display_era, recipe_identity, signature, position) values ('86100000-0000-4000-8000-000000000001', '82000000-0000-4000-8000-000000000001', current_date - 11, 'member_at_age', '83000000-0000-4000-8000-000000000002', 'Looking back', 'Wrong child', 'From your archive', 'member_at_age:wrong', repeat('d', 64), 0)$$,
   '23503', null,
   'the member-at-age subject has a composite same-family foreign key'
+);
+
+insert into public.looking_back_daily_sets (id, family_id, package_date, timezone_name, refresh_after, created_at)
+values ('a7000000-0000-4000-8000-000000000001', '82000000-0000-4000-8000-000000000017', current_date - 30, 'UTC', now() - interval '29 days', now() - interval '30 days');
+select throws_ok(
+  $$insert into public.looking_back_packages (id, daily_set_id, family_id, package_date, package_type, subject_family_member_id, secondary_subject_family_member_id, display_kind, display_title, display_era, recipe_identity, signature, position) values ('a7000000-0000-4000-8000-000000000002', 'a7000000-0000-4000-8000-000000000001', '82000000-0000-4000-8000-000000000017', current_date - 30, 'members_together', '83000000-0000-4000-8000-000000000006', '83000000-0000-4000-8000-000000000008', 'Together', 'Wrong family', 'From your archive', 'members_together:wrong-family', repeat('1', 64), 0)$$,
+  '23503', null,
+  'the togetherness secondary subject has a composite same-family foreign key'
+);
+select throws_ok(
+  $$insert into public.looking_back_packages (id, daily_set_id, family_id, package_date, package_type, subject_family_member_id, secondary_subject_family_member_id, display_kind, display_title, display_era, recipe_identity, signature, position) values ('a7000000-0000-4000-8000-000000000003', 'a7000000-0000-4000-8000-000000000001', '82000000-0000-4000-8000-000000000017', current_date - 30, 'members_together', '83000000-0000-4000-8000-000000000006', '83000000-0000-4000-8000-000000000006', 'Together', 'Same member', 'From your archive', 'members_together:same-member', repeat('2', 64), 0)$$,
+  '23514', null,
+  'the togetherness subject constraint rejects equal members'
+);
+select throws_ok(
+  $$insert into public.looking_back_packages (id, daily_set_id, family_id, package_date, package_type, subject_family_member_id, secondary_subject_family_member_id, display_kind, display_title, display_era, recipe_identity, signature, position) values ('a7000000-0000-4000-8000-000000000004', 'a7000000-0000-4000-8000-000000000001', '82000000-0000-4000-8000-000000000017', current_date - 30, 'members_together', '83000000-0000-4000-8000-000000000007', '83000000-0000-4000-8000-000000000006', 'Together', 'Reversed pair', 'From your archive', 'members_together:reversed', repeat('3', 64), 0)$$,
+  '23514', null,
+  'the togetherness subject constraint rejects reversed canonical pairs'
+);
+insert into public.looking_back_packages (id, daily_set_id, family_id, package_date, package_type, subject_family_member_id, secondary_subject_family_member_id, display_kind, display_title, display_era, recipe_identity, signature, position)
+values ('a7000000-0000-4000-8000-000000000005', 'a7000000-0000-4000-8000-000000000001', '82000000-0000-4000-8000-000000000017', current_date - 30, 'members_together', '83000000-0000-4000-8000-000000000006', '83000000-0000-4000-8000-000000000007', 'Together', 'Cascade pair', 'From your archive', 'members_together:cascade', repeat('4', 64), 0);
+delete from public.family_members where id = '83000000-0000-4000-8000-000000000007';
+select is(
+  (select count(*) from public.looking_back_packages where id = 'a7000000-0000-4000-8000-000000000005'),
+  0::bigint,
+  'deleting a togetherness subject cascades the derived package'
 );
 
 insert into public.looking_back_daily_sets (id, family_id, package_date, timezone_name, refresh_after, created_at)

@@ -16,6 +16,7 @@ export interface LookingBackMediaWarmupOptions {
   frames: LookingBackFrame[];
   phase: LookingBackWarmupPhase;
   frameIndex: number;
+  foregroundGeneration?: number;
 }
 
 interface MediaFrameEntry {
@@ -199,6 +200,7 @@ export function useLookingBackMediaWarmup({
   frames,
   phase,
   frameIndex,
+  foregroundGeneration = 0,
 }: LookingBackMediaWarmupOptions): void {
   const queryClient = useQueryClient();
   const runRef = useRef<WarmupRun | null>(null);
@@ -256,7 +258,7 @@ export function useLookingBackMediaWarmup({
       if (runRef.current === run) runRef.current = null;
       if (coordinator.currentRun === run) coordinator.currentRun = null;
     };
-  }, [generation, queryClient]);
+  }, [foregroundGeneration, generation, queryClient]);
 
   useEffect(() => {
     const run = runRef.current;

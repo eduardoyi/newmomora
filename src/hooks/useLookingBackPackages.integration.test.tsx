@@ -76,7 +76,7 @@ function packageResponse(
       dailySetId: 'set-1', packageDate: '2026-08-08', refreshAfter,
       packages: [{
         id: 'package-1', dailySetId: 'set-1', familyId: 'family-1', packageDate: '2026-08-08',
-        packageType: 'on_this_day', subjectFamilyMemberId: null, displayKind: 'On this day',
+        packageType: 'on_this_day', subjectFamilyMemberId: null, secondarySubjectFamilyMemberId: null, displayKind: 'On this day',
         title: 'A day', subtitle: null, era: 'One year ago', tint: null, position: 0,
         memoryIds: ['memory-1', 'memory-2', 'memory-3', 'memory-4'],
         view: { firstViewedAt: null, lastViewedAt: null, completedAt: null },
@@ -230,6 +230,130 @@ describe('useLookingBackPackages integration', () => {
     await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
     expect(hook.result.current.packages[0].title).toBe('A family memory');
     expect(hook.result.current.packages[0].memories[0].taggedMembers[0].isLookingBackHidden).toBe(true);
+    hook.unmount();
+  });
+
+  it('checks every tagged occurrence when a historical portrait is reported', async () => {
+    const member = {
+      id: 'member-1', name: 'Nora', family_id: 'family-1', user_id: 'user-1', date_of_birth: '2020-01-01',
+      illustrated_profile_key: 'current.webp', illustrated_profile_status: 'ready', profile_picture_key: null,
+      updated_at: '2026-01-01', created_at: '2020-01-01', gender: null,
+    };
+    const firstMemory = { ...memories[0], memory_date: '2022-06-01', taggedMembers: [member] };
+    const secondMemory = { ...memories[1], memory_date: '2024-06-01', taggedMembers: [member] };
+    mockedFetchMemories.mockResolvedValue({ data: [firstMemory, secondMemory, ...memories.slice(2)], error: null } as never);
+    mockedFetchPackages.mockResolvedValue({
+      ...packageResponse(),
+      data: {
+        ...packageResponse().data,
+        packages: [{
+          ...packageResponse().data.packages[0], packageType: 'member_at_age',
+          subjectFamilyMemberId: 'member-1', title: 'Nora at two',
+        }],
+      },
+    } as never);
+    mockedUseFamilyPortraitVersions.mockReturnValue({ data: [
+      {
+        id: 'portrait-2022', family_id: 'family-1', family_member_id: 'member-1', user_id: 'user-1',
+        reference_date: '2022-01-01', date_source: 'manual', profile_picture_key: 'then.jpg',
+        illustrated_profile_key: 'then.webp', illustrated_profile_status: 'ready', generation_token: null,
+        generation_started_at: null, generation_output_key: null, deletion_token: null, deletion_started_at: null,
+        created_at: '2022-01-01', updated_at: '2022-01-01',
+      },
+      {
+        id: 'portrait-2024', family_id: 'family-1', family_member_id: 'member-1', user_id: 'user-1',
+        reference_date: '2024-01-01', date_source: 'manual', profile_picture_key: 'later.jpg',
+        illustrated_profile_key: 'later.webp', illustrated_profile_status: 'ready', generation_token: null,
+        generation_started_at: null, generation_output_key: null, deletion_token: null, deletion_started_at: null,
+        created_at: '2024-01-01', updated_at: '2024-01-01',
+      },
+    ] } as never);
+    mockedUseContentSafety.mockReturnValue({
+      isLoading: false, isError: false, isUserBlocked: () => false,
+      isTargetReported: (type: string, id: string | null | undefined) => (
+        type === 'family_member_portrait' && id === 'portrait-2024'
+      ),
+    } as never);
+    const client = createTestQueryClient();
+    const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
+
+    await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
+    expect(hook.result.current.packages[0].title).toBe('A family memory');
+    expect(hook.result.current.packages[0].memories[0].taggedMembers[0].isLookingBackHidden).toBe(false);
+    expect(hook.result.current.packages[0].memories[1].taggedMembers[0].isLookingBackHidden).toBe(true);
+    hook.unmount();
+  });
+
+  it('genericizes a subject title while portrait versions are still loading', async () => {
+    const member = {
+      id: 'member-1', name: 'Nora', family_id: 'family-1', user_id: 'user-1', date_of_birth: '2020-01-01',
+      illustrated_profile_key: 'current.webp', illustrated_profile_status: 'ready', profile_picture_key: null,
+      updated_at: '2026-01-01', created_at: '2020-01-01', gender: null,
+    };
+    mockedFetchMemories.mockResolvedValue({
+      data: [{ ...memories[0], taggedMembers: [member] }, ...memories.slice(1)], error: null,
+    } as never);
+    mockedFetchPackages.mockResolvedValue({
+      ...packageResponse(),
+      data: {
+        ...packageResponse().data,
+        packages: [{
+          ...packageResponse().data.packages[0], packageType: 'member_birthday',
+          subjectFamilyMemberId: 'member-1', title: 'Nora’s birthday, through the years',
+        }],
+      },
+    } as never);
+    mockedUseFamilyPortraitVersions.mockReturnValue({ data: undefined, isLoading: true, isError: false } as never);
+    mockedUseContentSafety.mockReturnValue({
+      isLoading: false, isError: false, isUserBlocked: () => false, isTargetReported: () => false,
+    } as never);
+    const client = createTestQueryClient();
+    const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
+
+    await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
+    expect(hook.result.current.packages[0].title).toBe('A birthday memory');
+    expect(hook.result.current.packages[0].memories[0].taggedMembers[0].isLookingBackHidden).toBe(true);
+    hook.unmount();
+  });
+
+  it('genericizes a togetherness title when either member subject is reported', async () => {
+    const members = [
+      {
+        id: 'member-1', name: 'Nora', family_id: 'family-1', user_id: 'user-1', date_of_birth: null,
+        illustrated_profile_key: 'nora.webp', illustrated_profile_status: 'ready', profile_picture_key: null,
+        updated_at: '2026-01-01', created_at: '2020-01-01', gender: null,
+      },
+      {
+        id: 'member-2', name: 'Leo', family_id: 'family-1', user_id: 'user-1', date_of_birth: null,
+        illustrated_profile_key: 'leo.webp', illustrated_profile_status: 'ready', profile_picture_key: null,
+        updated_at: '2026-01-01', created_at: '2020-01-01', gender: null,
+      },
+    ];
+    mockedFetchMemories.mockResolvedValue({
+      data: [{ ...memories[0], taggedMembers: members }, ...memories.slice(1)], error: null,
+    } as never);
+    mockedFetchPackages.mockResolvedValue({
+      ...packageResponse(),
+      data: {
+        ...packageResponse().data,
+        packages: [{
+          ...packageResponse().data.packages[0], packageType: 'members_together',
+          subjectFamilyMemberId: 'member-1', secondarySubjectFamilyMemberId: 'member-2',
+          title: 'Moments with Nora & Leo',
+        }],
+      },
+    } as never);
+    mockedUseContentSafety.mockReturnValue({
+      isLoading: false, isError: false, isUserBlocked: () => false,
+      isTargetReported: (type: string, id: string | null | undefined) => (
+        type === 'family_member_profile' && id === 'member-2'
+      ),
+    } as never);
+    const client = createTestQueryClient();
+    const hook = renderHook(() => useLookingBackPackages(), { wrapper: createWrapper(client) });
+
+    await waitFor(() => expect(hook.result.current.packages).toHaveLength(1));
+    expect(hook.result.current.packages[0].title).toBe('A shared family memory');
     hook.unmount();
   });
 
