@@ -19,6 +19,7 @@
     "eval:illustration": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-illustration.ts",
     "eval:image-cost": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-image-cost.ts",
     "seed:demo-top-up": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/seed-demo-top-up.ts",
+    "seed:demo-engagement": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/seed-demo-engagement.ts",
     "art:onboarding": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/generate-onboarding-art.ts",
     "export:onboarding": "npx --yes deno run --allow-all --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/export-onboarding-memories.ts",
     "export:onboarding-portraits": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/export-onboarding-portrait-pairs.ts",
