@@ -1,7 +1,7 @@
 # Feature: Looking Back
 
 **Status:** `in-progress`
-**Last updated:** 2026-08-11
+**Last updated:** 2026-08-12
 **PRD reference:** [Journey C](../PRD.md#journey-c--revisit), [§6.5](../PRD.md#65-memory-organization)
 
 ## Overview
@@ -92,6 +92,13 @@ There is no Edge Function, AI call, cron or new storage bucket.
 
 - Package sizes are 4–10 memories, four packages maximum, and cooldowns are
   enforced by the materialization RPC.
+- When at least four eligible memories remain, one daily slot is reserved for
+  `archive_mix` before the lower-priority month/written fallbacks. Its first
+  ten candidates use deterministic age-band quotas: up to four newer
+  historical memories (90 days–18 months), three medium memories (18–36
+  months), and three deep-archive memories (36+ months). Missing bands are
+  backfilled from the remaining eligible archive rather than making the rail
+  empty.
 - A daily set contains at most one package per recipe type. When multiple
   `member_at_age` candidates qualify, a member not featured by that recipe in
   the preceding three days ranks first; this is a soft preference, not a
@@ -148,7 +155,7 @@ There is no Edge Function, AI call, cron or new storage bucket.
 
 | File | Covers |
 |---|---|
-| `supabase/tests/looking_back_packages.sql` | Materialization, empty sentinel stability, cooldowns, one-package-per-recipe daily variety, age-subject rotation, current emotion vocabulary, timezone/DST/leap-day behavior, RLS/RPC authorization, direct-write denial, cascades, and same-family composite FKs (57 pgTAP assertions) |
+| `supabase/tests/looking_back_packages.sql` | Materialization, empty sentinel stability, age-balanced archive-mix quotas, missing-band backfill, slot reservation/release, package-cap safety, same-day age-band refilling, cooldowns, one-package-per-recipe daily variety, age-subject rotation, current emotion vocabulary, timezone/DST/leap-day behavior, RLS/RPC authorization, direct-write denial, cascades, and same-family composite FKs (74 pgTAP assertions) |
 | `supabase/tests/looking_back_packages_concurrency.sh` | Guarded isolated-only test using two independent `psql` sessions: advisory-lock waiting, one sentinel, and stable package order |
 | `supabase/tests/looking_back_packages_benchmark.sh` | Guarded isolated-only 10,000-memory `EXPLAIN (ANALYZE, BUFFERS)` benchmark; run with the explicit local opt-in shown in its header |
 | `supabase/scripts/run-looking-back-maestro.sh` | Guarded seed/run/cleanup harness for a fixed synthetic account, real local-only media bytes, and exact four-memory/five-frame mixed package; rejects hosted URLs and the default local ports |
@@ -225,6 +232,7 @@ LOOKING_BACK_E2E_PASSWORD='<same synthetic local password>' \
 
 | Date | Change |
 |---|---|
+| 2026-08-12 | Balanced `archive_mix` across newer historical, medium, and deep archive bands with deterministic 4/3/3 quotas, reserved one daily slot when viable, and covered the fallback/slot behavior in pgTAP |
 | 2026-08-11 | Viewer-scoped media warm-up now signs every frame with its own URL-cache version, shares exact frame key grouping with StoryFrame, and uses a bounded two-concurrent rolling image lookahead; raw videos remain excluded from expo-image and the detached-player experiment stays gated on device evidence |
 | 2026-08-09 | Added first-year age-zero titles, month-specific archive titles, and `A little look back` for mixed archive packages; kept completion copy grammatical for titles beginning with `From` |
 | 2026-08-08 | Replaced the passive intro instruction with explicit unpaused Start; added bounded preview/original image recovery and video-poster loading treatment; changed completion copy to name the package; and limited daily selection to one package per recipe with soft age-subject rotation |

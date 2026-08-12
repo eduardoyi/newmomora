@@ -472,8 +472,16 @@ opportunistically cleaned by materialization; daily-set cascades remove
 packages, items, and personal view rows.
 
 Daily materialization keeps at most one candidate per `package_type`, then
-selects up to four recipe types by the documented deterministic priority. A
-recent `recipe_identity` receives a soft three-day ranking penalty. Within
+selects up to four recipe types by the documented deterministic priority. When
+at least four eligible memories remain, `archive_mix` is considered before the
+lower-priority month/written fallbacks and reserves one of the four slots. Its
+candidate order is deterministic but age-stratified: up to four memories from
+90 days–18 months, three from 18–36 months, and three at least 36 months old.
+Missing bands are filled from the remaining eligible IDs, preserving the
+4–10 package bound. The final de-overlap step re-ranks remaining IDs within
+each archive age band so same-day overlap refills that band before global
+backfill; thematic recipes retain their date order. A recent
+`recipe_identity` receives a soft three-day ranking penalty. Within
 `member_at_age`, candidates for a subject featured by an age package in the
 preceding three days receive an additional soft penalty before the
 deterministic day hash. Exact final-package (14-day) and included-memory

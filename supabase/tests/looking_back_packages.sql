@@ -1,6 +1,6 @@
 begin;
 
-select plan(59);
+select plan(74);
 
 insert into auth.users (id, email, is_anonymous)
 values
@@ -16,7 +16,10 @@ values
   ('81000000-0000-4000-8000-000000000010', 'looking-back-invalid-timezone@example.test', false),
   ('81000000-0000-4000-8000-000000000011', 'looking-back-account-cascade@example.test', false),
   ('81000000-0000-4000-8000-000000000012', 'looking-back-timezone-backward@example.test', false),
-  ('81000000-0000-4000-8000-000000000013', 'looking-back-variety@example.test', false);
+  ('81000000-0000-4000-8000-000000000013', 'looking-back-variety@example.test', false),
+  ('81000000-0000-4000-8000-000000000014', 'looking-back-cap@example.test', false),
+  ('81000000-0000-4000-8000-000000000015', 'looking-back-release@example.test', false),
+  ('81000000-0000-4000-8000-000000000016', 'looking-back-reservation@example.test', false);
 
 insert into public.user_profiles (id, name, timezone)
 values
@@ -31,7 +34,10 @@ values
   ('81000000-0000-4000-8000-000000000010', 'Looking Back Invalid Timezone', 'Mars/Olympus_Mons'),
   ('81000000-0000-4000-8000-000000000011', 'Looking Back Account Cascade', 'UTC'),
   ('81000000-0000-4000-8000-000000000012', 'Looking Back Timezone Backward', 'Pacific/Honolulu'),
-  ('81000000-0000-4000-8000-000000000013', 'Looking Back Variety', 'UTC')
+  ('81000000-0000-4000-8000-000000000013', 'Looking Back Variety', 'UTC'),
+  ('81000000-0000-4000-8000-000000000014', 'Looking Back Cap', 'UTC'),
+  ('81000000-0000-4000-8000-000000000015', 'Looking Back Release', 'UTC'),
+  ('81000000-0000-4000-8000-000000000016', 'Looking Back Reservation', 'UTC')
 on conflict (id) do update set timezone = excluded.timezone;
 
 insert into public.families (id, owner_id, name)
@@ -45,7 +51,10 @@ values
   ('82000000-0000-4000-8000-000000000007', '81000000-0000-4000-8000-000000000010', 'Invalid Timezone Family'),
   ('82000000-0000-4000-8000-000000000008', '81000000-0000-4000-8000-000000000011', 'Account Cascade Family'),
   ('82000000-0000-4000-8000-000000000009', '81000000-0000-4000-8000-000000000012', 'Timezone Backward Family'),
-  ('82000000-0000-4000-8000-000000000010', '81000000-0000-4000-8000-000000000013', 'Variety Family');
+  ('82000000-0000-4000-8000-000000000010', '81000000-0000-4000-8000-000000000013', 'Variety Family'),
+  ('82000000-0000-4000-8000-000000000014', '81000000-0000-4000-8000-000000000014', 'Cap Family'),
+  ('82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015', 'Release Family'),
+  ('82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016', 'Reservation Family');
 
 insert into public.family_memberships (family_id, user_id, role)
 values
@@ -60,7 +69,10 @@ values
   ('82000000-0000-4000-8000-000000000007', '81000000-0000-4000-8000-000000000010', 'owner'),
   ('82000000-0000-4000-8000-000000000008', '81000000-0000-4000-8000-000000000011', 'owner'),
   ('82000000-0000-4000-8000-000000000009', '81000000-0000-4000-8000-000000000012', 'owner'),
-  ('82000000-0000-4000-8000-000000000010', '81000000-0000-4000-8000-000000000013', 'owner');
+  ('82000000-0000-4000-8000-000000000010', '81000000-0000-4000-8000-000000000013', 'owner'),
+  ('82000000-0000-4000-8000-000000000014', '81000000-0000-4000-8000-000000000014', 'owner'),
+  ('82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015', 'owner'),
+  ('82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016', 'owner');
 
 insert into public.family_members (id, family_id, user_id, name, date_of_birth)
 values (
@@ -195,11 +207,19 @@ select ('88000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
   '82000000-0000-4000-8000-000000000005', '81000000-0000-4000-8000-000000000008',
   'Signature fixture ' || series, current_date - (500 + series * 41), 'text_illustration', 'failed'
 from generate_series(1, 4) as series;
+-- The post-exposure survivors intentionally span all three archive age bands:
+-- newer historical (90d-18mo), medium (18-36mo), and deep (36mo+).
 insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
 select ('89000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
   '82000000-0000-4000-8000-000000000006', '81000000-0000-4000-8000-000000000009',
-  'Soft penalty fixture ' || series, current_date - (500 + series * 37), 'text_illustration', 'failed'
-from generate_series(1, 8) as series;
+  'Soft penalty fixture ' || series,
+  current_date - case
+    when series in (1, 4, 5, 6, 7, 8, 9) then 400 + series
+    when series in (2, 10, 11, 12, 13, 14) then 800 + series
+    else 1500 + series
+  end,
+  'text_illustration', 'failed'
+from generate_series(1, 19) as series;
 insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
 select ('8a000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
   '82000000-0000-4000-8000-000000000007', '81000000-0000-4000-8000-000000000010',
@@ -210,6 +230,210 @@ select ('8d000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
   '82000000-0000-4000-8000-000000000009', '81000000-0000-4000-8000-000000000012',
   'Timezone collision fixture ' || series, current_date - (500 + series * 43), 'text_illustration', 'failed'
 from generate_series(1, 4) as series;
+
+-- The cap fixture has three viable thematic recipes before archive_mix. Its
+-- exact mixed-archive signature is cooling down, while separate month and
+-- written fallbacks remain viable. Without the unconditional four-package
+-- guard, the second fallback attempts position 4 and rolls back the RPC.
+insert into public.family_members (id, family_id, user_id, name, date_of_birth)
+values (
+  '83000000-0000-4000-8000-000000000014',
+  '82000000-0000-4000-8000-000000000014',
+  '81000000-0000-4000-8000-000000000014',
+  'Cap Child', current_date - interval '6 years'
+);
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('8e000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000014', '81000000-0000-4000-8000-000000000014',
+  'Cap on-this-day fixture ' || series, (current_date - interval '4 years')::date,
+  'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('8f000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000014', '81000000-0000-4000-8000-000000000014',
+  'Cap around-this-time fixture ' || series,
+  (current_date - interval '4 years')::date + 5, 'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('90000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000014', '81000000-0000-4000-8000-000000000014',
+  'Cap member-at-age fixture ' || series,
+  (current_date - interval '4 years')::date + 15 + series, 'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memory_family_members (memory_id, family_member_id)
+select id, '83000000-0000-4000-8000-000000000014'
+from public.memories
+where family_id = '82000000-0000-4000-8000-000000000014'
+  and id::text like '90000000%';
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('91000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000014', '81000000-0000-4000-8000-000000000014',
+  'Cap month fallback fixture ' || series,
+  (current_date - interval '4 years')::date - 11, 'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('92000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000014', '81000000-0000-4000-8000-000000000014',
+  'Cap written fallback fixture ' || series,
+  (current_date - interval '22 months')::date, 'text_only', 'none'
+from generate_series(1, 4) as series;
+insert into public.looking_back_daily_sets (id, family_id, package_date, timezone_name, refresh_after, created_at)
+values
+  ('8e100000-0000-4000-8000-000000000014', '82000000-0000-4000-8000-000000000014', current_date - 8, 'UTC', (current_date - 7)::timestamp at time zone 'UTC', transaction_timestamp() - interval '8 days'),
+  ('8e300000-0000-4000-8000-000000000014', '82000000-0000-4000-8000-000000000014', current_date - 1, 'UTC', current_date::timestamp at time zone 'UTC', transaction_timestamp() - interval '1 day');
+insert into public.looking_back_packages (
+  id, daily_set_id, family_id, package_date, package_type, display_kind,
+  display_title, display_era, recipe_identity, signature, position, created_at
+)
+values
+  (
+    '8e200000-0000-4000-8000-000000000014',
+    '8e100000-0000-4000-8000-000000000014',
+    '82000000-0000-4000-8000-000000000014', current_date - 8, 'archive_mix',
+    'From your archive', 'Cooling archive', 'From your archive', 'archive_mix',
+    encode(extensions.digest(
+      'archive_mix:archive_mix:' || (
+        select array_to_string(array_agg(id order by id), ',')
+        from public.memories
+        where family_id = '82000000-0000-4000-8000-000000000014'
+          and (id::text like '91000000%' or id::text like '92000000%')
+      ), 'sha256'
+    ), 'hex'), 0, transaction_timestamp() - interval '8 days'
+  ),
+  (
+    '8e400000-0000-4000-8000-000000000014',
+    '8e300000-0000-4000-8000-000000000014',
+    '82000000-0000-4000-8000-000000000014', current_date - 1, 'month_archive',
+    'From your archive', 'From October 2024', 'October 2024',
+    'month_archive:' || date_trunc('month', (current_date - interval '22 months')::date)::date::text,
+    repeat('d', 64), 0, transaction_timestamp() - interval '1 day'
+  );
+insert into public.looking_back_package_memories (package_id, family_id, memory_id, position)
+select '8e200000-0000-4000-8000-000000000014',
+  '82000000-0000-4000-8000-000000000014', id,
+  row_number() over (order by id) - 1
+from public.memories
+where family_id = '82000000-0000-4000-8000-000000000014'
+  and (id::text like '91000000%' or id::text like '92000000%');
+
+-- The release fixture has one thematic package, a viable archive_mix, and
+-- two lower fallbacks. Accepting archive_mix must release its reservation so
+-- the fourth package is still materialized.
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('93000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015',
+  'Release on-this-day fixture ' || series, (current_date - interval '4 years')::date,
+  'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('93100000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015',
+  'Release newer core fixture ' || series, current_date - (400 + series * 20),
+  'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('93200000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015',
+  'Release medium core fixture ' || series, current_date - (700 + series * 30),
+  'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('93300000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015',
+  'Release deep core fixture ' || series, current_date - (1400 + series * 30),
+  'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('93400000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015',
+  'Release month fallback fixture ' || series, (current_date - interval '4 years')::date - 10,
+  'text_illustration', 'failed'
+from generate_series(1, 8) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('93500000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015',
+  'Release written fallback fixture ' || series, (current_date - interval '22 months')::date,
+  'text_only', 'none'
+from generate_series(1, 8) as series;
+insert into public.looking_back_daily_sets (id, family_id, package_date, timezone_name, refresh_after, created_at)
+values (
+  '93510000-0000-4000-8000-000000000015',
+  '82000000-0000-4000-8000-000000000015',
+  current_date - 1, 'UTC', current_date::timestamp at time zone 'UTC',
+  transaction_timestamp() - interval '1 day'
+);
+insert into public.looking_back_packages (
+  id, daily_set_id, family_id, package_date, package_type, display_kind,
+  display_title, display_era, recipe_identity, signature, position, created_at
+)
+values (
+  '93520000-0000-4000-8000-000000000015',
+  '93510000-0000-4000-8000-000000000015',
+  '82000000-0000-4000-8000-000000000015', current_date - 1, 'month_archive',
+  'From your archive', 'From October 2024', 'October 2024',
+  'month_archive:' || date_trunc('month', (current_date - interval '22 months')::date)::date::text,
+  repeat('e', 64), 0, transaction_timestamp() - interval '1 day'
+);
+
+-- Four thematic recipes are viable here. The archive reservation must stop
+-- the fourth thematic recipe from consuming position 3, and the post-overlap
+-- archive must refill the deep band after the on-this-day/member packages
+-- consume deep memories from its initial quota.
+insert into public.family_members (id, family_id, user_id, name, date_of_birth)
+values (
+  '83000000-0000-4000-8000-000000000016',
+  '82000000-0000-4000-8000-000000000016',
+  '81000000-0000-4000-8000-000000000016',
+  'Reservation Child', current_date - interval '6 years'
+);
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('96000000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016',
+  'Reservation on-this-day fixture ' || series, (current_date - interval '4 years')::date,
+  'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('96100000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016',
+  'Reservation one-year fixture ' || series,
+  (current_date - interval '1 year')::date + case series when 1 then -3 when 2 then -2 when 3 then -1 else 1 end,
+  'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('96200000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016',
+  'Reservation member-at-age fixture ' || series, current_date - (1500 + series),
+  'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memory_family_members (memory_id, family_member_id)
+select id, '83000000-0000-4000-8000-000000000016'
+from public.memories
+where family_id = '82000000-0000-4000-8000-000000000016'
+  and id::text like '96200000%';
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('96300000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016',
+  'Reservation around-this-time fixture ' || series,
+  (current_date - interval '2 years')::date + 5, 'text_illustration', 'failed'
+from generate_series(1, 4) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('96400000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016',
+  'Reservation newer filler ' || series, current_date - (400 + series * 12),
+  'text_illustration', 'failed'
+from generate_series(1, 8) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('96500000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016',
+  'Reservation medium filler ' || series, current_date - (750 + series * 20),
+  'text_illustration', 'failed'
+from generate_series(1, 8) as series;
+insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
+select ('96600000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
+  '82000000-0000-4000-8000-000000000016', '81000000-0000-4000-8000-000000000016',
+  'Reservation deep filler ' || series, current_date - (1400 + series * 20),
+  'text_illustration', 'failed'
+from generate_series(1, 8) as series;
 
 insert into public.looking_back_daily_sets (id, family_id, package_date, timezone_name, refresh_after, created_at)
 values
@@ -396,6 +620,121 @@ select ok(
   (select package_id from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000006') limit 1) is not null,
   'a recently exposed archive_mix identity is penalized, not hard-excluded when it is the viable candidate'
 );
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000006'
+     and package_date = current_date
+     and package_type = 'archive_mix'),
+  1::bigint,
+  'a viable archive mix gets a daily slot before lower-priority archive fallbacks'
+);
+select is(
+  (select count(*) from public.looking_back_package_memories i
+   join public.looking_back_packages p on p.id = i.package_id
+   join public.memories m on m.id = i.memory_id
+   where p.family_id = '82000000-0000-4000-8000-000000000006'
+     and p.package_date = current_date
+     and p.package_type = 'archive_mix'
+     and m.memory_date > current_date - interval '18 months'),
+  4::bigint,
+  'the mixed archive takes four newer historical memories when the band is full'
+);
+select is(
+  (select count(*) from public.looking_back_package_memories i
+   join public.looking_back_packages p on p.id = i.package_id
+   join public.memories m on m.id = i.memory_id
+   where p.family_id = '82000000-0000-4000-8000-000000000006'
+     and p.package_date = current_date
+     and p.package_type = 'archive_mix'
+     and m.memory_date > current_date - interval '36 months'
+     and m.memory_date <= current_date - interval '18 months'),
+  3::bigint,
+  'the mixed archive takes three medium memories when the band is full'
+);
+select is(
+  (select count(*) from public.looking_back_package_memories i
+   join public.looking_back_packages p on p.id = i.package_id
+   join public.memories m on m.id = i.memory_id
+   where p.family_id = '82000000-0000-4000-8000-000000000006'
+     and p.package_date = current_date
+     and p.package_type = 'archive_mix'
+     and m.memory_date <= current_date - interval '36 months'),
+  3::bigint,
+  'the mixed archive takes three deep memories when the band is full'
+);
+
+select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000014', true);
+select lives_ok(
+  $$select * from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000014')$$,
+  'a rejected archive mix releases exactly one fallback slot without exceeding four packages'
+);
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000014'
+     and package_date = current_date),
+  4::bigint,
+  'the rejected archive mix still leaves a four-package daily set'
+);
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000014'
+     and package_date = current_date
+     and position = 4),
+  0::bigint,
+  'a rejected archive mix can never create position four'
+);
+
+select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000015', true);
+select lives_ok(
+  $$select * from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000015')$$,
+  'a selected archive mix releases its reservation for a valid fourth package'
+);
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000015'
+     and package_date = current_date),
+  4::bigint,
+  'a viable archive mix does not suppress a fourth lower-priority package'
+);
+select ok(
+  exists (select 1 from public.looking_back_packages
+          where family_id = '82000000-0000-4000-8000-000000000015'
+            and package_date = current_date and package_type = 'archive_mix')
+  and exists (select 1 from public.looking_back_packages
+              where family_id = '82000000-0000-4000-8000-000000000015'
+                and package_date = current_date and package_type = 'written_archive'),
+  'the released slot contains both the mixed archive and its lower fallback'
+);
+
+select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000016', true);
+select lives_ok(
+  $$select * from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000016')$$,
+  'a viable archive mix reserves the fourth slot ahead of a fourth thematic recipe'
+);
+select is(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000016'
+     and package_date = current_date and package_type = 'archive_mix'),
+  1::bigint,
+  'the reserved slot materializes an archive mix even with four thematic candidates'
+);
+select is(
+  (select position from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000016'
+     and package_date = current_date and package_type = 'archive_mix'),
+  3::smallint,
+  'the archive mix occupies the fourth position after three thematic packages'
+);
+select is(
+  (select count(*) from public.looking_back_package_memories i
+   join public.looking_back_packages p on p.id = i.package_id
+   join public.memories m on m.id = i.memory_id
+   where p.family_id = '82000000-0000-4000-8000-000000000016'
+     and p.package_date = current_date and p.package_type = 'archive_mix'
+     and m.memory_date <= current_date - interval '36 months'),
+  3::bigint,
+  'same-day de-overlap refills the deep archive quota from unselected deep memories'
+);
 
 select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000013', true);
 select count(*) from public.get_or_create_looking_back_packages('82000000-0000-4000-8000-000000000010');
@@ -436,6 +775,18 @@ select is(
   make_date(2027, 2, 1) + least(28, extract(day from (make_date(2027, 2, 1) + interval '1 month - 1 day'))::int - 1),
   date '2027-02-28',
   'the leap-day anniversary calculation normalizes a non-leap prior year to February 28'
+);
+select ok(
+  (select count(*) from public.looking_back_packages
+   where family_id = '82000000-0000-4000-8000-000000000007'
+     and package_date = current_date
+     and package_type = 'archive_mix') = 1
+  and (select count(*) from public.looking_back_package_memories i
+   join public.looking_back_packages p on p.id = i.package_id
+   where p.family_id = '82000000-0000-4000-8000-000000000007'
+     and p.package_date = current_date
+     and p.package_type = 'archive_mix') = 4,
+  'a mixed archive backfills missing age bands when only four newer/medium memories exist'
 );
 
 select set_config('request.jwt.claim.sub', '81000000-0000-4000-8000-000000000001', true);

@@ -260,7 +260,7 @@ and documentation:
 | `member_at_age` | Memories tagging one member while their age-at-memory is the same integer age from 0–17 | `[Name] at [age]` for ages 1–17 / `From [Name]'s first year` at age 0 |
 | `month_archive` | 4–10 memories from one past calendar month/year | `From your archive` / `From August 2025` |
 | `written_archive` | Text-only memories older than 90 days | `From your archive` / `Small things, written down` |
-| `archive_mix` | Deterministically seeded fallback across eligible older memories | `From your archive` / `A little look back` |
+| `archive_mix` | Deterministically seeded, age-balanced selection across eligible older memories; up to 4 newer historical, 3 medium, and 3 deep-archive memories before backfill | `From your archive` / `A little look back` |
 
 V1 deliberately excludes semantic packages such as `Quiet mornings`, `The
 summer of the hose`, locations, milestones, or "best" memories. Momora does
@@ -296,10 +296,13 @@ For a family-local day:
    intentionally empty day is stable too.
 2. Generate all eligible candidates using only database metadata. Give each a
    non-PII `recipe_identity` made from its type plus subject/window identity.
-3. Remove memory IDs exposed by any package in the previous 7 days. Normalize
-   the survivors to at most ten memories in deterministic
-   `(memory_date desc, created_at desc, id)` order; the fallback recipe uses a
-   stable hash of `(family_id, package_date, memory_id)` for variety. Discard
+3. Remove memory IDs exposed by any package in the previous 7 days. For
+   `archive_mix`, classify survivors as newer historical (90 days–18 months),
+   medium (18–36 months), or deep archive (36+ months), choose up to 4/3/3
+   candidates per band using a stable daily hash, then append deterministic
+   backfill candidates until the archive has at most ten IDs. Normalize
+   thematic recipes in `(memory_date desc, created_at desc, id)` order, while
+   preserving the mixed archive's quota-first candidate order. Discard
    candidates below four memories.
 4. Within each recipe type, rank candidates by deterministic daily key after
    applying a 3-day penalty to a recently exposed `recipe_identity`. For
@@ -307,11 +310,16 @@ For a family-local day:
    subject was recently exposed by another age package. Keep only the best
    candidate per recipe type, then rank those candidates by recipe priority
    (`on_this_day`, `one_year_ago`, `member_at_age`, `around_this_time`,
-   `month_archive`, `written_archive`, `archive_mix`). This prevents one
-   recipe—especially several ages for one child—from filling the daily rail
-   without requiring households to have multiple children or recipe types.
+   `archive_mix`, `month_archive`, `written_archive`). When a viable
+   `archive_mix` exists, no more than three higher-priority thematic packages
+   may consume the set before it is considered. This reserves one daily slot
+   for broad rediscovery without requiring households to have multiple
+   children or recipe types. If the mixed candidate fails after de-overlap or
+   exact-signature cooldown, lower fallbacks may fill the released slot.
 5. Greedily consider candidates until four are selected or candidates run out.
-   Remove IDs already selected that day and discard candidates below four.
+   Remove IDs already selected that day and discard candidates below four;
+   `archive_mix` re-ranks remaining IDs within each age band so overlap
+   refills the 4/3/3 quotas before deterministic cross-band backfill.
 6. Only now compute the final `signature = sha256(package_type +
    recipe_identity + sorted final memory ids)`. Reject it if that exact final
    signature appeared in the previous 14 days; continue to the next candidate.
