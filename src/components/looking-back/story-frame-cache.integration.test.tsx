@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanupAsync, render, renderHook, waitFor } from '@testing-library/react-native';
+import { act, cleanupAsync, fireEvent, render, renderHook, waitFor } from '@testing-library/react-native';
 import { Image } from 'expo-image';
 import type { ReactNode } from 'react';
+import { Platform } from 'react-native';
 
 import { StoryFrame } from './story-frame';
 
@@ -56,10 +57,13 @@ function wrapperFor(queryClient: QueryClient) {
 }
 
 describe('StoryFrame media warm-up cache regression', () => {
+  const originalPlatformOs = Platform.OS;
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
     jest.clearAllMocks();
+    mockedLoadAsync.mockImplementation(async () => ({ release: jest.fn() }));
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: Infinity } },
     });
@@ -75,6 +79,7 @@ describe('StoryFrame media warm-up cache regression', () => {
   afterEach(async () => {
     await cleanupAsync();
     queryClient.clear();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatformOs });
   });
 
   it('mounts a later media frame from the warmed exact query without a new signing call or LoadingPlate', async () => {
@@ -120,14 +125,16 @@ describe('StoryFrame media warm-up cache regression', () => {
       () => useLookingBackMediaWarmup({ frames: [frame], phase: 'intro', frameIndex: 0 }),
       { wrapper: wrapperFor(queryClient) },
     );
+    const onBuffering = jest.fn();
+    const onReady = jest.fn();
     const screen = render(
       <QueryClientProvider client={queryClient}>
         <StoryFrame
           frame={frame}
           isPaused={false}
           muted
-          onBuffering={() => {}}
-          onReady={() => {}}
+          onBuffering={onBuffering}
+          onReady={onReady}
           onUnavailable={() => {}}
         />
       </QueryClientProvider>,
@@ -153,6 +160,38 @@ describe('StoryFrame media warm-up cache regression', () => {
       expect(screen.queryByTestId('looking-back-media-loading')).toBeNull();
       expect(screen.getByTestId('looking-back-image')).toBeTruthy();
     });
+    fireEvent(screen.getByTestId('looking-back-image'), 'display');
+    expect(onReady).toHaveBeenCalledTimes(1);
     warmup.unmount();
+  });
+
+  it('uses imperative image-load readiness when iOS omits native image callbacks', async () => {
+    const frame = buildPhotoFrame('frame-0', 'memory-0-version', 'photo-0-original', 'photo-0-preview');
+    const onReady = jest.fn();
+    let resolveLoad: ((imageRef: Awaited<ReturnType<typeof Image.loadAsync>>) => void) | undefined;
+    mockedLoadAsync.mockImplementation(() => new Promise((resolve) => {
+      resolveLoad = resolve;
+    }) as Promise<Awaited<ReturnType<typeof Image.loadAsync>>>);
+    const screen = render(
+      <QueryClientProvider client={queryClient}>
+        <StoryFrame
+          frame={frame}
+          isPaused={false}
+          muted
+          onBuffering={() => {}}
+          onReady={onReady}
+          onUnavailable={() => {}}
+        />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('looking-back-image')).toBeTruthy());
+    expect(onReady).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveLoad?.({ release: jest.fn() } as Awaited<ReturnType<typeof Image.loadAsync>>);
+      await Promise.resolve();
+    });
+    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('looking-back-image')).toBeTruthy();
   });
 });

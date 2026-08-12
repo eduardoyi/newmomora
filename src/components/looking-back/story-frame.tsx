@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { VideoView, type VideoPlayer, type SourceLoadEventPayload, type SourceChangeEventPayload } from 'expo-video';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   cancelAnimation,
   FadeIn,
@@ -31,28 +31,45 @@ function StoryVideo({ frameId, player, url, videoKey, posterUrl, posterKey, mute
   const placeholderUrl = posterUrl ?? runtimeThumbnail?.uri;
   const [renderedFrame, setRenderedFrame] = useState<{ player: VideoPlayer; url: string } | null>(null);
   const [attachedPlayer, setAttachedPlayer] = useState<VideoPlayer | null>(null);
-  const callbacksRef = useRef({ onBuffering, onReady, onUnavailable, onDuration });
+  const readyVisualFallbackRef = useRef(true);
+  const readyNotificationRef = useRef<{ player: VideoPlayer; url: string } | null>(null);
+  const renderedFrameRef = useRef<{ player: VideoPlayer; url: string } | null>(null);
+  const sourceIdentityRef = useRef<{ player: VideoPlayer | null; url: string } | null>(null);
+  const callbacksRef = useRef({ onBuffering, onReady, onUnavailable, onDuration, url });
   useEffect(() => {
-    callbacksRef.current = { onBuffering, onReady, onUnavailable, onDuration };
-  }, [onBuffering, onDuration, onReady, onUnavailable]);
+    callbacksRef.current = { onBuffering, onReady, onUnavailable, onDuration, url };
+  }, [onBuffering, onDuration, onReady, onUnavailable, url]);
+
+  const notifyReady = useCallback((readyPlayer: VideoPlayer, readyUrl: string) => {
+    if (readyNotificationRef.current?.player === readyPlayer && readyNotificationRef.current.url === readyUrl) return;
+    readyNotificationRef.current = { player: readyPlayer, url: readyUrl };
+    callbacksRef.current.onReady();
+  }, []);
+
+  const setRenderedFrameState = useCallback((next: { player: VideoPlayer; url: string } | null) => {
+    renderedFrameRef.current = next;
+    setRenderedFrame(next);
+  }, []);
 
   useEffect(() => {
+    const previousSource = sourceIdentityRef.current;
+    if (!previousSource || previousSource.player !== player) {
+      readyVisualFallbackRef.current = true;
+    } else if (previousSource.url !== url) {
+      // A refreshed signed URL on the same native player must wait for the
+      // matching source/visible first-frame path; readyToPlay alone may still
+      // describe the old native item.
+      readyVisualFallbackRef.current = false;
+    }
+    sourceIdentityRef.current = { player, url };
+
     if (!player) {
       callbacksRef.current.onBuffering(true);
       return undefined;
     }
 
     const handleStatus = (status: VideoPlayer['status']) => {
-      callbacksRef.current.onBuffering(status === 'loading');
-      if (status === 'readyToPlay') {
-        callbacksRef.current.onBuffering(false);
-        callbacksRef.current.onReady();
-        // iOS can finish buffering while the player is detached. In that
-        // case the surface-scoped onFirstFrameRender callback may not fire
-        // again after VideoView attaches, so readyToPlay is the safe visual
-        // fallback for the already-buffered handoff.
-        setRenderedFrame({ player, url });
-      }
+      if (status === 'loading') callbacksRef.current.onBuffering(true);
       if (status === 'error') callbacksRef.current.onUnavailable();
     };
     const sourceLoadSubscription = player.addListener('sourceLoad', (event: SourceLoadEventPayload) => {
@@ -64,9 +81,14 @@ function StoryVideo({ frameId, player, url, videoKey, posterUrl, posterKey, mute
     const sourceChangeSubscription = player.addListener('sourceChange', (event: SourceChangeEventPayload) => {
       const changedUrl = sourceUriFromEvent(event.source);
       if (changedUrl && changedUrl !== url) return;
+      // iOS can deliver the initial source event after the detached player has
+      // already been accepted as a ready visual handoff. That event describes
+      // the same source, not a new signed-URL boundary, so do not put the
+      // loading cover back over an already-rendered frame.
+      if (renderedFrameRef.current?.player === player && renderedFrameRef.current.url === url) return;
       // Keep the poster over an attached player until the newly signed source
       // actually renders its first frame.
-      setRenderedFrame(null);
+      setRenderedFrameState(null);
       callbacksRef.current.onBuffering(true);
     });
     const statusSubscription = player.addListener('statusChange', ({ status }) => handleStatus(status));
@@ -81,7 +103,7 @@ function StoryVideo({ frameId, player, url, videoKey, posterUrl, posterKey, mute
       sourceChangeSubscription.remove();
       statusSubscription.remove();
     };
-  }, [player, url]);
+  }, [notifyReady, player, setRenderedFrameState, url]);
 
   useEffect(() => {
     if (!player) {
@@ -97,21 +119,24 @@ function StoryVideo({ frameId, player, url, videoKey, posterUrl, posterKey, mute
     // The event subscriptions above are live before playback is started. A
     // handed-off player may already be ready, so reconcile its current native
     // state immediately instead of waiting for an event that already fired.
-    callbacksRef.current.onBuffering(player.status === 'loading');
-    if (player.status === 'readyToPlay') {
+    const canUseReadyVisualFallback = Platform.OS === 'ios'
+      && player.status === 'readyToPlay'
+      && readyVisualFallbackRef.current;
+    callbacksRef.current.onBuffering(!canUseReadyVisualFallback);
+    if (canUseReadyVisualFallback) {
       callbacksRef.current.onBuffering(false);
-      callbacksRef.current.onReady();
+      notifyReady(player, callbacksRef.current.url);
       // The player may have reached readyToPlay before this visible lease was
       // mounted. Do not wait for a first-frame event that already happened on
       // the detached preload surface.
-      setRenderedFrame({ player, url });
+      setRenderedFrameState({ player, url: callbacksRef.current.url });
+      readyVisualFallbackRef.current = false;
     }
     if (player.status === 'error') callbacksRef.current.onUnavailable();
     if (Number.isFinite(player.duration) && player.duration > 0) callbacksRef.current.onDuration(player.duration * 1000);
 
     // This state change is the native-surface admission boundary: the manager
     // has granted the lease, so only the next render may mount VideoView.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAttachedPlayer(player);
 
     return () => {
@@ -120,14 +145,19 @@ function StoryVideo({ frameId, player, url, videoKey, posterUrl, posterKey, mute
       // older lease during a frame transition.
       setAttachedPlayer((current) => current === player ? null : current);
     };
-  }, [frameId, onAttach, onDetach, player]);
+  }, [frameId, notifyReady, onAttach, onDetach, player, setRenderedFrameState]);
 
   useEffect(() => {
     if (attachedPlayer) configureVideoPlayer(attachedPlayer, muted, isPaused);
   }, [attachedPlayer, isPaused, muted]);
   const handleFirstFrame = useCallback(() => {
-    if (player) setRenderedFrame({ player, url });
-  }, [player, url]);
+    if (player) {
+      readyVisualFallbackRef.current = false;
+      callbacksRef.current.onBuffering(false);
+      notifyReady(player, url);
+      setRenderedFrameState({ player, url });
+    }
+  }, [notifyReady, player, setRenderedFrameState, url]);
   const sourceUri = attachedPlayer === player && player ? <VideoView contentFit="contain" nativeControls={false} onFirstFrameRender={handleFirstFrame} player={player} style={styles.media} testID="looking-back-video" /> : null;
   const isVideoReady = Boolean(attachedPlayer === player && player && renderedFrame?.player === player && renderedFrame.url === url);
   return <View style={styles.media}>
@@ -221,9 +251,13 @@ function ReliableStoryImage({
   const [retryCycle, setRetryCycle] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
   const readySourceRef = useRef<string | null>(null);
+  const failedSourceRef = useRef<string | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
   const source = sources[Math.min(sourceIndex, Math.max(0, sources.length - 1))];
+  const sourceIdentity = source ? `${source.key}:${source.url}:${retryCycle}` : null;
+  const sourceKey = source?.key ?? null;
+  const sourceUrl = source?.url ?? null;
 
   useEffect(() => () => {
     isMountedRef.current = false;
@@ -231,6 +265,7 @@ function ReliableStoryImage({
   }, []);
 
   const handleError = useCallback(() => {
+    failedSourceRef.current = sourceIdentity;
     if (sourceIndex + 1 < sources.length) {
       setSourceIndex((current) => current + 1);
       return;
@@ -249,14 +284,31 @@ function ReliableStoryImage({
         setIsRetrying(false);
       });
     }, IMAGE_RETRY_BACKOFF_MS[retryCycle]);
-  }, [onUnavailable, refetch, retryCycle, sourceIndex, sources.length]);
+  }, [onUnavailable, refetch, retryCycle, sourceIdentity, sourceIndex, sources.length]);
 
   const handleReady = useCallback(() => {
-    const sourceIdentity = source ? `${source.key}:${retryCycle}` : null;
     if (!sourceIdentity || readySourceRef.current === sourceIdentity) return;
     readySourceRef.current = sourceIdentity;
     onReady();
-  }, [onReady, retryCycle, source]);
+  }, [onReady, sourceIdentity]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || isRetrying || !sourceKey || !sourceUrl || !sourceIdentity) return undefined;
+
+    let cancelled = false;
+    const loadingIdentity = sourceIdentity;
+    void Image.loadAsync(mediaImageSource(sourceUrl, sourceKey))
+      .then((imageRef) => {
+        imageRef.release();
+        if (!cancelled && failedSourceRef.current !== loadingIdentity) handleReady();
+      })
+      .catch(() => {
+        // The mounted Image remains the authority for retry/fallback errors.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [handleReady, isRetrying, sourceIdentity, sourceKey, sourceUrl]);
 
   if (isRetrying || !source) return <LoadingPlate />;
   return <Image

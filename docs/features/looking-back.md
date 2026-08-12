@@ -120,9 +120,12 @@ There is no Edge Function, AI call, cron or new storage bucket.
   requirement that every household have multiple members.
 - Viewer photos prefer the generated display preview, retry transient signed
   URL/image failures twice, then fall back to the original before showing the
-  unavailable plate. Videos retain their stored first-frame poster (or a
-  runtime thumbnail for legacy rows) under a loading indicator until the
-  player renders its first frame.
+  unavailable plate. Photo readiness accepts a successful mounted-image load,
+  an imperative `Image.loadAsync` cache confirmation, or a native display
+  callback, which covers iOS cache paths that do not replay the display
+  callback. Videos retain their stored first-frame poster (or a runtime
+  thumbnail for legacy rows) under a loading indicator until the player renders
+  its first frame or an already-ready detached handoff is attached.
 - The viewer signs every media frame during the intro with StoryFrame's exact
   key grouping and owning-memory `updated_at` version. It warms the first three
   media frames during the intro, then the current plus next two media frames
@@ -152,8 +155,8 @@ There is no Edge Function, AI call, cron or new storage bucket.
 | `src/hooks/useLookingBackSession.test.tsx` | Frozen snapshot tombstones, access-loss cleanup, and stable frame identity through a detail-style reconciliation |
 | `src/components/looking-back/package-card.test.tsx` | Text and revisited-card treatment, delayed press/open behavior, later-photo cover selection, and legacy raw-video text fallback. |
 | `src/components/looking-back/cover-artwork.test.tsx` | Signed safe-illustration cover rendering and emotion-print fallback after an illustration report. |
-| `src/components/looking-back/story-frame.test.tsx` | Video `readyToPlay`, stored-poster loading treatment and authoritative duration correction; preview-first photos; bounded signed-URL/image retry with original fallback; single-surface image fade; and calm unavailable fallback. |
-| `src/hooks/useLookingBackVideoPreload.test.tsx` | Exact fresh-query admission, asynchronous signing, one-upcoming/two-player admission, same-player intro handoff, muted/paused configuration, duration-only frame stability, signed-URL replacement ordering, background release, and lease-safe A→B→A/unmount cleanup. |
+| `src/components/looking-back/story-frame.test.tsx` | Video `readyToPlay`, ready-before-mount visual handoff, stored-poster loading treatment and authoritative duration correction; preview-first photos; display/load readiness; bounded signed-URL/image retry with original fallback; single-surface image fade; and calm unavailable fallback. |
+| `src/hooks/useLookingBackVideoPreload.test.tsx` | Exact fresh-query admission, asynchronous signing, initial ready-state source fallback, one-upcoming/two-player admission, same-player intro handoff, muted/paused configuration, duration-only frame stability, signed-URL replacement ordering, background release, and lease-safe A→B→A/unmount cleanup. |
 | `src/hooks/useMediaUrls.test.ts` | Stable query key/freshness options shared by mounted and imperative media-URL callers. |
 | `src/hooks/useLookingBackMediaWarmup.test.tsx` | Per-frame URL versions, fresh/stale query behavior, ordered three-frame lookahead, two-load concurrency, raw-video exclusion, reference release, retryable failures, handled rejections, and superseded-run cancellation. |
 | `src/components/looking-back/story-progress.test.tsx` | Equal-width slide segments regardless of dwell time, with memory-level accessible progress units. |
@@ -166,7 +169,8 @@ There is no Edge Function, AI call, cron or new storage bucket.
 | `src/hooks/useLookingBackPackages.integration.test.tsx` | Account/family cache isolation, safety and four-memory threshold filtering, historical portrait/profile safety, optional-rail failures, refresh/online/offline reconciliation, and viewed/completed optimistic outbox behavior. |
 | `src/screen-tests/looking-back-timeline.integration.test.tsx` | Date/title → This week → Looking back → Recently ordering, `Revisited today`, fresh-session reset before snapshot/route navigation, and rail omission when no package is eligible. |
 | `src/screen-tests/looking-back-viewer.integration.test.tsx` | Route-mounted explicit Start flow, warm-up hook wiring, unpaused media readiness, video readiness/viewed marking, frozen-snapshot report/block reconciliation, fail-closed safety and deep-link states, checkpoint/background/access loss, detail pause/resume, close-once paths, package-name completion copy, screen-reader controls, pause/caption/tap navigation, and video metadata. |
-| `src/components/looking-back/story-frame-cache.integration.test.tsx` | Regression coverage that warms a media package, mounts a later real StoryFrame, and verifies an immediate cache hit with no additional URL signing or LoadingPlate. |
+| `src/components/looking-back/story-frame-cache.integration.test.tsx` | Regression coverage for a warmed later frame, a first visible photo mounted concurrently with package signing, and a first photo whose native callbacks are omitted but imperative image loading completes, verifying no extra URL signing or permanently stuck LoadingPlate. |
+| `src/components/looking-back/story-frame-video-preload.integration.test.tsx` | Composes the real video preload controller with StoryFrame to verify the iOS ready-before-attachment handoff and exact signed-URL refresh boundary. |
 | `src/components/offline-banner.test.tsx` | Offline and two-second back-online clearance signal used by the full-screen viewer |
 
 ### Database and performance tests
@@ -253,6 +257,7 @@ LOOKING_BACK_E2E_PASSWORD='<same synthetic local password>' \
 | 2026-08-12 | Balanced `archive_mix` across newer historical, medium, and deep archive bands with deterministic 4/3/3 quotas, reserved one daily slot when viable, and covered the fallback/slot behavior in pgTAP |
 | 2026-08-12 | Added birthday-through-the-years, member-pair, and rotating funny/mischief archive recipes with name-safe subject metadata and database coverage |
 | 2026-08-12 | Added a viewer-scoped `expo-video` manager for one-upcoming same-player handoff, exact signed-source replacement, two-player admission, and lease-safe detach/release; physical iOS/Android validation remains the production gate |
+| 2026-08-12 | Hardened first-open media readiness for iOS: already-ready detached players can complete the initial handoff when native source events are omitted, and imperative image loading covers cache paths that omit display callbacks |
 | 2026-08-11 | Viewer-scoped media warm-up now signs every frame with its own URL-cache version, shares exact frame key grouping with StoryFrame, and uses a bounded two-concurrent rolling image lookahead; raw videos remain excluded from expo-image and the detached-player experiment stays gated on device evidence |
 | 2026-08-09 | Added first-year age-zero titles, month-specific archive titles, and `A little look back` for mixed archive packages; kept completion copy grammatical for titles beginning with `From` |
 | 2026-08-08 | Replaced the passive intro instruction with explicit unpaused Start; added bounded preview/original image recovery and video-poster loading treatment; changed completion copy to name the package; and limited daily selection to one package per recipe with soft age-subject rotation |

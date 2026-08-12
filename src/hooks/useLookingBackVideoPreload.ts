@@ -34,6 +34,8 @@ interface LookingBackVideoSlot {
   desiredUrl: string;
   appliedUrl: string | null;
   sourceRequestUrl: string | null;
+  hasConfirmedSource: boolean;
+  allowInitialReadyFallback: boolean;
   replacementInFlight: boolean;
   replacementAttempts: number;
   retryOnForeground: boolean;
@@ -356,6 +358,8 @@ export class LookingBackVideoPreloadController {
       desiredUrl: descriptor.url,
       appliedUrl: null,
       sourceRequestUrl: null,
+      hasConfirmedSource: false,
+      allowInitialReadyFallback: Platform.OS === 'ios',
       replacementInFlight: false,
       replacementAttempts: 0,
       retryOnForeground: false,
@@ -381,6 +385,9 @@ export class LookingBackVideoPreloadController {
     slot.subscriptions.push(slot.player.addListener('sourceLoad', (event: SourceLoadEventPayload) => {
       this.handleAppliedSource(slot, event.videoSource);
     }));
+    slot.subscriptions.push(slot.player.addListener('statusChange', ({ status }) => {
+      this.handleInitialReadyFallback(slot, status);
+    }));
   }
 
   private handleAppliedSource(slot: LookingBackVideoSlot, source: VideoSource | null | undefined): void {
@@ -399,9 +406,36 @@ export class LookingBackVideoPreloadController {
 
     slot.appliedUrl = uri;
     slot.sourceRequestUrl = null;
+    slot.hasConfirmedSource = true;
     slot.replacementAttempts = 0;
     slot.retryOnForeground = false;
     diagnostics('source-applied', slot);
+    this.onChange();
+  }
+
+  private handleInitialReadyFallback(slot: LookingBackVideoSlot, status: VideoPlayer['status']): void {
+    // On iOS an initially detached AVPlayer can reach readyToPlay without
+    // delivering the sourceChange/sourceLoad event to JavaScript. This is
+    // safe only for the first source: later signed-URL replacements must keep
+    // the exact source-event confirmation rule to avoid handing off a stale
+    // native item.
+    if (
+      status !== 'readyToPlay'
+      || slot.retired
+      || slot.hasConfirmedSource
+      || !slot.allowInitialReadyFallback
+      || slot.appliedUrl
+      || slot.sourceRequestUrl !== slot.desiredUrl
+    ) return;
+
+    slot.replacementInFlight = false;
+    slot.appliedUrl = slot.desiredUrl;
+    slot.sourceRequestUrl = null;
+    slot.hasConfirmedSource = true;
+    slot.allowInitialReadyFallback = false;
+    slot.replacementAttempts = 0;
+    slot.retryOnForeground = false;
+    diagnostics('source-applied-ready-fallback', slot);
     this.onChange();
   }
 
@@ -419,6 +453,13 @@ export class LookingBackVideoPreloadController {
     const desiredUrlChanged = slot.desiredUrl !== descriptor.url;
     const shouldRetry = slot.retryOnForeground && slot.appliedUrl !== descriptor.url;
     if (!desiredUrlChanged && !identityChanged && !shouldRetry) return;
+
+    if (desiredUrlChanged || identityChanged) {
+      // Once the initial signed URL or its owning-row identity changes, a
+      // later readyToPlay event cannot prove which native item is ready.
+      // From here on, exact sourceChange/sourceLoad confirmation is required.
+      slot.allowInitialReadyFallback = false;
+    }
 
     slot.desiredUrl = descriptor.url;
     slot.retryOnForeground = false;

@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanupAsync, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
+import { Platform } from 'react-native';
 
 import { createVideoPlayer, type VideoPlayer } from 'expo-video';
 
@@ -108,8 +109,10 @@ function controllerOptions(frames: LookingBackFrame[], phase: 'intro' | 'playing
 
 describe('useLookingBackVideoPreload', () => {
   let queryClient: QueryClient;
+  const originalPlatformOs = Platform.OS;
 
   beforeEach(() => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
     jest.clearAllMocks();
     players.length = 0;
     mockedCreateVideoPlayer.mockImplementation(() => createFakePlayer());
@@ -119,6 +122,7 @@ describe('useLookingBackVideoPreload', () => {
   afterEach(async () => {
     await cleanupAsync();
     queryClient.clear();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatformOs });
   });
 
   it('preloads the nearest intro video, keeps it muted/paused, and hands that same player to the current frame', async () => {
@@ -295,6 +299,56 @@ describe('useLookingBackVideoPreload', () => {
     expect(controller.getCurrentPlayer()).toBeNull();
     player.emit('sourceLoad', { videoSource: { uri: 'https://signed.example/three', useCaching: true }, duration: 2 });
     expect(controller.getCurrentPlayer()).toBe(player);
+  });
+
+  it('admits an initial iOS-style ready player when the detached source event is not delivered', () => {
+    const frame = buildVideoFrame('frame-0');
+    seedVideoUrl(queryClient, frame, 'https://signed.example/frame-0');
+    const controller = new LookingBackVideoPreloadController(queryClient, jest.fn());
+
+    controller.update(controllerOptions([frame], 'playing', 0));
+    const player = players[0];
+    expect(controller.getCurrentPlayer()).toBeNull();
+
+    player.emit('statusChange', { status: 'readyToPlay' });
+
+    expect(controller.getCurrentPlayer()).toBe(player);
+  });
+
+  it('does not let a late initial ready event confirm a newer signed URL', async () => {
+    const frame = buildVideoFrame('frame-0', 'version-1');
+    seedVideoUrl(queryClient, frame, 'https://signed.example/one');
+    const controller = new LookingBackVideoPreloadController(queryClient, jest.fn());
+
+    controller.update(controllerOptions([frame], 'playing', 0));
+    const player = players[0];
+
+    seedVideoUrl(queryClient, frame, 'https://signed.example/two');
+    controller.update(controllerOptions([frame], 'playing', 0));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(player.replaceAsync).toHaveBeenLastCalledWith({ uri: 'https://signed.example/two', useCaching: true });
+    player.emit('statusChange', { status: 'readyToPlay' });
+    expect(controller.getCurrentPlayer()).toBeNull();
+
+    player.emit('sourceLoad', { videoSource: { uri: 'https://signed.example/two', useCaching: true }, duration: 2 });
+    expect(controller.getCurrentPlayer()).toBe(player);
+  });
+
+  it('does not use the ready-state source fallback on Android', () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    const frame = buildVideoFrame('frame-0');
+    seedVideoUrl(queryClient, frame, 'https://signed.example/frame-0');
+    const controller = new LookingBackVideoPreloadController(queryClient, jest.fn());
+
+    controller.update(controllerOptions([frame], 'playing', 0));
+    const player = players[0];
+    player.emit('statusChange', { status: 'readyToPlay' });
+
+    expect(controller.getCurrentPlayer()).toBeNull();
   });
 
   it('keeps an attached player mounted while replacing its signed URL', () => {

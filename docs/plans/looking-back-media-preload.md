@@ -172,12 +172,11 @@ increasing foreground generation from its existing `AppState` listener.
   - When the foreground generation changes to active, reissue the exact per-frame
     `fetchQuery` calls so a long background interval can renew stale persisted signed URLs;
     do not rely on the frames array changing to trigger this.
-- `StoryFrame` image/retry behavior is otherwise untouched: its per-frame `useMediaUrls`
-  call now hits the warmed cache, and its `refetch`-based retry/self-heal
-  (`MissingMediaRetry`, `ReliableStoryImage`) keeps working unchanged. Step 3 adds only an
-  externally owned video-player prop and its lifecycle callbacks. A viewer paused beyond
-  the 50-minute URL freshness window may re-sign on resume/mount; normal packages complete
-  in minutes.
+- `StoryFrame` keeps its per-frame `useMediaUrls` and retry/self-heal behavior, while
+  `ReliableStoryImage` also uses an imperative `Image.loadAsync` confirmation when iOS
+  does not replay native image callbacks. Step 3 adds an externally owned video-player
+  prop and its lifecycle callbacks. A viewer paused beyond the 50-minute URL freshness
+  window may re-sign on resume/mount; normal packages complete in minutes.
 
 ### 3. Give the next video a head start with same-player handoff
 
@@ -242,7 +241,11 @@ currently allows only one visible video player at a time.
   playback and immediately reconcile `player.status` and `player.duration`. A preloaded
   player may already be `readyToPlay`, so waiting only for a future `statusChange` can leave
   the route paused forever. Reset first-frame state whenever the attachment lease or source
-  changes.
+  changes. On iOS, if the detached initial player is already `readyToPlay` but its initial
+  source event was not delivered, allow that first source to be admitted from the matching
+  ready state; later signed-URL replacements still require exact source confirmation. Treat
+  that already-ready handoff as the visual fallback when the surface-scoped first-frame
+  callback was emitted before `VideoView` attached.
 - Tie the preloaded player to the app lifecycle: release only the detached upcoming player
   when the route backgrounds, while the mounted current player follows the existing pause
   behavior. On foreground, increment the URL warm-up generation and let the manager wait
@@ -278,6 +281,10 @@ currently allows only one visible video player at a time.
   mount the real `StoryFrame` for a later frame and assert it renders its image with
   **zero additional `getMediaUrls` service calls** and no `LoadingPlate` — this is the
   test for the actual bug being fixed.
+- `src/components/looking-back/story-frame-video-preload.integration.test.tsx`: compose
+  the real video preload controller with the real `StoryFrame`; admit an iOS player whose
+  detached ready event precedes attachment, then refresh the signed URL and prove a stale
+  `readyToPlay` does not clear the visible loading cover before the matching first frame.
 - If Step 3 ships, add focused lifecycle coverage in
   `src/hooks/useLookingBackVideoPreload.test.tsx` and the StoryFrame integration surface:
   one upcoming player maximum; muted and paused before handoff; the exact same player

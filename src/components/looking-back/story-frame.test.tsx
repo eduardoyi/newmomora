@@ -1,6 +1,20 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
+import { Platform } from 'react-native';
 
 import { StoryFrame } from './story-frame';
+
+jest.mock('expo-image', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const React = require('react');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { View } = require('react-native');
+  const ImageComponent = (props: Record<string, unknown>) => React.createElement(View, {
+    ...props,
+    source: Array.isArray(props.source) || !props.source ? props.source : [props.source],
+    transition: props.transition === 0 ? { duration: 0 } : props.transition,
+  });
+  return { Image: Object.assign(ImageComponent, { loadAsync: jest.fn(() => new Promise(() => {})) }) };
+});
 
 const listeners = new Map<string, (event: any) => void>();
 const mockPlayer = { duration: 2, status: 'idle' as const, muted: true, loop: false, bufferOptions: {}, addListener: jest.fn((name: string, callback: (event: unknown) => void) => { listeners.set(name, callback as (event: any) => void); return { remove: jest.fn() }; }), pause: jest.fn(), play: jest.fn(), replaceAsync: jest.fn(() => Promise.resolve()), release: jest.fn() };
@@ -20,7 +34,10 @@ const videoFrame = {
 } as any;
 
 describe('StoryFrame video lifecycle', () => {
+  const originalPlatformOs = Platform.OS;
+
   beforeEach(() => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
     listeners.clear();
     jest.clearAllMocks();
     mockPlayer.duration = 2;
@@ -28,6 +45,11 @@ describe('StoryFrame video lifecycle', () => {
     mockAttach.mockImplementation(() => 1);
     mockMediaUrlState = { data: { 'video-key': 'https://signed/video' }, isLoading: false };
   });
+
+  afterEach(() => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatformOs });
+  });
+
   it('marks a video ready after its first rendered frame and corrects its authoritative duration', () => {
     const onReady = jest.fn(); const onDuration = jest.fn();
     const screen = render(<StoryFrame frame={videoFrame} isPaused={false} muted onBuffering={() => {}} onDuration={onDuration} onReady={onReady} onUnavailable={() => {}} onVideoAttach={mockAttach} onVideoDetach={mockDetach} videoPlayer={mockPlayer as any} />);
@@ -35,7 +57,7 @@ describe('StoryFrame video lifecycle', () => {
     expect(onDuration).toHaveBeenCalledWith(2000);
     expect(onReady).not.toHaveBeenCalled();
     act(() => listeners.get('statusChange')?.({ status: 'readyToPlay' }));
-    expect(onReady).toHaveBeenCalledTimes(1);
+    expect(onReady).not.toHaveBeenCalled();
     fireEvent(screen.getByTestId('looking-back-video'), 'firstFrameRender');
     expect(onReady).toHaveBeenCalledTimes(1);
   });
@@ -49,6 +71,42 @@ describe('StoryFrame video lifecycle', () => {
     expect(screen.getByTestId('looking-back-video').props.player).toBe(mockPlayer);
     expect(screen.queryByTestId('looking-back-video-loading')).toBeNull();
     expect(mockAttach).toHaveBeenCalledWith('frame', mockPlayer);
+
+    act(() => listeners.get('sourceChange')?.({ source: { uri: 'https://signed/video' } }));
+    expect(screen.queryByTestId('looking-back-video-loading')).toBeNull();
+  });
+
+  it('does not use a ready status as a visual fallback on Android', () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    mockPlayer.status = 'readyToPlay';
+    const onReady = jest.fn();
+    const screen = render(<StoryFrame frame={videoFrame} isPaused={false} muted onBuffering={() => {}} onReady={onReady} onUnavailable={() => {}} onVideoAttach={mockAttach} onVideoDetach={mockDetach} videoPlayer={mockPlayer as any} />);
+
+    expect(onReady).not.toHaveBeenCalled();
+    fireEvent(screen.getByTestId('looking-back-video'), 'firstFrameRender');
+    expect(onReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the loading cover during a later signed-URL refresh until the visible first frame', () => {
+    mockPlayer.status = 'readyToPlay';
+    const onReady = jest.fn();
+    const onBuffering = jest.fn();
+    const screen = render(<StoryFrame frame={videoFrame} isPaused={false} muted onBuffering={onBuffering} onReady={onReady} onUnavailable={() => {}} onVideoAttach={mockAttach} onVideoDetach={mockDetach} videoPlayer={mockPlayer as any} />);
+    expect(screen.queryByTestId('looking-back-video-loading')).toBeNull();
+    expect(onReady).toHaveBeenCalledTimes(1);
+
+    mockMediaUrlState = { data: { 'video-key': 'https://signed/video-refreshed' }, isLoading: false };
+    screen.rerender(<StoryFrame frame={videoFrame} isPaused={false} muted onBuffering={onBuffering} onReady={onReady} onUnavailable={() => {}} onVideoAttach={mockAttach} onVideoDetach={mockDetach} videoPlayer={mockPlayer as any} />);
+    expect(screen.getByTestId('looking-back-video-loading')).toBeTruthy();
+
+    act(() => listeners.get('statusChange')?.({ status: 'readyToPlay' }));
+    expect(screen.getByTestId('looking-back-video-loading')).toBeTruthy();
+    expect(onReady).toHaveBeenCalledTimes(1);
+
+    act(() => listeners.get('sourceChange')?.({ source: { uri: 'https://signed/video-refreshed' } }));
+    fireEvent(screen.getByTestId('looking-back-video'), 'firstFrameRender');
+    expect(screen.queryByTestId('looking-back-video-loading')).toBeNull();
+    expect(onReady).toHaveBeenCalledTimes(2);
   });
 
   it('covers a loading video with its stored first-frame poster and loading affordance', () => {
@@ -111,7 +169,6 @@ describe('StoryFrame video lifecycle', () => {
     expect(screen.getByTestId('looking-back-image').props.transition).toEqual({ duration: 0 });
     expect(onUnavailable).not.toHaveBeenCalled();
     fireEvent(screen.getByTestId('looking-back-image'), 'display');
-    expect(onReady).toHaveBeenCalledTimes(1);
     fireEvent(screen.getByTestId('looking-back-image'), 'load', { nativeEvent: {} });
     expect(onReady).toHaveBeenCalledTimes(1);
   });
