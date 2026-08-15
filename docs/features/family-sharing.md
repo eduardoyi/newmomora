@@ -698,6 +698,7 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 | `src/screen-tests/sharing.members.test.tsx` | Family members screen: invite affordance by role, member-management affordance matrix (owner/manager/viewer × own/owner/other rows), promote/demote/remove wiring, destructive-confirm gating, zero-row refresh copy |
 | `src/screen-tests/no-family.test.tsx` | Create-family / redeem entry points, single state-driven post-create navigation, `pendingInviteCode` guard precedence |
 | `src/screen-tests/sharing.redeem.test.tsx` | Redeem screen prefill, definitive-vs-transient error handling |
+| `src/screen-tests/invite.integration.test.tsx` | Universal-link routing distinguishes anonymous onboarding sessions from permanent accounts |
 
 ### E2E (Maestro)
 
@@ -739,6 +740,7 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 
 | Date | Change |
 |------|--------|
+| 2026-08-15 | Universal invite links now keep anonymous onboarding sessions on the pre-auth join path instead of sending them to the permanent-account redemption screen, which previously produced an `Unauthorized` response. |
 | 2026-08-15 | Fixed manager/owner cross-creator media edits retaining preview variants: the media RPC now admits only the exact snapshot-paired preview for a retained foreign original, while keeping caller-prefix admission for new/replaced previews and all existing role/billing/anonymous guards. |
 | 2026-07-11 | Family sharing shipped: OTP auth, tenancy schema + RLS rewrite, storage re-authorization, client role gating, invite/redeem/approve flow, notifications. See `docs/plans/family-sharing.md` Outcome section for what deviated from the original plan. |
 | 2026-07-12 | Member management UI: owner/manager can promote/demote/remove non-owner members directly from the Settings member list (`MemberActionSheet`, `useMemberManagement`, `updateMemberRole`/`removeMember`) — the underlying RLS already allowed this, only the client surface was missing. See [Member management](#member-management). |
