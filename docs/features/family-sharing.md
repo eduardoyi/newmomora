@@ -633,8 +633,12 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
   rows **before** the function's own delete-then-reinsert (checking against
   a live re-query mid-transaction would find nothing and collapse back to
   "caller's own prefix only," breaking the manager-edits-another-member
-  case). The closing cover-field `UPDATE` also dropped its `user_id =
-  current_user_id` predicate for the same reason.
+  case). The snapshot also binds a retained foreign `preview_object_key` to
+  its exact retained `object_key`: that pair is allowed, while a forged
+  foreign preview or one borrowed from another asset is rejected. New or
+  replacement previews still require the caller's own upload prefix. The
+  closing cover-field `UPDATE` also dropped its `user_id = current_user_id`
+  predicate for the same reason.
 - **`family_activity_log` / `invite_redemption_attempts` growth:** both are
   pruned opportunistically (rows >24h old deleted) inside the Edge
   Functions that write them, not by a separate cron job.
@@ -722,6 +726,7 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 ```bash
 npm test -- --testPathPattern="invites|roles|pending-invite-code|use-family|no-family|sharing|family|member-action-sheet"
 npm run test:edge -- redeem-family-invite resolve-family-invite notify-family-activity
+supabase test db supabase/tests/retained_media_preview_authorization.sql
 maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... \
   .maestro/flows/sharing/01-owner-create-invite.yaml \
   .maestro/flows/sharing/02-second-account-redeem.yaml \
@@ -734,6 +739,7 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 
 | Date | Change |
 |------|--------|
+| 2026-08-15 | Fixed manager/owner cross-creator media edits retaining preview variants: the media RPC now admits only the exact snapshot-paired preview for a retained foreign original, while keeping caller-prefix admission for new/replaced previews and all existing role/billing/anonymous guards. |
 | 2026-07-11 | Family sharing shipped: OTP auth, tenancy schema + RLS rewrite, storage re-authorization, client role gating, invite/redeem/approve flow, notifications. See `docs/plans/family-sharing.md` Outcome section for what deviated from the original plan. |
 | 2026-07-12 | Member management UI: owner/manager can promote/demote/remove non-owner members directly from the Settings member list (`MemberActionSheet`, `useMemberManagement`, `updateMemberRole`/`removeMember`) — the underlying RLS already allowed this, only the client surface was missing. See [Member management](#member-management). |
 | 2026-07-12 | Family management IA restructure: the member list moved off Settings onto its own **Family members** screen (`app/(app)/sharing/members.tsx`) so Settings stays constant-size for families up to the 50-member cap; Settings now shows a "Family members" row with the active-member count, and "Pending invites"/"Approvals" only render when there's at least one non-expired/redeemed invite to act on. See [Member management](#member-management). |

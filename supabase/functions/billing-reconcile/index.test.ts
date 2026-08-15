@@ -15,8 +15,8 @@ Deno.test('keeps production and sandbox entitlements in separate snapshots', () 
     entitlements: {
       momora_plus: {
         product_identifier: 'momora',
-        purchase_date: '2026-08-01T00:00:00Z',
-        expires_date: '2026-08-08T00:00:00Z',
+        purchase_date: '2099-08-01T00:00:00Z',
+        expires_date: '2099-08-08T00:00:00Z',
         is_sandbox: true,
       },
     },
@@ -37,8 +37,8 @@ Deno.test('keeps production and sandbox entitlements in separate snapshots', () 
     product_id: 'momora:annual',
     store: 'play_store',
     period_type: 'trial',
-    purchased_at: '2026-08-01T00:00:00Z',
-    expires_at: '2026-08-08T00:00:00Z',
+    purchased_at: '2099-08-01T00:00:00Z',
+    expires_at: '2099-08-08T00:00:00Z',
     grace_until: null,
     will_renew: true,
     original_transaction_id: null,

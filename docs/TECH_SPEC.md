@@ -2151,14 +2151,17 @@ close-up viewing. See
 `replace_memory_media_assets` receives each ordered asset as
 `{ objectKey, contentType, durationMs, aspectRatio, previewObjectKey }`.
 `aspectRatio` is nullable for legacy clients/rows and must be between `0.1`
-and `10` when present. `previewObjectKey` is nullable and, when present, must
-match the identical `{caller_prefix}/media/[A-Za-z0-9_-]{1,128}.{ext}`
-ownership/pattern check applied to `objectKey` — a preview lives at the same
-asset path, only the filename differs (`{mediaAssetId}-preview.jpg`), so
-garbage or foreign preview keys are rejected the same way garbage or foreign
-object keys are. When an older client edits an existing asset without one or
-both of `aspectRatio`/`previewObjectKey`, the RPC preserves the row's current
-value (keyed by matching `objectKey`) instead of clearing it.
+and `10` when present. `previewObjectKey` is nullable. A newly supplied or
+replacement preview must match the identical
+`{caller_prefix}/media/[A-Za-z0-9_-]{1,128}.{ext}` ownership/pattern check
+applied to `objectKey` — a preview lives at the same asset path, only the
+filename differs (`{mediaAssetId}-preview.jpg`). A retained original can keep
+the exact `preview_object_key` previously paired with that same
+`objectKey`, even when an owner/manager is editing media created under another
+member's prefix; no other foreign preview is admitted, including one paired
+with a different retained asset. When an older client edits an existing asset
+without one or both of `aspectRatio`/`previewObjectKey`, the RPC preserves the
+row's current value (keyed by matching `objectKey`) instead of clearing it.
 
 `durationMs` is cast via `round(nullif(asset->>'durationMs', '')::numeric)::integer`
 (migration `20260716120000_round_media_duration_ms_cast.sql`), not a bare

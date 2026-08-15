@@ -2,8 +2,8 @@ begin;
 
 select plan(6);
 
-insert into auth.users (id, email)
-values ('b1000000-0000-4000-8000-000000000001', 'media-metadata@example.test');
+insert into auth.users (id, email, is_anonymous)
+values ('b1000000-0000-4000-8000-000000000001', 'media-metadata@example.test', false);
 
 insert into public.families (id, name, owner_id)
 values (
@@ -20,12 +20,30 @@ values (
   'owner'
 );
 
-insert into public.memories (id, family_id, user_id, memory_type)
+-- The media-finalization RPC enforces the production billing gate. Keep this
+-- fixture on the normal paid path rather than relying on an onboarding grace
+-- exception so it remains valid after a fresh migration reset.
+insert into public.owner_entitlements (
+  owner_user_id, app_user_id, environment, store, product_id, entitlement_id,
+  period_type, status, expires_at, will_renew
+)
+values (
+  'b1000000-0000-4000-8000-000000000001',
+  'b1000000-0000-4000-8000-000000000001',
+  'production', 'app_store', 'momora_annual_v1', 'momora_plus',
+  'annual', 'active', transaction_timestamp() + interval '30 days', true
+);
+
+insert into public.memories (
+  id, family_id, user_id, memory_type, media_key, media_content_type
+)
 values (
   'b4000000-0000-4000-8000-000000000001',
   'b2000000-0000-4000-8000-000000000001',
   'b1000000-0000-4000-8000-000000000001',
-  'media'
+  'media',
+  'b1000000-0000-4000-8000-000000000001/memories/b4000000-0000-4000-8000-000000000001/media/photo.jpg',
+  'image/jpeg'
 );
 
 set local role authenticated;
