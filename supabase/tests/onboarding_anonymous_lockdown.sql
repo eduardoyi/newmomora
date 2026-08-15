@@ -37,6 +37,21 @@ insert into public.families (id, name, owner_id)
 values ('a2000000-0000-4000-8000-000000000001', 'Lockdown fixture family', 'a1000000-0000-4000-8000-000000000002');
 insert into public.family_memberships (id, family_id, user_id, role)
 values ('a3000000-0000-4000-8000-000000000001', 'a2000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000002', 'owner');
+
+-- The paid multi-family rule applies when this fixture later verifies that a
+-- real owner can create a second family. Keep that regression on the normal
+-- paid path rather than depending on a billing-mode exception.
+insert into public.owner_entitlements (
+  owner_user_id, app_user_id, environment, store, product_id, entitlement_id,
+  period_type, status, expires_at, will_renew
+)
+values (
+  'a1000000-0000-4000-8000-000000000002',
+  'a1000000-0000-4000-8000-000000000002',
+  'production', 'app_store', 'momora_annual_v1', 'momora_plus',
+  'annual', 'active', transaction_timestamp() + interval '30 days', true
+);
+
 insert into public.family_members (id, family_id, user_id, name, date_of_birth)
 values ('a4000000-0000-4000-8000-000000000001', 'a2000000-0000-4000-8000-000000000001', 'a1000000-0000-4000-8000-000000000002', 'Kiddo', '2020-01-01');
 insert into public.memories (id, family_id, user_id, content, memory_type)
@@ -152,7 +167,7 @@ select throws_ok(
 );
 select throws_ok(
   $$select public.create_family_invite('a2000000-0000-4000-8000-000000000001', 'viewer')$$,
-  '42501', 'Anonymous accounts cannot create an invite',
+  '42501', 'Unauthorized',
   'create_family_invite rejects an anonymous caller despite the simulated manager row'
 );
 select throws_ok(
