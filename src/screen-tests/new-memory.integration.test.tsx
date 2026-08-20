@@ -1208,9 +1208,116 @@ describe('NewMemoryScreen -- audio memories (emergent type)', () => {
 
     expect(mockDiscardAudioClip).toHaveBeenCalledWith('file:///documents/audio-recordings/first.m4a');
     expect(screen.getByTestId('new-memory-audio-clip')).toBeTruthy();
-    // The first clip's description is preserved (non-empty field never gets
-    // silently swapped out from under the user by a replace).
+    // Regression coverage (device-confirmed bug): the first clip's caption
+    // was AI-authored and never touched by the user -- it describes a sound
+    // that's now gone, so the new clip's caption must replace it, not sit
+    // there stale (docs/features/audio-memories.md capture-flow section).
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('Second description');
+  });
+
+  it('re-record: an untouched AI caption is replaced even when the new description is empty (cleared to placeholder, not left stale)', async () => {
+    const screen = renderScreen();
+    await keepSound(screen, { localUri: 'file:///documents/audio-recordings/first.m4a' });
     expect(screen.getByTestId('new-memory-content').props.value).toBe('A quick hello');
+
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    act(() => {
+      mockLatestOnKeepSound?.(buildKeptClip({
+        localUri: 'file:///documents/audio-recordings/second.m4a',
+        transcriptionResult: { cleanedText: '', description: '', mentionedMemberIds: [] },
+      }));
+    });
+
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('');
+  });
+
+  it('re-record: a user-edited caption survives the replace, and the invisible transcript still updates to the new clip', async () => {
+    const screen = renderScreen();
+    await keepSound(screen, { localUri: 'file:///documents/audio-recordings/first.m4a' });
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('A quick hello');
+
+    // The user edits the AI-authored caption -- it's theirs now.
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'A quick hello, edited by me');
+
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    act(() => {
+      mockLatestOnKeepSound?.(buildKeptClip({
+        localUri: 'file:///documents/audio-recordings/second.m4a',
+        transcriptionResult: { cleanedText: 'second clip transcript', description: 'Second description', mentionedMemberIds: [] },
+      }));
+    });
+
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('A quick hello, edited by me');
+
+    // The invisible transcript describes the clip, not the user's words --
+    // it must still move to the new clip's transcript even though the
+    // visible caption stayed put.
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ audioTranscript: 'second clip transcript' }),
+    );
+  });
+
+  it('re-record: text typed before ever recording anything stays protected across a replace too', async () => {
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'my own caption');
+
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    act(() => {
+      mockLatestOnKeepSound?.(buildKeptClip({ localUri: 'file:///documents/audio-recordings/first.m4a' }));
+    });
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('my own caption');
+
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    act(() => {
+      mockLatestOnKeepSound?.(buildKeptClip({
+        localUri: 'file:///documents/audio-recordings/second.m4a',
+        transcriptionResult: { cleanedText: 'second clip', description: 'Second description', mentionedMemberIds: [] },
+      }));
+    });
+
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('my own caption');
+  });
+
+  it('re-record while the note is an untouched AI caption shows the generating treatment again while the new clip transcribes', async () => {
+    let resolveTranscription!: (value: AudioTranscriptionResult | null) => void;
+    const pending = new Promise<AudioTranscriptionResult | null>((resolve) => {
+      resolveTranscription = resolve;
+    });
+
+    const screen = renderScreen();
+    await keepSound(screen, { localUri: 'file:///documents/audio-recordings/first.m4a' });
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('A quick hello');
+
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    act(() => {
+      mockLatestOnKeepSound?.(buildKeptClip({
+        localUri: 'file:///documents/audio-recordings/second.m4a',
+        transcriptionStatus: 'transcribing',
+        transcriptionResult: null,
+        pendingTranscription: pending,
+      }));
+    });
+
+    // The stale caption must not linger on screen with no indication it's
+    // about to change -- the generating treatment takes over just like the
+    // very first recording.
+    expect(screen.getByTestId('new-memory-audio-note-generating')).toBeTruthy();
+    expect(screen.queryByTestId('new-memory-content')).toBeNull();
+
+    await act(async () => {
+      resolveTranscription({ cleanedText: 'second clip', description: 'Second description', mentionedMemberIds: [] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId('new-memory-audio-note-generating')).toBeNull();
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('Second description');
   });
 
   it('never persists the clip in the draft payload', async () => {

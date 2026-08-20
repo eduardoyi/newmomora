@@ -195,8 +195,17 @@ export default function NewMemoryScreen() {
   // Ratchets true the instant the user types anything (or already had text
   // before keeping the sound) -- once true, an AI description that arrives
   // later is discarded silently, never merged/prompted (same empty-form-only
-  // spirit as draft restore).
+  // spirit as draft restore). Recomputed at each keep (see handleKeepSound)
+  // from lastAppliedAiCaptionRef, so an *untouched* AI caption from a
+  // previous clip stays replaceable across a re-record, while anything the
+  // user actually typed or edited never does.
   const hasTypedAudioNoteRef = useRef(false);
+  // The exact description text `applyAudioTranscriptionResult` last wrote
+  // into `content` (if any). Lets keep-time distinguish "content still holds
+  // the AI's own words, untouched" from "the user typed or edited it" --
+  // the former describes a clip that's about to be replaced and should be
+  // replaced with it; the latter is the user's and is never clobbered.
+  const lastAppliedAiCaptionRef = useRef<string | null>(null);
   // Set only when the kept clip's transcription was still in flight -- awaited
   // fire-and-forget at save time to backfill the description post-save. This
   // promise outlives the (already-closed) voice modal; see useVoiceInput.ts.
@@ -410,6 +419,7 @@ export default function NewMemoryScreen() {
       setAudioTranscript(result.cleanedText.trim() || null);
       if (!hasTypedAudioNoteRef.current) {
         setContent(result.description);
+        lastAppliedAiCaptionRef.current = result.description;
       }
       const mentionedMemberIds =
         result.mentionedMemberIds.length === 0 && members.length === 1
@@ -430,7 +440,15 @@ export default function NewMemoryScreen() {
     }
     setAudioClip({ localUri: clip.localUri, durationMs: clip.durationMs });
     setAudioClipRemoved(false);
-    hasTypedAudioNoteRef.current = content.trim().length > 0;
+    // "User owns the note" (never overwritten) means: there's text, AND
+    // it's not just the previous clip's untouched AI caption sitting there.
+    // An untouched AI caption describes a sound that's about to be replaced
+    // -- it must be replaceable too, or a re-record leaves a caption for a
+    // clip that no longer exists in this memory.
+    const trimmedContent = content.trim();
+    const isUntouchedAiCaption =
+      trimmedContent.length > 0 && trimmedContent === (lastAppliedAiCaptionRef.current ?? '').trim();
+    hasTypedAudioNoteRef.current = trimmedContent.length > 0 && !isUntouchedAiCaption;
     pendingAudioTranscriptionRef.current = null;
 
     if (clip.transcriptionResult) {
@@ -449,6 +467,14 @@ export default function NewMemoryScreen() {
       // pendingTranscription branch below where the row doesn't exist yet.
       applyAudioTranscriptionResult(clip.transcriptionResult);
     } else if (clip.pendingTranscription) {
+      if (isUntouchedAiCaption) {
+        // The old clip's caption is about to be superseded by one for the
+        // NEW clip -- clear it now so the "Writing a note..." generating
+        // treatment shows while we wait, instead of leaving the old
+        // (now-stale) caption on screen with no indication it's about to
+        // change. Mirrors the always-starts-empty first-record case.
+        setContent('');
+      }
       setAudioNoteGenerating(true);
       pendingAudioTranscriptionRef.current = clip.pendingTranscription;
       const awaited = clip.pendingTranscription;

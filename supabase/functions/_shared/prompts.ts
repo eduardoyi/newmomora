@@ -395,8 +395,10 @@ export function buildVoiceCleanupSystemPrompt(options: { includeDescription?: bo
   // Audio-memories "keep the sound" fork (docs/features/audio-memories.md):
   // one extra field on the same cleanup call, not a second provider call.
   lines.push(
-    'Also write a short third-person caption describing what the recording is (e.g. "Lila singing Twinkle Twinkle in the bath"), under 120 characters.',
-    'If the speech is unusable (silence, babble, indistinct noise), set description to an empty string "" — never invent or guess a description.',
+    'Also write a short third-person caption describing what the recording is, under 120 characters (examples: "Lila singing Twinkle Twinkle in the bath" / "Enzo contando lo que hizo en la escuela").',
+    'Write the caption in the same language the speaker used.',
+    'ALWAYS write a caption when there are intelligible words — mundane, short, or test recordings included (someone trying out the microphone gets a plain caption of what they said).',
+    'Set description to an empty string "" ONLY when there are no intelligible words at all (silence, pure noise) — never invent a description for those.',
     'JSON only: {"cleanedText":"...","description":"...","mentionedUserSelf":false}',
   );
   return lines.join(' ');
