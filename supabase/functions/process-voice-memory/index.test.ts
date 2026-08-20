@@ -16,6 +16,7 @@ interface VoiceTestCalls {
   transcriptionPrompts: string[];
   transcriptionContexts: unknown[];
   cleanupContexts: unknown[];
+  cleanupSystemPrompts: string[];
 }
 
 function makeRequest(body: unknown): Request {
@@ -37,6 +38,7 @@ function makeDependencies(input: Partial<ProcessVoiceMemoryDependencies> = {}): 
     transcriptionPrompts: [],
     transcriptionContexts: [],
     cleanupContexts: [],
+    cleanupSystemPrompts: [],
   };
   const dependencies: ProcessVoiceMemoryDependencies = {
     getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: true }),
@@ -62,9 +64,10 @@ function makeDependencies(input: Partial<ProcessVoiceMemoryDependencies> = {}): 
       calls.transcriptionContexts.push(options.usageContext);
       return 'Sarah made a tower';
     },
-    chatJson: async <T>(_system: string, _transcript: string, options: { usageContext: unknown }) => {
+    chatJson: async <T>(system: string, _transcript: string, options: { usageContext: unknown }) => {
       calls.events.push('cleanup');
       calls.cleanupContexts.push(options.usageContext);
+      calls.cleanupSystemPrompts.push(system);
       return { cleanedText: 'Sarah made a tower', mentionedUserSelf: false } as T;
     },
     ...input,
@@ -258,6 +261,33 @@ Deno.test('family voice remains the default, uses the canonical roster, and reco
   assertEquals(calls.cleanupContexts, [{
     attributionScope: 'family', familyId: FAMILY_ID, actorUserId: USER_ID, operation: 'voice_cleanup',
   }]);
+});
+
+Deno.test('family voice caption context carries names, nicknames, and derived age labels — never the birth date', async () => {
+  const { dependencies, calls } = makeDependencies({
+    getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),
+    getCanonicalFamilyMembers: async () => [
+      { id: 'canonical-sarah', name: 'Sarah', nicknames: ['Sally'], date_of_birth: '2023-03-15' },
+      { id: 'canonical-max', name: 'Max' },
+    ],
+  });
+  const response = await handleProcessVoiceMemoryWithDependencies(
+    makeRequest({ audioBase64: 'AQID', familyId: FAMILY_ID }),
+    dependencies,
+  );
+  assertEquals(response.status, 200);
+  const prompt = calls.cleanupSystemPrompts[0];
+  assertStringIncludes(prompt, 'Family members:');
+  assertStringIncludes(prompt, 'Sarah');
+  assertStringIncludes(prompt, 'Sally');
+  assertStringIncludes(prompt, 'Max');
+  // Derived age label present (exact wording owned by describeAgeAtDate);
+  // the raw date_of_birth must never reach the model.
+  assertStringIncludes(prompt.toLowerCase(), 'old');
+  assertEquals(prompt.includes('2023-03-15'), false);
+  assertStringIncludes(prompt, 'canonical name');
+  // Onboarding stays context-free: dictate-only path builds the prompt
+  // without members (covered by the onboarding tests' unchanged shape).
 });
 
 Deno.test('process-voice-memory rejects empty audio before any reservation or provider call', async () => {

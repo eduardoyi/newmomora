@@ -1,3 +1,4 @@
+import { describeAgeAtDate } from '../_shared/age.ts';
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
@@ -23,6 +24,8 @@ export interface ProcessVoiceFamilyMember {
   name: string;
   nicknames?: string[];
   is_user_profile?: boolean;
+  /** Read server-side for the caption's derived age label only — never sent to the model or logged. */
+  date_of_birth?: string | null;
 }
 
 export interface ProcessVoiceMemoryRequest {
@@ -362,7 +365,19 @@ export async function handleProcessVoiceMemoryWithDependencies(
       mentionedUserSelf?: boolean;
       description?: unknown;
     }>(
-      buildVoiceCleanupSystemPrompt({ includeDescription: true }),
+      buildVoiceCleanupSystemPrompt({
+        includeDescription: true,
+        // Caption context (owner decision 2026-08-20): names + nicknames +
+        // derived age label only. date_of_birth itself never enters the
+        // prompt; the age is computed here and sent as a label.
+        members: familyMembers.map((member) => ({
+          name: member.name,
+          nicknames: member.nicknames ?? undefined,
+          ageLabel: member.date_of_birth
+            ? describeAgeAtDate(member.date_of_birth, new Date().toISOString().slice(0, 10))
+            : null,
+        })),
+      }),
       transcript,
       { usageContext: { attributionScope: 'family', familyId, actorUserId: user.id, operation: 'voice_cleanup' } },
     );
@@ -414,7 +429,7 @@ export async function handleProcessVoiceMemory(req: Request): Promise<Response> 
     getCanonicalFamilyMembers: async ({ supabase, familyId }) => {
       const { data, error } = await (supabase as ReturnType<typeof createServiceClient>)
         .from('family_members')
-        .select('id, name, nicknames, is_user_profile')
+        .select('id, name, nicknames, is_user_profile, date_of_birth')
         .eq('family_id', familyId);
       if (error) throw error;
       return (data ?? []) as ProcessVoiceFamilyMember[];
