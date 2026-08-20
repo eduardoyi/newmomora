@@ -405,7 +405,7 @@ describe('MemoryDetailScreen audio variant', () => {
     expect(screen.getByText('Not on this phone yet')).toBeTruthy();
   });
 
-  it('shows the no-note copy for a clip with no description', () => {
+  it('renders no note block at all for a clip with no description (owner decision 2026-08-20)', () => {
     mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
     mockedUseMemory.mockReturnValue({
       data: audioMemory({ content: null }),
@@ -415,9 +415,8 @@ describe('MemoryDetailScreen audio variant', () => {
 
     const screen = renderScreen();
 
-    expect(screen.getByTestId('memory-detail-section-content')).toHaveTextContent(
-      'No note — just the sound.',
-    );
+    expect(screen.queryByTestId('memory-detail-section-content')).toBeNull();
+    expect(screen.queryByText('No note — just the sound.')).toBeNull();
   });
 
   it('animates the note/engagement/footer block toward 32% opacity while playing (words step back)', () => {

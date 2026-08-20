@@ -715,11 +715,7 @@ function MemoryDetailSound({
                 style={styles.detailText}
                 testID="memory-detail-section-content"
               />
-            ) : (
-              <Text style={styles.soundNoNote} testID="memory-detail-section-content">
-                No note — just the sound.
-              </Text>
-            )}
+            ) : null}
             {memory.taggedMembers.length > 0 && (
               <View style={styles.memberRow} testID="memory-detail-section-members">
                 {memory.taggedMembers.map((m) => (
@@ -1345,12 +1341,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.ink2,
     textAlign: 'center',
-  },
-  soundNoNote: {
-    fontFamily: fonts.sans,
-    fontSize: 16,
-    lineHeight: 26,
-    color: colors.ink3,
   },
   placeholderIcon: {
     fontSize: 32,
