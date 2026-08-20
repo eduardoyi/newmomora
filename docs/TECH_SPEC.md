@@ -231,17 +231,22 @@ create table public.memories (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users on delete set null,  -- creator attribution (nullable, was NOT NULL)
   family_id uuid not null references public.families on delete cascade,  -- tenancy
-  content text,                              -- required for text_illustration and text_only; optional caption for media
+  content text,                              -- required for text_illustration and text_only; optional caption for media/audio
   memory_date date not null default current_date,
   memory_type text not null default 'text_illustration'
-    check (memory_type in ('text_illustration', 'text_only', 'media')),
+    check (memory_type in ('text_illustration', 'text_only', 'media', 'audio')),
   emotion text,
   illustration_key text,                     -- R2 object key; populated for text_illustration only
   illustration_status text not null default 'none'
     check (illustration_status in ('none', 'pending', 'generating', 'ready', 'failed')),
   illustration_prompt text,
-  media_key text,                            -- R2 object key for user-uploaded photo or video
-  media_content_type text,                   -- MIME type e.g. image/jpeg, video/mp4
+  media_key text,                            -- R2 object key for user-uploaded photo/video, or the kept clip for `audio`
+  media_content_type text,                   -- MIME type e.g. image/jpeg, video/mp4, audio/mp4
+  -- Audio memories (2026-08-19, 20260819120000_audio_memories.sql,
+  -- docs/features/audio-memories.md): invisible raw transcript for `audio`
+  -- rows, search-only -- never rendered client-side. GIN index below.
+  -- Nullable, normalized empty-string -> NULL on write (never '').
+  audio_transcript text,
   link_previews jsonb not null default '{}'::jsonb,  -- { [url]: { title: string|null, fetchedAt } } -- see fetch-link-previews (§4.13)
   -- Share card store-through cache (2026-08-05,
   -- docs/plans/share-card-store-through.md, W1): cached compose-share-card
@@ -509,6 +514,10 @@ create index idx_family_members_user_id on public.family_members (user_id);
 -- the created_at tie-break within a same-date group.
 create index idx_memories_family_id_memory_date on public.memories (family_id, memory_date desc, created_at desc);
 create index idx_memories_content_search on public.memories using gin (to_tsvector('english', content));
+-- Audio memories (2026-08-19): a SEPARATE GIN index from the one above --
+-- audio_transcript is its own column, not folded into a combined tsvector --
+-- so searchMemories runs it as a second query merged/deduped client-side.
+create index idx_memories_audio_transcript_search on public.memories using gin (to_tsvector('english', audio_transcript));
 create index idx_user_profiles_scheduled_delete on public.user_profiles (scheduled_hard_delete_at)
   where scheduled_hard_delete_at is not null;
 
@@ -727,6 +736,74 @@ create trigger clear_memory_share_card_on_content_change
   for each row execute function public.clear_memory_share_card_on_content_change();
 ```
 
+**Audio memories (2026-08-19, `20260819120000_audio_memories.sql`,
+docs/features/audio-memories.md):**
+
+```sql
+-- At most one memory_media row per `audio` parent (the transient zero-row
+-- state between the memories insert and the clip row landing stays legal --
+-- this only constrains the child table, never a lower bound on memories),
+-- audio content types only under audio parents, non-audio content types
+-- forbidden under an audio parent.
+create or replace function public.enforce_audio_memory_media_invariants()
+returns trigger as $$
+declare
+  parent_memory_type text;
+  sibling_count integer;
+begin
+  select memory_type into parent_memory_type
+  from public.memories where id = new.memory_id for update;
+
+  if parent_memory_type = 'audio' then
+    if new.content_type not like 'audio/%' then
+      raise exception 'Audio memories can only hold an audio clip' using errcode = '23514';
+    end if;
+    select count(*) into sibling_count
+    from public.memory_media
+    where memory_id = new.memory_id and id is distinct from new.id;
+    if sibling_count >= 1 then
+      raise exception 'Audio memories hold exactly one clip' using errcode = '23514';
+    end if;
+  elsif new.content_type like 'audio/%' then
+    raise exception 'Audio content types are only allowed on audio memories' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$ language plpgsql set search_path = public;
+
+create trigger memory_media_audio_invariants
+  before insert or update of content_type, memory_id on public.memory_media
+  for each row execute function public.enforce_audio_memory_media_invariants();
+
+-- Type immutability: no generic type-transition trigger exists for the
+-- other three types (the only guard there is app-level, updateMemory's
+-- media-specific check) -- audio gets a DB-enforced one because a kept
+-- clip cannot follow a type change anywhere.
+create or replace function public.enforce_audio_memory_type_immutable()
+returns trigger as $$
+begin
+  if old.memory_type is distinct from new.memory_type
+    and (old.memory_type = 'audio' or new.memory_type = 'audio') then
+    raise exception 'Audio memories cannot change type' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$ language plpgsql set search_path = public;
+
+create trigger memories_audio_type_immutable
+  before update of memory_type on public.memories
+  for each row execute function public.enforce_audio_memory_type_immutable();
+```
+
+Mirrored at the app level by `updateMemory`'s explicit type-immutability guard
+(`src/services/memories.ts`) for a friendlier error than a raw `23514`. The
+same migration also widens `memory_media.content_type`'s check constraint to
+admit `audio/mp4`, `audio/m4a`, `audio/x-m4a` (see §4.0/§4.0a for the
+matching Edge Function allow-lists) and `CREATE OR REPLACE`s
+`get_or_create_looking_back_packages` (§2.1a) to exclude `memory_type =
+'audio'` from package eligibility in both of its candidate-selection
+predicates.
+
 Scoped to `update of content, memory_date, emotion` specifically so the
 far more frequent illustration-status-only writes (the async pipeline's
 `pending -> generating -> ready/failed` progression) never fire it — Postgres
@@ -740,10 +817,10 @@ memory on any media edit, so a replaced asset's row always starts with
 
 ### 2.5 Constraints
 
-- `memory_family_members`: no global tag cap. The DB trigger permits unlimited tags for `text_only`/`media`, caps `text_illustration` at 6, and rejects switching a text-only row with more than 6 existing tags back to illustrated.
-- `memories.content`: non-empty after trim for `text_illustration` and `text_only` types; nullable for `media` type — enforced in Edge Function / client layer
-- `memories.memory_type`: drives whether AI pipeline fires and whether `media_key` is expected
-- `memories.media_key`: required (non-null) when `memory_type = 'media'`; must be null for other types — enforced in Edge Function / client layer
+- `memory_family_members`: no global tag cap. The DB trigger permits unlimited tags for `text_only`/`media`/`audio`, caps `text_illustration` at 6, and rejects switching a text-only row with more than 6 existing tags back to illustrated.
+- `memories.content`: non-empty after trim for `text_illustration` and `text_only` types; nullable for `media` and `audio` types — enforced in Edge Function / client layer. For `audio`, deliberately left unconstrained rather than forbidden even at the DB layer (the `memories_type_invariants` check constraint, `20260819120000_audio_memories.sql`) — an old-build edit screen can still staple a caption onto an audio row.
+- `memories.memory_type`: drives whether AI pipeline fires and whether `media_key` is expected. `audio` is DB-immutable once set (`memories_audio_type_immutable` trigger, above) — no other type transitions into or out of it.
+- `memories.media_key`: required (non-null) when `memory_type = 'media'` or `'audio'`; must be null for other types — enforced in Edge Function / client layer, and by the `memories_type_invariants` check constraint (`20260819120000_audio_memories.sql`) for `media`/`audio`
 - `memories.illustration_status`: on insert, set to `'pending'` for `text_illustration` and `'none'` for other types. Editing an illustrated memory to `text_only` deliberately retains its illustration key/prompt/status so toggling AI back on can reveal the existing asset without regeneration; rendering and generation eligibility branch on `memory_type`.
 - `memories.illustration_generation_id`: identifies the exact immutable R2 illustration object currently referenced by the row. `illustration_generation_attempt_id` is a transient CAS token owned by one generator attempt.
 - `memories.illustration_generation_started_at`: server-owned recovery clock. It is set when an illustrated memory is parked/claimed, cleared at terminal publication/failure, and is never written by the client. Older/null rows fall back to `updated_at`, then `created_at`, so a memory saved before a dispatch attempt remains recoverable.
@@ -856,7 +933,7 @@ Momora uses a **single private R2 bucket** (`R2_BUCKET`, e.g. `momora-prod`) wit
 | `{userId}/family/{memberId}/portraits/{versionId}/photo.jpg` | Private (presigned) | Immutable portrait-version source photo |
 | `{userId}/family/{memberId}/portraits/{versionId}/portrait/{attemptId}.webp` | Private (presigned) | Immutable durable portrait attempt/output. `.webp` is a REQUEST, not a guarantee — see footnote below. |
 | `{userId}/memories/{memoryId}/illustrations/{generationId}.{webp\|jpg}` | Private (presigned) | Immutable AI memory-illustration generation (`text_illustration` type). See footnote below. |
-| `{userId}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | Private (presigned) | Ordered user-uploaded memory photo/video assets (`media` type) |
+| `{userId}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | Private (presigned) | Ordered user-uploaded memory photo/video assets (`media` type), or the single kept clip (`audio` type, `ext` = `m4a`) — see [audio-memories.md](./features/audio-memories.md) |
 | `{userId}/memories/{memoryId}/media.{ext}` | Private (presigned) | Legacy single media object |
 | `_assets/styles/{illustration_style}.png` | Private (Edge Function read) | Style reference images |
 
@@ -973,7 +1050,7 @@ Presigned PUT for direct client → R2 upload.
 | Pattern | Allowed `contentType` values | Notes |
 |---------|------------------------------|-------|
 | `{uid}/family/{memberId}/portraits/{versionId}/photo.jpg` | `image/jpeg` | Immutable normalized portrait-version source |
-| `{uid}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | `image/jpeg`, `image/png`, `image/heic`, `image/heif`, `image/webp`, `video/mp4`, `video/quicktime` | Ordered memory photo/video asset |
+| `{uid}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | `image/jpeg`, `image/png`, `image/heic`, `image/heif`, `image/webp`, `video/mp4`, `video/quicktime`, `audio/mp4`, `audio/m4a`, `audio/x-m4a` | Ordered memory photo/video asset, or the single kept clip for `audio` memories (2026-08-19, [audio-memories.md](./features/audio-memories.md)) — the client uploads audio only via `upload-media` (§4.0a) in practice, but the allow-list is shared (`_shared/storage-keys.ts#getAllowedContentTypes`) so this pattern accepts it too |
 | `{uid}/memories/{memoryId}/media.{ext}` | Same as above | Legacy single media object |
 
 **Validation**
@@ -981,13 +1058,13 @@ Presigned PUT for direct client → R2 upload.
 - Reject `objectKey` not matching any allowed pattern (still caller-prefix-scoped)
 - Reject `contentType` not in the allowed set for the matched pattern
 - Reject if `familyId` missing or caller isn't owner/manager of that family (`403 forbidden`)
-- Client is responsible for enforcing video duration ≤ 3 minutes and raw source size ≤ 2 GB (pick-time sanity cap) before compression, video size ≤ 100 MB after compression (the same cap this function/`upload-media` enforce server-side), and image size ≤ 20 MB before upload — see [docs/features/media-memories.md](./features/media-memories.md#constraints--gotchas) for the full pipeline
+- Client is responsible for enforcing video duration ≤ 3 minutes and raw source size ≤ 2 GB (pick-time sanity cap) before compression, video size ≤ 100 MB after compression (the same cap this function/`upload-media` enforce server-side), and image size ≤ 20 MB before upload — see [docs/features/media-memories.md](./features/media-memories.md#constraints--gotchas) for the full pipeline. Audio clips are client-capped at 2 minutes / 5 MB (`MAX_AUDIO_DURATION_MS`/`MAX_AUDIO_BYTES`, `src/utils/media-validation.ts`), mirroring `upload-media`'s server-side audio cap below.
 
 **Response:** `{ uploadUrl, objectKey, expiresIn }`
 
 ### 4.0a `upload-media`
 
-Authenticated binary upload proxy for mobile clients that cannot reliably reach the R2 S3 endpoint directly.
+Authenticated binary upload proxy for mobile clients that cannot reliably reach the R2 S3 endpoint directly. The kept-clip upload for `audio` memories goes through this function (`postAudioMemory` → `uploadMediaObject`), not a base64 round trip through an Edge Function.
 
 **Request:** `POST` raw file bytes with headers:
 
@@ -998,7 +1075,7 @@ Authenticated binary upload proxy for mobile clients that cannot reliably reach 
 | `x-object-key` | R2 object key matching the same allowed upload patterns as `get-upload-url` |
 | `x-family-id` | Family this upload belongs to — same owner/manager check as `get-upload-url` (family-sharing Phase 3) |
 
-The function validates the user, object key, content type, family role, and basic file size before uploading to R2 server-side.
+The function validates the user, object key, content type, family role, and basic file size before uploading to R2 server-side. Size cap depends on content type (`maxBytesForContentType`): **20 MB** for `image/*`, **5 MB** for the three audio content types (`audio/mp4`, `audio/m4a`, `audio/x-m4a` — generous headroom over the ~1.9 MB a 2-minute AAC clip actually produces), **100 MB** otherwise (compressed video).
 
 **Response:** `{ success: true, objectKey }`
 
@@ -1090,13 +1167,16 @@ Classifies dominant emotion and color palette for memories.
 | `text_only` | Non-empty `content` (text) | `gpt-4o-mini` chat |
 | `media` (has photo) | First ordered image asset + optional caption | `gpt-4o-mini` vision |
 | `media` (all video) | — | Rejected/skipped (`400` `video_not_supported`) |
+| `audio` | `content` (description) + `audio_transcript`, concatenated — either alone is enough | `gpt-4o-mini` chat (2026-08-19, [audio-memories.md](./features/audio-memories.md)) |
+| `audio` (both empty) | — | `{ emotion: '', colorPalette: '', skipped: true }` — success-shaped, never an error (babble/silence with no typed caption) |
 
 **Triggers**
 
 - `text_illustration`: client after memory save, before `generate-illustration`
 - `text_only`: client after memory save (`runTextOnlyEmotionAnalysis`); no illustration follows
 - `media` photo: `useMemories` hook after successful create or caption edit (not from `createMediaMemory` directly)
-- Backfill: `useMemories` retries analysis once per session for any analyzable memory still missing an emotion
+- `audio`: `use-pending-memory-uploads.tsx` after `postAudioMemory` resolves (`runAudioEmotionAnalysis`), only when `content` or `audio_transcript` is non-empty
+- Backfill: `useMemories` retries analysis once per session for any analyzable memory still missing an emotion (audio's analyzability check also considers `audio_transcript`, not just `content`)
 
 All client-side triggers retry once in the background after the per-memory cooldown; if both attempts fail the emotion is left empty.
 
@@ -1117,6 +1197,13 @@ Does **not** invoke `generate-illustration` for `media`.
 1. Fetch memory (JWT + RLS); assert caller is a family member
 2. Call `gpt-4o-mini` with text emotion prompt
 3. Update `memories.emotion` via the **service-role client**
+
+**Logic (audio, 2026-08-19)**
+
+1. Fetch memory (the row SELECT now includes `audio_transcript`); assert caller is a family member
+2. Build classifier input: `content` + `audio_transcript`, `stripUrls`'d and joined; both empty → return `{ skipped: true }` immediately (no OpenAI call, no error — the empty-content 400 that `text_illustration`/`text_only` get does NOT apply here, since a transcript-only or description-only audio memory must still proceed)
+3. Call `gpt-4o-mini` with the same text emotion prompt as `text_illustration`/`text_only`
+4. Update `memories.emotion` via the **service-role client**
 
 **Logic (media photo)**
 
@@ -1212,7 +1299,14 @@ The legacy synchronous success response remains accepted during rollout.
 
 ### 4.4 `process-voice-memory`
 
-Transcribes audio and returns cleaned text with suggested family tags.
+Transcribes audio and returns cleaned text with suggested family tags. Family
+mode also returns a short AI caption (`description`) so the same call serves
+both branches of the composer's post-recording fork ("Turn into text" /
+"Keep the sound," 2026-08-19 — see [audio-memories.md](./features/audio-memories.md)).
+This function never persists audio itself in either mode — dictation
+discards it after transcription, and a kept clip is uploaded separately via
+`upload-media` (§4.0a), never round-tripped as base64 through an Edge
+Function.
 
 **Trigger:** Client after voice recording stops
 
@@ -1271,21 +1365,36 @@ Family mode:
 2. Build transcription prompt from the canonical names + nicknames.
 3. Call OpenAI `/v1/audio/transcriptions` (`gpt-4o-mini-transcribe`).
 4. Parse raw transcript for name/nickname matches → `mentionedMemberIds`.
-5. Call `gpt-4o-mini` for cleanup + self-reference detection.
+5. Call `gpt-4o-mini` for cleanup + self-reference detection + `description`
+   generation — one call, `buildVoiceCleanupSystemPrompt({ includeDescription:
+   true })`. `description` is server-sanitized (`sanitizeVoiceDescription`):
+   trimmed, clamped to 120 chars, `''` when speech is unusable (silence,
+   babble, indistinct noise) — the model is instructed to never invent or
+   guess one.
 6. If `mentionedUserSelf`, append the canonical user-profile member ID.
-7. Return result; audio is discarded and never stored.
+7. Return result; audio is discarded and never stored by this function.
 
 Onboarding mode follows the same two-minute/audio validation and OpenAI
 transcription + cleanup sequence, but uses only the supplied spelling hints,
 does not query a family roster, and records both provider calls as Momora
 system onboarding cost rather than family cost.
 
-**Response**
+**Response (family mode)**
 
 ```json
 {
   "cleanedText": "Emma said her first full sentence today: 'I love you, Mama.'",
-  "mentionedMemberIds": ["uuid-emma"]
+  "mentionedMemberIds": ["uuid-emma"],
+  "description": "Emma saying her first full sentence"
+}
+```
+
+**Response (onboarding mode)** — unchanged, no `description` field:
+
+```json
+{
+  "cleanedText": "Emma said her first full sentence today: 'I love you, Mama.'",
+  "mentionedMemberIds": []
 }
 ```
 
@@ -2100,6 +2209,15 @@ while the DB validates both tag insertion and the `memory_type` transition.
 3. Populate form with cleanedText + suggested tags
 4. User edits → Save → same flow as 5.1
 ```
+
+**Composer's post-recording fork (2026-08-19,
+[audio-memories.md](./features/audio-memories.md)):** step 2 above fires
+immediately on stop, before the user picks a branch. "Turn into text" is
+exactly the flow above. "Keep the sound" instead claims the clip
+(`claimAudioClip`), enqueues it into the deferred-posting queue, and follows
+§5.5's upload pattern with `memory_type: 'audio'` — see that doc for the full
+flow. The edit screen's dictation-into-existing-memory usage never offers
+the fork.
 
 ### 5.3 Add Family Member
 

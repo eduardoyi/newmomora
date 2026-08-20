@@ -9,15 +9,22 @@ const MEMORY_MEDIA_CONTENT_TYPES = new Set([
   'image/webp',
   'video/mp4',
   'video/quicktime',
+  // Audio memories "keep the sound" (docs/features/audio-memories.md, P0.2):
+  // expo-audio's HIGH_QUALITY preset records AAC-in-MPEG4 (.m4a) on both
+  // native platforms. The client uploads with audio/mp4; the alternates are
+  // accepted defensively across platform/library variance.
+  'audio/mp4',
+  'audio/m4a',
+  'audio/x-m4a',
 ]);
 
-const MEMORY_MEDIA_EXTENSION_PATTERN = /^([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
+const MEMORY_MEDIA_EXTENSION_PATTERN = /^([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov|m4a)$/i;
 // Exported (not just module-private) because supabase/scripts/backfill-media-previews.ts
 // reuses this exact pattern to parse original asset keys into
 // {memoryId, assetId, ext} and to validate derived preview keys -- see the
 // cross-reference comment on deriveMediaPreviewKey there. Keep in sync.
 export const MEMORY_MEDIA_ASSET_EXTENSION_PATTERN =
-  /^([^/]+)\/media\/([A-Za-z0-9_-]{1,128})\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
+  /^([^/]+)\/media\/([A-Za-z0-9_-]{1,128})\.(jpg|jpeg|png|heic|heif|webp|mp4|mov|m4a)$/i;
 
 export function buildFamilyPhotoKey(userId: string, familyMemberId: string): string {
   return `${userId}/family/${familyMemberId}/photo.webp`;
@@ -242,9 +249,9 @@ const MEMORY_ILLUSTRATION_FULL_PATTERN =
 const MEMORY_ILLUSTRATION_VERSIONED_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/illustrations\/([^/]+)\.(?:webp|jpg)$/;
 const MEMORY_MEDIA_FULL_PATTERN =
-  /^([^/]+)\/memories\/([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
+  /^([^/]+)\/memories\/([^/]+)\/media\.(jpg|jpeg|png|heic|heif|webp|mp4|mov|m4a)$/i;
 const MEMORY_MEDIA_ASSET_FULL_PATTERN =
-  /^([^/]+)\/memories\/([^/]+)\/media\/[A-Za-z0-9_-]{1,128}\.(jpg|jpeg|png|heic|heif|webp|mp4|mov)$/i;
+  /^([^/]+)\/memories\/([^/]+)\/media\/[A-Za-z0-9_-]{1,128}\.(jpg|jpeg|png|heic|heif|webp|mp4|mov|m4a)$/i;
 // Share card store-through cache (docs/plans/share-card-store-through.md,
 // W1). Lives under its own `share-card/` path segment, not `media/`, so it
 // never collides with MEMORY_MEDIA_ASSET_FULL_PATTERN above -- but needs its

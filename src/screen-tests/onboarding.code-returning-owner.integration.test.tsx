@@ -114,6 +114,10 @@ jest.mock('@/services/memory-posting', () => ({
   hasImageMediaAsset: jest.fn((assets: { contentType: string }[]) =>
     assets.some((asset) => !asset.contentType.startsWith('video/')),
   ),
+  // Audio memories aren't exercised by this onboarding flow, but
+  // usePendingMemoryUploads() (real, not mocked here) calls this
+  // discriminant unconditionally on every enqueue/runUpload.
+  isAudioUploadInput: jest.fn(() => false),
   notifyFamilyActivityFireAndForget: jest.fn(),
 }));
 

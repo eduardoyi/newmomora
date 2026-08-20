@@ -1,14 +1,15 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 
-import { createMediaMemory } from '@/services/memories';
+import { createAudioMemory, createMediaMemory } from '@/services/memories';
 import { deleteStorageObject, uploadMediaObject } from '@/services/media';
-import { postMediaMemory, uploadMemoryMediaAssets } from '@/services/memory-posting';
+import { postAudioMemory, postMediaMemory, uploadMemoryMediaAssets } from '@/services/memory-posting';
 import { getLocalFileSizeBytes } from '@/utils/local-files';
-import { MAX_VIDEO_BYTES } from '@/utils/media-validation';
+import { MAX_AUDIO_BYTES, MAX_AUDIO_DURATION_MS, MAX_VIDEO_BYTES } from '@/utils/media-validation';
 import { getVideoFrame } from '@/utils/video-aspect-ratio';
 
 jest.mock('@/services/memories', () => ({
   createMediaMemory: jest.fn(),
+  createAudioMemory: jest.fn(),
 }));
 
 jest.mock('@/services/media', () => ({
@@ -32,6 +33,7 @@ jest.mock('@/utils/local-files', () => ({
 }));
 
 const mockedCreateMediaMemory = createMediaMemory as jest.MockedFunction<typeof createMediaMemory>;
+const mockedCreateAudioMemory = createAudioMemory as jest.MockedFunction<typeof createAudioMemory>;
 const mockedUploadMediaObject = uploadMediaObject as jest.MockedFunction<typeof uploadMediaObject>;
 const mockedDeleteStorageObject = deleteStorageObject as jest.MockedFunction<typeof deleteStorageObject>;
 const mockedManipulateAsync = ImageManipulator.manipulateAsync as jest.MockedFunction<
@@ -630,5 +632,149 @@ describe('postMediaMemory', () => {
     expect(mockedDeleteStorageObject).toHaveBeenCalledTimes(1);
 
     mockedGetLocalFileSizeBytes.mockResolvedValue(5 * 1024 * 1024);
+  });
+});
+
+// docs/plans/audio-memories-v1.md P2.4: a dedicated, minimal pipeline --
+// deliberately NOT a call into uploadMemoryMediaAssets/postMediaMemory, so a
+// raw recorded .m4a never flows through the image branch (compression, EXIF
+// strip, preview generation).
+describe('postAudioMemory', () => {
+  const audioInput = {
+    memoryId: 'memory-audio-1',
+    clip: {
+      fileUri: 'file:///recording.m4a',
+      durationMs: 4200,
+      contentType: 'audio/mp4',
+    },
+    content: 'Mia singing in the bath',
+    audioTranscript: 'twinkle twinkle little star',
+    memoryDate: '2026-08-19',
+    taggedMemberIds: [],
+  } as const;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedUploadMediaObject.mockResolvedValue({
+      data: { objectKey: 'key', success: true },
+      error: null,
+    });
+    mockedDeleteStorageObject.mockResolvedValue({ error: null });
+    mockedGetLocalFileSizeBytes.mockResolvedValue(5 * 1024 * 1024);
+  });
+
+  it('uploads the clip under a .m4a key and inserts, without touching image manipulation, video compression, or frame extraction', async () => {
+    mockedCreateAudioMemory.mockResolvedValue({
+      data: { id: 'memory-audio-1', memory_type: 'audio' },
+      error: null,
+    } as Awaited<ReturnType<typeof createAudioMemory>>);
+
+    const memory = await postAudioMemory({
+      userId: 'user-1',
+      familyId: 'family-1',
+      input: audioInput,
+    });
+
+    expect(memory.id).toBe('memory-audio-1');
+    expect(mockedUploadMediaObject).toHaveBeenCalledTimes(1);
+    expect(mockedUploadMediaObject.mock.calls[0]?.[0]).toMatch(
+      /^user-1\/memories\/memory-audio-1\/media\/[0-9a-f-]{36}\.m4a$/i,
+    );
+    expect(mockedUploadMediaObject.mock.calls[0]?.[1]).toBe('file:///recording.m4a');
+    expect(mockedUploadMediaObject.mock.calls[0]?.[2]).toBe('audio/mp4');
+
+    // No image-manipulation, EXIF-strip, video-compression, or frame-grab
+    // calls -- the crash/waste this dedicated pipeline exists to avoid.
+    expect(mockedManipulateAsync).not.toHaveBeenCalled();
+    expect(mockedGetVideoFrame).not.toHaveBeenCalled();
+
+    expect(mockedCreateAudioMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-audio-1',
+        content: 'Mia singing in the bath',
+        audioTranscript: 'twinkle twinkle little star',
+        clip: expect.objectContaining({
+          contentType: 'audio/mp4',
+          durationMs: 4200,
+        }),
+      }),
+    );
+  });
+
+  it('maps every accepted audio content type to the .m4a extension', async () => {
+    mockedCreateAudioMemory.mockResolvedValue({
+      data: { id: 'memory-audio-1', memory_type: 'audio' },
+      error: null,
+    } as Awaited<ReturnType<typeof createAudioMemory>>);
+
+    for (const contentType of ['audio/mp4', 'audio/m4a', 'audio/x-m4a']) {
+      mockedUploadMediaObject.mockClear();
+      await postAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        input: { ...audioInput, clip: { ...audioInput.clip, contentType } },
+      });
+
+      expect(mockedUploadMediaObject.mock.calls[0]?.[0]).toMatch(/\.m4a$/);
+    }
+  });
+
+  it('rolls back the uploaded clip when createAudioMemory fails', async () => {
+    mockedCreateAudioMemory.mockResolvedValue({
+      data: null,
+      error: { message: 'insert failed' },
+    } as Awaited<ReturnType<typeof createAudioMemory>>);
+
+    await expect(
+      postAudioMemory({ userId: 'user-1', familyId: 'family-1', input: audioInput }),
+    ).rejects.toThrow('insert failed');
+
+    expect(mockedDeleteStorageObject).toHaveBeenCalledTimes(1);
+    expect(mockedDeleteStorageObject.mock.calls[0]?.[0]).toMatch(
+      /^user-1\/memories\/memory-audio-1\/media\//,
+    );
+  });
+
+  it('never uploads (and never rolls back) when the recording exceeds the duration cap', async () => {
+    await expect(
+      postAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        input: {
+          ...audioInput,
+          clip: { ...audioInput.clip, durationMs: MAX_AUDIO_DURATION_MS + 1 },
+        },
+      }),
+    ).rejects.toThrow(/2 minutes/i);
+
+    expect(mockedUploadMediaObject).not.toHaveBeenCalled();
+    expect(mockedCreateAudioMemory).not.toHaveBeenCalled();
+  });
+
+  it('never uploads when the local recording exceeds the size cap', async () => {
+    mockedGetLocalFileSizeBytes.mockResolvedValueOnce(MAX_AUDIO_BYTES + 1);
+
+    await expect(
+      postAudioMemory({ userId: 'user-1', familyId: 'family-1', input: audioInput }),
+    ).rejects.toThrow(/too large/i);
+
+    expect(mockedUploadMediaObject).not.toHaveBeenCalled();
+    expect(mockedCreateAudioMemory).not.toHaveBeenCalled();
+  });
+
+  it('rolls back nothing when the upload itself fails (nothing was uploaded yet)', async () => {
+    mockedUploadMediaObject.mockResolvedValue({
+      data: null,
+      error: { message: 'upload failed' },
+    });
+
+    await expect(
+      postAudioMemory({ userId: 'user-1', familyId: 'family-1', input: audioInput }),
+    ).rejects.toThrow('upload failed');
+
+    expect(mockedCreateAudioMemory).not.toHaveBeenCalled();
+    expect(mockedDeleteStorageObject).not.toHaveBeenCalled();
   });
 });

@@ -1,12 +1,14 @@
 import { fireEvent, render } from '@testing-library/react-native';
-import { Alert } from 'react-native';
+import { Alert, Animated } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
+import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { trackEvent } from '@/services/analytics';
 
 import MemoryDetailScreen from '../../app/(app)/memory/[id]';
@@ -43,7 +45,7 @@ jest.mock('@/components/memory-comments-drawer', () => ({
 }));
 
 jest.mock('@/components/memory-engagement-bar', () => ({
-  MemoryEngagementBar: () => null,
+  MemoryEngagementBar: jest.fn(() => null),
 }));
 
 jest.mock('@/components/memory-media-carousel', () => ({
@@ -70,6 +72,9 @@ jest.mock('@/hooks/useMemories', () => ({
 jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrl: jest.fn(),
 }));
+jest.mock('@/hooks/useAudioClipPlayback', () => ({
+  useAudioClipPlayback: jest.fn(),
+}));
 jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
 }));
@@ -88,6 +93,7 @@ const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.Mock;
 const mockedUseMemory = useMemory as jest.Mock;
 const mockedUseMemoryMutations = useMemoryMutations as jest.Mock;
 const mockedUseMediaUrl = useMediaUrl as jest.Mock;
+const mockedUseAudioClipPlayback = useAudioClipPlayback as jest.Mock;
 const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 const taggedMember = {
@@ -235,6 +241,227 @@ describe('MemoryDetailScreen hierarchy', () => {
     expect(mockedCarousel.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ initialIndex: expectedInitialIndex }),
     );
+  });
+});
+
+// P0.1 forward-compat fallback (docs/plans/audio-memories-v1.md) -- an old
+// installed client fetching a memory_type it doesn't recognize yet (e.g. a
+// hypothetical future type -- 'audio' itself is now known, so the fixture
+// below uses a never-real string instead) must never fall into the
+// illustration branch's permanent "generating" placeholder.
+describe('MemoryDetailScreen unknown memory_type', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'manager' });
+    mockedUseFamilyMemberProfiles.mockReturnValue({
+      profiles: [{ user_id: 'user-1', name: 'Eduardo' }],
+    });
+    mockedUseMemoryMutations.mockReturnValue({
+      deleteMemory: jest.fn(),
+      retryIllustration: jest.fn(),
+      regenerateIllustration: jest.fn(),
+      isDeleting: false,
+      isRetrying: false,
+      isRegenerating: false,
+    });
+    mockedUseMediaUrl.mockReturnValue({ url: undefined });
+  });
+
+  it('renders the text-style layout with the update notice, never the generating overlay', () => {
+    mockedUseMemory.mockReturnValue({
+      data: {
+        ...baseMemory,
+        memory_type: 'hologram',
+        content: 'A giggle worth keeping',
+        illustration_status: 'none',
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('memory-detail-section-unavailable')).toHaveTextContent(
+      'Update Momora to play this memory.',
+    );
+    expect(screen.getByTestId('memory-detail-section-content')).toHaveTextContent(
+      'A giggle worth keeping',
+    );
+    expect(screen.queryByText('Illustration pending')).toBeNull();
+    expect(screen.queryByText('Illustrated memory')).toBeNull();
+  });
+
+  it('disables the share button', () => {
+    const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+    mockedEngagementBar.mockClear();
+
+    mockedUseMemory.mockReturnValue({
+      data: {
+        ...baseMemory,
+        memory_type: 'hologram',
+        content: 'A giggle worth keeping',
+        illustration_status: 'none',
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderScreen();
+
+    expect(mockedEngagementBar.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ enableShare: false }),
+    );
+  });
+});
+
+// P3.2 (docs/plans/audio-memories-v1.md) -- the real, known `audio` variant:
+// playback is the hero, not the P0.1 fallback exercised above.
+describe('MemoryDetailScreen audio variant', () => {
+  const audioMemory = (overrides: Record<string, unknown> = {}) => ({
+    ...baseMemory,
+    memory_type: 'audio',
+    content: 'Lila singing Twinkle Twinkle in the bath.',
+    media_key: 'user-1/memories/memory-1/media/clip-1.m4a',
+    mediaAssets: [
+      {
+        id: 'clip-1',
+        object_key: 'user-1/memories/memory-1/media/clip-1.m4a',
+        content_type: 'audio/mp4',
+        duration_ms: 42_000,
+        position: 0,
+      },
+    ],
+    ...overrides,
+  });
+
+  const idlePlayback = {
+    playing: false,
+    position: 0,
+    duration: 0,
+    progress: 0,
+    loading: false,
+    error: null,
+    toggle: jest.fn(),
+    seekTo: jest.fn(),
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'manager' });
+    mockedUseFamilyMemberProfiles.mockReturnValue({
+      profiles: [{ user_id: 'user-1', name: 'Eduardo' }],
+    });
+    mockedUseMemoryMutations.mockReturnValue({
+      deleteMemory: jest.fn(),
+      retryIllustration: jest.fn(),
+      regenerateIllustration: jest.fn(),
+      isDeleting: false,
+      isRetrying: false,
+      isRegenerating: false,
+    });
+    mockedUseAudioClipPlayback.mockReturnValue(idlePlayback);
+  });
+
+  it('shows the idle "tap to listen" affordance and hides share', () => {
+    const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+    mockedEngagementBar.mockClear();
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
+    mockedUseMemory.mockReturnValue({ data: audioMemory(), isLoading: false, isError: false });
+
+    const screen = renderScreen();
+
+    expect(screen.getByText('tap to listen')).toBeTruthy();
+    expect(screen.getByTestId('memory-detail-sound-seal')).toBeTruthy();
+    expect(mockedEngagementBar.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ enableShare: false }),
+    );
+  });
+
+  it('shows the "getting the sound" loading state while the signed URL is still resolving', () => {
+    mockedUseMediaUrl.mockReturnValue({ url: undefined, isLoading: true, isError: false });
+    mockedUseMemory.mockReturnValue({ data: audioMemory(), isLoading: false, isError: false });
+
+    const screen = renderScreen();
+
+    expect(screen.getByText('getting the sound')).toBeTruthy();
+  });
+
+  it('shows the calm "Not on this phone yet" state when the clip URL fails to resolve', () => {
+    mockedUseMediaUrl.mockReturnValue({ url: undefined, isLoading: false, isError: true });
+    mockedUseMemory.mockReturnValue({ data: audioMemory(), isLoading: false, isError: false });
+
+    const screen = renderScreen();
+
+    expect(screen.getByText('Not on this phone yet')).toBeTruthy();
+  });
+
+  it('shows the calm unavailable state on a playback error even when the URL resolved fine', () => {
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
+    mockedUseAudioClipPlayback.mockReturnValue({ ...idlePlayback, error: 'decode failed' });
+    mockedUseMemory.mockReturnValue({ data: audioMemory(), isLoading: false, isError: false });
+
+    const screen = renderScreen();
+
+    expect(screen.getByText('Not on this phone yet')).toBeTruthy();
+  });
+
+  it('shows the no-note copy for a clip with no description', () => {
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
+    mockedUseMemory.mockReturnValue({
+      data: audioMemory({ content: null }),
+      isLoading: false,
+      isError: false,
+    });
+
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('memory-detail-section-content')).toHaveTextContent(
+      'No note — just the sound.',
+    );
+  });
+
+  it('animates the note/engagement/footer block toward 32% opacity while playing (words step back)', () => {
+    const timingSpy = jest.spyOn(Animated, 'timing');
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
+    mockedUseAudioClipPlayback.mockReturnValue({ ...idlePlayback, playing: true, position: 5, progress: 5 / 42 });
+    mockedUseMemory.mockReturnValue({ data: audioMemory(), isLoading: false, isError: false });
+
+    renderScreen();
+
+    expect(timingSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ toValue: 0.32, duration: 380 }),
+    );
+
+    timingSpy.mockRestore();
+  });
+
+  it('animates back toward full opacity once playback stops', () => {
+    const timingSpy = jest.spyOn(Animated, 'timing');
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
+    mockedUseAudioClipPlayback.mockReturnValue(idlePlayback);
+    mockedUseMemory.mockReturnValue({ data: audioMemory(), isLoading: false, isError: false });
+
+    renderScreen();
+
+    expect(timingSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ toValue: 1, duration: 380 }),
+    );
+
+    timingSpy.mockRestore();
+  });
+
+  it('toggles playback via the seal', () => {
+    const toggle = jest.fn();
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
+    mockedUseAudioClipPlayback.mockReturnValue({ ...idlePlayback, toggle });
+    mockedUseMemory.mockReturnValue({ data: audioMemory(), isLoading: false, isError: false });
+
+    const screen = renderScreen();
+    fireEvent.press(screen.getByTestId('memory-detail-sound-seal'));
+
+    expect(toggle).toHaveBeenCalledTimes(1);
   });
 });
 

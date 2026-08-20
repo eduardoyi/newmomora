@@ -154,6 +154,21 @@ export interface AnalyticsEventMap {
   notification_opened: {
     target: NonNullable<PushRouteData['route']>;
   };
+
+  // Audio memories (docs/plans/audio-memories-v1.md P2.6) -- the fork split
+  // is the product signal this feature's VoC bet needs to validate, so it
+  // gets its own events rather than piggybacking on `memory_saved`.
+  voice_fork_shown: {
+    /** Whether the fork was reached via the 2:00 auto-stop rather than a deliberate tap-to-stop. */
+    auto_stopped: boolean;
+  };
+  voice_fork_choice: {
+    choice: 'turn_into_text' | 'keep_the_sound';
+  };
+  audio_memory_saved: {
+    duration_bucket: '0_15s' | '15_30s' | '30_60s' | '60_90s' | '90_120s';
+    has_description: boolean;
+  };
 }
 
 // Compile-time safety net: every event's properties must satisfy

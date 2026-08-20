@@ -14,6 +14,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
+import { seedFromKey } from '@/components/audio/audio-seed';
+import { SoundTile } from '@/components/audio/sound-tile';
 import { CastCard } from '@/components/cast-card';
 import { ContentActionSheet } from '@/components/content-action-sheet';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
@@ -103,6 +105,18 @@ function MemoryThumb({
       <View style={[styles.thumb, { backgroundColor: emo?.soft ?? colors.surface, alignItems: 'center', justifyContent: 'center' }]}>
         <Text style={[styles.thumbQuote, { color: emo?.ink ?? colors.ink3 }]}>“</Text>
       </View>
+    );
+  }
+
+  if (memory.memory_type === 'audio') {
+    return (
+      <SoundTile
+        durationSeconds={(memory.mediaAssets[0]?.duration_ms ?? 0) / 1000}
+        emotion={memory.emotion}
+        seed={seedFromKey(memory.id)}
+        size={54}
+        testID={`member-memory-${memory.id}-sound`}
+      />
     );
   }
 
@@ -407,11 +421,13 @@ export default function ViewFamilyMemberScreen() {
                   </Text>
                 ) : (
                   <Text style={styles.memoryNoCaption}>
-                    {m.memory_type === 'media' && m.mediaAssets.length > 1
-                      ? 'Media'
-                      : m.memory_type === 'media' && m.media_content_type?.startsWith('video/')
-                        ? 'Video'
-                        : 'Photo'}
+                    {m.memory_type === 'audio'
+                      ? 'Sound'
+                      : m.memory_type === 'media' && m.mediaAssets.length > 1
+                        ? 'Media'
+                        : m.memory_type === 'media' && m.media_content_type?.startsWith('video/')
+                          ? 'Video'
+                          : 'Photo'}
                   </Text>
                 )}
                 {(() => {

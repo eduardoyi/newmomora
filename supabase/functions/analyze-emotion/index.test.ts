@@ -1,6 +1,7 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import {
   analyzeTextIllustrationEmotion,
+  buildAudioEmotionClassifierInput,
   handleAnalyzeEmotion,
   updateEmotionIfSnapshotMatches,
   validateMediaPhotoMemoryRow,
@@ -135,6 +136,59 @@ Deno.test('validateMediaPhotoMemoryRow accepts a media key under a different mem
   });
 
   assertEquals(result, null);
+});
+
+// Audio memories (docs/features/audio-memories.md, P1.4): the vision path's
+// media-only guard must keep rejecting `audio` even though it now has its
+// own text-classifier branch in the handler -- this pins the guard as
+// defense-in-depth against a misrouted call.
+Deno.test('validateMediaPhotoMemoryRow rejects audio on the vision (media) path', () => {
+  const result = validateMediaPhotoMemoryRow({
+    memory_type: 'audio',
+    media_key: 'user-1/memories/memory-1/media/asset-1.m4a',
+    media_content_type: 'audio/mp4',
+  });
+
+  assertEquals(result?.code, 'invalid_memory_type');
+});
+
+Deno.test('buildAudioEmotionClassifierInput proceeds on description only', () => {
+  const result = buildAudioEmotionClassifierInput({
+    content: 'Lila singing Twinkle Twinkle in the bath',
+    audio_transcript: null,
+  });
+  assertEquals(result, { skip: false, input: 'Lila singing Twinkle Twinkle in the bath' });
+});
+
+Deno.test('buildAudioEmotionClassifierInput proceeds on transcript only', () => {
+  const result = buildAudioEmotionClassifierInput({
+    content: null,
+    audio_transcript: 'twinkle twinkle little star',
+  });
+  assertEquals(result, { skip: false, input: 'twinkle twinkle little star' });
+});
+
+Deno.test('buildAudioEmotionClassifierInput concatenates description and transcript when both are present', () => {
+  const result = buildAudioEmotionClassifierInput({
+    content: 'Lila singing in the bath',
+    audio_transcript: 'twinkle twinkle little star',
+  });
+  assertEquals(result, {
+    skip: false,
+    input: 'Lila singing in the bath twinkle twinkle little star',
+  });
+});
+
+Deno.test('buildAudioEmotionClassifierInput skips (no-op) when both description and transcript are empty', () => {
+  for (const row of [
+    { content: null, audio_transcript: null },
+    { content: '', audio_transcript: '' },
+    { content: '   ', audio_transcript: '   ' },
+    // URL-only content strips to nothing, same as the text_only/text_illustration gate.
+    { content: 'https://example.com/clip', audio_transcript: null },
+  ]) {
+    assertEquals(buildAudioEmotionClassifierInput(row), { skip: true });
+  }
 });
 
 Deno.test('updateEmotionIfSnapshotMatches returns false when no row matches', async () => {

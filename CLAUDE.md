@@ -23,7 +23,7 @@ This project uses shared agent instructions. **Read [AGENTS.md](AGENTS.md) first
 - **Secrets:** Never commit `.env*` or API keys. OpenAI/service role keys only in Edge Function secrets.
 - RLS policies and storage bucket permissions
 - Edge Function auth (JWT vs cron secret)
-- Voice pipeline — no audio persistence
+- Voice pipeline — dictation audio is transcribed and discarded, never persisted; "keep the sound" audio memories deliberately persist the clip to private R2 as the memory artifact (see [docs/features/audio-memories.md](docs/features/audio-memories.md))
 - AI async flows — text saves first, illustration status tracked separately
 - Child/family PII — no logging of memory content
 - Mobile keyboard UX — any `TextInput` in a screen, modal, bottom sheet, or drawer must stay visible and keep primary actions reachable when the keyboard opens

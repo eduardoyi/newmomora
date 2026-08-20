@@ -232,17 +232,19 @@ Each feature includes user stories, acceptance criteria, and deferred scope.
 
 **Memory types**
 
-Memories support three formats, derived from what the user provides — no upfront type selector:
+Memories support four formats, derived from what the user provides — no upfront type selector:
 
 | Type | Text | Media | AI illustration |
 |------|------|-------|-----------------|
 | `text_illustration` | Required | None | Yes — async after save |
 | `text_only` | Required | None | No |
 | `media` | Optional caption | 1-10 photos/videos | No |
+| `audio` | Optional description | 1 kept audio clip | No — see §6.3a |
 
 **Emergent type UX:** The new-memory form always shows the text field and a media attach icon in the toolbar.
 
 - Attaching one or more photos/videos → `media` type; AI illustration toggle is hidden.
+- Choosing "Keep the sound" after recording (§6.3a) → `audio` type; media attach and AI illustration toggle are both hidden.
 - No media attached, AI toggle **off** → `text_only`.
 - No media attached, AI toggle **on** (default) → `text_illustration`.
 
@@ -262,6 +264,39 @@ Memories support three formats, derived from what the user provides — no upfro
 - Voice input available as alternate input method (see §6.7); transcribed text remains editable before save
 
 **Deferred:** Milestone auto-detection
+
+---
+
+### 6.3a Audio Memories
+
+**User stories**
+
+- As a parent, I can keep the actual sound of a moment — my child's babble, a mispronounced word, a laugh, a snippet of song — instead of only a written record of it.
+- As a parent, I don't have to decide upfront whether I'm dictating a note or keeping a recording; I record once and choose after.
+
+Extends §6.3's memory-type table with `audio`; relates to §6.7 Voice-to-Text Journaling, whose recorder and transcription pipeline this reuses — dictation there still always discards audio (unchanged).
+
+**Behavior**
+
+- One recording entry point (the composer mic, same as §6.7). After the recording stops, the user picks one of two equal-weight actions: **"Turn into text"** (§6.7's existing dictation flow — transcript populates the memory text, recording discarded) or **"Keep the sound"** (the memory becomes an `audio` type: the clip is kept, with a short AI-generated description shown as the visible, user-editable text — the raw transcript itself is stored invisibly for search only, never displayed).
+- **2-minute cap**, same as dictation.
+- Exclusive type: one clip per memory, no mixed photo/video attachments, no AI illustration.
+- Own timeline card and detail screen (playback-first), matching each memory type's distinct keepsake presentation.
+- Edit allows description/tags/date; the clip itself cannot be replaced or removed post-save.
+
+**Acceptance criteria**
+
+- Recording auto-stops at 2 minutes, same limit as voice dictation.
+- "Keep the sound" never fails or blocks on the description/transcript generation — the clip is the artifact; if AI processing hasn't finished by save time, the memory saves with an empty description and the description fills in when ready.
+- Description is optional and user-editable, like a media caption.
+- Tagged family members: unlimited, like `text_only`/`media` (no AI-illustration tag cap applies).
+
+**Out of v1 (backlog):**
+
+- Sharing an audio memory as a share card (§6.3's `media`/`text_illustration`/`text_only` share-card flow explicitly rejects `audio`).
+- Audio memories appearing in Looking Back resurfaced packages (excluded from eligibility entirely; a dedicated audio story frame is a future design pass).
+- Illustration generated from an audio memory's transcript (the "illustrated memory with voice" combo).
+- Clips longer than 2 minutes; a waveform-peaks/scrubbing-preview sidecar beyond the current inline seek.
 
 ---
 

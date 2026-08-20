@@ -1,0 +1,27 @@
+appId: com.memora.app
+---
+# Deleting an audio memory (docs/features/audio-memories.md) works like any
+# other memory type: chrome trash icon -> native confirm -> back to the
+# timeline, R2 clip cleanup happens server-side. Chains off
+# create-audio-memory.yaml, which leaves the flow on that memory's detail
+# screen -- same composition pattern as engagement/like-and-comment.yaml
+# chaining off memories/create-memory.yaml.
+#
+# Authored, not executed in this pass (no bootable simulator in this
+# environment) -- validated against .maestro/flows conventions by eye. Runs
+# in the release device pass (P4.3).
+- runFlow: create-audio-memory.yaml
+- tapOn:
+    id: memory-detail-delete
+- extendedWaitUntil:
+    visible: "Delete memory"
+    timeout: 10000
+- tapOn: "Delete"
+- extendedWaitUntil:
+    notVisible:
+      id: memory-detail-back
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000

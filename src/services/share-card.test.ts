@@ -402,4 +402,17 @@ describe('warmShareCardForMemoryFireAndForget', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  // P3.3 (docs/plans/audio-memories-v1.md) -- 'audio' isn't in
+  // compose-share-card's SHAREABLE_MEMORY_TYPES; never fire a doomed warm.
+  it('skips warming entirely for an audio memory', async () => {
+    warmShareCardForMemoryFireAndForget({
+      id: 'memory-5',
+      memory_type: 'audio',
+      mediaAssets: [{ id: 'clip-1' }],
+    });
+    await flushMicrotasks();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

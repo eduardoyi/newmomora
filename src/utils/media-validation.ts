@@ -45,6 +45,26 @@ export const MAX_VIDEO_SOURCE_BYTES = 2 * 1024 * 1024 * 1024;
  */
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
+// Audio "keep the sound" client-side caps (docs/features/audio-memories.md,
+// P0.2/P2.4). Mirrors the server-side authoritative limits: MAX_AUDIO_BYTES
+// must match MAX_AUDIO_UPLOAD_BYTES in
+// supabase/functions/upload-media/index.ts, and MAX_AUDIO_DURATION_MS
+// matches the recorder's 2-minute auto-stop cap (same cap as dictation).
+// Kept in sync by hand (Deno edge functions can't import from src/) --
+// change both together. A 2-minute AAC clip at expo-audio's HIGH_QUALITY
+// preset is ~1.9 MB, so 5 MB leaves generous headroom.
+export const MAX_AUDIO_DURATION_MS = 2 * 60 * 1000;
+export const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
+
+// Deliberately separate from ALLOWED_MEDIA_CONTENT_TYPES below -- audio
+// clips never flow through the photo/video picker's validateMediaFile path
+// (captured via the recorder, not attached from the camera roll).
+export const ALLOWED_AUDIO_CONTENT_TYPES = new Set(['audio/mp4', 'audio/m4a', 'audio/x-m4a']);
+
+export function isAudioContentType(contentType: string): boolean {
+  return ALLOWED_AUDIO_CONTENT_TYPES.has(contentType);
+}
+
 export const ALLOWED_IMAGE_CONTENT_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -143,6 +163,10 @@ export function getMediaExtensionFromContentType(contentType: string): string | 
       return 'mp4';
     case 'video/quicktime':
       return 'mov';
+    case 'audio/mp4':
+    case 'audio/m4a':
+    case 'audio/x-m4a':
+      return 'm4a';
     default:
       return null;
   }

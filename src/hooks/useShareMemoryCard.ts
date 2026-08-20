@@ -68,6 +68,16 @@ export function handleShareCardError(
     return;
   }
 
+  // A memory type this build offered the share icon for but the server
+  // rejects (e.g. `audio`, before an old installed client has updated --
+  // P0.1, docs/plans/audio-memories-v1.md). The server's own message is
+  // written for this exact case ("Audio memories cannot be shared yet");
+  // surface it instead of the generic fallback below.
+  if (error.code === 'unsupported_memory_type') {
+    Alert.alert('Could not share memory', error.message || 'This memory can’t be shared yet.');
+    return;
+  }
+
   Alert.alert('Could not share memory', 'Please try again.');
 }
 

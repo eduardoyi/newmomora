@@ -48,6 +48,28 @@ export interface ProcessVoiceMemoryResponse {
   mentionedMemberIds: string[];
 }
 
+/**
+ * Family mode only (audio-memories "keep the sound" fork,
+ * docs/features/audio-memories.md). Onboarding mode's response shape is
+ * unchanged -- no description field, since the fork does not exist pre-auth.
+ */
+export interface ProcessVoiceFamilyMemoryResponse extends ProcessVoiceMemoryResponse {
+  /** One-line third-person caption, <= ~120 chars. '' when speech is unusable -- never absent, never an error. */
+  description: string;
+}
+
+const MAX_DESCRIPTION_LENGTH = 120;
+
+/** Server-side clamp/validate: missing or wrong-typed input defaults to ''; oversized input is truncated. Never throws. */
+function sanitizeVoiceDescription(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > MAX_DESCRIPTION_LENGTH ? trimmed.slice(0, MAX_DESCRIPTION_LENGTH) : trimmed;
+}
+
 interface VoiceFamilyLookupClient {
   from(table: 'user_profiles' | 'family_memberships'): {
     select(columns: string): {
@@ -335,13 +357,18 @@ export async function handleProcessVoiceMemoryWithDependencies(
       return errorResponse('Transcription returned empty text', 400, 'TRANSCRIPTION_FAILED');
     }
 
-    const cleanup = await dependencies.chatJson<{ cleanedText?: string; mentionedUserSelf?: boolean }>(
-      buildVoiceCleanupSystemPrompt(),
+    const cleanup = await dependencies.chatJson<{
+      cleanedText?: string;
+      mentionedUserSelf?: boolean;
+      description?: unknown;
+    }>(
+      buildVoiceCleanupSystemPrompt({ includeDescription: true }),
       transcript,
       { usageContext: { attributionScope: 'family', familyId, actorUserId: user.id, operation: 'voice_cleanup' } },
     );
 
     const cleanedText = cleanup.cleanedText?.trim() || transcript;
+    const description = sanitizeVoiceDescription(cleanup.description);
     const mentionedMemberIds = matchMemberIdsMentionedInText(cleanedText, familyMembers);
 
     if (cleanup.mentionedUserSelf) {
@@ -351,8 +378,9 @@ export async function handleProcessVoiceMemoryWithDependencies(
       }
     }
 
-    const response: ProcessVoiceMemoryResponse = {
+    const response: ProcessVoiceFamilyMemoryResponse = {
       cleanedText,
+      description,
       mentionedMemberIds: mentionedMemberIds.slice(0, 4),
     };
 

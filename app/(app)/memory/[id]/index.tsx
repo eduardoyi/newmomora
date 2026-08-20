@@ -2,10 +2,12 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +16,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { seedFromKey } from '@/components/audio/audio-seed';
+import { formatClipTime } from '@/components/audio/audio-emotion';
+import { ListenSeal } from '@/components/audio/listen-seal';
+import { SoundTrace } from '@/components/audio/sound-trace';
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
 import { ContentActionSheet } from '@/components/content-action-sheet';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
@@ -28,6 +34,7 @@ import { colors, fonts, getEmotionColors, getEmotionGradient, radius, spacing } 
 import type { FamilyMember } from '@/services/family-members';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMemberProfiles, resolveAttributionName } from '@/hooks/useFamilyMemberProfiles';
+import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
@@ -45,7 +52,9 @@ import {
   getIllustrationStatusLabel,
   isIllustrationGenerationStale,
   isIllustrationInProgress,
+  isKnownMemoryType,
   needsIllustrationRecovery,
+  UNSUPPORTED_MEMORY_TYPE_NOTICE,
   type IllustrationStatus,
 } from '@/utils/memories';
 import type { ReportTargetType } from '@/services/content-safety';
@@ -412,7 +421,7 @@ function MemoryDetailFramed({
   );
 }
 
-// ── Detail B — Editorial text (text_only) ─────────────────────────────────────
+// ── Detail B — Editorial text (text_only, and the unknown-type fallback) ──────
 function MemoryDetailEditorial({
   memory,
   attributionName,
@@ -422,6 +431,8 @@ function MemoryDetailEditorial({
   isDeleting,
   onOpenComments,
   onMore,
+  enableShare = true,
+  unavailableNotice,
 }: {
   memory: NonNullable<ReturnType<typeof useMemory>['data']>;
   attributionName: string;
@@ -431,6 +442,14 @@ function MemoryDetailEditorial({
   isDeleting: boolean;
   onOpenComments: () => void;
   onMore?: () => void;
+  /** False for a `memory_type` this build can't share (P0.1). */
+  enableShare?: boolean;
+  /**
+   * Shown where the visual (illustration/media/future audio player) would
+   * be, in place of that visual -- only set for a `memory_type` this build
+   * doesn't recognize yet. Muted and calm, never an error treatment.
+   */
+  unavailableNotice?: string;
 }) {
   const emo = getEmotionColors(memory.emotion);
 
@@ -447,6 +466,11 @@ function MemoryDetailEditorial({
       </SafeAreaView>
       <ScrollView contentContainerStyle={styles.detailScrollContent}>
         <View style={styles.editorialCard}>
+          {unavailableNotice ? (
+            <Text style={styles.unavailableNotice} testID="memory-detail-section-unavailable">
+              {unavailableNotice}
+            </Text>
+          ) : null}
           <Text style={[styles.editorialQuote, { color: emo ? emo.ink : colors.ink3 }]}>“</Text>
           <MemoryContentText
             content={memory.content}
@@ -466,7 +490,7 @@ function MemoryDetailEditorial({
               memory={memory}
               onOpenComments={onOpenComments}
               iconSize={24}
-              enableShare
+              enableShare={enableShare}
             />
           </View>
           <MemoryMetaFooter
@@ -474,6 +498,241 @@ function MemoryDetailEditorial({
             attributionName={attributionName}
             emotion={memory.emotion}
           />
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// ── Detail C — Sound (audio) ───────────────────────────────────────────────────
+type SoundPlaybackState = 'idle' | 'playing' | 'loading' | 'unavailable';
+
+// The player, in the slot MemoryDetailFramed gives the carousel/illustration
+// (design handoff: SoundStage). Duration comes from the DB row -- not
+// `clip.duration`, which is 0 until the player has actually loaded the
+// clip -- so the total is visible immediately, before any tap (same reason
+// memory-card.tsx's SoundCard passes an explicit `durationSeconds`).
+function SoundStage({
+  clip,
+  durationSeconds,
+  emotion,
+  seed,
+  state,
+}: {
+  clip: ReturnType<typeof useAudioClipPlayback>;
+  durationSeconds: number;
+  emotion: string | null;
+  seed: number;
+  state: SoundPlaybackState;
+}) {
+  const [traceWidth, setTraceWidth] = useState(0);
+  const listening = state === 'playing';
+
+  if (state === 'unavailable') {
+    return (
+      <View style={[styles.framedImage, styles.soundStage, styles.soundStageUnavailable]}>
+        <SoundTrace
+          emotion={emotion}
+          height={64}
+          idleColor={colors.borderStrong}
+          points={46}
+          progress={0}
+          seed={seed}
+          stroke={2}
+        />
+        <Text style={styles.soundUnavailableTitle}>Not on this phone yet</Text>
+        <Text style={styles.soundUnavailableBody}>
+          It needs a connection to come down. Your note is here either way.
+        </Text>
+      </View>
+    );
+  }
+
+  const showElapsed = listening || clip.position > 0.05;
+  const statusLabel = state === 'loading'
+    ? 'getting the sound'
+    : listening
+      ? 'listening'
+      : clip.position > 0.05
+        ? 'paused'
+        : 'tap to listen';
+
+  const handleSeekPress = (event: { nativeEvent: { locationX: number } }) => {
+    if (state === 'loading' || !traceWidth) {
+      return;
+    }
+    const fraction = event.nativeEvent.locationX / traceWidth;
+    void clip.seekTo(Math.max(0, Math.min(1, fraction)));
+  };
+
+  return (
+    <View style={[styles.framedImage, styles.soundStage]}>
+      <Pressable
+        disabled={state === 'loading'}
+        onLayout={(event) => setTraceWidth(event.nativeEvent.layout.width)}
+        onPress={handleSeekPress}
+        style={styles.soundStageTrace}
+        testID="memory-detail-sound-trace"
+      >
+        <SoundTrace
+          emotion={emotion}
+          height={104}
+          points={62}
+          progress={clip.progress}
+          seed={seed}
+          stroke={2.6}
+        />
+      </Pressable>
+      <View style={styles.soundStageControls}>
+        <ListenSeal
+          busy={state === 'loading'}
+          emotion={emotion}
+          onPress={() => void clip.toggle()}
+          playing={clip.playing}
+          size={64}
+          testID="memory-detail-sound-seal"
+        />
+      </View>
+      <View style={styles.soundStageTimeRow}>
+        {state !== 'loading' ? (
+          <>
+            {showElapsed ? (
+              <Text style={styles.soundStageTime}>{formatClipTime(clip.position)}</Text>
+            ) : null}
+            {showElapsed ? <Text style={styles.soundStageTimeDim}>/</Text> : null}
+            <Text style={showElapsed ? styles.soundStageTimeDim : styles.soundStageTime}>
+              {formatClipTime(durationSeconds)}
+            </Text>
+            <View style={styles.soundStageDot} />
+          </>
+        ) : null}
+        <Text style={styles.soundStageStatus}>{statusLabel}</Text>
+      </View>
+    </View>
+  );
+}
+
+// Playback is the hero (design handoff: MemoryDetailSound) -- the player
+// takes the slot MemoryDetailFramed gives the carousel/illustration, then
+// the same engagement/note/members/footer stack MemoryDetailFramed already
+// uses, unchanged in shape. Share is hidden (server rejects audio in v1).
+function MemoryDetailSound({
+  memory,
+  attributionName,
+  onBack,
+  onEdit,
+  onDelete,
+  isDeleting,
+  onOpenComments,
+  onMore,
+}: {
+  memory: NonNullable<ReturnType<typeof useMemory>['data']>;
+  attributionName: string;
+  onBack: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
+  isDeleting: boolean;
+  onOpenComments: () => void;
+  onMore?: () => void;
+}) {
+  const clipAsset = memory.mediaAssets[0] ?? null;
+  const clipKey = clipAsset?.object_key ?? memory.media_key ?? null;
+  const { url: clipUrl, isLoading: isClipUrlLoading, isError: isClipUrlError } = useMediaUrl(
+    clipKey,
+    memory.updated_at,
+  );
+  const clip = useAudioClipPlayback(clipUrl);
+  const durationSeconds = (clipAsset?.duration_ms ?? 0) / 1000;
+  const seed = seedFromKey(memory.id);
+
+  const state: SoundPlaybackState =
+    !clipKey || isClipUrlError || clip.error
+      ? 'unavailable'
+      : isClipUrlLoading || (Boolean(clipUrl) && clip.loading)
+        ? 'loading'
+        : clip.playing
+          ? 'playing'
+          : 'idle';
+  const listening = state === 'playing';
+
+  // The words step back while listening (design handoff, P3.2): the
+  // engagement/note/members/footer block fades to ~32% opacity over ~380ms
+  // while playing, then fades back the same way when it stops -- "nothing
+  // to look at is the point." The chrome (back/edit/delete) stays fully
+  // usable throughout; only this content block quiets down.
+  const [quietOpacity] = useState(() => new Animated.Value(1));
+  useEffect(() => {
+    Animated.timing(quietOpacity, {
+      toValue: listening ? 0.32 : 1,
+      duration: 380,
+      easing: Easing.bezier(0.22, 0.61, 0.36, 1),
+      useNativeDriver: true,
+    }).start();
+  }, [listening, quietOpacity]);
+
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      <LinearGradient
+        colors={getEmotionGradient(memory.emotion)}
+        locations={[0, 0.45, 1]}
+        style={styles.emotionGradient}
+        pointerEvents="none"
+      />
+      <SafeAreaView edges={['top']}>
+        <DetailChrome
+          isDeleting={isDeleting}
+          onBack={onBack}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onMore={onMore}
+        />
+      </SafeAreaView>
+      <ScrollView contentContainerStyle={styles.detailScrollContent}>
+        <View style={styles.framedCard}>
+          <View style={styles.framedMediaWrap}>
+            <SoundStage
+              clip={clip}
+              durationSeconds={durationSeconds}
+              emotion={memory.emotion}
+              seed={seed}
+              state={state}
+            />
+          </View>
+          <Animated.View style={[styles.framedCardBody, { opacity: quietOpacity }]}>
+            <View testID="memory-detail-section-engagement">
+              <MemoryEngagementBar
+                memory={memory}
+                onOpenComments={onOpenComments}
+                iconSize={24}
+                enableShare={false}
+                currentMediaAssetId={null}
+              />
+            </View>
+            {memory.content ? (
+              <MemoryContentText
+                content={memory.content}
+                linkPreviews={toLinkPreviewMap(memory.link_previews)}
+                style={styles.detailText}
+                testID="memory-detail-section-content"
+              />
+            ) : (
+              <Text style={styles.soundNoNote} testID="memory-detail-section-content">
+                No note — just the sound.
+              </Text>
+            )}
+            {memory.taggedMembers.length > 0 && (
+              <View style={styles.memberRow} testID="memory-detail-section-members">
+                {memory.taggedMembers.map((m) => (
+                  <MemberPill key={m.id} member={m} memoryDate={memory.memory_date} />
+                ))}
+              </View>
+            )}
+            <MemoryMetaFooter
+              date={memory.memory_date}
+              attributionName={attributionName}
+              emotion={memory.emotion}
+            />
+          </Animated.View>
         </View>
       </ScrollView>
     </View>
@@ -754,10 +1013,63 @@ export default function MemoryDetailScreen() {
     );
   }
 
+  if (!isKnownMemoryType(memory.memory_type)) {
+    // Forward-compat fallback (P0.1): a `memory_type` this build doesn't
+    // recognize yet (e.g. a future `'audio'` row fetched by an old
+    // installed client) renders as the text-style layout with an explicit
+    // notice instead of the illustration/media branch's permanent
+    // "generating" placeholder.
+    return (
+      <>
+        <MemoryDetailEditorial
+          memory={memory}
+          attributionName={attributionName}
+          isDeleting={isDeleting}
+          onBack={leaveMemoryDetail}
+          onEdit={canEdit ? () => router.push(editMemoryRoute(id)) : undefined}
+          onDelete={canEdit ? handleDelete : undefined}
+          onOpenComments={() => setCommentsOpen(true)}
+          onMore={hasReportActions ? () => setActionsOpen(true) : undefined}
+          enableShare={false}
+          unavailableNotice={UNSUPPORTED_MEMORY_TYPE_NOTICE}
+        />
+        <MemoryCommentsDrawer
+          memory={memory}
+          onClose={() => setCommentsOpen(false)}
+          visible={commentsOpen}
+        />
+        {safetyModals}
+      </>
+    );
+  }
+
   if (memory.memory_type === 'text_only') {
     return (
       <>
         <MemoryDetailEditorial
+          memory={memory}
+          attributionName={attributionName}
+          isDeleting={isDeleting}
+          onBack={leaveMemoryDetail}
+          onEdit={canEdit ? () => router.push(editMemoryRoute(id)) : undefined}
+          onDelete={canEdit ? handleDelete : undefined}
+          onOpenComments={() => setCommentsOpen(true)}
+          onMore={hasReportActions ? () => setActionsOpen(true) : undefined}
+        />
+        <MemoryCommentsDrawer
+          memory={memory}
+          onClose={() => setCommentsOpen(false)}
+          visible={commentsOpen}
+        />
+        {safetyModals}
+      </>
+    );
+  }
+
+  if (memory.memory_type === 'audio') {
+    return (
+      <>
+        <MemoryDetailSound
           memory={memory}
           attributionName={attributionName}
           isDeleting={isDeleting}
@@ -971,6 +1283,75 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.sm,
   },
+
+  // ── Sound stage (audio detail hero) ──
+  soundStage: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+  },
+  soundStageUnavailable: {
+    gap: 6,
+    paddingHorizontal: 24,
+  },
+  soundStageTrace: {
+    width: '100%',
+  },
+  soundStageControls: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 14,
+    marginTop: 22,
+  },
+  soundStageTimeRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+  },
+  soundStageTime: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 13,
+    color: colors.ink,
+  },
+  soundStageTimeDim: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 13,
+    color: colors.ink3,
+  },
+  soundStageDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: colors.ink3,
+  },
+  soundStageStatus: {
+    fontFamily: fonts.sansBold,
+    fontSize: 10.5,
+    letterSpacing: 0.12 * 10.5,
+    textTransform: 'uppercase',
+    color: colors.ink3,
+  },
+  soundUnavailableTitle: {
+    fontFamily: fonts.sansBold,
+    fontSize: 14,
+    color: colors.ink,
+    marginTop: 6,
+  },
+  soundUnavailableBody: {
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    color: colors.ink2,
+    textAlign: 'center',
+  },
+  soundNoNote: {
+    fontFamily: fonts.sans,
+    fontSize: 16,
+    lineHeight: 26,
+    color: colors.ink3,
+  },
   placeholderIcon: {
     fontSize: 32,
     color: colors.primary,
@@ -1064,5 +1445,16 @@ const styles = StyleSheet.create({
     fontSize: 22,
     lineHeight: 22 * 1.55,
     color: colors.ink,
+  },
+  unavailableNotice: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    color: colors.ink3,
+    fontFamily: fonts.sansMedium,
+    fontSize: 13,
+    padding: spacing.md,
+    textAlign: 'center',
   },
 });

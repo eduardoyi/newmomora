@@ -6,7 +6,7 @@
 
 ## Overview
 
-Journal entries in three formats: text with AI illustration, plain text only, or user-uploaded photo/video with optional caption. Text saves to Postgres first for all types. Every analyzable memory gets an `analyze-emotion` pass: `text_illustration` and `text_only` use the text classifier, **photo** `media` uses the vision classifier; **video** `media` has no emotion in MVP. For `text_illustration` the emotion result also feeds the `generate-illustration` color palette. The memory type is derived from the creation form.
+Journal entries in four formats: text with AI illustration, plain text only, user-uploaded photo/video with optional caption, or a kept audio clip with an editable description. Text saves to Postgres first for all types. Every analyzable memory gets an `analyze-emotion` pass: `text_illustration`, `text_only`, and `audio` use the text classifier (audio over its description + invisible transcript), **photo** `media` uses the vision classifier; **video** `media` has no emotion in MVP. For `text_illustration` the emotion result also feeds the `generate-illustration` color palette. The memory type is derived from the creation form. See [audio-memories.md](./audio-memories.md) for the `audio` type's own capture flow, data model, and constraints — this doc only touches the sites where the type system itself is enumerated.
 
 Emotion analysis runs fire-and-forget with **one background retry** (after the edge-function cooldown). If both attempts fail the emotion is left empty rather than forced to a default, and a session-scoped backfill pass in `useMemories` re-attempts analysis for any analyzable memory still missing an emotion (covers older entries created before this pass existed).
 
@@ -23,12 +23,14 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
 - An existing illustrated memory caps manual tag selection at 6 while AI remains on, matching the illustration input limit. Turning AI off removes that cap; AI cannot be turned back on until the tag count returns to 6 or fewer.
 - **Emergent type logic:**
   - Attach one or more photos/videos → `media` type; AI toggle is hidden.
+  - Keep a recorded sound (post-recording fork's "Keep the sound") → `audio` type; media picker and AI toggle both hidden. See [audio-memories.md](./audio-memories.md).
   - No media, AI toggle off → `text_only`.
   - No media, AI toggle on (default) → `text_illustration`.
 - Timeline cards render differently by type:
   - `text_illustration`: excerpt + emotion chip + illustration thumbnail (with status indicator).
   - `text_only`: excerpt + emotion chip; no image area.
   - `media`: photo/video carousel + optional caption; media with at least one photo may show emotion chip after async analysis.
+  - `audio`: ticket-stub/inked-trace/wax-seal card (`SoundCard`) — inline play/pause, description excerpt, emotion chip once analyzed. See [audio-memories.md](./audio-memories.md).
 - Timeline cards show up to six tagged-member avatars. Memories with more than six tags keep the first six visible and append a compact `+N` avatar for the remaining count.
 - Tagged-member avatars on timeline cards and memory detail are resolved against `memory_date`, using the same portrait-version rule as illustration generation.
 - Illustrated and media memory details follow the Timeline card order: visual, engagement, story, then tagged members. Text-only details prioritize the story and tagged members before engagement. Every variant ends with date and emotion in a compact footer, with creator attribution on its own lowest-priority line. The detail background carries a soft top-down gradient tinted by the emotion (`getEmotionGradient` in `src/constants/theme.ts`), falling back to a neutral surface→bg fade when no emotion is set.
@@ -224,15 +226,15 @@ For `media` type: the client generates a `memoryId` UUID upfront, presigns a PUT
 
 | Table / field | Role |
 |---------------|------|
-| `memories.memory_type` | `text_illustration` \| `text_only` \| `media` — drives AI pipeline and UI rendering |
-| `memories.content` | Required (non-empty) for `text_illustration` and `text_only`; optional caption for `media` |
+| `memories.memory_type` | `text_illustration` \| `text_only` \| `media` \| `audio` — drives AI pipeline and UI rendering. See [audio-memories.md](./audio-memories.md) for the `audio` arm's data model |
+| `memories.content` | Required (non-empty) for `text_illustration` and `text_only`; optional caption for `media` and `audio` |
 | `memories.illustration_key` | R2 object key — set only for `text_illustration`. Extension matches the REAL stored bytes, not necessarily `.webp`: OpenAI's images/edits endpoint has been observed to ignore the requested `output_format: 'webp'` and return PNG bytes anyway, so `generate-illustration` sniffs the real bytes and stores a re-encoded `.jpg` key when they mismatch (`_shared/image-bytes.ts`'s `resolveRealImageBytesForStorage`; see [memory-sharing.md's changelog](./memory-sharing.md#changelog) for the incident this fixed and `supabase/scripts/backfill-portrait-reencode.ts` for existing-row cleanup). Never assume `.webp` from the column name alone — sniff bytes, same as `compose-share-card`'s `resolveImageMimeType` already does on read. |
 | `memories.illustration_status` | `none` \| `pending` \| `generating` \| `ready` \| `failed`; newly created non-illustration rows use `none`, while a text-only row may retain the status of a hidden illustration |
 | `memories.illustration_generation_started_at` | Server-owned recovery clock. Null legacy rows recover from `updated_at`, then `created_at`; the client never writes it to Postgres (it may optimistically mirror an accepted dispatch in its local cache). |
 | `memories.media_key` | Cover/cache R2 object key for the first media asset |
 | `memories.media_content_type` | Cover/cache MIME type for the first media asset |
 | `memory_media` | Canonical ordered 1-10 photo/video assets for `media` memories |
-| `memory_family_members` | Unlimited for `text_only`/`media`; max 6 for `text_illustration` (conditional triggers enforced) |
+| `memory_family_members` | Unlimited for `text_only`/`media`/`audio`; max 6 for `text_illustration` (conditional triggers enforced) |
 | `family_member_portrait_versions` | Date-aware character references and tagged-member avatars; see [portrait-timeline.md](./portrait-timeline.md) |
 
 ## API & Edge Functions
@@ -304,7 +306,7 @@ authorized Supabase publication path.
 1. Add memory fields → migration + regenerate types + update `createMemory` / UI.
 2. New per-character illustration labels (age, visual guidance) → extend `buildMemberIllustrationDescription` in `_shared/illustration-references.ts`. Portrait selection itself must continue through the canonical memory-date resolver in `_shared/portrait-versions.ts`. Do not add nicknames back into the description — they're deliberately excluded from the image prompt and handled only via the safety-rewrite nickname mapping in `_shared/prompts.ts`.
 3. Always save text/row before invoking AI; never block save on illustration failure.
-4. New memory type → add value to `memory_type` check constraint, update `createMemory` service, update timeline card renderer, update `hard-delete-expired-accounts` if it introduces new storage keys.
+4. New memory type → add value to `memory_type` check constraint, update `createMemory` service, update timeline card renderer, update `hard-delete-expired-accounts` if it introduces new storage keys. Done for `audio`: check constraint + `memories_type_invariants` arm in `20260819120000_audio_memories.sql`; `createAudioMemory` (parameterized fork of `createMediaMemory`, not a `createMemory` extension, since the clip upload needs its own pipeline — see [audio-memories.md](./audio-memories.md)); `SoundCard` in `memory-card.tsx`; `hard-delete-expired-accounts` needed no change (`memory_media.object_key` collection is MIME-agnostic).
 5. For media type details (upload flow, validation, video playback) see [media-memories.md](./media-memories.md).
 6. Treat `memory_type` as illustration visibility/eligibility, not proof that no illustration object exists. A `text_only` row may intentionally retain a hidden `illustration_key` so users can restore it later.
 
@@ -320,7 +322,7 @@ role/tenancy model and the RLS rewrite.
 
 ## Constraints & gotchas
 
-- No global tag maximum. `text_illustration` is capped at **6 tags** by client validation, a conditional junction-table trigger, a memory-type transition trigger, and `generate-illustration`; `text_only` and `media` are unlimited.
+- No global tag maximum. `text_illustration` is capped at **6 tags** by client validation, a conditional junction-table trigger, a memory-type transition trigger, and `generate-illustration`; `text_only`, `media`, and `audio` are unlimited.
 - Turning AI off preserves all illustration columns and the R2 object. Timeline/detail rendering must continue to branch on `memory_type`, so retained keys on `text_only` rows remain hidden. Account deletion still collects retained keys normally.
 - Illustration requires a usable date-resolved portrait for at least one selected character (`NO_PORTRAITS` otherwise). For each member, selection is latest ready portrait on/before `memory_date`, then earliest ready after it, then an undated migrated legacy portrait. Failed/generating/deleting rows do not displace a usable result.
 - **Illustration deferral:** if no selected member has a *ready* portrait but at least one has a **fresh in-flight** one (`illustrated_profile_status` `pending`/`generating`, not deletion-claimed, with a claimed attempt younger than five minutes thirty seconds from `generation_started_at`, or an unclaimed `pending` row younger than three minutes from immutable `created_at` — see [TECH_SPEC §4.3](../TECH_SPEC.md#43-generate-illustration) for the exact predicate), `generate-illustration` returns `409 PORTRAITS_NOT_READY` instead of failing. This is the onboarding-guaranteed case: creating the first family member fires portrait generation in the background, and the first memory is usually captured before it finishes. The memory's status reset is **key-aware**: no retained `illustration_key` → resets to `pending` (attempt id cleared, parked like a fresh unillustrated memory); a retained `illustration_key` (e.g. regenerate after retagging) → stays `ready`, keeping the old image visible instead of an indefinite shimmer. `generate-portrait-illustration`'s background task retriggers up to 3 waiting memories per family (`illustration_status = 'pending'`, `created_at` at least 30s old to avoid racing a brand-new memory's own emotion analysis) on every exit path once a portrait resolves; the deferring request itself also self-retriggers once if its post-reset re-check finds the portrait already `ready`. See TECH_SPEC §4.1/§4.3 for the full mechanics.
@@ -339,7 +341,7 @@ role/tenancy model and the RLS rewrite.
   single `.in(...)` containing hundreds of UUIDs can exceed the Supabase
   request-line limit and return HTTP 400 even though the memory rows are valid.
 - `media_key` must be null for non-`media` types; for `media`, it mirrors `memory_media` position 0 for compatibility.
-- Voice audio is **not stored** — only transcribed text.
+- Voice **dictation** audio is **not stored** — only transcribed text. The one deliberate exception is the `audio` memory type's kept clip, which is stored by design as the memory artifact itself — see [audio-memories.md](./audio-memories.md); do not treat that as a violation of this rule.
 - `content` is nullable in the schema but must be non-empty after trim for `text_illustration` and `text_only` — enforced in client and Edge Function layer.
 
 ## Testing

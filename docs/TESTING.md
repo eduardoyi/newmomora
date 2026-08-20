@@ -282,8 +282,9 @@ Examples:
 - `auth/sign-up-and-login.yaml`
 - `onboarding/add-family-member-with-fixture.yaml` — reliable photo upload (dev fixture)
 - `onboarding/add-family-member-with-picker.yaml` — real system gallery picker
-- `memories/create-text-memory.yaml`
-- `memories/voice-memory.yaml`
+- `memories/create-memory.yaml` — text memory
+- `memories/create-media-memory.yaml` — photo/video memory
+- `memories/create-audio-memory.yaml`, `memories/voice-turn-into-text.yaml`, `memories/edit-audio-description.yaml`, `memories/delete-audio-memory.yaml` — audio memories (the post-recording "Turn into text" / "Keep the sound" fork); CI simulators record silence, which is the intended babble-fallback exercise for these flows
 - `sharing/01-owner-create-invite.yaml` … `04-second-account-sees-timeline.yaml` — numbered sub-flows for the two-account invite → redeem → approve loop (see `.maestro/flows/sharing/README.md` for why it's split and the required run command)
 - `sharing/viewer-readonly.yaml` — viewer sees timeline but no create FAB / no edit affordances
 

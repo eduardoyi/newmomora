@@ -380,13 +380,26 @@ export function buildSafetySystemPrompt(members: Array<SafetyPromptMember> = [])
   ].filter((line): line is string => Boolean(line)).join(' ');
 }
 
-export function buildVoiceCleanupSystemPrompt(): string {
-  return [
+export function buildVoiceCleanupSystemPrompt(options: { includeDescription?: boolean } = {}): string {
+  const lines = [
     'Clean up a voice transcript for a parenting journal entry.',
     'Fix grammar lightly, remove filler words, preserve meaning and names.',
     'Detect if the speaker refers to themselves as parent (I, me, my) → set mentionedUserSelf true.',
-    'JSON only: {"cleanedText":"...","mentionedUserSelf":false}',
-  ].join(' ');
+  ];
+
+  if (!options.includeDescription) {
+    lines.push('JSON only: {"cleanedText":"...","mentionedUserSelf":false}');
+    return lines.join(' ');
+  }
+
+  // Audio-memories "keep the sound" fork (docs/features/audio-memories.md):
+  // one extra field on the same cleanup call, not a second provider call.
+  lines.push(
+    'Also write a short third-person caption describing what the recording is (e.g. "Lila singing Twinkle Twinkle in the bath"), under 120 characters.',
+    'If the speech is unusable (silence, babble, indistinct noise), set description to an empty string "" — never invent or guess a description.',
+    'JSON only: {"cleanedText":"...","description":"...","mentionedUserSelf":false}',
+  );
+  return lines.join(' ');
 }
 
 export function buildTranscriptionPrompt(

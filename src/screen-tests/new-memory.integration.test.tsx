@@ -60,9 +60,57 @@ jest.mock('@/components/family-member-avatar', () => ({
 // VoiceSpeakItModal (rendered for real) transitively imports expo-audio at
 // module scope via useVoiceInput -- unrelated to capture-date prefill and
 // not mockable via a native-module stub alone, so the component itself is
-// stubbed out here. Voice input has its own test coverage elsewhere.
+// stubbed out here. Voice input has its own test coverage elsewhere. The
+// mock hands out the latest onKeepSound/onResult callbacks plus the
+// captureMode the composer requested (module-scope vars, same pattern as
+// new-memory.auto-tag.test.tsx) so the audio-mode tests below can drive the
+// fork's outcome directly and assert which mode the composer asked for.
+let mockLatestOnKeepSound:
+  | ((clip: {
+      localUri: string;
+      durationMs: number;
+      transcriptionStatus: 'idle' | 'transcribing' | 'done' | 'failed';
+      transcriptionResult: { cleanedText: string; description: string; mentionedMemberIds: string[] } | null;
+      pendingTranscription: Promise<{ cleanedText: string; description: string } | null> | null;
+    }) => void)
+  | undefined;
+let mockLatestOnResult:
+  | ((result: { cleanedText: string; description: string; mentionedMemberIds: string[] }) => void)
+  | undefined;
+let mockLatestCaptureMode: 'dictate' | 'fork' | 'keepOnly' | undefined;
 jest.mock('@/components/voice-speak-it-modal', () => ({
-  VoiceSpeakItModal: () => null,
+  VoiceSpeakItModal: (props: {
+    captureMode?: 'dictate' | 'fork' | 'keepOnly';
+    onKeepSound?: (clip: unknown) => void;
+    onResult: (result: unknown) => void;
+  }) => {
+    mockLatestCaptureMode = props.captureMode;
+    mockLatestOnKeepSound = props.onKeepSound as typeof mockLatestOnKeepSound;
+    mockLatestOnResult = props.onResult as typeof mockLatestOnResult;
+    return null;
+  },
+}));
+
+// new-memory.tsx imports useAudioClipPlayback directly for the clip-chip
+// preview -- unrelated to most suites in this file, but it transitively
+// pulls in expo-audio at module scope (see useAudioClipPlayback.test.ts for
+// real coverage of that hook).
+jest.mock('@/hooks/useAudioClipPlayback', () => ({
+  useAudioClipPlayback: () => ({
+    playing: false,
+    position: 0,
+    duration: 0,
+    progress: 0,
+    loading: false,
+    error: null,
+    toggle: jest.fn(),
+    seekTo: jest.fn(),
+  }),
+}));
+
+const mockDiscardAudioClip = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/utils/audio-clip-custody', () => ({
+  discardAudioClip: (...args: unknown[]) => mockDiscardAudioClip(...args),
 }));
 
 jest.mock('expo-image-picker', () => ({
@@ -881,5 +929,342 @@ describe('NewMemoryScreen -- memory_saved / memory_save_failed analytics', () =>
         onlineManager.setOnline(true);
       });
     }
+  });
+});
+
+// docs/plans/audio-memories-v1.md P2.3 -- the composer's emergent `audio`
+// type once a clip is kept via the fork. VoiceSpeakItModal is mocked (see
+// the module mock above); these tests drive it via the captured
+// onKeepSound/onResult callbacks, the same pattern new-memory.auto-tag.test
+// uses for onResult alone.
+describe('NewMemoryScreen -- audio memories (emergent type)', () => {
+  type AudioTranscriptionResult = { cleanedText: string; description: string; mentionedMemberIds: string[] };
+  type KeptClip = {
+    localUri: string;
+    durationMs: number;
+    transcriptionStatus: 'idle' | 'transcribing' | 'done' | 'failed';
+    transcriptionResult: AudioTranscriptionResult | null;
+    pendingTranscription: Promise<AudioTranscriptionResult | null> | null;
+  };
+
+  const enqueue = jest.fn();
+  const createMemory = jest.fn();
+  const updateProfile = jest.fn().mockResolvedValue(undefined);
+
+  function buildKeptClip(overrides: Partial<KeptClip> = {}): KeptClip {
+    return {
+      localUri: 'file:///documents/audio-recordings/clip-1.m4a',
+      durationMs: 4200,
+      transcriptionStatus: 'done',
+      transcriptionResult: { cleanedText: 'hello there', description: 'A quick hello', mentionedMemberIds: [] },
+      pendingTranscription: null,
+      ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    await AsyncStorage.clear();
+    jest.useFakeTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    mockLatestOnKeepSound = undefined;
+    mockLatestOnResult = undefined;
+    mockLatestCaptureMode = undefined;
+    mockDiscardAudioClip.mockClear();
+
+    mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as ImagePicker.MediaLibraryPermissionResponse);
+
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseFamily.mockReturnValue({
+      role: 'manager',
+      familyId: 'family-1',
+      family: { id: 'family-1', name: 'Test family' },
+      memberships: [],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseFamilyMembers.mockReturnValue({ members: [] });
+    mockedUseMemoryMutations.mockReturnValue({ createMemory, isCreating: false });
+    mockedUseUserProfile.mockReturnValue({ updateProfile });
+    mockedUsePendingMemoryUploads.mockReturnValue({ enqueue, retry: jest.fn(), discard: jest.fn(), uploads: [] });
+    mockedUseIncomingMemoryShare.mockReturnValue(false);
+    mockedUseLocalSearchParams.mockReturnValue({});
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+  });
+
+  async function keepSound(screen: ReturnType<typeof render>, overrides: Partial<KeptClip> = {}) {
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    act(() => {
+      mockLatestOnKeepSound?.(buildKeptClip(overrides));
+    });
+  }
+
+  it('becomes an emergent audio type once a sound is kept: media/AI hide, the description prefills, and the clip chip renders', async () => {
+    const screen = renderScreen();
+    await keepSound(screen);
+
+    expect(screen.getByText('· Sound')).toBeTruthy();
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('A quick hello');
+    expect(screen.getByTestId('new-memory-audio-clip')).toBeTruthy();
+    expect(screen.queryByTestId('new-memory-attach-media')).toBeNull();
+    expect(screen.queryByTestId('new-memory-ai-toggle')).toBeNull();
+  });
+
+  it('opens the mic in fork mode for the first recording, and keepOnly mode (no fork) once already an audio memory', async () => {
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    expect(mockLatestCaptureMode).toBe('fork');
+
+    act(() => {
+      mockLatestOnKeepSound?.(buildKeptClip());
+    });
+
+    // The toolbar's re-record mic promises a replace, never another
+    // choice -- the composer must request keepOnly, not fork, once it's
+    // already an audio memory (docs/plans/audio-memories-v1.md P2.3).
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    expect(mockLatestCaptureMode).toBe('keepOnly');
+  });
+
+  it('pre-tags family members mentioned in the transcript', async () => {
+    mockedUseFamilyMembers.mockReturnValue({
+      members: [
+        { id: 'member-1', name: 'Lila', nicknames: [], is_user_profile: false },
+        { id: 'member-2', name: 'Theo', nicknames: [], is_user_profile: false },
+      ],
+    });
+    const screen = renderScreen();
+    await keepSound(screen, {
+      transcriptionResult: { cleanedText: 'Lila laughed', description: 'Lila laughing', mentionedMemberIds: ['member-1'] },
+    });
+
+    expect(screen.getByTestId('memory-tag-member-1').props.accessibilityState.selected).toBe(true);
+    expect(screen.getByTestId('memory-tag-member-2').props.accessibilityState.selected).toBe(false);
+  });
+
+  it('never prefills over text the user already had before keeping the sound', async () => {
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'my own caption');
+
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    act(() => {
+      mockLatestOnKeepSound?.(buildKeptClip());
+    });
+
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('my own caption');
+  });
+
+  it('shows the "writing a note" treatment while a description is still generating, and applies it once it resolves (field left empty)', async () => {
+    let resolveTranscription!: (value: AudioTranscriptionResult | null) => void;
+    const pending = new Promise<AudioTranscriptionResult | null>((resolve) => {
+      resolveTranscription = resolve;
+    });
+
+    const screen = renderScreen();
+    await keepSound(screen, { transcriptionStatus: 'transcribing', transcriptionResult: null, pendingTranscription: pending });
+
+    expect(screen.getByTestId('new-memory-audio-note-generating')).toBeTruthy();
+    expect(screen.getByText('Writing a note from what you said…')).toBeTruthy();
+    expect(screen.queryByTestId('new-memory-content')).toBeNull();
+
+    await act(async () => {
+      resolveTranscription({ cleanedText: 'said hello', description: 'A generated note', mentionedMemberIds: [] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId('new-memory-audio-note-generating')).toBeNull();
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('A generated note');
+  });
+
+  it('skipping the generating note lets the user type immediately, and a later-arriving AI result is discarded', async () => {
+    let resolveTranscription!: (value: AudioTranscriptionResult | null) => void;
+    const pending = new Promise<AudioTranscriptionResult | null>((resolve) => {
+      resolveTranscription = resolve;
+    });
+
+    const screen = renderScreen();
+    await keepSound(screen, { transcriptionStatus: 'transcribing', transcriptionResult: null, pendingTranscription: pending });
+
+    fireEvent.press(screen.getByTestId('new-memory-audio-note-skip'));
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('');
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'my own note');
+
+    await act(async () => {
+      resolveTranscription({ cleanedText: 'said hello', description: 'A generated note', mentionedMemberIds: [] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('my own note');
+  });
+
+  it('removing the clip shows an Undo affordance and disables Save; Undo restores it', async () => {
+    const screen = renderScreen();
+    await keepSound(screen);
+
+    fireEvent.press(screen.getByTestId('new-memory-audio-clip-remove'));
+
+    expect(screen.getByTestId('new-memory-audio-clip-removed')).toBeTruthy();
+    expect(screen.queryByTestId('new-memory-audio-clip')).toBeNull();
+    expect(screen.getByTestId('new-memory-save').props.accessibilityState?.disabled).toBe(true);
+
+    fireEvent.press(screen.getByTestId('new-memory-audio-clip-undo'));
+
+    expect(screen.queryByTestId('new-memory-audio-clip-removed')).toBeNull();
+    expect(screen.getByTestId('new-memory-audio-clip')).toBeTruthy();
+    expect(screen.getByTestId('new-memory-save').props.accessibilityState?.disabled).toBe(false);
+  });
+
+  it('cancel with the clip removed discards the local file', async () => {
+    const screen = renderScreen();
+    await keepSound(screen, { localUri: 'file:///documents/audio-recordings/removed-me.m4a' });
+    fireEvent.press(screen.getByTestId('new-memory-audio-clip-remove'));
+
+    fireEvent.press(screen.getByTestId('new-memory-cancel'));
+
+    expect(mockDiscardAudioClip).toHaveBeenCalledWith('file:///documents/audio-recordings/removed-me.m4a');
+    expect(navigateBack).toHaveBeenCalled();
+  });
+
+  it('re-recording (a second "Keep the sound") replaces the clip and discards the old file, with no fork offered', async () => {
+    const screen = renderScreen();
+    await keepSound(screen, { localUri: 'file:///documents/audio-recordings/first.m4a' });
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('A quick hello');
+
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    expect(mockLatestCaptureMode).toBe('keepOnly');
+    act(() => {
+      mockLatestOnKeepSound?.(buildKeptClip({
+        localUri: 'file:///documents/audio-recordings/second.m4a',
+        transcriptionResult: { cleanedText: 'second clip', description: 'Second description', mentionedMemberIds: [] },
+      }));
+    });
+
+    expect(mockDiscardAudioClip).toHaveBeenCalledWith('file:///documents/audio-recordings/first.m4a');
+    expect(screen.getByTestId('new-memory-audio-clip')).toBeTruthy();
+    // The first clip's description is preserved (non-empty field never gets
+    // silently swapped out from under the user by a replace).
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('A quick hello');
+  });
+
+  it('never persists the clip in the draft payload', async () => {
+    const screen = renderScreen();
+    await keepSound(screen);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(500);
+    });
+
+    const stored = await AsyncStorage.getItem(getNewMemoryDraftStorageKey('user-1', 'family-1'));
+    expect(stored).toBeTruthy();
+    const parsed = JSON.parse(stored as string) as Record<string, unknown>;
+    expect(parsed).not.toHaveProperty('audioClip');
+    expect(parsed).not.toHaveProperty('clip');
+    expect(JSON.stringify(parsed)).not.toContain('audio-recordings');
+    expect(JSON.stringify(parsed)).not.toContain('file://');
+  });
+
+  it('saves via the seam contract, firing memory_saved and audio_memory_saved with a bucketed duration', async () => {
+    const screen = renderScreen();
+    await keepSound(screen, { durationMs: 45000 });
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'audio',
+        memoryDate: expect.any(String),
+        content: 'A quick hello',
+        taggedMemberIds: [],
+        audioTranscript: 'hello there',
+        clip: expect.objectContaining({
+          fileUri: 'file:///documents/audio-recordings/clip-1.m4a',
+          durationMs: 45000,
+          contentType: 'audio/mp4',
+        }),
+      }),
+    );
+    expect(trackEvent).toHaveBeenCalledWith('memory_saved', expect.objectContaining({
+      memory_type: 'audio',
+      used_voice: true,
+      has_media: false,
+    }));
+    expect(trackEvent).toHaveBeenCalledWith('audio_memory_saved', {
+      duration_bucket: '30_60s',
+      has_description: true,
+    });
+    expect(navigateBack).toHaveBeenCalled();
+  });
+
+  it('saving before transcription resolves stores an empty description and hands the still-pending promise to the queue, rather than patching directly', async () => {
+    // Bug fix (post-review): the composer must NOT race
+    // patchAudioDescriptionIfEmpty against the deferred post's insert --
+    // the memories row doesn't exist until that insert completes, which
+    // usually finishes AFTER transcription resolves, so a caller-side
+    // patch here would silently no-op (a zero-row UPDATE succeeds with no
+    // error) and permanently lose the description/transcript. The promise
+    // itself is threaded through the enqueue input instead;
+    // use-pending-memory-uploads.tsx fires the backfill only once its own
+    // insert has succeeded (see PostAudioMemoryInput.pendingTranscription).
+    let resolveTranscription!: (value: AudioTranscriptionResult | null) => void;
+    const pending = new Promise<AudioTranscriptionResult | null>((resolve) => {
+      resolveTranscription = resolve;
+    });
+
+    const screen = renderScreen();
+    await keepSound(screen, { transcriptionStatus: 'transcribing', transcriptionResult: null, pendingTranscription: pending });
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ content: null, audioTranscript: null, pendingTranscription: pending }),
+    );
+
+    // Resolving afterward must not make the (already-closed) composer try
+    // to patch anything itself.
+    await act(async () => {
+      resolveTranscription({ cleanedText: 'late transcript', description: 'late description', mentionedMemberIds: [] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  });
+
+  it('omits pendingTranscription from the enqueue input once transcription has already resolved by save time', async () => {
+    const screen = renderScreen();
+    await keepSound(screen);
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    const input = enqueue.mock.calls[0][0] as { pendingTranscription?: unknown };
+    expect(input.pendingTranscription).toBeUndefined();
   });
 });

@@ -1577,6 +1577,7 @@ export type Database = {
       }
       memories: {
         Row: {
+          audio_transcript: string | null
           content: string | null
           created_at: string
           emotion: string | null
@@ -1609,6 +1610,7 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          audio_transcript?: string | null
           content?: string | null
           created_at?: string
           emotion?: string | null
@@ -1641,6 +1643,7 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          audio_transcript?: string | null
           content?: string | null
           created_at?: string
           emotion?: string | null

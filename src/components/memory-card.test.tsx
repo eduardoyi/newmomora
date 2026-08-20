@@ -5,6 +5,7 @@ import { Pressable } from 'react-native';
 import { MemoryCard } from '@/components/memory-card';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
+import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import type { MemoryWithTags } from '@/services/memories';
 
@@ -32,6 +33,19 @@ jest.mock('@/components/memory-media-carousel', () => ({
 
 jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrl: jest.fn(() => ({ url: null })),
+}));
+
+jest.mock('@/hooks/useAudioClipPlayback', () => ({
+  useAudioClipPlayback: jest.fn(() => ({
+    playing: false,
+    position: 0,
+    duration: 0,
+    progress: 0,
+    loading: false,
+    error: null,
+    toggle: jest.fn(),
+    seekTo: jest.fn(),
+  })),
 }));
 
 const createMember = (index: number) => ({
@@ -324,6 +338,174 @@ describe('MemoryCard tagged member avatars', () => {
     expect(queryByTestId('memory-card-member-member-7')).toBeNull();
     expect(getByTestId('memory-card-member-overflow')).toHaveTextContent('+2');
     expect(getByLabelText('2 more tagged members')).toBeTruthy();
+  });
+});
+
+describe('MemoryCard audio variant (P3.1, docs/plans/audio-memories-v1.md)', () => {
+  const audioMemory = (overrides: Partial<MemoryWithTags> = {}) => ({
+    ...createMemory(0),
+    memory_type: 'audio',
+    content: 'Lila singing Twinkle Twinkle in the bath.',
+    media_key: 'user-1/memories/memory-1/media/clip-1.m4a',
+    media_content_type: 'audio/mp4',
+    mediaAssets: [
+      {
+        id: 'clip-1',
+        memory_id: 'memory-1',
+        object_key: 'user-1/memories/memory-1/media/clip-1.m4a',
+        content_type: 'audio/mp4',
+        duration_ms: 42_000,
+        aspect_ratio: null,
+        position: 0,
+        preview_object_key: null,
+        share_card_key: null,
+        created_at: '2026-07-14T00:00:00.000Z',
+        updated_at: '2026-07-14T00:00:00.000Z',
+      },
+    ],
+    ...overrides,
+  }) as MemoryWithTags;
+
+  const mockedUseAudioClipPlayback = useAudioClipPlayback as jest.Mock;
+
+  beforeEach(() => {
+    mockedUseAudioClipPlayback.mockReturnValue({
+      playing: false,
+      position: 0,
+      duration: 42,
+      progress: 0,
+      loading: false,
+      error: null,
+      toggle: jest.fn(),
+      seekTo: jest.fn(),
+    });
+  });
+
+  it('renders the stub band idle, with the caption and no share affordance', () => {
+    const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+    mockedEngagementBar.mockClear();
+
+    const memory = audioMemory();
+    const { getByTestId, getByText } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />,
+    );
+
+    expect(getByTestId('memory-card-memory-1-stub')).toBeTruthy();
+    expect(getByTestId('memory-card-memory-1-stub-seal')).toBeTruthy();
+    expect(getByText('Lila singing Twinkle Twinkle in the bath.')).toBeTruthy();
+    expect(mockedEngagementBar.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ enableShare: false }),
+    );
+  });
+
+  it('toggles playback via the seal without navigating to detail', () => {
+    const toggle = jest.fn();
+    mockedUseAudioClipPlayback.mockReturnValue({
+      playing: true,
+      position: 12,
+      duration: 42,
+      progress: 12 / 42,
+      loading: false,
+      error: null,
+      toggle,
+      seekTo: jest.fn(),
+    });
+
+    const onPress = jest.fn();
+    const memory = audioMemory();
+    const { getByTestId } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={onPress} />,
+    );
+
+    fireEvent.press(getByTestId('memory-card-memory-1-stub-seal'));
+    expect(toggle).toHaveBeenCalledTimes(1);
+    expect(onPress).not.toHaveBeenCalled();
+  });
+
+  it('opens the memory detail screen when the card body is tapped', () => {
+    const onPress = jest.fn();
+    const memory = audioMemory();
+    const { getByTestId } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={onPress} />,
+    );
+
+    fireEvent.press(getByTestId('memory-card-content-memory-1'));
+    expect(onPress).toHaveBeenCalledWith('memory-1');
+  });
+
+  it('omits the caption block for a clip with no description', () => {
+    const memory = audioMemory({ content: null });
+    const { queryByText } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />,
+    );
+
+    expect(queryByText('Lila singing Twinkle Twinkle in the bath.')).toBeNull();
+  });
+
+  it('renders the neutral graphite treatment before emotion analysis lands', () => {
+    const memory = audioMemory({ emotion: null });
+    const { getByTestId } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />,
+    );
+
+    // Renders without an emotion chip and without crashing on a null
+    // emotion -- the kit's resolveAudioEmotionColors neutral fallback.
+    expect(getByTestId('memory-card-memory-1-stub')).toBeTruthy();
+  });
+});
+
+describe('MemoryCard unknown memory_type (P0.1 forward-compat fallback)', () => {
+  it('renders the caption as text and offers no share button when content is present', () => {
+    const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+    mockedEngagementBar.mockClear();
+
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'hologram',
+      content: 'A giggle worth keeping',
+    } as unknown as MemoryWithTags;
+
+    const { getByText, queryByTestId } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />,
+    );
+
+    expect(getByText('A giggle worth keeping')).toBeTruthy();
+    expect(queryByTestId('memory-card-memory-1-unavailable')).toBeNull();
+    expect(mockedEngagementBar.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ enableShare: false }),
+    );
+  });
+
+  it('shows a muted update notice instead of an empty box when content is missing', () => {
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'hologram',
+      content: null,
+    } as unknown as MemoryWithTags;
+
+    const { getByTestId } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={jest.fn()} />,
+    );
+
+    expect(getByTestId('memory-card-memory-1-unavailable')).toHaveTextContent(
+      'Update Momora to play this memory.',
+    );
+  });
+
+  it('still opens the detail screen on press, like every other card', () => {
+    const memory = {
+      ...createMemory(0),
+      memory_type: 'hologram',
+      content: 'A giggle worth keeping',
+    } as unknown as MemoryWithTags;
+    const onPress = jest.fn();
+
+    const { getByTestId } = render(
+      <MemoryCard memory={memory} onOpenComments={jest.fn()} onPress={onPress} />,
+    );
+
+    fireEvent.press(getByTestId('memory-card-content-memory-1'));
+    expect(onPress).toHaveBeenCalledWith('memory-1');
   });
 });
 

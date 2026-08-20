@@ -17,6 +17,8 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { seedFromKey } from '@/components/audio/audio-seed';
+import { SoundTile } from '@/components/audio/sound-tile';
 import { CalendarMonthPickerSheet } from '@/components/calendar-month-picker-sheet';
 import { MemoryFab } from '@/components/memory-fab';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
@@ -147,6 +149,18 @@ function MemoryStamp({
     );
   }
 
+  if (memory.memory_type === 'audio') {
+    return (
+      <SoundTile
+        durationSeconds={(memory.mediaAssets[0]?.duration_ms ?? 0) / 1000}
+        emotion={memory.emotion}
+        seed={seedFromKey(memory.id)}
+        size={56}
+        testID={`calendar-memory-${memory.id}-sound`}
+      />
+    );
+  }
+
   const displayUri = isVideo ? videoThumbnail : mediaUrl;
   // A video without a stored poster falls back to `runtimeVideoThumbnail`, a
   // locally-decoded frame with no R2 object identity -- only pin a cacheKey
@@ -253,11 +267,13 @@ function RibbonDay({
             ) : (
               <View style={styles.ribbonMediaLabel}>
                 <Text style={styles.ribbonMediaText}>
-                  {day.memory.mediaAssets.length > 1
-                    ? 'Media'
-                    : day.memory.media_content_type?.startsWith('video/')
-                      ? 'Video'
-                      : 'Photo'}
+                  {day.memory.memory_type === 'audio'
+                    ? 'Sound'
+                    : day.memory.mediaAssets.length > 1
+                      ? 'Media'
+                      : day.memory.media_content_type?.startsWith('video/')
+                        ? 'Video'
+                        : 'Photo'}
                 </Text>
               </View>
             )}

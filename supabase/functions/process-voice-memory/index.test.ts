@@ -247,7 +247,7 @@ Deno.test('family voice remains the default, uses the canonical roster, and reco
   );
   assertEquals(response.status, 200);
   assertEquals(await readBody(response), {
-    cleanedText: 'Sarah made a tower', mentionedMemberIds: ['canonical-sarah'],
+    cleanedText: 'Sarah made a tower', description: '', mentionedMemberIds: ['canonical-sarah'],
   });
   assertEquals(calls.events, ['transcribe', 'cleanup']);
   assertStringIncludes(calls.transcriptionPrompts[0], 'Sarah');
@@ -308,6 +308,102 @@ Deno.test('legacy voice family resolution falls back from a stale active family 
   });
   assertEquals(result, { familyId: 'remaining-family' });
   assertEquals(calls, ['stale-family', 'remaining-family']);
+});
+
+Deno.test('family voice returns the AI description alongside cleanedText for usable speech', async () => {
+  const { dependencies } = makeDependencies({
+    getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),
+    chatJson: async <T>() => ({
+      cleanedText: 'Sarah made a tower',
+      description: 'Sarah building a block tower',
+      mentionedUserSelf: false,
+    } as T),
+  });
+  const response = await handleProcessVoiceMemoryWithDependencies(
+    makeRequest({ audioBase64: 'AQID', familyId: FAMILY_ID }),
+    dependencies,
+  );
+  assertEquals(response.status, 200);
+  assertEquals(await readBody(response), {
+    cleanedText: 'Sarah made a tower',
+    description: 'Sarah building a block tower',
+    mentionedMemberIds: ['canonical-sarah'],
+  });
+});
+
+Deno.test('family voice returns an empty description for unusable speech, never an error', async () => {
+  const { dependencies } = makeDependencies({
+    getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),
+    chatJson: async <T>() => ({
+      cleanedText: '',
+      description: '',
+      mentionedUserSelf: false,
+    } as T),
+  });
+  const response = await handleProcessVoiceMemoryWithDependencies(
+    makeRequest({ audioBase64: 'AQID', familyId: FAMILY_ID }),
+    dependencies,
+  );
+  assertEquals(response.status, 200);
+  const body = await readBody(response);
+  assertEquals(body.description, '');
+});
+
+Deno.test('family voice clamps an oversized description to 120 characters', async () => {
+  const overlong = 'x'.repeat(200);
+  const { dependencies } = makeDependencies({
+    getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),
+    chatJson: async <T>() => ({
+      cleanedText: 'Sarah made a tower',
+      description: overlong,
+      mentionedUserSelf: false,
+    } as T),
+  });
+  const response = await handleProcessVoiceMemoryWithDependencies(
+    makeRequest({ audioBase64: 'AQID', familyId: FAMILY_ID }),
+    dependencies,
+  );
+  assertEquals(response.status, 200);
+  const body = await readBody(response);
+  assertEquals(body.description, 'x'.repeat(120));
+});
+
+Deno.test('family voice defaults a missing or malformed description to an empty string', async () => {
+  for (const malformedDescription of [undefined, null, 42, ['not', 'a', 'string'], { nested: true }]) {
+    const { dependencies } = makeDependencies({
+      getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),
+      chatJson: async <T>() => ({
+        cleanedText: 'Sarah made a tower',
+        description: malformedDescription,
+        mentionedUserSelf: false,
+      } as T),
+    });
+    const response = await handleProcessVoiceMemoryWithDependencies(
+      makeRequest({ audioBase64: 'AQID', familyId: FAMILY_ID }),
+      dependencies,
+    );
+    assertEquals(response.status, 200);
+    const body = await readBody(response);
+    assertEquals(body.description, '');
+  }
+});
+
+Deno.test('onboarding voice response shape is unchanged by the family-mode description feature (no description field)', async () => {
+  const { dependencies } = makeDependencies({
+    chatJson: async <T>() => ({
+      cleanedText: 'Sarah made a tower',
+      description: 'this must never leak into onboarding responses',
+      mentionedUserSelf: false,
+    } as T),
+  });
+  const response = await handleProcessVoiceMemoryWithDependencies(
+    makeRequest({ mode: 'onboarding', audioBase64: 'AQID', nameHints: ['Maya'] }),
+    dependencies,
+  );
+  assertEquals(response.status, 200);
+  assertEquals(await readBody(response), {
+    cleanedText: 'Sarah made a tower', mentionedMemberIds: [],
+  });
 });
 
 Deno.test('legacy voice family resolution refuses ambiguous memberships after a stale active family', async () => {
