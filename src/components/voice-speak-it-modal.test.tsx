@@ -364,6 +364,72 @@ describe('VoiceSpeakItModal', () => {
       );
     });
 
+    it('carries a mid-fork transcription resolution (transcribing -> done while the user sits at the fork) into the Keep payload', async () => {
+      // Regression test for a device-confirmed bug: the user sits at the
+      // fork long enough for transcription to resolve *before* tapping
+      // "Keep the sound" -- distinct from the already-covered "already
+      // done at mount" tests above (which never exercise a live
+      // transcribing->done transition) and from "mid-transcription" above
+      // (which keeps while still pending). handleKeepSound reads
+      // transcriptionStatus/transcriptionResult fresh off this render's
+      // closure, so the re-render triggered by the status flip must carry
+      // through correctly by the time Keep is tapped.
+      mockedUseVoiceInput.mockReturnValue(
+        baseHookReturn({
+          stoppedClip: { localUri: 'file:///cache/rec.m4a', durationMs: 8000 },
+          transcriptionStatus: 'transcribing',
+          transcriptionResult: null,
+        }),
+      );
+
+      const onKeepSound = jest.fn();
+      const screen = render(
+        <VoiceSpeakItModal
+          captureMode="fork"
+          familyMembers={[]}
+          onDismiss={jest.fn()}
+          onKeepSound={onKeepSound}
+          onResult={jest.fn()}
+          visible
+        />,
+      );
+      present(screen);
+
+      // Transcription resolves while the fork is still showing -- simulates
+      // useVoiceInput's own setState-driven re-render once the in-flight
+      // call settles, well before the user taps anything.
+      mockedUseVoiceInput.mockReturnValue(
+        baseHookReturn({
+          stoppedClip: { localUri: 'file:///cache/rec.m4a', durationMs: 8000 },
+          transcriptionStatus: 'done',
+          transcriptionResult: { cleanedText: 'hello there', description: 'a lovely description', mentionedMemberIds: [] },
+        }),
+      );
+      screen.rerender(
+        <VoiceSpeakItModal
+          captureMode="fork"
+          familyMembers={[]}
+          onDismiss={jest.fn()}
+          onKeepSound={onKeepSound}
+          onResult={jest.fn()}
+          visible
+        />,
+      );
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('voice-speak-it-keep-sound'));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(onKeepSound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          transcriptionResult: { cleanedText: 'hello there', description: 'a lovely description', mentionedMemberIds: [] },
+          pendingTranscription: null,
+        }),
+      );
+    });
+
     it('"Record again" discards the current clip and restarts recording', async () => {
       const recordAgain = jest.fn().mockResolvedValue(undefined);
       mockedUseVoiceInput.mockReturnValue(

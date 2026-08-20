@@ -1024,6 +1024,49 @@ describe('NewMemoryScreen -- audio memories (emergent type)', () => {
     expect(screen.queryByTestId('new-memory-ai-toggle')).toBeNull();
   });
 
+  // Regression coverage for a device-confirmed bug: fork mode, transcription
+  // already resolved by the time the user tapped "Keep the sound" (as
+  // opposed to still-in-flight, covered separately below). `buildKeptClip`'s
+  // default is exactly this shape -- `transcriptionStatus: 'done'`,
+  // `transcriptionResult` populated, `pendingTranscription: null` -- unlike
+  // the re-record (keepOnly) path, which auto-keeps while transcription is
+  // still pending and never exercises this branch. The composer must both
+  // (1) prefill the note text field and (2) actually save that description
+  // -- not just hold it in state invisibly (see the `key` fix + comment on
+  // the content TextInput in new-memory.tsx for the display-only half of
+  // this bug, which this state-level assertion can't observe on its own).
+  it('fork: an already-resolved AI description prefills the note the instant the sound is kept', async () => {
+    const screen = renderScreen();
+    await keepSound(screen, {
+      transcriptionStatus: 'done',
+      transcriptionResult: { cleanedText: 'she giggled', description: 'Her giggle in the kitchen', mentionedMemberIds: [] },
+      pendingTranscription: null,
+    });
+
+    expect(screen.queryByTestId('new-memory-audio-note-generating')).toBeNull();
+    expect(screen.getByTestId('new-memory-content').props.value).toBe('Her giggle in the kitchen');
+  });
+
+  it('fork: an already-resolved description reaches the save payload on an immediate save (no pendingTranscription plumbing needed)', async () => {
+    const screen = renderScreen();
+    await keepSound(screen, {
+      transcriptionStatus: 'done',
+      transcriptionResult: { cleanedText: 'she giggled', description: 'Her giggle in the kitchen', mentionedMemberIds: [] },
+      pendingTranscription: null,
+    });
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Her giggle in the kitchen',
+        pendingTranscription: undefined,
+      }),
+    );
+  });
+
   it('opens the mic in fork mode for the first recording, and keepOnly mode (no fork) once already an audio memory', async () => {
     const screen = renderScreen();
     await act(async () => {

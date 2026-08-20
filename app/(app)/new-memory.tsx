@@ -434,6 +434,19 @@ export default function NewMemoryScreen() {
     pendingAudioTranscriptionRef.current = null;
 
     if (clip.transcriptionResult) {
+      // Already resolved by keep-time (the user sat at the fork long enough
+      // for transcription to finish before tapping "Keep the sound").
+      // applyAudioTranscriptionResult below sets `content` synchronously --
+      // `content` (React state, the value handleSaveAudio reads at save
+      // time) is therefore already correct the instant this call returns,
+      // independent of whatever the native TextInput has painted on screen
+      // (see the `key` comment on the TextInput above for the display-only
+      // half of this bug). So an immediate save right after this keep needs
+      // no extra plumbing here: pendingAudioTranscriptionRef.current was
+      // already cleared to null above, handleSaveAudio reads `content`
+      // itself (not a promise), and enqueuePendingMemoryUpload gets the
+      // real description directly -- there is no race to bridge, unlike the
+      // pendingTranscription branch below where the row doesn't exist yet.
       applyAudioTranscriptionResult(clip.transcriptionResult);
     } else if (clip.pendingTranscription) {
       setAudioNoteGenerating(true);
@@ -776,6 +789,24 @@ export default function NewMemoryScreen() {
           </View>
         ) : (
           <TextInput
+            // Forces a fresh native TextInput the moment the composer
+            // becomes an audio memory (isAudio flips false -> true exactly
+            // once, at "Keep the sound" time -- see handleKeepSound). This
+            // is a device-confirmed fix: when the AI description resolves
+            // *before* the user taps Keep, applyAudioTranscriptionResult
+            // sets `content` synchronously and this same TextInput instance
+            // was already mounted (rendered by the plain-text composer
+            // before Keep was tapped) -- a controlled RN TextInput can
+            // silently keep showing its last-known native text instead of a
+            // programmatic `value` update while it still holds focus, so
+            // the field can visually stay on the empty placeholder even
+            // though `content` state (and therefore the eventual save) is
+            // already correct. The pending-transcription branch never hit
+            // this: it swaps to the "Writing a note…" placeholder View and
+            // back, which already forces a real unmount/remount. Keying on
+            // `isAudio` gives the resolved-before-keep branch that same
+            // guaranteed fresh mount instead of relying on that coincidence.
+            key={isAudio ? 'audio-note' : 'text-note'}
             multiline
             value={content}
             onChangeText={handleContentChange}
