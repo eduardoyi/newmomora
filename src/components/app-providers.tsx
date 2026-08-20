@@ -9,6 +9,7 @@ import { FamilyProvider } from '@/hooks/use-family';
 import { PendingMemoryUploadsProvider } from '@/hooks/use-pending-memory-uploads';
 import { startConnectivityMonitoring } from '@/lib/connectivity';
 import { PersistedQueryProvider } from '@/lib/query-persistence';
+import { sweepAudioRecordingsDirectory } from '@/utils/audio-clip-custody';
 
 export function AppProviders({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -29,6 +30,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
   // fail-fast mutations) depends on this being wired before those consumers
   // mount, same lifecycle slot as the focusManager wiring above.
   useEffect(() => startConnectivityMonitoring(), []);
+
+  // One-time startup sweep of claimed-but-orphaned audio clips (docs/plans/
+  // audio-memories-v1.md P2.1/P2.2) -- covers a force-quit between "Keep
+  // the sound" and a successful (in-memory-only) upload. Fire-and-forget,
+  // same lifecycle slot as the effects above; never blocks first paint.
+  useEffect(() => {
+    void sweepAudioRecordingsDirectory();
+  }, []);
 
   return (
     <KeyboardProvider preload={false}>

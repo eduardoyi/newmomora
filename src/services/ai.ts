@@ -147,7 +147,12 @@ export async function processVoiceMemory(
   familyMembers: VoiceFamilyMemberPayload[],
   familyId: string,
 ): Promise<{
-  data: { cleanedText: string; mentionedMemberIds: string[] } | null;
+  // `description` is the audio-memories fork's short AI caption (P1.2,
+  // docs/plans/audio-memories-v1.md) -- family mode now returns it alongside
+  // cleanedText/mentionedMemberIds on every call so one round trip serves
+  // both the "turn into text" and "keep the sound" branches. Never garbled
+  // babble: empty string when speech is unusable, never an error.
+  data: { cleanedText: string; mentionedMemberIds: string[]; description: string } | null;
   error: ServiceError | null;
 }> {
   return invokeEdgeFunction('process-voice-memory', {

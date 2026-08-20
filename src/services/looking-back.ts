@@ -4,10 +4,13 @@ import { supabase } from '@/lib/supabase';
 import type { MemoryWithTags, ServiceError } from '@/services/memories';
 
 export const lookingBackPackageTypes = [
+  'member_birthday',
   'on_this_day',
   'one_year_ago',
-  'around_this_time',
   'member_at_age',
+  'members_together',
+  'around_this_time',
+  'emotion_archive',
   'month_archive',
   'written_archive',
   'archive_mix',
@@ -28,6 +31,7 @@ export interface LookingBackPackageMetadata {
   packageDate: string;
   packageType: LookingBackPackageType;
   subjectFamilyMemberId: string | null;
+  secondarySubjectFamilyMemberId: string | null;
   displayKind: string;
   title: string;
   subtitle: string | null;
@@ -64,6 +68,7 @@ interface LookingBackPackageRpcRow {
   package_date: string | null;
   package_type: string | null;
   subject_family_member_id: string | null;
+  secondary_subject_family_member_id: string | null;
   display_kind: string | null;
   display_title: string | null;
   display_subtitle: string | null;
@@ -135,6 +140,7 @@ function toPackage(row: LookingBackPackageRpcRow): LookingBackPackageMetadata | 
     packageDate: row.package_date,
     packageType: row.package_type,
     subjectFamilyMemberId: row.subject_family_member_id,
+    secondarySubjectFamilyMemberId: row.secondary_subject_family_member_id ?? null,
     displayKind: row.display_kind,
     title: row.display_title,
     subtitle: row.display_subtitle,

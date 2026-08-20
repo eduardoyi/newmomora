@@ -380,13 +380,57 @@ export function buildSafetySystemPrompt(members: Array<SafetyPromptMember> = [])
   ].filter((line): line is string => Boolean(line)).join(' ');
 }
 
-export function buildVoiceCleanupSystemPrompt(): string {
-  return [
+export interface VoiceCleanupMemberContext {
+  name: string;
+  nicknames?: string[];
+  /** Derived label (e.g. "3 years old"), never a birth date — computed by the caller. */
+  ageLabel?: string | null;
+}
+
+function describeVoiceCleanupMember(member: VoiceCleanupMemberContext): string {
+  const parts = [member.name];
+  if (member.ageLabel) parts.push(member.ageLabel);
+  if (member.nicknames && member.nicknames.length > 0) {
+    parts.push(`nicknames: ${member.nicknames.join(', ')}`);
+  }
+  return parts.length > 1 ? `${parts[0]} (${parts.slice(1).join('; ')})` : parts[0];
+}
+
+export function buildVoiceCleanupSystemPrompt(
+  options: { includeDescription?: boolean; members?: VoiceCleanupMemberContext[] } = {},
+): string {
+  const lines = [
     'Clean up a voice transcript for a parenting journal entry.',
     'Fix grammar lightly, remove filler words, preserve meaning and names.',
     'Detect if the speaker refers to themselves as parent (I, me, my) → set mentionedUserSelf true.',
-    'JSON only: {"cleanedText":"...","mentionedUserSelf":false}',
-  ].join(' ');
+  ];
+
+  if (!options.includeDescription) {
+    lines.push('JSON only: {"cleanedText":"...","mentionedUserSelf":false}');
+    return lines.join(' ');
+  }
+
+  // Caption context (audio memories): names anchor spelling and third-person
+  // framing; nicknames resolve to canonical names (same rule as the
+  // illustration pipeline — a nickname like "cheeky monkey" must never leak
+  // into a caption literally); ages inform interpretation only.
+  if (options.members && options.members.length > 0) {
+    lines.push(
+      `Family members: ${options.members.map(describeVoiceCleanupMember).join('; ')}.`,
+      'In the caption, refer to family members by their canonical name (resolve nicknames to the real name); use their ages only to interpret what is happening — never state an age in the caption unless the speaker said it. Only name a family member when the speech clearly refers to them — never guess who is in the recording.',
+    );
+  }
+
+  // Audio-memories "keep the sound" fork (docs/features/audio-memories.md):
+  // one extra field on the same cleanup call, not a second provider call.
+  lines.push(
+    'Also write a short third-person caption describing what the recording is, under 120 characters (examples: "Lila singing Twinkle Twinkle in the bath" / "Enzo contando lo que hizo en la escuela").',
+    'Write the caption in the same language the speaker used.',
+    'If you can understand ANY of the speaker\'s words, you MUST write a caption — mundane, short, or test recordings included (someone trying out the microphone gets a plain caption of what they said).',
+    'An empty-string description "" is reserved for recordings with no intelligible words at all — silence, pure noise, and wordless baby babble or sound play ("ba ba", "goo goo") all count as no intelligible words. Never invent a description for those, never output filler like "...", and never return "" when actual words were understood.',
+    'JSON only: {"cleanedText":"...","description":"...","mentionedUserSelf":false}',
+  );
+  return lines.join(' ');
 }
 
 export function buildTranscriptionPrompt(

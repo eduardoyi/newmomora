@@ -1,12 +1,14 @@
 import { notifyFamilyActivity } from '@/services/ai';
 import { deleteStorageObject, uploadMediaObject } from '@/services/media';
-import { createMediaMemory, type MemoryWithTags } from '@/services/memories';
+import { createAudioMemory, createMediaMemory, type MemoryWithTags } from '@/services/memories';
 import { createImagePreviewForUpload, createVideoPosterForUpload } from '@/utils/create-image-preview';
 import { getLocalFileSizeBytes } from '@/utils/local-files';
 import { aspectRatioFromDimensions } from '@/utils/media-aspect';
 import {
   getMediaExtensionFromContentType,
   isVideoContentType,
+  MAX_AUDIO_BYTES,
+  MAX_AUDIO_DURATION_MS,
   MAX_VIDEO_BYTES,
 } from '@/utils/media-validation';
 import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
@@ -58,6 +60,53 @@ export interface PostMediaMemoryInput {
   content?: string;
   memoryDate: string;
   taggedMemberIds: string[];
+}
+
+// Audio memories "keep the sound" (docs/plans/audio-memories-v1.md P2.4):
+// enqueue seam contract for use-pending-memory-uploads.tsx. `kind: 'audio'`
+// is the sole discriminant against PostMediaMemoryInput above -- that type
+// deliberately carries no `kind` field, so existing media callers stay
+// source-compatible with no changes.
+export interface PostAudioMemoryInput {
+  kind: 'audio';
+  memoryId: string;
+  clip: {
+    fileUri: string;
+    durationMs: number;
+    contentType: string;
+  };
+  content: string | null;
+  audioTranscript: string | null;
+  memoryDate: string;
+  taggedMemberIds: string[];
+  /**
+   * Ordering fix for the save-before-transcription race: the composer kicks
+   * transcription immediately on stop (P2.1/P2.2), but the memories row
+   * isn't created until this deferred post's insert completes -- which
+   * typically finishes AFTER transcription resolves. A caller-side
+   * `patchAudioDescriptionIfEmpty` call racing that insert would silently
+   * no-op (a Supabase UPDATE matching zero rows succeeds with no error),
+   * permanently losing the description/transcript in the common fast-save
+   * case. Handing the in-flight promise through the queue instead lets
+   * use-pending-memory-uploads.tsx fire the backfill only AFTER
+   * postAudioMemory's insert has actually succeeded, guaranteeing order.
+   *
+   * Safe only because this queue is in-memory-only and never serializes its
+   * inputs (docs/plans/audio-memories-v1.md's queue-persistence-across-
+   * force-quit item is explicitly out of v1 -- see "Explicitly out of v1").
+   * If queue persistence ever lands, a Promise cannot survive
+   * serialization and this field's shape must be revisited (e.g. persist
+   * the resolved result instead, or re-kick transcription on rehydrate).
+   */
+  pendingTranscription?: Promise<{ cleanedText: string; description: string } | null>;
+}
+
+export type PendingMemoryUploadInput = PostMediaMemoryInput | PostAudioMemoryInput;
+
+export function isAudioUploadInput(
+  input: PendingMemoryUploadInput,
+): input is PostAudioMemoryInput {
+  return (input as PostAudioMemoryInput).kind === 'audio';
 }
 
 function createUuid(): string {
@@ -383,6 +432,102 @@ export async function postMediaMemory(params: {
       content: input.content,
       memoryDate: input.memoryDate,
       taggedMemberIds: input.taggedMemberIds,
+    });
+
+    if (error) {
+      throw toError(error, 'Could not save memory');
+    }
+
+    return data as MemoryWithTags;
+  } catch (error) {
+    await Promise.all(uploadedKeys.map((key) => deleteStorageObject(key)));
+    throw toError(error, 'Could not save memory');
+  }
+}
+
+/**
+ * Client-side backstop for the recorded clip's cap, mirroring
+ * assertVideoWithinUploadCap above -- the server (upload-media) is
+ * authoritative, but failing here gives a clearer error and avoids spending
+ * a PUT on a clip that will just be rejected. MAX_AUDIO_DURATION_MS/
+ * MAX_AUDIO_BYTES are kept in sync by hand with
+ * supabase/functions/upload-media/index.ts (see media-validation.ts).
+ */
+async function assertAudioClipWithinLimits(clip: { fileUri: string; durationMs: number }): Promise<void> {
+  if (!Number.isFinite(clip.durationMs) || clip.durationMs <= 0) {
+    throw new Error('Could not read the recording duration. Try recording again.');
+  }
+
+  if (clip.durationMs > MAX_AUDIO_DURATION_MS) {
+    throw new Error('Recordings must be 2 minutes or shorter.');
+  }
+
+  const sizeBytes = await getLocalFileSizeBytes(clip.fileUri);
+  if (sizeBytes != null && sizeBytes > MAX_AUDIO_BYTES) {
+    throw new Error('This recording is too large to upload. Try a shorter clip.');
+  }
+}
+
+/**
+ * Minimal audio upload pipeline (docs/plans/audio-memories-v1.md P2.4) --
+ * deliberately NOT a call into uploadMemoryMediaAssets/postMediaMemory. A
+ * raw recorded .m4a must never flow through the image branch: no video
+ * compression, no EXIF strip (stripImageMetadataForUpload gates on "not
+ * video", so an audio asset would fall into ImageManipulator.manipulateAsync
+ * and throw on native image-decode), no preview/poster generation (audio has
+ * no preview concept -- preview_object_key stays null). This helper shares
+ * only presign/PUT/rollback with the media path. Rolls back the uploaded
+ * clip and throws on failure, matching postMediaMemory's contract so the
+ * pending-upload queue's existing failed/retry/discard lifecycle applies
+ * unchanged.
+ */
+export async function postAudioMemory(params: {
+  userId: string;
+  familyId: string;
+  input: PostAudioMemoryInput;
+  onAssetUploaded?: () => void;
+}): Promise<MemoryWithTags> {
+  const { userId, familyId, input, onAssetUploaded } = params;
+  const uploadedKeys: string[] = [];
+
+  try {
+    await assertAudioClipWithinLimits(input.clip);
+
+    const extension = getMediaExtensionFromContentType(input.clip.contentType);
+    if (!extension) {
+      throw new Error('Unsupported audio file type');
+    }
+
+    const mediaAssetId = createUuid();
+    const objectKey = buildMemoryMediaAssetKey(userId, input.memoryId, mediaAssetId, extension);
+
+    const { error: uploadError } = await uploadMediaObject(
+      objectKey,
+      input.clip.fileUri,
+      input.clip.contentType,
+      familyId,
+    );
+
+    if (uploadError) {
+      throw toError(uploadError, 'Audio upload failed');
+    }
+
+    uploadedKeys.push(objectKey);
+    onAssetUploaded?.();
+
+    const { data, error } = await createAudioMemory({
+      userId,
+      familyId,
+      memoryId: input.memoryId,
+      content: input.content,
+      audioTranscript: input.audioTranscript,
+      memoryDate: input.memoryDate,
+      taggedMemberIds: input.taggedMemberIds,
+      clip: {
+        objectKey,
+        contentType: input.clip.contentType,
+        durationMs: input.clip.durationMs,
+      },
     });
 
     if (error) {

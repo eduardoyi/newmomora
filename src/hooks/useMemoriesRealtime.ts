@@ -48,7 +48,14 @@ async function fetchAndPrependInsertedMemory(
     return;
   }
 
-  const needsRetry = first.data.memory_type === 'media' && first.data.mediaAssets.length === 0;
+  // 'audio' rows race their own `memory_media` insert exactly like 'media'
+  // (docs/plans/audio-memories-v1.md P3.3) -- a cross-device audio insert
+  // this delayed fetch catches before its single clip row lands would
+  // otherwise prepend with zero mediaAssets and no way to recover the clip
+  // short of a full refetch.
+  const needsRetry =
+    (first.data.memory_type === 'media' || first.data.memory_type === 'audio') &&
+    first.data.mediaAssets.length === 0;
   if (!needsRetry) {
     prependMemoryToListCaches(queryClient, familyId, first.data);
     return;

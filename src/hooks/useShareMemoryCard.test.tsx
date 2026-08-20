@@ -177,6 +177,33 @@ describe('useShareMemoryCard', () => {
     expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
   });
 
+  // P0.1 forward-compat fallback (docs/plans/audio-memories-v1.md) -- the
+  // share icon can be reached for a memory_type the server rejects (e.g.
+  // `audio`, before an old installed client has updated). The server's own
+  // message is written for this exact case and must reach the user instead
+  // of the generic "Could not share memory / Please try again." fallback.
+  it('surfaces the server message for a 400 unsupported_memory_type response', async () => {
+    mockedComposeShareCard.mockResolvedValue({
+      ok: false,
+      error: {
+        message: 'Audio memories cannot be shared yet',
+        code: 'unsupported_memory_type',
+        status: 400,
+      },
+    });
+
+    const { result } = renderHook(() => useShareMemoryCard(), { wrapper });
+    await act(async () => {
+      await result.current.shareMemoryCard(memory);
+    });
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Could not share memory',
+      'Audio memories cannot be shared yet',
+    );
+    expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
+  });
+
   it('shows a generic message for other failures', async () => {
     mockedComposeShareCard.mockResolvedValue({ ok: false, error: { message: 'boom', status: 500 } });
 

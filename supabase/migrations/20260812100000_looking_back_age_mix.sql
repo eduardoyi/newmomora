@@ -1,0 +1,421 @@
+-- Looking Back: balance mixed archive packages across archive age bands.
+--
+-- The public RPC contract remains unchanged. The archive_mix recipe now keeps
+-- a deterministic quota of newer historical, medium-age, and deep-archive
+-- memories before filling the remaining package capacity. The package is
+-- considered before the lower-priority month/written fallbacks, while the
+-- daily set and all cooldown boundaries remain immutable and server-owned.
+
+create or replace function public.get_or_create_looking_back_packages(p_family_id uuid)
+returns table (
+  daily_set_id uuid,
+  package_id uuid,
+  package_date date,
+  package_type text,
+  subject_family_member_id uuid,
+  display_kind text,
+  display_title text,
+  display_subtitle text,
+  display_era text,
+  tint text,
+  "position" smallint,
+  memory_ids uuid[],
+  first_viewed_at timestamptz,
+  last_viewed_at timestamptz,
+  completed_at timestamptz,
+  refresh_after timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_timezone text := 'UTC';
+  v_date date;
+  v_refresh_after timestamptz;
+  v_set public.looking_back_daily_sets%rowtype;
+  v_candidate record;
+  v_selected_ids uuid[] := '{}'::uuid[];
+  v_final_ids uuid[];
+  v_signature text;
+  v_position smallint := 0;
+  v_package_id uuid;
+  v_archive_mix_available boolean := false;
+begin
+  if v_user_id is null or public.is_anonymous_user() then
+    raise exception 'Authentication required' using errcode = '28000';
+  end if;
+  if p_family_id is null or not public.is_family_member(p_family_id) then
+    raise exception 'Not authorized for this family' using errcode = '42501';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('looking-back:' || p_family_id::text, 0));
+
+  select s.* into v_set
+  from public.looking_back_daily_sets s
+  where s.family_id = p_family_id
+    and s.created_at <= transaction_timestamp()
+    and s.refresh_after > transaction_timestamp()
+  order by s.created_at desc
+  limit 1;
+  if found then
+    return query select * from public.return_looking_back_daily_set(v_set.id, v_user_id);
+    return;
+  end if;
+
+  select coalesce(up.timezone, 'UTC') into v_timezone
+  from public.families f
+  left join public.user_profiles up on up.id = f.owner_id
+  where f.id = p_family_id;
+  if not exists (select 1 from pg_timezone_names where name = v_timezone) then
+    v_timezone := 'UTC';
+  end if;
+  v_date := (transaction_timestamp() at time zone v_timezone)::date;
+  v_refresh_after := ((v_date + 1)::timestamp at time zone v_timezone);
+  perform pg_advisory_xact_lock(hashtextextended(
+    'looking-back:' || p_family_id::text || ':' || v_date::text, 0
+  ));
+
+  select s.* into v_set
+  from public.looking_back_daily_sets s
+  where s.family_id = p_family_id
+    and s.package_date = v_date
+    and s.refresh_after > transaction_timestamp()
+  limit 1;
+  if found then
+    return query select * from public.return_looking_back_daily_set(v_set.id, v_user_id);
+    return;
+  end if;
+
+  delete from public.looking_back_daily_sets s
+  where s.family_id = p_family_id
+    and s.created_at < transaction_timestamp() - interval '45 days';
+
+  insert into public.looking_back_daily_sets (
+    family_id, package_date, timezone_name, refresh_after
+  ) values (
+    p_family_id, v_date, v_timezone, v_refresh_after
+  ) returning * into v_set;
+
+  -- If the archive has enough eligible memories, hold one of the four daily
+  -- slots for the balanced archive_mix candidate. If that candidate later
+  -- fails because earlier packages consumed too many IDs or its exact
+  -- signature is cooling down, lower-priority candidates may fill the slot.
+  select count(*) >= 4
+  into v_archive_mix_available
+  from public.memories m
+  where m.family_id = p_family_id
+    and m.memory_date <= v_date - 90
+    and (
+      m.memory_type <> 'media'
+      or exists (select 1 from public.memory_media mm where mm.memory_id = m.id)
+    )
+    and not exists (
+      select 1
+      from public.looking_back_packages p
+      join public.looking_back_package_memories i on i.package_id = p.id
+      where p.family_id = p_family_id
+        and p.created_at >= transaction_timestamp() - interval '7 days'
+        and p.created_at < transaction_timestamp()
+        and i.memory_id = m.id
+    );
+
+  for v_candidate in
+    with recent_memory_ids as (
+      select distinct i.memory_id
+      from public.looking_back_packages p
+      join public.looking_back_package_memories i on i.package_id = p.id
+      where p.family_id = p_family_id
+        and p.created_at >= transaction_timestamp() - interval '7 days'
+        and p.created_at < transaction_timestamp()
+    ),
+    eligible as (
+      select m.id, m.memory_date, m.created_at, m.memory_type, m.emotion
+      from public.memories m
+      where m.family_id = p_family_id
+        and m.memory_date <= v_date - 90
+        and (
+          m.memory_type <> 'media'
+          or exists (select 1 from public.memory_media mm where mm.memory_id = m.id)
+        )
+        and not exists (select 1 from recent_memory_ids r where r.memory_id = m.id)
+    ),
+    ordered as (
+      select e.*, row_number() over (order by e.memory_date desc, e.created_at desc, e.id) as recency_position
+      from eligible e
+    ),
+    age_banded as (
+      select e.*,
+        case
+          when e.memory_date > (v_date - interval '18 months')::date then 'newer'
+          when e.memory_date > (v_date - interval '36 months')::date then 'medium'
+          else 'deep'
+        end as archive_age_band,
+        md5(p_family_id::text || ':' || v_date::text || ':archive_mix:' || e.id::text) as archive_mix_order
+      from eligible e
+    ),
+    archive_mix_seed as (
+      select b.*,
+        row_number() over (
+          partition by b.archive_age_band
+          order by b.archive_mix_order, b.created_at desc, b.id
+        ) as age_band_position
+      from age_banded b
+    ),
+    archive_mix_ordered as (
+      select s.*,
+        case
+          when s.age_band_position <= case s.archive_age_band
+            when 'newer' then 4
+            when 'medium' then 3
+            else 3
+          end then 0
+          else 1
+        end as quota_rank
+      from archive_mix_seed s
+    ),
+    archive_mix_candidate as (
+      select coalesce(
+        array_agg(id order by quota_rank, archive_mix_order, created_at desc, id),
+        '{}'::uuid[]
+      ) as memory_ids
+      from archive_mix_ordered
+    ),
+    candidate_rows as (
+      select 1::int priority, 'on_this_day'::text package_type,
+        ('on_this_day:' || o.memory_date::text) recipe_identity,
+        null::uuid subject_id, 'On this day'::text display_kind,
+        'On this day'::text display_title, null::text display_subtitle,
+        to_char(o.memory_date, 'FMMonth YYYY')::text display_era, null::text tint,
+        array_agg(o.id order by o.memory_date desc, o.created_at desc, o.id) memory_ids
+      from ordered o
+      where extract(month from o.memory_date) = extract(month from v_date)
+        and extract(day from o.memory_date) = extract(day from v_date)
+        and o.memory_date <= v_date - interval '1 year'
+      group by o.memory_date
+
+      union all
+      select 2, 'one_year_ago', 'one_year_ago:' || (v_date - interval '1 year')::date::text,
+        null, 'A year ago', 'A year ago', null,
+        to_char((v_date - interval '1 year')::date, 'FMMonth YYYY'), null,
+        array_agg(o.id order by o.memory_date desc, o.created_at desc, o.id)
+      from ordered o
+      where o.memory_date between ((v_date - interval '1 year')::date - 3) and ((v_date - interval '1 year')::date + 3)
+
+      union all
+      select 4, 'around_this_time', 'around_this_time:' || extract(month from v_date)::text || '-' || extract(day from v_date)::text,
+        null, 'Around this time', 'Around this time', null,
+        'From your archive', null,
+        array_agg(o.id order by o.memory_date desc, o.created_at desc, o.id)
+      from ordered o
+      cross join lateral (
+        select make_date(
+          extract(year from o.memory_date)::int,
+          extract(month from v_date)::int,
+          1
+        ) + least(
+          extract(day from v_date)::int - 1,
+          extract(day from (
+            make_date(extract(year from o.memory_date)::int, extract(month from v_date)::int, 1)
+            + interval '1 month - 1 day'
+          ))::int - 1
+        ) as anniversary_date
+      ) anniversary
+      where o.memory_date <= v_date - interval '1 year'
+        and o.memory_date between anniversary.anniversary_date - 7 and anniversary.anniversary_date + 7
+
+      union all
+      -- The mixed archive is deliberately considered before the lower
+      -- month/written fallbacks so a viable age-balanced rediscovery package
+      -- gets one of the four daily slots.
+      select 5, 'archive_mix', 'archive_mix', null,
+        'From your archive', 'A little look back', null, 'From your archive', null,
+        a.memory_ids
+      from archive_mix_candidate a
+
+      union all
+      select 6, 'month_archive', 'month_archive:' || date_trunc('month', o.memory_date)::date::text,
+        null, 'From your archive', 'From ' || to_char(date_trunc('month', o.memory_date), 'FMMonth YYYY'), null,
+        to_char(date_trunc('month', o.memory_date), 'FMMonth YYYY'), null,
+        array_agg(o.id order by o.memory_date desc, o.created_at desc, o.id)
+      from ordered o
+      group by date_trunc('month', o.memory_date)
+
+      union all
+      select 7, 'written_archive', 'written_archive', null,
+        'From your archive', 'Small things, written down', null, 'From your archive', null,
+        array_agg(o.id order by o.memory_date desc, o.created_at desc, o.id)
+      from ordered o where o.memory_type = 'text_only'
+
+      union all
+      select 3, 'member_at_age',
+        'member_at_age:' || fm.id::text || ':' || extract(year from age(o.memory_date, fm.date_of_birth))::int::text,
+        fm.id, 'Looking back',
+        case
+          when extract(year from age(o.memory_date, fm.date_of_birth))::int = 0
+            then 'From ' || fm.name || '''s first year'
+          else fm.name || ' at ' || extract(year from age(o.memory_date, fm.date_of_birth))::int::text
+        end,
+        null, 'From your archive', null,
+        array_agg(o.id order by o.memory_date desc, o.created_at desc, o.id)
+      from ordered o
+      join public.memory_family_members mfm on mfm.memory_id = o.id
+      join public.family_members fm on fm.id = mfm.family_member_id and fm.family_id = p_family_id
+      where fm.date_of_birth is not null
+        and extract(year from age(o.memory_date, fm.date_of_birth)) between 0 and 17
+      group by fm.id, fm.name, extract(year from age(o.memory_date, fm.date_of_birth))
+    ),
+    candidate_penalties as (
+      select c.*,
+        exists (
+          select 1
+          from public.looking_back_packages previous
+          where previous.family_id = p_family_id
+            and previous.recipe_identity = c.recipe_identity
+            and previous.created_at >= transaction_timestamp() - interval '3 days'
+            and previous.created_at < transaction_timestamp()
+        ) as has_recent_recipe,
+        (
+          c.package_type = 'member_at_age'
+          and exists (
+            select 1
+            from public.looking_back_packages previous
+            where previous.family_id = p_family_id
+              and previous.package_type = 'member_at_age'
+              and previous.subject_family_member_id = c.subject_id
+              and previous.created_at >= transaction_timestamp() - interval '3 days'
+              and previous.created_at < transaction_timestamp()
+          )
+        ) as has_recent_subject
+      from candidate_rows c
+      where cardinality(c.memory_ids) >= 4
+    ),
+    ranked_candidates as (
+      select p.*,
+        row_number() over (
+          partition by p.package_type
+          order by
+            p.has_recent_subject asc,
+            p.has_recent_recipe asc,
+            md5(p_family_id::text || ':' || v_date::text || ':' || p.recipe_identity)
+        ) as package_type_rank
+      from candidate_penalties p
+    )
+    select *
+    from ranked_candidates
+    where package_type_rank = 1
+    order by
+      priority asc,
+      has_recent_subject asc,
+      has_recent_recipe asc,
+      md5(p_family_id::text || ':' || v_date::text || ':' || recipe_identity)
+  loop
+    exit when v_position >= 4;
+
+    -- When a viable age-balanced archive exists, let no more than three
+    -- higher-priority thematic packages consume the daily set. If the mixed
+    -- candidate is rejected below, this flag is cleared so lower fallbacks can
+    -- still fill the fourth slot.
+    if v_archive_mix_available
+       and v_candidate.package_type <> 'archive_mix'
+       and v_position >= 3 then
+      continue;
+    end if;
+
+    if v_candidate.package_type = 'archive_mix' then
+      -- Re-rank each age band after same-day de-overlap. Earlier thematic
+      -- packages can consume the initially seeded quota rows; replacements
+      -- from that same band must win before cross-band backfill.
+      select coalesce(array_agg(normalized.id order by normalized.quota_rank, normalized.candidate_position), '{}'::uuid[])
+      into v_final_ids
+      from (
+        select ranked.id, ranked.candidate_position,
+          case
+            when ranked.archive_age_band = 'newer' and ranked.band_position <= 4 then 0
+            when ranked.archive_age_band = 'medium' and ranked.band_position <= 3 then 0
+            when ranked.archive_age_band = 'deep' and ranked.band_position <= 3 then 0
+            else 1
+          end as quota_rank
+        from (
+          select available.*,
+            row_number() over (
+              partition by available.archive_age_band
+              order by available.candidate_position
+            ) as band_position
+          from (
+            select m.id, m.memory_date, m.created_at, candidate.candidate_position,
+              case
+                when m.memory_date > (v_date - interval '18 months')::date then 'newer'
+                when m.memory_date > (v_date - interval '36 months')::date then 'medium'
+                else 'deep'
+              end as archive_age_band
+            from unnest(v_candidate.memory_ids) with ordinality as candidate(memory_id, candidate_position)
+            join public.memories m on m.id = candidate.memory_id and m.family_id = p_family_id
+            where not (m.id = any(v_selected_ids))
+          ) available
+        ) ranked
+        order by quota_rank, candidate_position
+        limit 10
+      ) normalized;
+    else
+      select coalesce(array_agg(normalized.id order by normalized.candidate_position), '{}'::uuid[])
+      into v_final_ids
+      from (
+        select m.id, m.memory_date, m.created_at, candidate.candidate_position
+        from unnest(v_candidate.memory_ids) with ordinality as candidate(memory_id, candidate_position)
+        join public.memories m on m.id = candidate.memory_id and m.family_id = p_family_id
+        where not (m.id = any(v_selected_ids))
+        order by candidate.candidate_position
+        limit 10
+      ) normalized;
+    end if;
+    if cardinality(v_final_ids) < 4 then
+      if v_candidate.package_type = 'archive_mix' then
+        v_archive_mix_available := false;
+      end if;
+      continue;
+    end if;
+    select encode(extensions.digest(
+      v_candidate.package_type || ':' || v_candidate.recipe_identity || ':' ||
+      array_to_string((select array_agg(x order by x) from unnest(v_final_ids) x), ','),
+      'sha256'
+    ), 'hex') into v_signature;
+    if exists (
+      select 1 from public.looking_back_packages previous
+      where previous.family_id = p_family_id
+        and previous.signature = v_signature
+        and previous.created_at >= transaction_timestamp() - interval '14 days'
+        and previous.created_at < transaction_timestamp()
+    ) then
+      if v_candidate.package_type = 'archive_mix' then
+        v_archive_mix_available := false;
+      end if;
+      continue;
+    end if;
+    insert into public.looking_back_packages (
+      daily_set_id, family_id, package_date, package_type, subject_family_member_id,
+      display_kind, display_title, display_subtitle, display_era, tint,
+      recipe_identity, signature, position
+    ) values (
+      v_set.id, p_family_id, v_date, v_candidate.package_type, v_candidate.subject_id,
+      v_candidate.display_kind, v_candidate.display_title, v_candidate.display_subtitle,
+      v_candidate.display_era, v_candidate.tint, v_candidate.recipe_identity,
+      v_signature, v_position
+    ) returning id into v_package_id;
+    insert into public.looking_back_package_memories (package_id, family_id, memory_id, position)
+    select v_package_id, p_family_id, memory_id, ordinal - 1
+    from unnest(v_final_ids) with ordinality as item(memory_id, ordinal);
+    v_selected_ids := v_selected_ids || v_final_ids;
+    v_position := v_position + 1;
+    if v_candidate.package_type = 'archive_mix' then
+      v_archive_mix_available := false;
+    end if;
+  end loop;
+
+  return query select * from public.return_looking_back_daily_set(v_set.id, v_user_id);
+end;
+$$;
+
+comment on function public.get_or_create_looking_back_packages(uuid) is
+  'Returns or atomically materializes an immutable daily Looking Back set with at most four packages, including a deterministic age-balanced archive mix when four eligible memories exist, plus soft three-day recipe/age-subject rotation.';

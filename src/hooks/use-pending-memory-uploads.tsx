@@ -20,12 +20,19 @@ import {
   setMemoryEmotionInCache,
 } from '@/hooks/memory-cache';
 import { fetchLinkPreviews } from '@/services/ai';
-import { runMediaPhotoEmotionAnalysis, type MemoryWithTags } from '@/services/memories';
+import {
+  patchAudioDescriptionIfEmpty,
+  runAudioEmotionAnalysis,
+  runMediaPhotoEmotionAnalysis,
+  type MemoryWithTags,
+} from '@/services/memories';
 import {
   hasImageMediaAsset,
+  isAudioUploadInput,
   notifyFamilyActivityFireAndForget,
+  postAudioMemory,
   postMediaMemory,
-  type PostMediaMemoryInput,
+  type PendingMemoryUploadInput,
 } from '@/services/memory-posting';
 import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 import { extractUrls } from '@/utils/links';
@@ -53,7 +60,7 @@ export interface PendingMemoryUpload {
 
 interface PendingMemoryUploadsContextValue {
   uploads: PendingMemoryUpload[];
-  enqueue: (input: PostMediaMemoryInput) => boolean;
+  enqueue: (input: PendingMemoryUploadInput) => boolean;
   retry: (memoryId: string) => void;
   discard: (memoryId: string) => void;
 }
@@ -76,7 +83,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
   // without the composer -- and retried against the family they were composed
   // for even if the user has switched active family since.
   const inputsRef = useRef(
-    new Map<string, { input: PostMediaMemoryInput; userId: string; familyId: string }>(),
+    new Map<string, { input: PendingMemoryUploadInput; userId: string; familyId: string }>(),
   );
 
   const patchUpload = useCallback(
@@ -96,38 +103,95 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
   }, []);
 
   const runUpload = useCallback(
-    async (input: PostMediaMemoryInput, userId: string, activeFamilyId: string) => {
+    async (input: PendingMemoryUploadInput, userId: string, activeFamilyId: string) => {
       try {
-        const memory = await postMediaMemory({
-          userId,
-          familyId: activeFamilyId,
-          input,
-          onAssetUploaded: () => {
-            setUploads((current) =>
-              current.map((upload) =>
-                upload.memoryId === input.memoryId
-                  ? { ...upload, uploadedAssets: upload.uploadedAssets + 1 }
-                  : upload,
-              ),
-            );
-          },
-        });
+        const onAssetUploaded = () => {
+          setUploads((current) =>
+            current.map((upload) =>
+              upload.memoryId === input.memoryId
+                ? { ...upload, uploadedAssets: upload.uploadedAssets + 1 }
+                : upload,
+            ),
+          );
+        };
 
-        // postMediaMemory already returns the enriched row -- prepend it
-        // (sorted by memory_date desc, created_at desc) into whichever list
-        // caches it belongs to instead of relying on a refetch to surface
-        // it. The memoriesQueryKeyBase invalidations below are now
-        // refetchType: 'none' backstops (Workstream A4b): with list caches
-        // as InfiniteData, a refetching invalidation would re-run every
-        // loaded page's enrichment round-trips per media post -- the exact
-        // regression this rework prevents. Calendar stays a normal
+        const isAudio = isAudioUploadInput(input);
+        // Audio memories never flow through the image/video upload branch
+        // (docs/plans/audio-memories-v1.md P2.4) -- postAudioMemory is a
+        // minimal, dedicated pipeline (no compression/strip/preview).
+        const memory = isAudio
+          ? await postAudioMemory({ userId, familyId: activeFamilyId, input, onAssetUploaded })
+          : await postMediaMemory({ userId, familyId: activeFamilyId, input, onAssetUploaded });
+
+        // postMediaMemory/postAudioMemory already return the enriched row --
+        // prepend it (sorted by memory_date desc, created_at desc) into
+        // whichever list caches it belongs to instead of relying on a
+        // refetch to surface it. The memoriesQueryKeyBase invalidations
+        // below are now refetchType: 'none' backstops (Workstream A4b): with
+        // list caches as InfiniteData, a refetching invalidation would
+        // re-run every loaded page's enrichment round-trips per post -- the
+        // exact regression this rework prevents. Calendar stays a normal
         // (refetching) invalidation -- it's array-shaped, windowed, cheap.
         prependMemoryToListCaches(queryClient, activeFamilyId, memory);
         // The card is already replaced by the prepended memory, so there's
         // no gap to bridge by waiting on a refetch before removing it.
         removeUpload(input.memoryId);
 
-        if (hasImageMediaAsset(input.mediaAssets)) {
+        if (isAudio && input.pendingTranscription) {
+          // Ordering fix (cross-seam bug): the memories row is created by
+          // THIS deferred post's insert, which typically finishes AFTER the
+          // composer's in-flight transcription resolves. A caller firing
+          // patchAudioDescriptionIfEmpty directly off the transcription
+          // promise would race that insert -- a Supabase UPDATE matching
+          // zero rows succeeds silently, permanently losing the
+          // description/transcript in the common fast-save case. Chaining
+          // off the promise HERE, after postAudioMemory has already
+          // resolved (the row now exists), guarantees the patch always
+          // lands after the insert. On a failed post this branch is never
+          // reached (retry re-runs runUpload, re-chaining onto the same
+          // already-resolved promise then fires immediately -- correct); on
+          // discard it's never reached at all.
+          input.pendingTranscription
+            .then((result) => {
+              if (!result) {
+                return;
+              }
+              void patchAudioDescriptionIfEmpty(memory.id, {
+                description: result.description.trim() || null,
+                transcript: result.cleanedText.trim() || null,
+              });
+            })
+            .catch((error) => {
+              console.warn(
+                'pendingTranscription failed; audio memory keeps its save-time description/transcript',
+                memory.id,
+                error instanceof Error ? error.message : 'unknown',
+              );
+            });
+        }
+
+        if (isAudio) {
+          // Text-classifier emotion path, not the photo/vision path
+          // hasImageMediaAsset would otherwise route audio into (the server
+          // rejects vision analysis for a non-media type). Only kick when
+          // there's actually something to analyze -- a both-null kick is a
+          // wasted call, though the server no-ops it safely.
+          const hasAnalyzableContent =
+            Boolean(memory.content?.trim()) || Boolean(memory.audio_transcript?.trim());
+
+          if (hasAnalyzableContent) {
+            void runAudioEmotionAnalysis(memory.id)
+              .then((emotion) => {
+                if (emotion) {
+                  setMemoryEmotionInCache(queryClient, activeFamilyId, memory.id, emotion);
+                }
+              })
+              .finally(() => {
+                queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase], refetchType: 'none' });
+                queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+              });
+          }
+        } else if (hasImageMediaAsset(input.mediaAssets)) {
           void runMediaPhotoEmotionAnalysis(memory.id)
             .then((emotion) => {
               if (emotion) {
@@ -140,17 +204,25 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
             });
         }
         notifyFamilyActivityFireAndForget(memory.id);
-        // Store-through cache warm (docs/plans/share-card-store-through.md,
-        // W3): same fire-and-forget slot as notifyFamilyActivityFireAndForget
-        // above. Media memories always warm the COVER asset (position 0)
-        // only -- warmShareCardForMemoryFireAndForget branches on
-        // memory.memory_type, which is always 'media' for a post that
-        // reaches this queue.
-        warmShareCardForMemoryFireAndForget(memory);
 
-        // Inline links (docs/plans/inline-links.md §7): media memories are
-        // created outside the useMemories mutations, so the caption's URL
-        // trigger lives here instead. fetch-link-previews returns the
+        if (!isAudio) {
+          // Store-through cache warm (docs/plans/share-card-store-through.md,
+          // W3): same fire-and-forget slot as
+          // notifyFamilyActivityFireAndForget above. Media memories always
+          // warm the COVER asset (position 0) only --
+          // warmShareCardForMemoryFireAndForget branches on
+          // memory.memory_type, which is always 'media' for a post that
+          // reaches this branch. Audio stays unwarmed here --
+          // compose-share-card rejects `audio` in v1 (see
+          // docs/features/audio-memories.md), so warming it would only ever
+          // fail; teaching warmShareCardForMemoryFireAndForget itself to
+          // skip `audio` is P3.3, out of this wave's scope.
+          warmShareCardForMemoryFireAndForget(memory);
+        }
+
+        // Inline links (docs/plans/inline-links.md §7): media/audio memories
+        // are created outside the useMemories mutations, so the caption's
+        // URL trigger lives here instead. fetch-link-previews returns the
         // resolved map in its response -- patch it straight in rather than
         // invalidating, or a posted URL would show its domain fallback
         // until the next reconciling refresh (see fireLinkPreviewFetch in
@@ -181,18 +253,22 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         });
         // Terminal-failure transition (docs/plans/analytics-tracking.md Tier
         // 2) -- the composer's own `memory_saved` already fired when the
-        // media path was enqueued, so this is the only place a media post's
+        // media/audio path was enqueued, so this is the only place a post's
         // eventual failure gets reported. Fires again on a user-initiated
         // retry() that also fails -- that's a new terminal failure, not a
-        // duplicate of this one.
-        trackEvent('memory_save_failed', { code: 'media_upload_failed' });
+        // duplicate of this one. Audio failures use 'other' rather than a
+        // new analytics literal (analytics.ts events are out of this wave's
+        // scope).
+        trackEvent('memory_save_failed', {
+          code: isAudioUploadInput(input) ? 'other' : 'media_upload_failed',
+        });
       }
     },
     [patchUpload, queryClient, removeUpload],
   );
 
   const enqueue = useCallback(
-    (input: PostMediaMemoryInput) => {
+    (input: PendingMemoryUploadInput) => {
       if (!user) {
         throw new Error('You must be signed in to save a memory');
       }
@@ -200,19 +276,21 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         throw new Error('You must have a family to save a memory');
       }
 
-      const previewAsset = input.mediaAssets[0];
       inputsRef.current.set(input.memoryId, { input, userId: user.id, familyId });
+
+      const isAudio = isAudioUploadInput(input);
+      const previewAsset = isAudio ? undefined : input.mediaAssets[0];
       setUploads((current) => [
         ...current,
         {
           memoryId: input.memoryId,
           familyId,
           status: 'posting',
-          totalAssets: input.mediaAssets.length,
+          totalAssets: isAudio ? 1 : input.mediaAssets.length,
           uploadedAssets: 0,
           errorMessage: null,
-          previewUri: previewAsset?.fileUri ?? null,
-          previewContentType: previewAsset?.contentType ?? null,
+          previewUri: isAudio ? input.clip.fileUri : (previewAsset?.fileUri ?? null),
+          previewContentType: isAudio ? input.clip.contentType : (previewAsset?.contentType ?? null),
           isNetworkFailure: false,
         },
       ]);

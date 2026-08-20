@@ -1,5 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert@1';
-import { handleUploadMedia } from './index.ts';
+import { handleUploadMedia, maxBytesForContentType } from './index.ts';
 
 Deno.test('upload-media rejects unauthenticated requests', async () => {
   const response = await handleUploadMedia(
@@ -24,4 +24,19 @@ Deno.test('upload-media rejects unsupported methods', async () => {
   );
 
   assertEquals(response.status, 405);
+});
+
+// Audio memories "keep the sound" (docs/features/audio-memories.md, P1.3): a
+// 2-minute AAC clip is ~1.9 MB, so 5 MB is a generous but real ceiling --
+// distinct from the 100 MB video/generic cap and the 20 MB image cap.
+Deno.test('maxBytesForContentType applies the 5 MB audio cap to all three allow-listed audio MIME types', () => {
+  const FIVE_MB = 5 * 1024 * 1024;
+  assertEquals(maxBytesForContentType('audio/mp4'), FIVE_MB);
+  assertEquals(maxBytesForContentType('audio/m4a'), FIVE_MB);
+  assertEquals(maxBytesForContentType('audio/x-m4a'), FIVE_MB);
+});
+
+Deno.test('maxBytesForContentType keeps the image and generic/video caps distinct from the audio cap', () => {
+  assertEquals(maxBytesForContentType('image/jpeg'), 20 * 1024 * 1024);
+  assertEquals(maxBytesForContentType('video/mp4'), 100 * 1024 * 1024);
 });

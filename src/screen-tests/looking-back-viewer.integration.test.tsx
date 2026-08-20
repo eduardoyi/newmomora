@@ -1,5 +1,4 @@
 import { act, fireEvent, renderAsync } from '@testing-library/react-native';
-import { Image as ExpoImage } from 'expo-image';
 import { AccessibilityInfo, AppState, View } from 'react-native';
 import { withTiming } from 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -14,7 +13,6 @@ let mockAppStateListener: ((nextState: string) => void) | undefined;
 let mockLastStageSize: { width: number; height: number } | undefined;
 let mockIsTargetReported: jest.Mock;
 let mockIsUserBlocked: jest.Mock;
-const mockImageLoadAsync = jest.fn(() => Promise.resolve());
 
 jest.mock('expo-router', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -43,14 +41,15 @@ const mockUseContentSafety = jest.fn();
 const mockUseLookingBackPackages = jest.fn();
 const mockUseLookingBackSession = jest.fn();
 const mockUseLookingBackPlayback = jest.fn();
-const mockUseMediaUrls = jest.fn();
+const mockUseLookingBackMediaWarmup = jest.fn();
+const mockUseLookingBackVideoPreload = jest.fn();
 jest.mock('@/hooks/use-family', () => ({ useFamily: () => mockUseFamily() }));
 jest.mock('@/hooks/useContentSafety', () => ({ useContentSafety: () => mockUseContentSafety() }));
 jest.mock('@/hooks/useLookingBackPackages', () => ({ useLookingBackPackages: () => mockUseLookingBackPackages() }));
 jest.mock('@/hooks/useLookingBackSession', () => ({ useLookingBackSession: () => mockUseLookingBackSession() }));
 jest.mock('@/hooks/useLookingBackPlayback', () => ({ useLookingBackPlayback: (options: unknown) => mockUseLookingBackPlayback(options) }));
-let mockMediaUrls: Record<string, string> = {};
-jest.mock('@/hooks/useMediaUrls', () => ({ useMediaUrls: (...args: unknown[]) => mockUseMediaUrls(...args) }));
+jest.mock('@/hooks/useLookingBackMediaWarmup', () => ({ useLookingBackMediaWarmup: (...args: unknown[]) => mockUseLookingBackMediaWarmup(...args) }));
+jest.mock('@/hooks/useLookingBackVideoPreload', () => ({ useLookingBackVideoPreload: (...args: unknown[]) => mockUseLookingBackVideoPreload(...args) }));
 jest.mock('@/components/offline-banner', () => ({ OFFLINE_BANNER_CONTENT_CLEARANCE: 54, useOfflineBannerVisible: () => false }));
 jest.mock('@/components/family-member-avatar', () => ({ FamilyMemberAvatar: () => null }));
 jest.mock('@/components/looking-back/story-progress', () => {
@@ -69,6 +68,7 @@ jest.mock('@/components/looking-back/story-frame', () => {
     StoryFrame: ({ onBuffering, onDuration, onReady, onUnavailable, muted, stageSize }: {
       onBuffering: (value: boolean) => void; onDuration: (value: number) => void;
       onReady: () => void; onUnavailable: () => void; muted: boolean; stageSize?: { width: number; height: number };
+      onVideoAttach?: unknown; onVideoDetach?: unknown; videoPlayer?: unknown;
     }) => {
       mockLastStageSize = stageSize;
       return React.createElement(NativeView, { testID: 'looking-back-story-frame' },
@@ -130,6 +130,8 @@ interface PlaybackState {
 let playbackState: PlaybackState;
 let playbackFrame = frame;
 let latestPlaybackOptions: any;
+let latestWarmupOptions: any;
+let latestVideoPreloadOptions: any;
 let dispatch: jest.Mock;
 let pause: jest.Mock;
 let resume: jest.Mock;
@@ -174,9 +176,13 @@ describe('LookingBackViewerScreen route integration', () => {
     mockBeforeRemove = undefined;
     mockAppStateListener = undefined;
     mockLastStageSize = undefined;
-    mockMediaUrls = {};
-    Object.assign(ExpoImage, { loadAsync: mockImageLoadAsync });
-    mockUseMediaUrls.mockImplementation(() => ({ data: mockMediaUrls, isLoading: false }));
+    latestWarmupOptions = undefined;
+    latestVideoPreloadOptions = undefined;
+    mockUseLookingBackMediaWarmup.mockImplementation((options: unknown) => { latestWarmupOptions = options; });
+    mockUseLookingBackVideoPreload.mockImplementation((options: unknown) => {
+      latestVideoPreloadOptions = options;
+      return { currentPlayer: null, attachVideoPlayer: jest.fn(), detachVideoPlayer: jest.fn() };
+    });
     mockNavigation.addListener.mockImplementation((event: string, listener: typeof mockBeforeRemove) => {
       if (event === 'beforeRemove') mockBeforeRemove = listener;
       return jest.fn();
@@ -205,6 +211,7 @@ describe('LookingBackViewerScreen route integration', () => {
     }));
     packagesValue = {
       viewerPackages: [item], packages: [item], dailySetId: 'daily-1', isSuccess: true,
+      portraitVersions: [], isPortraitDataUnavailable: false,
       markPackageViewed: jest.fn(), markPackageCompleted: jest.fn(),
     };
     mockUseLookingBackPackages.mockImplementation(() => packagesValue);
@@ -231,6 +238,33 @@ describe('LookingBackViewerScreen route integration', () => {
     expect(packagesValue.markPackageViewed).toHaveBeenCalledWith('package-1');
   });
 
+  it('hides a subject title while portrait versions are unavailable', async () => {
+    const taggedMember = {
+      id: 'member-1', name: 'Nora', family_id: 'family-1', user_id: 'user-1', date_of_birth: null,
+      illustrated_profile_key: 'nora.webp', illustrated_profile_status: 'ready', profile_picture_key: null,
+      updated_at: '2026-01-01', created_at: '2020-01-01', gender: null,
+    };
+    const birthdayPackage = {
+      ...item,
+      packageType: 'member_birthday',
+      subjectFamilyMemberId: 'member-1',
+      title: 'Nora’s birthday, through the years',
+      memories: item.memories.map((memory) => ({ ...memory, taggedMembers: [taggedMember] })),
+    };
+    packagesValue = {
+      ...packagesValue,
+      viewerPackages: [birthdayPackage], packages: [birthdayPackage],
+      portraitVersions: [], isPortraitDataUnavailable: true,
+    };
+    sessionValue = {
+      ...sessionValue,
+      packageSnapshot: { ...sessionValue.packageSnapshot, value: birthdayPackage },
+    };
+    const screen = await renderViewer();
+    expect(screen.getAllByText('A birthday memory').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Nora’s birthday, through the years')).toBeNull();
+  });
+
   it('waits on the intro until the explicit Start button begins unpaused playback', async () => {
     const screen = await renderViewer();
     expect(screen.queryByText('Tap to move · hold to pause')).toBeNull();
@@ -251,30 +285,30 @@ describe('LookingBackViewerScreen route integration', () => {
     expect(packagesValue.markPackageViewed).toHaveBeenCalledWith('package-1');
   });
 
-  it('prefetches the active and next image with the stable source cache key used for display', async () => {
-    jest.useRealTimers();
-    configurePlayback({ phase: 'playing' });
-    const illustratedMemory = {
-      ...frame.memory,
-      id: 'memory-1',
-      memory_type: 'text_illustration',
-      illustration_key: 'family-1/illustrations/memory-1.png',
-      illustration_status: 'ready',
-    };
-    const packageWithIllustration = { ...item, memories: [illustratedMemory, ...item.memories.slice(1)] };
-    sessionValue.packageSnapshot = { ...sessionValue.packageSnapshot, value: packageWithIllustration };
-    packagesValue = { ...packagesValue, viewerPackages: [packageWithIllustration], packages: [packageWithIllustration] };
-    mockMediaUrls = { 'family-1/illustrations/memory-1.png': 'https://signed.example/memory-1.png' };
+  it('wires the complete package, playback phase, and current frame to the viewer-scoped warm-up', async () => {
+    const screen = await renderViewer();
 
-    await renderViewer();
-    await act(async () => { await Promise.resolve(); });
-    expect(mockUseMediaUrls).toHaveBeenCalledWith(
-      expect.arrayContaining(['family-1/illustrations/memory-1.png']),
-      undefined,
-    );
-    expect(mockImageLoadAsync).toHaveBeenCalledWith({
-      uri: 'https://signed.example/memory-1.png',
-      cacheKey: 'family-1/illustrations/memory-1.png',
+    expect(latestWarmupOptions).toEqual({
+      frames: latestPlaybackOptions.frames,
+      phase: 'intro',
+      frameIndex: 0,
+      foregroundGeneration: 0,
+    });
+
+    playbackState = { ...playbackState, phase: 'playing', frameIndex: 1 };
+    await screen.rerenderAsync(viewerTree());
+
+    expect(latestWarmupOptions).toEqual({
+      frames: latestPlaybackOptions.frames,
+      phase: 'playing',
+      frameIndex: 1,
+      foregroundGeneration: 0,
+    });
+    expect(latestVideoPreloadOptions).toEqual({
+      frames: latestPlaybackOptions.frames,
+      phase: 'playing',
+      frameIndex: 1,
+      foregroundGeneration: 0,
     });
   });
 
@@ -475,6 +509,14 @@ describe('LookingBackViewerScreen route integration', () => {
     expect(pause.mock.invocationCallOrder.at(-1)).toBeLessThan(sessionValue.saveCheckpoint.mock.invocationCallOrder.at(-1)!);
   });
 
+  it('bumps the media warm-up generation when returning to the foreground', async () => {
+    await renderViewer();
+    act(() => mockAppStateListener?.('active'));
+
+    expect(latestWarmupOptions.foregroundGeneration).toBe(1);
+    expect(latestVideoPreloadOptions.foregroundGeneration).toBe(1);
+  });
+
   it('uses the one reverse-close path exactly once, even during intro or native Back', async () => {
     jest.useRealTimers();
     const screen = await renderViewer();
@@ -555,6 +597,34 @@ describe('LookingBackViewerScreen route integration', () => {
     };
     const screen = await renderViewer();
     expect(screen.getByText('That was 4 memories from Enzo at 1.')).toBeTruthy();
+  });
+
+  it('preserves a birthday member name in the package-name completion copy', async () => {
+    configurePlayback({ phase: 'complete' });
+    const birthdayPackage = {
+      ...item,
+      packageType: 'member_birthday',
+      title: 'Nora’s birthday, through the years',
+    };
+    packagesValue = { ...packagesValue, viewerPackages: [birthdayPackage], packages: [birthdayPackage] };
+    sessionValue = {
+      ...sessionValue,
+      packageSnapshot: { ...sessionValue.packageSnapshot, value: birthdayPackage },
+    };
+    const screen = await renderViewer();
+    expect(screen.getByText('That was 4 memories from Nora’s birthday, through the years.')).toBeTruthy();
+  });
+
+  it('lowercases a generic reported-subject title in completion copy', async () => {
+    configurePlayback({ phase: 'complete' });
+    const genericBirthdayPackage = { ...item, packageType: 'member_birthday', title: 'A birthday memory' };
+    packagesValue = { ...packagesValue, viewerPackages: [genericBirthdayPackage], packages: [genericBirthdayPackage] };
+    sessionValue = {
+      ...sessionValue,
+      packageSnapshot: { ...sessionValue.packageSnapshot, value: genericBirthdayPackage },
+    };
+    const screen = await renderViewer();
+    expect(screen.getByText('That was 4 memories from a birthday memory.')).toBeTruthy();
   });
 
   it('keeps leading From titles grammatical in completion copy', async () => {

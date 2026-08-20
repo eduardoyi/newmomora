@@ -10,8 +10,18 @@ import {
 } from '@/hooks/use-pending-memory-uploads';
 import { memoriesQueryKey, memoriesQueryKeyBase, calendarMemoriesQueryKeyBase } from '@/hooks/queryKeys';
 import { fetchLinkPreviews } from '@/services/ai';
-import { runMediaPhotoEmotionAnalysis, type MemoriesPage, type MemoryWithTags } from '@/services/memories';
-import { notifyFamilyActivityFireAndForget, postMediaMemory } from '@/services/memory-posting';
+import {
+  patchAudioDescriptionIfEmpty,
+  runAudioEmotionAnalysis,
+  runMediaPhotoEmotionAnalysis,
+  type MemoriesPage,
+  type MemoryWithTags,
+} from '@/services/memories';
+import {
+  notifyFamilyActivityFireAndForget,
+  postAudioMemory,
+  postMediaMemory,
+} from '@/services/memory-posting';
 import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 
 jest.mock('@/hooks/use-auth', () => ({
@@ -28,13 +38,17 @@ jest.mock('@/services/ai', () => ({
 
 jest.mock('@/services/memories', () => ({
   runMediaPhotoEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
+  runAudioEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
+  patchAudioDescriptionIfEmpty: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('@/services/memory-posting', () => ({
   postMediaMemory: jest.fn(),
+  postAudioMemory: jest.fn(),
   notifyFamilyActivityFireAndForget: jest.fn(),
   hasImageMediaAsset: (assets: { contentType: string }[]) =>
     assets.some((asset) => !asset.contentType.startsWith('video/')),
+  isAudioUploadInput: (input: { kind?: string }) => input?.kind === 'audio',
 }));
 
 jest.mock('@/services/share-card', () => ({
@@ -44,6 +58,7 @@ jest.mock('@/services/share-card', () => ({
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedPostMediaMemory = postMediaMemory as jest.MockedFunction<typeof postMediaMemory>;
+const mockedPostAudioMemory = postAudioMemory as jest.MockedFunction<typeof postAudioMemory>;
 const mockedNotify = notifyFamilyActivityFireAndForget as jest.MockedFunction<
   typeof notifyFamilyActivityFireAndForget
 >;
@@ -53,6 +68,12 @@ const mockedWarmShareCard = warmShareCardForMemoryFireAndForget as jest.MockedFu
 const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.MockedFunction<
   typeof runMediaPhotoEmotionAnalysis
 >;
+const mockedRunAudioEmotionAnalysis = runAudioEmotionAnalysis as jest.MockedFunction<
+  typeof runAudioEmotionAnalysis
+>;
+const mockedPatchAudioDescriptionIfEmpty = patchAudioDescriptionIfEmpty as jest.MockedFunction<
+  typeof patchAudioDescriptionIfEmpty
+>;
 const mockedFetchLinkPreviews = fetchLinkPreviews as jest.MockedFunction<typeof fetchLinkPreviews>;
 
 const photoInput = {
@@ -61,6 +82,20 @@ const photoInput = {
     { mediaAssetId: 'asset-1', fileUri: 'file:///photo.jpg', contentType: 'image/jpeg' },
   ],
   memoryDate: '2026-07-12',
+  taggedMemberIds: [],
+};
+
+const audioInput = {
+  kind: 'audio' as const,
+  memoryId: 'memory-audio-1',
+  clip: {
+    fileUri: 'file:///recording.m4a',
+    durationMs: 4200,
+    contentType: 'audio/mp4',
+  },
+  content: 'Mia singing in the bath',
+  audioTranscript: 'twinkle twinkle little star',
+  memoryDate: '2026-08-19',
   taggedMemberIds: [],
 };
 
@@ -610,6 +645,406 @@ describe('usePendingMemoryUploads', () => {
         refetchType: 'none',
       });
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: [calendarMemoriesQueryKeyBase] });
+    });
+  });
+
+  // docs/plans/audio-memories-v1.md P2.4: audio shares the same
+  // pending/failed/retry/discard lifecycle as media, but routes through
+  // postAudioMemory and the text-classifier emotion kick instead of the
+  // photo/vision one.
+  describe('audio uploads', () => {
+    it('tracks a pending audio upload with the clip as its preview, and removes it once posting succeeds', async () => {
+      let resolvePost: (memory: unknown) => void = () => {};
+      mockedPostAudioMemory.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolvePost = resolve as typeof resolvePost;
+          }) as ReturnType<typeof postAudioMemory>,
+      );
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(audioInput);
+      });
+
+      expect(result.current.uploads).toHaveLength(1);
+      expect(result.current.uploads[0]).toMatchObject({
+        memoryId: 'memory-audio-1',
+        status: 'posting',
+        totalAssets: 1,
+        uploadedAssets: 0,
+        previewUri: 'file:///recording.m4a',
+        previewContentType: 'audio/mp4',
+      });
+
+      act(() => {
+        resolvePost({ id: 'memory-audio-1', content: 'Mia singing in the bath', audio_transcript: 'twinkle twinkle little star' });
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads).toHaveLength(0);
+      });
+      expect(mockedPostMediaMemory).not.toHaveBeenCalled();
+    });
+
+    it('kicks the text-path emotion analysis (never the photo/vision one) when content or transcript is analyzable', async () => {
+      mockedPostAudioMemory.mockResolvedValue({
+        id: 'memory-audio-1',
+        content: 'Mia singing in the bath',
+        audio_transcript: 'twinkle twinkle little star',
+      } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(audioInput);
+      });
+
+      await waitFor(() => {
+        expect(mockedRunAudioEmotionAnalysis).toHaveBeenCalledWith('memory-audio-1');
+      });
+      expect(mockedRunMediaPhotoEmotionAnalysis).not.toHaveBeenCalled();
+    });
+
+    it('skips the emotion kick entirely when both content and transcript are empty (server no-ops it, but the call is still wasted)', async () => {
+      mockedPostAudioMemory.mockResolvedValue({
+        id: 'memory-audio-empty',
+        content: null,
+        audio_transcript: null,
+      } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue({
+          ...audioInput,
+          memoryId: 'memory-audio-empty',
+          content: null,
+          audioTranscript: null,
+        });
+      });
+
+      await waitFor(() => {
+        expect(mockedNotify).toHaveBeenCalledWith('memory-audio-empty');
+      });
+      expect(mockedRunAudioEmotionAnalysis).not.toHaveBeenCalled();
+      expect(mockedRunMediaPhotoEmotionAnalysis).not.toHaveBeenCalled();
+    });
+
+    it('does not warm the share card for an audio memory (compose-share-card rejects audio in v1)', async () => {
+      mockedPostAudioMemory.mockResolvedValue({
+        id: 'memory-audio-1',
+        content: 'Mia singing in the bath',
+        audio_transcript: null,
+      } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(audioInput);
+      });
+
+      await waitFor(() => {
+        expect(mockedNotify).toHaveBeenCalledWith('memory-audio-1');
+      });
+      expect(mockedWarmShareCard).not.toHaveBeenCalled();
+    });
+
+    // Cross-seam ordering bug fix: the memories row only exists once
+    // postAudioMemory's insert resolves, which typically happens AFTER the
+    // composer's in-flight transcription. Firing patchAudioDescriptionIfEmpty
+    // directly off the transcription promise (bypassing the queue) would
+    // race that insert -- a zero-row UPDATE succeeds silently, permanently
+    // losing the description/transcript. The queue must own this ordering.
+    describe('pendingTranscription backfill (ordering fix)', () => {
+      it('patches the backfill after post success even when transcription resolved BEFORE the post did', async () => {
+        // Transcription already resolved by the time enqueue() is called --
+        // the promise is already settled, but the queue must still wait for
+        // postAudioMemory's own insert before chaining onto it.
+        const pendingTranscription = Promise.resolve({
+          cleanedText: 'twinkle twinkle little star',
+          description: 'Mia singing in the bath',
+        });
+        mockedPostAudioMemory.mockResolvedValue({ id: 'memory-audio-1' } as never);
+
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue({ ...audioInput, pendingTranscription });
+        });
+
+        await waitFor(() => {
+          expect(result.current.uploads).toHaveLength(0);
+        });
+        await waitFor(() => {
+          expect(mockedPatchAudioDescriptionIfEmpty).toHaveBeenCalledWith('memory-audio-1', {
+            description: 'Mia singing in the bath',
+            transcript: 'twinkle twinkle little star',
+          });
+        });
+      });
+
+      it('patches the backfill after post success when transcription resolves AFTER the post did', async () => {
+        let resolveTranscription: (
+          value: { cleanedText: string; description: string } | null,
+        ) => void = () => {};
+        const pendingTranscription = new Promise<{ cleanedText: string; description: string } | null>(
+          (resolve) => {
+            resolveTranscription = resolve;
+          },
+        );
+        mockedPostAudioMemory.mockResolvedValue({ id: 'memory-audio-1' } as never);
+
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue({ ...audioInput, pendingTranscription });
+        });
+
+        // Post already succeeded (row exists); transcription is still in flight.
+        await waitFor(() => {
+          expect(result.current.uploads).toHaveLength(0);
+        });
+        expect(mockedPatchAudioDescriptionIfEmpty).not.toHaveBeenCalled();
+
+        act(() => {
+          resolveTranscription({
+            cleanedText: 'twinkle twinkle little star',
+            description: 'Mia singing in the bath',
+          });
+        });
+
+        await waitFor(() => {
+          expect(mockedPatchAudioDescriptionIfEmpty).toHaveBeenCalledWith('memory-audio-1', {
+            description: 'Mia singing in the bath',
+            transcript: 'twinkle twinkle little star',
+          });
+        });
+      });
+
+      it('normalizes an empty description/transcript result to NULL rather than empty string', async () => {
+        const pendingTranscription = Promise.resolve({ cleanedText: '   ', description: '' });
+        mockedPostAudioMemory.mockResolvedValue({ id: 'memory-audio-1' } as never);
+
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue({ ...audioInput, pendingTranscription });
+        });
+
+        await waitFor(() => {
+          expect(mockedPatchAudioDescriptionIfEmpty).toHaveBeenCalledWith('memory-audio-1', {
+            description: null,
+            transcript: null,
+          });
+        });
+      });
+
+      it('never patches when the transcription result resolves to null (unusable speech)', async () => {
+        const pendingTranscription = Promise.resolve(null);
+        mockedPostAudioMemory.mockResolvedValue({ id: 'memory-audio-1' } as never);
+
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue({ ...audioInput, pendingTranscription });
+        });
+
+        await waitFor(() => {
+          expect(result.current.uploads).toHaveLength(0);
+        });
+        // Give the already-resolved promise's .then a turn to run.
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(mockedPatchAudioDescriptionIfEmpty).not.toHaveBeenCalled();
+      });
+
+      it('a rejected pendingTranscription does not break the post or throw unhandled', async () => {
+        const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const pendingTranscription = Promise.reject(new Error('transcription network failure'));
+        mockedPostAudioMemory.mockResolvedValue({ id: 'memory-audio-1' } as never);
+
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue({ ...audioInput, pendingTranscription });
+        });
+
+        // The post itself still succeeds -- the queue never awaits this promise.
+        await waitFor(() => {
+          expect(result.current.uploads).toHaveLength(0);
+        });
+
+        await waitFor(() => {
+          expect(consoleWarnSpy).toHaveBeenCalledWith(
+            'pendingTranscription failed; audio memory keeps its save-time description/transcript',
+            'memory-audio-1',
+            'transcription network failure',
+          );
+        });
+        expect(mockedPatchAudioDescriptionIfEmpty).not.toHaveBeenCalled();
+
+        consoleWarnSpy.mockRestore();
+      });
+
+      it('never patches after a failed post is discarded (discard is only ever exposed for a failed card)', async () => {
+        // The queue exposes discard() for a 'failed' card (see the existing
+        // "discards a failed upload" test) -- there is no discard affordance
+        // while still 'posting'. On a rejected post, control never reaches
+        // the pendingTranscription-chaining code below (it's inside the try
+        // block, after the now-thrown `await postAudioMemory(...)`), so the
+        // patch can never fire regardless of discard; this test protects
+        // that invariant explicitly rather than relying on it implicitly.
+        mockedPostAudioMemory.mockRejectedValue(new Error('network down'));
+        const pendingTranscription = Promise.resolve({
+          cleanedText: 'twinkle twinkle little star',
+          description: 'Mia singing in the bath',
+        });
+
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue({ ...audioInput, pendingTranscription });
+        });
+
+        await waitFor(() => {
+          expect(result.current.uploads[0]?.status).toBe('failed');
+        });
+
+        act(() => {
+          result.current.discard('memory-audio-1');
+        });
+
+        expect(result.current.uploads).toHaveLength(0);
+
+        // Give the already-resolved pendingTranscription a turn regardless.
+        await act(async () => {
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+
+        expect(mockedPatchAudioDescriptionIfEmpty).not.toHaveBeenCalled();
+      });
+
+      it('media (non-audio) inputs are entirely unaffected -- patchAudioDescriptionIfEmpty is never invoked', async () => {
+        mockedPostMediaMemory.mockResolvedValue({ id: 'memory-1' } as never);
+
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue(photoInput);
+        });
+
+        await waitFor(() => {
+          expect(result.current.uploads).toHaveLength(0);
+        });
+        expect(mockedPatchAudioDescriptionIfEmpty).not.toHaveBeenCalled();
+      });
+    });
+
+    it('marks the audio upload failed and supports retrying it', async () => {
+      mockedPostAudioMemory
+        .mockRejectedValueOnce(new Error('network down'))
+        .mockResolvedValueOnce({ id: 'memory-audio-1' } as never);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(audioInput);
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads[0]).toMatchObject({
+          status: 'failed',
+          errorMessage: 'network down',
+          isNetworkFailure: true,
+        });
+      });
+
+      act(() => {
+        result.current.retry('memory-audio-1');
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads).toHaveLength(0);
+      });
+      expect(mockedPostAudioMemory).toHaveBeenCalledTimes(2);
+    });
+
+    it('discards a failed audio upload', async () => {
+      mockedPostAudioMemory.mockRejectedValue(new Error('network down'));
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(audioInput);
+      });
+
+      await waitFor(() => {
+        expect(result.current.uploads[0]?.status).toBe('failed');
+      });
+
+      act(() => {
+        result.current.discard('memory-audio-1');
+      });
+
+      expect(result.current.uploads).toHaveLength(0);
+    });
+
+    // Workstream A4b / P2.4: the audio path shares the exact same
+    // memory-cache prepend helper as media -- no new query shapes.
+    describe('cache wiring', () => {
+      function buildInfiniteMemoriesData(memories: MemoryWithTags[]): InfiniteData<MemoriesPage> {
+        return { pages: [{ memories, nextCursor: null }], pageParams: [null] };
+      }
+
+      it('prepends the posted audio memory into the timeline cache without waiting on a refetch', async () => {
+        const existing = {
+          id: 'existing-1',
+          memory_type: 'text_only',
+          memory_date: '2026-08-10',
+          created_at: '2026-08-10T00:00:00Z',
+          taggedMembers: [],
+          mediaAssets: [],
+        } as unknown as MemoryWithTags;
+        const posted = {
+          id: 'memory-audio-1',
+          memory_type: 'audio',
+          memory_date: '2026-08-19',
+          created_at: '2026-08-19T00:00:00Z',
+          content: 'Mia singing in the bath',
+          audio_transcript: 'twinkle twinkle little star',
+          taggedMembers: [],
+          mediaAssets: [],
+        } as unknown as MemoryWithTags;
+        mockedPostAudioMemory.mockResolvedValue(posted);
+
+        const queryClient = new QueryClient({
+          defaultOptions: {
+            queries: { gcTime: Infinity, retry: false },
+            mutations: { gcTime: Infinity, retry: false },
+          },
+        });
+        queryClient.setQueryData(memoriesQueryKey('family-1'), buildInfiniteMemoriesData([existing]));
+
+        const { result } = renderHook(() => usePendingMemoryUploads(), {
+          wrapper: createWrapperWithClient(queryClient),
+        });
+
+        act(() => {
+          result.current.enqueue(audioInput);
+        });
+
+        await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+        const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey('family-1'));
+        expect(list?.pages[0]?.memories.map((m) => m.id)).toEqual([
+          'memory-audio-1',
+          'existing-1',
+        ]);
+      });
     });
   });
 

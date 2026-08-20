@@ -1,0 +1,34 @@
+appId: com.memora.app
+---
+# Editing an audio memory (docs/features/audio-memories.md): description,
+# tags, and date are editable; the clip itself never is. Chains off
+# create-audio-memory.yaml, which leaves the flow on that memory's detail
+# screen (playback hero visible) -- same composition pattern as
+# engagement/like-and-comment.yaml chaining off memories/create-memory.yaml.
+#
+# Authored, not executed in this pass (no bootable simulator in this
+# environment) -- validated against .maestro/flows conventions by eye. Runs
+# in the release device pass (P4.3).
+- runFlow: create-audio-memory.yaml
+- tapOn:
+    id: memory-detail-edit
+- extendedWaitUntil:
+    visible:
+      id: edit-memory-content
+    timeout: 15000
+# The clip itself renders recessed with no remove control on this screen --
+# confirm it's present (immutable), then edit only the description.
+- assertVisible:
+    id: edit-memory-audio-clip
+- tapOn:
+    id: edit-memory-content
+- inputText: "Giggling in the bath after bedtime"
+- tapOn:
+    id: edit-memory-save-btn
+- extendedWaitUntil:
+    notVisible:
+      id: edit-memory-content
+    timeout: 15000
+- extendedWaitUntil:
+    visible: "Giggling in the bath after bedtime"
+    timeout: 15000

@@ -424,16 +424,21 @@ overlap — is intentionally pixel-matched where satori's CSS subset allows it
   sync between `emoji.ts` and `upload-twemoji-assets.ts` — a version bump
   in one without the other silently makes every emoji miss.
 
-**What audio sharing would need** (audio memories are specced but unshipped
-— see [audio-memories.md](./audio-memories.md)): `compose-share-card`
-currently rejects `audio` explicitly with a friendly message
-(`isRejectedMemoryType`). A shareable audio "card" would need a genuinely
-different design — there's no waveform/audio rendering in satori's SVG
-model, and a share **sheet** target can't play back audio at all, so this
-would likely need a differently-composed static image (e.g. a waveform
-snapshot + the memory's description text) rather than reusing
-`SpreadCard`/`QuoteCard`. Treat it as a new card variant, not an extension of
-the photo/illustration path.
+**What audio sharing would need** (audio memories are now implemented,
+status `in-progress` — see [audio-memories.md](./audio-memories.md) — but
+sharing them is still explicitly rejected by design, not an oversight):
+`compose-share-card` rejects `audio` explicitly with a friendly message
+(`isRejectedMemoryType`, `400 unsupported_memory_type`). The client never
+even reaches that rejection in practice — the audio card/detail's
+`MemoryEngagementBar` is rendered with `enableShare={false}`, hiding the
+share affordance entirely, and `warmShareCardForMemoryFireAndForget` returns
+early for `memory_type === 'audio'` before ever attempting a warm. A
+shareable audio "card" would need a genuinely different design — there's no
+waveform/audio rendering in satori's SVG model, and a share **sheet** target
+can't play back audio at all, so this would likely need a
+differently-composed static image (e.g. a waveform snapshot + the memory's
+description text) rather than reusing `SpreadCard`/`QuoteCard`. Treat it as a
+new card variant, not an extension of the photo/illustration path.
 
 ## Constraints & gotchas
 

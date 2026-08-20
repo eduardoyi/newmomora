@@ -12,7 +12,7 @@ Memory journal for parents. Capture moments in text or voice; AI generates consi
 - **Child-first onboarding:** Nudge adding a child first; one family member required before journaling.
 - **Plain text memories** — no rich text in MVP. Pasted URLs are a display-level exception: rendered (non-editing) views show a fetched-title inline link (`(Title)`, falling back to the domain); storage (`memories.content`) and the editor both stay plain text. See [docs/features/inline-links.md](docs/features/inline-links.md).
 - **Memory tags are unlimited** for text-only and media memories. AI-illustrated memories support **max 6 tagged family members** (enforce in UI + backend).
-- **Voice:** Tap start/stop, 2-minute max; audio never persisted.
+- **Voice:** Tap start/stop, 2-minute max. Dictation ("Turn into text") transcribes and discards the audio — never persisted. Audio memories ("Keep the sound") are the one deliberate exception: the clip persists to private R2 as the memory artifact — see [docs/features/audio-memories.md](docs/features/audio-memories.md).
 - **Privacy:** Private storage, RLS everywhere, signed URLs for images, no public sharing in MVP.
 - **Account deletion:** 15-day grace period before hard delete.
 - **Illustration style:** Single token (`illustration_style: 'default'`) — extensible later.
@@ -156,7 +156,7 @@ Momora handles family and child data. Treat security as a feature, not an aftert
 - **Edge Functions:** Validate JWT on user-facing endpoints. Cron/scheduler endpoints require `CRON_SECRET` header.
 - **Input:** Validate and sanitize on server; enforce max 6 tags for illustrated memories and the 2-min voice limit server-side.
 - **Logging:** Never log memory content, transcripts, audio, or child PII in production. Log ids and status codes only.
-- **Voice:** Process audio in memory; discard after transcription — do not write to storage.
+- **Voice:** Dictation processes audio in memory and discards it after transcription — never written to storage. The one deliberate exception: "keep the sound" audio memories upload the clip to private R2 as the memory artifact (see [docs/features/audio-memories.md](docs/features/audio-memories.md)) — this is intentional, not a lapse of the no-persistence rule; don't "fix" it.
 - **Dependencies:** Prefer well-maintained Expo/Supabase packages; review new native deps for data collection.
 - **Family sharing:** invite codes (`family_invites.code`) are single-use, rate-limited secrets — never log raw codes. Shared-table RLS goes through the `is_family_member`/`has_family_role` security-definer helpers, not a hand-rolled join — and every role check must bind to one specific `family_id`, never "has this role somewhere" (a Family A manager must have zero authority in Family B). Definer RPCs (`create_family`, `create_family_invite`, `get_invite_redeemer`, `resolve-family-invite`, …) carry their own authorization inside the function body — don't weaken it when extending them. See [docs/features/family-sharing.md](docs/features/family-sharing.md).
 
@@ -201,8 +201,10 @@ Momora handles family and child data. Treat security as a feature, not an aftert
 ### Voice (`process-voice-memory`)
 
 - Send base64 audio + family member list for name-aware transcription.
-- Return `cleanedText` + `mentionedMemberIds`; user edits before save.
+- Family mode returns `cleanedText` + `mentionedMemberIds` + `description` (short AI caption for a kept clip; `''` when speech is unusable, never an error). Onboarding mode is unchanged — no `description`, no fork pre-auth.
+- User edits the result before save.
 - Reject audio > 2 minutes.
+- The function itself never persists audio — dictation discards the clip after transcription. A kept clip is uploaded separately via `upload-media`, not by this function. See [docs/features/audio-memories.md](docs/features/audio-memories.md).
 
 ### AI illustration pipeline
 

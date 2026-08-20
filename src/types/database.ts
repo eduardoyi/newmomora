@@ -2149,6 +2149,7 @@ export type Database = {
           package_type: string
           position: number
           recipe_identity: string
+          secondary_subject_family_member_id: string | null
           signature: string
           subject_family_member_id: string | null
           tint: string | null
@@ -2166,6 +2167,7 @@ export type Database = {
           package_type: string
           position: number
           recipe_identity: string
+          secondary_subject_family_member_id?: string | null
           signature: string
           subject_family_member_id?: string | null
           tint?: string | null
@@ -2183,6 +2185,7 @@ export type Database = {
           package_type?: string
           position?: number
           recipe_identity?: string
+          secondary_subject_family_member_id?: string | null
           signature?: string
           subject_family_member_id?: string | null
           tint?: string | null
@@ -2203,6 +2206,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "looking_back_packages_secondary_subject_family_fkey"
+            columns: ["secondary_subject_family_member_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id", "family_id"]
+          },
+          {
             foreignKeyName: "looking_back_packages_subject_family_fkey"
             columns: ["subject_family_member_id", "family_id"]
             isOneToOne: false
@@ -2213,6 +2223,7 @@ export type Database = {
       }
       memories: {
         Row: {
+          audio_transcript: string | null
           content: string | null
           created_at: string
           creation_source: string
@@ -2246,6 +2257,7 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          audio_transcript?: string | null
           content?: string | null
           created_at?: string
           creation_source?: string
@@ -2279,6 +2291,7 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          audio_transcript?: string | null
           content?: string | null
           created_at?: string
           creation_source?: string
@@ -3884,6 +3897,7 @@ export type Database = {
           package_type: string
           position: number
           refresh_after: string
+          secondary_subject_family_member_id: string
           subject_family_member_id: string
           tint: string
         }[]
@@ -4311,6 +4325,7 @@ export type Database = {
           package_type: string
           position: number
           refresh_after: string
+          secondary_subject_family_member_id: string
           subject_family_member_id: string
           tint: string
         }[]

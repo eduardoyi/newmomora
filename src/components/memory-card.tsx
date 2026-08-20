@@ -2,12 +2,16 @@ import { Image } from 'expo-image';
 import { memo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { seedFromKey } from '@/components/audio/audio-seed';
+import { StubBand } from '@/components/audio/stub-band';
+import { StubTear } from '@/components/audio/stub-tear';
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
+import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import type { MemoryWithTags } from '@/services/memories';
 import { toLinkPreviewMap } from '@/utils/links';
@@ -16,6 +20,8 @@ import {
   formatMemoryExcerpt,
   getIllustrationStatusLabel,
   isIllustrationInProgress,
+  isKnownMemoryType,
+  UNSUPPORTED_MEMORY_TYPE_NOTICE,
   type IllustrationStatus,
 } from '@/utils/memories';
 import { aspectRatioFromDimensions, clampMediaAspectRatio } from '@/utils/media-aspect';
@@ -355,6 +361,127 @@ function QuoteCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
   );
 }
 
+// ── Sound card (audio) ─────────────────────────────────────────────────────────
+// The ticket-stub/inked-trace/wax-seal keepsake (design handoff: SoundCard,
+// audio-kit.jsx's StubBand/StubTear) in place of SpreadCard's 4:3 visual --
+// the rest of the shipped chrome (engagement row, caption, CardFooter) is
+// unchanged, so this reuses those exact styles rather than duplicating them.
+// No AI illustration, no media carousel, no share (server rejects it in v1
+// -- docs/features/audio-memories.md).
+function SoundCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
+  const clipAsset = memory.mediaAssets[0] ?? null;
+  const clipKey = clipAsset?.object_key ?? memory.media_key ?? null;
+  const { url: clipUrl } = useMediaUrl(clipKey, memory.updated_at);
+  const clip = useAudioClipPlayback(clipUrl);
+  // Duration comes from the DB row, not the playback hook -- the hook's own
+  // `duration` is 0 until the player has actually loaded the clip, but the
+  // card must show the real total immediately, before any tap (mirrors
+  // ClipChip's `durationSeconds` prop in the composer, which is likewise
+  // supplied from known metadata rather than derived from playback state).
+  const durationSeconds = (clipAsset?.duration_ms ?? 0) / 1000;
+  const excerpt = memory.content
+    ? formatMemoryExcerpt(memory.content, 140, toLinkPreviewMap(memory.link_previews))
+    : null;
+  const handlePress = () => onPress(memory.id);
+  const handleOpenComments = () => onOpenComments(memory.id);
+  const handleToggle = () => void clip.toggle();
+  const handleSeek = (fraction: number) => void clip.seekTo(fraction);
+
+  return (
+    <View style={styles.card} testID={`memory-card-${memory.id}`}>
+      <StubBand
+        durationSeconds={durationSeconds}
+        emotion={memory.emotion}
+        onPress={handlePress}
+        onSeek={handleSeek}
+        onToggle={handleToggle}
+        playing={clip.playing}
+        positionSeconds={clip.position}
+        progress={clip.progress}
+        seed={seedFromKey(memory.id)}
+        testID={`memory-card-${memory.id}-stub`}
+      />
+      <StubTear cardColor={colors.white} />
+      <View style={styles.engagementWrap}>
+        <MemoryEngagementBar
+          memory={memory}
+          onOpenComments={handleOpenComments}
+          iconSize={23}
+          enableShare={false}
+          currentMediaAssetId={null}
+        />
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        onPress={handlePress}
+        style={({ pressed }) => pressed && styles.cardPressed}
+        testID={`memory-card-content-${memory.id}`}
+      >
+        {excerpt ? (
+          <View style={styles.captionWrap}>
+            <Text style={styles.caption} numberOfLines={3}>{excerpt}</Text>
+          </View>
+        ) : null}
+        <CardFooter memory={memory} />
+      </Pressable>
+    </View>
+  );
+}
+
+// ── Unknown-type card (forward-compat fallback, P0.1) ─────────────────────────
+// Renders any `memory_type` this build doesn't recognize yet (e.g. an old
+// installed client fetching a future `'audio'` row before it has updated --
+// docs/plans/audio-memories-v1.md). Deliberately built on the text-style
+// shell rather than falling through to SpreadCard's illustration/media
+// branches, which would otherwise render an empty gray placeholder box with
+// no caption and no explanation. No image area, no shimmer, and no
+// tap-to-open-viewer affordance beyond the normal card press to detail.
+function UnknownTypeCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
+  const emo = getEmotionColors(memory.emotion);
+  const excerpt = memory.content
+    ? formatMemoryExcerpt(memory.content, 120, toLinkPreviewMap(memory.link_previews))
+    : '';
+  const handlePress = () => onPress(memory.id);
+  const handleOpenComments = () => onOpenComments(memory.id);
+
+  return (
+    <View style={styles.card} testID={`memory-card-${memory.id}`}>
+      {emo && <View style={[styles.quoteAccent, { backgroundColor: emo.soft }]} />}
+      <Pressable
+        accessibilityRole="button"
+        onPress={handlePress}
+        style={({ pressed }) => pressed && styles.cardPressed}
+        testID={`memory-card-content-${memory.id}`}
+      >
+        <View style={styles.quoteBody}>
+          {excerpt ? (
+            <Text style={styles.quoteText} numberOfLines={4}>{excerpt}</Text>
+          ) : (
+            <Text
+              style={styles.unavailableNotice}
+              testID={`memory-card-${memory.id}-unavailable`}
+            >
+              {UNSUPPORTED_MEMORY_TYPE_NOTICE}
+            </Text>
+          )}
+        </View>
+      </Pressable>
+      <View style={styles.engagementWrapQuote}>
+        <MemoryEngagementBar
+          memory={memory}
+          onOpenComments={handleOpenComments}
+          iconSize={23}
+          enableShare={false}
+          currentMediaAssetId={null}
+        />
+      </View>
+      <Pressable accessibilityRole="button" onPress={handlePress}>
+        <CardFooter memory={memory} />
+      </Pressable>
+    </View>
+  );
+}
+
 // Memoized (Workstream B1): the timeline list can hold hundreds of loaded
 // rows across pages, and without this every unrelated re-render of the
 // parent FlatList (e.g. a single card's video-active flag toggling) would
@@ -370,8 +497,14 @@ export const MemoryCard = memo(function MemoryCard({
   isIllustrationHidden,
   onShowIllustration,
 }: MemoryCardProps) {
+  if (!isKnownMemoryType(memory.memory_type)) {
+    return <UnknownTypeCard memory={memory} onPress={onPress} onOpenComments={onOpenComments} />;
+  }
   if (memory.memory_type === 'text_only') {
     return <QuoteCard memory={memory} onPress={onPress} onOpenComments={onOpenComments} />;
+  }
+  if (memory.memory_type === 'audio') {
+    return <SoundCard memory={memory} onPress={onPress} onOpenComments={onOpenComments} />;
   }
   return (
     <SpreadCard
@@ -472,6 +605,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     lineHeight: 1.28 * 22,
     color: colors.ink,
+  },
+  unavailableNotice: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 14,
+    lineHeight: 1.4 * 14,
+    color: colors.ink3,
   },
   // Footer
   footer: {

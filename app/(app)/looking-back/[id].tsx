@@ -1,6 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useNavigation, router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-import { Image } from 'expo-image';
 import { StatusBar } from 'expo-status-bar';
 import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Layers3, Volume2, VolumeX, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -16,17 +15,22 @@ import { LookingBackCoverArtwork } from '@/components/looking-back/cover-artwork
 import { fonts, getEmotionColors } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useContentSafety } from '@/hooks/useContentSafety';
-import { useLookingBackPackages, type LookingBackPackageWithMemories } from '@/hooks/useLookingBackPackages';
+import {
+  useLookingBackPackages,
+  type LookingBackPackageWithMemories,
+  type LookingBackTaggedMember,
+} from '@/hooks/useLookingBackPackages';
+import { useLookingBackMediaWarmup } from '@/hooks/useLookingBackMediaWarmup';
+import { useLookingBackVideoPreload } from '@/hooks/useLookingBackVideoPreload';
 import { useLookingBackPlayback } from '@/hooks/useLookingBackPlayback';
 import { useLookingBackSession, type LookingBackCheckpoint, type LookingBackSourceGeometry } from '@/hooks/useLookingBackSession';
-import { useMediaUrls } from '@/hooks/useMediaUrls';
 import { memoryDetailRoute, timelineRoute } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
 import type { LookingBackPackageType } from '@/services/looking-back';
 import { buildLookingBackChapters, flattenLookingBackFrames } from '@/utils/looking-back-frames';
 import { formatDisplayDate } from '@/utils/memories';
 import { formatAgeCompactFromDob } from '@/utils/family-members';
-import { mediaImageSource } from '@/utils/media-image-source';
+import { resolveMemoryTagPortraits } from '@/utils/portrait-versions';
 
 const MAT = '#1B1610';
 
@@ -96,7 +100,16 @@ export default function LookingBackViewerScreen() {
     isLoading: isContentSafetyLoading,
     isError: isContentSafetyError,
   } = useContentSafety();
-  const { viewerPackages, packages, dailySetId, isSuccess: isLookingBackLoaded, markPackageViewed, markPackageCompleted } = useLookingBackPackages();
+  const {
+    viewerPackages,
+    packages,
+    dailySetId,
+    isPortraitDataUnavailable = false,
+    portraitVersions = [],
+    isSuccess: isLookingBackLoaded,
+    markPackageViewed,
+    markPackageCompleted,
+  } = useLookingBackPackages();
   const { checkpoint, packageSnapshot, saveCheckpoint, savePackageSnapshot, reconcilePackageMemories, clearCheckpoint } = useLookingBackSession();
   const liveViewerItem = useMemo(() => viewerPackages.find((candidate) => candidate.id === id) ?? null, [id, viewerPackages]);
   const snapshotItem = packageSnapshot?.packageId === id && packageSnapshot.familyId === familyId ? packageSnapshot.value : null;
@@ -115,10 +128,18 @@ export default function LookingBackViewerScreen() {
   // a reported person's name on every render.
   const item = useMemo(() => {
     if (!rawItem) return null;
-    const safeMemories = rawItem.memories
+    const subjectIds = [rawItem.subjectFamilyMemberId, rawItem.secondarySubjectFamilyMemberId]
+      .filter((memberId): memberId is string => Boolean(memberId));
+    const portraitResolvedMemories = resolveMemoryTagPortraits(rawItem.memories, portraitVersions);
+    const safeMemories = portraitResolvedMemories
       .filter((memory) => !isTargetReported('memory', memory.id) && !isUserBlocked(memory.user_id))
       .map((memory) => ({
       ...memory,
+      taggedMembers: memory.taggedMembers.map((member) => ({
+        ...member,
+        isLookingBackHidden: (isPortraitDataUnavailable && subjectIds.includes(member.id))
+          || (member as LookingBackTaggedMember).isLookingBackHidden,
+      })),
       // A frozen snapshot preserves the package identity, never a reported
       // illustration. Keep the written memory and let the frame builder use
       // its text fallback, matching useLookingBackPackages exactly.
@@ -128,18 +149,32 @@ export default function LookingBackViewerScreen() {
         memory.illustration_generation_id,
       ),
       }));
-    const subject = rawItem.subjectFamilyMemberId
-      ? safeMemories.flatMap((memory) => memory.taggedMembers).find((member) => member.id === rawItem.subjectFamilyMemberId)
-      : null;
-    const subjectHidden = Boolean(rawItem.subjectFamilyMemberId && (
-      isTargetReported('family_member_profile', rawItem.subjectFamilyMemberId)
-      || isTargetReported('family_member_portrait', subject?.resolvedPortraitVersion?.id)
-    ));
+    const taggedMembers = safeMemories.flatMap((memory) => memory.taggedMembers);
+    const subjectHidden = (isPortraitDataUnavailable && subjectIds.length > 0)
+      || subjectIds.some((memberId) => (
+        isTargetReported('family_member_profile', memberId)
+        || taggedMembers.some((member) => (
+          member.id === memberId
+          && isTargetReported('family_member_portrait', member.resolvedPortraitVersion?.id)
+        ))
+      ));
     const sanitizedItem = { ...rawItem, memories: safeMemories };
-    return subjectHidden && rawItem.packageType === 'member_at_age'
-      ? { ...sanitizedItem, title: 'A family memory' }
+    const shouldHideSubjectTitle = subjectHidden && (
+      rawItem.packageType === 'member_at_age'
+      || rawItem.packageType === 'member_birthday'
+      || rawItem.packageType === 'members_together'
+    );
+    return shouldHideSubjectTitle
+      ? {
+        ...sanitizedItem,
+        title: rawItem.packageType === 'member_birthday'
+          ? 'A birthday memory'
+          : rawItem.packageType === 'members_together'
+            ? 'A shared family memory'
+            : 'A family memory',
+      }
       : sanitizedItem;
-  }, [isTargetReported, isUserBlocked, rawItem]);
+  }, [isPortraitDataUnavailable, isTargetReported, isUserBlocked, portraitVersions, rawItem]);
   const chapters = useMemo(() => buildLookingBackChapters(item?.memories ?? []), [item?.memories]);
   const uncorrectedFrames = useMemo(() => flattenLookingBackFrames(chapters), [chapters]);
   const [videoDurations, setVideoDurations] = useState<Record<string, number>>({});
@@ -152,6 +187,7 @@ export default function LookingBackViewerScreen() {
   const didRecognizeHoldRef = useRef(false);
   const [stageWidth, setStageWidth] = useState(0);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
+  const [foregroundGeneration, setForegroundGeneration] = useState(0);
   const wasMarkedViewedRef = useRef(false);
   const wasCompletedRef = useRef(false);
   const insets = useSafeAreaInsets();
@@ -173,29 +209,8 @@ export default function LookingBackViewerScreen() {
     checkpointFor,
     progress,
   } = useLookingBackPlayback({ frames, checkpoint: validCheckpoint, isScreenReaderEnabled: screenReaderEnabled });
-  const prefetchFrames = useMemo(() => [frames[state.frameIndex], frames[state.frameIndex + 1]].filter((frame): frame is NonNullable<typeof frame> => Boolean(frame)), [frames, state.frameIndex]);
-  const prefetchKeys = useMemo(() => prefetchFrames.flatMap((frame) => {
-    const primaryKey = frame.kind === 'illustration' ? frame.memory.illustration_key : frame.asset?.object_key;
-    const previewKey = frame.kind === 'photo' || frame.kind === 'video' ? frame.asset?.preview_object_key : null;
-    return [...new Set([primaryKey, previewKey].filter((key): key is string => Boolean(key)))];
-  }), [prefetchFrames]);
-  const { data: prefetchUrls } = useMediaUrls(prefetchKeys, currentFrame?.memory.updated_at);
-  useEffect(() => {
-    for (const frame of prefetchFrames) {
-      const primaryKey = frame.kind === 'illustration' ? frame.memory.illustration_key : frame.asset?.object_key;
-      const previewKey = frame.kind === 'photo' || frame.kind === 'video' ? frame.asset?.preview_object_key : null;
-      // Do not prefetch raw video through expo-image. Its stored first-frame
-      // JPEG poster is safe to warm and avoids an empty VideoView while the
-      // active player prepares the real source.
-      const imageKeys = frame.kind === 'video' ? [previewKey] : [primaryKey, previewKey];
-      for (const key of [...new Set(imageKeys.filter((candidate): candidate is string => Boolean(candidate)))]) {
-        const url = prefetchUrls?.[key];
-        // Keep prefetch in the same stable cache slot StoryFrame uses. A
-        // signed URL alone becomes a different slot after the next R2 re-sign.
-        if (url) void Image.loadAsync(mediaImageSource(url, key)).catch(() => {});
-      }
-    }
-  }, [prefetchFrames, prefetchUrls]);
+  useLookingBackMediaWarmup({ frames, phase: state.phase, frameIndex: state.frameIndex, foregroundGeneration });
+  const videoPreload = useLookingBackVideoPreload({ frames, phase: state.phase, frameIndex: state.frameIndex, foregroundGeneration });
   const checkpointIdentityRef = useRef<Pick<LookingBackCheckpoint, 'familyId' | 'dailySetId' | 'packageId'> | null>(null);
 
   useEffect(() => {
@@ -255,7 +270,10 @@ export default function LookingBackViewerScreen() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') resume('background');
+      if (state === 'active') {
+        setForegroundGeneration((generation) => generation + 1);
+        resume('background');
+      }
       else {
         pause('background');
         saveLiveCheckpoint();
@@ -394,7 +412,7 @@ export default function LookingBackViewerScreen() {
     </SafeAreaView>
     {isIntro ? <Intro item={item} onStart={() => dispatch({ type: 'INTRO_COMPLETE' })} /> : isComplete ? <Completion item={item} onClose={close} onReplay={() => { replay(); void markPackageViewed(item.id); trackEvent('looking_back_package_replayed', packageTypeProperties(item)); }} /> : <>
       <Pressable accessibilityActions={[{ name: 'increment', label: 'Next memory' }, { name: 'decrement', label: 'Previous memory' }]} accessibilityLabel="Story navigation" accessibilityRole="adjustable" onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === 'increment') moveNext(); if (event.nativeEvent.actionName === 'decrement') movePrevious(); }} onLayout={(event) => { const { width: layoutWidth, height: layoutHeight } = event.nativeEvent.layout; setStageWidth(layoutWidth); setStageSize({ width: Math.max(0, layoutWidth - 36), height: Math.max(0, layoutHeight - 8) }); }} onPress={tapZone as never} onPressIn={onPressIn} onPressOut={onPressOut} style={styles.stage} testID="looking-back-stage">
-        {isUnavailable ? <StoryUnavailable /> : <StoryFrame frame={currentFrame!} isPaused={state.pauseReasons.length > 0} muted={state.isMuted} onBuffering={handleBuffering} onDuration={handleVideoDuration} onReady={handleFrameReady} onUnavailable={handleFrameUnavailable} stageSize={stageSize} />}
+        {isUnavailable ? <StoryUnavailable /> : <StoryFrame frame={currentFrame!} isPaused={state.pauseReasons.length > 0} muted={state.isMuted} onBuffering={handleBuffering} onDuration={handleVideoDuration} onReady={handleFrameReady} onUnavailable={handleFrameUnavailable} onVideoAttach={videoPreload.attachVideoPlayer} onVideoDetach={videoPreload.detachVideoPlayer} stageSize={stageSize} videoPlayer={videoPreload.currentPlayer} />}
       </Pressable>
       <Footer expanded={state.pauseReasons.includes('manual')} frame={currentFrame!} onOpen={openDetail} />
       {screenReaderEnabled ? <View style={styles.accessibleControls}>
@@ -424,7 +442,9 @@ function Completion({ item, onReplay, onClose }: { item: LookingBackPackageWithM
   const rawPackageName = item.title.replace(/^from\s+/i, '');
   // Keep proper names and date titles intact, while sentence-style archive
   // titles read naturally after “from” ("from a year ago", not "from A year ago").
-  const packageName = item.packageType === 'member_at_age' || hasLeadingFrom
+  const hasNameSensitiveTitle = (item.packageType === 'member_at_age' || item.packageType === 'member_birthday')
+    && !/^a\s+/i.test(rawPackageName);
+  const packageName = hasNameSensitiveTitle || hasLeadingFrom
     ? rawPackageName
     : `${rawPackageName.charAt(0).toLowerCase()}${rawPackageName.slice(1)}`;
   const memoryLabel = item.memories.length === 1 ? 'memory' : 'memories';
@@ -433,7 +453,8 @@ function Completion({ item, onReplay, onClose }: { item: LookingBackPackageWithM
 
 function Footer({ expanded, frame, onOpen }: { expanded: boolean; frame: NonNullable<ReturnType<typeof useLookingBackPlayback>['currentFrame']>; onOpen: () => void }) {
   const contentSafety = useContentSafety();
-  const members = frame.memory.taggedMembers.filter((member) => !contentSafety.isTargetReported('family_member_profile', member.id)
+  const members = frame.memory.taggedMembers.filter((member) => !(member as LookingBackTaggedMember).isLookingBackHidden
+    && !contentSafety.isTargetReported('family_member_profile', member.id)
     && !contentSafety.isTargetReported('family_member_portrait', member.resolvedPortraitVersion?.id));
   const member = members[0];
   const singleMemberAge = member?.date_of_birth ? formatAgeCompactFromDob(member.date_of_birth, new Date(`${frame.memory.memory_date}T12:00:00`)) : null;

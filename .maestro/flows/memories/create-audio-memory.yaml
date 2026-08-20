@@ -1,0 +1,57 @@
+appId: com.memora.app
+---
+# Audio memories (docs/features/audio-memories.md): record -> keep the sound
+# -> save with the AI description's babble-fallback placeholder (CI
+# simulators record silence, which is the intended empty-description
+# exercise -- see docs/plans/audio-memories-v1.md P4.2) -> timeline sound
+# card renders -> detail opens with playback controls.
+#
+# Authored, not executed in this pass (no bootable simulator in this
+# environment) -- validated against .maestro/flows conventions by eye. Runs
+# in the release device pass (P4.3).
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+- tapOn:
+    id: new-memory-voice-trigger
+- extendedWaitUntil:
+    visible:
+      id: voice-speak-it-mic
+    timeout: 10000
+- tapOn:
+    id: voice-speak-it-mic
+- extendedWaitUntil:
+    visible:
+      id: voice-speak-it-fork
+    timeout: 10000
+- tapOn:
+    id: voice-speak-it-keep-sound
+- extendedWaitUntil:
+    notVisible:
+      id: voice-speak-it-modal
+    timeout: 15000
+- assertVisible:
+    id: new-memory-audio-clip
+# The description field is left untouched -- silence produces an empty AI
+# description, so Save exercises the "Add a note about this sound"
+# placeholder path rather than a typed caption.
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    notVisible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
+- tapOn:
+    id: "memory-card-.*-stub"
+- extendedWaitUntil:
+    visible:
+      id: memory-detail-sound-seal
+    timeout: 15000
+- assertVisible:
+    id: memory-detail-sound-trace

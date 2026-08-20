@@ -154,6 +154,7 @@ describe('serializePersistedClient', () => {
       packageDate: '2026-08-08',
       packageType: 'archive_mix',
       subjectFamilyMemberId: null,
+      secondarySubjectFamilyMemberId: null,
       displayKind: 'From your archive',
       title: `Package ${packageIndex}`,
       subtitle: 'A collection of moments from this time of year',

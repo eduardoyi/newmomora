@@ -40,6 +40,7 @@ import {
   fetchMemoryById,
   regenerateMemoryIllustration,
   retryMemoryIllustration,
+  runAudioEmotionAnalysis,
   runMediaPhotoEmotionAnalysis,
   runTextOnlyEmotionAnalysis,
   searchMemories,
@@ -685,7 +686,9 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
       const analyze =
         memory.memory_type === 'media'
           ? runMediaPhotoEmotionAnalysis
-          : runTextOnlyEmotionAnalysis;
+          : memory.memory_type === 'audio'
+            ? runAudioEmotionAnalysis
+            : runTextOnlyEmotionAnalysis;
 
       // Patch the resolved emotion straight into the caches rather than
       // invalidating every memory query per analyzed memory.

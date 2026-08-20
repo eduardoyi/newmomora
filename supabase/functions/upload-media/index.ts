@@ -19,6 +19,14 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 // src/services/memory-posting.ts. Kept in sync by hand -- Deno edge
 // functions can't import from src/ -- so change both together.
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+// Audio memories "keep the sound" (docs/features/audio-memories.md, P0.2): a
+// 2-minute AAC clip at expo-audio's HIGH_QUALITY preset is ~1.9 MB. 5 MB is a
+// generous ceiling that still catches anything wildly oversized.
+const MAX_AUDIO_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+// Kept in sync by hand with MEMORY_MEDIA_CONTENT_TYPES's audio entries in
+// _shared/storage-keys.ts (that module doesn't export its content-type set).
+const AUDIO_CONTENT_TYPES = new Set(['audio/mp4', 'audio/m4a', 'audio/x-m4a']);
 
 function parseContentLength(value: string | null): number | null {
   if (!value) {
@@ -29,8 +37,16 @@ function parseContentLength(value: string | null): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function maxBytesForContentType(contentType: string): number {
-  return contentType.startsWith('image/') ? MAX_IMAGE_BYTES : MAX_UPLOAD_BYTES;
+export function maxBytesForContentType(contentType: string): number {
+  if (contentType.startsWith('image/')) {
+    return MAX_IMAGE_BYTES;
+  }
+
+  if (AUDIO_CONTENT_TYPES.has(contentType)) {
+    return MAX_AUDIO_UPLOAD_BYTES;
+  }
+
+  return MAX_UPLOAD_BYTES;
 }
 
 export async function handleUploadMedia(req: Request): Promise<Response> {

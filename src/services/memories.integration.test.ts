@@ -1,4 +1,5 @@
 import {
+  createAudioMemory,
   createMediaMemory,
   createMemory,
   deleteMemory,
@@ -9,6 +10,7 @@ import {
   fetchMemoriesByIds,
   fetchMemoryGenerationStatuses,
   fetchOldestMemoryDate,
+  patchAudioDescriptionIfEmpty,
   regenerateMemoryIllustration,
   retryMemoryIllustration,
   runMemoryIllustrationPipeline,
@@ -60,6 +62,7 @@ function createQueryBuilder(finalResult: QueryResult) {
   builder.eq = jest.fn(() => builder);
   builder.gte = jest.fn(() => builder);
   builder.in = jest.fn(() => builder);
+  builder.is = jest.fn(() => builder);
   builder.limit = jest.fn(() => builder);
   builder.lte = jest.fn(() => builder);
   builder.or = jest.fn(() => builder);
@@ -329,6 +332,550 @@ describe('memories service integration', () => {
       }],
     });
     expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
+  });
+
+  describe('createAudioMemory (docs/plans/audio-memories-v1.md P2.4)', () => {
+    function audioMemoryRow(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'memory-audio-1',
+        user_id: 'user-1',
+        family_id: 'family-1',
+        content: null,
+        memory_date: '2026-08-19',
+        memory_type: 'audio',
+        emotion: null,
+        illustration_key: null,
+        illustration_status: 'none',
+        illustration_prompt: null,
+        media_key: 'user-1/memories/memory-audio-1/media/clip.m4a',
+        media_content_type: 'audio/mp4',
+        audio_transcript: null,
+        created_at: '2026-08-19T00:00:00Z',
+        updated_at: '2026-08-19T00:00:00Z',
+        ...overrides,
+      };
+    }
+
+    it('inserts an audio memory row, normalizing whitespace-only content and transcript to NULL', async () => {
+      const memoryRow = audioMemoryRow();
+      const memoriesBuilder = createQueryBuilder({ data: memoryRow, error: null });
+      const tagsBuilder = createQueryBuilder({ data: [], error: null });
+      const mediaBuilder = createQueryBuilder({ data: [], error: null });
+
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return memoriesBuilder;
+        if (table === 'memory_family_members') return tagsBuilder;
+        if (table === 'memory_media') return mediaBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await createAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-audio-1',
+        content: '   ',
+        audioTranscript: '   ',
+        memoryDate: '2026-08-19',
+        taggedMemberIds: [],
+        clip: {
+          objectKey: 'user-1/memories/memory-audio-1/media/clip.m4a',
+          contentType: 'audio/mp4',
+          durationMs: 4200,
+        },
+      });
+
+      expect(result.error).toBeNull();
+      expect(memoriesBuilder.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          memory_type: 'audio',
+          content: null,
+          audio_transcript: null,
+          media_key: 'user-1/memories/memory-audio-1/media/clip.m4a',
+          media_content_type: 'audio/mp4',
+          illustration_status: 'none',
+        }),
+      );
+      expect(supabase.rpc).toHaveBeenCalledWith('replace_memory_media_assets', {
+        target_memory_id: 'memory-audio-1',
+        assets: [
+          {
+            objectKey: 'user-1/memories/memory-audio-1/media/clip.m4a',
+            contentType: 'audio/mp4',
+            durationMs: 4200,
+            aspectRatio: null,
+            previewObjectKey: null,
+          },
+        ],
+      });
+      expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
+    });
+
+    it('stores real, trimmed content and transcript untouched', async () => {
+      const memoryRow = audioMemoryRow({
+        content: 'Mia singing in the bath',
+        audio_transcript: 'twinkle twinkle little star',
+      });
+      const memoriesBuilder = createQueryBuilder({ data: memoryRow, error: null });
+      const tagsBuilder = createQueryBuilder({ data: [], error: null });
+      const mediaBuilder = createQueryBuilder({ data: [], error: null });
+
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return memoriesBuilder;
+        if (table === 'memory_family_members') return tagsBuilder;
+        if (table === 'memory_media') return mediaBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await createAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-audio-1',
+        content: '  Mia singing in the bath  ',
+        audioTranscript: '  twinkle twinkle little star  ',
+        memoryDate: '2026-08-19',
+        taggedMemberIds: [],
+        clip: {
+          objectKey: 'user-1/memories/memory-audio-1/media/clip.m4a',
+          contentType: 'audio/mp4',
+          durationMs: 4200,
+        },
+      });
+
+      expect(result.error).toBeNull();
+      expect(memoriesBuilder.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: 'Mia singing in the bath',
+          audio_transcript: 'twinkle twinkle little star',
+        }),
+      );
+    });
+
+    it('rolls back the uploaded clip when the tag insert fails', async () => {
+      const memoryRow = audioMemoryRow();
+      const memoriesBuilder = createQueryBuilder({ data: memoryRow, error: null });
+      const failingTagsBuilder = createQueryBuilder({
+        data: null,
+        error: { message: 'tag insert failed' },
+      });
+
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return memoriesBuilder;
+        if (table === 'memory_family_members') return failingTagsBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await createAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-audio-1',
+        content: null,
+        audioTranscript: null,
+        memoryDate: '2026-08-19',
+        taggedMemberIds: ['member-1'],
+        clip: {
+          objectKey: 'user-1/memories/memory-audio-1/media/clip.m4a',
+          contentType: 'audio/mp4',
+          durationMs: 4200,
+        },
+      });
+
+      expect(result.error?.message).toBe('tag insert failed');
+      expect(deleteStorageObject).toHaveBeenCalledWith(
+        'user-1/memories/memory-audio-1/media/clip.m4a',
+      );
+    });
+
+    it('rolls back the uploaded clip when the insert itself fails (non-conflict error)', async () => {
+      const failingInsertBuilder = createQueryBuilder({
+        data: null,
+        error: { message: 'insert failed', code: '23514' },
+      });
+
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return failingInsertBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await createAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-audio-1',
+        content: null,
+        audioTranscript: null,
+        memoryDate: '2026-08-19',
+        taggedMemberIds: [],
+        clip: {
+          objectKey: 'user-1/memories/memory-audio-1/media/clip.m4a',
+          contentType: 'audio/mp4',
+          durationMs: 4200,
+        },
+      });
+
+      expect(result.error?.message).toBe('insert failed');
+      expect(deleteStorageObject).toHaveBeenCalledWith(
+        'user-1/memories/memory-audio-1/media/clip.m4a',
+      );
+    });
+
+    it('repairs an orphaned audio memory row on a 23505 duplicate-key retry', async () => {
+      const insertBuilder = createQueryBuilder({
+        data: null,
+        error: { message: 'duplicate key value violates unique constraint', code: '23505' },
+      });
+      const orphanRow = audioMemoryRow();
+      const conflictFetchBuilder = createQueryBuilder({ data: orphanRow, error: null });
+      const tagsBuilder = createQueryBuilder({ data: [], error: null });
+      const emptyMediaBuilder = createQueryBuilder({ data: [], error: null });
+      const populatedMediaBuilder = createQueryBuilder({
+        data: [
+          {
+            id: 'asset-audio-1',
+            memory_id: 'memory-audio-1',
+            object_key: 'user-1/memories/memory-audio-1/media/clip.m4a',
+            content_type: 'audio/mp4',
+            duration_ms: 4200,
+            position: 0,
+            created_at: '2026-08-19T00:00:00Z',
+            updated_at: '2026-08-19T00:00:00Z',
+          },
+        ],
+        error: null,
+      });
+
+      let memoriesCall = 0;
+      let mediaCall = 0;
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') {
+          memoriesCall += 1;
+          return memoriesCall === 1 ? insertBuilder : conflictFetchBuilder;
+        }
+        if (table === 'memory_family_members') return tagsBuilder;
+        if (table === 'memory_media') {
+          mediaCall += 1;
+          return mediaCall === 1 ? emptyMediaBuilder : populatedMediaBuilder;
+        }
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await createAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-audio-1',
+        content: null,
+        audioTranscript: null,
+        memoryDate: '2026-08-19',
+        taggedMemberIds: [],
+        clip: {
+          objectKey: 'user-1/memories/memory-audio-1/media/clip.m4a',
+          contentType: 'audio/mp4',
+          durationMs: 4200,
+        },
+      });
+
+      expect(result.error).toBeNull();
+      expect(result.data?.id).toBe('memory-audio-1');
+      expect(result.data?.mediaAssets).toHaveLength(1);
+      expect(deleteStorageObject).not.toHaveBeenCalled();
+    });
+
+    it('returns the existing audio memory idempotently when a 23505 retry finds it already fully posted', async () => {
+      const insertBuilder = createQueryBuilder({
+        data: null,
+        error: { message: 'duplicate key value violates unique constraint', code: '23505' },
+      });
+      const postedRow = audioMemoryRow();
+      const conflictFetchBuilder = createQueryBuilder({ data: postedRow, error: null });
+      const tagsBuilder = createQueryBuilder({ data: [], error: null });
+      const mediaBuilder = createQueryBuilder({
+        data: [
+          {
+            id: 'asset-audio-1',
+            memory_id: 'memory-audio-1',
+            object_key: 'user-1/memories/memory-audio-1/media/clip.m4a',
+            content_type: 'audio/mp4',
+            duration_ms: 4200,
+            position: 0,
+            created_at: '2026-08-19T00:00:00Z',
+            updated_at: '2026-08-19T00:00:00Z',
+          },
+        ],
+        error: null,
+      });
+
+      let memoriesCall = 0;
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') {
+          memoriesCall += 1;
+          return memoriesCall === 1 ? insertBuilder : conflictFetchBuilder;
+        }
+        if (table === 'memory_family_members') return tagsBuilder;
+        if (table === 'memory_media') return mediaBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await createAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-audio-1',
+        content: null,
+        audioTranscript: null,
+        memoryDate: '2026-08-19',
+        taggedMemberIds: [],
+        clip: {
+          objectKey: 'user-1/memories/memory-audio-1/media/clip.m4a',
+          contentType: 'audio/mp4',
+          durationMs: 4200,
+        },
+      });
+
+      expect(result.error).toBeNull();
+      expect(result.data?.id).toBe('memory-audio-1');
+      expect(supabase.rpc).not.toHaveBeenCalled();
+      expect(deleteStorageObject).not.toHaveBeenCalled();
+    });
+
+    it('does not repair a 23505 conflict against a same-id row of a different memory_type (e.g. media)', async () => {
+      const insertBuilder = createQueryBuilder({
+        data: null,
+        error: { message: 'duplicate key value violates unique constraint', code: '23505' },
+      });
+      const differentTypeRow = {
+        id: 'memory-audio-1',
+        user_id: 'user-1',
+        memory_type: 'media',
+      };
+      const conflictFetchBuilder = createQueryBuilder({ data: differentTypeRow, error: null });
+
+      let memoriesCall = 0;
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') {
+          memoriesCall += 1;
+          return memoriesCall === 1 ? insertBuilder : conflictFetchBuilder;
+        }
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await createAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        memoryId: 'memory-audio-1',
+        content: null,
+        audioTranscript: null,
+        memoryDate: '2026-08-19',
+        taggedMemberIds: [],
+        clip: {
+          objectKey: 'user-1/memories/memory-audio-1/media/clip.m4a',
+          contentType: 'audio/mp4',
+          durationMs: 4200,
+        },
+      });
+
+      // Falls through to the original 23505 insert error, not a repair.
+      expect(result.error?.code).toBe('23505');
+      expect(deleteStorageObject).toHaveBeenCalledWith(
+        'user-1/memories/memory-audio-1/media/clip.m4a',
+      );
+    });
+  });
+
+  describe('updateMemory audio type immutability (P2.4)', () => {
+    it('rejects converting an audio memory to text_only', async () => {
+      const fetchBuilder = createQueryBuilder({
+        data: {
+          content: null,
+          memory_type: 'audio',
+          illustration_key: null,
+          illustration_status: 'none',
+        },
+        error: null,
+      });
+
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return fetchBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await updateMemory('memory-audio-1', { memoryType: 'text_only' });
+
+      expect(result.error?.code).toBe('invalid_memory_type');
+      expect(result.data).toBeNull();
+    });
+
+    it('rejects converting a text_only memory to audio', async () => {
+      const fetchBuilder = createQueryBuilder({
+        data: {
+          content: 'A plain note',
+          memory_type: 'text_only',
+          illustration_key: null,
+          illustration_status: 'none',
+        },
+        error: null,
+      });
+
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return fetchBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await updateMemory('memory-text-1', { memoryType: 'audio' });
+
+      expect(result.error?.code).toBe('invalid_memory_type');
+      expect(result.data).toBeNull();
+    });
+
+    it('allows updating content/date/tags on an audio memory without touching its type', async () => {
+      const existingBuilder = createQueryBuilder({
+        data: {
+          content: null,
+          memory_type: 'audio',
+          illustration_key: null,
+          illustration_status: 'none',
+        },
+        error: null,
+      });
+      const updateBuilder = createQueryBuilder({ data: null, error: null });
+      const detailBuilder = createQueryBuilder({
+        data: {
+          id: 'memory-audio-1',
+          content: 'Added a caption',
+          memory_type: 'audio',
+          memory_date: '2026-08-19',
+          illustration_key: null,
+          illustration_status: 'none',
+          media_key: 'user-1/memories/memory-audio-1/media/clip.m4a',
+          media_content_type: 'audio/mp4',
+          created_at: '2026-08-19T00:00:00Z',
+          updated_at: '2026-08-19T00:00:00Z',
+        },
+        error: null,
+      });
+      const tagsBuilder = createQueryBuilder({ data: [], error: null });
+      const mediaBuilder = createQueryBuilder({ data: [], error: null });
+
+      let memoriesCall = 0;
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') {
+          memoriesCall += 1;
+          return [existingBuilder, updateBuilder, detailBuilder][memoriesCall - 1];
+        }
+        if (table === 'memory_family_members') return tagsBuilder;
+        if (table === 'memory_media') return mediaBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await updateMemory('memory-audio-1', {
+        content: 'Added a caption',
+        taggedMemberIds: ['member-1'],
+      });
+
+      expect(result.error).toBeNull();
+      expect(updateBuilder.update).toHaveBeenCalledWith({ content: 'Added a caption' });
+    });
+
+    it('rejects mediaAssets updates on an audio memory (clip is immutable post-save)', async () => {
+      const fetchBuilder = createQueryBuilder({
+        data: {
+          content: null,
+          memory_type: 'audio',
+          illustration_key: null,
+          illustration_status: 'none',
+        },
+        error: null,
+      });
+
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return fetchBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      const result = await updateMemory('memory-audio-1', {
+        mediaAssets: [{ objectKey: 'x', contentType: 'audio/mp4' }],
+      });
+
+      expect(result.error?.code).toBe('invalid_memory_type');
+    });
+  });
+
+  describe('patchAudioDescriptionIfEmpty (P2.2/P2.4)', () => {
+    it('conditionally patches content only where it is currently NULL, and unconditionally patches the transcript', async () => {
+      const contentBuilder = createQueryBuilder({ data: null, error: null });
+      const transcriptBuilder = createQueryBuilder({ data: null, error: null });
+      let call = 0;
+
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') {
+          call += 1;
+          return call === 1 ? contentBuilder : transcriptBuilder;
+        }
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      await patchAudioDescriptionIfEmpty('memory-audio-1', {
+        description: 'Mia singing in the bath',
+        transcript: 'twinkle twinkle little star',
+      });
+
+      expect(contentBuilder.update).toHaveBeenCalledWith({ content: 'Mia singing in the bath' });
+      expect(contentBuilder.eq).toHaveBeenCalledWith('id', 'memory-audio-1');
+      // The DB-enforced empty-only guard -- must never overwrite a user's
+      // own caption.
+      expect(contentBuilder.is).toHaveBeenCalledWith('content', null);
+
+      expect(transcriptBuilder.update).toHaveBeenCalledWith({
+        audio_transcript: 'twinkle twinkle little star',
+      });
+      expect(transcriptBuilder.eq).toHaveBeenCalledWith('id', 'memory-audio-1');
+      // Unconditional -- no `.is(...)` guard on the transcript write.
+      expect(transcriptBuilder.is).not.toHaveBeenCalled();
+    });
+
+    it('skips the content write entirely when there is no description to patch', async () => {
+      const transcriptBuilder = createQueryBuilder({ data: null, error: null });
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return transcriptBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+
+      await patchAudioDescriptionIfEmpty('memory-audio-1', {
+        description: '   ',
+        transcript: 'twinkle twinkle little star',
+      });
+
+      expect(transcriptBuilder.update).toHaveBeenCalledTimes(1);
+      expect(transcriptBuilder.update).toHaveBeenCalledWith({
+        audio_transcript: 'twinkle twinkle little star',
+      });
+    });
+
+    it('is a no-op when both description and transcript are empty', async () => {
+      await patchAudioDescriptionIfEmpty('memory-audio-1', { description: null, transcript: null });
+
+      expect(supabase.from).not.toHaveBeenCalled();
+    });
+
+    it('swallows a content-write failure to console.warn without throwing', async () => {
+      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const failingBuilder = createQueryBuilder({
+        data: null,
+        error: { message: 'update failed' },
+      });
+      (supabase.from as jest.Mock).mockReturnValue(failingBuilder);
+
+      await expect(
+        patchAudioDescriptionIfEmpty('memory-audio-1', {
+          description: 'A caption',
+          transcript: null,
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        'patchAudioDescriptionIfEmpty failed to patch content',
+        'memory-audio-1',
+        'update failed',
+      );
+
+      consoleWarnSpy.mockRestore();
+    });
   });
 
   it('deletes storage keys before deleting a memory row', async () => {
@@ -1808,8 +2355,9 @@ describe('memories service integration', () => {
         config: 'english',
       });
       expect(contentBuilder.limit).toHaveBeenCalledWith(MEMORIES_SEARCH_LIMIT);
-      // 'bedtime' isn't a known emotion label, so only the content query runs.
-      expect(fromMemoriesCallCount).toBe(1);
+      // 'bedtime' isn't a known emotion label, so the emotion arm is skipped
+      // -- but content AND audio_transcript (P3.4) both always run.
+      expect(fromMemoriesCallCount).toBe(2);
       expect(data?.[0]?.id).toBe('memory-1');
     });
 
@@ -1818,6 +2366,7 @@ describe('memories service integration', () => {
         data: [searchMemoryRow({ id: 'memory-1', emotion: 'joy' })],
         error: null,
       });
+      const transcriptBuilder = createQueryBuilder({ data: [], error: null });
       const emotionBuilder = createQueryBuilder({
         data: [
           searchMemoryRow({ id: 'memory-1', emotion: 'joy' }),
@@ -1825,7 +2374,7 @@ describe('memories service integration', () => {
         ],
         error: null,
       });
-      const memoriesBuilders = [contentBuilder, emotionBuilder];
+      const memoriesBuilders = [contentBuilder, transcriptBuilder, emotionBuilder];
       let callIndex = 0;
 
       (supabase.from as jest.Mock).mockImplementation((table: string) => {
@@ -1863,6 +2412,94 @@ describe('memories service integration', () => {
       await searchMemories('stroller');
 
       expect(contentBuilder.eq).not.toHaveBeenCalled();
+    });
+
+    describe('audio transcript matching (P3.4)', () => {
+      it('runs a second websearch query on audio_transcript', async () => {
+        const contentBuilder = createQueryBuilder({ data: [], error: null });
+        const transcriptBuilder = createQueryBuilder({ data: [], error: null });
+        const memoriesBuilders = [contentBuilder, transcriptBuilder];
+        let callIndex = 0;
+
+        (supabase.from as jest.Mock).mockImplementation((table: string) => {
+          if (table === 'memories') {
+            return memoriesBuilders[callIndex++] ?? contentBuilder;
+          }
+          if (table === 'memory_family_members' || table === 'memory_media') {
+            return createQueryBuilder({ data: [], error: null });
+          }
+          throw new Error(`Unexpected table ${table}`);
+        });
+
+        await searchMemories('twinkle');
+
+        expect(transcriptBuilder.textSearch).toHaveBeenCalledWith('audio_transcript', 'twinkle', {
+          type: 'websearch',
+          config: 'english',
+        });
+        expect(transcriptBuilder.limit).toHaveBeenCalledWith(MEMORIES_SEARCH_LIMIT);
+      });
+
+      it('merges a transcript-only match with the content results, deduping overlap', async () => {
+        const audioRow = searchMemoryRow({
+          id: 'memory-audio-1',
+          memory_type: 'audio',
+          content: null,
+          audio_transcript: 'twinkle twinkle little star',
+        });
+        const overlapRow = searchMemoryRow({ id: 'memory-1' });
+
+        const contentBuilder = createQueryBuilder({ data: [overlapRow], error: null });
+        const transcriptBuilder = createQueryBuilder({
+          data: [overlapRow, audioRow],
+          error: null,
+        });
+        const memoriesBuilders = [contentBuilder, transcriptBuilder];
+        let callIndex = 0;
+
+        (supabase.from as jest.Mock).mockImplementation((table: string) => {
+          if (table === 'memories') {
+            return memoriesBuilders[callIndex++] ?? contentBuilder;
+          }
+          if (table === 'memory_family_members' || table === 'memory_media') {
+            return createQueryBuilder({ data: [], error: null });
+          }
+          throw new Error(`Unexpected table ${table}`);
+        });
+
+        const { data, error } = await searchMemories('twinkle');
+
+        expect(error).toBeNull();
+        // memory-1 matched both content and transcript -- deduped, not
+        // duplicated; memory-audio-1 only matched transcript.
+        expect(data).toHaveLength(2);
+        expect(data?.map((memory) => memory.id).sort()).toEqual([
+          'memory-1',
+          'memory-audio-1',
+        ]);
+      });
+
+      it('surfaces an error from the transcript query', async () => {
+        const contentBuilder = createQueryBuilder({ data: [], error: null });
+        const transcriptBuilder = createQueryBuilder({
+          data: null,
+          error: { message: 'transcript search failed' },
+        });
+        const memoriesBuilders = [contentBuilder, transcriptBuilder];
+        let callIndex = 0;
+
+        (supabase.from as jest.Mock).mockImplementation((table: string) => {
+          if (table === 'memories') {
+            return memoriesBuilders[callIndex++] ?? contentBuilder;
+          }
+          throw new Error(`Unexpected table ${table}`);
+        });
+
+        const { data, error } = await searchMemories('twinkle');
+
+        expect(data).toBeNull();
+        expect(error?.message).toBe('transcript search failed');
+      });
     });
   });
 

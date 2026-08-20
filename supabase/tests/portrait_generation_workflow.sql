@@ -11,6 +11,19 @@ values ('23000000-0000-4000-8000-000000000001', 'Portrait Workflow DB test', '13
 insert into public.family_memberships (id, family_id, user_id, role)
 values ('33000000-0000-4000-8000-000000000001', '23000000-0000-4000-8000-000000000001', '13000000-0000-4000-8000-000000000001', 'owner');
 
+-- The direct client-DML regression below must pass the paid family-member
+-- update policy so it reaches the service-managed deletion-fence trigger.
+insert into public.owner_entitlements (
+  owner_user_id, app_user_id, environment, store, product_id, entitlement_id,
+  period_type, status, expires_at, will_renew
+)
+values (
+  '13000000-0000-4000-8000-000000000001',
+  '13000000-0000-4000-8000-000000000001',
+  'production', 'app_store', 'momora_annual_v1', 'momora_plus',
+  'annual', 'active', transaction_timestamp() + interval '30 days', true
+);
+
 insert into public.family_members (id, family_id, user_id, name, date_of_birth)
 values ('43000000-0000-4000-8000-000000000001', '23000000-0000-4000-8000-000000000001', '13000000-0000-4000-8000-000000000001', 'Portrait test child', date '2024-01-01');
 

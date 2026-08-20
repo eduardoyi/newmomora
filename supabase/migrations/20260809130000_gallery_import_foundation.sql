@@ -7,19 +7,15 @@
 
 alter table public.memories
   add column if not exists creation_source text not null default 'manual';
-
 alter table public.memories
   drop constraint if exists memories_creation_source_check,
   add constraint memories_creation_source_check
     check (creation_source in ('manual', 'onboarding', 'gallery_import'));
-
 revoke insert (creation_source) on public.memories from public, anon, authenticated;
 revoke update (creation_source) on public.memories from public, anon, authenticated;
-
 alter table public.families
   add column if not exists gallery_caption_language text not null default 'en-US',
   add column if not exists gallery_caption_instructions text not null default '';
-
 alter table public.families
   drop constraint if exists families_gallery_caption_language_check,
   add constraint families_gallery_caption_language_check
@@ -30,10 +26,8 @@ alter table public.families
       char_length(gallery_caption_instructions) <= 500
       and gallery_caption_instructions !~ '[[:cntrl:]]'
     );
-
 revoke insert (gallery_caption_language, gallery_caption_instructions) on public.families from public, anon, authenticated;
 revoke update (gallery_caption_language, gallery_caption_instructions) on public.families from public, anon, authenticated;
-
 create table public.gallery_import_admission_settings (
   singleton boolean primary key default true check (singleton),
   enabled boolean not null default false,
@@ -71,7 +65,6 @@ create table public.gallery_import_admission_settings (
 );
 insert into public.gallery_import_admission_settings (singleton) values (true)
 on conflict (singleton) do nothing;
-
 create or replace function public.touch_gallery_import_admission_settings()
 returns trigger language plpgsql set search_path = public as $$
 begin
@@ -90,7 +83,6 @@ $$;
 create trigger touch_gallery_import_admission_settings
   before update on public.gallery_import_admission_settings
   for each row execute function public.touch_gallery_import_admission_settings();
-
 create table public.gallery_import_runs (
   id uuid primary key default gen_random_uuid(),
   family_id uuid not null references public.families(id) on delete cascade,
@@ -121,7 +113,6 @@ create index gallery_import_runs_actor_active_idx
   on public.gallery_import_runs (actor_id, created_at desc);
 create index gallery_import_runs_cleanup_idx
   on public.gallery_import_runs (expires_at) where status not in ('completed', 'cancelled', 'expired');
-
 create table public.gallery_import_chunks (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references public.gallery_import_runs(id) on delete cascade,
@@ -143,7 +134,6 @@ create table public.gallery_import_chunks (
     or (status not in ('completed','failed','cancelled','expired') and completed_at is null))
 );
 create index gallery_import_chunks_run_status_idx on public.gallery_import_chunks (run_id, status, ordinal);
-
 create table public.gallery_import_assets (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references public.gallery_import_runs(id) on delete cascade,
@@ -169,7 +159,6 @@ create table public.gallery_import_assets (
 );
 create index gallery_import_assets_cluster_idx on public.gallery_import_assets (run_id, cluster_signature);
 create index gallery_import_assets_cleanup_idx on public.gallery_import_assets (expires_at) where preview_object_key is not null;
-
 create table public.gallery_import_cluster_results (
   chunk_id uuid not null references public.gallery_import_chunks(id) on delete cascade,
   cluster_signature text not null check (cluster_signature ~ '^[0-9a-f]{64}$'),
@@ -186,12 +175,10 @@ create table public.gallery_import_cluster_results (
     or (state='suppressed' and completed_at is not null and skip_reason is null and candidate_count=0)
     or (state='failed' and completed_at is not null and candidate_count=0))
 );
-
 create or replace function public.gallery_import_uuid_array_is_distinct(p_values uuid[])
 returns boolean language sql immutable strict set search_path = public as $$
   select cardinality(p_values) = (select count(distinct value) from unnest(p_values) value);
 $$;
-
 create table public.gallery_import_candidates (
   id uuid primary key default gen_random_uuid(),
   run_id uuid not null references public.gallery_import_runs(id) on delete cascade,
@@ -221,7 +208,6 @@ create table public.gallery_import_candidates (
 );
 create index gallery_import_candidates_actor_run_idx on public.gallery_import_candidates (actor_id, run_id, status, created_at);
 create index gallery_import_candidates_cleanup_idx on public.gallery_import_candidates (expires_at) where status in ('staged','posting','skipped','unavailable');
-
 create table public.gallery_import_cluster_receipts (
   id uuid primary key default gen_random_uuid(),
   family_id uuid not null references public.families(id) on delete cascade,
@@ -235,7 +221,6 @@ create table public.gallery_import_cluster_receipts (
   updated_at timestamptz not null default transaction_timestamp(),
   unique (family_id, actor_id, algorithm_version, cluster_signature)
 );
-
 create table public.gallery_import_provider_attempts (
   id uuid primary key default gen_random_uuid(),
   chunk_id uuid not null references public.gallery_import_chunks(id) on delete cascade,
@@ -252,7 +237,6 @@ create table public.gallery_import_provider_attempts (
   unique (chunk_id, cluster_signature, attempt_ordinal),
   unique (id, reservation_token)
 );
-
 create table public.gallery_import_approval_leases (
   id uuid primary key default gen_random_uuid(),
   candidate_id uuid not null unique references public.gallery_import_candidates(id) on delete cascade,
@@ -273,7 +257,6 @@ create table public.gallery_import_approval_leases (
   unique (id, candidate_id)
 );
 create index gallery_import_approval_leases_cleanup_idx on public.gallery_import_approval_leases (expires_at) where state in ('reserved','uploading','finalizing','expired','orphaned');
-
 create table public.gallery_import_digest_windows (
   family_id uuid not null references public.families(id) on delete cascade,
   actor_id uuid not null references auth.users(id) on delete cascade,
@@ -291,7 +274,6 @@ create table public.gallery_import_digest_windows (
   check ((claim_token is null and claimed_at is null and claimed_approval_count is null)
     or (claim_token is not null and claimed_at is not null and claimed_approval_count between 1 and approval_count))
 );
-
 create table public.gallery_import_workflow_bridge_nonces (
   nonce uuid primary key,
   created_at timestamptz not null default transaction_timestamp(),
@@ -299,7 +281,6 @@ create table public.gallery_import_workflow_bridge_nonces (
   check (expires_at > created_at and expires_at <= created_at + interval '24 hours')
 );
 create index gallery_import_bridge_nonces_expiry_idx on public.gallery_import_workflow_bridge_nonces (expires_at);
-
 create or replace function public.gallery_import_set_updated_at()
 returns trigger language plpgsql set search_path = public as $$
 begin new.updated_at := transaction_timestamp(); return new; end;
@@ -310,7 +291,6 @@ create trigger gallery_import_candidates_updated_at before update on public.gall
 create trigger gallery_import_receipts_updated_at before update on public.gallery_import_cluster_receipts for each row execute function public.gallery_import_set_updated_at();
 create trigger gallery_import_leases_updated_at before update on public.gallery_import_approval_leases for each row execute function public.gallery_import_set_updated_at();
 create trigger gallery_import_digest_updated_at before update on public.gallery_import_digest_windows for each row execute function public.gallery_import_set_updated_at();
-
 -- Candidate inserts are service-owned, but this catches a malformed worker
 -- publication even if its JSON validation regresses.
 create or replace function public.validate_gallery_import_candidate_assets()
@@ -346,7 +326,6 @@ $$;
 create trigger validate_gallery_import_candidate_assets
   before insert or update of run_id, family_id, actor_id, cluster_signature, candidate_fingerprint, selected_asset_tokens, family_member_ids
   on public.gallery_import_candidates for each row execute function public.validate_gallery_import_candidate_assets();
-
 create or replace function public.protect_gallery_import_preview_manifest()
 returns trigger language plpgsql set search_path = public as $$
 begin
@@ -359,7 +338,6 @@ begin
 end;
 $$;
 create trigger protect_gallery_import_preview_manifest before update of preview_object_key,preview_content_type,preview_width,preview_height,preview_bytes,preview_sha256 on public.gallery_import_assets for each row execute function public.protect_gallery_import_preview_manifest();
-
 create or replace function public.enforce_gallery_import_transitions()
 returns trigger language plpgsql set search_path = public as $$
 declare v_new jsonb := to_jsonb(new); v_old jsonb := to_jsonb(old);
@@ -403,7 +381,6 @@ create trigger enforce_gallery_import_run_transitions before update of status on
 create trigger enforce_gallery_import_chunk_transitions before update of status on public.gallery_import_chunks for each row execute function public.enforce_gallery_import_transitions();
 create trigger enforce_gallery_import_candidate_transitions before update of status on public.gallery_import_candidates for each row execute function public.enforce_gallery_import_transitions();
 create trigger enforce_gallery_import_cluster_result_transitions before update of state,skip_reason,candidate_count,completed_at on public.gallery_import_cluster_results for each row execute function public.enforce_gallery_import_transitions();
-
 create or replace function public.protect_gallery_import_run_identity()
 returns trigger language plpgsql set search_path = public as $$
 begin
@@ -423,7 +400,6 @@ $$;
 create trigger protect_gallery_import_run_identity
   before update on public.gallery_import_runs
   for each row execute function public.protect_gallery_import_run_identity();
-
 create or replace function public.gallery_import_capability_matches(p_run_id uuid, p_capability text)
 returns boolean language sql security definer stable set search_path = public as $$
   select p_capability is not null
@@ -434,7 +410,6 @@ returns boolean language sql security definer stable set search_path = public as
         and r.capability_hash = encode(extensions.digest(p_capability, 'sha256'), 'hex')
     );
 $$;
-
 create or replace function public.gallery_import_require_actor_run(p_run_id uuid, p_capability text)
 returns public.gallery_import_runs language plpgsql security definer set search_path = public as $$
 declare v_run public.gallery_import_runs%rowtype;
@@ -452,7 +427,6 @@ begin
   return v_run;
 end;
 $$;
-
 create or replace function public.create_gallery_import_run_internal(
   p_family_id uuid,
   p_capability text,
@@ -484,7 +458,6 @@ begin
   return v_run_id;
 end;
 $$;
-
 create or replace function public.get_gallery_import_run(p_run_id uuid, p_capability text)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_run public.gallery_import_runs%rowtype;
@@ -495,7 +468,6 @@ begin
     'readyCandidates', (select count(*) from public.gallery_import_candidates c where c.run_id=v_run.id and c.status='staged'));
 end;
 $$;
-
 create or replace function public.get_gallery_import_candidates(p_run_id uuid, p_capability text)
 returns setof public.gallery_import_candidates language plpgsql security definer set search_path = public as $$
 declare v_run public.gallery_import_runs%rowtype;
@@ -504,7 +476,6 @@ begin
   return query select c.* from public.gallery_import_candidates c where c.run_id=v_run.id and c.status in ('staged','posting','skipped','unavailable') and c.expires_at > transaction_timestamp() order by c.created_at;
 end;
 $$;
-
 create or replace function public.register_gallery_import_chunk(
   p_run_id uuid, p_capability text, p_ordinal integer, p_cluster_count integer, p_asset_count integer
 )
@@ -527,7 +498,6 @@ begin
   return v_chunk_id;
 end;
 $$;
-
 create or replace function public.register_gallery_import_assets(
   p_run_id uuid, p_chunk_id uuid, p_capability text, p_assets jsonb
 )
@@ -585,7 +555,6 @@ begin
   return jsonb_build_object('acceptedAssetTokens',v_accepted,'suppressedClusterSignatures',(select coalesce(array_agg(distinct s order by s),'{}'::text[]) from unnest(v_suppressed) s));
 end;
 $$;
-
 create or replace function public.record_gallery_import_preview_upload(
   p_run_id uuid, p_opaque_token uuid, p_object_key text, p_content_type text, p_width integer, p_height integer, p_bytes integer, p_sha256 text
 )
@@ -604,7 +573,6 @@ begin
   return found;
 end;
 $$;
-
 create or replace function public.mark_gallery_chunk_dispatched(p_chunk_id uuid, p_workflow_id text)
 returns boolean language plpgsql security definer set search_path = public as $$
 begin
@@ -615,7 +583,6 @@ begin
   return found;
 end;
 $$;
-
 create or replace function public.update_gallery_import_candidate_draft(
   p_candidate_id uuid, p_capability text, p_caption text, p_memory_date date, p_asset_tokens uuid[], p_family_member_ids uuid[] default '{}'::uuid[]
 )
@@ -636,7 +603,6 @@ begin
   return v_candidate;
 end;
 $$;
-
 create or replace function public.set_gallery_import_candidate_skip(p_candidate_id uuid, p_capability text, p_skip boolean)
 returns public.gallery_import_candidates language plpgsql security definer set search_path = public as $$
 declare v_candidate public.gallery_import_candidates%rowtype; v_run public.gallery_import_runs%rowtype; v_run_id uuid;
@@ -662,7 +628,6 @@ begin
   return v_candidate;
 end;
 $$;
-
 create or replace function public.set_gallery_import_candidate_unavailable(p_candidate_id uuid, p_capability text, p_unavailable boolean)
 returns public.gallery_import_candidates language plpgsql security definer set search_path = public as $$
 declare v_candidate public.gallery_import_candidates%rowtype; v_run public.gallery_import_runs%rowtype; v_run_id uuid;
@@ -681,7 +646,6 @@ begin
   return v_candidate;
 end;
 $$;
-
 create or replace function public.begin_gallery_import_approval(
   p_candidate_id uuid, p_capability text, p_selected_assets jsonb
 )
@@ -728,7 +692,6 @@ begin
   return jsonb_build_object('leaseId',v_lease.id,'memoryId',v_lease.memory_id,'expiresAt',v_lease.expires_at,'expectedAssets',v_lease.expected_assets);
 end;
 $$;
-
 create or replace function public.record_gallery_import_approval_upload(
   p_lease_id uuid, p_object_key text, p_content_type text, p_byte_length integer, p_sha256 text, p_aspect_ratio double precision default null
 )
@@ -752,7 +715,6 @@ begin
   return true;
 end;
 $$;
-
 create or replace function public.finalize_gallery_import_candidate(p_candidate_id uuid, p_capability text)
 returns uuid language plpgsql security definer set search_path = public as $$
 declare v_candidate public.gallery_import_candidates%rowtype; v_lease public.gallery_import_approval_leases%rowtype; v_asset jsonb; v_position integer := 0; v_first_key text; v_first_type text;
@@ -795,7 +757,6 @@ begin
   return v_lease.memory_id;
 end;
 $$;
-
 create or replace function public.cancel_gallery_import_run(p_run_id uuid, p_capability text)
 returns boolean language plpgsql security definer set search_path = public as $$
 declare v_run public.gallery_import_runs%rowtype;
@@ -810,7 +771,6 @@ begin
   return true;
 end;
 $$;
-
 create or replace function public.complete_gallery_import_run(p_run_id uuid, p_capability text)
 returns boolean language plpgsql security definer set search_path = public as $$
 declare v_run public.gallery_import_runs%rowtype;
@@ -822,7 +782,6 @@ begin
   return true;
 end;
 $$;
-
 -- Service bridge primitives.  They are intentionally separate from the
 -- authenticated capability RPCs above: Workers never receive a device
 -- capability and clients never receive prompt inputs or provider attempts.
@@ -860,7 +819,6 @@ begin
   );
 end;
 $$;
-
 create or replace function public.reserve_gallery_attempt(p_chunk_id uuid, p_cluster_signature text, p_attempt_ordinal smallint)
 returns table (attempt_id uuid, reservation_token uuid, outcome text) language plpgsql security definer set search_path = public as $$
 declare v_attempt public.gallery_import_provider_attempts%rowtype;
@@ -888,7 +846,6 @@ begin
   return query select v_attempt.id,v_attempt.reservation_token,'reserved_now'::text;
 end;
 $$;
-
 create or replace function public.record_gallery_usage(p_attempt_id uuid, p_reservation_token uuid, p_usage jsonb)
 returns boolean language plpgsql security definer set search_path = public as $$
 declare v_status text;
@@ -913,7 +870,6 @@ begin
   return found;
 end;
 $$;
-
 create or replace function public.mark_gallery_attempt_ambiguous(p_attempt_id uuid, p_reservation_token uuid)
 returns boolean language plpgsql security definer set search_path = public as $$
 begin
@@ -922,7 +878,6 @@ begin
   return found;
 end;
 $$;
-
 create or replace function public.publish_gallery_candidates(p_chunk_id uuid, p_candidates jsonb)
 returns integer language plpgsql security definer set search_path = public as $$
 declare v_chunk public.gallery_import_chunks%rowtype; v_run public.gallery_import_runs%rowtype; v_item jsonb; v_count integer := 0; v_tokens uuid[]; v_candidate_id uuid; v_candidate_fingerprint text; v_split_index smallint;
@@ -964,7 +919,6 @@ begin
   return v_count;
 end;
 $$;
-
 create or replace function public.publish_gallery_cluster_result(
   p_chunk_id uuid, p_cluster_signature text, p_candidates jsonb, p_skip_reason text default null
 )
@@ -997,7 +951,6 @@ begin
   return v_count;
 end;
 $$;
-
 create or replace function public.fail_gallery_chunk(p_chunk_id uuid, p_closed_error_code text)
 returns boolean language plpgsql security definer set search_path = public as $$
 declare v_run_id uuid; v_updated boolean := false;
@@ -1016,7 +969,6 @@ begin
   return v_updated;
 end;
 $$;
-
 create or replace function public.scrub_gallery_chunk(p_chunk_id uuid)
 returns boolean language plpgsql security definer set search_path = public as $$
 begin
@@ -1024,7 +976,6 @@ begin
   return found;
 end;
 $$;
-
 create or replace function public.claim_gallery_import_cleanup(p_limit integer default 50)
 returns table (run_id uuid, claim_token uuid) language plpgsql security definer set search_path = public as $$
 begin
@@ -1040,7 +991,6 @@ begin
   ) select id,cleanup_claim_token from claimed;
 end;
 $$;
-
 create or replace function public.finish_gallery_import_cleanup(p_run_id uuid, p_claim_token uuid)
 returns boolean language plpgsql security definer set search_path = public as $$
 begin
@@ -1054,7 +1004,6 @@ begin
   return true;
 end;
 $$;
-
 create or replace function public.get_gallery_import_cleanup_objects(p_run_id uuid, p_claim_token uuid)
 returns table (object_key text) language sql security definer set search_path = public as $$
   select a.preview_object_key
@@ -1068,7 +1017,6 @@ returns table (object_key text) language sql security definer set search_path = 
   where l.run_id=p_run_id and r.cleanup_claim_token=p_claim_token and r.status='expired'
     and l.state not in ('finalized');
 $$;
-
 create or replace function public.claim_gallery_import_digests(p_limit integer default 50)
 returns table (family_id uuid, actor_id uuid, claim_token uuid)
 language plpgsql security definer set search_path = public as $$
@@ -1089,7 +1037,6 @@ begin
   ) select claimed.family_id,claimed.actor_id,claimed.claim_token from claimed;
 end;
 $$;
-
 create or replace function public.finish_gallery_import_digest(p_family_id uuid,p_actor_id uuid,p_claim_token uuid,p_sent boolean)
 returns boolean language plpgsql security definer set search_path = public as $$
 begin
@@ -1107,7 +1054,6 @@ begin
   return found;
 end;
 $$;
-
 create or replace function public.cleanup_gallery_import_workflow_bridge_nonces(p_limit integer default 500)
 returns integer language plpgsql security definer set search_path = public as $$
 declare v_count integer;
@@ -1123,7 +1069,6 @@ begin
   return v_count;
 end;
 $$;
-
 create or replace function public.get_gallery_caption_settings(p_family_id uuid)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_family public.families%rowtype;
@@ -1134,7 +1079,6 @@ begin
   return jsonb_build_object('language',v_family.gallery_caption_language,'instructions',v_family.gallery_caption_instructions);
 end;
 $$;
-
 create or replace function public.update_gallery_caption_settings(p_family_id uuid, p_language text, p_instructions text)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_family public.families%rowtype;
@@ -1146,7 +1090,6 @@ begin
   return jsonb_build_object('language',v_family.gallery_caption_language,'instructions',v_family.gallery_caption_instructions);
 end;
 $$;
-
 -- Tables are RPC/service-only.  In particular, an account logged in on a
 -- second phone cannot query another device's unapproved cards by guessing a
 -- run UUID; capability-bound readers above are the only client read surface.
@@ -1161,7 +1104,6 @@ alter table public.gallery_import_provider_attempts enable row level security;
 alter table public.gallery_import_approval_leases enable row level security;
 alter table public.gallery_import_digest_windows enable row level security;
 alter table public.gallery_import_workflow_bridge_nonces enable row level security;
-
 revoke all on table
   public.gallery_import_admission_settings,
   public.gallery_import_runs,
@@ -1175,16 +1117,13 @@ revoke all on table
   public.gallery_import_digest_windows,
   public.gallery_import_workflow_bridge_nonces
 from public, anon, authenticated;
-
 grant select, insert, delete on table public.gallery_import_workflow_bridge_nonces to service_role;
-
 revoke all on function public.touch_gallery_import_admission_settings() from public, anon, authenticated, service_role;
 revoke all on function public.gallery_import_set_updated_at() from public, anon, authenticated, service_role;
 revoke all on function public.validate_gallery_import_candidate_assets() from public, anon, authenticated, service_role;
 revoke all on function public.protect_gallery_import_preview_manifest() from public, anon, authenticated, service_role;
 revoke all on function public.enforce_gallery_import_transitions() from public, anon, authenticated, service_role;
 revoke all on function public.protect_gallery_import_run_identity() from public, anon, authenticated, service_role;
-
 revoke all on function public.gallery_import_capability_matches(uuid,text) from public, anon, authenticated, service_role;
 revoke all on function public.gallery_import_require_actor_run(uuid,text) from public, anon, authenticated, service_role;
 revoke all on function public.gallery_import_uuid_array_is_distinct(uuid[]) from public, anon, authenticated, service_role;
@@ -1215,7 +1154,6 @@ grant execute on function public.cancel_gallery_import_run(uuid,text) to authent
 grant execute on function public.complete_gallery_import_run(uuid,text) to authenticated;
 grant execute on function public.get_gallery_caption_settings(uuid) to authenticated;
 grant execute on function public.update_gallery_caption_settings(uuid,text,text) to authenticated;
-
 revoke all on function public.record_gallery_import_approval_upload(uuid,text,text,integer,text,double precision) from public, anon, authenticated;
 revoke all on function public.record_gallery_import_preview_upload(uuid,uuid,text,text,integer,integer,integer,text) from public, anon, authenticated;
 revoke all on function public.mark_gallery_chunk_dispatched(uuid,text) from public, anon, authenticated;
@@ -1249,7 +1187,6 @@ grant execute on function public.get_gallery_import_cleanup_objects(uuid,uuid) t
 grant execute on function public.claim_gallery_import_digests(integer) to service_role;
 grant execute on function public.finish_gallery_import_digest(uuid,uuid,uuid,boolean) to service_role;
 grant execute on function public.cleanup_gallery_import_workflow_bridge_nonces(integer) to service_role;
-
 -- The public admission contract deliberately has no caller-provided limits.
 create function public.create_gallery_import_run(
   p_family_id uuid, p_capability text, p_algorithm_version text,
@@ -1260,16 +1197,13 @@ returns uuid language sql security definer set search_path = public as $$
 $$;
 revoke all on function public.create_gallery_import_run(uuid,text,text,text,text) from public, anon;
 grant execute on function public.create_gallery_import_run(uuid,text,text,text,text) to authenticated;
-
 -- Scheduler requests read their environment-specific URL and shared secret at
 -- execution time. Replacing any existing job by name makes migration replay
 -- deterministic without committing credentials.
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
-
 select cron.unschedule(jobid) from cron.job where jobname='invoke-send-gallery-import-digests';
 select cron.unschedule(jobid) from cron.job where jobname='invoke-cleanup-gallery-imports';
-
 select cron.schedule(
   'invoke-send-gallery-import-digests',
   '*/5 * * * *',
@@ -1285,7 +1219,6 @@ select cron.schedule(
   );
   $cron$
 );
-
 select cron.schedule(
   'invoke-cleanup-gallery-imports',
   '0 * * * *',

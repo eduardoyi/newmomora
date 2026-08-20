@@ -1,3 +1,4 @@
+import { describeAgeAtDate } from '../_shared/age.ts';
 import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
@@ -23,6 +24,8 @@ export interface ProcessVoiceFamilyMember {
   name: string;
   nicknames?: string[];
   is_user_profile?: boolean;
+  /** Read server-side for the caption's derived age label only — never sent to the model or logged. */
+  date_of_birth?: string | null;
 }
 
 export interface ProcessVoiceMemoryRequest {
@@ -46,6 +49,28 @@ export type ProcessVoiceRequest = ProcessVoiceMemoryRequest | ProcessOnboardingV
 export interface ProcessVoiceMemoryResponse {
   cleanedText: string;
   mentionedMemberIds: string[];
+}
+
+/**
+ * Family mode only (audio-memories "keep the sound" fork,
+ * docs/features/audio-memories.md). Onboarding mode's response shape is
+ * unchanged -- no description field, since the fork does not exist pre-auth.
+ */
+export interface ProcessVoiceFamilyMemoryResponse extends ProcessVoiceMemoryResponse {
+  /** One-line third-person caption, <= ~120 chars. '' when speech is unusable -- never absent, never an error. */
+  description: string;
+}
+
+const MAX_DESCRIPTION_LENGTH = 120;
+
+/** Server-side clamp/validate: missing or wrong-typed input defaults to ''; oversized input is truncated. Never throws. */
+function sanitizeVoiceDescription(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > MAX_DESCRIPTION_LENGTH ? trimmed.slice(0, MAX_DESCRIPTION_LENGTH) : trimmed;
 }
 
 interface VoiceFamilyLookupClient {
@@ -335,13 +360,30 @@ export async function handleProcessVoiceMemoryWithDependencies(
       return errorResponse('Transcription returned empty text', 400, 'TRANSCRIPTION_FAILED');
     }
 
-    const cleanup = await dependencies.chatJson<{ cleanedText?: string; mentionedUserSelf?: boolean }>(
-      buildVoiceCleanupSystemPrompt(),
+    const cleanup = await dependencies.chatJson<{
+      cleanedText?: string;
+      mentionedUserSelf?: boolean;
+      description?: unknown;
+    }>(
+      buildVoiceCleanupSystemPrompt({
+        includeDescription: true,
+        // Caption context (owner decision 2026-08-20): names + nicknames +
+        // derived age label only. date_of_birth itself never enters the
+        // prompt; the age is computed here and sent as a label.
+        members: familyMembers.map((member) => ({
+          name: member.name,
+          nicknames: member.nicknames ?? undefined,
+          ageLabel: member.date_of_birth
+            ? describeAgeAtDate(member.date_of_birth, new Date().toISOString().slice(0, 10))
+            : null,
+        })),
+      }),
       transcript,
       { usageContext: { attributionScope: 'family', familyId, actorUserId: user.id, operation: 'voice_cleanup' } },
     );
 
     const cleanedText = cleanup.cleanedText?.trim() || transcript;
+    const description = sanitizeVoiceDescription(cleanup.description);
     const mentionedMemberIds = matchMemberIdsMentionedInText(cleanedText, familyMembers);
 
     if (cleanup.mentionedUserSelf) {
@@ -351,8 +393,9 @@ export async function handleProcessVoiceMemoryWithDependencies(
       }
     }
 
-    const response: ProcessVoiceMemoryResponse = {
+    const response: ProcessVoiceFamilyMemoryResponse = {
       cleanedText,
+      description,
       mentionedMemberIds: mentionedMemberIds.slice(0, 4),
     };
 
@@ -386,7 +429,7 @@ export async function handleProcessVoiceMemory(req: Request): Promise<Response> 
     getCanonicalFamilyMembers: async ({ supabase, familyId }) => {
       const { data, error } = await (supabase as ReturnType<typeof createServiceClient>)
         .from('family_members')
-        .select('id, name, nicknames, is_user_profile')
+        .select('id, name, nicknames, is_user_profile, date_of_birth')
         .eq('family_id', familyId);
       if (error) throw error;
       return (data ?? []) as ProcessVoiceFamilyMember[];

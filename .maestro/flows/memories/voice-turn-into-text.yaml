@@ -1,0 +1,73 @@
+appId: com.memora.app
+---
+# The first-ever Maestro coverage of voice dictation (docs/plans/
+# audio-memories-v1.md P4.2 -- no voice flow existed before audio memories):
+# record silence -> choose "Turn into text" on the composer's post-recording
+# fork -> the composer settles into a graceful state, never a crash.
+#
+# CI simulators record silence, so the real OpenAI call can resolve into one
+# of two shapes -- both handled below, since which one happens is a live
+# provider response, not something this flow controls:
+#   1. A resolved-but-unusable transcript: the fork's "Turn into text" stays
+#      tappable, the composer closes back onto an empty (or near-empty)
+#      content field -- the ordinary graceful-empty case.
+#   2. A genuine transcription failure (network/provider): the fork's
+#      terminal-failure state shows instead -- "Turn into text" dims with
+#      "couldn't catch the words" and the reassurance note appears; only
+#      "Keep the sound" stays available (docs/features/audio-memories.md).
+#
+# Authored, not executed in this pass (no bootable simulator in this
+# environment) -- validated against .maestro/flows conventions by eye. Runs
+# in the release device pass (P4.3).
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+- tapOn:
+    id: new-memory-voice-trigger
+- extendedWaitUntil:
+    visible:
+      id: voice-speak-it-mic
+    timeout: 10000
+- tapOn:
+    id: voice-speak-it-mic
+- extendedWaitUntil:
+    visible:
+      id: voice-speak-it-fork
+    timeout: 10000
+# The zero-wait transcription call starts the instant recording stops (see
+# useVoiceInput's kickTranscription), well before the fork even renders --
+# this just gives the in-flight OpenAI round trip room to settle before the
+# branch below decides which outcome landed.
+- waitForAnimationToEnd:
+    timeout: 8000
+
+# Outcome 1: transcription resolved (possibly to an unusable/empty
+# transcript, which is fine -- silence is expected to produce one).
+- runFlow:
+    when:
+      notVisible: "couldn’t catch the words"
+    commands:
+      - tapOn:
+          id: voice-speak-it-choose-text
+      - extendedWaitUntil:
+          notVisible:
+            id: voice-speak-it-modal
+          timeout: 15000
+      - assertVisible:
+          id: new-memory-content
+
+# Outcome 2: transcription failed outright -- the fork's terminal state.
+# "Turn into text" is dimmed/disabled here; "Keep the sound" still works.
+- runFlow:
+    when:
+      visible: "couldn’t catch the words"
+    commands:
+      - assertVisible:
+          text: "No connection, so the words will have to wait. The sound itself is right here — you can still keep it."
+      - assertVisible:
+          id: voice-speak-it-keep-sound
+      - tapOn:
+          id: voice-speak-it-cancel

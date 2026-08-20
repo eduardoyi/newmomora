@@ -37,6 +37,8 @@ interface MemoryRow {
   media_key: string | null;
   media_content_type: string | null;
   updated_at: string;
+  /** Audio memories only (docs/features/audio-memories.md). Invisible, search-only transcript. */
+  audio_transcript: string | null;
 }
 
 interface MemoryMediaRow {
@@ -174,6 +176,30 @@ export function validateMediaPhotoMemoryRow(
   return null;
 }
 
+export type AudioEmotionClassifierInput =
+  | { skip: true }
+  | { skip: false; input: string };
+
+/**
+ * Audio memories classify over the visible description (content) plus the
+ * invisible transcript -- either alone is enough to proceed
+ * (docs/features/audio-memories.md). Neither present (babble/silence with no
+ * user-typed caption) is not an error: emotion simply stays unset, same as a
+ * video memory with nothing to analyze.
+ */
+export function buildAudioEmotionClassifierInput(
+  row: Pick<MemoryRow, 'content' | 'audio_transcript'>,
+): AudioEmotionClassifierInput {
+  const strippedContent = row.content ? stripUrls(row.content).trim() : '';
+  const strippedTranscript = row.audio_transcript ? stripUrls(row.audio_transcript).trim() : '';
+
+  if (!strippedContent && !strippedTranscript) {
+    return { skip: true };
+  }
+
+  return { skip: false, input: [strippedContent, strippedTranscript].filter(Boolean).join(' ') };
+}
+
 export async function updateEmotionIfSnapshotMatches(
   supabase: ReturnType<typeof createUserClient>,
   memoryId: string,
@@ -243,7 +269,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
 
   const { data: memory, error: memoryError } = await supabase
     .from('memories')
-    .select('id, family_id, content, memory_type, media_key, media_content_type, updated_at')
+    .select('id, family_id, content, memory_type, media_key, media_content_type, audio_transcript, updated_at')
     .eq('id', memoryId)
     .maybeSingle();
 
@@ -291,6 +317,24 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
       }
 
       const analyzed = await analyzeTextIllustrationEmotion(row.content);
+      await serviceClient.from('memories').update({ emotion: analyzed.emotion }).eq('id', memoryId);
+
+      const response: AnalyzeEmotionResponse = {
+        emotion: analyzed.emotion,
+        colorPalette: analyzed.colorPalette,
+      };
+
+      return jsonResponse(response);
+    }
+
+    if (row.memory_type === 'audio') {
+      const audioInput = buildAudioEmotionClassifierInput(row);
+      if (audioInput.skip) {
+        const response: AnalyzeEmotionResponse = { emotion: '', colorPalette: '', skipped: true };
+        return jsonResponse(response);
+      }
+
+      const analyzed = await analyzeTextIllustrationEmotion(audioInput.input);
       await serviceClient.from('memories').update({ emotion: analyzed.emotion }).eq('id', memoryId);
 
       const response: AnalyzeEmotionResponse = {

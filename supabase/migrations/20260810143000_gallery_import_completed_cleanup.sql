@@ -43,7 +43,6 @@ begin
   return new;
 end;
 $$;
-
 create or replace function public.claim_gallery_import_cleanup(p_limit integer default 50)
 returns table (run_id uuid, claim_token uuid) language plpgsql security definer set search_path = public as $$
 begin
@@ -60,7 +59,6 @@ begin
   ) select id,cleanup_claim_token from claimed;
 end;
 $$;
-
 drop index if exists public.gallery_import_runs_cleanup_idx;
 create index gallery_import_runs_cleanup_idx
   on public.gallery_import_runs (expires_at) where status <> 'expired';

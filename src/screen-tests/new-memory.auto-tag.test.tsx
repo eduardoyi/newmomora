@@ -64,6 +64,23 @@ jest.mock('@/components/voice-speak-it-modal', () => ({
   },
 }));
 
+// new-memory.tsx now imports useAudioClipPlayback directly (for the audio
+// clip chip) -- unrelated to auto-tagging, but it transitively pulls in
+// expo-audio at module scope, which isn't safely importable under jest
+// without this stub (see useAudioClipPlayback.test.ts for real coverage).
+jest.mock('@/hooks/useAudioClipPlayback', () => ({
+  useAudioClipPlayback: () => ({
+    playing: false,
+    position: 0,
+    duration: 0,
+    progress: 0,
+    loading: false,
+    error: null,
+    toggle: jest.fn(),
+    seekTo: jest.fn(),
+  }),
+}));
+
 jest.mock('expo-image-picker', () => ({
   getCameraPermissionsAsync: jest.fn(),
   getMediaLibraryPermissionsAsync: jest.fn(),

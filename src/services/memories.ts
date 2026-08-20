@@ -9,6 +9,7 @@ import {
 import { deleteStorageObject } from '@/services/media';
 import type { FamilyMember } from '@/services/family-members';
 import {
+  type CreateAudioMemoryInput,
   type CreateMediaMemoryInput,
   type MemoryMediaAssetInput,
   type CreateMemoryInput,
@@ -222,7 +223,7 @@ function buildLegacyMediaAssets(memory: Memory): MemoryMediaAsset[] {
   ];
 }
 
-function normalizeOptionalContent(content?: string): string | null {
+function normalizeOptionalContent(content?: string | null): string | null {
   const trimmed = content?.trim();
   return trimmed ? trimmed : null;
 }
@@ -722,11 +723,26 @@ export async function searchMemories(query: string): Promise<{
 
   const emotionMatch = matchKnownEmotionLabel(trimmed);
 
-  const [contentResult, emotionResult] = await Promise.all([
+  // Audio's invisible transcript (docs/plans/audio-memories-v1.md P3.4) gets
+  // its own FTS query merged + deduped client-side, same established pattern
+  // as the emotion query below -- audio_transcript has its own GIN index
+  // (idx_memories_audio_transcript_search,
+  // supabase/migrations/20260819120000_audio_memories.sql) separate from
+  // content's, so a single combined tsvector isn't how the schema is shaped.
+  // The visible description already matches via the content FTS query above
+  // for free (content and audio_transcript are two independent columns on
+  // the same row).
+  const [contentResult, transcriptResult, emotionResult] = await Promise.all([
     supabase
       .from('memories')
       .select('*')
       .textSearch('content', trimmed, { type: 'websearch', config: 'english' })
+      .order('memory_date', { ascending: false })
+      .limit(MEMORIES_SEARCH_LIMIT),
+    supabase
+      .from('memories')
+      .select('*')
+      .textSearch('audio_transcript', trimmed, { type: 'websearch', config: 'english' })
       .order('memory_date', { ascending: false })
       .limit(MEMORIES_SEARCH_LIMIT),
     emotionMatch
@@ -742,11 +758,18 @@ export async function searchMemories(query: string): Promise<{
   if (contentResult.error) {
     return { data: null, error: mapSupabaseError(contentResult.error) };
   }
+  if (transcriptResult.error) {
+    return { data: null, error: mapSupabaseError(transcriptResult.error) };
+  }
   if (emotionResult.error) {
     return { data: null, error: mapSupabaseError(emotionResult.error) };
   }
 
-  const memories = dedupeById([...(contentResult.data ?? []), ...(emotionResult.data ?? [])])
+  const memories = dedupeById([
+    ...(contentResult.data ?? []),
+    ...(transcriptResult.data ?? []),
+    ...(emotionResult.data ?? []),
+  ])
     .sort(compareMemoriesDesc)
     .slice(0, MEMORIES_SEARCH_LIMIT);
 
@@ -888,6 +911,17 @@ export async function runTextOnlyEmotionAnalysis(memoryId: string): Promise<stri
   return data?.emotion ?? null;
 }
 
+// Audio memories route through analyze-emotion's text-classifier path over
+// content (description) + audio_transcript (docs/plans/audio-memories-v1.md
+// P1.4/P2.4) -- the server dispatches on the row's own memory_type, so this
+// is functionally identical to the other two analyze* wrappers above, kept
+// as its own named export for call-site clarity and so a future divergence
+// (e.g. a distinct retry policy) doesn't require touching every caller.
+export async function runAudioEmotionAnalysis(memoryId: string): Promise<string | null> {
+  const { data } = await analyzeEmotionWithRetry(memoryId);
+  return data?.emotion ?? null;
+}
+
 export async function createMemory(input: CreateMemoryInput): Promise<{
   data: MemoryWithTags | null;
   error: ServiceError | null;
@@ -978,36 +1012,96 @@ async function rollbackMediaMemoryRow(memoryId: string): Promise<void> {
   }
 }
 
-/** Shared tail of createMediaMemory: replace media assets + tags against an
- * already-inserted (or repaired-orphan) memory row, rolling back that row on
- * either failure. Used by both the normal insert path and the 23505
- * orphan-repair path below. */
-async function continueCreateMediaMemory(
+/** Shared tail of createMediaMemory/createAudioMemory: replace media assets +
+ * tags against an already-inserted (or repaired-orphan) memory row, rolling
+ * back that row on either failure. Used by both the normal insert path and
+ * the 23505 orphan-repair path below, for both memory_type = 'media' and
+ * 'audio' (a single-element mediaAssets array for the latter). */
+async function continueCreateMemoryWithMedia(
   memory: Memory,
-  input: CreateMediaMemoryInput,
+  mediaAssets: MemoryMediaAssetInput[],
+  taggedMemberIds: string[],
 ): Promise<{ data: MemoryWithTags | null; error: ServiceError | null }> {
   // Onboarding media rows are created atomically before R2 upload and remain
   // marked onboarding-attributed until their tags have been restored. Insert
   // tags first so the row keeps the onboarding RLS exception through the
   // whole retry/finalization transaction; replace_memory_media_assets then
   // publishes the first object key and clears that marker.
-  const tagsError = await replaceMemoryTags(memory.id, input.taggedMemberIds);
+  const tagsError = await replaceMemoryTags(memory.id, taggedMemberIds);
   if (tagsError) {
     await rollbackMediaMemoryRow(memory.id);
-    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
+    await deleteStorageKeys(mediaAssetInputStorageKeys(mediaAssets));
     return { data: null, error: tagsError };
   }
 
-  const mediaReplaceError = await replaceMemoryMediaAssets(memory.id, input.mediaAssets);
+  const mediaReplaceError = await replaceMemoryMediaAssets(memory.id, mediaAssets);
   if (mediaReplaceError) {
     await rollbackMediaMemoryRow(memory.id);
-    await deleteStorageKeys(mediaAssetInputStorageKeys(input.mediaAssets));
+    await deleteStorageKeys(mediaAssetInputStorageKeys(mediaAssets));
     return { data: null, error: mediaReplaceError };
   }
 
   const tagMap = await fetchTagsForMemories([memory.id]);
   const mediaMap = await fetchMediaForMemories([memory.id]);
   return { data: attachMediaAssets(attachTags([memory], tagMap), mediaMap)[0], error: null };
+}
+
+async function continueCreateMediaMemory(
+  memory: Memory,
+  input: CreateMediaMemoryInput,
+): Promise<{ data: MemoryWithTags | null; error: ServiceError | null }> {
+  return continueCreateMemoryWithMedia(memory, input.mediaAssets, input.taggedMemberIds);
+}
+
+/** Shared 23505 retry-conflict resolver for both createMediaMemory and
+ * createAudioMemory -- parameterized on the expected memory_type so an
+ * audio retry-conflict is repaired the same way a media one is, instead of
+ * silently giving up (docs/plans/audio-memories-v1.md P2.4). See
+ * resolveMediaMemoryInsertConflict's original doc comment (preserved below)
+ * for the full repair-vs-idempotent-replay rationale. */
+async function resolveMemoryInsertConflict(params: {
+  memoryId: string;
+  userId: string;
+  expectedMemoryType: MemoryType;
+  mediaAssets: MemoryMediaAssetInput[];
+  taggedMemberIds: string[];
+}): Promise<{ data: MemoryWithTags | null; error: ServiceError | null } | null> {
+  const { data: existingMemory, error: fetchError } = await supabase
+    .from('memories')
+    .select('*')
+    .eq('id', params.memoryId)
+    .maybeSingle();
+
+  if (fetchError || !existingMemory) {
+    return null;
+  }
+
+  if (
+    existingMemory.user_id !== params.userId ||
+    existingMemory.memory_type !== params.expectedMemoryType
+  ) {
+    return null;
+  }
+
+  const existingMediaAssets =
+    (await fetchMediaForMemories([existingMemory.id])).get(existingMemory.id) ?? [];
+
+  if (existingMediaAssets.length === 0) {
+    return continueCreateMemoryWithMedia(
+      existingMemory as Memory,
+      params.mediaAssets,
+      params.taggedMemberIds,
+    );
+  }
+
+  const tagMap = await fetchTagsForMemories([existingMemory.id]);
+  return {
+    data: attachMediaAssets(
+      attachTags([existingMemory as Memory], tagMap),
+      new Map([[existingMemory.id, existingMediaAssets]]),
+    )[0],
+    error: null,
+  };
 }
 
 /** The pending-upload queue retries createMediaMemory with the SAME
@@ -1026,35 +1120,33 @@ async function continueCreateMediaMemory(
 async function resolveMediaMemoryInsertConflict(
   input: CreateMediaMemoryInput,
 ): Promise<{ data: MemoryWithTags | null; error: ServiceError | null } | null> {
-  const { data: existingMemory, error: fetchError } = await supabase
-    .from('memories')
-    .select('*')
-    .eq('id', input.memoryId)
-    .maybeSingle();
+  return resolveMemoryInsertConflict({
+    memoryId: input.memoryId,
+    userId: input.userId,
+    expectedMemoryType: 'media',
+    mediaAssets: input.mediaAssets,
+    taggedMemberIds: input.taggedMemberIds,
+  });
+}
 
-  if (fetchError || !existingMemory) {
-    return null;
-  }
-
-  if (existingMemory.user_id !== input.userId || existingMemory.memory_type !== 'media') {
-    return null;
-  }
-
-  const existingMediaAssets =
-    (await fetchMediaForMemories([existingMemory.id])).get(existingMemory.id) ?? [];
-
-  if (existingMediaAssets.length === 0) {
-    return continueCreateMediaMemory(existingMemory as Memory, input);
-  }
-
-  const tagMap = await fetchTagsForMemories([existingMemory.id]);
-  return {
-    data: attachMediaAssets(
-      attachTags([existingMemory as Memory], tagMap),
-      new Map([[existingMemory.id, existingMediaAssets]]),
-    )[0],
-    error: null,
-  };
+/** Same repair-or-idempotent-replay logic as resolveMediaMemoryInsertConflict,
+ * for audio's single-clip retry conflicts. */
+async function resolveAudioMemoryInsertConflict(
+  input: CreateAudioMemoryInput,
+): Promise<{ data: MemoryWithTags | null; error: ServiceError | null } | null> {
+  return resolveMemoryInsertConflict({
+    memoryId: input.memoryId,
+    userId: input.userId,
+    expectedMemoryType: 'audio',
+    mediaAssets: [
+      {
+        objectKey: input.clip.objectKey,
+        contentType: input.clip.contentType,
+        durationMs: input.clip.durationMs ?? null,
+      },
+    ],
+    taggedMemberIds: input.taggedMemberIds,
+  });
 }
 
 export async function createMediaMemory(input: CreateMediaMemoryInput): Promise<{
@@ -1114,6 +1206,71 @@ export async function createMediaMemory(input: CreateMediaMemoryInput): Promise<
   return continueCreateMediaMemory(memory, input);
 }
 
+/** Parameterized fork of createMediaMemory for the audio memory type
+ * (docs/plans/audio-memories-v1.md P2.4) -- NOT a call into
+ * createMediaMemory, which hardcodes memory_type: 'media'. Shares the
+ * upload-rollback/conflict-repair internals via
+ * continueCreateMemoryWithMedia/resolveAudioMemoryInsertConflict above.
+ * content/audioTranscript are normalized empty-string-or-whitespace -> NULL
+ * (never '') -- patchAudioDescriptionIfEmpty's conditional backfill depends
+ * on that invariant to detect "still empty" via `.is('content', null)`. */
+export async function createAudioMemory(input: CreateAudioMemoryInput): Promise<{
+  data: MemoryWithTags | null;
+  error: ServiceError | null;
+}> {
+  const contentError = validateMemoryContent(input.content, 'audio');
+  if (contentError) {
+    return { data: null, error: { message: contentError, code: 'validation_error' } };
+  }
+
+  const dateError = validateMemoryDate(input.memoryDate);
+  if (dateError) {
+    return { data: null, error: { message: dateError, code: 'validation_error' } };
+  }
+
+  const tagError = validateTaggedMembers(input.taggedMemberIds);
+  if (tagError) {
+    return { data: null, error: { message: tagError, code: 'validation_error' } };
+  }
+
+  const clipAsset: MemoryMediaAssetInput = {
+    objectKey: input.clip.objectKey,
+    contentType: input.clip.contentType,
+    durationMs: input.clip.durationMs ?? null,
+  };
+
+  const { data: memory, error } = await supabase
+    .from('memories')
+    .insert({
+      id: input.memoryId,
+      user_id: input.userId,
+      family_id: input.familyId,
+      content: normalizeOptionalContent(input.content),
+      memory_date: input.memoryDate,
+      memory_type: 'audio',
+      media_key: clipAsset.objectKey,
+      media_content_type: clipAsset.contentType,
+      audio_transcript: normalizeOptionalContent(input.audioTranscript),
+      illustration_status: 'none',
+    })
+    .select('*')
+    .single();
+
+  if (error || !memory) {
+    if (error?.code === POSTGRES_UNIQUE_VIOLATION) {
+      const conflictResult = await resolveAudioMemoryInsertConflict(input);
+      if (conflictResult) {
+        return conflictResult;
+      }
+    }
+
+    await deleteStorageKeys(mediaAssetInputStorageKeys([clipAsset]));
+    return { data: null, error: mapSupabaseError(error ?? { message: 'Memory was not created' }) };
+  }
+
+  return continueCreateMemoryWithMedia(memory, [clipAsset], input.taggedMemberIds);
+}
+
 export async function updateMemory(
   memoryId: string,
   input: UpdateMemoryInput,
@@ -1143,6 +1300,23 @@ export async function updateMemory(
       data: null,
       error: {
         message: 'Media memories cannot be converted to or from text memories',
+        code: 'invalid_memory_type',
+      },
+    };
+  }
+
+  // Audio type immutability (docs/plans/audio-memories-v1.md P1.1/P2.4): the
+  // DB trigger memories_audio_type_immutable backs this, but the app-level
+  // guard gives a friendlier error instead of a raw Postgres 23514. An audio
+  // memory may only ever change content/memory_date/tags.
+  if (
+    (existingMemoryType === 'audio' && memoryType !== 'audio') ||
+    (existingMemoryType !== 'audio' && memoryType === 'audio')
+  ) {
+    return {
+      data: null,
+      error: {
+        message: 'Audio memories cannot be converted to or from other memory types',
         code: 'invalid_memory_type',
       },
     };
@@ -1284,6 +1458,70 @@ export async function updateMemory(
   }
 
   return result;
+}
+
+/**
+ * Post-save fire-and-forget backfill for an audio memory's AI-generated
+ * description/transcript when transcription resolves AFTER the memory row
+ * already saved (docs/plans/audio-memories-v1.md P2.2/P2.4 -- "keep the
+ * sound" never blocks on transcription). Two independent writes, each with
+ * its own semantics:
+ *  - `content` (the visible description): CONDITIONAL, empty-only, enforced
+ *    at the DB write via `.is('content', null)` -- never a client-side
+ *    read-then-write race. createAudioMemory's normalization guarantees
+ *    "no description yet" means NULL, never '', so this filter is the
+ *    correct emptiness check. A user who saved and immediately typed their
+ *    own caption in edit can never be clobbered by this late-arriving patch.
+ *  - `audio_transcript` (invisible, search-only): UNCONDITIONAL -- it is
+ *    never user-editable, so it always overwrites with the latest known
+ *    value, no `.is(...)` guard.
+ * Both calls swallow their own errors to console.warn and never throw --
+ * this must never surface as a user-facing failure on a memory that already
+ * saved successfully. No-ops (skips the write entirely) when the
+ * corresponding input value normalizes to empty, since there is nothing new
+ * to patch.
+ */
+export async function patchAudioDescriptionIfEmpty(
+  memoryId: string,
+  input: { description: string | null; transcript: string | null },
+): Promise<void> {
+  const normalizedDescription = normalizeOptionalContent(input.description);
+  const normalizedTranscript = normalizeOptionalContent(input.transcript);
+
+  try {
+    if (normalizedDescription !== null) {
+      const { error } = await supabase
+        .from('memories')
+        .update({ content: normalizedDescription })
+        .eq('id', memoryId)
+        .is('content', null);
+
+      if (error) {
+        console.warn('patchAudioDescriptionIfEmpty failed to patch content', memoryId, error.message);
+      }
+    }
+
+    if (normalizedTranscript !== null) {
+      const { error } = await supabase
+        .from('memories')
+        .update({ audio_transcript: normalizedTranscript })
+        .eq('id', memoryId);
+
+      if (error) {
+        console.warn(
+          'patchAudioDescriptionIfEmpty failed to patch transcript',
+          memoryId,
+          error.message,
+        );
+      }
+    }
+  } catch (error) {
+    console.warn(
+      'patchAudioDescriptionIfEmpty failed',
+      memoryId,
+      error instanceof Error ? error.message : 'unknown',
+    );
+  }
 }
 
 export async function deleteMemory(memoryId: string): Promise<{ error: ServiceError | null }> {

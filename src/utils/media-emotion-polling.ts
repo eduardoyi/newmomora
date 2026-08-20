@@ -12,6 +12,7 @@ type EmotionPollMemory = Pick<
   | 'created_at'
   | 'content'
   | 'illustration_status'
+  | 'audio_transcript'
 > & {
   mediaAssets?: { content_type: string }[];
 };
@@ -33,6 +34,13 @@ export function isEmotionAnalyzable(memory: EmotionPollMemory): boolean {
 
   if (memory.memory_type === 'text_only' || memory.memory_type === 'text_illustration') {
     return Boolean(memory.content?.trim());
+  }
+
+  // Audio memories analyze over the visible description (content) or the
+  // invisible transcript (docs/plans/audio-memories-v1.md P1.4) -- either
+  // alone is enough source material for the text classifier.
+  if (memory.memory_type === 'audio') {
+    return Boolean(memory.content?.trim()) || Boolean(memory.audio_transcript?.trim());
   }
 
   return false;

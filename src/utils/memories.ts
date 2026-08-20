@@ -21,7 +21,29 @@ export interface IllustrationRecoveryMemory {
   created_at?: string | null;
 }
 
-export type MemoryType = 'text_illustration' | 'text_only' | 'media';
+export type MemoryType = 'text_illustration' | 'text_only' | 'media' | 'audio';
+
+/**
+ * Every `memory_type` this build knows how to render. A row whose type is
+ * outside this set (e.g. a hypothetical future memory type fetched by an
+ * old installed client, before that client has updated -- the same
+ * forward-compat pattern `'audio'` itself needed pre-launch, P0.1,
+ * docs/plans/audio-memories-v1.md) must degrade gracefully rather than fall
+ * through into a branch that assumes one of these four shapes.
+ */
+export const KNOWN_MEMORY_TYPES: readonly MemoryType[] = ['text_illustration', 'text_only', 'media', 'audio'];
+
+export function isKnownMemoryType(type: string): type is MemoryType {
+  return (KNOWN_MEMORY_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * Shown wherever a card/detail screen would normally render a type-specific
+ * visual (illustration, media, future audio player) for a `memory_type` this
+ * build doesn't recognize -- never an error tone, just an honest "there's
+ * more here than this build can show" notice (P0.1).
+ */
+export const UNSUPPORTED_MEMORY_TYPE_NOTICE = 'Update Momora to play this memory.';
 
 export const MAX_MEMORY_MEDIA_ASSETS = 10;
 
@@ -59,6 +81,26 @@ export interface CreateMediaMemoryInput {
   taggedMemberIds: string[];
 }
 
+export interface CreateAudioMemoryInput {
+  userId: string;
+  familyId: string;
+  memoryId: string;
+  /** The visible, editable description. Normalized to NULL when empty/whitespace
+   * -- never stored as '' -- see normalizeOptionalContent in services/memories.ts
+   * and patchAudioDescriptionIfEmpty's `.is('content', null)` backfill guard. */
+  content?: string | null;
+  /** Invisible, search-only transcript. Same empty-string-to-NULL normalization
+   * as content. Never rendered client-side. */
+  audioTranscript?: string | null;
+  memoryDate: string;
+  taggedMemberIds: string[];
+  clip: {
+    objectKey: string;
+    contentType: string;
+    durationMs?: number | null;
+  };
+}
+
 export interface UpdateMemoryInput {
   content?: string;
   memoryDate?: string;
@@ -71,7 +113,10 @@ export function validateMemoryContent(
   content: string | null | undefined,
   memoryType: MemoryType = 'text_illustration',
 ): string | null {
-  if (memoryType === 'media') {
+  // Audio's visible description is optional, exactly like media's caption --
+  // the description is AI-generated and may be empty (unusable/no speech),
+  // and the kept clip itself is the artifact (docs/features/audio-memories.md).
+  if (memoryType === 'media' || memoryType === 'audio') {
     if (content == null) {
       return null;
     }

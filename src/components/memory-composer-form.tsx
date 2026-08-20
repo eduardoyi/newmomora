@@ -75,6 +75,18 @@ export interface MemoryComposerFormProps {
   contentEditable?: boolean;
   /** gallery-import only -- new-memory/edit-memory leave content unbounded. */
   contentMaxLength?: number;
+  /** Forces a fresh native TextInput instance when it changes (new-memory
+   * audio: `isAudio ? 'audio-note' : 'text-note'`) -- device-confirmed fix
+   * for a controlled RN TextInput silently keeping its last-painted native
+   * text instead of a programmatic `value` update while it still holds
+   * focus. Undefined for every other caller (no remount forced). */
+  contentKey?: string;
+  /** Replaces the content TextInput entirely (new-memory audio: the
+   * "Writing a note from what you said…" generating placeholder). While
+   * set, the word count / contentBelowSlot row is also skipped, matching
+   * how the generating placeholder fully owns that space. Undefined for
+   * every other caller. */
+  contentSlot?: ReactNode;
   /** Rendered directly under the content field, replacing the word count
    * (gallery-import: the AI-draft hint / "Restore Momora's draft"). Only
    * one of the word count or this slot is ever shown, matching how
@@ -163,6 +175,8 @@ export function MemoryComposerForm({
   hasMediaRegion,
   contentEditable = true,
   contentMaxLength,
+  contentKey,
+  contentSlot,
   contentBelowSlot,
   noticeSlot,
   illustrationSlot,
@@ -235,21 +249,28 @@ export function MemoryComposerForm({
           {dateAccessorySlot}
         </View>
 
-        {/* Text area -- grows to fill space when no media/illustration present */}
-        <TextInput
-          editable={contentEditable}
-          maxLength={contentMaxLength}
-          multiline
-          value={contentValue}
-          onChangeText={onContentChange}
-          placeholder={contentPlaceholder}
-          placeholderTextColor={colors.ink3}
-          style={[styles.textarea, hasMediaRegion ? styles.textareaCaption : null]}
-          testID={contentTestID}
-        />
-        {contentBelowSlot ?? (!hasMediaRegion && (
-          <Text style={styles.wordCount}>{wordCount} {wordCount === 1 ? 'word' : 'words'}</Text>
-        ))}
+        {/* Text area -- grows to fill space when no media/illustration present.
+            contentSlot (new-memory audio: the "writing a note" generating
+            placeholder) replaces it, and the row below, entirely. */}
+        {contentSlot ?? (
+          <>
+            <TextInput
+              key={contentKey}
+              editable={contentEditable}
+              maxLength={contentMaxLength}
+              multiline
+              value={contentValue}
+              onChangeText={onContentChange}
+              placeholder={contentPlaceholder}
+              placeholderTextColor={colors.ink3}
+              style={[styles.textarea, hasMediaRegion ? styles.textareaCaption : null]}
+              testID={contentTestID}
+            />
+            {contentBelowSlot ?? (!hasMediaRegion && (
+              <Text style={styles.wordCount}>{wordCount} {wordCount === 1 ? 'word' : 'words'}</Text>
+            ))}
+          </>
+        )}
 
         {noticeSlot}
 

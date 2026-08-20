@@ -357,6 +357,44 @@ describe('useMemoriesRealtime', () => {
     expect(list?.pages[0]?.memories[0]?.mediaAssets).toHaveLength(1);
   });
 
+  // P3.3 (docs/plans/audio-memories-v1.md) -- a cross-device audio insert
+  // races its own single memory_media row exactly like 'media' does.
+  it('retries once when an audio INSERT races its own clip-asset insert', async () => {
+    const emptyClip = buildMemoryWithTags({ id: 'memory-4', memory_type: 'audio', mediaAssets: [] });
+    const withClip = buildMemoryWithTags({
+      id: 'memory-4',
+      memory_type: 'audio',
+      mediaAssets: [
+        {
+          id: 'clip-1',
+          memory_id: 'memory-4',
+          object_key: 'k.m4a',
+          content_type: 'audio/mp4',
+          duration_ms: 20_000,
+          aspect_ratio: null,
+          preview_object_key: null,
+          share_card_key: null,
+          position: 0,
+          created_at: '2026-07-15T00:00:00.000Z',
+          updated_at: '2026-07-15T00:00:00.000Z',
+        },
+      ],
+    });
+    mockedFetchMemoryById.mockResolvedValueOnce({ data: emptyClip, error: null });
+    mockedFetchMemoryById.mockResolvedValueOnce({ data: withClip, error: null });
+    queryClient.setQueryData(memoriesQueryKey(FAMILY_ID), buildInfiniteData([]));
+
+    renderHook(() => useMemoriesRealtime(FAMILY_ID), { wrapper });
+
+    fake.emit('INSERT', { new: buildMemoryRow({ id: 'memory-4', memory_type: 'audio' }), old: {} });
+    await jest.advanceTimersByTimeAsync(1500); // initial fetch fires, comes back empty
+    await jest.advanceTimersByTimeAsync(1500); // retry fires
+
+    expect(mockedFetchMemoryById).toHaveBeenCalledTimes(2);
+    const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey(FAMILY_ID));
+    expect(list?.pages[0]?.memories[0]?.mediaAssets).toHaveLength(1);
+  });
+
   it('removes the memory from list caches on DELETE', () => {
     queryClient.setQueryData(
       memoriesQueryKey(FAMILY_ID),

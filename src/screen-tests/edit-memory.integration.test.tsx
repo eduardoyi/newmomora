@@ -60,6 +60,19 @@ jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrls: jest.fn(),
 }));
 
+jest.mock('@/hooks/useAudioClipPlayback', () => ({
+  useAudioClipPlayback: jest.fn(() => ({
+    playing: false,
+    position: 0,
+    duration: 0,
+    progress: 0,
+    loading: false,
+    error: null,
+    toggle: jest.fn(),
+    seekTo: jest.fn(),
+  })),
+}));
+
 const mockedUseAutoMemoryTags = useAutoMemoryTags as jest.Mock;
 const mockedUseFamily = useFamily as jest.Mock;
 const mockedUseFamilyMembers = useFamilyMembers as jest.Mock;
@@ -229,6 +242,42 @@ describe('EditMemoryScreen', () => {
     );
   });
 
+  // P0.1 forward-compat fallback (docs/plans/audio-memories-v1.md) -- a
+  // memory_type this build doesn't recognize yet (a hypothetical future
+  // type -- 'audio' itself is now known and editable, so the fixture below
+  // uses a never-real string instead) previously opened as a misleadingly-
+  // empty "Text only" note. It must now be read-only: no editing
+  // affordances, Save disabled.
+  it('renders read-only with Save disabled for an unrecognized memory_type', () => {
+    mockedUseMemory.mockReturnValue({
+      data: {
+        id: 'memory-1',
+        content: 'A giggle worth keeping',
+        memory_date: '2026-07-14',
+        memory_type: 'hologram',
+        media_key: null,
+        media_content_type: null,
+        mediaAssets: [],
+        taggedMembers: [],
+        illustration_key: null,
+        illustration_status: 'none',
+        updated_at: '2026-07-14T09:00:00.000Z',
+      },
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('edit-memory-unavailable-notice')).toHaveTextContent(
+      'This memory needs a newer version of Momora to edit.',
+    );
+    expect(screen.getByTestId('edit-memory-save-btn').props.accessibilityState?.disabled).toBe(true);
+    expect(screen.queryByTestId('edit-memory-content')).toBeNull();
+    expect(screen.queryByTestId('edit-memory-ai-toggle')).toBeNull();
+    expect(updateMemory).not.toHaveBeenCalled();
+  });
+
   it('disables AI with concise helper copy above six tags', () => {
     mockedUseAutoMemoryTags.mockReturnValue({
       selectedMemberIds: Array.from({ length: 7 }, (_, index) => `member-${index}`),
@@ -242,5 +291,111 @@ describe('EditMemoryScreen', () => {
 
     expect(screen.getByTestId('edit-memory-ai-toggle').props.disabled).toBe(true);
     expect(screen.getByText('Up to 6 people per illustration')).toBeTruthy();
+  });
+});
+
+// P3.2 (docs/plans/audio-memories-v1.md) -- audio memories are the real,
+// known, EDITABLE type here: description/date/tags, clip immutable.
+describe('EditMemoryScreen audio variant', () => {
+  const audioMemoryData = (overrides: Record<string, unknown> = {}) => ({
+    id: 'memory-1',
+    content: 'Lila singing Twinkle Twinkle in the bath.',
+    memory_date: '2026-07-14',
+    memory_type: 'audio',
+    media_key: 'user-1/memories/memory-1/media/clip-1.m4a',
+    media_content_type: 'audio/mp4',
+    mediaAssets: [
+      {
+        id: 'clip-1',
+        object_key: 'user-1/memories/memory-1/media/clip-1.m4a',
+        content_type: 'audio/mp4',
+        duration_ms: 42_000,
+        aspect_ratio: null,
+      },
+    ],
+    taggedMembers: [],
+    illustration_key: null,
+    illustration_status: 'none',
+    updated_at: '2026-07-14T09:00:00.000Z',
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedUseFamily.mockReturnValue({ role: 'manager' });
+    mockedUseFamilyMembers.mockReturnValue({ members: [] });
+    mockedUseMemoryMutations.mockReturnValue({ updateMemory, isUpdating: false });
+    mockedUseMediaUrl.mockReturnValue({ url: undefined });
+    mockedUseMediaUrls.mockReturnValue({ data: undefined });
+    mockedUseAutoMemoryTags.mockReturnValue({
+      selectedMemberIds: [],
+      initializeTags,
+      applyForContent: jest.fn(),
+      toggleMember: jest.fn(),
+      applyVoiceResult: jest.fn(),
+    });
+    mockedUseMemory.mockReturnValue({ data: audioMemoryData(), isLoading: false, isPlaceholderData: false });
+  });
+
+  it('opens editable, with the description prefilled, the "Sound" type pill, and no media/AI affordances', () => {
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('edit-memory-content').props.value).toBe(
+      'Lila singing Twinkle Twinkle in the bath.',
+    );
+    expect(screen.getByText('· Sound')).toBeTruthy();
+    expect(screen.queryByTestId('edit-memory-ai-toggle')).toBeNull();
+    expect(screen.getByTestId('edit-memory-audio-clip')).toBeTruthy();
+  });
+
+  it('never renders a remove control on the clip', () => {
+    const screen = renderScreen();
+    expect(screen.queryByTestId('edit-memory-audio-clip-remove')).toBeNull();
+  });
+
+  it('disables the mic with the "cannot be re-recorded" hint, and never opens the voice modal', () => {
+    const screen = renderScreen();
+
+    const micButton = screen.getByTestId('edit-memory-voice-trigger');
+    expect(micButton.props.accessibilityState?.disabled).toBe(true);
+    expect(screen.getByText('This sound cannot be re-recorded.')).toBeTruthy();
+
+    fireEvent.press(micButton);
+    // A disabled Pressable's onPress never fires -- nothing to assert on a
+    // mock here beyond "the screen didn't crash navigating into a modal
+    // that isn't wired for audio," which the render above already covers.
+  });
+
+  it('saves description/date/tags as an audio memory, never sending mediaAssets', async () => {
+    const screen = renderScreen();
+
+    fireEvent.changeText(screen.getByTestId('edit-memory-content'), 'Updated note about the sound');
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-save-btn'));
+    });
+
+    expect(updateMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryId: 'memory-1',
+        content: 'Updated note about the sound',
+        memoryType: 'audio',
+        mediaAssets: undefined,
+      }),
+    );
+  });
+
+  it('allows saving with an empty description -- the clip is the artifact', async () => {
+    const screen = renderScreen();
+
+    fireEvent.changeText(screen.getByTestId('edit-memory-content'), '');
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-save-btn'));
+    });
+
+    expect(updateMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '', memoryType: 'audio' }),
+    );
   });
 });

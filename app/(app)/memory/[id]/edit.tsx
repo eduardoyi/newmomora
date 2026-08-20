@@ -4,6 +4,7 @@ import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Pressable,
   StyleSheet,
   Switch,
   Text,
@@ -11,6 +12,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { seedFromKey } from '@/components/audio/audio-seed';
+import { ClipChip } from '@/components/audio/clip-chip';
 import { MemoryComposerForm, type MemoryComposerTypeBadge } from '@/components/memory-composer-form';
 import {
   MemoryMediaPicker,
@@ -18,13 +21,14 @@ import {
 } from '@/components/memory-media-picker';
 import { VoiceSpeakItModal } from '@/components/voice-speak-it-modal';
 import { colors, fonts, spacing } from '@/constants/theme';
+import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
 import { mediaImageSource } from '@/utils/media-image-source';
-import { MAX_ILLUSTRATION_MEMBERS } from '@/utils/memories';
+import { isKnownMemoryType, MAX_ILLUSTRATION_MEMBERS } from '@/utils/memories';
 import { canEditFamilyContent } from '@/utils/roles';
 
 const TYPE_CONFIGS = {
@@ -33,6 +37,7 @@ const TYPE_CONFIGS = {
   media_photo:       { label: 'Photo',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
   media_video:       { label: 'Video',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
   media_mixed:       { label: 'Media',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
+  audio:             { label: 'Sound',        color: colors.seaInk,  bg: colors.seaSoft,     border: colors.sea },
 } as const;
 
 const EMPTY_MEDIA_URLS: Record<string, string> = {};
@@ -146,6 +151,10 @@ export default function EditMemoryScreen() {
   }, [isInitialized, mediaUrls]);
 
   const isMedia = memory?.memory_type === 'media';
+  // Audio is exclusive and immutable (docs/plans/audio-memories-v1.md P3.2):
+  // description/date/tags are editable, the clip itself never is -- no media
+  // picker, no AI-illustration toggle, mic disabled.
+  const isAudio = memory?.memory_type === 'audio';
   const isIllustrationOverLimit = selectedMemberIds.length > MAX_ILLUSTRATION_MEMBERS;
   const isIllustrationEnabled = illustrationEnabled && !isIllustrationOverLimit;
   const hasRetainedIllustration = Boolean(memory?.illustration_key);
@@ -157,6 +166,12 @@ export default function EditMemoryScreen() {
       (memory?.illustration_status && memory.illustration_status !== 'none'),
   );
 
+  const audioClipAsset = isAudio ? memory?.mediaAssets[0] ?? null : null;
+  const audioClipKey = audioClipAsset?.object_key ?? memory?.media_key ?? null;
+  const { url: audioClipUrl } = useMediaUrl(isAudio ? audioClipKey : null, memory?.updated_at);
+  const audioClipPlayback = useAudioClipPlayback(audioClipUrl);
+  const audioDurationSeconds = (audioClipAsset?.duration_ms ?? 0) / 1000;
+
   const typeKey =
     memory?.memory_type === 'media' && attachedMedia.length > 1
       ? 'media_mixed'
@@ -164,6 +179,8 @@ export default function EditMemoryScreen() {
       ? 'media_video'
       : memory?.memory_type === 'media'
       ? 'media_photo'
+      : isAudio
+      ? 'audio'
       : isIllustrationEnabled
       ? 'text_illustration'
       : 'text_only';
@@ -171,8 +188,9 @@ export default function EditMemoryScreen() {
 
   const hasAttachment =
     isMedia ||
+    isAudio ||
     (isIllustrationEnabled && (hasRetainedIllustration || isIllustrationJobInProgress));
-  const canSave = isMedia ? attachedMedia.length > 0 : content.trim().length > 0;
+  const canSave = isMedia ? attachedMedia.length > 0 : isAudio ? true : content.trim().length > 0;
 
   const voiceMembers = useMemo(
     () => members.map((m) => ({ id: m.id, name: m.name, nicknames: m.nicknames ?? [], is_user_profile: m.is_user_profile })),
@@ -227,9 +245,13 @@ export default function EditMemoryScreen() {
         taggedMemberIds: selectedMemberIds,
         memoryType: isMedia
           ? 'media'
-          : isIllustrationEnabled
-            ? 'text_illustration'
-            : 'text_only',
+          : isAudio
+            ? 'audio'
+            : isIllustrationEnabled
+              ? 'text_illustration'
+              : 'text_only',
+        // Never sent for audio -- the clip is immutable post-save (P3.2);
+        // updateMemory rejects a mediaAssets write for any non-media type.
         mediaAssets: isMedia
           ? attachedMedia.map((attachment) => ({
               objectKey: attachment.objectKey,
@@ -267,6 +289,34 @@ export default function EditMemoryScreen() {
     );
   }
 
+  // Forward-compat fallback (P0.1): a `memory_type` this build doesn't
+  // recognize yet (a hypothetical future type -- 'audio' itself is now
+  // known and editable, see the `isAudio` branch below) previously opened
+  // as a misleadingly-empty "Text only" note -- saving couldn't corrupt the
+  // row (updateMemory's `memoryType` write is always one of the four known
+  // types), but the form itself was misleading. Read-only instead: no
+  // type-editing affordances, Save disabled.
+  if (!isKnownMemoryType(memory.memory_type)) {
+    return (
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()} style={styles.headerTextBtn} testID="edit-memory-cancel">
+            <Text style={styles.cancelText}>Cancel</Text>
+          </Pressable>
+          <View style={styles.headerSpacer} />
+          <Pressable disabled style={styles.headerTextBtn} testID="edit-memory-save-btn">
+            <Text style={[styles.saveText, styles.saveTextDisabled]}>Save</Text>
+          </Pressable>
+        </View>
+        <View style={styles.centered}>
+          <Text style={styles.unavailableNotice} testID="edit-memory-unavailable-notice">
+            This memory needs a newer version of Momora to edit.
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   const illustrationSlot = isIllustrationEnabled && (hasRetainedIllustration || isIllustrationJobInProgress) ? (
     illustrationUrl ? (
       <Image
@@ -282,6 +332,25 @@ export default function EditMemoryScreen() {
       </View>
     )
   ) : null;
+
+  // The clip -- read-only, recessed, no remove control (P3.2). Only the
+  // description/tags/date are editable for an audio memory.
+  const noticeSlot = isAudio ? (
+    <View style={styles.audioClipWrap}>
+      <ClipChip
+        durationSeconds={audioDurationSeconds}
+        emotion={memory.emotion}
+        onToggle={() => void audioClipPlayback.toggle()}
+        playing={audioClipPlayback.playing}
+        positionSeconds={audioClipPlayback.position}
+        progress={audioClipPlayback.progress}
+        recessed
+        seed={seedFromKey(memory.id)}
+        testID="edit-memory-audio-clip"
+      />
+      <Text style={styles.audioClipCaption}>Kept as recorded</Text>
+    </View>
+  ) : undefined;
 
   return (
     <MemoryComposerForm
@@ -299,6 +368,7 @@ export default function EditMemoryScreen() {
       isSaving={isUpdating}
       maxSelectedMembers={isIllustrationEnabled && hasIllustrationHistory ? MAX_ILLUSTRATION_MEMBERS : undefined}
       members={members}
+      noticeSlot={noticeSlot}
       onCancel={() => router.back()}
       onContentChange={handleContentChange}
       onDateChange={setMemoryDate}
@@ -329,7 +399,9 @@ export default function EditMemoryScreen() {
           />
         </View>
       )}
-      toolbarTrailingSlot={!isMedia ? (
+      toolbarTrailingSlot={isAudio ? (
+        <Text style={styles.audioToolbarHint}>This sound cannot be re-recorded.</Text>
+      ) : !isMedia ? (
         <View style={styles.toggleRow}>
           <View style={styles.toggleCopy}>
             <Text style={[styles.toggleLabel, !isIllustrationEnabled && styles.toggleLabelOff]}>
@@ -358,7 +430,7 @@ export default function EditMemoryScreen() {
         </View>
       ) : null}
       typeBadge={typeCfg as MemoryComposerTypeBadge}
-      voiceDisabled={isUpdating}
+      voiceDisabled={isUpdating || isAudio}
       voiceModalSlot={(
         <VoiceSpeakItModal
           familyMembers={voiceMembers}
@@ -387,6 +459,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 0,
+  },
+  headerTextBtn: {
+    padding: 4,
+    minWidth: 48,
+    alignItems: 'center',
+  },
+  headerSpacer: {
+    flex: 1,
+  },
+  cancelText: {
+    fontFamily: fonts.sansBold,
+    fontSize: 16,
+    color: colors.primary,
+  },
+  saveText: {
+    fontFamily: fonts.sansBold,
+    fontSize: 16,
+    color: colors.primary,
+  },
+  saveTextDisabled: {
+    color: colors.ink3,
+  },
   attachmentImage: {
     flex: 1,
     borderRadius: 16,
@@ -410,6 +511,24 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sans,
     fontSize: 13,
     color: colors.ink3,
+  },
+  audioClipWrap: {
+    marginBottom: spacing.md,
+    gap: 8,
+  },
+  audioClipCaption: {
+    alignSelf: 'flex-start',
+    fontFamily: fonts.sansMedium,
+    fontSize: 11.5,
+    color: colors.ink3,
+  },
+  audioToolbarHint: {
+    flex: 1,
+    fontFamily: fonts.sans,
+    fontSize: 11,
+    color: colors.ink3,
+    textAlign: 'right',
+    lineHeight: 14,
   },
   toolbarIconBtn: {
     width: 46,
@@ -456,5 +575,17 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sans,
     fontSize: 13,
     color: colors.error,
+  },
+  unavailableNotice: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: 16,
+    borderWidth: 1,
+    color: colors.ink3,
+    fontFamily: fonts.sansMedium,
+    fontSize: 14,
+    marginHorizontal: 20,
+    padding: spacing.lg,
+    textAlign: 'center',
   },
 });

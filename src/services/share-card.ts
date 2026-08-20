@@ -276,7 +276,10 @@ export interface ShareCardWarmableMemory {
  * cold-path, rare shares, the retry still exists). A media memory with zero
  * mediaAssets (defensive-only -- validateMemoryMediaAssets requires at
  * least one) skips warming entirely rather than warming a memory-level card
- * that compose-share-card would reject for a `media` type.
+ * that compose-share-card would reject for a `media` type. `audio` also
+ * skips entirely (docs/plans/audio-memories-v1.md P3.3) -- it isn't in
+ * SHAREABLE_MEMORY_TYPES, so a per-MEMORY warm would only ever hit the
+ * server's 400.
  */
 export function warmShareCardForMemoryFireAndForget(memory: ShareCardWarmableMemory): void {
   if (memory.memory_type === 'media') {
@@ -285,6 +288,14 @@ export function warmShareCardForMemoryFireAndForget(memory: ShareCardWarmableMem
       return;
     }
     warmShareCardFireAndForget(memory.id, coverAssetId);
+    return;
+  }
+  // 'audio' is not in SHAREABLE_MEMORY_TYPES (compose-share-card/index.ts)
+  // -- the server rejects it outright (docs/features/audio-memories.md,
+  // docs/plans/audio-memories-v1.md P3.3). Never fire a warm doomed to a
+  // 400; skip entirely rather than falling into the generic per-MEMORY path
+  // below, which only fits the other two (still-shareable) text types.
+  if (memory.memory_type === 'audio') {
     return;
   }
   warmShareCardFireAndForget(memory.id);

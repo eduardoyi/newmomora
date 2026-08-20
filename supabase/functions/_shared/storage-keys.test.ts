@@ -188,6 +188,40 @@ Deno.test('parseStorageKey recognizes a jpg-suffixed portrait attempt key', () =
   });
 });
 
+// Audio memories "keep the sound" (docs/features/audio-memories.md, P1.3):
+// expo-audio records .m4a on both native platforms. All four extension
+// allow-lists (unqualified `media.{ext}`, asset `media/{id}.{ext}`, and their
+// FULL/parseStorageKey counterparts) must accept it, or an uploaded clip is
+// unplayable (get-media-url fails closed) even though the upload succeeded.
+Deno.test('m4a is accepted by the upload allow-list, the deletable-key allow-list, and parseStorageKey', () => {
+  const assetKey = buildMemoryMediaAssetKey(USER_ID, MEMORY_ID, GENERATION_ID, 'm4a');
+  assertEquals(assetKey, `${USER_ID}/memories/${MEMORY_ID}/media/${GENERATION_ID}.m4a`);
+
+  assertEquals(isAllowedUploadKey(assetKey, USER_ID), true);
+  assertEquals(isDeletableUserObjectKey(assetKey, USER_ID), true);
+
+  const contentTypes = getAllowedContentTypes(assetKey, USER_ID);
+  assertEquals(contentTypes?.has('audio/mp4'), true);
+  assertEquals(contentTypes?.has('audio/m4a'), true);
+  assertEquals(contentTypes?.has('audio/x-m4a'), true);
+
+  assertEquals(parseStorageKey(assetKey), {
+    kind: 'memory_media',
+    ownerUserId: USER_ID,
+    entityId: MEMORY_ID,
+  });
+
+  // The unqualified `media.{ext}` shape (legacy single-asset key) also
+  // accepts m4a.
+  const legacyKey = buildMemoryMediaKey(USER_ID, MEMORY_ID, 'm4a');
+  assertEquals(isAllowedUploadKey(legacyKey, USER_ID), true);
+  assertEquals(parseStorageKey(legacyKey), {
+    kind: 'memory_media',
+    ownerUserId: USER_ID,
+    entityId: MEMORY_ID,
+  });
+});
+
 Deno.test('isDeletableUserObjectKey accepts known user object patterns', () => {
   assertEquals(isDeletableUserObjectKey(buildMemoryMediaKey(USER_ID, MEMORY_ID, 'jpg'), USER_ID), true);
   assertEquals(
