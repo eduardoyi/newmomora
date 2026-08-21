@@ -30,6 +30,7 @@ import { resolveAttributionName, useFamilyMemberProfiles } from '@/hooks/useFami
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { MAX_COMMENT_LENGTH, type MemoryComment } from '@/services/engagement';
 import type { MemoryWithTags } from '@/services/memories';
+import { getBottomSheetBottomPadding, shouldDismissBottomSheet } from '@/utils/bottom-sheet-dismiss';
 import { formatEngagementTimestamp } from '@/utils/engagement';
 import { canEditFamilyContent } from '@/utils/roles';
 
@@ -38,9 +39,6 @@ interface MemoryCommentsDrawerProps {
   visible: boolean;
   onClose: () => void;
 }
-
-const COMMENTS_DRAWER_DISMISS_DISTANCE = 120;
-const COMMENTS_DRAWER_DISMISS_VELOCITY = 900;
 
 export function getCommentsKeyboardAvoidingBehavior(
   platform: string,
@@ -51,17 +49,13 @@ export function getCommentsKeyboardAvoidingBehavior(
   return undefined;
 }
 
-export function getCommentsDrawerBottomPadding(
-  bottomInset: number,
-  isKeyboardVisible: boolean,
-) {
-  return isKeyboardVisible ? 0 : Math.max(bottomInset, spacing.md);
-}
-
-export function shouldDismissCommentsDrawer(translationY: number, velocityY: number) {
-  'worklet';
-  return translationY >= COMMENTS_DRAWER_DISMISS_DISTANCE || velocityY >= COMMENTS_DRAWER_DISMISS_VELOCITY;
-}
+// Thin re-exports so this file's public API (and every existing caller/test
+// importing these two names from here) stays unchanged -- the actual
+// thresholds now live in src/utils/bottom-sheet-dismiss.ts so a second
+// in-house sheet (FamilyActivitySheet) can reuse them without pulling in
+// this file's full hook chain. Behavior is identical.
+export const getCommentsDrawerBottomPadding = getBottomSheetBottomPadding;
+export const shouldDismissCommentsDrawer = shouldDismissBottomSheet;
 
 export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryCommentsDrawerProps) {
   const insets = useSafeAreaInsets();

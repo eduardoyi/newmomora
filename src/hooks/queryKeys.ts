@@ -18,6 +18,8 @@ export const familyMembersQueryKeyBase = 'family-members' as const;
 export const familyMemberProfilesQueryKeyBase = 'family-member-profiles' as const;
 export const familyInvitesQueryKeyBase = 'family-invites' as const;
 export const memoryCommentsQueryKeyBase = 'memory-comments' as const;
+export const familyActivityQueryKeyBase = 'family-activity' as const;
+export const familyActivityUnreadQueryKeyBase = 'family-activity-unread' as const;
 export const portraitVersionsQueryKeyBase = 'portrait-versions' as const;
 // Looking Back is both family- and account-scoped: the package materialization
 // belongs to the family, while reported/blocked visibility and viewed state
@@ -116,4 +118,12 @@ export function galleryImportRunStatusQueryKey(runId: string | null | undefined)
 
 export function galleryImportCandidatesQueryKey(runId: string | null | undefined) {
   return [galleryImportCandidatesQueryKeyBase, runId ?? 'none'] as const;
+}
+
+export function familyActivityQueryKey(familyId: string | null | undefined) {
+  return [familyActivityQueryKeyBase, familyId] as const;
+}
+
+export function familyActivityUnreadQueryKey(familyId: string | null | undefined) {
+  return [familyActivityUnreadQueryKeyBase, familyId] as const;
 }

@@ -20,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MemoryCard } from '@/components/memory-card';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
+import { FamilyActivitySheet } from '@/components/family-activity-sheet';
 import { MemoryFab } from '@/components/memory-fab';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
 import { LookingBackPackageRail } from '@/components/looking-back/package-rail';
@@ -29,6 +30,8 @@ import { ImportInviteCard } from '@/components/gallery-import/import-invite-card
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
+import { TimelineActivityBell } from '@/components/timeline-activity-bell';
+import { useFamilyActivityUnread } from '@/hooks/useFamilyActivity';
 import { useMemories } from '@/hooks/useMemories';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useGalleryImportEntryStatus } from '@/hooks/useGalleryImport';
@@ -42,6 +45,8 @@ import {
   memoryDetailRoute,
   newMemoryRoute,
   lookingBackPackageRoute,
+  sharingApprovalsRoute,
+  sharingInviteRoute,
   sharingMembersRoute,
 } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
@@ -220,20 +225,38 @@ function TimelineGalleryImportInvite() {
   return <ImportInviteCard onDismiss={handleDismiss} onStart={handleStart} />;
 }
 
-function TimelineTitle() {
+interface ActivityBellSlotProps {
+  unread: boolean;
+  onPressBell: () => void;
+}
+
+function TimelineTitle({ unread, onPressBell }: ActivityBellSlotProps) {
   const now = new Date();
   const dayLabel = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
   return (
     <View style={styles.header} testID="timeline-title-section">
-      <View style={styles.headerTitleRow}><View><Text style={styles.eyebrow}>{dayLabel}</Text><Text style={styles.title}>Your moments.</Text></View><TimelineImportGlyph /></View>
+      <View style={styles.headerTitleRow}>
+        <View>
+          <Text style={styles.eyebrow}>{dayLabel}</Text>
+          <Text style={styles.title}>Your moments.</Text>
+        </View>
+        <View style={styles.headerGlyphs}>
+          <TimelineActivityBell onPress={onPressBell} unread={unread} />
+          <TimelineImportGlyph />
+        </View>
+      </View>
     </View>
   );
 }
 
-function TimelineTitleWithStreak({ memories }: { memories: MemoryWithTags[] }) {
+function TimelineTitleWithStreak({
+  memories,
+  unread,
+  onPressBell,
+}: ActivityBellSlotProps & { memories: MemoryWithTags[] }) {
   return <>
-    <TimelineTitle />
+    <TimelineTitle onPressBell={onPressBell} unread={unread} />
     <View style={styles.streakWrap} testID="timeline-week-section">
       <StreakDots memories={memories} />
     </View>
@@ -248,8 +271,24 @@ function RecentlySection({ hasLookingBack }: { hasLookingBack: boolean }) {
 }
 
 export default function TimelineScreen() {
-  const { role } = useFamily();
+  const { role, familyId } = useFamily();
   const canEdit = canEditFamilyContent(role);
+  const { unread: hasUnreadActivity, refetch: refetchActivityUnread } = useFamilyActivityUnread(familyId);
+  const [isActivitySheetVisible, setIsActivitySheetVisible] = useState(false);
+  const handleOpenActivitySheet = useCallback(() => setIsActivitySheetVisible(true), []);
+  const handleCloseActivitySheet = useCallback(() => setIsActivitySheetVisible(false), []);
+  const handleActivityOpenMemory = useCallback((memoryId: string) => {
+    router.push(memoryDetailRoute(memoryId));
+  }, []);
+  const handleActivityOpenComments = useCallback((memoryId: string) => {
+    router.push(memoryDetailCommentsRoute(memoryId));
+  }, []);
+  const handleActivityOpenApprovals = useCallback(() => {
+    router.push(sharingApprovalsRoute);
+  }, []);
+  const handleActivityInvite = useCallback(() => {
+    router.push(sharingInviteRoute);
+  }, []);
   const { isLoading: isOnboardingLoading, needsFamilyMember } = useOnboardingStatus();
   const windowHeight = useWindowDimensions().height;
   // Coarse scroll-position tracking (a ref write, so no re-renders) --
@@ -376,7 +415,7 @@ export default function TimelineScreen() {
   const listHeader = useMemo(
     () => (
       <SafeAreaView edges={['top']} testID="timeline-top-sections">
-        <TimelineTitle />
+        <TimelineTitle onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
         <View style={styles.streakWrap} testID="timeline-week-section">
           <StreakDots memories={visibleMemories} />
         </View>
@@ -385,7 +424,7 @@ export default function TimelineScreen() {
         <PendingMemoryUploadsBanner />
       </SafeAreaView>
     ),
-    [handleOpenLookingBackPackage, lookingBack.packages, visibleMemories],
+    [handleOpenActivitySheet, handleOpenLookingBackPackage, hasUnreadActivity, lookingBack.packages, visibleMemories],
   );
 
   // fetchNextPage's signature (FetchNextPageOptions) doesn't match FlatList's
@@ -394,8 +433,8 @@ export default function TimelineScreen() {
     void fetchNextPage();
   }, [fetchNextPage]);
   const handleRefresh = useCallback(() => {
-    void Promise.all([refetch(), lookingBack.refetch()]);
-  }, [lookingBack, refetch]);
+    void Promise.all([refetch(), lookingBack.refetch(), refetchActivityUnread()]);
+  }, [lookingBack, refetch, refetchActivityUnread]);
 
   const listFooter = isFetchingNextPage ? (
     <View style={styles.listFooterLoading}>
@@ -452,7 +491,7 @@ export default function TimelineScreen() {
       {isLoading ? (
         <>
           <SafeAreaView>
-            <TimelineTitleWithStreak memories={memories} />
+            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
           </SafeAreaView>
           <View style={styles.centeredInline}>
             <ActivityIndicator color={colors.primary} size="large" />
@@ -465,7 +504,7 @@ export default function TimelineScreen() {
           }
         >
           <SafeAreaView>
-            <TimelineTitleWithStreak memories={memories} />
+            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
           </SafeAreaView>
           <Text style={styles.errorText}>Could not load memories</Text>
         </ScrollView>
@@ -478,7 +517,7 @@ export default function TimelineScreen() {
           testID="timeline-hidden-content-state"
         >
           <SafeAreaView>
-            <TimelineTitleWithStreak memories={memories} />
+            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.hiddenOnlyTitle}>Blocked-account memories are hidden</Text>
@@ -503,7 +542,7 @@ export default function TimelineScreen() {
           testID="timeline-empty-state"
         >
           <SafeAreaView>
-              <TimelineTitleWithStreak memories={visibleMemories} />
+              <TimelineTitleWithStreak memories={visibleMemories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.emptyScript}>nothing yet</Text>
@@ -541,6 +580,15 @@ export default function TimelineScreen() {
       )}
 
       {canEdit && <MemoryFab onPress={() => router.push(newMemoryRoute('fab_timeline'))} />}
+
+      <FamilyActivitySheet
+        onClose={handleCloseActivitySheet}
+        onInvite={handleActivityInvite}
+        onOpenApprovals={handleActivityOpenApprovals}
+        onOpenComments={handleActivityOpenComments}
+        onOpenMemory={handleActivityOpenMemory}
+        visible={isActivitySheetVisible}
+      />
     </View>
   );
 }
@@ -566,7 +614,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: 0,
   },
-  headerTitleRow: { alignItems: 'flex-start', flexDirection: 'row', justifyContent: 'space-between' },
+  headerTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  headerGlyphs: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
   streakWrap: { paddingHorizontal: spacing.lg },
   eyebrow: {
     fontFamily: fonts.sansBold,

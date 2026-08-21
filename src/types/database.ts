@@ -1060,6 +1060,71 @@ export type Database = {
         }
         Relationships: []
       }
+      family_activity_events: {
+        Row: {
+          actor_id: string
+          comment_id: string | null
+          created_at: string
+          family_id: string
+          id: string
+          invite_id: string | null
+          kind: string
+          like_user_id: string | null
+          memory_id: string | null
+        }
+        Insert: {
+          actor_id: string
+          comment_id?: string | null
+          created_at?: string
+          family_id: string
+          id?: string
+          invite_id?: string | null
+          kind: string
+          like_user_id?: string | null
+          memory_id?: string | null
+        }
+        Update: {
+          actor_id?: string
+          comment_id?: string | null
+          created_at?: string
+          family_id?: string
+          id?: string
+          invite_id?: string | null
+          kind?: string
+          like_user_id?: string | null
+          memory_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_activity_events_comment_id_fkey"
+            columns: ["comment_id"]
+            isOneToOne: false
+            referencedRelation: "memory_comments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "family_activity_events_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "family_activity_events_invite_id_fkey"
+            columns: ["invite_id"]
+            isOneToOne: false
+            referencedRelation: "family_invites"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "family_activity_events_memory_id_fkey"
+            columns: ["memory_id"]
+            isOneToOne: false
+            referencedRelation: "memories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       family_activity_log: {
         Row: {
           actor_id: string
@@ -1308,6 +1373,7 @@ export type Database = {
       }
       family_memberships: {
         Row: {
+          activity_seen_at: string | null
           created_at: string
           family_id: string
           id: string
@@ -1316,6 +1382,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          activity_seen_at?: string | null
           created_at?: string
           family_id: string
           id?: string
@@ -1324,6 +1391,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          activity_seen_at?: string | null
           created_at?: string
           family_id?: string
           id?: string
@@ -3761,6 +3829,30 @@ export type Database = {
           report_id: string
         }[]
       }
+      get_family_activity: {
+        Args: { target_family_id: string }
+        Returns: {
+          actor_id: string
+          actor_is_former: boolean
+          actor_name: string
+          comment_id: string
+          comment_snippet: string
+          created_at: string
+          id: string
+          invite_id: string
+          kind: string
+          memory_creation_source: string
+          memory_excerpt: string
+          memory_id: string
+          memory_illustration_key: string
+          memory_media_content_type: string
+          memory_media_key: string
+        }[]
+      }
+      get_family_activity_unread: {
+        Args: { target_family_id: string }
+        Returns: boolean
+      }
       get_family_billing_status: {
         Args: { p_family_id: string }
         Returns: Json
@@ -3928,6 +4020,10 @@ export type Database = {
         Args: { p_attempt_token: string; p_report_id: string }
         Returns: boolean
       }
+      mark_family_activity_seen: {
+        Args: { target_family_id: string }
+        Returns: undefined
+      }
       mark_gallery_attempt_ambiguous: {
         Args: { p_attempt_id: string; p_reservation_token: string }
         Returns: boolean
@@ -3979,6 +4075,7 @@ export type Database = {
             }
             Returns: boolean
           }
+      prune_family_activity_events: { Args: never; Returns: number }
       publish_gallery_candidates: {
         Args: { p_candidates: Json; p_chunk_id: string }
         Returns: number
@@ -4661,3 +4758,4 @@ export const Constants = {
     Enums: {},
   },
 } as const
+

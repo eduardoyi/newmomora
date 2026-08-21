@@ -275,6 +275,16 @@ there's no sweep job; an expired-but-still-`pending` row simply fails the
 atomic claim in `redeem-family-invite` and reads as "Expired" on the
 pending-invites list (`formatInviteExpiry` in `src/utils/invites.ts`).
 
+Two steps in this lifecycle also feed the [Family activity](./family-activity.md)
+sheet, independent of the push notifications above: a DB trigger writes a
+`member_joined` event when `resolve-family-invite` inserts the membership row
+(suppressed for a family's founding owner — no "you joined" row for the
+person who created the family), and a `member_pending` event when an invite
+moves to `redeemed`, removed again if the invite later moves to
+`approved`/`rejected`/`revoked`. `member_pending` rows are only ever readable
+by owner/manager viewers of that family — filtered in the activity RPC, the
+same authorization shape as `resolve-family-invite` itself.
+
 ## Data model
 
 | Table | Role |
@@ -285,6 +295,7 @@ pending-invites list (`formatInviteExpiry` in `src/utils/invites.ts`).
 | `invite_code_words` | ~1,000-word curated seed list `create_family_invite` samples 3 words from |
 | `invite_redemption_attempts` | Rate-limit log (`user_id`, `ip`, `attempted_at`); service-role/definer-only, no client-visible policy |
 | `family_activity_log` | New-memory push debounce log (`family_id`, `actor_id`, `kind`, `created_at`); service-role/definer-only |
+| `family_memberships.activity_seen_at` | Nullable timestamp; null means the member has never opened the [Family activity](./family-activity.md) sheet (everything unread). Set by that feature's `mark_family_activity_seen` RPC — not to be confused with `family_activity_log` above, a different, older, service-only table for push debounce |
 | `memories.family_id` / `family_members.family_id` | Tenancy column, `not null`, immutable once set |
 | `memories.user_id` / `family_members.user_id` | Creator attribution, nullable, `on delete set null`, immutable once set |
 | `user_profiles.active_family_id` | Which family the client currently shows |
@@ -668,7 +679,10 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
   is now family-scoped), [Memories & illustrations](./memories.md),
   [Media memories](./media-memories.md), [Voice journaling](./voice-journaling.md),
   [Likes & comments](./likes-and-comments.md)
-  (all now family-scoped — see the "Family sharing" note in each doc)
+  (all now family-scoped — see the "Family sharing" note in each doc),
+  [Family activity](./family-activity.md) (membership roles gate
+  `member_pending` visibility; the invite lifecycle sources `member_joined`/
+  `member_pending` events)
 
 ## Testing
 
@@ -740,6 +754,7 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 
 | Date | Change |
 |------|--------|
+| 2026-08-21 | Added `family_memberships.activity_seen_at` and `member_joined`/`member_pending` DB-trigger events feeding the new [Family activity](./family-activity.md) feed — no change to invite/approval behavior itself, just new read-side event emission. |
 | 2026-08-15 | Universal invite links now keep anonymous onboarding sessions on the pre-auth join path instead of sending them to the permanent-account redemption screen, which previously produced an `Unauthorized` response. |
 | 2026-08-15 | Fixed manager/owner cross-creator media edits retaining preview variants: the media RPC now admits only the exact snapshot-paired preview for a retained foreign original, while keeping caller-prefix admission for new/replaced previews and all existing role/billing/anonymous guards. |
 | 2026-07-11 | Family sharing shipped: OTP auth, tenancy schema + RLS rewrite, storage re-authorization, client role gating, invite/redeem/approve flow, notifications. See `docs/plans/family-sharing.md` Outcome section for what deviated from the original plan. |
