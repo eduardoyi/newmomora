@@ -97,7 +97,7 @@ does not distinguish them in v1.
   handle, header "Family activity" + close button, bottom safe-area padding.
 - Body: sectioned `FlatList` — **Today · Yesterday · This week · Earlier**.
 - Row anatomy (left → right):
-  `FamilyMemberAvatar` (initial) · text block (name in `fonts.semibold`,
+  text block (name in `fonts.semibold`,
   sentence in body, then one muted line: comment snippet for
   `memory_commented`, otherwise the memory excerpt; timestamp in caption
   using the existing `formatEngagementTimestamp`) · 44px memory thumbnail
@@ -328,8 +328,8 @@ Deviations from this plan, all accepted:
 - Sheet data hooks live in an inner body rendered inside the `Modal`, so
   nothing fetches until the sheet opens; row taps defer navigation until the
   sheet has re-rendered closed.
-- `FamilyMemberAvatar` is reused for actors with no image key (initials
-  only).
+- Actor avatar dropped after the first device look (owner call): rows are
+  text + thumbnail only.
 - Maestro flow is a single-account approximation (bell → sheet → empty copy
   → close); the unread dot / rows / Review pill need a second account and
   are covered by pgTAP + component tests instead.

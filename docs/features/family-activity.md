@@ -23,8 +23,7 @@ the bell shows there's something new since the viewer last opened it.
 - **Sheet:** tapping the bell opens a ~80%-height bottom sheet titled "Family
   activity," sectioned **Today / Yesterday / This week / Earlier**. Each
   section only renders if it has rows.
-- **Row anatomy:** an initial-only avatar for the actor, a sentence with the
-  actor's name(s) in bold ("**Ana** added 3 memories," "**Grandma** and
+- **Row anatomy:** a sentence with the actor's name(s) in bold ("**Ana** added 3 memories," "**Grandma** and
   **Luis** liked a memory"), a muted second line (the comment snippet for a
   comment row, otherwise a short excerpt of the memory), a timestamp, and — for
   memories — up to 3 stacked 44px thumbnails on the right (illustration first,
@@ -206,15 +205,9 @@ always the **newest** member's timestamp.
   (`actor_is_former`); this fallback is specific to the actor, not the
   memory's creator, and is capitalized ("A former member") because it
   always opens the sentence.
-- **`FamilyMemberAvatar` is a children-roster component reused here for
-  adults.** The actor is a household member (`family_memberships` /
-  `user_profiles`), not a child (`family_members`) — `family-activity-row.tsx`
-  builds a minimal `SafetyAwareFamilyMemberAvatarMember`-shaped object with
-  `avatarImageKey: null` so it always renders an initial, never attempting to
-  resolve a portrait. Don't wire a real photo through this path.
-  Reusing `FamilyMemberAvatar` here means it now serves two different actor
-  types — if it ever needs actor-specific behavior (e.g. a "you" affordance),
-  branch inside `family-activity-row.tsx`, not inside the avatar component.
+- **No actor avatar, on purpose.** Rows are text-first (owner decision
+  2026-08-21: the initial-circle avatar was removed as visual noise). The bold
+  name carries the attribution; don't reintroduce `FamilyMemberAvatar` here.
 - **`bottom-sheet-dismiss.ts` is intentionally dependency-free.** Its two
   pull-down-dismiss helpers were extracted out of `memory-comments-drawer.tsx`
   (both files re-export the same functions with the same names, so no
@@ -266,7 +259,7 @@ always the **newest** member's timestamp.
   wrong in a component that stays mounted across opens.
 - **Any screen that renders `FamilyActivitySheet`/`FamilyActivityRow` in a
   Jest test must mock `@/lib/supabase`** (or mock the sheet/row entirely) —
-  `family-activity-row.tsx` → `FamilyMemberAvatar` → `useMediaUrls` →
+  `family-activity-row.tsx` → `useMediaUrls` →
   `services/media.ts` reaches the real Supabase client, whose
   `@react-native-async-storage/async-storage` import throws under Jest. See
   how `timeline.integration.test.tsx` and

@@ -24,7 +24,6 @@ export interface FamilyActivitySheetProps {
 function SkeletonRow({ testID }: { testID: string }) {
   return (
     <View style={styles.skeletonRow} testID={testID}>
-      <View style={styles.skeletonAvatar} />
       <View style={styles.skeletonLines}>
         <View style={[styles.skeletonLine, styles.skeletonLineWide]} />
         <View style={[styles.skeletonLine, styles.skeletonLineNarrow]} />
@@ -353,7 +352,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: 12,
   },
-  skeletonAvatar: { backgroundColor: colors.surface, borderRadius: 19, height: 38, width: 38 },
   skeletonLines: { flex: 1, gap: 8 },
   skeletonLine: { backgroundColor: colors.surface, borderRadius: radius.sm, height: 10 },
   skeletonLineWide: { width: '80%' },

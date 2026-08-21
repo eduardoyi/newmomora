@@ -31,7 +31,7 @@ jest.mock('@/components/content-hidden-notice', () => ({ ContentHiddenNotice: ()
 jest.mock('@/components/pending-memory-uploads-banner', () => ({ PendingMemoryUploadsBanner: () => null }));
 // Exercised in its own test suite (family-activity-sheet.test.tsx); mocked
 // out here so this screen test doesn't have to reach into its transitive
-// dependencies (FamilyMemberAvatar -> useMediaUrls -> @/lib/supabase).
+// dependencies (useMediaUrls -> @/lib/supabase).
 jest.mock('@/components/family-activity-sheet', () => ({ FamilyActivitySheet: () => null }));
 jest.mock('@/components/looking-back/package-rail', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports

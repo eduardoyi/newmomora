@@ -29,12 +29,6 @@ jest.mock('@/hooks/useFamilyActivity', () => ({
 }));
 jest.mock('@/hooks/useFamilyMemberProfiles', () => ({ useFamilyMemberProfiles: jest.fn() }));
 jest.mock('@/hooks/useMediaUrls', () => ({ useMediaUrls: jest.fn(() => ({ data: {} })) }));
-jest.mock('@/components/family-member-avatar', () => {
-  const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
-  return {
-    FamilyMemberAvatar: ({ member }: { member: { name: string } }) => <Text>{member.name}</Text>,
-  };
-});
 
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyActivity = useFamilyActivity as jest.MockedFunction<typeof useFamilyActivity>;

@@ -1,7 +1,6 @@
 import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { FamilyMemberAvatar, type SafetyAwareFamilyMemberAvatarMember } from '@/components/family-member-avatar';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
 import type { FamilyActivityEvent, FamilyActivityGroup } from '@/services/family-activity';
@@ -14,24 +13,6 @@ const MAX_THUMBNAILS = 3;
 
 function resolveThumbnailKey(event: FamilyActivityEvent): string | null {
   return event.memoryIllustrationKey ?? event.memoryMediaKey ?? null;
-}
-
-/**
- * The actor is a household member (`family_memberships`/`user_profiles`),
- * not a child (`family_members`) -- `FamilyMemberAvatar` is a children-roster
- * component, so this builds the minimal shape it needs (plan §4 row anatomy)
- * with no image key, which always resolves to an initial-only avatar.
- */
-function buildActorAvatarMember(name: string, fallbackDate: string): SafetyAwareFamilyMemberAvatarMember {
-  return {
-    name,
-    illustrated_profile_key: null,
-    illustrated_profile_status: 'ready',
-    profile_picture_key: null,
-    updated_at: fallbackDate,
-    avatarImageKey: null,
-    avatarUpdatedAt: undefined,
-  };
 }
 
 function collectThumbnailKeys(events: FamilyActivityEvent[]): string[] {
@@ -61,10 +42,6 @@ export function FamilyActivityRow({ group, onPress }: FamilyActivityRowProps) {
   const { data: mediaUrls } = useMediaUrls(thumbnailKeys);
   const mutedLine =
     primaryEvent.kind === 'memory_commented' ? primaryEvent.commentSnippet : primaryEvent.memoryExcerpt;
-  const avatarMember = buildActorAvatarMember(
-    primaryEvent.actorIsFormer ? 'A former member' : primaryEvent.actorName,
-    primaryEvent.createdAt,
-  );
 
   return (
     <Pressable
@@ -74,7 +51,6 @@ export function FamilyActivityRow({ group, onPress }: FamilyActivityRowProps) {
       style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       testID={`family-activity-row-${group.id}`}
     >
-      <FamilyMemberAvatar member={avatarMember} size={38} />
       <View style={styles.textBlock}>
         <Text style={styles.sentence}>
           {copy.segments.map((segment, index) => (

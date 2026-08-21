@@ -64,7 +64,7 @@ jest.mock('@/components/looking-back/package-rail', () => ({
 // Exercised in its own test suite (family-activity-sheet.test.tsx); mocked
 // out here (like the other child components above) so this screen test's
 // mocks don't have to reach into its transitive dependencies
-// (FamilyMemberAvatar -> useMediaUrls -> @/lib/supabase).
+// (useMediaUrls -> @/lib/supabase).
 jest.mock('@/components/family-activity-sheet', () => ({
   FamilyActivitySheet: () => null,
 }));
