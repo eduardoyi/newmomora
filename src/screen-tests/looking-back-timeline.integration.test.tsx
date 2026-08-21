@@ -19,10 +19,20 @@ jest.mock('@/hooks/useMemories', () => ({ useMemories: () => mockUseMemories() }
 jest.mock('@/hooks/useContentSafety', () => ({ useContentSafety: () => mockUseContentSafety() }));
 jest.mock('@/hooks/useLookingBackPackages', () => ({ useLookingBackPackages: () => mockUseLookingBackPackages() }));
 jest.mock('@/hooks/useLookingBackSession', () => ({ useLookingBackSession: () => mockUseLookingBackSession() }));
+// The bell's unread dot -- mocked because its service imports the real
+// @/lib/supabase client. Bell/dot behavior is covered by
+// timeline-activity-bell.test.tsx.
+jest.mock('@/hooks/useFamilyActivity', () => ({
+  useFamilyActivityUnread: () => ({ unread: false, isLoading: false, refetch: jest.fn() }),
+}));
 jest.mock('@/components/memory-card', () => ({ MemoryCard: () => null }));
 jest.mock('@/components/memory-fab', () => ({ MemoryFab: () => null }));
 jest.mock('@/components/content-hidden-notice', () => ({ ContentHiddenNotice: () => null }));
 jest.mock('@/components/pending-memory-uploads-banner', () => ({ PendingMemoryUploadsBanner: () => null }));
+// Exercised in its own test suite (family-activity-sheet.test.tsx); mocked
+// out here so this screen test doesn't have to reach into its transitive
+// dependencies (FamilyMemberAvatar -> useMediaUrls -> @/lib/supabase).
+jest.mock('@/components/family-activity-sheet', () => ({ FamilyActivitySheet: () => null }));
 jest.mock('@/components/looking-back/package-rail', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const React = require('react');

@@ -1017,6 +1017,8 @@ export type Database = {
           deleted_at: string | null
           deletion_fence_started_at: string | null
           deletion_fence_token: string | null
+          gallery_caption_instructions: string
+          gallery_caption_language: string
           id: string
           illustration_style: string
           name: string
@@ -1031,6 +1033,8 @@ export type Database = {
           deleted_at?: string | null
           deletion_fence_started_at?: string | null
           deletion_fence_token?: string | null
+          gallery_caption_instructions?: string
+          gallery_caption_language?: string
           id?: string
           illustration_style?: string
           name: string
@@ -1045,6 +1049,8 @@ export type Database = {
           deleted_at?: string | null
           deletion_fence_started_at?: string | null
           deletion_fence_token?: string | null
+          gallery_caption_instructions?: string
+          gallery_caption_language?: string
           id?: string
           illustration_style?: string
           name?: string
@@ -1053,6 +1059,71 @@ export type Database = {
           viewer_sharing_enabled?: boolean
         }
         Relationships: []
+      }
+      family_activity_events: {
+        Row: {
+          actor_id: string
+          comment_id: string | null
+          created_at: string
+          family_id: string
+          id: string
+          invite_id: string | null
+          kind: string
+          like_user_id: string | null
+          memory_id: string | null
+        }
+        Insert: {
+          actor_id: string
+          comment_id?: string | null
+          created_at?: string
+          family_id: string
+          id?: string
+          invite_id?: string | null
+          kind: string
+          like_user_id?: string | null
+          memory_id?: string | null
+        }
+        Update: {
+          actor_id?: string
+          comment_id?: string | null
+          created_at?: string
+          family_id?: string
+          id?: string
+          invite_id?: string | null
+          kind?: string
+          like_user_id?: string | null
+          memory_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_activity_events_comment_id_fkey"
+            columns: ["comment_id"]
+            isOneToOne: false
+            referencedRelation: "memory_comments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "family_activity_events_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "family_activity_events_invite_id_fkey"
+            columns: ["invite_id"]
+            isOneToOne: false
+            referencedRelation: "family_invites"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "family_activity_events_memory_id_fkey"
+            columns: ["memory_id"]
+            isOneToOne: false
+            referencedRelation: "memories"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       family_activity_log: {
         Row: {
@@ -1302,6 +1373,7 @@ export type Database = {
       }
       family_memberships: {
         Row: {
+          activity_seen_at: string | null
           created_at: string
           family_id: string
           id: string
@@ -1310,6 +1382,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          activity_seen_at?: string | null
           created_at?: string
           family_id: string
           id?: string
@@ -1318,6 +1391,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          activity_seen_at?: string | null
           created_at?: string
           family_id?: string
           id?: string
@@ -1334,6 +1408,646 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      gallery_import_admission_settings: {
+        Row: {
+          enabled: boolean
+          initial_run_limit: number
+          initial_window: string
+          limit_template: Json
+          normal_monthly_run_limit: number
+          policy_epoch: number
+          quiet_period: string
+          review_ttl: string
+          singleton: boolean
+          updated_at: string
+        }
+        Insert: {
+          enabled?: boolean
+          initial_run_limit?: number
+          initial_window?: string
+          limit_template?: Json
+          normal_monthly_run_limit?: number
+          policy_epoch?: number
+          quiet_period?: string
+          review_ttl?: string
+          singleton?: boolean
+          updated_at?: string
+        }
+        Update: {
+          enabled?: boolean
+          initial_run_limit?: number
+          initial_window?: string
+          limit_template?: Json
+          normal_monthly_run_limit?: number
+          policy_epoch?: number
+          quiet_period?: string
+          review_ttl?: string
+          singleton?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      gallery_import_approval_leases: {
+        Row: {
+          actor_id: string
+          candidate_id: string
+          cleanup_claim_token: string | null
+          cleanup_claimed_at: string | null
+          created_at: string
+          expected_assets: Json
+          expires_at: string
+          family_id: string
+          finalized_at: string | null
+          id: string
+          lease_token_hash: string
+          memory_id: string
+          run_id: string
+          state: string
+          updated_at: string
+          uploaded_assets: Json
+        }
+        Insert: {
+          actor_id: string
+          candidate_id: string
+          cleanup_claim_token?: string | null
+          cleanup_claimed_at?: string | null
+          created_at?: string
+          expected_assets: Json
+          expires_at: string
+          family_id: string
+          finalized_at?: string | null
+          id?: string
+          lease_token_hash: string
+          memory_id?: string
+          run_id: string
+          state?: string
+          updated_at?: string
+          uploaded_assets?: Json
+        }
+        Update: {
+          actor_id?: string
+          candidate_id?: string
+          cleanup_claim_token?: string | null
+          cleanup_claimed_at?: string | null
+          created_at?: string
+          expected_assets?: Json
+          expires_at?: string
+          family_id?: string
+          finalized_at?: string | null
+          id?: string
+          lease_token_hash?: string
+          memory_id?: string
+          run_id?: string
+          state?: string
+          updated_at?: string
+          uploaded_assets?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_import_approval_leases_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: true
+            referencedRelation: "gallery_import_candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_import_approval_leases_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_import_approval_leases_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_import_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_import_assets: {
+        Row: {
+          capture_date: string
+          chunk_id: string | null
+          cluster_signature: string
+          created_at: string
+          expires_at: string
+          height: number | null
+          id: string
+          is_favorite: boolean
+          opaque_token: string
+          preview_bytes: number | null
+          preview_content_type: string | null
+          preview_height: number | null
+          preview_object_key: string | null
+          preview_sha256: string | null
+          preview_uploaded_at: string | null
+          preview_width: number | null
+          run_id: string
+          width: number | null
+        }
+        Insert: {
+          capture_date: string
+          chunk_id?: string | null
+          cluster_signature: string
+          created_at?: string
+          expires_at: string
+          height?: number | null
+          id?: string
+          is_favorite?: boolean
+          opaque_token?: string
+          preview_bytes?: number | null
+          preview_content_type?: string | null
+          preview_height?: number | null
+          preview_object_key?: string | null
+          preview_sha256?: string | null
+          preview_uploaded_at?: string | null
+          preview_width?: number | null
+          run_id: string
+          width?: number | null
+        }
+        Update: {
+          capture_date?: string
+          chunk_id?: string | null
+          cluster_signature?: string
+          created_at?: string
+          expires_at?: string
+          height?: number | null
+          id?: string
+          is_favorite?: boolean
+          opaque_token?: string
+          preview_bytes?: number | null
+          preview_content_type?: string | null
+          preview_height?: number | null
+          preview_object_key?: string | null
+          preview_sha256?: string | null
+          preview_uploaded_at?: string | null
+          preview_width?: number | null
+          run_id?: string
+          width?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_import_assets_chunk_id_fkey"
+            columns: ["chunk_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_import_chunks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_import_assets_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_import_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_import_candidates: {
+        Row: {
+          actor_id: string
+          candidate_fingerprint: string
+          caption: string
+          chunk_id: string | null
+          cluster_signature: string
+          confidence: number
+          created_at: string
+          emotion: string | null
+          expires_at: string
+          family_id: string
+          family_member_ids: string[]
+          id: string
+          memory_date: string
+          memory_id: string | null
+          run_id: string
+          selected_asset_tokens: string[]
+          split_index: number
+          status: string
+          unavailable_reason: string | null
+          updated_at: string
+        }
+        Insert: {
+          actor_id: string
+          candidate_fingerprint: string
+          caption: string
+          chunk_id?: string | null
+          cluster_signature: string
+          confidence: number
+          created_at?: string
+          emotion?: string | null
+          expires_at: string
+          family_id: string
+          family_member_ids?: string[]
+          id?: string
+          memory_date: string
+          memory_id?: string | null
+          run_id: string
+          selected_asset_tokens: string[]
+          split_index?: number
+          status?: string
+          unavailable_reason?: string | null
+          updated_at?: string
+        }
+        Update: {
+          actor_id?: string
+          candidate_fingerprint?: string
+          caption?: string
+          chunk_id?: string | null
+          cluster_signature?: string
+          confidence?: number
+          created_at?: string
+          emotion?: string | null
+          expires_at?: string
+          family_id?: string
+          family_member_ids?: string[]
+          id?: string
+          memory_date?: string
+          memory_id?: string | null
+          run_id?: string
+          selected_asset_tokens?: string[]
+          split_index?: number
+          status?: string
+          unavailable_reason?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_import_candidates_chunk_id_fkey"
+            columns: ["chunk_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_import_chunks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_import_candidates_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_import_candidates_memory_id_fkey"
+            columns: ["memory_id"]
+            isOneToOne: false
+            referencedRelation: "memories"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_import_candidates_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_import_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_import_chunks: {
+        Row: {
+          asset_count: number
+          closed_error_code: string | null
+          cluster_count: number
+          completed_at: string | null
+          created_at: string
+          declared_asset_count: number
+          declared_cluster_count: number
+          dispatched_at: string | null
+          id: string
+          ordinal: number
+          run_id: string
+          scrubbed_at: string | null
+          status: string
+          updated_at: string
+          workflow_id: string | null
+        }
+        Insert: {
+          asset_count?: number
+          closed_error_code?: string | null
+          cluster_count?: number
+          completed_at?: string | null
+          created_at?: string
+          declared_asset_count: number
+          declared_cluster_count: number
+          dispatched_at?: string | null
+          id?: string
+          ordinal: number
+          run_id: string
+          scrubbed_at?: string | null
+          status?: string
+          updated_at?: string
+          workflow_id?: string | null
+        }
+        Update: {
+          asset_count?: number
+          closed_error_code?: string | null
+          cluster_count?: number
+          completed_at?: string | null
+          created_at?: string
+          declared_asset_count?: number
+          declared_cluster_count?: number
+          dispatched_at?: string | null
+          id?: string
+          ordinal?: number
+          run_id?: string
+          scrubbed_at?: string | null
+          status?: string
+          updated_at?: string
+          workflow_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_import_chunks_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_import_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_import_cluster_receipts: {
+        Row: {
+          actor_id: string
+          algorithm_version: string
+          candidate_fingerprint: string
+          cluster_signature: string
+          created_at: string
+          family_id: string
+          id: string
+          outcome: string
+          source_candidate_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          actor_id: string
+          algorithm_version: string
+          candidate_fingerprint: string
+          cluster_signature: string
+          created_at?: string
+          family_id: string
+          id?: string
+          outcome: string
+          source_candidate_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          actor_id?: string
+          algorithm_version?: string
+          candidate_fingerprint?: string
+          cluster_signature?: string
+          created_at?: string
+          family_id?: string
+          id?: string
+          outcome?: string
+          source_candidate_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_import_cluster_receipts_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_import_cluster_receipts_source_candidate_id_fkey"
+            columns: ["source_candidate_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_import_candidates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_import_cluster_results: {
+        Row: {
+          candidate_count: number
+          chunk_id: string
+          cluster_signature: string
+          completed_at: string | null
+          created_at: string
+          skip_reason: string | null
+          state: string
+          updated_at: string
+        }
+        Insert: {
+          candidate_count?: number
+          chunk_id: string
+          cluster_signature: string
+          completed_at?: string | null
+          created_at?: string
+          skip_reason?: string | null
+          state?: string
+          updated_at?: string
+        }
+        Update: {
+          candidate_count?: number
+          chunk_id?: string
+          cluster_signature?: string
+          completed_at?: string | null
+          created_at?: string
+          skip_reason?: string | null
+          state?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_import_cluster_results_chunk_id_fkey"
+            columns: ["chunk_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_import_chunks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_import_digest_windows: {
+        Row: {
+          actor_id: string
+          approval_count: number
+          claim_token: string | null
+          claimed_approval_count: number | null
+          claimed_at: string | null
+          created_at: string
+          family_id: string
+          first_approval_at: string | null
+          last_approval_at: string | null
+          sent_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          actor_id: string
+          approval_count?: number
+          claim_token?: string | null
+          claimed_approval_count?: number | null
+          claimed_at?: string | null
+          created_at?: string
+          family_id: string
+          first_approval_at?: string | null
+          last_approval_at?: string | null
+          sent_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          actor_id?: string
+          approval_count?: number
+          claim_token?: string | null
+          claimed_approval_count?: number | null
+          claimed_at?: string | null
+          created_at?: string
+          family_id?: string
+          first_approval_at?: string | null
+          last_approval_at?: string | null
+          sent_at?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_import_digest_windows_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_import_provider_attempts: {
+        Row: {
+          attempt_ordinal: number
+          chunk_id: string
+          closed_error_code: string | null
+          cluster_signature: string
+          completed_at: string | null
+          created_at: string
+          id: string
+          provider: string
+          reservation_token: string
+          started_at: string | null
+          state: string
+          usage: Json
+        }
+        Insert: {
+          attempt_ordinal: number
+          chunk_id: string
+          closed_error_code?: string | null
+          cluster_signature: string
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          provider: string
+          reservation_token?: string
+          started_at?: string | null
+          state?: string
+          usage?: Json
+        }
+        Update: {
+          attempt_ordinal?: number
+          chunk_id?: string
+          closed_error_code?: string | null
+          cluster_signature?: string
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          provider?: string
+          reservation_token?: string
+          started_at?: string | null
+          state?: string
+          usage?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_import_provider_attempts_chunk_id_fkey"
+            columns: ["chunk_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_import_chunks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_import_runs: {
+        Row: {
+          actor_id: string
+          algorithm_version: string
+          cancelled_at: string | null
+          capability_hash: string
+          cleanup_claim_token: string | null
+          cleanup_claimed_at: string | null
+          completed_at: string | null
+          consent_version: string
+          created_at: string
+          expires_at: string
+          family_id: string
+          id: string
+          limit_snapshot: Json
+          permission_mode: string
+          policy_epoch: number
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          actor_id: string
+          algorithm_version: string
+          cancelled_at?: string | null
+          capability_hash: string
+          cleanup_claim_token?: string | null
+          cleanup_claimed_at?: string | null
+          completed_at?: string | null
+          consent_version: string
+          created_at?: string
+          expires_at: string
+          family_id: string
+          id?: string
+          limit_snapshot?: Json
+          permission_mode: string
+          policy_epoch: number
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          actor_id?: string
+          algorithm_version?: string
+          cancelled_at?: string | null
+          capability_hash?: string
+          cleanup_claim_token?: string | null
+          cleanup_claimed_at?: string | null
+          completed_at?: string | null
+          consent_version?: string
+          created_at?: string
+          expires_at?: string
+          family_id?: string
+          id?: string
+          limit_snapshot?: Json
+          permission_mode?: string
+          policy_epoch?: number
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_import_runs_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_import_workflow_bridge_nonces: {
+        Row: {
+          created_at: string
+          expires_at: string
+          nonce: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          nonce: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          nonce?: string
+        }
+        Relationships: []
       }
       invite_code_words: {
         Row: {
@@ -1580,6 +2294,7 @@ export type Database = {
           audio_transcript: string | null
           content: string | null
           created_at: string
+          creation_source: string
           emotion: string | null
           family_id: string
           id: string
@@ -1613,6 +2328,7 @@ export type Database = {
           audio_transcript?: string | null
           content?: string | null
           created_at?: string
+          creation_source?: string
           emotion?: string | null
           family_id: string
           id?: string
@@ -1646,6 +2362,7 @@ export type Database = {
           audio_transcript?: string | null
           content?: string | null
           created_at?: string
+          creation_source?: string
           emotion?: string | null
           family_id?: string
           id?: string
@@ -2440,6 +3157,14 @@ export type Database = {
           upload_token: string
         }[]
       }
+      begin_gallery_import_approval: {
+        Args: {
+          p_candidate_id: string
+          p_capability: string
+          p_selected_assets: Json
+        }
+        Returns: Json
+      }
       begin_memory_illustration_usage: {
         Args: {
           p_actor_user_id: string
@@ -2512,6 +3237,10 @@ export type Database = {
       }
       cancel_account_deletion: {
         Args: { p_owner_id: string }
+        Returns: boolean
+      }
+      cancel_gallery_import_run: {
+        Args: { p_capability: string; p_run_id: string }
         Returns: boolean
       }
       claim_account_hard_deletion: {
@@ -2670,6 +3399,21 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      claim_gallery_import_cleanup: {
+        Args: { p_limit?: number }
+        Returns: {
+          claim_token: string
+          run_id: string
+        }[]
+      }
+      claim_gallery_import_digests: {
+        Args: { p_limit?: number }
+        Returns: {
+          actor_id: string
+          claim_token: string
+          family_id: string
+        }[]
+      }
       claim_memory_illustration_workflow_generation: {
         Args: {
           p_actor_user_id: string
@@ -2685,6 +3429,10 @@ export type Database = {
           p_memory_id: string
         }
         Returns: boolean
+      }
+      cleanup_gallery_import_workflow_bridge_nonces: {
+        Args: { p_limit?: number }
+        Returns: number
       }
       commit_onboarding: {
         Args: {
@@ -2709,6 +3457,10 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      complete_gallery_import_run: {
+        Args: { p_capability: string; p_run_id: string }
+        Returns: boolean
       }
       create_content_report: {
         Args: {
@@ -2752,6 +3504,8 @@ export type Database = {
           deleted_at: string | null
           deletion_fence_started_at: string | null
           deletion_fence_token: string | null
+          gallery_caption_instructions: string
+          gallery_caption_language: string
           id: string
           illustration_style: string
           name: string
@@ -2831,6 +3585,26 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      create_gallery_import_run: {
+        Args: {
+          p_algorithm_version: string
+          p_capability: string
+          p_consent_version: string
+          p_family_id: string
+          p_permission_mode: string
+        }
+        Returns: string
+      }
+      create_gallery_import_run_internal: {
+        Args: {
+          p_algorithm_version: string
+          p_capability: string
+          p_consent_version: string
+          p_family_id: string
+          p_permission_mode: string
+        }
+        Returns: string
+      }
       current_user_local_date: { Args: never; Returns: string }
       delete_family: {
         Args: { fam: string }
@@ -2841,6 +3615,8 @@ export type Database = {
           deleted_at: string | null
           deletion_fence_started_at: string | null
           deletion_fence_token: string | null
+          gallery_caption_instructions: string
+          gallery_caption_language: string
           id: string
           illustration_style: string
           name: string
@@ -2922,6 +3698,10 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      fail_gallery_chunk: {
+        Args: { p_chunk_id: string; p_closed_error_code: string }
+        Returns: boolean
+      }
       fail_memory_illustration_workflow_job: {
         Args: { p_error_code: string; p_job_id: string }
         Returns: {
@@ -2935,6 +3715,10 @@ export type Database = {
           output_key: string
           terminal_status: string
         }[]
+      }
+      finalize_gallery_import_candidate: {
+        Args: { p_candidate_id: string; p_capability: string }
+        Returns: string
       }
       finish_family_member_portrait_deletion: {
         Args: { delete_token: string; target_version_id: string }
@@ -2979,8 +3763,57 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      finish_gallery_import_cleanup: {
+        Args: { p_claim_token: string; p_run_id: string }
+        Returns: boolean
+      }
+      finish_gallery_import_digest: {
+        Args: {
+          p_actor_id: string
+          p_claim_token: string
+          p_family_id: string
+          p_sent: boolean
+        }
+        Returns: boolean
+      }
       finish_owned_family_deletion_fences: {
         Args: { p_fences: Json; p_owner_id: string }
+        Returns: boolean
+      }
+      gallery_import_capability_matches: {
+        Args: { p_capability: string; p_run_id: string }
+        Returns: boolean
+      }
+      gallery_import_require_actor_run: {
+        Args: { p_capability: string; p_run_id: string }
+        Returns: {
+          actor_id: string
+          algorithm_version: string
+          cancelled_at: string | null
+          capability_hash: string
+          cleanup_claim_token: string | null
+          cleanup_claimed_at: string | null
+          completed_at: string | null
+          consent_version: string
+          created_at: string
+          expires_at: string
+          family_id: string
+          id: string
+          limit_snapshot: Json
+          permission_mode: string
+          policy_epoch: number
+          status: string
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "gallery_import_runs"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      gallery_import_uuid_array_is_distinct: {
+        Args: { p_values: string[] }
         Returns: boolean
       }
       get_abandoned_anonymous_auth_user_ids: {
@@ -2996,6 +3829,30 @@ export type Database = {
           report_id: string
         }[]
       }
+      get_family_activity: {
+        Args: { target_family_id: string }
+        Returns: {
+          actor_id: string
+          actor_is_former: boolean
+          actor_name: string
+          comment_id: string
+          comment_snippet: string
+          created_at: string
+          id: string
+          invite_id: string
+          kind: string
+          memory_creation_source: string
+          memory_excerpt: string
+          memory_id: string
+          memory_illustration_key: string
+          memory_media_content_type: string
+          memory_media_key: string
+        }[]
+      }
+      get_family_activity_unread: {
+        Args: { target_family_id: string }
+        Returns: boolean
+      }
       get_family_billing_status: {
         Args: { p_family_id: string }
         Returns: Json
@@ -3010,6 +3867,52 @@ export type Database = {
           role: string
           user_id: string
         }[]
+      }
+      get_gallery_caption_settings: {
+        Args: { p_family_id: string }
+        Returns: Json
+      }
+      get_gallery_chunk_input: { Args: { p_chunk_id: string }; Returns: Json }
+      get_gallery_import_candidates: {
+        Args: { p_capability: string; p_run_id: string }
+        Returns: {
+          actor_id: string
+          candidate_fingerprint: string
+          caption: string
+          chunk_id: string | null
+          cluster_signature: string
+          confidence: number
+          created_at: string
+          emotion: string | null
+          expires_at: string
+          family_id: string
+          family_member_ids: string[]
+          id: string
+          memory_date: string
+          memory_id: string | null
+          run_id: string
+          selected_asset_tokens: string[]
+          split_index: number
+          status: string
+          unavailable_reason: string | null
+          updated_at: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "gallery_import_candidates"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      get_gallery_import_cleanup_objects: {
+        Args: { p_claim_token: string; p_run_id: string }
+        Returns: {
+          object_key: string
+        }[]
+      }
+      get_gallery_import_run: {
+        Args: { p_capability: string; p_run_id: string }
+        Returns: Json
       }
       get_invite_redeemer: {
         Args: { invite_id: string }
@@ -3117,6 +4020,18 @@ export type Database = {
         Args: { p_attempt_token: string; p_report_id: string }
         Returns: boolean
       }
+      mark_family_activity_seen: {
+        Args: { target_family_id: string }
+        Returns: undefined
+      }
+      mark_gallery_attempt_ambiguous: {
+        Args: { p_attempt_id: string; p_reservation_token: string }
+        Returns: boolean
+      }
+      mark_gallery_chunk_dispatched: {
+        Args: { p_chunk_id: string; p_workflow_id: string }
+        Returns: boolean
+      }
       mark_looking_back_package_viewed: {
         Args: { p_completed?: boolean; p_package_id: string }
         Returns: {
@@ -3160,6 +4075,20 @@ export type Database = {
             }
             Returns: boolean
           }
+      prune_family_activity_events: { Args: never; Returns: number }
+      publish_gallery_candidates: {
+        Args: { p_candidates: Json; p_chunk_id: string }
+        Returns: number
+      }
+      publish_gallery_cluster_result: {
+        Args: {
+          p_candidates: Json
+          p_chunk_id: string
+          p_cluster_signature: string
+          p_skip_reason?: string
+        }
+        Returns: number
+      }
       publish_memory_illustration_workflow_job: {
         Args: { p_job_id: string; p_model: string }
         Returns: {
@@ -3291,6 +4220,38 @@ export type Database = {
         }
         Returns: boolean
       }
+      record_gallery_import_approval_upload: {
+        Args: {
+          p_aspect_ratio?: number
+          p_byte_length: number
+          p_content_type: string
+          p_lease_id: string
+          p_object_key: string
+          p_sha256: string
+        }
+        Returns: boolean
+      }
+      record_gallery_import_preview_upload: {
+        Args: {
+          p_bytes: number
+          p_content_type: string
+          p_height: number
+          p_object_key: string
+          p_opaque_token: string
+          p_run_id: string
+          p_sha256: string
+          p_width: number
+        }
+        Returns: boolean
+      }
+      record_gallery_usage: {
+        Args: {
+          p_attempt_id: string
+          p_reservation_token: string
+          p_usage: Json
+        }
+        Returns: boolean
+      }
       record_memory_illustration_workflow_upload_complete: {
         Args: { p_job_id: string; p_output_key: string; p_upload_token: string }
         Returns: boolean
@@ -3302,6 +4263,25 @@ export type Database = {
       refresh_account_hard_deletion_claim: {
         Args: { p_hard_delete_token: string; p_owner_id: string }
         Returns: boolean
+      }
+      register_gallery_import_assets: {
+        Args: {
+          p_assets: Json
+          p_capability: string
+          p_chunk_id: string
+          p_run_id: string
+        }
+        Returns: Json
+      }
+      register_gallery_import_chunk: {
+        Args: {
+          p_asset_count: number
+          p_capability: string
+          p_cluster_count: number
+          p_ordinal: number
+          p_run_id: string
+        }
+        Returns: string
       }
       release_account_hard_deletion_claim: {
         Args: { p_hard_delete_token: string; p_owner_id: string }
@@ -3379,6 +4359,18 @@ export type Database = {
               scope: string
             }[]
           }
+      reserve_gallery_attempt: {
+        Args: {
+          p_attempt_ordinal: number
+          p_chunk_id: string
+          p_cluster_signature: string
+        }
+        Returns: {
+          attempt_id: string
+          outcome: string
+          reservation_token: string
+        }[]
+      }
       reserve_legacy_ai_image_provider_attempt_v2: {
         Args: {
           p_attempt_number: number
@@ -3443,6 +4435,7 @@ export type Database = {
         }
         Returns: string
       }
+      scrub_gallery_chunk: { Args: { p_chunk_id: string }; Returns: boolean }
       set_family_account_block: {
         Args: {
           p_block_id?: string
@@ -3460,6 +4453,72 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "blocked_family_accounts"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      set_gallery_import_candidate_skip: {
+        Args: { p_candidate_id: string; p_capability: string; p_skip: boolean }
+        Returns: {
+          actor_id: string
+          candidate_fingerprint: string
+          caption: string
+          chunk_id: string | null
+          cluster_signature: string
+          confidence: number
+          created_at: string
+          emotion: string | null
+          expires_at: string
+          family_id: string
+          family_member_ids: string[]
+          id: string
+          memory_date: string
+          memory_id: string | null
+          run_id: string
+          selected_asset_tokens: string[]
+          split_index: number
+          status: string
+          unavailable_reason: string | null
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "gallery_import_candidates"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      set_gallery_import_candidate_unavailable: {
+        Args: {
+          p_candidate_id: string
+          p_capability: string
+          p_unavailable: boolean
+        }
+        Returns: {
+          actor_id: string
+          candidate_fingerprint: string
+          caption: string
+          chunk_id: string | null
+          cluster_signature: string
+          confidence: number
+          created_at: string
+          emotion: string | null
+          expires_at: string
+          family_id: string
+          family_member_ids: string[]
+          id: string
+          memory_date: string
+          memory_id: string | null
+          run_id: string
+          selected_asset_tokens: string[]
+          split_index: number
+          status: string
+          unavailable_reason: string | null
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "gallery_import_candidates"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3514,6 +4573,52 @@ export type Database = {
         SetofOptions: {
           from: "*"
           to: "family_member_portrait_versions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      update_gallery_caption_settings: {
+        Args: {
+          p_family_id: string
+          p_instructions: string
+          p_language: string
+        }
+        Returns: Json
+      }
+      update_gallery_import_candidate_draft: {
+        Args: {
+          p_asset_tokens: string[]
+          p_candidate_id: string
+          p_capability: string
+          p_caption: string
+          p_family_member_ids?: string[]
+          p_memory_date: string
+        }
+        Returns: {
+          actor_id: string
+          candidate_fingerprint: string
+          caption: string
+          chunk_id: string | null
+          cluster_signature: string
+          confidence: number
+          created_at: string
+          emotion: string | null
+          expires_at: string
+          family_id: string
+          family_member_ids: string[]
+          id: string
+          memory_date: string
+          memory_id: string | null
+          run_id: string
+          selected_asset_tokens: string[]
+          split_index: number
+          status: string
+          unavailable_reason: string | null
+          updated_at: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "gallery_import_candidates"
           isOneToOne: true
           isSetofReturn: false
         }
@@ -3653,3 +4758,4 @@ export const Constants = {
     Enums: {},
   },
 } as const
+

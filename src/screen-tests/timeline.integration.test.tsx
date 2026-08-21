@@ -4,6 +4,7 @@ import { StyleSheet } from 'react-native';
 import TimelineScreen from '../../app/(app)/(tabs)/timeline';
 import { colors } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
+import { useFamilyActivityUnread } from '@/hooks/useFamilyActivity';
 import { useFamilyMembers, useOnboardingStatus } from '@/hooks/useFamilyMembers';
 import { useMemories } from '@/hooks/useMemories';
 
@@ -41,6 +42,12 @@ jest.mock('@/hooks/useContentSafety', () => ({
     revealTarget: jest.fn(), revealBlockedUser: jest.fn(), refetch: jest.fn(),
   }),
 }));
+// The bell's unread dot -- mocked (rather than exercised for real) because
+// its own service (src/services/family-activity.ts) imports the real
+// @/lib/supabase client, which this screen test doesn't otherwise need to
+// mock. Bell/dot behavior itself is covered by
+// timeline-activity-bell.test.tsx.
+jest.mock('@/hooks/useFamilyActivity', () => ({ useFamilyActivityUnread: jest.fn() }));
 
 jest.mock('@/components/memory-card', () => ({
   MemoryCard: () => null,
@@ -54,11 +61,19 @@ jest.mock('@/components/pending-memory-uploads-banner', () => ({
 jest.mock('@/components/looking-back/package-rail', () => ({
   LookingBackPackageRail: () => null,
 }));
+// Exercised in its own test suite (family-activity-sheet.test.tsx); mocked
+// out here (like the other child components above) so this screen test's
+// mocks don't have to reach into its transitive dependencies
+// (FamilyMemberAvatar -> useMediaUrls -> @/lib/supabase).
+jest.mock('@/components/family-activity-sheet', () => ({
+  FamilyActivitySheet: () => null,
+}));
 
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof useFamilyMembers>;
 const mockedUseOnboardingStatus = useOnboardingStatus as jest.MockedFunction<typeof useOnboardingStatus>;
 const mockedUseMemories = useMemories as jest.MockedFunction<typeof useMemories>;
+const mockedUseFamilyActivityUnread = useFamilyActivityUnread as jest.MockedFunction<typeof useFamilyActivityUnread>;
 
 const memory = {
   id: 'memory-1',
@@ -79,12 +94,19 @@ function toLocalDateString(date: Date) {
 
 describe('TimelineScreen', () => {
   let mockedRefetch: jest.Mock;
+  let mockedRefetchActivityUnread: jest.Mock;
 
   beforeEach(() => {
     jest.clearAllMocks();
     mockedRefetch = jest.fn();
+    mockedRefetchActivityUnread = jest.fn();
 
     mockedUseFamily.mockReturnValue({ role: 'owner' } as ReturnType<typeof useFamily>);
+    mockedUseFamilyActivityUnread.mockReturnValue({
+      unread: false,
+      isLoading: false,
+      refetch: mockedRefetchActivityUnread,
+    } as unknown as ReturnType<typeof useFamilyActivityUnread>);
     mockedUseFamilyMembers.mockReturnValue({
       members: [{ id: 'member-1' }],
       isLoading: false,
@@ -119,6 +141,16 @@ describe('TimelineScreen', () => {
     onRefresh();
 
     expect(mockedRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('also refreshes the family activity unread dot on pull-to-refresh', () => {
+    const { getByTestId } = render(<TimelineScreen />);
+
+    const list = getByTestId('timeline-memory-list');
+    const onRefresh = list.props.refreshControl.props.onRefresh as () => void;
+    onRefresh();
+
+    expect(mockedRefetchActivityUnread).toHaveBeenCalledTimes(1);
   });
 
   // Workstream B2: infinite scroll wiring -- reaching the end of the loaded

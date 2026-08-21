@@ -1,15 +1,19 @@
 # Feature: Likes & comments
 
 **Status:** `done`
-**Last updated:** 2026-07-29
+**Last updated:** 2026-08-21
 **PRD reference:** §6.8 Likes & Comments
 
 ## Overview
 
 Household members can react to a memory without changing the journal entry.
-Likes are private-identity reactions with aggregate counts; comments are a
-chronological household conversation attributed to account profile names.
-Every active role, including viewer, may participate.
+Likes are household-visible reactions with aggregate counts — since
+2026-08-21 (see [Family activity](./family-activity.md)), any active member
+of the memory's family can read who liked it, not just the liker themselves —
+though there is still no liker-list UI on the engagement bar itself (see the
+"do not change" list below); comments are a chronological household
+conversation attributed to account profile names. Every active role,
+including viewer, may participate.
 
 ## User-facing behavior
 
@@ -22,8 +26,14 @@ Every active role, including viewer, may participate.
   rules, and permission matrix. It's a separate opt-in prop
   (`enableShare`) on `MemoryEngagementBar`, not a fourth engagement metric —
   it has no count and isn't part of the like/comment data model below.
-- Counts are passive and appear only when greater than zero. There is no liker
-  list.
+- Counts are passive and appear only when greater than zero. There is still
+  no liker-list UI on the engagement bar or memory detail — the only place a
+  liker's identity surfaces client-side is the [Family activity](./family-activity.md)
+  feed ("**Grandma** liked a memory"), which is a household-visible feed by
+  design. The underlying read policy is household-wide (see
+  [Data model](#data-model) below), so a liker list could be added to the
+  engagement bar later without a further RLS change — that UI simply doesn't
+  exist yet.
 - Timeline comment taps navigate to memory detail with `?comments=1`; detail
   comment taps open an 80%-height bottom drawer directly. A deliberate
   downward drag on its handle/header dismisses it; short, slow drags spring
@@ -71,11 +81,15 @@ fire-and-forget and never rolls back engagement.
 | `memory_comments` | Immutable plain-text comments with `id`, `memory_id`, `user_id`, `content`, `created_at`; DB enforces trimmed length 1–1000 |
 | `user_profiles.notify_engagement` | Global per-account engagement push preference, `not null default true` |
 | `family_activity_log` | Service-only notification attempt/debounce rows; kind contains memory or comment identity |
+| `family_activity_events` | Owned by [Family activity](./family-activity.md), not this feature — a `memory_liked`/`memory_commented` row is written here by a DB trigger on `memory_likes`/`memory_comments` insert (and removed on `memory_likes` delete, so an un-like doesn't leave a stale "liked" event) |
 
-RLS requires active membership in the memory's family. Like rows can be read,
-inserted, and deleted only by their author, so liker identities are not exposed.
-Comments are readable by the household; insert is self-only; delete is self-only
-or owner/manager moderation bound to the memory's family. There is deliberately
+RLS requires active membership in the memory's family. **Like rows carry a
+household select policy mirroring comments** (any active member of the
+memory's family may read who liked it) as of 2026-08-21 — this reverses the
+2026-07-13 "liker identities are not exposed" decision; insert and delete
+stay self-only (an account can only like/unlike on its own behalf). Comments
+are readable by the household; insert is self-only; delete is self-only or
+owner/manager moderation bound to the memory's family. There is deliberately
 no comment update policy.
 
 Removed members lose access but their comments and account-name attribution are
@@ -130,8 +144,12 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 
 **Do not change without updating this doc**
 
-- Viewer participation, comment moderation roles, liker-identity privacy, the
-  no-self notification rule, or hard-delete/removed-member semantics.
+- Viewer participation, comment moderation roles, the no-self notification
+  rule, or hard-delete/removed-member semantics.
+- The household-visible like-select policy (RLS) or the self-only
+  insert/delete policies — don't widen inserts/deletes to "any member" the
+  way select was widened; only the memory's own liker may create or remove
+  their like row.
 - Notification payload routing or debounce-key format.
 - Realtime synchronization: current cache/refetch behavior is intentional.
 
@@ -161,7 +179,7 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 ## Dependencies
 
 - Depends on: [Memories & illustrations](./memories.md), [Family sharing](./family-sharing.md)
-- Used by: Timeline, memory detail, Settings notifications
+- Used by: Timeline, memory detail, Settings notifications, [Family activity](./family-activity.md) (reads `memory_liked`/`memory_commented` events sourced from this feature's tables)
 
 ## Testing
 
@@ -212,6 +230,7 @@ maestro test .maestro/flows/engagement/like-and-comment.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-08-21 | Likes are now household-visible: `memory_likes`' select policy was replaced with a household select policy mirroring comments (reversing the 2026-07-13 "liker identities are not exposed" decision). Scope is the read policy only — insert/delete stay self-only, and no liker-list UI was added to the engagement bar; the only place a liker's identity now surfaces is the new [Family activity](./family-activity.md) feed. |
 | 2026-07-29 | Added reliable handle/header pull-down dismissal with Android modal gesture support and snapback coverage |
 | 2026-07-15 | Keep the comment composer above the Android keyboard and restore bottom docking after keyboard close |
 | 2026-07-14 | Fixed keyboard spacing, visible-viewport overflow, first-comment visibility, and Android drawer reposition flicker |

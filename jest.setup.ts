@@ -106,6 +106,7 @@ jest.mock('expo-image-manipulator', () => ({
 // surrounding Pressables.
 jest.mock('lucide-react-native', () => ({
   ArrowRight: () => null,
+  Bell: () => null,
   Check: () => null,
   Clock: () => null,
   Heart: () => null,

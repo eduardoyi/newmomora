@@ -506,6 +506,38 @@ ones`, `Tiny troublemakers`, `From [Name]'s first year` for age-zero packages,
 archive fallback packages; the title-copy migration backfills already-materialized
 package rows.
 
+### 2.1b Family activity feed
+
+`docs/plans/family-activity.md` — a persistent, family-scoped feed ("Ana
+added a memory", "Grandma liked your memory") surfaced via a bell + bottom
+sheet on the timeline. Ids only; content is joined at read time.
+
+```sql
+create table public.family_activity_events (
+  id            uuid primary key default gen_random_uuid(),
+  family_id     uuid not null references public.families on delete cascade,
+  actor_id      uuid not null references auth.users on delete cascade,
+  kind          text not null check (kind in (
+                  'memory_added','memory_commented','memory_liked',
+                  'member_joined','member_pending')),
+  memory_id     uuid references public.memories on delete cascade,
+  comment_id    uuid references public.memory_comments on delete cascade,
+  like_user_id  uuid,  -- set for memory_liked; with memory_id identifies the like row
+  invite_id     uuid references public.family_invites on delete cascade,
+  created_at    timestamptz not null default now()
+);
+
+alter table public.family_memberships
+  add column activity_seen_at timestamptz;  -- nullable; null = never opened
+```
+
+Every FK cascades, so deleting a memory/comment/invite deletes its events
+too — nothing to separately scrub. Migration
+`supabase/migrations/20260822100000_family_activity.sql` backfills recent
+history (memories: last 90 days; comments/likes: all; memberships: every
+row but the founder's; invites: those currently `redeemed`) and applies the
+retention prune (§5.4-equivalent, see below) once immediately after.
+
 ### 2.2 Indexes
 
 ```sql
@@ -532,6 +564,12 @@ create index idx_family_activity_log_family_actor_kind
 create index idx_memory_likes_user_id on public.memory_likes (user_id);
 create index idx_memory_comments_memory_created_at on public.memory_comments (memory_id, created_at desc);
 create index idx_memory_comments_user_id on public.memory_comments (user_id);
+
+-- Family activity feed (2026-08-22):
+create index idx_family_activity_events_family_created
+  on public.family_activity_events (family_id, created_at desc, id desc);
+create index idx_family_activity_events_actor
+  on public.family_activity_events (actor_id);
 ```
 
 `idx_memories_user_id` and the old `idx_memories_memory_date (user_id,
@@ -669,6 +707,53 @@ deleted, allowing notification delivery to ignore stale/repeated writes.
   granted only to `authenticated`. No entitlement helper is involved, so
   owners with lapsed write access and household viewers retain archive read
   access.
+
+**Family activity feed (2026-08-22, `docs/plans/family-activity.md`):**
+
+- `family_activity_events` has RLS enabled with **no client policies** —
+  same posture as `family_activity_log` (§2.6). `anon` and `authenticated`
+  are explicitly revoked all table privileges (defense in depth; the table
+  was never granted anything to begin with). Every read goes through the
+  RPCs below; every write goes through the triggers in §2.4.
+- `family_memberships.activity_seen_at` is writable only by
+  `mark_family_activity_seen` (below). The table's blanket client `UPDATE`
+  grant (from `20260731110000_grant_authenticated_client_table_access.sql`)
+  was narrowed to a column-level `grant update (role) on
+  public.family_memberships to authenticated` — the only column the client
+  actually writes directly (`updateMemberRole`,
+  `src/services/family.ts`) — so a manager can no longer set
+  `activity_seen_at` (their own or another member's) outside the RPC.
+- `memory_likes` select flips from "own row only" to household-wide: policy
+  `"Memory likes: select own"` is replaced by `"Memory likes: select
+  household"`, using the same `is_family_member(m.family_id)` shape as
+  `"Memory comments: select"`. Insert/delete stay unchanged (self-only) —
+  see [likes-and-comments.md](./features/likes-and-comments.md) for the
+  privacy-flip rationale (locked product decision, feed scope only — no
+  liker-list UI).
+- `get_family_activity(target_family_id uuid)` — `security definer stable`
+  authenticated RPC, up to 100 rows newest-first
+  (`order by created_at desc, id desc`). Rejects anonymous sessions
+  (`is_anonymous_user()`) and non-members (`is_family_member`) inside the
+  body, exactly like `get_family_member_profiles`. Excludes the caller's own
+  events (`actor_id <> auth.uid()`) and excludes `kind = 'member_pending'`
+  unless the caller `has_family_role(target_family_id, array['owner',
+  'manager'])`. Also excludes any event whose actor the caller has blocked
+  (`blocked_family_accounts`, §2.7) — same rule push delivery already
+  applies (docs/features/content-reporting.md, "Activity pushes exclude
+  recipients who blocked the actor"). Joins `user_profiles` (actor name),
+  `memories`, and `memory_comments` at read time; `memory_excerpt` is
+  `left(coalesce(nullif(btrim(content), ''), nullif(btrim(audio_transcript),
+  '')), 80)` and `comment_snippet` is `left(content, 120)`.
+- `get_family_activity_unread(target_family_id uuid) returns boolean` —
+  same guards, `member_pending` role filter, and blocked-actor exclusion;
+  true when any qualifying event's `created_at` is after the caller's
+  `coalesce(activity_seen_at, '-infinity')`.
+- `mark_family_activity_seen(target_family_id uuid) returns void` — same
+  guards; sets the caller's own `family_memberships.activity_seen_at =
+  now()`.
+- All three are `revoke all ... from public, anon, authenticated` then
+  `grant execute ... to authenticated`, matching every other definer RPC in
+  this file.
 
 ### 2.4 Triggers
 
@@ -814,6 +899,45 @@ body too. `memory_media.share_card_key` needs no equivalent trigger:
 `replace_memory_media_assets` (§2.3) deletes and re-inserts every row for a
 memory on any media edit, so a replaced asset's row always starts with
 `share_card_key` null already.
+
+**Family activity feed (2026-08-22, `20260822100000_family_activity.sql`,
+docs/plans/family-activity.md):** six `security definer, set search_path =
+public` trigger functions write/delete `family_activity_events` rows —
+content never flows through them, only ids:
+
+- `trg_activity_memory_added` (`after insert on memories`) — inserts
+  `memory_added`; skipped when `new.user_id is null` (gallery-import /
+  service-role inserts with no attributed creator).
+- `trg_activity_memory_commented` (`after insert on memory_comments`) —
+  inserts `memory_commented`, family resolved via the parent memory.
+- `trg_activity_memory_liked` (`after insert on memory_likes`) — inserts
+  `memory_liked`, `like_user_id = new.user_id`.
+- `trg_activity_memory_unliked` (`after delete on memory_likes`) — deletes
+  the matching `memory_liked` row (`memory_id` + `like_user_id`) instead of
+  logging an "unliked" event — `memory_likes` has no id of its own to key
+  off of.
+- `trg_activity_member_joined` (`after insert on family_memberships`) —
+  inserts `member_joined` only when the family already has `>= 1` other
+  membership row, suppressing the founder's own solo-family insert
+  (`create_family`, `commit_onboarding`) and every other single-row
+  bootstrap insert.
+- `trg_activity_member_pending` (`after update of status on
+  family_invites`) — `status` transitioning to `'redeemed'` inserts
+  `member_pending` (actor = `new.redeemed_by`); transitioning away from
+  `'redeemed'` (approved/rejected/revoked) deletes that invite's
+  `member_pending` row. Invite rows are always `UPDATE`d, never deleted, on
+  decision, so FK cascade alone does not clean these up.
+
+**Retention (`prune_family_activity_events()`):** `security definer` SQL
+function, per family keeps the newest 200 rows and drops anything older
+than 90 days (window function over `(family_id, created_at desc, id
+desc)`), `returns integer` (rows deleted). Granted to `service_role` only.
+Applied once in the migration right after the backfill, then scheduled
+daily via `pg_cron` job `invoke-prune-family-activity` at 04:30 UTC — pure
+SQL (`select public.prune_family_activity_events()`), no Vault/`pg_net`
+round trip needed, unlike the HTTP-calling cron jobs elsewhere in this
+file. 04:30 UTC sits between `invoke-hard-delete-expired-accounts` (03:00,
+§4.7) and `invoke-cleanup-abandoned-anonymous-users` (04:00, §4.17).
 
 ### 2.5 Constraints
 

@@ -1,0 +1,30 @@
+appId: com.memora.app
+---
+# Single-account approximation of the family-activity flow (plan
+# docs/plans/family-activity.md §9 calls for a two-account flow: account B
+# likes/comments on account A's memory, then A sees the unread dot and the
+# resulting rows). This flow cannot cover that -- get_family_activity
+# deliberately excludes the caller's own events (plan §2.3 "own actions
+# excluded"), so a single account can never produce a row, an unread dot, or
+# a Review pill in its own feed. What this DOES cover: the bell renders and
+# opens the sheet, the empty state and its exact copy render for a solo/no-
+# new-activity account, and the sheet closes via the header close button.
+- runFlow: ../auth/login.yaml
+- extendedWaitUntil:
+    visible:
+      id: timeline-activity-bell
+    timeout: 15000
+- tapOn:
+    id: timeline-activity-bell
+- extendedWaitUntil:
+    visible:
+      id: family-activity-sheet
+    timeout: 10000
+- assertVisible: "Family activity"
+- assertVisible: "Quiet for now. When someone adds a moment or leaves a comment, it'll show up here."
+- tapOn:
+    id: family-activity-sheet-close
+- extendedWaitUntil:
+    notVisible:
+      id: family-activity-sheet
+    timeout: 5000
