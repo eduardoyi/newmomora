@@ -44,7 +44,10 @@
       "android": {
         "credentialsSource": "local"
       },
-      "channel": "production"
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_GALLERY_IMPORT_ENABLED": "true"
+      }
     }
   },
   "submit": {
