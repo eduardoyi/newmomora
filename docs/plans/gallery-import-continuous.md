@@ -367,3 +367,62 @@ Owner-reported issues fixed after part 1 (all with regression tests):
 iPhone 12 session (same family, second device): per-device admission ✅; fair-use pause surfaced instantly (family-wide window shared with the Android sweep) and auto-un-paused ~1 min after the cap was restored ✅; sweep streamed 24 chunks while the owner reviewed (56 set aside, 1 kept via the PhotoKit originals approval path) ✅; between-batches → new-batch loop ✅; Wi-Fi off/on, airplane mode, background/foreground, and Stop-looking/Keep-looking all exercised by the owner — everything recovered on its own ✅.
 
 Expiry-warning caveat (accepted): `gallery_import_touch_run` extends the TTL on any candidates read, so the "clears in N days" warning is only reachable after ~29 days without opening the deck; the rendering paths are unit-tested.
+
+## Phase-0 cost benchmark — measured 2026-08-23 (real libraries, gpt-4o-mini)
+
+Two full-device sweeps in one day (Pixel 9a camera album + iPhone 12 library):
+295 clusters, 1,444 photos previewed, 272 provider attempts (269 completed,
+2 failed, 1 ambiguous), 199 candidates staged. Token usage from
+`gallery_import_provider_attempts.usage`: 4.35M input + 28K output tokens →
+**$0.67 total** ≈ **$0.0023/cluster ≈ $0.00046/photo ≈ $0.0034/candidate**.
+A typical initial sweep is therefore ~$0.30–0.35 per device library and near
+zero at steady state; the 300-cluster/day family cap bounds worst-case spend
+at ~$0.68/family/day. R2 preview storage/ops are fractions of a cent
+(transient ~200 MB per sweep). Cost clears the Phase-0 gate by a wide margin
+at the $12.99/mo price point.
+
+## Release prep — 2026-08-23/24
+
+- Release worktree `../Momora2-release`, branch `release/1.3.0` at 2c91936 +
+  two release-only commits (production env flag `EXPO_PUBLIC_GALLERY_IMPORT_ENABLED=true`
+  in eas.json; `.easignore` trimming the upload). Cherry-pick both onto
+  `codex/gallery-import` before or with the main merge so branches agree.
+- Production EAS builds started (Android versionCode 44, iOS via stored
+  distribution cert). Version 1.3.0, `appVersionSource: remote`.
+- Server rollout lever: `gallery_import_admission_settings.enabled` (already
+  on for the shared project). Client flag now baked into production builds.
+
+### Google Play — Photos and Video Permissions declaration (draft answers)
+
+Play Console → App content → Photo and video permissions.
+
+- **Permission requested:** `READ_MEDIA_IMAGES` only (expo-media-library
+  `granularPermissions: ["photo"]`; no videos, no ACCESS_MEDIA_LOCATION).
+- **Core feature:** "Find memories in your photos" — the app's primary
+  content-creation flow. Momora is a private family memory journal; the
+  feature scans the user's photo library on-device, groups photos into
+  events, and suggests journal entries the parent explicitly reviews and
+  approves one by one. Broad access is required because the feature's core
+  value is looking across the whole library (including older photos) to
+  find moments worth keeping; the Android Photo Picker cannot provide
+  recurring, whole-library discovery.
+- **One-time vs recurring:** recurring, user-initiated; the user consents in
+  an in-app explainer BEFORE the OS permission prompt and can stop at any
+  time ("Stop looking for more" / "Stop and clear").
+- **Data handling:** photo files are read on-device; 512 px JPEG previews of
+  candidate photos are uploaded transiently to the developer's private
+  storage solely to generate caption suggestions, then deleted automatically
+  (30-day cap, sooner on stop/finish). Full-resolution photos are uploaded
+  only for suggestions the user explicitly approves, into their private
+  family journal. No location data (EXIF GPS stripped / not requested), no
+  face recognition, no ads, no sale or sharing of photo data.
+- **Demo video:** record Settings → "Find memories in your photos" → trust
+  explainer → OS prompt → progress → review deck → keep → journal entry.
+  (To be recorded on the production build.)
+
+### App Store (iOS) notes
+- `NSPhotoLibraryUsageDescription` already present ("privately suggest
+  family memories from photos you choose to let it review").
+- No additional Apple declaration required; normal review. App Privacy
+  labels already declare Photos under user content collection — verify the
+  label mentions "Photos" linked to the user before submitting.
