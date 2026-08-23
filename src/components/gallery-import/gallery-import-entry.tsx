@@ -20,8 +20,8 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
+import { useGalleryImportEntryStatus } from '@/hooks/useGalleryImport';
 import { trackEvent } from '@/services/analytics';
-import { loadLatestGalleryImportCheckpoint } from '@/utils/gallery-import-checkpoint';
 import { getGalleryImportE2eAdapter } from '@/utils/gallery-import-e2e-adapter';
 import { beginGalleryImportPipeline } from '@/utils/gallery-import-pipeline';
 import {
@@ -32,7 +32,7 @@ import {
 import { canEditFamilyContent } from '@/utils/roles';
 
 import { GalleryImportExceptionScreen } from './gallery-import-exception';
-import { GalleryImportFact, GalleryImportReassure, GalleryImportTopBar, PrimaryButton, gi } from './gallery-import-shared';
+import { GalleryImportTopBar, PrimaryButton, gi } from './gallery-import-shared';
 import { GalleryImportPermissionOutcome, GalleryImportTrustExplainer, type GalleryImportPermissionOutcomeKind } from './gallery-import-trust';
 
 export type GalleryImportSurface = 'offer' | 'settings' | 'timeline' | 'glyph';
@@ -53,9 +53,15 @@ export function GalleryImportEntry({ surface = 'settings' }: { surface?: Gallery
   const billing = useBilling();
   const [permission, setPermission] = useState<GalleryPhotoPermissionState | null>(null);
   const [isStarting, setIsStarting] = useState(false);
-  const [resumableRunId, setResumableRunId] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<EntryOverlay | null>(null);
   const canStart = canEditFamilyContent(role);
+  // Same device-bound status the activity bell/sheet and Settings row read
+  // (docs/plans/gallery-import-continuous.md I4a step 5) -- this is what
+  // lets an existing checkpoint route straight to the review deck instead
+  // of always bouncing through progress.
+  const entryStatus = useGalleryImportEntryStatus({ enabled: canStart });
+  const resumableRunId = entryStatus.checkpoint?.runId ?? null;
+  const hasReadyToReview = entryStatus.readyCount > 0;
 
   useEffect(() => { trackEvent('gallery_import_opened', { surface }); }, [surface]);
   useEffect(() => {
@@ -63,11 +69,6 @@ export function GalleryImportEntry({ surface = 'settings' }: { surface?: Gallery
     const adapter = getGalleryImportE2eAdapter() ?? createExpoGalleryMediaLibraryAdapter();
     void adapter.getPermission().then((response) => setPermission(getGalleryPhotoPermissionState(response))).catch(() => undefined);
   }, [canStart]);
-  useEffect(() => {
-    if (!user?.id || !familyId || !canStart) return;
-    void loadLatestGalleryImportCheckpoint(user.id, familyId)
-      .then((checkpoint) => setResumableRunId(checkpoint?.runId ?? null));
-  }, [canStart, familyId, user?.id]);
 
   const chooseMorePhotos = useCallback(async () => {
     const adapter = getGalleryImportE2eAdapter() ?? createExpoGalleryMediaLibraryAdapter();
@@ -97,7 +98,10 @@ export function GalleryImportEntry({ surface = 'settings' }: { surface?: Gallery
       return;
     }
     if (resumableRunId) {
-      router.replace({ pathname: '/(app)/gallery-import/progress' as never, params: { runId: resumableRunId } });
+      // Ready suggestions always win: land straight on the deck instead of
+      // bouncing through progress with nothing new to show there (I4a step 5).
+      const pathname = hasReadyToReview ? '/(app)/gallery-import/review' : '/(app)/gallery-import/progress';
+      router.replace({ pathname: pathname as never, params: { runId: resumableRunId } });
       return;
     }
     setIsStarting(true);
@@ -115,7 +119,7 @@ export function GalleryImportEntry({ surface = 'settings' }: { surface?: Gallery
     // 'denied' and askable: nothing has explained the OS prompt yet.
     setIsStarting(false);
     setOverlay({ kind: 'trust' });
-  }, [billing.status, canStart, familyId, isStarting, resumableRunId, startAndNavigate, user]);
+  }, [billing.status, canStart, familyId, hasReadyToReview, isStarting, resumableRunId, startAndNavigate, user]);
 
   const continueFromExplainer = useCallback(async () => {
     const adapter = getGalleryImportE2eAdapter() ?? createExpoGalleryMediaLibraryAdapter();
@@ -181,11 +185,13 @@ export function GalleryImportEntry({ surface = 'settings' }: { surface?: Gallery
       footer={<>
         <PrimaryButton
           disabled={!canStart || isStarting}
-          label={isStarting ? 'Working…' : resumableRunId ? 'Pick up where you left off' : 'Look through my photos'}
+          label={isStarting ? 'Working…' : resumableRunId && hasReadyToReview ? 'Pick up where you left off' : 'Look through my photos'}
           onPress={() => void requestPermissionThenStart()}
           testID="gallery-import-start"
         />
-        <Pressable accessibilityRole="button" onPress={() => router.back()} testID="gallery-import-not-now"><Text style={styles.ghostButton}>Maybe later</Text></Pressable>
+        {/* Single exit per screen (I4a step 5, minimal-copy principle) --
+            the top bar's "Not now" is it; this is only an informational
+            note, not a second dismiss affordance. */}
         <Text style={styles.footerHint}>You can start this any time from Settings.</Text>
       </>}
       footerStyle={[gi.stickyFooterSurface, styles.footerGap]}
@@ -195,7 +201,7 @@ export function GalleryImportEntry({ surface = 'settings' }: { surface?: Gallery
     >
       <Text style={styles.eyebrow}>Before you start writing</Text>
       <Text style={styles.display}>Some of it is{`\n`}already on{`\n`}<Text style={styles.displayAccent}>your phone.</Text></Text>
-      <Text style={styles.body}>Momora can look through the photos you already have and suggest a handful of moments worth keeping. You decide which ones become memories.</Text>
+      <Text style={styles.body}>Momora suggests photos only, and only you decide what becomes a memory.</Text>
       <View accessibilityLabel="A stack of family photo prints" style={styles.printStack}>
         <View style={[styles.print, styles.printBackOne]} />
         <View style={[styles.print, styles.printBackTwo]} />
@@ -206,19 +212,6 @@ export function GalleryImportEntry({ surface = 'settings' }: { surface?: Gallery
           </View>
           <View style={styles.thumbRow}>{[0, 1, 2, 3].map((index) => <View key={index} style={styles.thumb} />)}</View>
         </View>
-      </View>
-      <GalleryImportFact icon="search" title="It looks for events, not good photos">
-        Days with a lot going on, like a snowy morning or an afternoon outside, grouped the way you would remember them.
-      </GalleryImportFact>
-      <GalleryImportFact icon="image" title="Nothing is deleted or tidied up">
-        Momora only reads your photos. Your camera roll stays exactly as it is.
-      </GalleryImportFact>
-      <GalleryImportFact icon="check" title="Nothing is added without you">
-        You look at each suggestion and keep only the ones you want. The rest quietly go away.
-      </GalleryImportFact>
-      <Text style={styles.videosNote}>Momora suggests photos only for now.</Text>
-      <View style={styles.reassureWrap}>
-        <GalleryImportReassure />
       </View>
       {permission === 'limited' && !overlay ? <Text style={styles.note}>Momora will only look at the photos you allowed. You can choose more before you start.</Text> : null}
       {permission === 'limited' && !overlay ? <Pressable accessibilityRole="button" onPress={() => void chooseMorePhotos()} testID="gallery-import-choose-more"><Text style={styles.managePhotos}>Choose more photos</Text></Pressable> : null}
@@ -247,14 +240,11 @@ const styles = StyleSheet.create({
   placeholderStamp: { bottom: 8, color: 'rgba(60,44,30,0.4)', fontFamily: fonts.script, fontSize: 16, position: 'absolute', right: 10, transform: [{ rotate: '-4deg' }] },
   thumbRow: { flexDirection: 'row', gap: 6, marginTop: 10 },
   thumb: { backgroundColor: colors.seaSoft, borderRadius: 6, flex: 1, height: 34 },
-  videosNote: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 12, lineHeight: 18, marginTop: 20 },
-  reassureWrap: { marginTop: 12 },
   // The solid background + hairline top border that give this footer its
   // own visual identity now live in the shared `gi.stickyFooterSurface`
   // (composed in via `footerStyle` on KeyboardStickyShell above) -- this is
-  // only the element spacing between the button/ghost-button/hint stack.
+  // only the element spacing between the button and the hint below it.
   footerGap: { gap: 10 },
-  ghostButton: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 13, padding: 8, textAlign: 'center' },
   footerHint: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 11.5, lineHeight: 16, textAlign: 'center' },
   error: { color: colors.error, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 18, marginTop: spacing.md },
   note: { color: colors.seaInk, fontFamily: fonts.sans, fontSize: 12, lineHeight: 18, marginTop: spacing.lg },

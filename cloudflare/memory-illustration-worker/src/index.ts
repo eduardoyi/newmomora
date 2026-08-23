@@ -15,6 +15,10 @@ function response(body: Record<string, unknown>, status = 200): Response {
 }
 
 function isDuplicateWorkflowError(error: unknown): boolean {
+  // The Workflows binding surfaces a duplicate-instance-id rejection as a
+  // plain Error with a human-readable message (no documented numeric code
+  // in @cloudflare/workers-types' `WorkflowError` as of this writing); match
+  // its wording rather than relying on an unstable code.
   const message = error instanceof Error ? error.message : '';
   return /already exists|duplicate|unique/i.test(message);
 }
@@ -90,10 +94,23 @@ async function handleGalleryDispatch(request: Request, target: GalleryDispatchTa
   if (!WORKFLOW_JOB_ID_PATTERN.test(payload.chunkId ?? '')) {
     return response({ error: 'Invalid request', code: 'INVALID_CHUNK_ID' }, 400);
   }
+  if (payload.attempt !== undefined && (!Number.isSafeInteger(payload.attempt) || payload.attempt < 0)) {
+    return response({ error: 'Invalid request', code: 'INVALID_ATTEMPT' }, 400);
+  }
+  // S4: a re-dispatch on reconciliation carries `attempt` (chunks.dispatch_attempts)
+  // so it gets its own Workflow instance id instead of colliding with the
+  // still-running (or ambiguous) prior attempt's instance.
+  // Workflow instance ids only admit [A-Za-z0-9_-] (a colon made `create`
+  // throw on every dispatch -- device-observed 2026-08-23), so the prefix and
+  // attempt suffix are dash-joined. Must stay in sync with the Edge's
+  // galleryWorkflowInstanceId (supabase/functions/_shared/gallery-import.ts).
+  const instanceId = payload.attempt !== undefined && payload.attempt > 1
+    ? `gallery-${payload.chunkId}-${payload.attempt}`
+    : `gallery-${payload.chunkId}`;
   try {
     await target.workflow.create({
-      id: payload.chunkId,
-      params: { chunkId: payload.chunkId },
+      id: instanceId,
+      params: { chunkId: payload.chunkId, attempt: payload.attempt },
       retention: { successRetention: '1 day', errorRetention: '1 day' },
     });
     return response({ accepted: true, chunkId: payload.chunkId }, 202);

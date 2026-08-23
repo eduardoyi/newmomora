@@ -6,6 +6,7 @@
 // the same functions run inside react-native-gesture-handler callbacks.
 import { GALLERY_IMPORT_CLUSTER_GAP_MS } from '@/constants/gallery-import';
 import type { GalleryImportCheckpoint, GalleryImportCheckpointAsset } from '@/utils/gallery-import-checkpoint';
+import type { GalleryImportFrontier } from '@/utils/gallery-import-frontier';
 import type { GalleryImportRun } from '@/services/gallery-import';
 
 /**
@@ -26,7 +27,10 @@ export function galleryImportStillComingCount(
   chunks: GalleryImportCheckpoint['chunks'] | undefined,
 ): number {
   return (chunks ?? []).reduce(
-    (count, chunk) => (chunk.status === 'dispatched' || chunk.status === 'failed' ? count : count + chunk.clusters.length),
+    // 'abandoned' (continuous model, 2026-08-23) is as terminal as
+    // 'dispatched' for this legacy local-plan count -- it will never be
+    // retried again, so it must never read as still forthcoming either.
+    (count, chunk) => (chunk.status === 'dispatched' || chunk.status === 'failed' || chunk.status === 'abandoned' ? count : count + chunk.clusters.length),
     0,
   );
 }
@@ -48,36 +52,70 @@ export function isGalleryImportRunTerminal(status: GalleryImportRun['status'] | 
  * completed and was slowly gaining more; the old local count showed a
  * phantom "+51 coming" that never moved).
  *
- * - `'none'`: nothing more is coming -- the run is genuinely terminal, or it
- *   is 'reviewing' and the server confirms zero clusters are still pending.
- *   This is the only state that makes "done"/completing the run honest.
- * - `'count'`: the server knows exactly how many clusters are still
- *   pending (registered, not yet resolved) -- show the real number.
- * - `'unknown'`: the run has not finished scanning/registering yet
- *   ('scanning'/'processing', or `run` has not loaded), or the server could
- *   not compute the pending count this time (`pendingClusters` is null/
- *   absent) -- more is coming, but not a trustworthy number. Show
- *   qualitative copy ("more on the way"), never a guessed digit.
+ * Continuous model (S9, 2026-08-23): "coming" is now server pending +
+ * locally planned/failed (retryable, not yet abandoned) clusters +
+ * `moreHistory` (the frontier has not proven the library is fully covered,
+ * and `autoContinue` has not been turned off). A deck/progress screen is
+ * never honestly "done" while any of these hold, even if the server's own
+ * pendingClusters count happens to read zero right now.
+ *
+ * - `'none'`: nothing more is coming -- the run is genuinely terminal. This
+ *   is the only state that makes "done"/completing the run honest.
+ * - `'count'`: a real, addable number is known (server pending + local
+ *   planned/failed clusters) -- show it. `moreHistory` may still be true
+ *   alongside a `count` of 0 (nothing currently pending, but the sweep has
+ *   more of the library left to look through).
+ * - `'unknown'`: the run has not finished scanning/registering its first
+ *   window yet ('scanning'/'processing', or `run` has not loaded), or the
+ *   server could not compute its own pending count this time AND there is no
+ *   local count to fall back on -- more is coming, but not a trustworthy
+ *   number. Show qualitative copy ("more on the way"), never a guessed digit.
+ *
+ * `moreHistory` is required on the non-`'none'` variants (tightened
+ * 2026-08-23 once every production caller -- the review deck, the progress
+ * screen, and `useGalleryImportEntryStatus` -- passed `checkpoint`/`frontier`
+ * through to this function, per docs/plans/gallery-import-continuous.md I4a):
+ * every branch below always sets it explicitly, so there is no longer a
+ * legitimate way to construct this type without deciding the value.
  */
 export type GalleryImportComingIndicator =
   | { kind: 'none' }
-  | { kind: 'count'; count: number }
-  | { kind: 'unknown' };
+  | { kind: 'count'; count: number; moreHistory: boolean }
+  | { kind: 'unknown'; moreHistory: boolean };
+
+/** Clusters in local chunks that will still be attempted -- planned, or
+ * failed but not yet exhausted (abandoned chunks are terminal, like
+ * dispatched ones, and contribute nothing here). Distinct from the legacy
+ * `galleryImportStillComingCount` above only in name/intent: this is the
+ * one S9 wires into user-facing "+N coming" surfaces. */
+function localRetryableClusterCount(chunks: GalleryImportCheckpoint['chunks'] | undefined): number {
+  return (chunks ?? []).reduce(
+    (count, chunk) => (chunk.status === 'dispatched' || chunk.status === 'abandoned' ? count : count + chunk.clusters.length),
+    0,
+  );
+}
 
 export function deriveGalleryImportComingIndicator(
   run: Pick<GalleryImportRun, 'status' | 'pendingClusters'> | null | undefined,
+  checkpoint?: Pick<GalleryImportCheckpoint, 'chunks'> | null,
+  frontier?: Pick<GalleryImportFrontier, 'completedLibrary' | 'autoContinue'> | null,
 ): GalleryImportComingIndicator {
-  if (!run) return { kind: 'unknown' };
+  const moreHistory = Boolean(frontier) && frontier!.completedLibrary !== true && frontier!.autoContinue !== false;
+  if (!run) return { kind: 'unknown', moreHistory };
   if (isGalleryImportRunTerminal(run.status)) return { kind: 'none' };
-  // Still scanning/registering chunks server-side: more is coming by
-  // definition, and a pending-cluster count from before the first chunk
-  // even landed would be misleadingly small.
-  if (run.status !== 'reviewing') return { kind: 'unknown' };
+  const localCount = localRetryableClusterCount(checkpoint?.chunks);
+  // Still scanning/registering the run's very first window server-side: more
+  // is coming by definition, and a pending-cluster count from before the
+  // first chunk even landed would be misleadingly small.
+  if (run.status !== 'reviewing') return { kind: 'unknown', moreHistory };
   const pending = run.pendingClusters;
   if (typeof pending === 'number' && Number.isFinite(pending)) {
-    return pending > 0 ? { kind: 'count', count: pending } : { kind: 'none' };
+    const total = pending + localCount;
+    if (total > 0) return { kind: 'count', count: total, moreHistory };
+    return moreHistory ? { kind: 'count', count: 0, moreHistory } : { kind: 'none' };
   }
-  return { kind: 'unknown' };
+  if (localCount > 0) return { kind: 'count', count: localCount, moreHistory };
+  return { kind: 'unknown', moreHistory };
 }
 
 // gi-notes.jsx: "Commit threshold 92px or a fling over 0.6 px/ms."

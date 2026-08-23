@@ -22,7 +22,17 @@ export type GalleryImportStageKey =
   | 'interrupted'
   | 'failed'
   | 'cancelled'
-  | 'expired';
+  | 'expired'
+  /** Continuous model (2026-08-23): a chunk registration was refused with the
+   * family's daily fair-use limit (S2) -- distinct from `waitingWifi`, which
+   * is a device-local network condition. See `pausedUntil` below. */
+  | 'pausedFairUse'
+  /** Continuous model: every local chunk has settled and the server
+   * confirms nothing is pending, but the frontier says more of the library
+   * is left to sweep (and autoContinue is on) -- distinct from a genuine
+   * `ready`/empty end state. I4a decides whether this needs its own visual
+   * treatment or folds into `ready`/`processing`. */
+  | 'doneLookingMoreHistory';
 
 /** The subset of gi-states.jsx GI_STATES this screen can reach. `wrongDevice`
  * is handled before a checkpoint/run even exists (see DeviceBoundNotice in
@@ -82,6 +92,30 @@ export interface GalleryImportProgressStageInput {
    * error, e.g. a network request threw. Distinct from the server explicitly
    * reporting the run status as 'failed'. */
   hasTransientError: boolean;
+  /**
+   * Continuous model (2026-08-23) additions -- all optional so a caller that
+   * predates them (there should be none left once I4a wires the redesigned
+   * progress screen, but this keeps any transitional/frozen caller
+   * compiling) keeps working exactly as before.
+   */
+  /** Clusters in local chunks still planned or failed-but-retryable (never
+   * abandoned/dispatched) -- see gallery-import-deck.ts's local-retryable
+   * count. A positive value means real local work remains even if the
+   * server's own view looks quiet. */
+  localPlannedClusters?: number;
+  /** Local chunks that exhausted their retry budget this run (terminal,
+   * counted for the UI as "couldn't be sent" rather than silently dropped). */
+  abandonedChunks?: number;
+  /** The app-root driver's current phase (gallery-import-driver.ts /
+   * `subscribeGalleryImportDriver`), when known. */
+  driverPhase?: string;
+  /** The checkpoint's own `pausedUntil` (S8) -- an ISO timestamp while a
+   * fair-use pause is active, else null/undefined. */
+  pausedUntil?: string | null;
+  /** True while the frontier says more of the library remains to sweep and
+   * `autoContinue` has not been turned off -- see
+   * `deriveGalleryImportComingIndicator`'s same-named field. */
+  moreHistory?: boolean;
 }
 
 export function deriveGalleryImportProgressOutcome(input: GalleryImportProgressStageInput): GalleryImportProgressOutcome {
@@ -92,6 +126,12 @@ export function deriveGalleryImportProgressOutcome(input: GalleryImportProgressS
   if (input.isDemoted) return { kind: 'exception', exception: 'demoted' };
   if (input.checkpointStatus === 'paused') {
     return { kind: 'stage', stage: 'waitingWifi', ready: input.readyCount, value: null, total: null, scannedAssetCount: null };
+  }
+  // Fair-use pause (S2/S8) is a local-checkpoint-derived, family-wide gate --
+  // checked alongside the Wi-Fi pause above and before the offline check,
+  // since it is unrelated to this device's own connectivity.
+  if (input.pausedUntil && new Date(input.pausedUntil).getTime() > Date.now()) {
+    return { kind: 'stage', stage: 'pausedFairUse', ready: input.readyCount, value: null, total: null, scannedAssetCount: null };
   }
   if (input.isOffline) return { kind: 'exception', exception: 'offline' };
 
@@ -121,7 +161,18 @@ export function deriveGalleryImportProgressOutcome(input: GalleryImportProgressS
     return { kind: 'exception', exception: 'errorFinal' };
   }
   if (input.serverStatus === 'reviewing') {
-    if (input.readyCount === 0 && input.deckCursor === 0) {
+    // Continuous model: real local work (still-planned/retryable chunks)
+    // must never be reported as "nothing stood out" -- the empty outcome is
+    // reserved for a genuinely settled run.
+    const hasUnsettledLocalWork = (input.localPlannedClusters ?? 0) > 0;
+    if (input.readyCount === 0 && input.deckCursor === 0 && !hasUnsettledLocalWork) {
+      // A transient (non-server-declared) error with nothing ready and
+      // nothing local left to try is more honest as a recoverable error than
+      // a calm "nothing stood out" outcome the user might read as final.
+      if (input.hasTransientError) return { kind: 'exception', exception: 'errorRecoverable' };
+      if (input.moreHistory) {
+        return { kind: 'stage', stage: 'doneLookingMoreHistory', ready: 0, value: null, total: null, scannedAssetCount: null };
+      }
       return { kind: 'empty', empty: input.permissionMode === 'limited' ? 'limitedNothing' : 'nothing' };
     }
     if (input.readyCount === 0) {

@@ -38,7 +38,6 @@ describe('gallery import photo chooser', () => {
     );
     await flushUriResolution();
 
-    expect(screen.getByText(/choosing one does not send anything new anywhere/)).toBeTruthy();
     expect(screen.getByText(/all still on your phone/)).toBeTruthy();
     expect(screen.getByText('Tap a photo to add or remove it.')).toBeTruthy();
 
@@ -84,13 +83,13 @@ describe('gallery import photo chooser', () => {
     });
   });
 
-  it('is browse-only from the read-only deck: no toggling, no footer, a composer hint instead', async () => {
+  it('is browse-only from the read-only deck: no toggling, no footer, no note box or hint', async () => {
     const onUseSelection = jest.fn();
     const screen = render(
       <GalleryImportPhotoChooser candidate={candidate} mode="browse" onClose={jest.fn()} onUseSelection={onUseSelection} pool={pool} />,
     );
     await flushUriResolution();
-    expect(screen.getByTestId('gallery-import-chooser-browse-hint').props.children).toBe('Keeping opens the memory, where the photos can be changed.');
+    expect(screen.queryByTestId('gallery-import-chooser-browse-hint')).toBeNull();
     expect(screen.queryByTestId('gallery-import-chooser-use')).toBeNull();
     fireEvent.press(screen.getByTestId('gallery-import-chooser-photo-token-2'));
     expect(screen.queryByTestId('gallery-import-chooser-order-token-2')).toBeNull();
@@ -102,12 +101,11 @@ describe('gallery import set-aside sheet', () => {
     { id: 'candidate-9', caption: 'A rainy market morning with both kids.', memoryDate: '2024-01-14', selectedAssetTokens: ['token-0'], familyMemberIds: [], status: 'skipped' as const, previewUrls: ['https://preview-9'] },
   ];
 
-  it('shows thumb, excerpt, date, the Bring back action, and the reassurance card', () => {
+  it('shows thumb, excerpt, date, the Bring back action, and the one-line footer', () => {
     const onBringBack = jest.fn();
     const screen = render(
       <GalleryImportSetAsideSheet candidates={skipped} isActioning={false} onBringBack={onBringBack} onClose={jest.fn()} />,
     );
-    expect(screen.getByText('Nothing here was deleted. Bring any of them back for the next 30 days.')).toBeTruthy();
     expect(screen.getByText('A rainy market morning with both kids.')).toBeTruthy();
     // Same long-form date as the deck card and photo chooser header --
     // never the raw ISO date, and never a shorter one-off format either
@@ -116,7 +114,9 @@ describe('gallery import set-aside sheet', () => {
     expect(screen.queryByText('Jan 14, 2024')).toBeNull();
     expect(screen.queryByText('2024-01-14')).toBeNull();
     expect(screen.getByTestId('gallery-import-aside-thumb-candidate-9')).toBeTruthy();
-    expect(screen.getByText(/not a judgement of the photo/)).toBeTruthy();
+    // One short footer line, no "30 days" literal and no longer paragraph.
+    expect(screen.getByText('Won’t be suggested again.')).toBeTruthy();
+    expect(screen.queryByText(/30 days/)).toBeNull();
     expect(screen.queryByText('Restore')).toBeNull();
     fireEvent.press(screen.getByTestId('gallery-import-restore-candidate-9'));
     expect(onBringBack).toHaveBeenCalledWith(skipped[0]);

@@ -356,4 +356,103 @@ describe('FamilyActivitySheet', () => {
     expect(mockedUseProfiles).not.toHaveBeenCalled();
     expect(mutate).not.toHaveBeenCalled();
   });
+
+  describe('gallery-import ephemeral row', () => {
+    function galleryImportProp(overrides: Partial<FamilyActivitySheetProps['galleryImport']> = {}) {
+      return {
+        readyCount: 0,
+        comingIndicator: { kind: 'none' as const },
+        phase: 'idle' as const,
+        onOpen: jest.fn(),
+        ...overrides,
+      };
+    }
+
+    it('is absent when no galleryImport prop is passed at all (no checkpoint/run, per the caller\'s own gating)', () => {
+      const { queryByTestId } = renderSheet();
+      expect(queryByTestId('family-activity-gallery-import-row')).toBeNull();
+    });
+
+    it('shows nothing when the sweep is idle with nothing ready, even if the prop is passed', () => {
+      const { queryByTestId } = renderSheet({ galleryImport: galleryImportProp() });
+      expect(queryByTestId('family-activity-gallery-import-row')).toBeNull();
+    });
+
+    it('shows the ready copy with a Review pill above the empty state, and ready wins over an active sweep', () => {
+      const { getByTestId, getByText } = renderSheet({
+        galleryImport: galleryImportProp({ readyCount: 12, phase: 'uploading', comingIndicator: { kind: 'count', count: 3 } }),
+      });
+      expect(getByTestId('family-activity-gallery-import-row')).toBeTruthy();
+      expect(getByTestId('family-activity-gallery-import-row-review')).toBeTruthy();
+      expect(getByText('12 photo suggestions', { exact: false })).toBeTruthy();
+      expect(getByText('ready to review', { exact: false })).toBeTruthy();
+      // Still above the empty state, not instead of it.
+      expect(getByTestId('family-activity-sheet-empty')).toBeTruthy();
+    });
+
+    it('shows the singular noun for exactly one ready suggestion', () => {
+      const { getByText } = renderSheet({ galleryImport: galleryImportProp({ readyCount: 1 }) });
+      expect(getByText('1 photo suggestion', { exact: false })).toBeTruthy();
+    });
+
+    it('shows "still looking" copy with no Review pill while a sweep is active and nothing is ready yet', () => {
+      const { getByText, queryByTestId } = renderSheet({
+        galleryImport: galleryImportProp({ phase: 'preparing' }),
+      });
+      expect(getByText('Momora is still looking through your photos')).toBeTruthy();
+      expect(queryByTestId('family-activity-gallery-import-row-review')).toBeNull();
+    });
+
+    it('shows "still looking" copy when comingIndicator alone says more history remains, even with an idle phase', () => {
+      const { getByText } = renderSheet({
+        galleryImport: galleryImportProp({ comingIndicator: { kind: 'count', count: 0, moreHistory: true } }),
+      });
+      expect(getByText('Momora is still looking through your photos')).toBeTruthy();
+    });
+
+    it('shows the fair-use pause copy', () => {
+      const { getByText } = renderSheet({ galleryImport: galleryImportProp({ phase: 'paused_fair_use' }) });
+      expect(getByText('Momora will keep looking tomorrow')).toBeTruthy();
+    });
+
+    it('shows the Wi-Fi wait copy', () => {
+      const { getByText } = renderSheet({ galleryImport: galleryImportProp({ phase: 'waiting_wifi' }) });
+      expect(getByText('Needs Wi-Fi to keep going')).toBeTruthy();
+    });
+
+    it('shows the error copy', () => {
+      const { getByText } = renderSheet({ galleryImport: galleryImportProp({ phase: 'error' }) });
+      expect(getByText('Something needs a second look')).toBeTruthy();
+    });
+
+    it('renders above the sections when the feed has real events too', () => {
+      mockedUseFamilyActivity.mockReturnValue({
+        events: [makeEvent({ id: 'e1' })],
+        isLoading: false,
+        isRefetching: false,
+        isError: false,
+        error: null,
+        refetch,
+      });
+      const { getByTestId } = renderSheet({ galleryImport: galleryImportProp({ readyCount: 4 }) });
+      expect(getByTestId('family-activity-gallery-import-row')).toBeTruthy();
+      expect(getByTestId('family-activity-row-group-e1')).toBeTruthy();
+    });
+
+    it('closes the sheet before firing onOpen, matching every other row\'s deferred-navigation order', () => {
+      const onClose = jest.fn();
+      const onOpen = jest.fn();
+      const { getByTestId, rerenderVisible } = renderSheet({
+        onClose,
+        galleryImport: galleryImportProp({ readyCount: 4, onOpen }),
+      });
+
+      fireEvent.press(getByTestId('family-activity-gallery-import-row'));
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onOpen).not.toHaveBeenCalled();
+
+      rerenderVisible(false);
+      expect(onOpen).toHaveBeenCalledTimes(1);
+    });
+  });
 });

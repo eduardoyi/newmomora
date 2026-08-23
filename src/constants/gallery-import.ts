@@ -40,7 +40,41 @@ export const GALLERY_IMPORT_SCAN_PAGE_SIZE = 100;
 // before wide rollout).
 export const GALLERY_IMPORT_MAX_ENUMERATED_ASSETS = 4_000;
 export const GALLERY_IMPORT_MAX_ASSETS_PER_CLUSTER = 10;
-export const GALLERY_IMPORT_MAX_CLUSTERS_PER_RUN = 60;
+/**
+ * Continuous model (2026-08-23): one scan pass now produces at most one
+ * "window" of clusters (see docs/plans/gallery-import-continuous.md's
+ * Internal model) instead of one whole run's worth. `GALLERY_IMPORT_WINDOW_CLUSTERS`
+ * is the new name for that per-pass cap; `GALLERY_IMPORT_MAX_CLUSTERS_PER_RUN`
+ * is kept as an alias only so any code/tests that still reference the old
+ * name keep compiling -- new code should use the window name.
+ */
+export const GALLERY_IMPORT_WINDOW_CLUSTERS = 60;
+/** @deprecated Alias for {@link GALLERY_IMPORT_WINDOW_CLUSTERS}. A run is no
+ * longer capped at a fixed cluster count -- it keeps sweeping window by
+ * window until the library is covered (or the user stops it). */
+export const GALLERY_IMPORT_MAX_CLUSTERS_PER_RUN = GALLERY_IMPORT_WINDOW_CLUSTERS;
+/** Clusters per checkpoint chunk (chunk ordinals continue across windows). */
+export const GALLERY_IMPORT_CLUSTERS_PER_CHUNK = 4;
+/** A new window is only planned once server pending + local planned/failed
+ * clusters drops below this backlog target (see maybeExtendGalleryImportPlan
+ * in gallery-import-runner.ts). */
+export const GALLERY_IMPORT_TARGET_BACKLOG = 120;
+/** How often the app-root driver (gallery-import-driver.ts) re-kicks the
+ * runner while a run has unsettled work, in addition to AppState/NetInfo
+ * event-driven kicks. */
+export const GALLERY_IMPORT_DRIVER_TICK_MS = 60_000;
+/** Hard ceiling on one Edge Function round-trip (gallery-import.ts's
+ * invokeGalleryImport). A hung request must fail the pass, never hang it
+ * indefinitely -- the driver retries on its own backoff schedule. */
+export const GALLERY_IMPORT_EDGE_TIMEOUT_MS = 45_000;
+/** A checkpoint chunk that fails this many register/upload/dispatch attempts
+ * in a row is marked 'abandoned' (terminal, locally) rather than retried
+ * forever -- see gallery-import-runner.ts's processGalleryImportChunks. */
+export const GALLERY_IMPORT_CHUNK_MAX_ATTEMPTS = 3;
 export const GALLERY_IMPORT_CHECKPOINT_VERSION = 2;
-export const GALLERY_IMPORT_CHECKPOINT_MAX_BYTES = 900_000;
+// Raised 900,000 -> 1,500,000 (2026-08-23) for the continuous model: a
+// long-lived run's checkpoint now accumulates many more windows/chunks over
+// its lifetime than a single-pass run ever did. pruneGalleryImportCheckpoint
+// (gallery-import-checkpoint.ts) keeps growth bounded regardless.
+export const GALLERY_IMPORT_CHECKPOINT_MAX_BYTES = 1_500_000;
 export const GALLERY_IMPORT_MIN_CAPTURE_TIME_MS = Date.UTC(2000, 0, 1);

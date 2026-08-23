@@ -159,9 +159,15 @@ export function galleryUploadRequiredHeaders(
  */
 async function countPendingGalleryClusters(context: GalleryImportRequestContext, runId: unknown): Promise<number | null> {
   try {
+    // `gallery_import_cluster_results` has no `id` column -- its primary key
+    // is the composite (chunk_id, cluster_signature). Selecting `id` here
+    // always fails PostgREST validation (400), which the try/catch below
+    // silently swallowed into `null` -- so this count was always unknown in
+    // production. `chunk_id` is a real column and is enough for a head/count
+    // request.
     const { count, error } = await context.serviceClient
       .from('gallery_import_cluster_results')
-      .select('id, gallery_import_chunks!inner(run_id)', { count: 'exact', head: true })
+      .select('chunk_id, gallery_import_chunks!inner(run_id)', { count: 'exact', head: true })
       .eq('state', 'pending')
       .eq('gallery_import_chunks.run_id', runId as string);
     if (error || typeof count !== 'number') return null;
@@ -171,11 +177,79 @@ async function countPendingGalleryClusters(context: GalleryImportRequestContext,
   }
 }
 
+/**
+ * S1: per-chunk status list, ordered by ordinal. Distinct from `chunkCount`
+ * (the SQL aggregate integer already returned by `get_gallery_import_run`):
+ * that field intentionally never carries an array, so a reloaded checkpoint
+ * can never be confused by a polymorphic type. This is a new, separate,
+ * always-array field.
+ */
+async function fetchGalleryChunkSummaries(
+  context: GalleryImportRequestContext,
+  runId: unknown,
+): Promise<Array<{ ordinal: number; status: string }>> {
+  try {
+    const { data, error } = await context.serviceClient
+      .from('gallery_import_chunks')
+      .select('ordinal, status')
+      .eq('run_id', runId as string)
+      .order('ordinal', { ascending: true });
+    if (error || !Array.isArray(data)) return [];
+    return data
+      .filter((row): row is { ordinal: number; status: string } =>
+        finiteInteger(row?.ordinal, 0, 10_000) && typeof row?.status === 'string')
+      .map((row) => ({ ordinal: row.ordinal, status: row.status }));
+  } catch {
+    return [];
+  }
+}
+
+/** S1: opaque tokens selected by every still-live (staged/skipped) candidate. */
+async function fetchLiveCandidateAssetTokens(context: GalleryImportRequestContext, runId: unknown): Promise<string[]> {
+  try {
+    const { data, error } = await context.serviceClient
+      .from('gallery_import_candidates')
+      .select('selected_asset_tokens')
+      .eq('run_id', runId as string)
+      .in('status', ['staged', 'skipped']);
+    if (error || !Array.isArray(data)) return [];
+    const tokens = new Set<string>();
+    for (const row of data) {
+      if (Array.isArray(row.selected_asset_tokens)) {
+        for (const token of row.selected_asset_tokens) if (isUuid(token)) tokens.add(token);
+      }
+    }
+    return [...tokens];
+  } catch {
+    return [];
+  }
+}
+
+/** S1: the family's rolling 24h fair-use window, computed server-side. */
+async function fetchGalleryFairUse(context: GalleryImportRequestContext, familyId: unknown): Promise<{ pausedUntil: string | null }> {
+  try {
+    const { data, error } = await context.serviceClient.rpc('get_gallery_import_fair_use', { p_family_id: familyId as string });
+    if (error || !isRecord(data)) return { pausedUntil: null };
+    const used = typeof data.used === 'number' ? data.used : 0;
+    const limit = typeof data.limit === 'number' ? data.limit : Number.POSITIVE_INFINITY;
+    const resetsAt = typeof data.resets_at === 'string' ? data.resets_at : null;
+    return { pausedUntil: used >= limit ? resetsAt : null };
+  } catch {
+    return { pausedUntil: null };
+  }
+}
+
 export async function clientRun(context: GalleryImportRequestContext, run: Record<string, unknown>) {
   const { data: stored } = await context.serviceClient.from('gallery_import_runs')
     .select('limit_snapshot').eq('id', run.id).maybeSingle();
   const limits = isRecord(stored?.limit_snapshot) ? stored.limit_snapshot : {};
   const numberAt = (key: string, fallback: number) => typeof limits[key] === 'number' ? limits[key] : fallback;
+  const [pendingClusters, chunks, liveCandidateAssetTokens, fairUse] = await Promise.all([
+    countPendingGalleryClusters(context, run.id),
+    fetchGalleryChunkSummaries(context, run.id),
+    fetchLiveCandidateAssetTokens(context, run.id),
+    fetchGalleryFairUse(context, run.familyId),
+  ]);
   return {
     id: run.id,
     familyId: run.familyId,
@@ -186,10 +260,15 @@ export async function clientRun(context: GalleryImportRequestContext, run: Recor
     // `chunks` array name: a polymorphic field quietly breaks checkpoint and
     // resume callers when a run is reloaded from the server.
     chunkCount: finiteInteger(run.chunks, 0, 500) ? run.chunks : 0,
+    // S1: always an array (never the raw SQL aggregate above) -- safe to add
+    // back alongside `chunkCount` without recreating the old ambiguity.
+    chunks,
     // Additive, optional: older clients that don't read it are unaffected.
     // null means "server could not compute it right now" -- never rendered
     // as a number, never treated as 0.
-    pendingClusters: await countPendingGalleryClusters(context, run.id),
+    pendingClusters,
+    liveCandidateAssetTokens,
+    fairUse,
     limits: {
       maxClusters: numberAt('maxCandidatesPerRun', 60),
       maxAssetsPerCluster: numberAt('maxImagesPerCluster', 10),
@@ -268,6 +347,18 @@ export async function getGalleryImportRun(context: GalleryImportRequestContext):
   return jsonResponse(await clientRun(context, result.data));
 }
 
+/**
+ * S2: `register_gallery_import_chunk` raises the rolling 24h fair-use cap as
+ * `P0002` with a `hint` carrying the ISO timestamp the window frees --
+ * distinct from every other `P0002` in this domain (plain "not found", no
+ * hint). The device treats this as a pause, never an error.
+ */
+function galleryFairUsePauseResponse(hint: string | undefined): Response {
+  const resetAtMs = hint ? Date.parse(hint) : Number.NaN;
+  const retryAfterSeconds = Number.isFinite(resetAtMs) ? Math.max(1, Math.ceil((resetAtMs - Date.now()) / 1000)) : 86_400;
+  return jsonResponse({ error: 'Gallery import daily limit reached', code: 'fair_use', retryAfterSeconds }, 429);
+}
+
 export async function registerGalleryImportChunk(context: GalleryImportRequestContext): Promise<Response> {
   const { runId, runCapability, ordinal } = context.body;
   const run = await assertRun(context, runId, runCapability);
@@ -275,13 +366,19 @@ export async function registerGalleryImportChunk(context: GalleryImportRequestCo
   if (!finiteInteger(ordinal, 0, 500)) return errorResponse('Invalid gallery import request', 400, 'validation_error');
   const manifest = parseGalleryImportManifest(context.body);
   if (!manifest) return errorResponse('Invalid gallery import manifest', 400, 'validation_error');
-  const chunk = await userRpc<string>(context, 'register_gallery_import_chunk', {
+  const { data: chunkId, error: chunkError } = await context.userClient.rpc('register_gallery_import_chunk', {
     p_run_id: runId, p_capability: runCapability, p_ordinal: ordinal,
     p_cluster_count: manifest.clusters.length, p_asset_count: manifest.assets.length,
   });
-  if (chunk.response || !chunk.data) return chunk.response ?? errorResponse('Unable to register gallery import chunk', 500, 'internal_error');
+  if (chunkError) {
+    if (chunkError.code === 'P0002' && typeof chunkError.hint === 'string' && chunkError.hint.length > 0) {
+      return galleryFairUsePauseResponse(chunkError.hint);
+    }
+    return rpcFailure(chunkError);
+  }
+  if (!isUuid(chunkId)) return errorResponse('Unable to register gallery import chunk', 500, 'internal_error');
   const assets = await userRpc<Record<string, unknown>>(context, 'register_gallery_import_assets', {
-    p_run_id: runId, p_chunk_id: chunk.data, p_capability: runCapability, p_assets: manifest.assets,
+    p_run_id: runId, p_chunk_id: chunkId, p_capability: runCapability, p_assets: manifest.assets,
   });
   if (assets.response) return assets.response;
   const acceptedAssetTokens = Array.isArray(assets.data?.acceptedAssetTokens)
@@ -290,7 +387,7 @@ export async function registerGalleryImportChunk(context: GalleryImportRequestCo
   const suppressedClusterSignatures = Array.isArray(assets.data?.suppressedClusterSignatures)
     ? assets.data.suppressedClusterSignatures.filter((value): value is string => typeof value === 'string' && CLUSTER_SIGNATURE.test(value))
     : [];
-  return jsonResponse({ chunkId: chunk.data, acceptedAssetTokens, suppressedClusterSignatures });
+  return jsonResponse({ chunkId, acceptedAssetTokens, suppressedClusterSignatures });
 }
 
 export async function getGalleryImportUploadUrl(context: GalleryImportRequestContext): Promise<Response> {
@@ -336,6 +433,17 @@ async function verifyObject(
 export type GalleryDispatchResult = 'accepted' | 'mark_failed' | 'dispatch_unavailable';
 
 /**
+ * S4: the Workflow instance id includes the attempt number once a chunk is
+ * re-dispatched, so a fresh reconciliation attempt never collides with (or
+ * is silently deduplicated against) a prior stuck/ambiguous instance.
+ */
+export function galleryWorkflowInstanceId(chunkId: string, attempt: number): string {
+  // Dash-joined: Cloudflare Workflow instance ids admit only [A-Za-z0-9_-].
+  // Mirrors the Worker's handleGalleryDispatch exactly.
+  return attempt <= 1 ? `gallery-${chunkId}` : `gallery-${chunkId}-${attempt}`;
+}
+
+/**
  * The Workflow is allowed to read a chunk only once its server-side state is
  * `dispatched`.  Mark before sending the deterministic workflow create
  * request: dispatch retries are then harmless and Cloudflare treats the
@@ -343,16 +451,17 @@ export type GalleryDispatchResult = 'accepted' | 'mark_failed' | 'dispatch_unava
  */
 export async function markAndDispatchGalleryChunk(
   serviceClient: Pick<SupabaseClient, 'rpc'>,
-  input: { chunkId: string; workerUrl: string; signingSecret: string; fetch?: typeof fetch },
+  input: { chunkId: string; workerUrl: string; signingSecret: string; fetch?: typeof fetch; attempt?: number },
 ): Promise<GalleryDispatchResult> {
-  const workflowId = `gallery:${input.chunkId}`;
+  const attempt = input.attempt ?? 1;
+  const workflowId = galleryWorkflowInstanceId(input.chunkId, attempt);
   const { data: marked, error: markedError } = await serviceClient.rpc('mark_gallery_chunk_dispatched', {
     p_chunk_id: input.chunkId,
     p_workflow_id: workflowId,
   });
   if (markedError || marked !== true) return 'mark_failed';
 
-  const raw = JSON.stringify({ chunkId: input.chunkId });
+  const raw = JSON.stringify({ chunkId: input.chunkId, attempt });
   const timestamp = String(Date.now());
   const nonce = crypto.randomUUID();
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(input.signingSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -377,10 +486,32 @@ export async function dispatchGalleryImportChunk(context: GalleryImportRequestCo
   const run = await assertRun(context, runId, runCapability);
   if (run.response) return run.response;
   if (!isUuid(chunkId)) return errorResponse('Invalid gallery import request', 400, 'validation_error');
+
+  // S3: assets the device admitted at registration but can no longer produce
+  // a preview for (deleted, iCloud-only original, permission revoked
+  // mid-sweep). Drop them from the manifest before verifying uploads.
+  const unavailableAssetTokens = context.body.unavailableAssetTokens;
+  if (unavailableAssetTokens !== undefined) {
+    if (!Array.isArray(unavailableAssetTokens) || unavailableAssetTokens.length > 500 || !unavailableAssetTokens.every(isUuid)) {
+      return errorResponse('Invalid unavailable asset tokens', 400, 'validation_error');
+    }
+    if (unavailableAssetTokens.length > 0) {
+      const unavailable = await userRpc<Record<string, unknown>>(context, 'mark_gallery_import_assets_unavailable', {
+        p_run_id: runId, p_capability: runCapability, p_chunk_id: chunkId, p_asset_tokens: unavailableAssetTokens,
+      });
+      if (unavailable.response) return unavailable.response;
+    }
+  }
+  // A chunk left with nothing available is closed server-side (every cluster
+  // resolved skipped/invalid_preview) -- nothing further to dispatch.
+  const { data: chunkStatusRow } = await context.serviceClient
+    .from('gallery_import_chunks').select('status').eq('id', chunkId).eq('run_id', runId).maybeSingle();
+  if (chunkStatusRow?.status === 'completed') return jsonResponse({ accepted: true });
+
   const uploads = context.body.previewUploads;
   if (!Array.isArray(uploads) || uploads.length < 1 || uploads.length > 500) return errorResponse('Preview upload receipts are required', 400, 'validation_error');
   const { data: expectedAssets, error: expectedAssetsError } = await context.serviceClient
-    .from('gallery_import_assets').select('opaque_token').eq('run_id', runId).eq('chunk_id', chunkId);
+    .from('gallery_import_assets').select('opaque_token').eq('run_id', runId).eq('chunk_id', chunkId).is('unavailable_at', null);
   if (expectedAssetsError || !expectedAssets || expectedAssets.length === 0) {
     return errorResponse('Gallery import chunk is not available', 409, 'not_available');
   }
@@ -411,10 +542,57 @@ export async function dispatchGalleryImportChunk(context: GalleryImportRequestCo
   const workerUrl = Deno.env.get('GALLERY_WORKER_URL');
   const secret = Deno.env.get('GALLERY_DISPATCH_SIGNING_SECRET');
   if (!workerUrl || !secret) return errorResponse('Gallery import is temporarily unavailable', 503, 'unavailable');
-  const dispatch = await markAndDispatchGalleryChunk(context.serviceClient, { chunkId, workerUrl, signingSecret: secret });
+  // S4: the attempt number is the chunk's dispatch_attempts value the Worker
+  // will see AFTER mark_gallery_chunk_dispatched increments it.
+  const { data: attemptsRow } = await context.serviceClient
+    .from('gallery_import_chunks').select('dispatch_attempts').eq('id', chunkId).maybeSingle();
+  const attempt = (typeof attemptsRow?.dispatch_attempts === 'number' ? attemptsRow.dispatch_attempts : 0) + 1;
+  const dispatch = await markAndDispatchGalleryChunk(context.serviceClient, { chunkId, workerUrl, signingSecret: secret, attempt });
   if (dispatch === 'mark_failed') return errorResponse('Gallery previews are not ready for dispatch', 409, 'preview_not_ready');
   if (dispatch === 'dispatch_unavailable') return errorResponse('Gallery import dispatch is temporarily unavailable', 503, 'dispatch_unavailable');
   return jsonResponse({ accepted: true });
+}
+
+export interface RedispatchGalleryChunksDependencies {
+  serviceClient: Pick<SupabaseClient, 'rpc'>;
+  workerUrl?: string;
+  signingSecret?: string;
+  fetch?: typeof fetch;
+  limit?: number;
+}
+
+export interface RedispatchGalleryChunksResult {
+  claimed: number;
+  redispatched: number;
+}
+
+/**
+ * Reconciliation (S4, S6, S7): claims chunks stuck past their dispatch
+ * timeout (Workflow crash, ambiguous network failure, lost Cloudflare
+ * instance) and re-dispatches each under a fresh attempt-suffixed Workflow
+ * instance id. `claim_stale_gallery_chunks` itself gives up (fails the
+ * chunk) once a chunk has exhausted its attempts, so every row this
+ * function receives is meant to be retried. Used by the hourly cleanup
+ * cron; logs only counts, never chunk/run identifiers' semantic content.
+ */
+export async function redispatchStaleGalleryChunks(
+  deps: RedispatchGalleryChunksDependencies,
+): Promise<RedispatchGalleryChunksResult> {
+  const { data, error } = await deps.serviceClient.rpc('claim_stale_gallery_chunks', { p_limit: deps.limit ?? 50 });
+  if (error || !Array.isArray(data) || data.length === 0) return { claimed: 0, redispatched: 0 };
+  const workerUrl = deps.workerUrl ?? Deno.env.get('GALLERY_WORKER_URL');
+  const secret = deps.signingSecret ?? Deno.env.get('GALLERY_DISPATCH_SIGNING_SECRET');
+  if (!workerUrl || !secret) return { claimed: data.length, redispatched: 0 };
+  let redispatched = 0;
+  for (const row of data as Array<{ chunk_id: string; dispatch_attempts: number }>) {
+    if (!isUuid(row.chunk_id)) continue;
+    const attempt = (typeof row.dispatch_attempts === 'number' ? row.dispatch_attempts : 0) + 1;
+    const result = await markAndDispatchGalleryChunk(deps.serviceClient, {
+      chunkId: row.chunk_id, workerUrl, signingSecret: secret, fetch: deps.fetch, attempt,
+    });
+    if (result === 'accepted') redispatched += 1;
+  }
+  return { claimed: data.length, redispatched };
 }
 
 function candidateResponse(row: Record<string, unknown>, previewUrls: string[]) {
@@ -434,12 +612,20 @@ export async function getGalleryImportCandidates(context: GalleryImportRequestCo
   const candidates = await userRpc<Array<Record<string, unknown>>>(context, 'get_gallery_import_candidates', { p_run_id: runId, p_capability: capability });
   if (candidates.response) return candidates.response;
   const rows = candidates.data ?? [];
-  const allTokens = rows.flatMap((row) => Array.isArray(row.selected_asset_tokens) ? row.selected_asset_tokens : []).filter(isUuid);
-  const { data: assets } = allTokens.length === 0 ? { data: [] as Array<{ opaque_token: string; preview_object_key: string | null }> } : await context.serviceClient
-    .from('gallery_import_assets').select('opaque_token, preview_object_key').eq('run_id', runId).in('opaque_token', allTokens);
-  const keys = (assets ?? []).map((asset) => asset.preview_object_key).filter((key): key is string => Boolean(key));
+  const allTokens = new Set(rows.flatMap((row) => Array.isArray(row.selected_asset_tokens) ? row.selected_asset_tokens : []).filter(isUuid));
+  // Query by run and match tokens in memory: an `.in(opaque_token, [...])`
+  // filter grows with the number of live candidates, and past ~100
+  // candidates (~400 tokens) the PostgREST request URL exceeded its limit,
+  // the fetch failed, and -- because the error was ignored -- EVERY
+  // candidate came back with no preview URLs (device-observed 2026-08-23
+  // once the continuous sweep passed the old 60-candidate cap).
+  const { data: assetRows, error: assetsError } = allTokens.size === 0 ? { data: [] as Array<{ opaque_token: string; preview_object_key: string | null }>, error: null } : await context.serviceClient
+    .from('gallery_import_assets').select('opaque_token, preview_object_key').eq('run_id', runId).not('preview_object_key', 'is', null);
+  if (assetsError) return errorResponse('Unable to load gallery suggestions', 500, 'internal_error');
+  const assets = (assetRows ?? []).filter((asset) => allTokens.has(asset.opaque_token));
+  const keys = assets.map((asset) => asset.preview_object_key).filter((key): key is string => Boolean(key));
   const urls = keys.length ? await createPresignedGetUrls(keys, 300) : {};
-  const keyByToken = new Map((assets ?? []).map((asset) => [asset.opaque_token, asset.preview_object_key]));
+  const keyByToken = new Map(assets.map((asset) => [asset.opaque_token, asset.preview_object_key]));
   return jsonResponse({ candidates: rows.map((row) => candidateResponse(row,
     (Array.isArray(row.selected_asset_tokens) ? row.selected_asset_tokens : []).map((token) => {
       const key = keyByToken.get(token as string); return key ? urls[key] : undefined;

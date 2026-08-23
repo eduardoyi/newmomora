@@ -4,7 +4,9 @@ import * as FileSystem from 'expo-file-system/legacy';
 import {
   GALLERY_IMPORT_CHECKPOINT_MAX_BYTES,
   GALLERY_IMPORT_CHECKPOINT_VERSION,
+  GALLERY_IMPORT_CLUSTER_GAP_MS,
 } from '@/constants/gallery-import';
+import type { GalleryImportRun } from '@/services/gallery-import';
 import type { GalleryCorpusMode, LocalGalleryAsset } from '@/utils/gallery-import-scanner';
 
 const STORAGE_PREFIX = 'gallery-import-checkpoint';
@@ -35,8 +37,20 @@ export interface GalleryImportCheckpointChunk {
    * refused chunk 'planned' made the "+N coming" counter promise progress
    * that would never arrive (device-observed: a 16-chunk run that lost
    * chunks 5+ to a server race still showed "+51 coming" indefinitely). A
-   * resume attempt retries a 'failed' chunk exactly like a 'planned' one. */
-  status: 'planned' | 'registered' | 'uploaded' | 'dispatched' | 'failed';
+   * resume attempt retries a 'failed' chunk exactly like a 'planned' one,
+   * up to `GALLERY_IMPORT_CHUNK_MAX_ATTEMPTS` (see `attempts` below), after
+   * which it becomes 'abandoned'.
+   * 'abandoned' (continuous model, 2026-08-23): this chunk has exhausted its
+   * retry budget. Terminal locally -- never retried again, excluded from
+   * every "+N coming" indicator, and counted separately by the UI as
+   * "couldn't be sent". A window/frontier-advance gate treats an abandoned
+   * chunk as settled (see maybeAdvanceGalleryImportFrontier's doc comment):
+   * this intentionally accepts a coverage hole rather than blocking forever. */
+  status: 'planned' | 'registered' | 'uploaded' | 'dispatched' | 'failed' | 'abandoned';
+  /** Consecutive register/upload/dispatch failures for this chunk across
+   * this run's lifetime. Absent/0 for a chunk that has never failed.
+   * Resets are never needed -- once a chunk dispatches it never fails again. */
+  attempts?: number;
   previewUploads: Array<{
     assetToken: string;
     previewWidth: number;
@@ -90,6 +104,20 @@ export interface GalleryImportCheckpoint {
    * version bump needed.
    */
   scanCorpusMode?: GalleryCorpusMode;
+  /** Continuous model (S8): set when `register_gallery_import_chunk`/
+   * `registerGalleryImportChunk` refuses a chunk with `{ code: 'fair_use' }`
+   * (S2) -- an ISO timestamp for when the family's rolling daily cluster
+   * limit frees up. The driver (gallery-import-driver.ts) reads this to show
+   * `paused_fair_use` instead of treating the pause as an error, and clears
+   * it once a later pass succeeds. Optional/additive -- absent means no
+   * fair-use pause is active. */
+  pausedUntil?: string;
+  /** Continuous model (S8): persists the progress screen's cellular-confirm
+   * choice onto the checkpoint itself (previously only threaded through a
+   * per-call `resumeGalleryImportRunner({ allowCellular })` argument that a
+   * background driver kick would not know about). The driver ORs this with
+   * any explicit per-kick `allowCellular` opt from `kickGalleryImportDriver`. */
+  allowCellular?: boolean;
   updatedAt: string;
 }
 
@@ -237,6 +265,79 @@ export async function loadLatestGalleryImportCheckpoint(
   } catch {
     return null;
   }
+}
+
+const TERMINAL_SERVER_CHUNK_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled', 'expired']);
+
+/**
+ * Bounds a long-lived continuous run's checkpoint (docs/plans/gallery-import-continuous.md
+ * Internal model's "checkpoint growth is bounded"). Called from
+ * `maybeExtendGalleryImportPlan` (gallery-import-runner.ts) with the freshly
+ * polled server `run` right before saving a newly-extended checkpoint.
+ * Deliberately conservative -- it only ever removes an `assetByToken` entry
+ * once ALL of the following hold, so a wrong guess degrades to "checkpoint
+ * grows a bit more than strictly necessary", never to a broken resume:
+ *
+ * - Its local chunk is not itself unsettled (still 'planned'/'registered'/
+ *   'uploaded'/'failed' -- active work always keeps its asset metadata).
+ * - It is not referenced by any in-flight `approvalOutbox` item.
+ * - It is not within `GALLERY_IMPORT_CLUSTER_GAP_MS` of any currently live
+ *   (`staged`/`skipped`) candidate's own selected capture time -- the day-pool
+ *   photo chooser (`buildGalleryImportDayPool`) reconstructs a candidate's
+ *   full day-cluster from `assetByToken` using that same gap, so a token
+ *   just outside a live candidate's own selection must still survive.
+ * - Its own chunk (matched by ordinal) is reported terminal by the server.
+ *
+ * `clusterSignatures` is pruned separately and more simply: it has no
+ * production reader today (write-only bookkeeping -- see the field's own
+ * comment), so bounding its growth only needs to drop signatures whose chunk
+ * has safely reached the server (`dispatched`).
+ */
+export function pruneGalleryImportCheckpoint(
+  checkpoint: GalleryImportCheckpoint,
+  run: Pick<GalleryImportRun, 'chunks' | 'liveCandidateAssetTokens'> | null | undefined,
+): GalleryImportCheckpoint {
+  if (!run) return checkpoint;
+  const serverStatusByOrdinal = new Map((run.chunks ?? []).map((chunk) => [chunk.ordinal, chunk.status]));
+  const isChunkServerTerminal = (ordinal: number): boolean => {
+    const status = serverStatusByOrdinal.get(ordinal);
+    return status !== undefined && TERMINAL_SERVER_CHUNK_STATUSES.has(status);
+  };
+
+  const activeTokens = new Set<string>();
+  for (const chunk of checkpoint.chunks) {
+    if (isChunkServerTerminal(chunk.ordinal)) continue;
+    for (const cluster of chunk.clusters) for (const token of cluster.assetTokens) activeTokens.add(token);
+  }
+
+  const outboxTokens = new Set(checkpoint.approvalOutbox.flatMap((item) => item.assetTokens));
+
+  const liveCandidateTokens = run.liveCandidateAssetTokens ?? [];
+  const liveCandidateTokenSet = new Set(liveCandidateTokens);
+  const liveCaptureTimes = liveCandidateTokens
+    .map((token) => checkpoint.assetByToken[token]?.captureAtMs)
+    .filter((value): value is number => typeof value === 'number');
+
+  function isNearLiveCandidate(captureAtMs: number): boolean {
+    return liveCaptureTimes.some((anchor) => Math.abs(anchor - captureAtMs) <= GALLERY_IMPORT_CLUSTER_GAP_MS);
+  }
+
+  const assetByToken = Object.fromEntries(
+    Object.entries(checkpoint.assetByToken).filter(([token, asset]) =>
+      activeTokens.has(token)
+      || outboxTokens.has(token)
+      || liveCandidateTokenSet.has(token)
+      || isNearLiveCandidate(asset.captureAtMs)),
+  );
+
+  const dispatchedSignatures = new Set(
+    checkpoint.chunks
+      .filter((chunk) => chunk.status === 'dispatched')
+      .flatMap((chunk) => chunk.clusters.map((cluster) => cluster.clusterSignature)),
+  );
+  const clusterSignatures = checkpoint.clusterSignatures.filter((signature) => !dispatchedSignatures.has(signature));
+
+  return { ...checkpoint, assetByToken, clusterSignatures };
 }
 
 export function getGalleryImportPreviewCacheDirectory(runId: string): string | null {

@@ -6,12 +6,12 @@ import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
 import { useIsOnline } from '@/lib/connectivity';
 import * as galleryService from '@/services/gallery-import';
+import { kickGalleryImportDriver, setGalleryImportAutoContinue } from '@/services/gallery-import-driver';
 import {
   GalleryImportEmptyLibraryError,
   GalleryImportServiceRequestError,
-  resumeGalleryImportRunner,
 } from '@/services/gallery-import-runner';
-import { clearGalleryImportLiveProgress, markGalleryImportRunnerInactive, publishGalleryImportLiveProgress } from '@/utils/gallery-import-live-progress';
+import { clearGalleryImportLiveProgress } from '@/utils/gallery-import-live-progress';
 import { clearGalleryImportPendingStart, setGalleryImportPendingStart } from '@/utils/gallery-import-pending-start';
 import { beginGalleryImportPipeline } from '@/utils/gallery-import-pipeline';
 
@@ -20,9 +20,7 @@ let mockCheckpoint: any = null;
 jest.mock('expo-router', () => ({ router: { back: jest.fn(), push: jest.fn(), replace: jest.fn(), setParams: jest.fn() } }));
 // See gallery-import-trust.test.tsx for why this simulates real inset math
 // instead of a dumb pass-through -- it lets a dropped/doubled safe-area
-// application fail a real assertion. Unlike the entry/trust/empty/exception
-// test files, this one does NOT stub KeyboardStickyShell away, so the same
-// real ScrollView/sticky-footer/safe-area machinery is exercised here too.
+// application fail a real assertion.
 const TEST_INSETS = { top: 47, bottom: 28, left: 0, right: 0 };
 jest.mock('react-native-safe-area-context', () => {
   const { View: MockView } = require('react-native');
@@ -47,18 +45,46 @@ jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/utils/gallery-import-e2e-adapter', () => ({ getGalleryImportE2eAdapter: () => undefined }));
 jest.mock('@/utils/gallery-import-scanner', () => ({ createExpoGalleryMediaLibraryAdapter: () => ({}) }));
 jest.mock('@/utils/gallery-import-pipeline', () => ({ beginGalleryImportPipeline: jest.fn() }));
+// Frontier defaults to "nothing on record" (null) for every test unless a
+// test opts in -- deriveGalleryImportComingIndicator then reads moreHistory
+// as false, matching the pre-S9 default behavior most scenarios rely on.
+jest.mock('@/utils/gallery-import-frontier', () => ({ loadGalleryImportFrontier: jest.fn(async () => null) }));
+// The continuous model's driver (docs/plans/gallery-import-continuous.md
+// I4a step 6): this screen no longer resumes the runner itself, it only
+// observes driver state and kicks it. resumeGalleryImportRunner is
+// deliberately NOT exported by this mock -- if the screen ever imports it
+// again, the resulting undefined-is-not-a-function error is the signal that
+// the self-resume regressed.
+jest.mock('@/services/gallery-import-driver', () => {
+  let mockDriverState = { phase: 'idle', runId: null, pausedUntil: null, lastError: null, isActive: false };
+  const mockDriverListeners = new Set();
+  return {
+    getGalleryImportDriverState: () => mockDriverState,
+    subscribeGalleryImportDriver: (listener: any) => {
+      mockDriverListeners.add(listener);
+      listener(mockDriverState);
+      return () => mockDriverListeners.delete(listener);
+    },
+    kickGalleryImportDriver: jest.fn(),
+    setGalleryImportAutoContinue: jest.fn(async () => undefined),
+    __setDriverState: (patch: any) => {
+      mockDriverState = { ...mockDriverState, ...patch };
+      mockDriverListeners.forEach((listener: any) => listener(mockDriverState));
+    },
+    __resetDriverState: () => {
+      mockDriverState = { phase: 'idle', runId: null, pausedUntil: null, lastError: null, isActive: false };
+    },
+  };
+});
 jest.mock('@/services/gallery-import-runner', () => {
-  class GalleryImportWaitingForWifiErrorMock extends Error {}
   class GalleryImportEmptyLibraryErrorMock extends Error {}
   class GalleryImportServiceRequestErrorMock extends Error {
     code?: string;
     constructor(message: string, code?: string) { super(message); this.code = code; }
   }
   return {
-    GalleryImportWaitingForWifiError: GalleryImportWaitingForWifiErrorMock,
     GalleryImportEmptyLibraryError: GalleryImportEmptyLibraryErrorMock,
     GalleryImportServiceRequestError: GalleryImportServiceRequestErrorMock,
-    resumeGalleryImportRunner: jest.fn(async () => undefined),
   };
 });
 jest.mock('@/services/gallery-import', () => ({ cancelGalleryImportRun: jest.fn(), getGalleryImportRun: jest.fn() }));
@@ -91,6 +117,7 @@ describe('gallery import progress', () => {
     jest.clearAllMocks();
     mockCheckpoint = checkpoint();
     clearGalleryImportPendingStart();
+    jest.requireMock('@/services/gallery-import-driver').__resetDriverState();
     (useFamily as jest.Mock).mockReturnValue({ role: 'owner', familyId: 'family-1', isLoading: false });
     (useBilling as jest.Mock).mockReturnValue({ status: { has_write_access: true, has_ever_had_access: true } });
     (useIsOnline as jest.Mock).mockReturnValue(true);
@@ -99,7 +126,6 @@ describe('gallery import progress', () => {
 
   afterEach(() => {
     clearGalleryImportLiveProgress('run-1');
-    markGalleryImportRunnerInactive('run-1');
     clearGalleryImportPendingStart();
   });
 
@@ -115,8 +141,8 @@ describe('gallery import progress', () => {
     it('renders the live scanning stage the instant a pipeline start is pending, with no Stop button and real safe-area/scroll', async () => {
       setGalleryImportPendingStart({ status: 'starting', scannedAssetCount: 240 });
       const screen = render(<GalleryImportProgress />);
-      await waitFor(() => expect(screen.getByText('240 photos so far')).toBeTruthy());
-      expect(screen.getByText('Step 1 of 3')).toBeTruthy();
+      await waitFor(() => expect(screen.getByText('240 photos read')).toBeTruthy());
+      expect(screen.getByText('Looking through your photos')).toBeTruthy();
       expect(screen.queryByTestId('gallery-import-stop')).toBeNull();
       expect(screen.getByTestId('gallery-import-progress-scroll')).toBeTruthy();
 
@@ -129,16 +155,16 @@ describe('gallery import progress', () => {
     it('re-renders live as the pending scan count updates', async () => {
       setGalleryImportPendingStart({ status: 'starting', scannedAssetCount: 10 });
       const screen = render(<GalleryImportProgress />);
-      await waitFor(() => expect(screen.getByText('10 photos so far')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('10 photos read')).toBeTruthy());
       act(() => { setGalleryImportPendingStart({ status: 'starting', scannedAssetCount: 250 }); });
-      await waitFor(() => expect(screen.getByText('250 photos so far')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('250 photos read')).toBeTruthy());
     });
 
     it('offers cellular data for a pre-run-id Wi-Fi wait, and retries the whole pipeline in place -- never bouncing back to entry', async () => {
       const { router } = jest.requireMock('expo-router');
       setGalleryImportPendingStart({ status: 'waitingWifi', permissionMode: 'full' });
       const screen = render(<GalleryImportProgress />);
-      await waitFor(() => expect(screen.getByText('Waiting for', { exact: false })).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('Waiting for Wi-Fi')).toBeTruthy());
       fireEvent.press(screen.getByTestId('gallery-import-stage-action-Use cellular data instead'));
       await waitFor(() => expect(screen.getByTestId('gallery-import-cellular-sheet')).toBeTruthy());
       fireEvent.press(screen.getByTestId('gallery-import-confirm-cellular'));
@@ -160,7 +186,6 @@ describe('gallery import progress', () => {
     });
 
     it('shows a recoverable exception for any other pending-start failure, and retries the pipeline from its primary action', async () => {
-      (useFamily as jest.Mock).mockReturnValue({ role: 'owner', familyId: 'family-1', isLoading: false });
       setGalleryImportPendingStart({ status: 'failed', error: new Error('boom'), permissionMode: 'full' });
       const screen = render(<GalleryImportProgress />);
       await waitFor(() => expect(screen.getByTestId('gallery-import-progress-exception-errorRecoverable')).toBeTruthy());
@@ -178,36 +203,28 @@ describe('gallery import progress', () => {
     });
   });
 
-  // Regression for the critical device-tested bug: a real 306-photo run
-  // reached server status 'reviewing' (10/10 chunks, 60 candidates staged,
-  // verified by direct DB query) but this screen stayed on "Writing the
-  // drafts" for 10+ minutes. Root cause: the runner's last published live-
-  // progress event for a completed run is always `{ stage: 'dispatching' }`
-  // (retained forever, never cleared -- see gallery-import-live-progress.ts),
-  // and the old priority order in gallery-import-progress-stage.ts checked
-  // that stale snapshot *before* the server status the ~8s poll below keeps
-  // current. This exercises the real poll interval end to end, not just the
-  // pure derive function, and asserts the transition happens on the *same*
-  // rendered instance (no remount).
-  it('transitions from processing to ready once the ~8s poll observes reviewing, without remounting, even with a stale live.dispatching snapshot', async () => {
+  it('kicks the driver on mount for an existing run, and never imports/calls resumeGalleryImportRunner itself', async () => {
+    const screen = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-progress')).toBeTruthy());
+    expect(kickGalleryImportDriver).toHaveBeenCalledWith('progress-screen-mount');
+  });
+
+  it('transitions from processing to ready once the ~8s poll observes reviewing, without remounting', async () => {
     jest.useFakeTimers();
     try {
-      publishGalleryImportLiveProgress('run-1', { stage: 'dispatching', completed: 10, total: 10 });
       mockCheckpoint = checkpoint({ status: 'processing' });
       (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'processing', readyCandidates: 0 }, error: null });
 
       const screen = render(<GalleryImportProgress runId="run-1" />);
       await act(async () => { await Promise.resolve(); });
-      expect(screen.getByText('Step 3 of 3')).toBeTruthy();
+      expect(screen.getByText('Writing the drafts')).toBeTruthy();
       expect(screen.queryByTestId('gallery-import-review')).toBeNull();
 
       (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'reviewing', readyCandidates: 60, pendingClusters: 0 }, error: null });
       await act(async () => { await jest.advanceTimersByTimeAsync(8_000); });
 
-      expect(screen.getByText('60 moments,', { exact: false })).toBeTruthy();
+      expect(screen.getByText('60 ready to review')).toBeTruthy();
       expect(screen.getByTestId('gallery-import-review')).toBeTruthy();
-      // Same rendered instance throughout -- this was a re-render off the
-      // poll, not a navigation/remount.
       expect(screen.getByTestId('gallery-import-progress')).toBeTruthy();
     } finally {
       jest.useRealTimers();
@@ -217,46 +234,15 @@ describe('gallery import progress', () => {
   it('folds expired into the staged expired view instead of a bare terminal notice', async () => {
     (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'expired', readyCandidates: 0 }, error: null });
     const screen = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(screen.getByText('These have', { exact: false })).toBeTruthy());
-    expect(screen.getByTestId('gallery-import-stage-action-Look through my photos again')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('These have cleared')).toBeTruthy());
+    expect(screen.getByTestId('gallery-import-look-again')).toBeTruthy();
   });
 
-  // Device-tested finding: users thought they had to sit and watch this
-  // screen. The "go check your journal" line only belongs on stages that
-  // keep working while Momora stays open (scanning/preparing/uploading/
-  // processing) -- never the waiting-for-Wi-Fi or terminal stages, where it
-  // would either be redundant or actively wrong (waitingWifi is paused;
-  // nothing is "working" for the deck to check on).
-  const LEAVE_HINT = 'Feel free to check your journal while it works.';
-  it('offers the leave-hint on an in-progress stage but not on the waiting or terminal ones', async () => {
-    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'processing', readyCandidates: 0 }, error: null });
-    const processing = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(processing.getByText('Step 3 of 3')).toBeTruthy());
-    expect(processing.getByText(LEAVE_HINT, { exact: false })).toBeTruthy();
-    processing.unmount();
-
-    mockCheckpoint = checkpoint({ status: 'paused', chunks: [{ ordinal: 0, status: 'registered', clusters: [{ clusterSignature: 'a', assetTokens: ['x'] }], previewUploads: [] }] });
-    const waiting = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(waiting.getByText('Waiting for', { exact: false })).toBeTruthy());
-    expect(waiting.queryByText(LEAVE_HINT, { exact: false })).toBeNull();
-    waiting.unmount();
-
-    mockCheckpoint = checkpoint();
-    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'expired', readyCandidates: 0 }, error: null });
-    const expired = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(expired.getByText('These have', { exact: false })).toBeTruthy());
-    expect(expired.queryByText(LEAVE_HINT, { exact: false })).toBeNull();
-  });
-
-  it('shows the partial-failure stage with real ready counts, not the old ambiguous message', async () => {
+  it('shows the partial-failure stage with real ready counts and a way into the deck', async () => {
     const { router } = jest.requireMock('expo-router');
     (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'failed', readyCandidates: 4 }, error: null });
     const screen = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(screen.getByTestId('gallery-import-stage-action-Try the rest again')).toBeTruthy());
-    expect(screen.queryByText(/family access or import eligibility changed/)).toBeNull();
-    // Round 4 audit finding: a partial failure with real ready candidates
-    // used to offer only "Try the rest again" -- no way to reach the
-    // suggestions already sitting in the deck from this screen.
+    await waitFor(() => expect(screen.getByText('4 suggestions ready')).toBeTruthy());
     expect(screen.getByTestId('gallery-import-review')).toBeTruthy();
     fireEvent.press(screen.getByTestId('gallery-import-review'));
     await waitFor(() => expect(router.push).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/review', params: { runId: 'run-1' } }));
@@ -309,75 +295,104 @@ describe('gallery import progress', () => {
     await waitFor(() => expect(screen.getByTestId('gallery-import-progress-empty-limitedNothing')).toBeTruthy());
   });
 
-  it('opens the cellular confirm sheet for an already-running import and resumes the runner in place, never bouncing through entry', async () => {
-    const { router } = jest.requireMock('expo-router');
+  it('persists allowCellular on the checkpoint and kicks the driver, never calling the runner directly, for an already-running import', async () => {
     mockCheckpoint = checkpoint({ status: 'paused', chunks: [{ ordinal: 0, status: 'registered', clusters: [{ clusterSignature: 'a', assetTokens: ['x'] }], previewUploads: [] }] });
+    const { router } = jest.requireMock('expo-router');
     const screen = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(screen.getByText('Waiting for', { exact: false })).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Waiting for Wi-Fi')).toBeTruthy());
     fireEvent.press(screen.getByTestId('gallery-import-stage-action-Use cellular data instead'));
     await waitFor(() => expect(screen.getByTestId('gallery-import-cellular-sheet')).toBeTruthy());
     fireEvent.press(screen.getByTestId('gallery-import-confirm-cellular'));
-    await waitFor(() => expect(resumeGalleryImportRunner).toHaveBeenCalledWith(expect.objectContaining({ allowCellular: true, runId: 'run-1' })));
+    await waitFor(() => expect(mockCheckpoint.allowCellular).toBe(true));
+    expect(kickGalleryImportDriver).toHaveBeenCalledWith('cellular', { allowCellular: true });
     expect(router.replace).not.toHaveBeenCalledWith(expect.objectContaining({ pathname: expect.stringContaining('/gallery-import') }));
     expect(router.push).not.toHaveBeenCalledWith(expect.objectContaining({ pathname: expect.stringContaining('/gallery-import') }));
   });
 
-  it('opens the stop-confirm sheet with the four facts and stops via the real cancel service, not a native Alert', async () => {
+  it('kicks a retry instead of resuming directly from the recoverable-error exception', async () => {
+    // No server status has landed yet and the poll fails -- hasTransientError.
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: null, error: { message: 'boom' } });
+    mockCheckpoint = checkpoint({ status: 'reviewing', deckCursor: 0, deckTotal: 0 });
+    const screen = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-progress-exception-errorRecoverable')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-progress-exception-errorRecoverable-primary'));
+    expect(kickGalleryImportDriver).toHaveBeenCalledWith('retry');
+  });
+
+  it('opens the stop-confirm sheet with the trimmed copy and stops via the real cancel service, not a native Alert', async () => {
     (galleryService.cancelGalleryImportRun as jest.Mock).mockResolvedValue({ data: { cancelled: true }, error: null });
     (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'processing', readyCandidates: 0 }, error: null });
     const screen = render(<GalleryImportProgress runId="run-1" />);
     await waitFor(() => expect(screen.getByTestId('gallery-import-stop')).toBeTruthy());
     fireEvent.press(screen.getByTestId('gallery-import-stop'));
     await waitFor(() => expect(screen.getByTestId('gallery-import-stop-sheet')).toBeTruthy());
+    expect(screen.getByText('Drafts clear. Kept memories stay.')).toBeTruthy();
     fireEvent.press(screen.getByTestId('gallery-import-confirm-stop'));
     await waitFor(() => expect(galleryService.cancelGalleryImportRun).toHaveBeenCalledWith({ runId: 'run-1', capability: 'cap' }));
   });
 
-  it('ignores a late status response after progress unmounts', async () => {
-    let resolveFirstStatus: ((value: unknown) => void) | undefined;
-    (galleryService.getGalleryImportRun as jest.Mock).mockImplementationOnce(() => new Promise((resolve) => { resolveFirstStatus = resolve; }));
-    const first = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(galleryService.getGalleryImportRun).toHaveBeenCalledTimes(1));
-    first.unmount();
+  it('calls setGalleryImportAutoContinue and shows an inline note when "Stop looking for more" is pressed', async () => {
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'processing', readyCandidates: 0 }, error: null });
+    const screen = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-stop-looking-for-more')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-stop-looking-for-more'));
+    expect(setGalleryImportAutoContinue).toHaveBeenCalledWith('user-1', 'family-1', false);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-stopped-looking-note')).toBeTruthy());
+    expect(screen.queryByTestId('gallery-import-stop-looking-for-more')).toBeNull();
+  });
 
-    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'expired', readyCandidates: 0 }, error: null });
-    const second = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(second.getByTestId('gallery-import-stage-action-Look through my photos again')).toBeTruthy());
-    await act(async () => { resolveFirstStatus?.({ data: { status: 'reviewing', readyCandidates: 4 }, error: null }); });
-    expect(second.getByTestId('gallery-import-stage-action-Look through my photos again')).toBeTruthy();
+  it('reads a persisted autoContinue=false as already stopped and offers "Keep looking", which re-enables and kicks the driver', async () => {
+    const { loadGalleryImportFrontier } = jest.requireMock('@/utils/gallery-import-frontier') as { loadGalleryImportFrontier: jest.Mock };
+    loadGalleryImportFrontier.mockResolvedValueOnce({ oldestCoveredMs: 1, coveredThroughNewestMs: 2, completedLibrary: false, corpusMode: 'full_library_fallback', autoContinue: false });
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'processing', readyCandidates: 0 }, error: null });
+    const screen = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-stopped-looking-note')).toBeTruthy());
+    expect(screen.queryByTestId('gallery-import-stop-looking-for-more')).toBeNull();
+    fireEvent.press(screen.getByTestId('gallery-import-keep-looking'));
+    expect(setGalleryImportAutoContinue).toHaveBeenCalledWith('user-1', 'family-1', true);
+    await waitFor(() => expect(kickGalleryImportDriver).toHaveBeenCalledWith('keep-looking'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-stop-looking-for-more')).toBeTruthy());
+  });
+
+  it('shows the fair-use pause stage with a Review footer when the checkpoint carries a future pausedUntil', async () => {
+    mockCheckpoint = checkpoint({ pausedUntil: new Date(Date.now() + 60_000).toISOString() });
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'reviewing', readyCandidates: 5, pendingClusters: 0 }, error: null });
+    const screen = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(screen.getByText('Momora will keep looking tomorrow')).toBeTruthy());
+    expect(screen.getByTestId('gallery-import-review')).toBeTruthy();
+    expect(screen.getByText('Review 5')).toBeTruthy();
+  });
+
+  it('shows one muted line with the abandoned-chunk count only when it is greater than zero', async () => {
+    mockCheckpoint = checkpoint({
+      chunks: [
+        { ordinal: 0, status: 'dispatched', clusters: [], previewUploads: [] },
+        { ordinal: 1, status: 'abandoned', clusters: [{ clusterSignature: 'a', assetTokens: ['x'] }], previewUploads: [] },
+      ],
+    });
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'reviewing', readyCandidates: 2, pendingClusters: 0 }, error: null });
+    const screen = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-abandoned-count')).toBeTruthy());
+    expect(screen.getByText('1 batch couldn’t be sent')).toBeTruthy();
   });
 
   it('shows the real ready count in the title instead of a fixture number', async () => {
     (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'reviewing', readyCandidates: 7 }, error: null });
     const screen = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(screen.getByText('7 moments,', { exact: false })).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('7 ready to review')).toBeTruthy());
   });
 
-  // Round 4: the ready stage's partial-vs-done split now reads server truth
-  // (run.pendingClusters), never the local checkpoint plan -- a resume/stall
-  // leaves that local plan stale (device-observed phantom "+51 coming").
-  it('shows the honest partial-ready state when the server reports clusters still pending', async () => {
+  it('shows a Review footer whenever readyCount is positive, even mid-sweep', async () => {
     (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({
       data: { status: 'reviewing', readyCandidates: 10, pendingClusters: 51 },
       error: null,
     });
     const screen = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(screen.getByText('First moments are ready')).toBeTruthy());
-    expect(screen.queryByText('All done looking')).toBeNull();
-    expect(screen.getByText('10 moments,', { exact: false })).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('10 ready to review')).toBeTruthy());
+    expect(screen.getByTestId('gallery-import-review')).toBeTruthy();
   });
 
-  it('shows the fully-done ready state once the server confirms zero clusters pending', async () => {
-    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({
-      data: { status: 'reviewing', readyCandidates: 10, pendingClusters: 0 },
-      error: null,
-    });
-    const screen = render(<GalleryImportProgress runId="run-1" />);
-    await waitFor(() => expect(screen.getByText('All done looking')).toBeTruthy());
-    expect(screen.queryByText('First moments are ready')).toBeNull();
-  });
-
-  it('scrolls, applies the real safe-area insets, and gives the privacy link a tappable affordance that opens the sheet', async () => {
+  it('scrolls, applies the real safe-area insets, and gives the footer the sticky-footer treatment', async () => {
     (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'reviewing', readyCandidates: 3 }, error: null });
     const screen = render(<GalleryImportProgress runId="run-1" />);
     await waitFor(() => expect(screen.getByTestId('gallery-import-progress-scroll')).toBeTruthy());
@@ -393,33 +408,24 @@ describe('gallery import progress', () => {
       expect.objectContaining({ paddingBottom: TEST_INSETS.bottom + getStickyFooterBottomPadding(TEST_INSETS.bottom) }),
     ]));
     expect(footerStyle.some((entry: any) => entry?.backgroundColor)).toBe(true);
-    // The shared gi.stickyFooterSurface hairline top border, so content
-    // reads as sliding under a deliberate floating surface.
     expect(footerStyle.some((entry: any) => entry?.borderTopWidth > 0 && entry?.borderTopColor)).toBe(true);
-
-    fireEvent.press(screen.getByTestId('gallery-import-privacy-link'));
-    await waitFor(() => expect(screen.getByTestId('gallery-import-privacy-sheet')).toBeTruthy());
   });
 
-  it('sweeps progress copy for banned words, the old checkpointed-language register, AI-partner mentions, the no-title product decision, and em-dashes/double-hyphens', async () => {
+  it('sweeps progress copy for banned words and em-dashes/double-hyphens', async () => {
     (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'reviewing', readyCandidates: 3 }, error: null });
     const screen = render(<GalleryImportProgress runId="run-1" />);
     await waitFor(() => expect(screen.getByTestId('gallery-import-progress')).toBeTruthy());
     const visibleText = collectRenderedText(screen.toJSON()).join(' ').toLowerCase();
-    for (const banned of ['import', 'upload', 'scan', 'checkpointed', 'does not promise', 'ai partner', 'ai service', 'title and caption', '—', '--']) {
+    for (const banned of ['import', 'upload', 'scan', 'checkpointed', 'your place is saved', '30 days', '—', '--']) {
       expect(visibleText).not.toContain(banned);
     }
   });
 
-  it('never duplicates "Safe to close Momora. Your place is saved." between the heading and the body', async () => {
-    for (const [status, readyCandidates] of [['processing', 0], ['reviewing', 3]] as const) {
-      (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status, readyCandidates }, error: null });
-      const screen = render(<GalleryImportProgress runId="run-1" />);
-      await waitFor(() => expect(screen.getByTestId('gallery-import-progress')).toBeTruthy());
-      const visibleText = collectRenderedText(screen.toJSON()).join(' | ');
-      const occurrences = visibleText.split('Safe to close Momora. Your place is saved.').length - 1;
-      expect(occurrences).toBeLessThanOrEqual(1);
-      screen.unmount();
-    }
+  it('shows the "Safe to close"/"Keep Momora open" pill exactly once, never both at the same time', async () => {
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'reviewing', readyCandidates: 3 }, error: null });
+    const screen = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-progress')).toBeTruthy());
+    expect(screen.getByText('Safe to close')).toBeTruthy();
+    expect(screen.queryByText('Keep Momora open')).toBeNull();
   });
 });

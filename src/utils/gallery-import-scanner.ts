@@ -6,10 +6,10 @@ import {
   GALLERY_IMPORT_ALGORITHM_VERSION,
   GALLERY_IMPORT_CLUSTER_GAP_MS,
   GALLERY_IMPORT_MAX_ASSETS_PER_CLUSTER,
-  GALLERY_IMPORT_MAX_CLUSTERS_PER_RUN,
   GALLERY_IMPORT_MAX_ENUMERATED_ASSETS,
   GALLERY_IMPORT_MIN_CAPTURE_TIME_MS,
   GALLERY_IMPORT_SCAN_PAGE_SIZE,
+  GALLERY_IMPORT_WINDOW_CLUSTERS,
 } from '@/constants/gallery-import';
 
 export type GalleryPhotoPermissionState = 'full' | 'limited' | 'denied' | 'blocked';
@@ -71,7 +71,14 @@ export interface GalleryMediaLibraryAdapter {
    * `scanGallerySnapshot`'s `frontier` option. Omit both for an unbounded
    * newest-first page, exactly as before deepening existed.
    */
-  getPhotoPage: (input: { offset: number; limit: number; newerThanMs?: number; olderThanMs?: number }) => Promise<GalleryPhotoMetadata[]>;
+  /** `ascending` (default false/descending): Phase A of the continuous
+   * model's windowed scan enumerates ASCENDING from the frontier boundary
+   * (oldest-of-the-catch-up-range first) so a truncated/early-stopped pass
+   * only ever leaves a gap on the NEWEST end (which the next Phase A picks
+   * up naturally via `coveredThroughNewestMs`) rather than an unexamined
+   * band adjacent to the frontier that never gets re-scanned. Phase B and
+   * the no-frontier single pass stay descending (newest-first). */
+  getPhotoPage: (input: { offset: number; limit: number; newerThanMs?: number; olderThanMs?: number; ascending?: boolean }) => Promise<GalleryPhotoMetadata[]>;
   /** True when URI resolution will not trigger a cloud-original download. */
   isAssetAvailableLocally?: (osAssetId: string) => Promise<boolean>;
   resolveAssetUri: (osAssetId: string) => Promise<string>;
@@ -149,6 +156,27 @@ export interface GalleryScanOptions {
    * actually examined under the other mode.
    */
   frontier?: { coveredThroughNewestMs: number; oldestCoveredMs: number; corpusMode: GalleryCorpusMode } | null;
+  /**
+   * Continuous model (2026-08-23): the size of the single window this pass
+   * should try to fill (docs/plans/gallery-import-continuous.md's Internal
+   * model). Replaces the old run-wide `maxClusters` as the enumeration/
+   * admission budget for one scan; `maxClusters` is still honored as a
+   * fallback for any caller that has not moved to this name. Defaults to
+   * `GALLERY_IMPORT_WINDOW_CLUSTERS`.
+   *
+   * Enumeration itself early-stops per phase once `targetClusterCount + 1`
+   * COMPLETE groups (a group whose next-older neighbor is confirmed more
+   * than `clusterGapMs` away, or the phase's enumeration ended) have formed
+   * -- this bounds how many pages a window needs to fetch instead of always
+   * walking the full `maxEnumeratedAssets` budget. With a frontier, Phase A
+   * admits its own groups OLDEST-first up to this window size (extending
+   * contiguously from `coveredThroughNewestMs`), then Phase B fills
+   * whatever window budget remains with its own groups NEWEST-first
+   * (extending contiguously backward from `oldestCoveredMs`). Without a
+   * frontier, the single pass admits groups newest-first, unchanged from
+   * before this option existed.
+   */
+  targetClusterCount?: number;
 }
 
 function isPlausibleCaptureTime(captureAtMs: number | null, nowMs: number): captureAtMs is number {
@@ -213,7 +241,7 @@ export function createExpoGalleryMediaLibraryAdapter(): GalleryMediaLibraryAdapt
       }
       return { mode: cameraAlbum ? 'camera_album' as const : 'full_library_fallback' as const };
     } : undefined,
-    getPhotoPage: async ({ offset, limit, newerThanMs, olderThanMs }) => {
+    getPhotoPage: async ({ offset, limit, newerThanMs, olderThanMs, ascending }) => {
       let query = new MediaLibrary.Query()
         .eq(MediaLibrary.AssetField.MEDIA_TYPE, MediaLibrary.MediaType.IMAGE);
       // Camera-captures-only corpus (2026-08-11 product decision): once
@@ -228,7 +256,7 @@ export function createExpoGalleryMediaLibraryAdapter(): GalleryMediaLibraryAdapt
       if (typeof newerThanMs === 'number') query = query.gt(MediaLibrary.AssetField.CREATION_TIME, newerThanMs);
       if (typeof olderThanMs === 'number') query = query.lt(MediaLibrary.AssetField.CREATION_TIME, olderThanMs);
       const metadata = await query
-        .orderBy({ key: MediaLibrary.AssetField.CREATION_TIME, ascending: false })
+        .orderBy({ key: MediaLibrary.AssetField.CREATION_TIME, ascending: ascending === true })
         .offset(offset)
         .limit(limit)
         .exeForMetadata();
@@ -378,25 +406,47 @@ function capClusterAssets(assets: LocalGalleryAsset[], maximum: number): LocalGa
   return assets.filter((asset) => selected.has(asset));
 }
 
+export type GalleryClusterOrder = 'newest_first' | 'oldest_first';
+
+/**
+ * Groups by the same fixed 3-hour gap threshold regardless of `order`: two
+ * consecutive-in-time assets land in the same group iff their gap is within
+ * the threshold, which is symmetric under time direction. `order` therefore
+ * only changes (a) which end of a tied/multi-group result `.slice(0,
+ * maxClusters)` keeps, and (b) the order clusters are returned in -- never
+ * which assets land in the same cluster, and never a cluster's signature
+ * (createClusterSignature re-sorts a group's own assets before hashing, and
+ * a cluster's members are identical either way -- see the scanner test that
+ * asserts this).
+ */
 export function clusterGalleryAssets(
   assets: LocalGalleryAsset[],
-  options: Pick<GalleryScanOptions, 'clusterGapMs' | 'maxAssetsPerCluster' | 'maxClusters'> = {},
+  options: Pick<GalleryScanOptions, 'clusterGapMs' | 'maxAssetsPerCluster' | 'maxClusters'> & { order?: GalleryClusterOrder } = {},
 ): GalleryCluster[] {
   const clusterGapMs = options.clusterGapMs ?? GALLERY_IMPORT_CLUSTER_GAP_MS;
   const maxAssets = options.maxAssetsPerCluster ?? GALLERY_IMPORT_MAX_ASSETS_PER_CLUSTER;
-  const maxClusters = options.maxClusters ?? GALLERY_IMPORT_MAX_CLUSTERS_PER_RUN;
-  const sorted = assets.slice().sort((left, right) => right.captureAtMs - left.captureAtMs || left.osAssetId.localeCompare(right.osAssetId));
+  const maxClusters = options.maxClusters ?? GALLERY_IMPORT_WINDOW_CLUSTERS;
+  const ascending = options.order === 'oldest_first';
+  const sorted = assets.slice().sort((left, right) => (ascending
+    ? left.captureAtMs - right.captureAtMs || left.osAssetId.localeCompare(right.osAssetId)
+    : right.captureAtMs - left.captureAtMs || left.osAssetId.localeCompare(right.osAssetId)));
   const groups: LocalGalleryAsset[][] = [];
   for (const asset of sorted) {
     const current = groups[groups.length - 1];
-    if (!current || current[current.length - 1].captureAtMs - asset.captureAtMs > clusterGapMs) {
+    const previous = current?.[current.length - 1];
+    if (!current || !previous || Math.abs(previous.captureAtMs - asset.captureAtMs) > clusterGapMs) {
       groups.push([asset]);
     } else {
       current.push(asset);
     }
   }
   return groups.slice(0, maxClusters).map((group) => {
-    const cappedAssets = capClusterAssets(group, maxAssets);
+    // Downstream consumers (capClusterAssets's favorite-spreading positions,
+    // the review deck's display order) assume a group's own assets are
+    // newest-first regardless of which end of the library this group was
+    // selected from -- re-normalize before capping.
+    const timeDescending = group.slice().sort((left, right) => right.captureAtMs - left.captureAtMs || left.osAssetId.localeCompare(right.osAssetId));
+    const cappedAssets = capClusterAssets(timeDescending, maxAssets);
     return {
       algorithmVersion: GALLERY_IMPORT_ALGORITHM_VERSION,
       // Receipts key off the full event. Changing representative-cap values or
@@ -412,8 +462,28 @@ interface ScanWindowResult {
   assets: LocalGalleryAsset[];
   rejectedCount: number;
   enumeratedCount: number;
-  /** True iff this window was cut off by its budget (more may remain). */
+  /** True iff this window was cut off by its budget or the cluster-count
+   * early stop below (more may remain). */
   wasTruncated: boolean;
+}
+
+/**
+ * Counts groups already CLOSED by a confirmed >`clusterGapMs` gap in a
+ * time-descending sequence (the order every native page arrives in,
+ * regardless of which phase/bound produced it). The trailing group is never
+ * counted -- a later page could still extend it -- so this only tells the
+ * caller how many complete clusters exist so far, per the early-stop rule.
+ */
+function countCompleteGroups(assetsInEnumerationOrder: LocalGalleryAsset[], clusterGapMs: number): number {
+  if (assetsInEnumerationOrder.length === 0) return 0;
+  let groups = 1;
+  for (let index = 1; index < assetsInEnumerationOrder.length; index += 1) {
+    // Direction-agnostic: Phase A enumerates ascending, Phase B and the
+    // no-frontier pass enumerate descending -- the magnitude of the gap
+    // between consecutive-as-enumerated assets is what matters, not its sign.
+    if (Math.abs(assetsInEnumerationOrder[index - 1].captureAtMs - assetsInEnumerationOrder[index].captureAtMs) > clusterGapMs) groups += 1;
+  }
+  return groups - 1;
 }
 
 async function scanWindow(
@@ -425,11 +495,17 @@ async function scanWindow(
     createToken: () => string;
     newerThanMs?: number;
     olderThanMs?: number;
+    /** See GalleryMediaLibraryAdapter.getPhotoPage's own doc comment --
+     * Phase A passes true, everything else omits it (descending). */
+    ascending?: boolean;
     onPage?: GalleryScanOptions['onPage'];
     yieldToEventLoop?: GalleryScanOptions['yieldToEventLoop'];
     /** For onPage's running totals across a prior window in the same pass. */
     scannedSoFar: number;
     rejectedSoFar: number;
+    /** Early-stop threshold -- see countCompleteGroups above. */
+    targetClusterCount: number;
+    clusterGapMs: number;
   },
 ): Promise<ScanWindowResult> {
   let offset = 0;
@@ -446,7 +522,7 @@ async function scanWindow(
     }
     const page = await adapter.getPhotoPage({
       offset, limit: Math.min(input.pageSize, remaining),
-      newerThanMs: input.newerThanMs, olderThanMs: input.olderThanMs,
+      newerThanMs: input.newerThanMs, olderThanMs: input.olderThanMs, ascending: input.ascending,
     });
     if (page.length === 0) break;
     offset += page.length;
@@ -472,6 +548,13 @@ async function scanWindow(
     input.onPage?.({ scannedAssetCount: input.scannedSoFar + assets.length, rejectedAssetCount: input.rejectedSoFar + rejectedCount });
     await input.yieldToEventLoop?.();
     if (page.length < Math.min(input.pageSize, remaining)) break;
+    if (countCompleteGroups(assets, input.clusterGapMs) >= input.targetClusterCount + 1) {
+      // Enough complete clusters already exist to fill this phase's whole
+      // window allowance -- stop paging even though the byte/asset budget
+      // isn't exhausted. More may still remain past this point.
+      wasTruncated = true;
+      break;
+    }
   }
 
   return { assets, rejectedCount, enumeratedCount, wasTruncated };
@@ -490,6 +573,11 @@ export async function scanGallerySnapshot(
   const pageSize = options.pageSize ?? GALLERY_IMPORT_SCAN_PAGE_SIZE;
   const maxEnumeratedAssets = options.maxEnumeratedAssets ?? GALLERY_IMPORT_MAX_ENUMERATED_ASSETS;
   const createToken = options.createToken ?? defaultCreateToken;
+  const clusterGapMs = options.clusterGapMs ?? GALLERY_IMPORT_CLUSTER_GAP_MS;
+  // `maxClusters` kept as a fallback name for any caller that has not moved
+  // to `targetClusterCount` -- see that option's own doc comment.
+  const targetClusterCount = options.targetClusterCount ?? options.maxClusters ?? GALLERY_IMPORT_WINDOW_CLUSTERS;
+  const clusterOptions = { clusterGapMs, maxAssetsPerCluster: options.maxAssetsPerCluster };
 
   // Resolve which corpus this pass draws from BEFORE deciding whether the
   // supplied frontier's bounds are usable -- they were built under whatever
@@ -503,12 +591,14 @@ export async function scanGallerySnapshot(
   const suppliedFrontier = options.frontier ?? null;
   const frontier = suppliedFrontier && suppliedFrontier.corpusMode === corpusMode ? suppliedFrontier : null;
 
-  const scannedAssets: LocalGalleryAsset[] = [];
+  let scannedAssetCount = 0;
   let rejectedAssetCount = 0;
   let wasTruncated = false;
   // Whether the oldest-going direction (Phase B, or the single fresh-scan
-  // pass) ran to completion this call -- see GalleryScanSnapshot.reachedLibraryEnd.
+  // pass) ran to completion this call AND every group it produced fit inside
+  // this window -- see GalleryScanSnapshot.reachedLibraryEnd's doc comment.
   let reachedLibraryEnd = false;
+  let clusters: GalleryCluster[];
 
   if (frontier) {
     // Phase A: catch up on anything newer than what a prior run already
@@ -516,29 +606,61 @@ export async function scanGallerySnapshot(
     const phaseA = await scanWindow(adapter, {
       pageSize, budget: maxEnumeratedAssets, nowMs, createToken,
       newerThanMs: frontier.coveredThroughNewestMs,
+      // Ascending (oldest-of-the-catch-up-range first): if this phase is
+      // truncated (early-stop or budget), the un-enumerated band is only
+      // ever the NEWEST end -- coveredThroughNewestMs (Math.max in
+      // mergeGalleryImportFrontierCoverage) then ends exactly where
+      // enumeration stopped, so the next Phase A picks the gap back up.
+      // Enumerating descending here (the old behavior) could leave an
+      // un-enumerated band ADJACENT to the frontier that never gets
+      // re-scanned once coveredThroughNewestMs is advanced past it.
+      ascending: true,
       onPage: options.onPage, yieldToEventLoop: options.yieldToEventLoop,
       scannedSoFar: 0, rejectedSoFar: 0,
+      targetClusterCount, clusterGapMs,
     });
-    scannedAssets.push(...phaseA.assets);
+    scannedAssetCount += phaseA.assets.length;
     rejectedAssetCount += phaseA.rejectedCount;
+    // Contiguous ordering (Internal model): Phase A admits its OLDEST groups
+    // first -- the ones immediately above the previously-covered boundary --
+    // so the newly-covered range extends contiguously from
+    // coveredThroughNewestMs rather than jumping to "now" and leaving a gap.
+    const phaseAAllGroups = clusterGalleryAssets(phaseA.assets, { ...clusterOptions, order: 'oldest_first', maxClusters: Number.POSITIVE_INFINITY });
+    const phaseAAdmitted = phaseAAllGroups.slice(0, targetClusterCount);
+    const remainingWindow = Math.max(0, targetClusterCount - phaseAAdmitted.length);
+
     const remainingBudget = maxEnumeratedAssets - phaseA.enumeratedCount;
     if (remainingBudget > 0) {
       // Phase B: deepen backward from the stored frontier with whatever
-      // budget Phase A left.
+      // budget Phase A left, filling whatever window space Phase A did not use.
       const phaseB = await scanWindow(adapter, {
         pageSize, budget: remainingBudget, nowMs, createToken,
         olderThanMs: frontier.oldestCoveredMs,
         onPage: options.onPage, yieldToEventLoop: options.yieldToEventLoop,
-        scannedSoFar: scannedAssets.length, rejectedSoFar: rejectedAssetCount,
+        scannedSoFar: scannedAssetCount, rejectedSoFar: rejectedAssetCount,
+        targetClusterCount, clusterGapMs,
       });
-      scannedAssets.push(...phaseB.assets);
+      scannedAssetCount += phaseB.assets.length;
       rejectedAssetCount += phaseB.rejectedCount;
-      if (phaseA.wasTruncated || phaseB.wasTruncated) wasTruncated = true;
-      reachedLibraryEnd = !phaseB.wasTruncated;
+      // Phase B admits its own NEWEST groups first -- immediately below the
+      // previously-covered oldestCoveredMs boundary -- so deepening also
+      // stays contiguous rather than skipping into unexamined territory.
+      const phaseBAllGroups = clusterGalleryAssets(phaseB.assets, { ...clusterOptions, order: 'newest_first', maxClusters: Number.POSITIVE_INFINITY });
+      const phaseBAdmitted = phaseBAllGroups.slice(0, remainingWindow);
+      clusters = [...phaseAAdmitted, ...phaseBAdmitted];
+      wasTruncated = phaseA.wasTruncated || phaseB.wasTruncated;
+      // Reaching the library's true end requires BOTH that Phase B's own
+      // enumeration ran to natural completion AND that every group it found
+      // actually fit inside this window -- a group Phase B found but could
+      // not admit (window full) means the true oldest edge is not yet
+      // actually covered/registered, so completedLibrary must stay false
+      // until a later window admits the rest.
+      reachedLibraryEnd = !phaseB.wasTruncated && phaseBAdmitted.length === phaseBAllGroups.length;
     } else {
       // Phase A alone consumed this run's whole budget; Phase B never ran,
       // so this pass proves nothing about whether the library's oldest end
       // has been reached.
+      clusters = phaseAAdmitted;
       wasTruncated = true;
       reachedLibraryEnd = false;
     }
@@ -547,17 +669,20 @@ export async function scanGallerySnapshot(
       pageSize, budget: maxEnumeratedAssets, nowMs, createToken,
       onPage: options.onPage, yieldToEventLoop: options.yieldToEventLoop,
       scannedSoFar: 0, rejectedSoFar: 0,
+      targetClusterCount, clusterGapMs,
     });
-    scannedAssets.push(...single.assets);
+    scannedAssetCount += single.assets.length;
     rejectedAssetCount += single.rejectedCount;
+    const allGroups = clusterGalleryAssets(single.assets, { ...clusterOptions, order: 'newest_first', maxClusters: Number.POSITIVE_INFINITY });
+    clusters = allGroups.slice(0, targetClusterCount);
     wasTruncated = single.wasTruncated;
-    reachedLibraryEnd = !single.wasTruncated;
+    reachedLibraryEnd = !single.wasTruncated && clusters.length === allGroups.length;
   }
 
   return {
     permission,
-    clusters: clusterGalleryAssets(scannedAssets, options),
-    scannedAssetCount: scannedAssets.length,
+    clusters,
+    scannedAssetCount,
     rejectedAssetCount,
     wasTruncated,
     reachedLibraryEnd,

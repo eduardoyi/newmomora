@@ -10,7 +10,7 @@ import * as galleryService from '@/services/gallery-import';
 const mockAdapter = { getPermission: jest.fn(), requestPermission: jest.fn(), presentPermissionPicker: jest.fn(), isAssetAvailableLocally: jest.fn(), resolveAssetUri: jest.fn(), getAssetFilename: jest.fn() };
 let mockCheckpoint: any = null;
 
-jest.mock('expo-router', () => ({ router: { back: jest.fn(), push: jest.fn(), replace: jest.fn() } }));
+jest.mock('expo-router', () => ({ router: { back: jest.fn(), push: jest.fn(), replace: jest.fn() }, useFocusEffect: (effect: () => void) => { const { useEffect } = require('react'); useEffect(effect, [effect]); } }));
 jest.mock('expo-image', () => { const { View: MockView } = require('react-native'); return { Image: (props: any) => <MockView testID={props.testID} onError={props.onError} /> }; });
 jest.mock('react-native-safe-area-context', () => { const { View: MockView } = require('react-native'); return { SafeAreaView: MockView, useSafeAreaInsets: () => ({ bottom: 28, top: 0, left: 0, right: 0 }) }; });
 jest.mock('@/hooks/use-auth', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }));
@@ -194,7 +194,7 @@ describe('gallery import approval composer', () => {
     expect(mockCheckpoint.approvalOutbox).toEqual([]);
   });
 
-  it('reports content-free secure-request, upload, and confirmation progress for each original', async () => {
+  it('reports one simplified, content-free "Saving photo" progress line across the request/upload/confirm steps', async () => {
     let resolveUploadUrl: ((value: unknown) => void) | undefined;
     let resolveUpload: ((value: unknown) => void) | undefined;
     let resolveRecord: ((value: unknown) => void) | undefined;
@@ -205,12 +205,12 @@ describe('gallery import approval composer', () => {
     const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
     await waitFor(() => expect(screen.getByTestId('gallery-import-approval-retry')).toBeTruthy());
     fireEvent.press(screen.getByTestId('gallery-import-approval-retry'));
-    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-progress').props.children).toBe('Requesting secure upload 1 of 1…'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-progress').props.children).toBe('Saving photo 1 of 1…'));
 
     await act(async () => { resolveUploadUrl?.({ data: { uploadUrl: 'https://upload', requiredHeaders: {} }, error: null }); });
-    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-progress').props.children).toBe('Uploading photo 1 of 1…'));
+    expect(screen.getByTestId('gallery-import-approval-progress').props.children).toBe('Saving photo 1 of 1…');
     await act(async () => { resolveUpload?.({ error: null }); });
-    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-progress').props.children).toBe('Confirming photo 1 of 1…'));
+    expect(screen.getByTestId('gallery-import-approval-progress').props.children).toBe('Saving photo 1 of 1…');
     await act(async () => { resolveRecord?.({ data: { recorded: true }, error: null }); });
     await waitFor(() => expect(galleryService.finalizeGalleryImportCandidate).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockCheckpoint.approvalOutbox).toEqual([]));
@@ -416,13 +416,23 @@ describe('gallery import approval composer', () => {
     })));
   });
 
-  it('shows the kept confirmation after a successful save, then lets "Next suggestion" return to the deck and "That is enough" exit', async () => {
+  it('shows the kept confirmation after a successful save, reading the run\'s real readyCandidates rather than the deck cursor/total (which also counts set-aside cards)', async () => {
+    // deckCursor 3 / deckTotal 10 would naively compute "6 left" -- but that
+    // count includes set-aside cards. The run's own readyCandidates (4) is
+    // what must actually render.
     mockCheckpoint = checkpoint({ deckCursor: 3, deckTotal: 10 });
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({
+      data: { id: 'run-1', familyId: 'family-1', status: 'reviewing', reviewExpiresAt: null, limits: { maxClusters: 20, maxAssetsPerCluster: 6, maxChunks: 4 }, readyCandidates: 4, pendingClusters: 0 },
+      error: null,
+    });
     const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
     await waitFor(() => expect(screen.getByTestId('gallery-import-approve')).toBeTruthy());
     fireEvent.press(screen.getByTestId('gallery-import-approve'));
     await waitFor(() => expect(screen.getByTestId('gallery-import-approval-success')).toBeTruthy());
-    expect(screen.getByText('Next suggestion · 6 left')).toBeTruthy();
+    // The readyCandidates fetch resolves in the background -- the label
+    // fills in once it does, never blocking the confirmation itself.
+    await waitFor(() => expect(screen.getByText('Next suggestion · 4 left')).toBeTruthy());
+    expect(screen.queryByText('Next suggestion · 6 left')).toBeNull();
     // The absolute-positioned action stack pads the live bottom inset (28 in
     // this suite's safe-area mock) so "That is enough for now" clears the
     // system nav bar: max(spacing.xl 32, spacing.md 16 + inset 28) = 44.
@@ -433,5 +443,81 @@ describe('gallery import approval composer', () => {
 
     fireEvent.press(screen.getByTestId('gallery-import-approval-stop'));
     expect(mockRouter.replace).toHaveBeenCalledWith('/(app)/(tabs)/timeline');
+  });
+
+  it('prefers a caller-supplied readyCount over fetching the run', async () => {
+    mockCheckpoint = checkpoint({ deckCursor: 3, deckTotal: 10 });
+    const screen = render(<GalleryImportApproval candidateId="candidate-1" readyCount={7} runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approve')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-approve'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-success')).toBeTruthy());
+    expect(screen.getByText('Next suggestion · 7 left')).toBeTruthy();
+    expect(galleryService.getGalleryImportRun).not.toHaveBeenCalled();
+  });
+
+  it('hides the "left" count rather than showing a wrong number when the run cannot be read', async () => {
+    mockCheckpoint = checkpoint({ deckCursor: 3, deckTotal: 10 });
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: null, error: { message: 'offline' } });
+    const screen = render(<GalleryImportApproval candidateId="candidate-1" runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approve')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-approve'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-success')).toBeTruthy());
+    // Give the (failing) background fetch a chance to settle, then confirm
+    // it never produced a count.
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByText('Next suggestion')).toBeTruthy();
+    expect(screen.queryByText(/Next suggestion ·/)).toBeNull();
+  });
+
+  it('renders the kept confirmation instantly -- before the readyCandidates fetch resolves -- then fills in the count once it does', async () => {
+    mockCheckpoint = checkpoint({ deckCursor: 3, deckTotal: 10 });
+    let resolveRun: ((value: unknown) => void) | undefined;
+    (galleryService.getGalleryImportRun as jest.Mock).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRun = resolve; }),
+    );
+    const screen = render(<GalleryImportApproval candidateId="candidate-1" runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approve')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-approve'));
+    // The confirmation must appear the instant the save finishes, without
+    // waiting on the readyCandidates round-trip -- saving already took
+    // several seconds of uploads.
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-success')).toBeTruthy());
+    expect(screen.getByText('Next suggestion')).toBeTruthy();
+    expect(screen.queryByText(/Next suggestion ·/)).toBeNull();
+    expect(resolveRun).toBeDefined();
+
+    await act(async () => {
+      resolveRun?.({
+        data: { id: 'run-1', familyId: 'family-1', status: 'reviewing', reviewExpiresAt: null, limits: { maxClusters: 20, maxAssetsPerCluster: 6, maxChunks: 4 }, readyCandidates: 5, pendingClusters: 0 },
+        error: null,
+      });
+    });
+    await waitFor(() => expect(screen.getByText('Next suggestion · 5 left')).toBeTruthy());
+  });
+
+  it('does not update state when the readyCandidates fetch resolves after the screen has unmounted', async () => {
+    mockCheckpoint = checkpoint({ deckCursor: 3, deckTotal: 10 });
+    let resolveRun: ((value: unknown) => void) | undefined;
+    (galleryService.getGalleryImportRun as jest.Mock).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRun = resolve; }),
+    );
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const screen = render(<GalleryImportApproval candidateId="candidate-1" runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approve')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-approve'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approval-success')).toBeTruthy());
+
+    screen.unmount();
+    await act(async () => {
+      resolveRun?.({
+        data: { id: 'run-1', familyId: 'family-1', status: 'reviewing', reviewExpiresAt: null, limits: { maxClusters: 20, maxAssetsPerCluster: 6, maxChunks: 4 }, readyCandidates: 5, pendingClusters: 0 },
+        error: null,
+      });
+    });
+    const stateUpdateAfterUnmount = consoleError.mock.calls.some(
+      ([message]) => typeof message === 'string' && message.includes('a component') && message.includes('unmounted'),
+    );
+    expect(stateUpdateAfterUnmount).toBe(false);
+    consoleError.mockRestore();
   });
 });

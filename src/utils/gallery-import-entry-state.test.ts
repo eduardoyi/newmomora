@@ -41,6 +41,7 @@ describe('deriveGalleryImportEntryStatus', () => {
       state: 'none',
       attentionReason: null,
       reviewDaysLeft: null,
+      readyCount: 0,
     });
   });
 
@@ -51,6 +52,7 @@ describe('deriveGalleryImportEntryStatus', () => {
       state: 'attention',
       attentionReason: 'waiting_for_wifi',
       reviewDaysLeft: null,
+      readyCount: 0,
     });
   });
 
@@ -60,6 +62,7 @@ describe('deriveGalleryImportEntryStatus', () => {
       state: 'none',
       attentionReason: null,
       reviewDaysLeft: null,
+      readyCount: 0,
     });
   });
 
@@ -70,6 +73,7 @@ describe('deriveGalleryImportEntryStatus', () => {
       state: 'attention',
       attentionReason: 'run_failed',
       reviewDaysLeft: null,
+      readyCount: 0,
     });
   });
 
@@ -86,6 +90,7 @@ describe('deriveGalleryImportEntryStatus', () => {
       state: 'ready',
       attentionReason: null,
       reviewDaysLeft: 22,
+      readyCount: 5,
     });
   });
 
@@ -104,7 +109,7 @@ describe('deriveGalleryImportEntryStatus', () => {
   it('is processing (not resume/ready) when reviewing but nothing is ready yet, even with deck progress already made', () => {
     const reviewingSoon = makeRun({ status: 'reviewing', readyCandidates: 0, reviewExpiresAt: '2026-09-01T00:00:00.000Z' });
     expect(deriveGalleryImportEntryStatus(makeCheckpoint({ status: 'reviewing', deckCursor: 0 }), reviewingSoon, NOW))
-      .toEqual({ state: 'processing', attentionReason: null, reviewDaysLeft: null });
+      .toEqual({ state: 'processing', attentionReason: null, reviewDaysLeft: null, readyCount: 0 });
     expect(deriveGalleryImportEntryStatus(makeCheckpoint({ status: 'reviewing', deckCursor: 3 }), reviewingSoon, NOW).state)
       .toBe('processing');
   });
@@ -116,6 +121,7 @@ describe('deriveGalleryImportEntryStatus', () => {
       state: 'expiring',
       attentionReason: null,
       reviewDaysLeft: 3,
+      readyCount: 2,
     });
   });
 

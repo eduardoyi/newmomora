@@ -10,6 +10,7 @@ import {
   clearGalleryImportCheckpoint,
   getGalleryImportCheckpointKey,
   loadGalleryImportCheckpoint,
+  pruneGalleryImportCheckpoint,
   saveGalleryImportCheckpoint,
   updateGalleryImportCheckpoint,
   type GalleryImportCheckpoint,
@@ -93,4 +94,84 @@ describe('gallery import checkpoint', () => {
     await expect(loadGalleryImportCheckpoint(USER_ID, FAMILY_ID, RUN_ID)).resolves.toBeNull();
   });
 
+});
+
+describe('pruneGalleryImportCheckpoint', () => {
+  function asset(token: string, captureAtMs: number) {
+    return { assetToken: token, osAssetId: `os-${token}`, captureAtMs, width: 10, height: 10, isFavorite: false };
+  }
+
+  function baseCheckpoint(overrides: Partial<GalleryImportCheckpoint> = {}): GalleryImportCheckpoint {
+    return { ...checkpoint(), assetByToken: {}, chunks: [], approvalOutbox: [], ...overrides };
+  }
+
+  it('returns the checkpoint unchanged when no server run is available', () => {
+    const original = baseCheckpoint({ assetByToken: { a: asset('a', 1) } });
+    expect(pruneGalleryImportCheckpoint(original, null)).toBe(original);
+  });
+
+  it('drops assetByToken entries whose chunk is server-terminal and not otherwise protected', () => {
+    const original = baseCheckpoint({
+      assetByToken: { a: asset('a', 1), b: asset('b', 2) },
+      chunks: [
+        { ordinal: 0, chunkId: 'chunk-0', status: 'dispatched', clusters: [{ clusterSignature: 'sig-a', assetTokens: ['a'] }], previewUploads: [] },
+        { ordinal: 1, chunkId: 'chunk-1', status: 'dispatched', clusters: [{ clusterSignature: 'sig-b', assetTokens: ['b'] }], previewUploads: [] },
+      ],
+    });
+    const pruned = pruneGalleryImportCheckpoint(original, {
+      chunks: [{ ordinal: 0, status: 'completed' }, { ordinal: 1, status: 'processing' }],
+      liveCandidateAssetTokens: [],
+    });
+    // Chunk 0 is server-terminal ('completed') and token 'a' is otherwise
+    // unprotected -> dropped. Chunk 1 is not terminal ('processing') -> kept.
+    expect(pruned.assetByToken).toEqual({ b: asset('b', 2) });
+  });
+
+  it('keeps a token whose chunk is server-terminal but is referenced by the approval outbox', () => {
+    const original = baseCheckpoint({
+      assetByToken: { a: asset('a', 1) },
+      chunks: [{ ordinal: 0, chunkId: 'chunk-0', status: 'dispatched', clusters: [{ clusterSignature: 'sig-a', assetTokens: ['a'] }], previewUploads: [] }],
+      approvalOutbox: [{ candidateId: 'candidate-1', leaseId: 'lease-1', memoryId: 'memory-1', assetTokens: ['a'], status: 'uploading' }],
+    });
+    const pruned = pruneGalleryImportCheckpoint(original, { chunks: [{ ordinal: 0, status: 'completed' }], liveCandidateAssetTokens: [] });
+    expect(pruned.assetByToken).toEqual({ a: asset('a', 1) });
+  });
+
+  it('keeps a token within the 3-hour cluster gap of a live candidate\'s own selected capture time', () => {
+    const hour = 60 * 60 * 1000;
+    const original = baseCheckpoint({
+      assetByToken: {
+        live: asset('live', 10_000),
+        near: asset('near', 10_000 + hour), // within 3h of the live candidate token
+        far: asset('far', 10_000 + 4 * hour), // beyond the 3h gap
+      },
+      chunks: [{ ordinal: 0, chunkId: 'chunk-0', status: 'dispatched', clusters: [{ clusterSignature: 'sig', assetTokens: ['live', 'near', 'far'] }], previewUploads: [] }],
+    });
+    const pruned = pruneGalleryImportCheckpoint(original, {
+      chunks: [{ ordinal: 0, status: 'completed' }],
+      liveCandidateAssetTokens: ['live'],
+    });
+    expect(Object.keys(pruned.assetByToken).sort()).toEqual(['live', 'near']);
+  });
+
+  it('keeps every token of a chunk that has no server row yet (not yet known to be terminal)', () => {
+    const original = baseCheckpoint({
+      assetByToken: { a: asset('a', 1) },
+      chunks: [{ ordinal: 5, status: 'planned', clusters: [{ clusterSignature: 'sig', assetTokens: ['a'] }], previewUploads: [] }],
+    });
+    const pruned = pruneGalleryImportCheckpoint(original, { chunks: [], liveCandidateAssetTokens: [] });
+    expect(pruned.assetByToken).toEqual({ a: asset('a', 1) });
+  });
+
+  it('prunes clusterSignatures belonging to a dispatched chunk', () => {
+    const original = baseCheckpoint({
+      clusterSignatures: ['sig-a', 'sig-b'],
+      chunks: [
+        { ordinal: 0, chunkId: 'chunk-0', status: 'dispatched', clusters: [{ clusterSignature: 'sig-a', assetTokens: [] }], previewUploads: [] },
+        { ordinal: 1, chunkId: 'chunk-1', status: 'planned', clusters: [{ clusterSignature: 'sig-b', assetTokens: [] }], previewUploads: [] },
+      ],
+    });
+    const pruned = pruneGalleryImportCheckpoint(original, { chunks: [{ ordinal: 0, status: 'completed' }, { ordinal: 1, status: 'registered' }], liveCandidateAssetTokens: [] });
+    expect(pruned.clusterSignatures).toEqual(['sig-b']);
+  });
 });

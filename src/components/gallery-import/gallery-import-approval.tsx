@@ -35,6 +35,7 @@ import {
   finalizeGalleryImportCandidate,
   getGalleryImportApprovalUploadUrl,
   getGalleryImportCandidates,
+  getGalleryImportRun,
   recordGalleryImportApprovalUpload,
   updateGalleryImportCandidate,
   type GalleryImportCandidate,
@@ -51,7 +52,7 @@ import {
 import { formatDisplayDate } from '@/utils/memories';
 
 import { type GalleryImportChosenPhoto } from './gallery-import-review-sheets';
-import { Header, PrimaryButton, gi, humanError, useRunCheckpoint } from './gallery-import-shared';
+import { Header, PrimaryButton, exitGalleryImportToTimeline, gi, humanError, useRunCheckpoint } from './gallery-import-shared';
 
 /**
  * What the day-pool photo-chooser sheet needs from the composer: the
@@ -121,13 +122,18 @@ interface GalleryImportSavedResult {
   memoryDate: string;
   previewUri?: string;
   assetCount: number;
-  remaining: number;
+  /** Real ready-to-review count from the run, never the deck's own
+   * cursor/total (that also counts set-aside cards, which are not "left" to
+   * review). `null` when the count could not be read -- the confirmation
+   * screen hides the number rather than showing a wrong one. */
+  remaining: number | null;
 }
 
 export function GalleryImportApproval({
   runId,
   candidateId,
   onAddPhotos,
+  readyCount,
 }: {
   runId?: string;
   candidateId?: string;
@@ -135,6 +141,10 @@ export function GalleryImportApproval({
   // dashed "Add" tile and toolbar camera button, and calls this with the
   // current selection context so the parent can open the chooser sheet.
   onAddPhotos?: (context: GalleryImportAddPhotosContext) => void;
+  /** Optional: a fresher ready-to-review count than this screen could fetch
+   * itself (e.g. one the review deck already has in hand). When absent, the
+   * kept-confirmation screen fetches the run's own `readyCandidates`. */
+  readyCount?: number;
 }) {
   const { checkpoint, isLoading, update: updateCheckpoint, userId, familyId } = useRunCheckpoint(runId);
   const { members } = useFamilyMembers();
@@ -181,14 +191,24 @@ export function GalleryImportApproval({
     setApprovalProgress(null);
   }, []);
   const pendingApproval = checkpoint?.approvalOutbox.find((item) => item.candidateId === candidateId) ?? null;
+  // Primitive identity for effects: the checkpoint is re-read from storage
+  // whenever the app-root driver writes it (every preview upload of the
+  // background sweep), so `pendingApproval`'s object identity churns
+  // constantly. Keying `refresh` on the object re-fetched the candidate
+  // mid-save, captured its transient 'approving' status, and -- once the
+  // outbox cleared after finalization -- tripped orphan recovery into a
+  // second `begin` that the server rightly refused (device-observed
+  // 2026-08-23: a successful save shown as "not available").
+  const pendingApprovalKey = pendingApproval ? `${pendingApproval.leaseId}:${pendingApproval.status}` : null;
   const refresh = useCallback(async () => {
-    if (!checkpoint || !runId || !candidateId || savedResult) return;
+    if (!checkpoint || !runId || !candidateId || savedResult || approvalActionInFlightRef.current) return;
     const response = await getGalleryImportCandidates({ runId, capability: checkpoint.runCapability });
     const found = response.data?.candidates.find((item) => item.id === candidateId) ?? null;
     if (response.error || (!found && !pendingApproval)) { setError(response.error?.message ?? 'This suggestion is no longer available.'); return; }
     if (!found) return;
     setCandidate(found); setCaption(found.caption); setIsCaptionEdited(false); setMemoryDate(found.memoryDate); setAssetTokens(found.selectedAssetTokens); setMemberIds(found.familyMemberIds);
-  }, [candidateId, checkpoint?.runCapability, pendingApproval, runId, savedResult]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `pendingApprovalKey` stands in for `pendingApproval` (see above).
+  }, [candidateId, checkpoint?.runCapability, pendingApprovalKey, runId, savedResult]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   type ResolvedApprovalOriginal = { assetToken: string; uri: string; original: Awaited<ReturnType<typeof getGalleryImportOriginalUpload>> };
@@ -223,25 +243,30 @@ export function GalleryImportApproval({
       if (!resolvedOriginals) {
         const adapter = getGalleryImportE2eAdapter() ?? createExpoGalleryMediaLibraryAdapter();
         for (let index = 0; index < pending.assetTokens.length; index += 1) {
-          setApprovalStage('Preparing selected photo', `Preparing photo ${index + 1} of ${pending.assetTokens.length}…`);
+          setApprovalStage('Preparing selected photo', `Saving photo ${index + 1} of ${pending.assetTokens.length}…`);
           originals.push(await resolveApprovalOriginal(adapter, pending.assetTokens[index], deadlineAtMs));
         }
       }
       for (let index = 0; index < originals.length; index += 1) {
         const { assetToken, uri, original } = originals[index];
-        setApprovalStage('Secure upload request', `Requesting secure upload ${index + 1} of ${originals.length}…`);
+        // The three sub-steps below (request/upload/confirm) share one
+        // simplified progress line -- the user sees one continuous "Saving
+        // photo i of n..." for this photo rather than three different
+        // sentences flashing by; the distinct stage identifiers survive only
+        // for the error-prefix in galleryImportApprovalStageError.
+        setApprovalStage('Secure upload request', `Saving photo ${index + 1} of ${originals.length}…`);
         const uploadUrl = await withGalleryImportApprovalDeadline(
           () => getGalleryImportApprovalUploadUrl({ candidateId, capability: checkpoint.runCapability, leaseId: pending.leaseId, assetToken, contentType: original.contentType, byteLength: original.byteLength }),
           deadlineAtMs,
         );
         if (!uploadUrl.data || uploadUrl.error) throw new Error(uploadUrl.error?.message ?? 'Could not resume the photo upload.');
-        setApprovalStage('Uploading selected photo', `Uploading photo ${index + 1} of ${originals.length}…`);
+        setApprovalStage('Uploading selected photo', `Saving photo ${index + 1} of ${originals.length}…`);
         const upload = await withGalleryImportApprovalDeadline(
           () => uploadToPresignedUrl(uploadUrl.data!.uploadUrl, uri, original.contentType, uploadUrl.data!.requiredHeaders),
           deadlineAtMs,
         );
         if (upload.error) throw new Error(upload.error.message);
-        setApprovalStage('Confirming secure upload', `Confirming photo ${index + 1} of ${originals.length}…`);
+        setApprovalStage('Confirming secure upload', `Saving photo ${index + 1} of ${originals.length}…`);
         const recorded = await withGalleryImportApprovalDeadline(
           () => recordGalleryImportApprovalUpload({ candidateId, capability: checkpoint.runCapability, leaseId: pending.leaseId, assetToken, contentType: original.contentType, byteLength: original.byteLength, aspectRatio: original.aspectRatio }),
           deadlineAtMs,
@@ -253,7 +278,7 @@ export function GalleryImportApproval({
         approvalOutbox: current.approvalOutbox.map((item) => item.candidateId === candidateId ? { ...item, status: 'finalizing', errorCode: undefined } : item),
       }));
     }
-    setApprovalStage('Finishing memory', 'Finishing memory…');
+    setApprovalStage('Finishing memory', 'Finishing…');
     const finalized = await withGalleryImportApprovalDeadline(
       () => finalizeGalleryImportCandidate({ candidateId, capability: checkpoint.runCapability }),
       deadlineAtMs,
@@ -283,16 +308,44 @@ export function GalleryImportApproval({
     }));
   }, [candidateId, updateCheckpoint]);
 
+  // Bumped on every showSaved call and captured per-call below, so a
+  // background readyCandidates fetch from a stale call (or one that outlives
+  // this component) can never clobber a newer saved result or update state
+  // after unmount.
+  const savedResultTokenRef = useRef(0);
+  const isMountedRef = useRef(true);
+  useEffect(() => () => { isMountedRef.current = false; }, []);
+
   const showSaved = useCallback((source: GalleryImportCandidate, submittedCaption: string, submittedDate: string, assetCount: number) => {
-    const remaining = Math.max(0, (checkpoint?.deckTotal ?? 0) - ((checkpoint?.deckCursor ?? 0) + 1));
+    // The kept-confirmation must render the instant the save finishes --
+    // saving already took several seconds of uploads, so this cannot also
+    // wait on a network round-trip. Show it immediately with whatever count
+    // is already known (or none), then fill in the real count in the
+    // background.
+    const token = ++savedResultTokenRef.current;
+    // The deck's own cursor/total also count set-aside cards, so they can
+    // never stand in for "how many suggestions are left to review" -- read
+    // the run's own readyCandidates instead (a caller-supplied readyCount
+    // wins when present and skips the fetch entirely; see the prop doc above).
+    const initialRemaining: number | null = typeof readyCount === 'number' ? readyCount : null;
     setSavedResult({
       caption: submittedCaption,
       memoryDate: submittedDate,
       previewUri: source.previewUrls?.[0],
       assetCount,
-      remaining,
+      remaining: initialRemaining,
     });
-  }, [checkpoint?.deckCursor, checkpoint?.deckTotal]);
+    const capturedRunId = checkpoint?.runId;
+    const capturedRunCapability = checkpoint?.runCapability;
+    if (initialRemaining === null && capturedRunId && capturedRunCapability) {
+      void getGalleryImportRun({ runId: capturedRunId, runCapability: capturedRunCapability }).then((response) => {
+        if (!isMountedRef.current || savedResultTokenRef.current !== token) return;
+        if (response.error || typeof response.data?.readyCandidates !== 'number') return;
+        const remaining = response.data.readyCandidates;
+        setSavedResult((current) => (current ? { ...current, remaining } : current));
+      });
+    }
+  }, [checkpoint?.runId, checkpoint?.runCapability, readyCount]);
 
   const runApprovalOutbox = useCallback(async (pending: GalleryImportApprovalOutboxItem) => {
     if (!checkpoint || !runId || !candidateId || !userId || !familyId || approvalActionInFlightRef.current) return;
@@ -350,10 +403,10 @@ export function GalleryImportApproval({
       const adapter = getGalleryImportE2eAdapter() ?? createExpoGalleryMediaLibraryAdapter();
       const originals: ResolvedApprovalOriginal[] = [];
       for (let index = 0; index < candidate.selectedAssetTokens.length; index += 1) {
-        setApprovalStage('Preparing selected photo', `Preparing photo ${index + 1} of ${candidate.selectedAssetTokens.length}…`);
+        setApprovalStage('Preparing selected photo', `Saving photo ${index + 1} of ${candidate.selectedAssetTokens.length}…`);
         originals.push(await resolveApprovalOriginal(adapter, candidate.selectedAssetTokens[index], deadlineAtMs));
       }
-      setApprovalStage('Securing approval', 'Securing this memory…');
+      setApprovalStage('Securing approval', `Saving photo 1 of ${candidate.selectedAssetTokens.length}…`);
       const lease = await withGalleryImportApprovalDeadline(
         () => beginGalleryImportApproval({
           candidateId,
@@ -404,7 +457,7 @@ export function GalleryImportApproval({
       const originals: ResolvedApprovalOriginal[] = [];
       for (let index = 0; index < assetTokens.length; index += 1) {
         const assetToken = assetTokens[index];
-        setApprovalStage('Preparing selected photo', `Preparing photo ${index + 1} of ${assetTokens.length}…`);
+        setApprovalStage('Preparing selected photo', `Saving photo ${index + 1} of ${assetTokens.length}…`);
         try {
           originals.push(await resolveApprovalOriginal(adapter, assetToken, deadlineAtMs));
         } catch (caught) {
@@ -415,7 +468,7 @@ export function GalleryImportApproval({
       }
       if (originals.length === 0) throw new Error('The selected photos are no longer available on this device. Return to the suggestion and choose another photo.');
       const survivingTokens = originals.map(({ assetToken }) => assetToken);
-      setApprovalStage('Securing approval', 'Securing this memory…');
+      setApprovalStage('Securing approval', `Saving photo 1 of ${assetTokens.length}…`);
       const updated = await withGalleryImportApprovalDeadline(
         () => updateGalleryImportCandidate({ candidateId, capability: checkpoint.runCapability, caption: trimmedCaption, memoryDate, assetTokens: survivingTokens, familyMemberIds: memberIds }),
         deadlineAtMs,
@@ -450,10 +503,11 @@ export function GalleryImportApproval({
     void runApprovalOutbox(pendingApproval);
   }, [pendingApproval, runApprovalOutbox]);
   useEffect(() => {
+    if (savedResult || approvalActionInFlightRef.current) return;
     if (!candidate || candidate.status !== 'approving' || pendingApproval || isOrphanRecoveryFailed || recoveredCandidateRef.current === candidate.id) return;
     recoveredCandidateRef.current = candidate.id;
     void recoverOrphanedApproval();
-  }, [candidate, isOrphanRecoveryFailed, pendingApproval, recoverOrphanedApproval]);
+  }, [candidate, isOrphanRecoveryFailed, pendingApproval, recoverOrphanedApproval, savedResult]);
 
   const removePhoto = useCallback((token: string) => {
     setAssetTokens((current) => current.filter((item) => item !== token));
@@ -504,7 +558,7 @@ export function GalleryImportApproval({
       <GalleryImportApproveSuccess
         result={savedResult}
         onNext={() => { setSavedResult(null); router.replace({ pathname: '/(app)/gallery-import/review' as never, params: { runId } }); }}
-        onStop={() => { setSavedResult(null); router.replace('/(app)/(tabs)/timeline'); }}
+        onStop={() => { setSavedResult(null); exitGalleryImportToTimeline(); }}
       />
     );
   }
@@ -608,7 +662,7 @@ export function GalleryImportApproval({
       ) : undefined}
       toolbarTrailingSlot={(
         <Text style={styles.footerLine} testID="gallery-import-approval-progress">
-          {approvalProgress ?? (isRetry ? 'Your existing save is safe to retry. Momora will not create a second memory.' : `Saves on ${formattedDate}, not today.\nYour camera roll is not changed.`)}
+          {approvalProgress ?? (isRetry ? 'Your existing save is safe to retry. Momora will not create a second memory.' : `Saves on ${formattedDate}, at full size.`)}
         </Text>
       )}
       typeBadge={typeBadge}
@@ -663,9 +717,6 @@ function GalleryImportApproveSuccess({
         </Pressable>
         <Text style={styles.eyebrow}>Kept</Text>
         <Text style={styles.displaySmall}>It is in your{`\n`}journal now.</Text>
-        <Text style={styles.body}>
-          Filed under {formattedDate}, with {result.assetCount} {result.assetCount === 1 ? 'photo' : 'photos'} at full size.
-        </Text>
         <View style={styles.savedCard}>
           {result.previewUri ? (
             <Image contentFit="cover" source={{ uri: result.previewUri }} style={styles.savedCardImage} />
@@ -675,16 +726,12 @@ function GalleryImportApproveSuccess({
           <Text style={styles.savedCardCaption}>{result.caption}</Text>
           <Text style={styles.savedCardMeta}>{formattedDate} · {result.assetCount} {result.assetCount === 1 ? 'photo' : 'photos'}</Text>
         </View>
-        <View style={styles.familyDigestCard}>
-          <Text style={styles.familyDigestTitle}>Your family will get one summary</Text>
-          <Text style={styles.familyDigestBody}>Not one alert per memory. Momora waits until you have finished, then tells them once.</Text>
-        </View>
       </ScrollView>
       <View
         style={[gi.stickyFooterSurface, styles.successActions, { paddingBottom: Math.max(spacing.xl, spacing.md + insets.bottom) }]}
         testID="gallery-import-approval-success-actions"
       >
-        <PrimaryButton label={`Next suggestion · ${result.remaining} left`} onPress={onNext} testID="gallery-import-approval-next" />
+        <PrimaryButton label={typeof result.remaining === 'number' ? `Next suggestion · ${result.remaining} left` : 'Next suggestion'} onPress={onNext} testID="gallery-import-approval-next" />
         <Pressable accessibilityRole="button" onPress={onStop} testID="gallery-import-approval-stop">
           <Text style={styles.ghostButton}>That is enough for now</Text>
         </Pressable>
@@ -731,9 +778,6 @@ const styles = StyleSheet.create({
   placeholderSun: { color: colors.primary, fontSize: 34 },
   savedCardCaption: { color: colors.ink, fontFamily: fonts.display, fontSize: 18, lineHeight: 25, marginTop: 12 },
   savedCardMeta: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 12, marginTop: 9 },
-  familyDigestCard: { backgroundColor: colors.surface, borderRadius: radius.md, padding: 14, marginTop: spacing.lg },
-  familyDigestTitle: { color: colors.ink, fontFamily: fonts.sansBold, fontSize: 13 },
-  familyDigestBody: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 18, marginTop: 4 },
   successActions: {
     // Visual surface (solid background + hairline top border) and
     // horizontal/top padding come from the composed gi.stickyFooterSurface;

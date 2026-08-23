@@ -1,6 +1,6 @@
 import { fireEvent, render } from '@testing-library/react-native';
 
-import { GalleryImportExceptionScreen, GalleryImportNotice } from '@/components/gallery-import/gallery-import-exception';
+import { GalleryImportExceptionScreen } from '@/components/gallery-import/gallery-import-exception';
 import { getStickyFooterBottomPadding } from '@/components/keyboard-sticky-shell';
 
 jest.mock('expo-router', () => ({ router: { back: jest.fn(), push: jest.fn(), replace: jest.fn() } }));
@@ -40,8 +40,9 @@ function collectRenderedText(node: unknown, out: string[] = []): string[] {
 }
 
 describe('GalleryImportExceptionScreen', () => {
+  const kinds = ['lapsed', 'demoted', 'capped', 'offline', 'errorRecoverable', 'errorFinal'] as const;
+
   it('renders every distinguishable exception kind with its own copy', () => {
-    const kinds = ['lapsed', 'demoted', 'removed', 'capped', 'offline', 'errorRecoverable', 'errorFinal', 'quietSkips'] as const;
     for (const kind of kinds) {
       const screen = render(<GalleryImportExceptionScreen kind={kind} onClose={jest.fn()} onPrimary={jest.fn()} onSecondary={jest.fn()} />);
       expect(screen.getByTestId('gallery-import-exception-primary')).toBeTruthy();
@@ -50,7 +51,6 @@ describe('GalleryImportExceptionScreen', () => {
   });
 
   it('never renders an em-dash or double-hyphen in any kind\'s copy', () => {
-    const kinds = ['lapsed', 'demoted', 'removed', 'capped', 'offline', 'errorRecoverable', 'errorFinal', 'quietSkips'] as const;
     for (const kind of kinds) {
       const screen = render(<GalleryImportExceptionScreen kind={kind} onClose={jest.fn()} onPrimary={jest.fn()} onSecondary={jest.fn()} readyCount={9} reviewDaysLeft={26} />);
       const visibleText = collectRenderedText(screen.toJSON()).join(' ');
@@ -67,6 +67,14 @@ describe('GalleryImportExceptionScreen', () => {
 
     const withoutCounts = render(<GalleryImportExceptionScreen kind="lapsed" onClose={jest.fn()} onPrimary={jest.fn()} onSecondary={jest.fn()} />);
     expect(withoutCounts.queryByText(/suggestions still here/)).toBeNull();
+  });
+
+  it('shows no note at all for any kind other than lapsed, even when counts are supplied', () => {
+    for (const kind of kinds.filter((item) => item !== 'lapsed')) {
+      const screen = render(<GalleryImportExceptionScreen kind={kind} onClose={jest.fn()} onPrimary={jest.fn()} onSecondary={jest.fn()} readyCount={9} reviewDaysLeft={26} />);
+      expect(screen.queryByText(/suggestions still here/)).toBeNull();
+      screen.unmount();
+    }
   });
 
   it('wires primary/secondary/close', () => {
@@ -99,15 +107,5 @@ describe('GalleryImportExceptionScreen', () => {
     // The shared gi.stickyFooterSurface hairline top border, so content
     // reads as sliding under a deliberate floating surface.
     expect(footerStyle.some((entry: any) => entry?.borderTopWidth > 0 && entry?.borderTopColor)).toBe(true);
-  });
-});
-
-describe('GalleryImportNotice', () => {
-  it('renders an inline banner with an optional action', () => {
-    const onPress = jest.fn();
-    const screen = render(<GalleryImportNotice action={{ label: 'Use cellular data', onPress }} body="46 MB of previews to send." icon="alert" testID="gallery-import-notice-wifi" title="Waiting for Wi-Fi" tone="sun" />);
-    expect(screen.getByText('Waiting for Wi-Fi')).toBeTruthy();
-    fireEvent.press(screen.getByTestId('gallery-import-notice-wifi-action'));
-    expect(onPress).toHaveBeenCalledTimes(1);
   });
 });

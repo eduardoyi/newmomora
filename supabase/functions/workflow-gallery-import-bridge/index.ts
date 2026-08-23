@@ -16,6 +16,7 @@ type Operation =
   | 'mark_gallery_attempt_ambiguous'
   | 'publish_gallery_cluster_result'
   | 'fail_gallery_chunk'
+  | 'fail_gallery_cluster'
   | 'scrub_gallery_chunk';
 
 interface BridgeRequest extends Record<string, unknown> {
@@ -112,18 +113,40 @@ async function consumeNonce(client: SupabaseClient, nonce: string): Promise<'ok'
   return error.code === '23505' ? 'replayed' : 'failed';
 }
 
+const CLOSED_ERROR_CODE = /^[A-Z0-9_]{1,64}$/;
+
 function validRequest(body: unknown): body is BridgeRequest {
   if (!isRecord(body) || typeof body.operation !== 'string') return false;
   const operation = body.operation as Operation;
-  if (!['get_gallery_chunk_input', 'reserve_gallery_attempt', 'record_gallery_usage', 'mark_gallery_attempt_ambiguous', 'publish_gallery_cluster_result', 'fail_gallery_chunk', 'scrub_gallery_chunk'].includes(operation)) return false;
+  if (!['get_gallery_chunk_input', 'reserve_gallery_attempt', 'record_gallery_usage', 'mark_gallery_attempt_ambiguous', 'publish_gallery_cluster_result', 'fail_gallery_chunk', 'fail_gallery_cluster', 'scrub_gallery_chunk'].includes(operation)) return false;
   if (!isUuid(body.chunkId)) return false;
   if (operation === 'reserve_gallery_attempt') return typeof body.clusterSignature === 'string' && CLUSTER_SIGNATURE.test(body.clusterSignature) && Number.isInteger(body.attemptNumber) && (body.attemptNumber as number) >= 1 && (body.attemptNumber as number) <= 3;
   if (operation === 'record_gallery_usage') return isUuid(body.attemptId) && isUuid(body.reservationToken) && validUsage(body.usage);
   if (operation === 'mark_gallery_attempt_ambiguous') return isUuid(body.attemptId) && isUuid(body.reservationToken);
   if (operation === 'publish_gallery_cluster_result') return typeof body.clusterSignature === 'string' && CLUSTER_SIGNATURE.test(body.clusterSignature) && validCandidates(body.candidates) &&
     (body.skipReason === null || body.skipReason === undefined || (typeof body.skipReason === 'string' && GALLERY_SKIP_REASONS.has(body.skipReason)));
-  if (operation === 'fail_gallery_chunk') return typeof body.errorCode === 'string' && /^[A-Z0-9_]{1,64}$/.test(body.errorCode);
+  if (operation === 'fail_gallery_chunk') return typeof body.errorCode === 'string' && CLOSED_ERROR_CODE.test(body.errorCode);
+  if (operation === 'fail_gallery_cluster') return typeof body.clusterSignature === 'string' && CLUSTER_SIGNATURE.test(body.clusterSignature) &&
+    typeof body.errorCode === 'string' && CLOSED_ERROR_CODE.test(body.errorCode);
   return true;
+}
+
+/**
+ * S6. Only a small allowlist of Postgres errors are genuinely non-retryable
+ * business/validation outcomes (`P0001` domain rule, `22023` bad input,
+ * `42501` authorization, `28000` unauthenticated) -- those map to the
+ * existing 409 `bridge_rejected`. Everything else (deadlock `40P01`,
+ * statement timeout `57014`, connection-class `08xxx`, resource-class
+ * `53xxx`, `P0002` not-found races, or any unexpected code) is treated as a
+ * transient server condition and maps to a retryable 503
+ * `bridge_unavailable`, so the Worker's bridge-retry policy can distinguish
+ * "never retry this" from "try again".
+ */
+const NON_RETRYABLE_BRIDGE_ERROR_CODES = new Set(['P0001', '22023', '42501', '28000']);
+
+function classifyGalleryBridgeError(error: { code?: string } | null): { status: number; code: string } {
+  if (error?.code && NON_RETRYABLE_BRIDGE_ERROR_CODES.has(error.code)) return { status: 409, code: 'bridge_rejected' };
+  return { status: 503, code: 'bridge_unavailable' };
 }
 
 export async function handleWorkflowGalleryImportBridge(
@@ -152,12 +175,14 @@ export async function handleWorkflowGalleryImportBridge(
     case 'mark_gallery_attempt_ambiguous': ({ data, error } = await supabase.rpc('mark_gallery_attempt_ambiguous', { p_attempt_id: body.attemptId, p_reservation_token: body.reservationToken })); break;
     case 'publish_gallery_cluster_result': ({ data, error } = await supabase.rpc('publish_gallery_cluster_result', { p_chunk_id: body.chunkId, p_cluster_signature: body.clusterSignature, p_candidates: body.candidates, p_skip_reason: body.skipReason ?? null })); break;
     case 'fail_gallery_chunk': ({ data, error } = await supabase.rpc('fail_gallery_chunk', { p_chunk_id: body.chunkId, p_closed_error_code: body.errorCode })); break;
+    case 'fail_gallery_cluster': ({ data, error } = await supabase.rpc('fail_gallery_cluster', { p_chunk_id: body.chunkId, p_cluster_signature: body.clusterSignature, p_closed_error_code: body.errorCode })); break;
     case 'scrub_gallery_chunk': ({ data, error } = await supabase.rpc('scrub_gallery_chunk', { p_chunk_id: body.chunkId })); break;
   }
   if (error) {
     // Worker classifies non-2xx; never surface SQL/input/model context.
     console.error('gallery bridge rpc failed', error.code ?? 'unknown');
-    return errorResponse('Workflow bridge request failed', 409, 'bridge_rejected');
+    const classified = classifyGalleryBridgeError(error);
+    return errorResponse('Workflow bridge request failed', classified.status, classified.code);
   }
   if (body.operation === 'get_gallery_chunk_input') return jsonResponse({ chunk: data });
   if (body.operation === 'reserve_gallery_attempt') {

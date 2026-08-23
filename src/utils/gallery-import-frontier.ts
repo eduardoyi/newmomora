@@ -55,13 +55,30 @@ export interface GalleryImportFrontier {
    * before windowing a scan.
    */
   corpusMode: GalleryCorpusMode;
+  /**
+   * Continuous model (2026-08-23, S8): whether the driver should keep
+   * planning new windows once the current one settles and the backlog is
+   * low (see maybeExtendGalleryImportPlan in gallery-import-runner.ts).
+   * Flipped false by the progress screen's "Stop looking for more" action
+   * (`setGalleryImportAutoContinue`, gallery-import-driver.ts) -- the run
+   * keeps whatever it already has and simply never extends again. Defaults
+   * to `true` for a brand-new frontier and for any frontier persisted before
+   * this field existed (see `loadGalleryImportFrontier`'s defaulting below);
+   * a family that never touched the control keeps sweeping exactly like
+   * before this flag was introduced.
+   */
+  autoContinue: boolean;
 }
 
 function storageKey(userId: string, familyId: string): string {
   return `${STORAGE_PREFIX}:${userId}:${familyId}`;
 }
 
-function isFrontier(value: unknown): value is GalleryImportFrontier {
+/** `autoContinue` is intentionally NOT required here -- a frontier persisted
+ * before this field existed must keep loading (see `loadGalleryImportFrontier`,
+ * which defaults it to `true` after this shape check passes), not be treated
+ * as corrupt. */
+function isFrontier(value: unknown): value is Omit<GalleryImportFrontier, 'autoContinue'> & { autoContinue?: unknown } {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<GalleryImportFrontier>;
   return typeof candidate.oldestCoveredMs === 'number' && Number.isFinite(candidate.oldestCoveredMs)
@@ -76,7 +93,8 @@ export async function loadGalleryImportFrontier(userId: string, familyId: string
     const raw = await AsyncStorage.getItem(storageKey(userId, familyId));
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    return isFrontier(parsed) ? parsed : null;
+    if (!isFrontier(parsed)) return null;
+    return { ...parsed, autoContinue: typeof parsed.autoContinue === 'boolean' ? parsed.autoContinue : true };
   } catch {
     // Unreadable/corrupt storage degrades to "no frontier" -- the next scan
     // simply restarts from the newest photo. That is a resource/UX
@@ -149,5 +167,9 @@ export function mergeGalleryImportFrontierCoverage(
     ? Math.min(priorFrontier.oldestCoveredMs, registeredCoverage.oldestCoveredMs)
     : registeredCoverage.oldestCoveredMs;
   const completedLibrary = Boolean(priorFrontier?.completedLibrary) || reachedLibraryEnd;
-  return { coveredThroughNewestMs, oldestCoveredMs, completedLibrary, corpusMode };
+  // A corpus-mode reset (priorFrontier discarded above) also resets
+  // autoContinue to its true default -- an explicit "stop looking for more"
+  // is scoped to the corpus it was set under, same as every other bound here.
+  const autoContinue = priorFrontier?.autoContinue ?? true;
+  return { coveredThroughNewestMs, oldestCoveredMs, completedLibrary, corpusMode, autoContinue };
 }

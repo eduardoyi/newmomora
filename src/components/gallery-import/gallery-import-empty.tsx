@@ -3,12 +3,17 @@
 // former generic error text: nothing stood out among photos Momora could
 // read, an empty photo library on this device, and nothing found among the
 // few photos a limited-access grant allowed.
+//
+// Simplified per the 2026-08-23 copy pass (docs/plans/gallery-import-continuous.md
+// I4b): eyebrow, title, one line, buttons -- no script card, no shield
+// reassurance line. The one reassurance for this whole flow lives on the
+// trust screen (gallery-import-trust.tsx).
 import { StyleSheet, Text, View } from 'react-native';
 
 import { KeyboardStickyShell } from '@/components/keyboard-sticky-shell';
-import { colors, fonts, radius, spacing } from '@/constants/theme';
+import { colors, fonts, spacing } from '@/constants/theme';
 
-import { GalleryImportReassure, GalleryImportTopBar, PrimaryButton, SecondaryButton, gi } from './gallery-import-shared';
+import { GalleryImportTopBar, PrimaryButton, SecondaryButton, gi } from './gallery-import-shared';
 
 export type GalleryImportEmptyKind = 'nothing' | 'emptyLibrary' | 'limitedNothing';
 
@@ -16,10 +21,8 @@ interface EmptyCopy {
   eyebrow: string;
   title: string;
   body: string;
-  note: string;
   primary: string;
   secondary?: string;
-  script: string;
 }
 
 /** design: gi-entry.jsx GIOutcomeEmpty's `map`. */
@@ -27,26 +30,20 @@ const GALLERY_IMPORT_EMPTY_COPY: Record<GalleryImportEmptyKind, EmptyCopy> = {
   nothing: {
     eyebrow: 'All done looking',
     title: 'Nothing stood out\nthis time.',
-    body: 'Momora went through your photos and did not find a group it felt confident about. That is not a judgement of your photos; it only suggests events it is sure of.',
-    note: 'You can still add any photo yourself, whenever you want.',
+    body: 'Momora did not find a group of photos it felt confident about.',
     primary: 'Add a photo myself', secondary: 'Back to my journal',
-    script: 'nothing to suggest',
   },
   emptyLibrary: {
     eyebrow: 'Nothing to look through',
     title: 'No photos here\nyet.',
-    body: 'Momora could not find any photos on this phone. If your photos live in another account or on another device, start this from that phone instead.',
-    note: 'Your camera roll is never changed; there was simply nothing to read.',
+    body: 'Try this from the phone your photos actually live on.',
     primary: 'Back to my journal', secondary: undefined,
-    script: 'an empty roll',
   },
   limitedNothing: {
     eyebrow: 'All done looking',
     title: 'Nothing yet from\nthe photos you\nchose.',
-    body: 'Momora looked at the photos you allowed and did not find an event it was confident about. Choosing a few more days of photos usually helps.',
-    note: 'Your camera roll is never changed.',
+    body: 'Choosing a few more days of photos usually helps.',
     primary: 'Choose more photos', secondary: 'Back to my journal',
-    script: 'just a few photos',
   },
 };
 
@@ -80,16 +77,8 @@ export function GalleryImportEmptyOutcome({ kind, onPrimary, onSecondary, onClos
         <Text style={em.eyebrow}>{copy.eyebrow}</Text>
         <Text style={em.title}>{copy.title}</Text>
       </View>
-      <View style={em.cardWrap}>
-        <View style={em.card}>
-          <Text style={em.script}>{copy.script}</Text>
-        </View>
-      </View>
       <View style={em.body}>
         <Text style={em.text}>{copy.body}</Text>
-        <View style={em.noteWrap}>
-          <GalleryImportReassure>{copy.note}</GalleryImportReassure>
-        </View>
       </View>
     </KeyboardStickyShell>
   );
@@ -101,15 +90,8 @@ const em = StyleSheet.create({
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
   eyebrow: { color: colors.ink3, fontFamily: fonts.sansBold, fontSize: 10, letterSpacing: 1.4, textTransform: 'uppercase' },
   title: { color: colors.ink, fontFamily: fonts.display, fontSize: 34, lineHeight: 38, marginTop: 12 },
-  cardWrap: { paddingHorizontal: spacing.xl, paddingTop: spacing.lg },
-  card: {
-    alignItems: 'center', backgroundColor: colors.white, borderColor: colors.border, borderRadius: radius.xl,
-    borderWidth: 1, justifyContent: 'center', paddingHorizontal: spacing.lg, paddingVertical: 30,
-  },
-  script: { color: colors.primary, fontFamily: fonts.script, fontSize: 28, transform: [{ rotate: '-3deg' }] },
   body: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
   text: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 14.5, lineHeight: 23 },
-  noteWrap: { marginTop: 16 },
   // The solid background + hairline top border live in the shared
   // `gi.stickyFooterSurface` (composed in via `footerStyle` above) -- this
   // is only the element spacing within the footer stack.

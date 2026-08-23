@@ -197,6 +197,14 @@ Two layers, mirroring what already exists:
    into named spreads ("Fun at the beach", "The funny ones"). The model
    curates; it does not paginate — layout templates own geometry.
 
+**Overlap and single placement (decided 2026-08-23):** topics are
+multi-label (0–3 per memory; `beach` + `grandparents`, `birthday` +
+`cooking-baking`), and axes stack (topics × emotion × people × milestone).
+Overlap determines *eligibility* for spreads; the printed book places each
+memory on exactly one page. When a memory qualifies for several spreads it is
+assigned where it is scarcest/most valuable, and the connective text may
+acknowledge the overlap ("a beach day with abuela").
+
 Curation emits a **book outline** (ordered chapters/spreads with memory refs
 and rationale) that is independently reviewable before any layout exists —
 this is what V2 of the validation plan (§9) inspects.
@@ -343,6 +351,44 @@ passes** — proceed to V1. Key findings:
 - Caption coverage is 23% (163/721) and text-first memories only ramp up in
   2025 — early-year books will be photo-led, making AI connective text and
   topic tagging (Stage A/B) more load-bearing for 2022–2024 scopes.
+
+### V1a results (runs 2026-08-23, `npm run eval:memory-book-tagging`)
+
+Script: `supabase/scripts/eval-memory-book-tagging.ts` (+ tests). Two full
+runs over 726 memories, 0 errors, ~$0.55 each on gpt-4o-mini:
+
+- **Strict mode** (production-style precision-first): only 35% of memories
+  got any theme; 206 distinct themes. Too conservative for discovery.
+- **Discovery mode** (recall-leaning, per-theme confidence): 68% coverage,
+  641 distinct raw themes (398 singletons). Concrete scene themes score high
+  confidence (bath time 0.85, beach day 0.86, playground 0.78); vague
+  catch-alls score low (family moments 0.53, growing up 0.54) — mean
+  confidence is a usable "is this a page title?" heuristic for V1b.
+- Catch-alls dominate raw counts (playtime 217, family time 89, family
+  bonding/moments/togetherness) and must be dropped in V1b; the
+  page-worthy clusters are birthday celebration (45), imaginative play (20),
+  snack/meal time (28), newborn moments (17), playground (13), bath time
+  (11), outdoor play (35 combined), cooking together (9), grandparent
+  bonding (8), thanksgiving/holiday season (19), beach day (7).
+- Sibling themes (~50 combined) confirm the people axis should come from
+  `memory_family_members`, not the model.
+- Milestones: 20 explicit text claims both runs; the code gate suppressed 24
+  image-only claims in strict mode. Catalog follow-ups: add `first-potty`
+  (distinct from `potty-trained`); model missed `blows-kiss` once.
+- Emotion: 76% agreement with the existing classifier; 78 previously
+  untagged (video) memories now have emotion.
+- Birthday rules fixed: `ageTurned >= 1` (newborn-week memories are a
+  separate `birthMatch`, 15 found); day offsets are spread evenly across the
+  ±7 window, so the window stays ±7 — "birthday week" is the right unit.
+
+**V1a passes.** V1b draft delivered 2026-08-23: `docs/plans/topic-vocabulary.md`
+— v2.1 final: 61 tags in 8 groups (38 observed + 23 generalized for
+other geographies, family structures, cultures); 61% of memories carry ≥1 tag under the
+mapping (the rest is chronological backbone); 674 raw catch-all tokens
+dropped (playtime, family time, …) and become negative examples in the V1c
+prompt; emotion/people/milestone/season demand confirmed as separate axes.
+Eduardo review applied 2026-08-23 (v2.1: cut tummy-time, errands-shopping,
+caregivers, games-puzzles, home-life). Next: V1c validation run.
 
 ## 10. Open questions
 

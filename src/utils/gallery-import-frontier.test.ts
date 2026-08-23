@@ -17,7 +17,7 @@ const USER_ID = 'user-1';
 const FAMILY_ID = 'family-1';
 
 function frontier(overrides: Partial<GalleryImportFrontier> = {}): GalleryImportFrontier {
-  return { oldestCoveredMs: 1_000, coveredThroughNewestMs: 5_000, completedLibrary: false, corpusMode: 'camera_album', ...overrides };
+  return { oldestCoveredMs: 1_000, coveredThroughNewestMs: 5_000, completedLibrary: false, corpusMode: 'camera_album', autoContinue: true, ...overrides };
 }
 
 describe('gallery import frontier storage', () => {
@@ -64,6 +64,14 @@ describe('gallery import frontier storage', () => {
     expect(await loadGalleryImportFrontier(USER_ID, FAMILY_ID)).toBeNull(); // missing corpusMode
   });
 
+  it('defaults autoContinue to true for a frontier persisted before the field existed', async () => {
+    await AsyncStorage.setItem(
+      'gallery-import-frontier:user-1:family-1',
+      JSON.stringify({ oldestCoveredMs: 1_000, coveredThroughNewestMs: 5_000, completedLibrary: false, corpusMode: 'camera_album' }),
+    );
+    expect(await loadGalleryImportFrontier(USER_ID, FAMILY_ID)).toEqual(frontier({ autoContinue: true }));
+  });
+
   it('degrades to null when the read itself fails', async () => {
     jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('disk on fire'));
     expect(await loadGalleryImportFrontier(USER_ID, FAMILY_ID)).toBeNull();
@@ -83,14 +91,14 @@ describe('gallery import frontier storage', () => {
 describe('mergeGalleryImportFrontierCoverage', () => {
   it('creates a fresh frontier from the first run\'s registered coverage, tagged with its corpus mode', () => {
     expect(mergeGalleryImportFrontierCoverage(null, { oldestCoveredMs: 1_000, newestCoveredMs: 5_000 }, false, 'camera_album'))
-      .toEqual({ oldestCoveredMs: 1_000, coveredThroughNewestMs: 5_000, completedLibrary: false, corpusMode: 'camera_album' });
+      .toEqual({ oldestCoveredMs: 1_000, coveredThroughNewestMs: 5_000, completedLibrary: false, corpusMode: 'camera_album', autoContinue: true });
   });
 
   it('extends coveredThroughNewestMs forward and oldestCoveredMs backward monotonically within the same corpus mode', () => {
     const existing = frontier({ oldestCoveredMs: 3_000, coveredThroughNewestMs: 5_000 });
     // Phase A found something newer, Phase B found something older.
     const next = mergeGalleryImportFrontierCoverage(existing, { oldestCoveredMs: 500, newestCoveredMs: 6_000 }, false, 'camera_album');
-    expect(next).toEqual({ oldestCoveredMs: 500, coveredThroughNewestMs: 6_000, completedLibrary: false, corpusMode: 'camera_album' });
+    expect(next).toEqual({ oldestCoveredMs: 500, coveredThroughNewestMs: 6_000, completedLibrary: false, corpusMode: 'camera_album', autoContinue: true });
   });
 
   it('tolerates overlap gracefully: coverage fully inside the existing range never shrinks the frontier', () => {
@@ -131,7 +139,7 @@ describe('mergeGalleryImportFrontierCoverage', () => {
       // A fresh frontier anchored ONLY on this run's coverage -- not merged
       // with (or bounded by) the stale camera_album range, and completedLibrary
       // resets rather than inheriting the old mode's sticky true.
-      expect(next).toEqual({ oldestCoveredMs: 200, coveredThroughNewestMs: 300, completedLibrary: false, corpusMode: 'full_library_fallback' });
+      expect(next).toEqual({ oldestCoveredMs: 200, coveredThroughNewestMs: 300, completedLibrary: false, corpusMode: 'full_library_fallback', autoContinue: true });
     });
 
     it('a mode change with nothing registered this run leaves no frontier rather than reviving the stale one', () => {
@@ -144,7 +152,25 @@ describe('mergeGalleryImportFrontierCoverage', () => {
     it('the album reappearing (full_library_fallback -> camera_album) also resets, not merges', () => {
       const existing = frontier({ oldestCoveredMs: 1_000, coveredThroughNewestMs: 10_000, corpusMode: 'full_library_fallback' });
       const next = mergeGalleryImportFrontierCoverage(existing, { oldestCoveredMs: 5_000, newestCoveredMs: 6_000 }, false, 'camera_album');
-      expect(next).toEqual({ oldestCoveredMs: 5_000, coveredThroughNewestMs: 6_000, completedLibrary: false, corpusMode: 'camera_album' });
+      expect(next).toEqual({ oldestCoveredMs: 5_000, coveredThroughNewestMs: 6_000, completedLibrary: false, corpusMode: 'camera_album', autoContinue: true });
+    });
+  });
+
+  describe('autoContinue', () => {
+    it('defaults a brand-new frontier to autoContinue: true', () => {
+      expect(mergeGalleryImportFrontierCoverage(null, { oldestCoveredMs: 1_000, newestCoveredMs: 5_000 }, false, 'camera_album')?.autoContinue).toBe(true);
+    });
+
+    it('carries an existing frontier\'s autoContinue: false forward across a same-mode merge', () => {
+      const existing = frontier({ autoContinue: false });
+      const next = mergeGalleryImportFrontierCoverage(existing, { oldestCoveredMs: 500, newestCoveredMs: 6_000 }, false, 'camera_album');
+      expect(next?.autoContinue).toBe(false);
+    });
+
+    it('resets autoContinue to true when the corpus mode changes, same as the bounds', () => {
+      const existing = frontier({ autoContinue: false, corpusMode: 'camera_album' });
+      const next = mergeGalleryImportFrontierCoverage(existing, { oldestCoveredMs: 200, newestCoveredMs: 300 }, false, 'full_library_fallback');
+      expect(next?.autoContinue).toBe(true);
     });
   });
 });

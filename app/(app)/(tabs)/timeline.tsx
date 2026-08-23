@@ -24,8 +24,6 @@ import { FamilyActivitySheet } from '@/components/family-activity-sheet';
 import { MemoryFab } from '@/components/memory-fab';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
 import { LookingBackPackageRail } from '@/components/looking-back/package-rail';
-import { ImportDrawer } from '@/components/gallery-import/import-drawer';
-import { ImportGlyph } from '@/components/gallery-import/import-glyph';
 import { ImportInviteCard } from '@/components/gallery-import/import-invite-card';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
@@ -53,6 +51,8 @@ import { trackEvent } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
 import { isVideoContentType } from '@/utils/media-validation';
 import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
+import { hasSeenGalleryImportBell, markGalleryImportBellSeen } from '@/utils/gallery-import-bell-seen';
+import { isGalleryImportRunTerminal } from '@/utils/gallery-import-deck';
 import {
   dismissGalleryImportInvite,
   isGalleryImportInviteDismissed,
@@ -105,81 +105,6 @@ function StreakDots({ memories }: { memories: MemoryWithTags[] }) {
         ))}
       </View>
     </View>
-  );
-}
-
-function TimelineImportGlyph() {
-  if (!isGalleryImportFeatureEnabled) return null;
-  return <EnabledTimelineImportGlyph />;
-}
-
-// Wires the Timeline entry point together: the glyph (always visible to an
-// editor once there's something to say) and its status drawer (only for the
-// five non-'none' states -- design intent per docs/design/gallery-import/
-// README.md: "the glyph can keep navigating straight to the offer screen"
-// when there is no run/candidates to show).
-function EnabledTimelineImportGlyph() {
-  const { role } = useFamily();
-  const canEdit = canEditFamilyContent(role);
-  const { attentionReason, checkpoint, reviewDaysLeft, run, state } = useGalleryImportEntryStatus({
-    enabled: canEdit,
-  });
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-
-  if (!canEdit) return null;
-
-  const handleGlyphPress = () => {
-    if (state !== 'none') {
-      setIsDrawerOpen(true);
-      return;
-    }
-    // NOTE: the offer screen (app/(app)/gallery-import/index.tsx, owned by
-    // another agent) does not yet read this `surface` param -- it always
-    // fires gallery_import_opened with surface: 'settings'. Passing it here
-    // is forward-compatible and harmless today; firing trackEvent directly
-    // from this file too would just double-count the same tap under two
-    // conflicting surfaces. See this task's final report for the one-line
-    // fix that closes the gap (read `surface` via useLocalSearchParams and
-    // forward it to <GalleryImportEntry surface={...} />).
-    router.push({ pathname: '/(app)/gallery-import' as never, params: { surface: 'glyph' } });
-  };
-
-  const handlePrimaryAction = () => {
-    setIsDrawerOpen(false);
-    if (!checkpoint) return;
-    // Suggestions ready always win: "Start reviewing" during processing must
-    // land on the deck (which streams "+N coming" while the rest stage) --
-    // routing it to the progress screen read as a broken button
-    // (device-observed). Only ready-less states go to progress -- except
-    // 'expiring' (round 4 audit finding): "Take a last look" is about the
-    // deck's own set-aside sheet, which only lives on the review screen, so
-    // it must never bounce through progress even with readyCandidates 0.
-    const pathname = (run?.readyCandidates ?? 0) > 0 || state === 'ready' || state === 'resume' || state === 'expiring'
-      ? '/(app)/gallery-import/review'
-      : '/(app)/gallery-import/progress';
-    router.push({ pathname: pathname as never, params: { runId: checkpoint.runId } });
-  };
-
-  return (
-    <>
-      <ImportGlyph
-        onPress={handleGlyphPress}
-        readyCount={run?.readyCandidates ?? null}
-        state={state}
-      />
-      {state !== 'none' && checkpoint ? (
-        <ImportDrawer
-          attentionReason={attentionReason}
-          checkpoint={checkpoint}
-          onClose={() => setIsDrawerOpen(false)}
-          onPrimaryAction={handlePrimaryAction}
-          reviewDaysLeft={reviewDaysLeft}
-          run={run}
-          state={state}
-          visible={isDrawerOpen}
-        />
-      ) : null}
-    </>
   );
 }
 
@@ -243,7 +168,6 @@ function TimelineTitle({ unread, onPressBell }: ActivityBellSlotProps) {
         </View>
         <View style={styles.headerGlyphs}>
           <TimelineActivityBell onPress={onPressBell} unread={unread} />
-          <TimelineImportGlyph />
         </View>
       </View>
     </View>
@@ -272,10 +196,47 @@ function RecentlySection({ hasLookingBack }: { hasLookingBack: boolean }) {
 
 export default function TimelineScreen() {
   const { role, familyId } = useFamily();
+  const { user } = useAuth();
   const canEdit = canEditFamilyContent(role);
   const { unread: hasUnreadActivity, refetch: refetchActivityUnread } = useFamilyActivityUnread(familyId);
+  // Continuous gallery-import sweep (docs/plans/gallery-import-continuous.md
+  // I4a): the Timeline keeps this hook alive ONLY to feed the activity
+  // bell's dot and the sheet's pinned ephemeral row -- the header glyph and
+  // its drawer are gone (owner decision: the activity bell is now the one
+  // re-entry point).
+  const galleryEntry = useGalleryImportEntryStatus({ enabled: canEdit });
+  const galleryRunId = galleryEntry.checkpoint?.runId ?? null;
+  const galleryReadyCount = galleryEntry.readyCount;
+  // Defaults to "seen" until the AsyncStorage check resolves, matching the
+  // invite card's own flash-avoidance default below.
+  const [isGalleryBellSeen, setIsGalleryBellSeen] = useState(true);
+  useEffect(() => {
+    if (!canEdit || !user?.id || !familyId || !galleryRunId || galleryReadyCount <= 0) {
+      setIsGalleryBellSeen(true);
+      return;
+    }
+    let cancelled = false;
+    void hasSeenGalleryImportBell(user.id, familyId, galleryRunId, galleryReadyCount).then((seen) => {
+      if (!cancelled) setIsGalleryBellSeen(seen);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canEdit, familyId, galleryReadyCount, galleryRunId, user]);
+  const galleryBellUnread = canEdit && galleryReadyCount > 0 && !isGalleryBellSeen;
+  // Row hidden when there is no checkpoint/run for this device, or the run
+  // has already reached a terminal status -- see
+  // docs/features/family-activity.md's extension guide for this ephemeral,
+  // non-persisted, non-grouped row.
+  const showGalleryImportActivityRow = canEdit && Boolean(galleryRunId) && !isGalleryImportRunTerminal(galleryEntry.run?.status);
   const [isActivitySheetVisible, setIsActivitySheetVisible] = useState(false);
-  const handleOpenActivitySheet = useCallback(() => setIsActivitySheetVisible(true), []);
+  const handleOpenActivitySheet = useCallback(() => {
+    setIsActivitySheetVisible(true);
+    if (canEdit && user?.id && familyId && galleryRunId && galleryReadyCount > 0) {
+      void markGalleryImportBellSeen(user.id, familyId, galleryRunId, galleryReadyCount);
+      setIsGalleryBellSeen(true);
+    }
+  }, [canEdit, familyId, galleryReadyCount, galleryRunId, user]);
   const handleCloseActivitySheet = useCallback(() => setIsActivitySheetVisible(false), []);
   const handleActivityOpenMemory = useCallback((memoryId: string) => {
     router.push(memoryDetailRoute(memoryId));
@@ -289,6 +250,14 @@ export default function TimelineScreen() {
   const handleActivityInvite = useCallback(() => {
     router.push(sharingInviteRoute);
   }, []);
+  const handleGalleryImportActivityOpen = useCallback(() => {
+    const pathname = galleryReadyCount > 0 ? '/(app)/gallery-import/review' : '/(app)/gallery-import/progress';
+    if (galleryRunId) {
+      router.push({ pathname: pathname as never, params: { runId: galleryRunId } });
+    } else {
+      router.push(pathname as never);
+    }
+  }, [galleryReadyCount, galleryRunId]);
   const { isLoading: isOnboardingLoading, needsFamilyMember } = useOnboardingStatus();
   const windowHeight = useWindowDimensions().height;
   // Coarse scroll-position tracking (a ref write, so no re-renders) --
@@ -415,16 +384,21 @@ export default function TimelineScreen() {
   const listHeader = useMemo(
     () => (
       <SafeAreaView edges={['top']} testID="timeline-top-sections">
-        <TimelineTitle onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
+        <TimelineTitle onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
         <View style={styles.streakWrap} testID="timeline-week-section">
           <StreakDots memories={visibleMemories} />
         </View>
         <LookingBackPackageRail packages={lookingBack.packages} onOpen={handleOpenLookingBackPackage} />
         <RecentlySection hasLookingBack={lookingBack.packages.length > 0} />
         <PendingMemoryUploadsBanner />
+        {/* The invite renders as the first list item when there is exactly
+            one memory, matching its empty-state placement below --
+            visibleMemories.length <= 1 is the one condition both branches
+            share (docs/plans/gallery-import-continuous.md I4a step 1). */}
+        {canEdit && visibleMemories.length === 1 ? <TimelineGalleryImportInvite /> : null}
       </SafeAreaView>
     ),
-    [handleOpenActivitySheet, handleOpenLookingBackPackage, hasUnreadActivity, lookingBack.packages, visibleMemories],
+    [canEdit, galleryBellUnread, handleOpenActivitySheet, handleOpenLookingBackPackage, hasUnreadActivity, lookingBack.packages, visibleMemories],
   );
 
   // fetchNextPage's signature (FetchNextPageOptions) doesn't match FlatList's
@@ -491,7 +465,7 @@ export default function TimelineScreen() {
       {isLoading ? (
         <>
           <SafeAreaView>
-            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
+            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
           </SafeAreaView>
           <View style={styles.centeredInline}>
             <ActivityIndicator color={colors.primary} size="large" />
@@ -504,7 +478,7 @@ export default function TimelineScreen() {
           }
         >
           <SafeAreaView>
-            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
+            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
           </SafeAreaView>
           <Text style={styles.errorText}>Could not load memories</Text>
         </ScrollView>
@@ -517,7 +491,7 @@ export default function TimelineScreen() {
           testID="timeline-hidden-content-state"
         >
           <SafeAreaView>
-            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
+            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.hiddenOnlyTitle}>Blocked-account memories are hidden</Text>
@@ -542,7 +516,7 @@ export default function TimelineScreen() {
           testID="timeline-empty-state"
         >
           <SafeAreaView>
-              <TimelineTitleWithStreak memories={visibleMemories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity} />
+              <TimelineTitleWithStreak memories={visibleMemories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.emptyScript}>nothing yet</Text>
@@ -582,6 +556,13 @@ export default function TimelineScreen() {
       {canEdit && <MemoryFab onPress={() => router.push(newMemoryRoute('fab_timeline'))} />}
 
       <FamilyActivitySheet
+        galleryImport={showGalleryImportActivityRow ? {
+          readyCount: galleryReadyCount,
+          comingIndicator: galleryEntry.comingIndicator,
+          phase: galleryEntry.driverState.phase,
+          expiringInDays: galleryEntry.state === 'expiring' ? galleryEntry.reviewDaysLeft : null,
+          onOpen: handleGalleryImportActivityOpen,
+        } : undefined}
         onClose={handleCloseActivitySheet}
         onInvite={handleActivityInvite}
         onOpenApprovals={handleActivityOpenApprovals}

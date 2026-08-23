@@ -513,15 +513,35 @@ staging domain for gallery import. It is deliberately not a second memory
 writer: `finalize_gallery_import_candidate` is the one atomic route that moves
 an approved staged item into `memories`/`memory_media`/tags.
 
+`20260823100000_gallery_import_continuous.sql` moves the model from a capped
+"run a batch, review, start another" flow to one continuous per-family
+library sweep (see [docs/plans/gallery-import-continuous.md](plans/gallery-import-continuous.md)):
+admission is no longer limited by a first-30-days/normal-monthly run count —
+a family may only have one *active* run at a time (unchanged), but nothing
+caps how many runs it starts over its lifetime. Fair use is instead a
+**rolling 24h per-family cluster cap** (`daily_cluster_limit`, default 300),
+enforced at chunk registration. **The review window is 30 days from last
+activity, not from run creation**: `gallery_import_touch_run` extends
+`gallery_import_runs.expires_at` (and propagates the same new expiry to every
+live `gallery_import_assets`/`gallery_import_candidates` row) on every
+chunk registration, candidate skip/undo, approval begin/finalize, and
+candidate read. Throttled to at most once per day of activity (a no-op
+single-statement `UPDATE ... WHERE expires_at < now() + review_ttl - 1 day`
+when not due) — `get_gallery_import_candidates` alone is polled by the
+review deck every ~9s, and without the throttle every poll would `UPDATE`
+every live asset/candidate row for the run.
+
 | Table / column | Canonical contract |
 |---|---|
 | `memories.creation_source` | Server-owned `manual \| onboarding \| gallery_import`; gallery provenance is operational only and is not rendered. |
 | `families.gallery_caption_language`, `gallery_caption_instructions` | Owner-managed BCP 47 locale and optional sanitized instruction (≤500 chars). |
-| `gallery_import_admission_settings` | Singleton server kill/admission configuration: `enabled`, first-30-day allowance, normal monthly allowance, review TTL (1–90 days; default 30), exactly-30-minute digest quiet period, policy epoch, and validated limit template. |
-| `gallery_import_runs` | `(family_id, actor_id)`, capability hash, algorithm/consent/permission snapshots, status `scanning\|processing\|reviewing\|completed\|cancelled\|expired\|failed`, immutable limit snapshot, and expiry/cleanup fence. A due completed run transitions to `expired` only when fenced cleanup claims its transient objects; approved memory/media and receipts are retained. One active run per family. |
-| `gallery_import_chunks`, `gallery_import_assets`, `gallery_import_cluster_results` | Bounded immutable manifest, opaque UUID tokens (never OS IDs), private preview receipt, Workflow ID/status, and per-cluster terminal ledger. |
+| `gallery_import_admission_settings` | Singleton server kill/admission configuration: `enabled`, review TTL (1–90 days; default 30), exactly-30-minute digest quiet period, policy epoch, rolling **`daily_cluster_limit`** (smallint, 20–5000, default 300) fair-use cap, and a widened validated limit template (`maxChunksPerRun` 1–5000, `maxAssetsPerRun` 1–100000, `maxAssetsPerChunk` 1–500, `maxCandidatesPerRun` 1–10000; default snapshot `{"maxChunksPerRun":2000,"maxAssetsPerRun":50000,"maxAssetsPerChunk":100,"maxCandidatesPerRun":5000,"maxProviderAttemptsPerCluster":3,"maxImagesPerCluster":10,"maxPreviewBytes":1500000}`). The `normal_monthly_run_limit`/`initial_run_limit`/`initial_window` columns remain in the schema but are no longer read by `create_gallery_import_run_internal`. |
+| `gallery_import_runs` | `(family_id, actor_id)`, capability hash, algorithm/consent/permission snapshots, status `scanning\|processing\|reviewing\|completed\|cancelled\|expired\|failed`, immutable limit snapshot, and expiry/cleanup fence. A due completed run transitions to `expired` only when fenced cleanup claims its transient objects; approved memory/media and receipts are retained. One active run per family — but admission no longer caps how many runs a family can start over time (see above). |
+| `gallery_import_chunks` | Bounded immutable manifest, opaque UUID tokens (never OS IDs), Workflow ID/status, and now `dispatch_attempts` (smallint, default 0, incremented by `mark_gallery_chunk_dispatched` on every (re)dispatch) for reconciliation. The `processing → dispatched` transition is now valid (a stuck chunk can be re-marked dispatched under a new Workflow instance id). |
+| `gallery_import_assets` | Per-asset manifest row; now also `unavailable_at` (nullable timestamptz) — set by `mark_gallery_import_assets_unavailable` for an asset the device can no longer produce a preview for (deleted, iCloud-only original, permission revoked mid-sweep). Only an asset with `preview_uploaded_at is null` can be marked unavailable; a verified preview manifest stays immutable. |
+| `gallery_import_cluster_results` | Per-cluster terminal ledger, `state \| skip_reason \| candidate_count`. **Has no `id` column** — its primary key is the composite `(chunk_id, cluster_signature)`. |
 | `gallery_import_candidates`, `gallery_import_cluster_receipts` | Staged candidate (caption ≤1,000, 1–10 selected opaque tokens, at most three split groups), status and best-effort same-device/reinstall suppression receipt. No prompt/model response/semantic description is stored. |
-| `gallery_import_provider_attempts` | Private service-only reservation and scalar usage/error state: `reserved\|inflight\|completed\|failed\|ambiguous\|cancelled`; a possible paid ambiguous outcome is never auto-replayed. |
+| `gallery_import_provider_attempts` | Private service-only reservation and scalar usage/error state: `reserved\|inflight\|completed\|failed\|ambiguous\|cancelled`; a possible paid ambiguous outcome is never auto-replayed. `reserve_gallery_attempt` treats an existing terminal (not `reserved`/`inflight`) attempt row at the requested ordinal as consumed and returns `denied` — this also fixed a real bug where retrying an `ambiguous` ordinal raised a duplicate-key error instead (plpgsql `RETURN QUERY` does not exit the function; the prior code fell through into an unconditional `INSERT`). |
 | `gallery_import_approval_leases` | Candidate-bound stable memory ID, hash of lease token, exact expected/original-uploaded keys, state and cleanup fence for idempotent finalization. |
 | `gallery_import_digest_windows` | Per-family/actor approval aggregation and idempotent cron claim/send state. |
 | `gallery_import_workflow_bridge_nonces` | Service-only HMAC replay nonce with a bounded (default 10-minute) expiry. |
@@ -534,6 +554,42 @@ triggers, and transition validation prevent cross-run/family reassignment.
 The canonical migration also creates indexes for active runs, cleanup,
 candidate reads, clusters, and bridge-nonce expiry; it schedules digest sends
 every five minutes and cleanup hourly through Vault-backed `pg_cron` calls.
+
+**RPCs added/changed by the continuous migration:**
+
+| RPC | Contract |
+|---|---|
+| `register_gallery_import_chunk` | Unchanged signature. Now also enforces the rolling 24h `daily_cluster_limit`: raises `'Gallery import daily limit reached'` with `errcode='P0002'` and a `hint` carrying the ISO-8601 UTC timestamp the window frees — distinct from every other (hint-less) `P0002` in this domain. The Edge maps this specific shape to HTTP 429 `{ code: 'fair_use', retryAfterSeconds }`; a plain "not found" `P0002` still maps to 404. The hint is the instant `used' + p_cluster_count` first fits under the cap — the `k`-th oldest counted row's `created_at + 24h` where `k = used + p_cluster_count - limit` — not `min(created_at) + 24h` of the whole window; a multi-cluster chunk needing more than one row to free would otherwise be refused again immediately on retry and thrash. |
+| `mark_gallery_import_assets_unavailable(p_run_id, p_capability, p_chunk_id, p_asset_tokens)` | Client-callable (capability-bound). Marks not-yet-uploaded assets unavailable, recomputes the chunk's `asset_count`/`cluster_count`, resolves any cluster left with zero available assets as `invalid_preview` (via `publish_gallery_cluster_result`, writing no suppression receipt), and closes the chunk `completed` without dispatch if nothing is left. |
+| `claim_stale_gallery_chunks(p_limit)` | Service-only. Claims chunks `dispatched`/`processing` with `dispatched_at` older than 20 minutes (run non-terminal, not expired) for redispatch, returning `(chunk_id, run_id, dispatch_attempts)`; a chunk already at `dispatch_attempts >= 3` is instead failed directly with `fail_gallery_chunk(id, 'GALLERY_RECONCILE_EXHAUSTED')`. |
+| `fail_gallery_cluster(p_chunk_id, p_cluster_signature, p_closed_error_code)` | Service-only. Resolves a single cluster `failed` without failing the rest of the chunk; chunk/run completion bookkeeping mirrors `fail_gallery_chunk`. |
+| `get_gallery_import_fair_use(p_family_id)` | Service-only. Returns `{ used, limit, resets_at }` for the family's rolling 24h cluster window; backs the Edge's `fairUse.pausedUntil` field. `resets_at` uses the same `k`-th-row precision as `register_gallery_import_chunk`'s hint (`k = used - limit + 1`). |
+| `gallery_import_touch_run(p_run_id)` | Internal (no client/service grant — called only from other `SECURITY DEFINER` functions). Extends `expires_at` to `now() + review_ttl`, throttled to at most once per day of activity (`WHERE expires_at < now() + review_ttl - interval '1 day'`) so the common case is a single no-op statement; only an actual extension propagates to live assets/candidates. |
+| `complete_gallery_import_run` | Additionally refuses (`P0001`, `'Gallery import still has work in flight'`) while any chunk is `registered\|uploading\|dispatched\|processing`, not only while candidates are `staged\|posting`. |
+| `publish_gallery_candidates` (and, transitively, `publish_gallery_cluster_result`) | Now also refuses (`P0001`, `'Run is closed'`) into a `completed` run, matching `cancelled\|expired\|failed`. |
+| `register_gallery_import_assets` | The `scanning/processing → reviewing` auto-flip (when a chunk registers with zero effective clusters) now also requires every other chunk in the run to already be terminal, mirroring `publish_gallery_cluster_result`/`fail_gallery_chunk`. |
+| `mark_gallery_chunk_dispatched` | Also accepts chunks in `processing` (re-dispatch) and increments the new `dispatch_attempts` column. Asset-completeness checks exclude `unavailable_at is not null` assets. |
+| `get_gallery_chunk_input` | Excludes `unavailable_at is not null` assets from both its completeness check and the clusters/assets payload sent to the Worker. |
+
+Edge (`_shared/gallery-import.ts`) fixes a production bug where
+`countPendingGalleryClusters` selected a non-existent `id` column on
+`gallery_import_cluster_results` (PostgREST 400 → `pendingClusters` always
+`null`); it now selects `chunk_id`. `clientRun` additionally returns `chunks`
+(an array of `{ ordinal, status }`, distinct from the pre-existing aggregate
+`chunkCount`), `liveCandidateAssetTokens` (deduplicated tokens of
+`staged`/`skipped` candidates), and `fairUse: { pausedUntil }`.
+`dispatchGalleryImportChunk` accepts an optional `unavailableAssetTokens`
+body field and sends `attempt` alongside `chunkId` to the Worker's
+`/dispatch/gallery` endpoint (`markAndDispatchGalleryChunk`'s Workflow
+instance id is `gallery:${chunkId}` for `attempt <= 1`, else
+`gallery:${chunkId}:${attempt}`). `redispatchStaleGalleryChunks` (used by
+`cleanup-gallery-imports`) claims and re-dispatches stale chunks each hour.
+`workflow-gallery-import-bridge` adds a `fail_gallery_cluster` operation and
+reclassifies RPC errors: only `P0001\|22023\|42501\|28000` map to the
+existing 409 `bridge_rejected`; every other Postgres error (deadlock
+`40P01`, statement timeout `57014`, connection-class `08xxx`,
+resource-class `53xxx`, or anything unexpected) maps to a retryable 503
+`bridge_unavailable`.
 
 ### 2.1c Family activity feed
 
@@ -2354,17 +2410,17 @@ in the authenticated local checkpoint and is stored only as a hash in
 | Function | Request / response contract |
 |---|---|
 | `create-gallery-import-run` | `{ familyId, algorithmVersion, consentVersion, permissionMode }` → `{ run, runCapability }`; server snapshots admission limits and expiry. |
-| `register-gallery-import-chunk` | `{ familyId, runId, runCapability, ordinal, clusters }` → `{ chunkId, acceptedAssetTokens, suppressedClusterSignatures }`; manifests carry opaque tokens, date/dimension/favorite metadata only. |
+| `register-gallery-import-chunk` | `{ familyId, runId, runCapability, ordinal, clusters }` → `{ chunkId, acceptedAssetTokens, suppressedClusterSignatures }`; manifests carry opaque tokens, date/dimension/favorite metadata only. Once the family's rolling 24h `daily_cluster_limit` would be exceeded, responds `429 { code: 'fair_use', retryAfterSeconds }` instead of registering — the device treats this as a pause, never an error. |
 | `get-gallery-import-upload-url` | Run/token-bound JPEG preview metadata → server-selected PUT URL/key/required hash metadata. Max preview is 512px edge and 1,500,000 bytes. |
-| `dispatch-gallery-import-chunk` | `{ familyId, runId, runCapability, chunkId, previewUploads }` → `{ accepted }`; HEAD-checks every registered object then dispatches signed `{ chunkId }` to the Worker. |
-| `get-gallery-import-run`, `get-gallery-import-candidates` | Capability-bound status or staged cards; candidate previews are individually signed for five minutes. |
+| `dispatch-gallery-import-chunk` | `{ familyId, runId, runCapability, chunkId, previewUploads, unavailableAssetTokens? }` → `{ accepted }`; HEAD-checks every registered (still-available) object then dispatches `{ chunkId, attempt }` to the Worker, signed. `unavailableAssetTokens` reports assets the device can no longer produce a preview for; the server drops them from the manifest and, if that empties the chunk entirely, closes it `completed` and returns `{ accepted: true }` without ever dispatching. |
+| `get-gallery-import-run`, `get-gallery-import-candidates` | Capability-bound status or staged cards; candidate previews are individually signed for five minutes. The run response additionally carries `chunks: { ordinal, status }[]`, `pendingClusters`, `liveCandidateAssetTokens`, and `fairUse: { pausedUntil }` (see §2.1b). |
 | `set-gallery-import-candidate-skip`, `update-gallery-import-candidate` | Capability-bound skip/undo and draft update. Cards expose caption/date/tokens/tags only—not model reasoning/emotion. |
 | `begin-gallery-import-approval` | `{ candidateId, capability, assets }` → stable `{ leaseId, memoryId, expiresAt, expectedAssets }`. |
 | `get-gallery-import-approval-upload-url`, `record-gallery-import-approval-upload`, `finalize-gallery-import-candidate` | Server-selected original PUT, HEAD/receipt validation, then atomic memory/media/tag/provenance/receipt/digest finalization. |
 | `cancel-gallery-import-run`, `complete-gallery-import-run` | Capability-bound terminal changes; terminal cleanup is fenced and idempotent. |
 | `get-gallery-caption-settings`, `update-gallery-caption-settings` | Owner-only family caption locale/instruction operations. |
-| `cleanup-gallery-imports`, `send-gallery-import-digests` | `POST` with `x-cron-secret`; hourly cleanup/nonces and five-minute digest claim/send respectively. |
-| `workflow-gallery-import-bridge` | Worker-only timestamped HMAC + nonce bridge for private chunk input, attempt reservation/usage, candidate publication, failure, and scrub. |
+| `cleanup-gallery-imports`, `send-gallery-import-digests` | `POST` with `x-cron-secret`; hourly cleanup/nonces and five-minute digest claim/send respectively. The hourly cleanup also calls `redispatchStaleGalleryChunks` after expiry work: it claims chunks stuck past their dispatch timeout (`claim_stale_gallery_chunks`) and re-dispatches each under a fresh attempt-suffixed Workflow instance id; response gains a `redispatched` count. |
+| `workflow-gallery-import-bridge` | Worker-only timestamped HMAC + nonce bridge for private chunk input, attempt reservation/usage, candidate publication, per-cluster failure (`fail_gallery_cluster`), whole-chunk failure, and scrub. Error mapping: only `P0001\|22023\|42501\|28000` map to 409 `bridge_rejected` (non-retryable); every other error (deadlock, timeout, connection/resource exhaustion, or anything unexpected) maps to 503 `bridge_unavailable` (retryable). |
 
 The shared function handler (`_shared/gallery-import.ts`) owns request
 validation and is wrapped by each user endpoint. `GalleryImportWorkflow` is
@@ -2374,7 +2430,10 @@ schema-constrained `gpt-4o-mini` multi-image vision request per cluster, and
 publishes a complete result idempotently. It may split a cluster into at most
 three groups and never merges clusters. Definite retryable responses can use
 the bounded attempt cap; network/timeout/disconnect outcomes are `ambiguous`
-and are quarantined rather than automatically replayed.
+and are quarantined rather than automatically replayed. A single cluster's
+definite failure calls `fail_gallery_cluster` for that cluster and continues
+with the rest of the chunk; only a whole-chunk-level input failure calls
+`fail_gallery_chunk`.
 
 ## 5. Client API Flow
 

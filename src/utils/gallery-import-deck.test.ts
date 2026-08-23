@@ -1,5 +1,6 @@
 import { GALLERY_IMPORT_CLUSTER_GAP_MS } from '@/constants/gallery-import';
 import type { GalleryImportRun } from '@/services/gallery-import';
+import type { GalleryImportCheckpoint } from '@/utils/gallery-import-checkpoint';
 import {
   GALLERY_DECK_COMMIT_THRESHOLD_PX,
   GALLERY_DECK_INTENT_THRESHOLD_PX,
@@ -124,8 +125,8 @@ describe('deriveGalleryImportComingIndicator', () => {
   }
 
   it('is unknown before a run has loaded at all -- never guesses "none" too early', () => {
-    expect(deriveGalleryImportComingIndicator(null)).toEqual({ kind: 'unknown' });
-    expect(deriveGalleryImportComingIndicator(undefined)).toEqual({ kind: 'unknown' });
+    expect(deriveGalleryImportComingIndicator(null)).toEqual({ kind: 'unknown', moreHistory: false });
+    expect(deriveGalleryImportComingIndicator(undefined)).toEqual({ kind: 'unknown', moreHistory: false });
   });
 
   it.each(['completed', 'cancelled', 'expired', 'failed'] as const)('is none once the run is terminal (%s), regardless of a stale pendingClusters value', (status) => {
@@ -133,27 +134,76 @@ describe('deriveGalleryImportComingIndicator', () => {
   });
 
   it.each(['scanning', 'processing'] as const)('is unknown while %s -- more is coming by definition, before any count is meaningful', (status) => {
-    expect(deriveGalleryImportComingIndicator(run({ status, pendingClusters: 0 }))).toEqual({ kind: 'unknown' });
+    expect(deriveGalleryImportComingIndicator(run({ status, pendingClusters: 0 }))).toEqual({ kind: 'unknown', moreHistory: false });
   });
 
   it('is a real count while reviewing with a positive server-computed pendingClusters', () => {
     expect(deriveGalleryImportComingIndicator(run({ status: 'reviewing', pendingClusters: 7 })))
-      .toEqual({ kind: 'count', count: 7 });
+      .toEqual({ kind: 'count', count: 7, moreHistory: false });
   });
 
   // Round 4, device-tested finding: a real production run planned ~16
   // chunks/61 clusters locally while the server had only 4 chunks
   // completed -- the client's local count showed a phantom "+51 coming"
   // that never resolved. pendingClusters is server truth instead.
-  it('is none (not a stale local number) once reviewing with a server-confirmed zero pending', () => {
+  it('is none (not a stale local number) once reviewing with a server-confirmed zero pending and no local/history follow-up', () => {
     expect(deriveGalleryImportComingIndicator(run({ status: 'reviewing', pendingClusters: 0 })))
       .toEqual({ kind: 'none' });
   });
 
-  it('is unknown while reviewing when the server could not compute pendingClusters (null/absent)', () => {
+  it('is unknown while reviewing when the server could not compute pendingClusters (null/absent) and there is no local count', () => {
     expect(deriveGalleryImportComingIndicator(run({ status: 'reviewing', pendingClusters: null })))
-      .toEqual({ kind: 'unknown' });
+      .toEqual({ kind: 'unknown', moreHistory: false });
     expect(deriveGalleryImportComingIndicator(run({ status: 'reviewing', pendingClusters: undefined })))
-      .toEqual({ kind: 'unknown' });
+      .toEqual({ kind: 'unknown', moreHistory: false });
+  });
+
+  describe('S9: local planned/failed clusters and moreHistory', () => {
+    function checkpointWithChunks(chunks: GalleryImportCheckpoint['chunks']): Pick<GalleryImportCheckpoint, 'chunks'> {
+      return { chunks };
+    }
+
+    it('adds locally planned/failed (retryable) clusters to the server pending count', () => {
+      const checkpoint = checkpointWithChunks([
+        { ordinal: 0, status: 'planned', clusters: [{ clusterSignature: 'a', assetTokens: [] }, { clusterSignature: 'b', assetTokens: [] }], previewUploads: [] },
+        { ordinal: 1, status: 'failed', attempts: 1, clusters: [{ clusterSignature: 'c', assetTokens: [] }], previewUploads: [] },
+        { ordinal: 2, status: 'dispatched', clusters: [{ clusterSignature: 'd', assetTokens: [] }], previewUploads: [] },
+        { ordinal: 3, status: 'abandoned', attempts: 3, clusters: [], previewUploads: [] },
+      ]);
+      expect(deriveGalleryImportComingIndicator(run({ status: 'reviewing', pendingClusters: 5 }), checkpoint))
+        .toEqual({ kind: 'count', count: 8, moreHistory: false });
+    });
+
+    it('falls back to the local count alone when the server could not compute its own', () => {
+      const checkpoint = checkpointWithChunks([
+        { ordinal: 0, status: 'planned', clusters: [{ clusterSignature: 'a', assetTokens: [] }], previewUploads: [] },
+      ]);
+      expect(deriveGalleryImportComingIndicator(run({ status: 'reviewing', pendingClusters: null }), checkpoint))
+        .toEqual({ kind: 'count', count: 1, moreHistory: false });
+    });
+
+    it('is moreHistory true when the frontier has not proven the library is fully covered', () => {
+      const frontier = { completedLibrary: false, autoContinue: true };
+      expect(deriveGalleryImportComingIndicator(run({ status: 'reviewing', pendingClusters: 0 }), null, frontier))
+        .toEqual({ kind: 'count', count: 0, moreHistory: true });
+    });
+
+    it('is moreHistory false once the frontier proves the library is fully covered', () => {
+      const frontier = { completedLibrary: true, autoContinue: true };
+      expect(deriveGalleryImportComingIndicator(run({ status: 'reviewing', pendingClusters: 0 }), null, frontier))
+        .toEqual({ kind: 'none' });
+    });
+
+    it('is moreHistory false once autoContinue has been turned off, even with history left', () => {
+      const frontier = { completedLibrary: false, autoContinue: false };
+      expect(deriveGalleryImportComingIndicator(run({ status: 'reviewing', pendingClusters: 0 }), null, frontier))
+        .toEqual({ kind: 'none' });
+    });
+
+    it('a terminal run is always kind: none regardless of moreHistory', () => {
+      const frontier = { completedLibrary: false, autoContinue: true };
+      expect(deriveGalleryImportComingIndicator(run({ status: 'completed', pendingClusters: 9 }), null, frontier))
+        .toEqual({ kind: 'none' });
+    });
   });
 });

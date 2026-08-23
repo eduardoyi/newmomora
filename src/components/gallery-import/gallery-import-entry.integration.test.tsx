@@ -3,6 +3,7 @@ import { Linking } from 'react-native';
 
 import { GalleryImportEntry } from '@/components/gallery-import/gallery-import-entry';
 import { useBilling } from '@/hooks/use-billing';
+import { useGalleryImportEntryStatus } from '@/hooks/useGalleryImport';
 import { beginGalleryImportPipeline } from '@/utils/gallery-import-pipeline';
 
 const mockAdapter = { getPermission: jest.fn(), requestPermission: jest.fn(), presentPermissionPicker: jest.fn(), isAssetAvailableLocally: jest.fn(), resolveAssetUri: jest.fn(), getAssetFilename: jest.fn() };
@@ -25,7 +26,20 @@ jest.mock('@/utils/gallery-import-e2e-adapter', () => ({ getGalleryImportE2eAdap
 jest.mock('@/utils/gallery-import-scanner', () => ({ createExpoGalleryMediaLibraryAdapter: () => mockAdapter, getGalleryPhotoPermissionState: (value: any) => value.state }));
 jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/utils/gallery-import-pipeline', () => ({ beginGalleryImportPipeline: jest.fn() }));
-jest.mock('@/utils/gallery-import-checkpoint', () => ({ loadLatestGalleryImportCheckpoint: jest.fn(async () => null) }));
+// The device-bound status hook (docs/plans/gallery-import-continuous.md I4a
+// step 5) replaces this screen's own loadLatestGalleryImportCheckpoint
+// effect -- mocked wholesale so this file never needs a real QueryClient.
+jest.mock('@/hooks/useGalleryImport', () => ({ useGalleryImportEntryStatus: jest.fn() }));
+
+function entryStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    state: 'none', attentionReason: null, reviewDaysLeft: null, readyCount: 0,
+    checkpoint: null, run: null, isLoading: false, refetch: jest.fn(),
+    driverState: { phase: 'idle', runId: null, pausedUntil: null, lastError: null, isActive: false },
+    comingIndicator: { kind: 'none' },
+    ...overrides,
+  } as never;
+}
 
 function pressStart(screen: ReturnType<typeof render>) {
   fireEvent.press(screen.getByTestId('gallery-import-start'));
@@ -50,6 +64,7 @@ describe('gallery import entry', () => {
     mockAdapter.getPermission.mockResolvedValue({ state: 'full' });
     mockAdapter.requestPermission.mockResolvedValue({ state: 'full' });
     (useBilling as jest.Mock).mockReturnValue({ status: { has_write_access: true, has_ever_had_access: true } });
+    (useGalleryImportEntryStatus as jest.Mock).mockReturnValue(entryStatus());
   });
 
   it('gives the footer the shared solid-background/hairline-border treatment, and never stacks a second safe-area inset onto the trailing hint (the reported oversized-gap bug)', async () => {
@@ -171,5 +186,45 @@ describe('gallery import entry', () => {
     for (const banned of ['import', 'upload', 'scan', 'library', '—', '--']) {
       expect(visibleText).not.toContain(banned);
     }
+  });
+
+  // I4a step 5: an existing checkpoint now routes by state instead of
+  // always bouncing through progress, and only advertises "Pick up where
+  // you left off" once there is something ready to review.
+  describe('an existing checkpoint routes by state', () => {
+    it('routes straight to the review deck when suggestions are already ready, with the resume label', async () => {
+      (useGalleryImportEntryStatus as jest.Mock).mockReturnValue(entryStatus({
+        state: 'ready', readyCount: 5, checkpoint: { runId: 'run-1' },
+      }));
+      const { router } = jest.requireMock('expo-router');
+      const screen = render(<GalleryImportEntry />);
+      await waitFor(() => expect(screen.getByText('Pick up where you left off')).toBeTruthy());
+      pressStart(screen);
+      await waitFor(() => expect(router.replace).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/review', params: { runId: 'run-1' } }));
+      expect(beginGalleryImportPipeline).not.toHaveBeenCalled();
+    });
+
+    it('routes to progress, with the default label, when a checkpoint exists but nothing is ready yet', async () => {
+      (useGalleryImportEntryStatus as jest.Mock).mockReturnValue(entryStatus({
+        state: 'processing', readyCount: 0, checkpoint: { runId: 'run-1' },
+      }));
+      const { router } = jest.requireMock('expo-router');
+      const screen = render(<GalleryImportEntry />);
+      expect(screen.getByText('Look through my photos')).toBeTruthy();
+      pressStart(screen);
+      await waitFor(() => expect(router.replace).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/progress', params: { runId: 'run-1' } }));
+      expect(beginGalleryImportPipeline).not.toHaveBeenCalled();
+    });
+  });
+
+  it('gives the screen a single exit: no second footer dismiss button next to the primary action', async () => {
+    const screen = render(<GalleryImportEntry />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-entry')).toBeTruthy());
+    // The mocked KeyboardStickyShell above does not render `header`, so the
+    // top-bar "Not now" itself isn't observable here -- gallery-import-shared.tsx's
+    // own GalleryImportTopBar is unit-covered elsewhere. This only asserts
+    // the footer no longer duplicates it with a second dismiss control.
+    expect(screen.queryByTestId('gallery-import-not-now')).toBeNull();
+    expect(screen.queryByText('Maybe later')).toBeNull();
   });
 });

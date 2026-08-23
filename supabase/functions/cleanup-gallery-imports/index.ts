@@ -2,6 +2,7 @@ import { validateCronSecret } from '../_shared/cron.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { deleteObject } from '../_shared/r2.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { redispatchStaleGalleryChunks } from '../_shared/gallery-import.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 interface CleanupClaim { run_id: string; claim_token: string; }
@@ -10,12 +11,14 @@ export interface CleanupGalleryImportsDependencies {
   createServiceClient: typeof createServiceClient;
   deleteObject: typeof deleteObject;
   validateCronSecret: typeof validateCronSecret;
+  redispatchStaleGalleryChunks: typeof redispatchStaleGalleryChunks;
 }
 
 const DEFAULT_DEPENDENCIES: CleanupGalleryImportsDependencies = {
   createServiceClient,
   deleteObject,
   validateCronSecret,
+  redispatchStaleGalleryChunks,
 };
 
 /**
@@ -66,7 +69,14 @@ export async function handleCleanupGalleryImports(
   // authenticated scheduler so the bridge guard stays bounded over time.
   const { error: nonceCleanupError } = await client.rpc('cleanup_gallery_import_workflow_bridge_nonces', { p_limit: 500 });
   if (nonceCleanupError) console.error('cleanup-gallery-imports nonce cleanup failed', nonceCleanupError.code ?? 'unknown');
-  return jsonResponse({ success: true, completed });
+  // Reconciliation (S4, S6, S7): re-dispatch chunks stuck past their
+  // dispatch timeout (Workflow crash, ambiguous network failure, lost
+  // Cloudflare instance). Content-free logging: counts only.
+  const redispatch = await dependencies.redispatchStaleGalleryChunks({ serviceClient: client });
+  if (redispatch.claimed > 0) {
+    console.log('cleanup-gallery-imports redispatch', redispatch.claimed, redispatch.redispatched);
+  }
+  return jsonResponse({ success: true, completed, redispatched: redispatch.redispatched });
 }
 
 if (import.meta.main) Deno.serve((req) => handleCleanupGalleryImports(req));

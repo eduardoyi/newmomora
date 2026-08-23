@@ -23,11 +23,14 @@ describe('ImportInviteCard', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the approved "photos only for now" clarification and never says import/upload/scan/library in visible copy', () => {
+  it('renders eyebrow, title, and CTA only -- no body paragraph, shield line, or video note (all duplicated on the entry screen)', () => {
     const { getByText, queryByText } = render(<ImportInviteCard onDismiss={jest.fn()} onStart={jest.fn()} />);
 
-    expect(getByText('Momora suggests photos only for now.')).toBeTruthy();
+    expect(getByText('From your photos')).toBeTruthy();
+    expect(getByText('Your journal does not have to start empty.')).toBeTruthy();
     expect(getByText('Look through my photos')).toBeTruthy();
+    expect(queryByText('Momora suggests photos only for now.')).toBeNull();
+    expect(queryByText(/camera roll/i)).toBeNull();
 
     // Scoped to visible text nodes only -- testIDs like
     // "timeline-gallery-import-start" legitimately contain "import" and are

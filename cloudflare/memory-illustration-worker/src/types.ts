@@ -20,6 +20,7 @@ export type BridgeOperation =
   | 'mark_gallery_attempt_ambiguous'
   | 'publish_gallery_cluster_result'
   | 'fail_gallery_chunk'
+  | 'fail_gallery_cluster'
   | 'scrub_gallery_chunk';
 
 export interface ReferenceCandidate {
@@ -128,13 +129,16 @@ export interface WorkflowDispatchPayload {
 }
 
 /**
- * Gallery Workflows deliberately receive only a chunk ID.  Library asset IDs,
- * prompt text, captions, and image bytes must never be stored in Workflow
- * event/step state.  The narrow bridge returns this input inside the single
- * sensitive processing step instead.
+ * Gallery Workflows deliberately receive only a chunk ID (and, on a
+ * reconciliation re-dispatch, the attempt ordinal used to derive a distinct
+ * instance id -- see `gallery:${chunkId}[:${attempt}]` in `index.ts`).
+ * Library asset IDs, prompt text, captions, and image bytes must never be
+ * stored in Workflow event/step state.  The narrow bridge returns this input
+ * inside the per-cluster sensitive processing steps instead.
  */
 export interface GalleryWorkflowDispatchPayload {
   chunkId: string;
+  attempt?: number;
 }
 
 export type GalleryPreviewContentType = 'image/jpeg';

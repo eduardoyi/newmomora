@@ -154,4 +154,42 @@ describe('deriveGalleryImportProgressOutcome', () => {
     expect(deriveGalleryImportProgressOutcome(baseInput({ serverStatus: 'processing' })))
       .toEqual({ kind: 'stage', stage: 'processing', ready: 0, value: null, total: null, scannedAssetCount: null });
   });
+
+  describe('continuous model additions (S8/S9)', () => {
+    it('shows pausedFairUse when pausedUntil is in the future, ahead of offline/reviewing checks', () => {
+      const future = new Date(Date.now() + 60_000).toISOString();
+      expect(deriveGalleryImportProgressOutcome(baseInput({ pausedUntil: future, isOffline: true, serverStatus: 'reviewing', readyCount: 3 })))
+        .toEqual({ kind: 'stage', stage: 'pausedFairUse', ready: 3, value: null, total: null, scannedAssetCount: null });
+    });
+
+    it('does not show pausedFairUse once pausedUntil is in the past', () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const outcome = deriveGalleryImportProgressOutcome(baseInput({ pausedUntil: past, serverStatus: 'processing' }));
+      expect(outcome).not.toEqual(expect.objectContaining({ stage: 'pausedFairUse' }));
+    });
+
+    it('never reports "nothing stood out" while local chunks are still planned/retryable', () => {
+      expect(deriveGalleryImportProgressOutcome(baseInput({
+        serverStatus: 'reviewing', readyCount: 0, deckCursor: 0, localPlannedClusters: 2,
+      }))).toEqual({ kind: 'stage', stage: 'processing', ready: 0, value: null, total: null, scannedAssetCount: null });
+    });
+
+    it('surfaces a transient error over the empty outcome when reviewing with nothing ready or local left', () => {
+      expect(deriveGalleryImportProgressOutcome(baseInput({
+        serverStatus: 'reviewing', readyCount: 0, deckCursor: 0, hasTransientError: true,
+      }))).toEqual({ kind: 'exception', exception: 'errorRecoverable' });
+    });
+
+    it('shows doneLookingMoreHistory instead of the empty outcome when the frontier says more history remains', () => {
+      expect(deriveGalleryImportProgressOutcome(baseInput({
+        serverStatus: 'reviewing', readyCount: 0, deckCursor: 0, moreHistory: true,
+      }))).toEqual({ kind: 'stage', stage: 'doneLookingMoreHistory', ready: 0, value: null, total: null, scannedAssetCount: null });
+    });
+
+    it('still shows the plain empty outcome once settled with no local work, no error, and no more history', () => {
+      expect(deriveGalleryImportProgressOutcome(baseInput({
+        serverStatus: 'reviewing', readyCount: 0, deckCursor: 0, localPlannedClusters: 0, moreHistory: false,
+      }))).toEqual({ kind: 'empty', empty: 'nothing' });
+    });
+  });
 });

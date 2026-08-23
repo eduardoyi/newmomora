@@ -44,48 +44,60 @@ function collectRenderedText(node: unknown, out: string[] = []): string[] {
 }
 
 describe('GalleryImportTrustExplainer', () => {
-  it('never renders an em-dash or double-hyphen, including inside both detail sheets', async () => {
-    const screen = render(<GalleryImportTrustExplainer onCancel={jest.fn()} onContinue={jest.fn()} reviewDays={26} />);
+  it('never renders an em-dash or double-hyphen, including inside the details sheet', async () => {
+    const screen = render(<GalleryImportTrustExplainer onCancel={jest.fn()} onContinue={jest.fn()} />);
     expect(collectRenderedText(screen.toJSON()).join(' ')).not.toContain('—');
     expect(collectRenderedText(screen.toJSON()).join(' ')).not.toContain('--');
 
-    fireEvent.press(screen.getByTestId('gallery-import-trust-detail-What a preview is'));
-    await waitFor(() => expect(screen.getByTestId('gallery-import-trust-preview-sheet')).toBeTruthy());
-    let visibleText = collectRenderedText(screen.toJSON()).join(' ');
-    expect(visibleText).not.toContain('—');
-    expect(visibleText).not.toContain('--');
-    fireEvent.press(screen.getByTestId('gallery-import-trust-preview-sheet-close'));
-
-    fireEvent.press(screen.getByTestId('gallery-import-trust-detail-What is kept, and for how long'));
-    await waitFor(() => expect(screen.getByTestId('gallery-import-trust-retention-sheet')).toBeTruthy());
-    visibleText = collectRenderedText(screen.toJSON()).join(' ');
+    fireEvent.press(screen.getByTestId('gallery-import-trust-details'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-trust-details-sheet')).toBeTruthy());
+    const visibleText = collectRenderedText(screen.toJSON()).join(' ');
     expect(visibleText).not.toContain('—');
     expect(visibleText).not.toContain('--');
   });
 
-  it('shows the three trust cards and opens both detail sheets', async () => {
-    const onContinue = jest.fn();
-    const onCancel = jest.fn();
-    const screen = render(<GalleryImportTrustExplainer onCancel={onCancel} onContinue={onContinue} reviewDays={26} />);
-    expect(screen.getByText('Your phone does the looking')).toBeTruthy();
-    expect(screen.getByText(/Small previews are sent/)).toBeTruthy();
-    expect(screen.getByText('Only what you keep is saved')).toBeTruthy();
+  it('shows the three one-line facts and no numbered cards, pills, or badges', () => {
+    const screen = render(<GalleryImportTrustExplainer onCancel={jest.fn()} onContinue={jest.fn()} />);
+    expect(screen.getByText('Your phone reads dates and groups photos. Nothing is changed.')).toBeTruthy();
+    expect(screen.getByText(/Small previews go to Momora to write draft captions/)).toBeTruthy();
+    expect(screen.getByText('Only what you keep is saved. The rest clears on its own.')).toBeTruthy();
+    // The former per-card "detail" links are gone -- only one "Details"
+    // affordance remains for the whole screen.
+    expect(screen.queryByText('What a preview is')).toBeNull();
+  });
 
-    fireEvent.press(screen.getByTestId('gallery-import-trust-detail-What a preview is'));
-    await waitFor(() => expect(screen.getByTestId('gallery-import-trust-preview-sheet')).toBeTruthy());
+  it('opens a single merged Details sheet with every fact the two former sheets covered', async () => {
+    const screen = render(<GalleryImportTrustExplainer onCancel={jest.fn()} onContinue={jest.fn()} />);
+    fireEvent.press(screen.getByTestId('gallery-import-trust-details'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-trust-details-sheet')).toBeTruthy());
     // The detail sheet's own content must scroll rather than silently clip --
     // device testing found long sheet content unreachable.
-    expect(screen.getByTestId('gallery-import-trust-preview-sheet-scroll')).toBeTruthy();
-
-    fireEvent.press(screen.getByTestId('gallery-import-trust-detail-What is kept, and for how long'));
-    await waitFor(() => expect(screen.getByTestId('gallery-import-trust-retention-sheet')).toBeTruthy());
-    expect(screen.getByText(/Up to 26 days/)).toBeTruthy();
+    expect(screen.getByTestId('gallery-import-trust-details-sheet-scroll')).toBeTruthy();
+    expect(screen.getByText('What a preview is')).toBeTruthy();
+    expect(screen.getByText('Where it goes')).toBeTruthy();
+    expect(screen.getByText('How long it lasts')).toBeTruthy();
+    expect(screen.getByText('What is never sent')).toBeTruthy();
+    // "camera roll" is allowed exactly once on this screen, inside this
+    // merged sheet -- see the "camera roll" sweep test below.
+    expect(screen.getByText('Your camera roll')).toBeTruthy();
   });
 
-  it('gives Not now equal weight to the primary action', () => {
+  it('mentions "camera roll" only inside the details sheet, and nowhere else on this screen', async () => {
+    const screen = render(<GalleryImportTrustExplainer onCancel={jest.fn()} onContinue={jest.fn()} />);
+    expect(collectRenderedText(screen.toJSON()).join(' ')).not.toContain('camera roll');
+    fireEvent.press(screen.getByTestId('gallery-import-trust-details'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-trust-details-sheet')).toBeTruthy());
+    const occurrences = collectRenderedText(screen.toJSON()).join(' ').split('camera roll').length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it('gives Not now the screen\'s only exit, at the top bar, and Continue as the primary action', () => {
     const onContinue = jest.fn();
     const onCancel = jest.fn();
     const screen = render(<GalleryImportTrustExplainer onCancel={onCancel} onContinue={onContinue} />);
+    // The former duplicate footer "Not now" secondary button is gone --
+    // "Not now" now lives once, at the top bar.
+    expect(screen.queryByTestId('gallery-import-trust-cancel')).toBeNull();
     fireEvent.press(screen.getByTestId('gallery-import-trust-not-now'));
     expect(onCancel).toHaveBeenCalled();
     fireEvent.press(screen.getByTestId('gallery-import-trust-continue'));
@@ -138,7 +150,7 @@ describe('GalleryImportPermissionOutcome', () => {
     const kinds = ['limited', 'denied', 'blocked'] as const;
     for (const kind of kinds) {
       for (const platform of ['ios', 'android'] as const) {
-        const screen = render(<GalleryImportPermissionOutcome accessibleCount={4} kind={kind} onClose={jest.fn()} onPrimary={jest.fn()} onSecondary={jest.fn()} platform={platform} />);
+        const screen = render(<GalleryImportPermissionOutcome kind={kind} onClose={jest.fn()} onPrimary={jest.fn()} onSecondary={jest.fn()} platform={platform} />);
         const visibleText = collectRenderedText(screen.toJSON()).join(' ');
         expect(visibleText).not.toContain('—');
         expect(visibleText).not.toContain('--');
@@ -147,7 +159,7 @@ describe('GalleryImportPermissionOutcome', () => {
     }
   });
 
-  it('renders distinct copy and actions per permission outcome kind', () => {
+  it('renders distinct copy and actions per permission outcome kind, with no shield reassurance line', () => {
     const onPrimary = jest.fn();
     const onSecondary = jest.fn();
     const onClose = jest.fn();
@@ -166,6 +178,7 @@ describe('GalleryImportPermissionOutcome', () => {
 
     const blocked = render(<GalleryImportPermissionOutcome kind="blocked" onClose={onClose} onPrimary={onPrimary} onSecondary={onSecondary} />);
     expect(blocked.getByText(/has to/)).toBeTruthy();
+    expect(blocked.queryByText(/Momora will not ask you again here/)).toBeNull();
   });
 
   it('keeps Close distinct from the labeled secondary action', () => {

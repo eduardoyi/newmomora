@@ -9,8 +9,24 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyActivity, useMarkFamilyActivitySeen } from '@/hooks/useFamilyActivity';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
+import type { GalleryImportDriverPhase } from '@/services/gallery-import-driver';
 import { groupFamilyActivity, type FamilyActivityGroup } from '@/services/family-activity';
 import { getBottomSheetBottomPadding, shouldDismissBottomSheet } from '@/utils/bottom-sheet-dismiss';
+import type { GalleryImportComingIndicator } from '@/utils/gallery-import-deck';
+
+const GALLERY_IMPORT_SWEEP_ACTIVE_PHASES = new Set<GalleryImportDriverPhase>([
+  'scanning', 'preparing', 'uploading', 'dispatching',
+]);
+
+export interface FamilyActivitySheetGalleryImportProps {
+  readyCount: number;
+  comingIndicator: GalleryImportComingIndicator;
+  phase: GalleryImportDriverPhase;
+  /** Whole days until the suggestions clear, only when that is imminent
+   * (the entry state is 'expiring'); null otherwise. */
+  expiringInDays?: number | null;
+  onOpen: () => void;
+}
 
 export interface FamilyActivitySheetProps {
   visible: boolean;
@@ -19,6 +35,84 @@ export interface FamilyActivitySheetProps {
   onOpenComments: (memoryId: string) => void;
   onOpenApprovals: () => void;
   onInvite: () => void;
+  /** Continuous gallery-import sweep re-entry point
+   * (docs/plans/gallery-import-continuous.md I4a step 3): an ephemeral row
+   * pinned above the sections (and above the empty state). Unlike every
+   * other row here it is NOT an event kind, is never grouped, and is never
+   * persisted -- it is derived live from the caller's own device-bound
+   * status (see app/(app)/(tabs)/timeline.tsx). Omit entirely when there is
+   * no checkpoint/run for this device or the run has reached a terminal
+   * status -- see docs/features/family-activity.md's extension guide. */
+  galleryImport?: FamilyActivitySheetGalleryImportProps;
+}
+
+interface GalleryImportActivityRowCopy {
+  segments: Array<{ text: string; bold?: boolean }>;
+  showReviewPill: boolean;
+}
+
+/** Pure copy derivation for the pinned gallery-import row -- see the owner's
+ * verbatim decision recorded in docs/plans/gallery-import-continuous.md
+ * (I4a "Activity bell spec"). Order matters: ready > 0 always wins, even
+ * while a sweep is still technically active, because there is something
+ * concrete to act on right now. Returns null when there is nothing worth
+ * saying, which is how the row hides itself once a sweep genuinely has
+ * nothing in flight. */
+function describeGalleryImportActivityRow(props: FamilyActivitySheetGalleryImportProps): GalleryImportActivityRowCopy | null {
+  if (props.readyCount > 0) {
+    const noun = props.readyCount === 1 ? 'photo suggestion' : 'photo suggestions';
+    const expiring = typeof props.expiringInDays === 'number'
+      ? ` · clear in ${props.expiringInDays} ${props.expiringInDays === 1 ? 'day' : 'days'}`
+      : '';
+    return {
+      segments: [{ text: `${props.readyCount} ${noun}`, bold: true }, { text: ` ready to review${expiring}` }],
+      showReviewPill: true,
+    };
+  }
+  if (props.phase === 'paused_fair_use') {
+    return { segments: [{ text: 'Momora will keep looking tomorrow' }], showReviewPill: false };
+  }
+  if (props.phase === 'waiting_wifi') {
+    return { segments: [{ text: 'Needs Wi-Fi to keep going' }], showReviewPill: false };
+  }
+  if (props.phase === 'error') {
+    return { segments: [{ text: 'Something needs a second look' }], showReviewPill: false };
+  }
+  const sweepActive = props.comingIndicator.kind !== 'none' || GALLERY_IMPORT_SWEEP_ACTIVE_PHASES.has(props.phase);
+  if (sweepActive) {
+    return { segments: [{ text: 'Momora is still looking through your photos' }], showReviewPill: false };
+  }
+  return null;
+}
+
+function GalleryImportActivityRow({ galleryImport, onPress }: { galleryImport: FamilyActivitySheetGalleryImportProps; onPress: () => void }) {
+  const copy = describeGalleryImportActivityRow(galleryImport);
+  if (!copy) return null;
+  const label = copy.segments.map((segment) => segment.text).join('');
+  return (
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [galleryRowStyles.row, pressed && galleryRowStyles.rowPressed]}
+      testID="family-activity-gallery-import-row"
+    >
+      <View style={galleryRowStyles.textBlock}>
+        <Text style={galleryRowStyles.sentence}>
+          {copy.segments.map((segment, index) => (
+            <Text key={index} style={segment.bold ? galleryRowStyles.sentenceBold : galleryRowStyles.sentenceRegular}>
+              {segment.text}
+            </Text>
+          ))}
+        </Text>
+      </View>
+      {copy.showReviewPill ? (
+        <View style={galleryRowStyles.reviewPill} testID="family-activity-gallery-import-row-review">
+          <Text style={galleryRowStyles.reviewPillText}>Review</Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
 }
 
 function SkeletonRow({ testID }: { testID: string }) {
@@ -39,6 +133,7 @@ interface FamilyActivitySheetBodyProps {
   onOpenComments: (memoryId: string) => void;
   onOpenApprovals: () => void;
   onInvite: () => void;
+  galleryImport?: FamilyActivitySheetGalleryImportProps;
 }
 
 /**
@@ -58,6 +153,7 @@ function FamilyActivitySheetBody({
   onOpenComments,
   onOpenApprovals,
   onInvite,
+  galleryImport,
 }: FamilyActivitySheetBodyProps) {
   const { familyId } = useFamily();
   const { profiles } = useFamilyMemberProfiles(familyId);
@@ -116,6 +212,14 @@ function FamilyActivitySheetBody({
     runAfterClose(() => onInvite());
   };
 
+  const handleGalleryImportPress = () => {
+    if (!galleryImport) return;
+    runAfterClose(() => galleryImport.onOpen());
+  };
+  const galleryImportRow = galleryImport
+    ? <GalleryImportActivityRow galleryImport={galleryImport} onPress={handleGalleryImportPress} />
+    : null;
+
   if (isLoading) {
     return (
       <View testID="family-activity-sheet-loading">
@@ -139,21 +243,25 @@ function FamilyActivitySheetBody({
 
   if (sections.length === 0) {
     return (
-      <View style={styles.emptyState} testID="family-activity-sheet-empty">
-        <Text style={styles.emptyTitle}>
-          {"Quiet for now. When someone adds a moment or leaves a comment, it'll show up here."}
-        </Text>
-        {activeMemberCount === 1 ? (
-          <Pressable accessibilityRole="button" onPress={handleInvite} testID="family-activity-sheet-invite">
-            <Text style={styles.inviteLink}>Invite a family member</Text>
-          </Pressable>
-        ) : null}
+      <View testID="family-activity-sheet-empty-wrap">
+        {galleryImportRow}
+        <View style={styles.emptyState} testID="family-activity-sheet-empty">
+          <Text style={styles.emptyTitle}>
+            {"Quiet for now. When someone adds a moment or leaves a comment, it'll show up here."}
+          </Text>
+          {activeMemberCount === 1 ? (
+            <Pressable accessibilityRole="button" onPress={handleInvite} testID="family-activity-sheet-invite">
+              <Text style={styles.inviteLink}>Invite a family member</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
     );
   }
 
   return (
     <SectionList
+      ListHeaderComponent={galleryImportRow}
       contentContainerStyle={styles.listContent}
       keyExtractor={(group) => group.id}
       renderItem={({ item }) => <FamilyActivityRow group={item} onPress={() => handleRowPress(item)} />}
@@ -173,6 +281,7 @@ export function FamilyActivitySheet({
   onOpenComments,
   onOpenApprovals,
   onInvite,
+  galleryImport,
 }: FamilyActivitySheetProps) {
   const insets = useSafeAreaInsets();
   const drawerTranslateY = useSharedValue(0);
@@ -280,6 +389,7 @@ export function FamilyActivitySheet({
           </GestureDetector>
 
           <FamilyActivitySheetBody
+            galleryImport={galleryImport}
             onClose={onClose}
             onInvite={onInvite}
             onOpenApprovals={onOpenApprovals}
@@ -356,4 +466,34 @@ const styles = StyleSheet.create({
   skeletonLine: { backgroundColor: colors.surface, borderRadius: radius.sm, height: 10 },
   skeletonLineWide: { width: '80%' },
   skeletonLineNarrow: { width: '45%' },
+});
+
+// The pinned gallery-import row's own styles -- deliberately mirrors
+// FamilyActivityRow's sentence/pill treatment (same tokens, no avatar,
+// text-first) rather than importing that component's private StyleSheet, so
+// this ephemeral, non-persisted row can evolve independently of the real
+// event row.
+const galleryRowStyles = StyleSheet.create({
+  row: {
+    alignItems: 'center',
+    backgroundColor: colors.primaryTint,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 11,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 14,
+  },
+  rowPressed: { opacity: 0.82 },
+  textBlock: { flex: 1, minWidth: 0 },
+  sentence: { color: colors.ink, fontFamily: fonts.sans, fontSize: 14, lineHeight: 20 },
+  sentenceBold: { fontFamily: fonts.sansBold },
+  sentenceRegular: { fontFamily: fonts.sans },
+  reviewPill: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  reviewPillText: { color: colors.white, fontFamily: fonts.sansBold, fontSize: 12.5 },
 });

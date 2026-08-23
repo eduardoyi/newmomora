@@ -184,6 +184,7 @@ export function buildGalleryCurationPrompt(cluster: GalleryClusterInput, locale:
   const rules = [
     'These photos share only a time window; decide whether they hold a real family memory worth keeping. Many clusters hold nothing worth keeping, so return zero groups rather than force one.',
     'Prefer meaningful photos with people, especially children. Across a cluster, select for variety across its arc, not near-duplicates of one pose.',
+    'Near-duplicates rule (hard): never select two photos that look alike — the same framing, pose, people and scene within moments of each other (burst shots, retakes, slight angle or expression changes). From every such set pick exactly ONE, the best one. Most groups should have 1–4 photos; add a fifth or more only when each added photo shows something clearly different — a different activity, a different person, or a different place. Fewer, distinct photos beat a larger, repetitive set.',
     'Exclude screenshots, photos of screens or TVs, documents, whiteboards, and receipts. Exclude food-only photos with no people unless they are clearly part of a family moment.',
     'Never invent names, relationships, ages, places, occasions, or identity. Do not identify people.',
     'Use only the opaque asset tokens supplied below. Select 1–10 distinct tokens per group, with no token in two groups.',

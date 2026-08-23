@@ -91,6 +91,13 @@ export async function failGalleryChunk(
   await callGalleryBridge<unknown>(env, 'fail_gallery_chunk', payload);
 }
 
+export async function failGalleryCluster(
+  env: Env,
+  payload: { chunkId: string; clusterSignature: string; errorCode: string },
+): Promise<void> {
+  await callGalleryBridge<unknown>(env, 'fail_gallery_cluster', payload);
+}
+
 export async function scrubGalleryChunk(env: Env, chunkId: string): Promise<void> {
   await callGalleryBridge<unknown>(env, 'scrub_gallery_chunk', { chunkId });
 }

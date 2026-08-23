@@ -1411,6 +1411,7 @@ export type Database = {
       }
       gallery_import_admission_settings: {
         Row: {
+          daily_cluster_limit: number
           enabled: boolean
           initial_run_limit: number
           initial_window: string
@@ -1423,6 +1424,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          daily_cluster_limit?: number
           enabled?: boolean
           initial_run_limit?: number
           initial_window?: string
@@ -1435,6 +1437,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          daily_cluster_limit?: number
           enabled?: boolean
           initial_run_limit?: number
           initial_window?: string
@@ -1546,6 +1549,7 @@ export type Database = {
           preview_uploaded_at: string | null
           preview_width: number | null
           run_id: string
+          unavailable_at: string | null
           width: number | null
         }
         Insert: {
@@ -1566,6 +1570,7 @@ export type Database = {
           preview_uploaded_at?: string | null
           preview_width?: number | null
           run_id: string
+          unavailable_at?: string | null
           width?: number | null
         }
         Update: {
@@ -1586,6 +1591,7 @@ export type Database = {
           preview_uploaded_at?: string | null
           preview_width?: number | null
           run_id?: string
+          unavailable_at?: string | null
           width?: number | null
         }
         Relationships: [
@@ -1712,6 +1718,7 @@ export type Database = {
           created_at: string
           declared_asset_count: number
           declared_cluster_count: number
+          dispatch_attempts: number
           dispatched_at: string | null
           id: string
           ordinal: number
@@ -1729,6 +1736,7 @@ export type Database = {
           created_at?: string
           declared_asset_count: number
           declared_cluster_count: number
+          dispatch_attempts?: number
           dispatched_at?: string | null
           id?: string
           ordinal: number
@@ -1746,6 +1754,7 @@ export type Database = {
           created_at?: string
           declared_asset_count?: number
           declared_cluster_count?: number
+          dispatch_attempts?: number
           dispatched_at?: string | null
           id?: string
           ordinal?: number
@@ -3430,6 +3439,14 @@ export type Database = {
         }
         Returns: boolean
       }
+      claim_stale_gallery_chunks: {
+        Args: { p_limit?: number }
+        Returns: {
+          chunk_id: string
+          dispatch_attempts: number
+          run_id: string
+        }[]
+      }
       cleanup_gallery_import_workflow_bridge_nonces: {
         Args: { p_limit?: number }
         Returns: number
@@ -3702,6 +3719,14 @@ export type Database = {
         Args: { p_chunk_id: string; p_closed_error_code: string }
         Returns: boolean
       }
+      fail_gallery_cluster: {
+        Args: {
+          p_chunk_id: string
+          p_closed_error_code: string
+          p_cluster_signature: string
+        }
+        Returns: boolean
+      }
       fail_memory_illustration_workflow_job: {
         Args: { p_error_code: string; p_job_id: string }
         Returns: {
@@ -3812,6 +3837,10 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      gallery_import_touch_run: {
+        Args: { p_run_id: string }
+        Returns: undefined
+      }
       gallery_import_uuid_array_is_distinct: {
         Args: { p_values: string[] }
         Returns: boolean
@@ -3909,6 +3938,10 @@ export type Database = {
         Returns: {
           object_key: string
         }[]
+      }
+      get_gallery_import_fair_use: {
+        Args: { p_family_id: string }
+        Returns: Json
       }
       get_gallery_import_run: {
         Args: { p_capability: string; p_run_id: string }
@@ -4031,6 +4064,15 @@ export type Database = {
       mark_gallery_chunk_dispatched: {
         Args: { p_chunk_id: string; p_workflow_id: string }
         Returns: boolean
+      }
+      mark_gallery_import_assets_unavailable: {
+        Args: {
+          p_asset_tokens: string[]
+          p_capability: string
+          p_chunk_id: string
+          p_run_id: string
+        }
+        Returns: Json
       }
       mark_looking_back_package_viewed: {
         Args: { p_completed?: boolean; p_package_id: string }

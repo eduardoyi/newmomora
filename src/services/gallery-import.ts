@@ -1,10 +1,11 @@
-import { FunctionsHttpError } from '@supabase/supabase-js';
+import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js';
 
 import {
   normalizeGalleryCaptionLocale,
   validateGalleryCaptionInstructions,
   type GalleryCaptionLocaleTag,
 } from '@/constants/gallery-caption-locales';
+import { GALLERY_IMPORT_EDGE_TIMEOUT_MS } from '@/constants/gallery-import';
 import { supabase } from '@/lib/supabase';
 import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
 import { invokeGalleryImportE2e } from '@/utils/gallery-import-e2e-adapter';
@@ -12,6 +13,9 @@ import { invokeGalleryImportE2e } from '@/utils/gallery-import-e2e-adapter';
 export interface GalleryImportServiceError {
   message: string;
   code?: string;
+  /** Present only for a `code: 'fair_use'` error (S2, HTTP 429): seconds
+   * until the family's rolling daily cluster limit frees up. */
+  retryAfterSeconds?: number;
 }
 
 export interface GalleryImportLimits {
@@ -35,6 +39,18 @@ export interface GalleryImportRun {
    * `null`/absent means the server could not compute it; never render a
    * number in that case. */
   pendingClusters?: number | null;
+  /** S1: every chunk registered for this run so far, ordered by ordinal.
+   * Absent/undefined only for a server response predating this field (older
+   * cached data) -- treat the same as an empty array. */
+  chunks?: Array<{ ordinal: number; status: 'registered' | 'uploading' | 'dispatched' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'expired' }>;
+  /** S1: selected asset tokens of every candidate currently `staged` or
+   * `skipped` (i.e. still "live" -- not yet approved/expired). Used by
+   * `pruneGalleryImportCheckpoint` to keep the day-pool photo chooser's
+   * source data alive even after its own chunk becomes server-terminal. */
+  liveCandidateAssetTokens?: string[];
+  /** S1: the family's rolling 24h fair-use window. `pausedUntil` is an ISO
+   * timestamp once the daily cluster limit is hit, else `null`. */
+  fairUse?: { pausedUntil: string | null };
 }
 
 /** A curation draft. It deliberately contains no model explanation or emotion. */
@@ -94,17 +110,26 @@ export interface GalleryCaptionSettings {
 async function mapError(error: unknown): Promise<GalleryImportServiceError> {
   if (error instanceof FunctionsHttpError) {
     try {
-      const body = (await error.context.clone().json()) as { error?: unknown; code?: unknown };
+      const body = (await error.context.clone().json()) as { error?: unknown; code?: unknown; retryAfterSeconds?: unknown };
       if (typeof body.error === 'string' && body.error.length > 0) {
         return {
           message: body.error,
           code: typeof body.code === 'string' ? body.code : String(error.context.status),
+          ...(typeof body.retryAfterSeconds === 'number' ? { retryAfterSeconds: body.retryAfterSeconds } : {}),
         };
       }
     } catch {
       // Fall through to the transport message when the response is not JSON.
     }
     return { message: error.message, code: String(error.context.status) };
+  }
+  // `supabase.functions.invoke`'s own `timeout` option (used below) aborts
+  // the underlying fetch via AbortController on expiry, which surfaces here
+  // as a FunctionsFetchError wrapping an AbortError -- map it to a
+  // distinguishable, content-free, retryable code instead of a generic
+  // transport failure message.
+  if (error instanceof FunctionsFetchError && (error.context as { name?: unknown } | undefined)?.name === 'AbortError') {
+    return { message: 'The gallery import service took too long to respond. Your place is saved — try again.', code: 'timeout' };
   }
   return { message: error instanceof Error ? error.message : 'The gallery import service failed.' };
 }
@@ -126,7 +151,7 @@ async function invokeGalleryImport<T>(
   } catch (error) {
     return { data: null, error: { message: error instanceof Error ? error.message : 'The gallery E2E fixture failed.' } };
   }
-  const { data, error } = await supabase.functions.invoke<T>(functionName, { body });
+  const { data, error } = await supabase.functions.invoke<T>(functionName, { body, timeout: GALLERY_IMPORT_EDGE_TIMEOUT_MS });
   if (error) return { data: null, error: await mapError(error) };
   if (!data && !options.allowEmptyData) return { data: null, error: { message: 'The gallery import service returned no data.' } };
   return { data, error: null };
@@ -189,6 +214,11 @@ export function dispatchGalleryImportChunk(input: {
     byteLength: number;
     sha256: string;
   }>;
+  /** S3: assets admitted at registration that this device could no longer
+   * produce a preview for (e.g. deleted or gone cloud-only mid-run). The
+   * server drops them from the chunk manifest, suppresses clusters left
+   * empty, and dispatches the rest. */
+  unavailableAssetTokens?: string[];
 }): Promise<{ data: { accepted: boolean } | null; error: GalleryImportServiceError | null }> {
   return invokeGalleryImport('dispatch-gallery-import-chunk', input);
 }

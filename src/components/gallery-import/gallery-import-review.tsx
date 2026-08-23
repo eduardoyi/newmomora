@@ -6,7 +6,7 @@
 // ledger and per-suggestion ticks -- never a completion bar over a total
 // Momora cannot know yet.
 import { Image } from 'expo-image';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -34,10 +34,11 @@ import {
   type GalleryDeckSwipeDirection,
   type GalleryImportComingIndicator,
 } from '@/utils/gallery-import-deck';
+import { loadGalleryImportFrontier, type GalleryImportFrontier } from '@/utils/gallery-import-frontier';
 
 import { GalleryImportDeckCard } from './gallery-import-deck-card';
 import { GalleryImportPhotoChooser, GalleryImportSetAsideSheet } from './gallery-import-review-sheets';
-import { DeviceBoundNotice, gi, humanError, styles as sharedStyles, useRunCheckpoint } from './gallery-import-shared';
+import { DeviceBoundNotice, exitGalleryImportToTimeline, gi, humanError, styles as sharedStyles, useRunCheckpoint } from './gallery-import-shared';
 
 const DECK_TICK_MAX = 12;
 
@@ -68,7 +69,20 @@ function reconcileSessionKept(runId: string, liveCandidates: GalleryImportCandid
 }
 
 export function GalleryImportReview({ runId }: { runId?: string }) {
-  const { checkpoint, isLoading, update: updateCheckpoint, userId, familyId } = useRunCheckpoint(runId);
+  const { checkpoint, isLoading, refresh: refreshCheckpoint, update: updateCheckpoint, userId, familyId } = useRunCheckpoint(runId);
+  // The composer (pushed on top of this deck) and the app-root driver both
+  // write the checkpoint in storage while this screen stays mounted, so the
+  // in-memory copy here goes stale. Re-read it whenever the deck regains
+  // focus -- otherwise an approval outbox item captured mid-save kept
+  // `pendingApproval` truthy after the composer had already finalized and
+  // cleared it, which gated the candidate poll off and left the deck on its
+  // redirect spinner forever (device-observed 2026-08-23).
+  const [isFocused, setIsFocused] = useState(false);
+  useFocusEffect(useCallback(() => {
+    setIsFocused(true);
+    void refreshCheckpoint();
+    return () => setIsFocused(false);
+  }, [refreshCheckpoint]));
   const reducedMotion = useReducedMotion();
   const [candidates, setCandidates] = useState<GalleryImportCandidate[]>([]);
   // Round 4, device-tested finding: the local checkpoint plan (chunks the
@@ -109,7 +123,21 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
   // to Keep: cancelling the composer must still return the same card, and
   // Keep never mutates `candidates` in the first place.
   const asideInFlightIdsRef = useRef<Set<string>>(new Set());
+  // Bumped by every local candidate mutation (set aside / bring back). A
+  // candidates refresh that STARTED before a mutation must not apply its
+  // (now stale) response: the 9 s poll was racing the skip call, and a
+  // response that left the server moments before the skip committed put the
+  // just-dismissed card straight back on top of the deck, so it had to be
+  // dismissed twice (device-observed 2026-08-23).
+  const mutationSeqRef = useRef(0);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [frontier, setFrontier] = useState<GalleryImportFrontier | null>(null);
+  // Set when the server refuses to complete the run with a "still has work"
+  // error (S9/step 7) -- `comingIndicator` alone may not have caught up to
+  // that fact yet (this device's own view of pending/local chunks can be a
+  // beat behind), so this flag forces the between-batches branch even if
+  // `comingIndicator.kind` still reads 'none' at the moment the error lands.
+  const [forceBetweenBatches, setForceBetweenBatches] = useState(false);
   const pendingApproval = checkpoint?.approvalOutbox[0] ?? null;
   const orphanedApproval = pendingApproval ? null : candidates.find((candidate) => candidate.status === 'approving') ?? null;
   const activeCandidates = candidates.filter(
@@ -123,29 +151,51 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
   const deckTotal = Math.max(checkpoint?.deckTotal ?? 0, candidates.length, 1);
   const deckPosition = Math.min((checkpoint?.deckCursor ?? 0) + 1, deckTotal);
   const keptCount = Math.max(0, (checkpoint?.deckCursor ?? 0) - setAside.length);
-  // Server truth (round 4): 'none' only once the run is genuinely terminal,
-  // or 'reviewing' with a server-confirmed zero clusters pending -- the only
-  // conditions honest enough to call the queue caught up. See
-  // deriveGalleryImportComingIndicator's own doc comment for why the local
-  // checkpoint plan can never answer this question correctly across a resume.
-  const comingIndicator = deriveGalleryImportComingIndicator(run);
+  // Server truth (round 4), now folding in local planned/failed chunks and
+  // the frontier's own moreHistory (S9) -- 'none' only once the run is
+  // genuinely terminal, or 'reviewing' with a server-confirmed zero clusters
+  // pending AND nothing local still unsettled AND the frontier says the
+  // library is fully covered. See deriveGalleryImportComingIndicator's own
+  // doc comment for why the local checkpoint plan alone can never answer
+  // this question correctly across a resume.
+  const comingIndicator = deriveGalleryImportComingIndicator(run, checkpoint, frontier);
   const isRunTerminal = isGalleryImportRunTerminal(run?.status);
   const dayPool = useMemo(
     () => checkpoint && current ? buildGalleryImportDayPool(checkpoint, current.selectedAssetTokens) : [],
     [checkpoint, current],
   );
   const sessionKept = (runId ? sessionKeptByRun.get(runId) : undefined) ?? [];
+  // The server's own ready count, when known -- every "N left"/"N ready"
+  // surface reads this instead of the locally-fetched `activeCandidates`
+  // length (get-candidates' page may lag or omit rows a concurrent poll on
+  // another device already changed).
+  const readyCandidateCount = run?.readyCandidates ?? activeCandidates.length;
 
   useEffect(() => () => { if (exitTimerRef.current) clearTimeout(exitTimerRef.current); }, []);
   useEffect(() => {
-    if (!pendingApproval || !runId || redirectedApprovalLeaseRef.current === pendingApproval.leaseId) return;
+    if (!userId || !familyId) { setFrontier(null); return; }
+    let cancelled = false;
+    void loadGalleryImportFrontier(userId, familyId).then((next) => {
+      if (!cancelled) setFrontier(next);
+    });
+    return () => { cancelled = true; };
+  }, [userId, familyId]);
+  useEffect(() => {
+    // Only the FOCUSED deck may redirect to a pending approval: while the
+    // composer is pushed on top, the deck's checkpoint re-reads legitimately
+    // see that composer's own in-flight outbox item, and redirecting from
+    // underneath replaced routes under a live save (device-observed
+    // 2026-08-23). Relaunch recovery still works -- the deck is focused then.
+    if (!isFocused || !pendingApproval || !runId || redirectedApprovalLeaseRef.current === pendingApproval.leaseId) return;
     redirectedApprovalLeaseRef.current = pendingApproval.leaseId;
     router.replace({ pathname: '/(app)/gallery-import/approve' as never, params: { runId, candidateId: pendingApproval.candidateId } });
-  }, [pendingApproval, runId]);
+  }, [isFocused, pendingApproval, runId]);
   useEffect(() => {
-    if (!orphanedApproval || !runId) return;
+    // Same focus gate as above: the candidate poll can observe the composer's
+    // own candidate in its transient 'approving' state while it is on top.
+    if (!isFocused || !orphanedApproval || !runId) return;
     router.replace({ pathname: '/(app)/gallery-import/approve' as never, params: { runId, candidateId: orphanedApproval.id } });
-  }, [orphanedApproval, runId]);
+  }, [isFocused, orphanedApproval, runId]);
   // Round 4: this used to gate a manual "Check again" empty/refreshing
   // screen (killed below -- see the removed branch's history). There is no
   // more a quiet-vs-loud distinction to make: candidates always refresh the
@@ -153,9 +203,13 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
   // to trigger this by hand.
   const refresh = useCallback(async () => {
     if (!checkpoint || !runId || pendingApproval) return;
+    const startSeq = mutationSeqRef.current;
     try {
       const response = await getGalleryImportCandidates({ runId, capability: checkpoint.runCapability });
       if (response.error) throw new Error(response.error.message);
+      // A mutation landed while this request was in flight -- its response
+      // predates that mutation. Drop it; the next poll fetches fresh state.
+      if (mutationSeqRef.current !== startSeq) return;
       const nextCandidates = response.data?.candidates ?? [];
       const skippedCount = nextCandidates.filter((candidate) => candidate.status === 'skipped').length;
       await updateCheckpoint((currentCheckpoint) => ({
@@ -185,6 +239,21 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
     }
   }, [checkpoint?.runCapability, pendingApproval, runId, updateCheckpoint]);
   useEffect(() => { void refresh(); }, [refresh]);
+  // Self-healing hero: a front card with no preview URL (seen on device as
+  // the pink placeholder that "loaded after a bit") or one whose signed URL
+  // has expired (expo-image onError) triggers one quiet re-sign per
+  // candidate instead of waiting for the next 9 s poll.
+  const resignedHeroIdsRef = useRef<Set<string>>(new Set());
+  const resignHeroFor = useCallback((candidateId: string) => {
+    if (resignedHeroIdsRef.current.has(candidateId)) return;
+    resignedHeroIdsRef.current.add(candidateId);
+    void refresh();
+  }, [refresh]);
+  const currentHeroId = current?.id ?? null;
+  const currentHasHero = Boolean(current?.previewUrls?.length);
+  useEffect(() => {
+    if (currentHeroId && !currentHasHero) resignHeroFor(currentHeroId);
+  }, [currentHeroId, currentHasHero, resignHeroFor]);
   // Round 4: server truth for "is more still coming" -- see the doc comment
   // on `comingIndicator` above and deriveGalleryImportComingIndicator's own
   // (gallery-import-deck.ts) for why the local checkpoint plan can't answer
@@ -212,11 +281,16 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
   useEffect(() => {
     if (!hasCheckpoint || !runId || isRunTerminal) return;
     const timer = setInterval(() => {
+      // While an approval outbox item is pending, the candidate refresh is
+      // deliberately off (see `refresh`), but the checkpoint itself must keep
+      // being re-read so a finished/cleared outbox is noticed (see the
+      // useFocusEffect above for the device-observed deadlock this avoids).
+      void refreshCheckpoint();
       void refresh();
       void refreshRun();
     }, 9_000);
     return () => clearInterval(timer);
-  }, [hasCheckpoint, isRunTerminal, refresh, refreshRun, runId]);
+  }, [hasCheckpoint, isRunTerminal, refresh, refreshCheckpoint, refreshRun, runId]);
   // The aside sheet always opens over freshly signed preview URLs; a stale
   // row would otherwise render an empty thumbnail after the 5-minute expiry.
   const openAsideSheet = useCallback(() => {
@@ -224,7 +298,18 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
     void refresh();
   }, [refresh]);
 
-  const changeSkip = useCallback(async (candidate: GalleryImportCandidate, skip: boolean) => {
+  // Deliberately NOT wrapped in useCallback: the React Compiler's own
+  // dependency inference for this closure (which mixes ref mutations, a
+  // conditional early return, and a try/catch/finally) does not agree with
+  // any manually-specified dependency array we can write by hand -- lint
+  // previously flagged this as "Compilation Skipped: Existing memoization
+  // could not be preserved" (inferred dep `setActionError`, vs. the
+  // then-listed `[checkpoint, refresh, runId, updateCheckpoint]`). There is
+  // nothing costly enough in this component's render to need this memoized
+  // (it is one of several handlers on a single-card screen), so the
+  // straightforward fix is to stop asserting a memoization the compiler
+  // itself cannot verify.
+  const changeSkip = async (candidate: GalleryImportCandidate, skip: boolean) => {
     if (!checkpoint || !runId || actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     setIsActioning(true);
@@ -232,6 +317,7 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
     try {
       const result = await setGalleryImportCandidateSkip({ candidateId: candidate.id, capability: checkpoint.runCapability, skip });
       if (result.error || !result.data) { setActionError(result.error?.message ?? 'Could not update this suggestion.'); return; }
+      mutationSeqRef.current += 1;
       await updateCheckpoint((currentCheckpoint) => ({
         ...currentCheckpoint,
         deckCursor: Math.max(0, currentCheckpoint.deckCursor + (skip ? 1 : -1)),
@@ -265,7 +351,7 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
       // intentional retry-visible behaviour (unchanged by this fix).
       asideInFlightIdsRef.current.delete(candidate.id);
     }
-  }, [checkpoint, refresh, runId, updateCheckpoint]);
+  };
 
   // One commit path for swipe, buttons, and screen-reader actions: play the
   // 240ms exit (90ms under reduced motion), then act.
@@ -278,7 +364,13 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
       if (direction === 'keep') {
         recordSessionKeep(runId, commitTarget);
         trackEvent('gallery_import_candidate_actioned', { action: 'keep' });
-        router.push({ pathname: '/(app)/gallery-import/approve' as never, params: { runId, candidateId: commitTarget.id } });
+        // Hand the approval screen the server's own ready count up front
+        // (it accepts an optional readyCount prop and still refreshes it in
+        // the background) -- see app/(app)/gallery-import/approve.tsx.
+        router.push({
+          pathname: '/(app)/gallery-import/approve' as never,
+          params: { runId, candidateId: commitTarget.id, readyCount: String(readyCandidateCount) },
+        });
         setExitDirection(null);
         setExitingCandidateId(null);
       } else {
@@ -294,14 +386,11 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
         });
       }
     }, reducedMotion ? GALLERY_DECK_REDUCED_EXIT_DURATION_MS : GALLERY_DECK_EXIT_DURATION_MS);
-  }, [changeSkip, current, exitDirection, isActioning, reducedMotion, runId]);
+  }, [changeSkip, current, exitDirection, isActioning, readyCandidateCount, reducedMotion, runId]);
 
   const finish = async () => {
     if (!checkpoint || !runId || !userId || !familyId) return;
-    // Chunks can still be staging server-side (round 3/4, "+N coming" is now
-    // server truth): the server currently still permits completing a run
-    // with in-flight chunks, so this client must not be the one to offer
-    // it. The done state itself is only reachable once comingIndicator is
+    // The done state itself is only reachable once comingIndicator is
     // 'none' (see the between-batches branch below), so this is
     // belt-and-suspenders -- route to plain navigation instead of ever
     // completing early.
@@ -313,13 +402,24 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
     // error. Just clear local state and leave, the same outcome either way.
     if (run?.status === 'reviewing') {
       const result = await completeGalleryImportRun({ runId, capability: checkpoint.runCapability });
-      if (result.error) { setActionError(result.error.message); return; }
+      if (result.error) {
+        // The server refuses to complete a run with reviewable candidates or
+        // in-flight chunks still outstanding (I1 step 4) -- both surface as
+        // the same generic `not_available` code, and both mean the exact
+        // same thing to this screen: it is not actually done. Refresh and
+        // fall back to the between-batches view rather than a bare error
+        // string next to the Finish button.
+        setForceBetweenBatches(true);
+        void refresh();
+        void refreshRun();
+        return;
+      }
     }
     await Promise.all([clearGalleryImportCheckpoint(userId, familyId, runId), clearGalleryImportPreviewCache(runId)]);
     sessionKeptByRun.delete(runId);
-    router.replace('/(app)/(tabs)/timeline');
+    exitGalleryImportToTimeline();
   };
-  const exitToTimeline = () => router.replace('/(app)/(tabs)/timeline');
+  const exitToTimeline = () => exitGalleryImportToTimeline();
 
   if (isLoading) return <View style={sharedStyles.center}><ActivityIndicator color={colors.primary} /></View>;
   if (!checkpoint) return <DeviceBoundNotice />;
@@ -347,7 +447,10 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
   );
 
   // A place to stop -- gi-review.jsx GIRestPoint. The cursor already
-  // persists, so leaving is safe; continuing is one tap.
+  // persists, so leaving is safe; continuing is one tap. Minimal per the
+  // I4a copy principle: eyebrow · title · "N more ready." · buttons, no
+  // boxed reassurance ("your place is saved" lives once on the trust
+  // screen -- see docs/design/gallery-import/README.md).
   if (current && isGalleryDeckRestPointDue(keptCount, restAcknowledgedAtKept)) {
     return (
       <SafeAreaView style={sharedStyles.screen} testID="gallery-import-rest-point">
@@ -355,10 +458,7 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
         <ScrollView contentContainerStyle={styles.restContent} style={styles.scrollBody}>
           <Text style={sharedStyles.eyebrow}>{keptCount} in a row</Text>
           <Text style={sharedStyles.displaySmall}>That is {keptCount}{'\n'}new memories.</Text>
-          <Text style={sharedStyles.body}>
-            They are in your journal now, filed under the day they happened, not today.
-            There are {activeCandidates.length} more ready when you want them{galleryImportComingSuffix(comingIndicator)}.
-          </Text>
+          <Text style={sharedStyles.body}>{readyCandidateCount} more ready.</Text>
           {sessionKept.length > 0 ? (
             <View style={styles.restStrip}>
               {sessionKept.slice(-6).map((item, index) => (
@@ -368,17 +468,10 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
               ))}
             </View>
           ) : null}
-          <View style={styles.placeSavedCard}>
-            <Text style={styles.placeSavedTitle}>Your place is saved</Text>
-            <Text style={styles.placeSavedBody}>
-              Stop here and pick up from the Timeline whenever you like: tonight, next week,
-              any time in the next 30 days.
-            </Text>
-          </View>
         </ScrollView>
         <View style={[gi.stickyFooterSurface, styles.actionArea]} testID="gallery-import-action-area">
           <Pressable accessibilityRole="button" onPress={() => setRestAcknowledgedAtKept(keptCount)} style={({ pressed }) => [styles.primaryAction, pressed && styles.actionPressed]} testID="gallery-import-rest-continue">
-            <Text style={styles.primaryActionText}>Keep going · {activeCandidates.length} ready</Text>
+            <Text style={styles.primaryActionText}>Keep going · {readyCandidateCount} ready</Text>
           </Pressable>
           <Pressable accessibilityRole="button" onPress={exitToTimeline} style={styles.ghostAction} testID="gallery-import-rest-stop">
             <Text style={styles.ghostActionText}>That is enough for now</Text>
@@ -399,14 +492,20 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
     // backed by the auto quiet-poll above; there is no more a manual refresh
     // surface anywhere on this screen.
     //
-    // Server truth (round 4) gates which of the two remaining states shows:
+    // Server truth (S9) gates which of the two remaining states shows:
     // between-batches unless the run is genuinely terminal or 'reviewing'
-    // with a server-confirmed zero clusters pending (comingIndicator.kind
-    // 'none') -- see deriveGalleryImportComingIndicator's own doc comment
-    // for why the local checkpoint plan can never answer this honestly
-    // across a resume/stall (finish() guards the same condition,
-    // belt-and-suspenders).
-    if (comingIndicator.kind !== 'none') {
+    // with a server-confirmed zero clusters pending, nothing local
+    // unsettled, and the frontier confirms full coverage
+    // (comingIndicator.kind 'none') -- see deriveGalleryImportComingIndicator's
+    // own doc comment for why the local checkpoint plan alone can never
+    // answer this honestly across a resume/stall (finish() guards the same
+    // condition, belt-and-suspenders). `forceBetweenBatches` additionally
+    // covers the server's own "still has work" refusal from completeGalleryImportRun,
+    // which can land a beat before this device's own comingIndicator catches up.
+    if (comingIndicator.kind !== 'none' || forceBetweenBatches) {
+      const moreHistoryOnly = comingIndicator.kind === 'unknown'
+        ? comingIndicator.moreHistory
+        : comingIndicator.kind === 'count' && comingIndicator.count === 0 && comingIndicator.moreHistory;
       return (
         <SafeAreaView style={sharedStyles.screen} testID="gallery-import-between-batches">
           <DeckTopBar asideCount={setAside.length} onClose={exitToTimeline} onOpenAside={openAsideSheet} />
@@ -416,18 +515,17 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
               <Text style={sharedStyles.eyebrow}>More on the way</Text>
             </View>
             <Text style={sharedStyles.displaySmall}>
-              {comingIndicator.kind === 'count'
-                ? `${comingIndicator.count} more ${comingIndicator.count === 1 ? 'suggestion' : 'suggestions'}\nbeing written.`
-                : 'More suggestions\nare being written.'}
+              {comingIndicator.kind === 'count' && comingIndicator.count > 0
+                ? `${comingIndicator.count} more\nbeing written.`
+                : moreHistoryOnly
+                  ? 'Momora is still\nlooking through your photos.'
+                  : 'More suggestions\nare being written.'}
             </Text>
             <Text style={sharedStyles.body}>
               {keptCount > 0
                 ? `You are caught up on what is ready. Your ${keptCount} kept ${keptCount === 1 ? 'memory is' : 'memories are'} already in your journal.`
                 : 'You are caught up on what is ready for now.'}
             </Text>
-            <View style={styles.betweenBatchesLedgerWrap}>
-              <DeckLedger asideCount={setAside.length} coming={comingIndicator} keptCount={keptCount} />
-            </View>
             {actionError ? <Text style={sharedStyles.error}>{actionError}</Text> : null}
           </ScrollView>
           <View style={[gi.stickyFooterSurface, styles.actionArea]} testID="gallery-import-action-area">
@@ -477,9 +575,7 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
           {setAside.length > 0 ? (
             <View style={styles.donePillRow}>
               <View style={styles.donePill}><Text style={styles.donePillText}>{setAside.length} set aside</Text></View>
-              <Text style={styles.donePillCopy}>
-                Kept for 30 days if you change your mind. They will not come back in a future look.
-              </Text>
+              <Text style={styles.donePillCopy}>Won’t be suggested again.</Text>
             </View>
           ) : null}
           {actionError ? <Text style={sharedStyles.error}>{actionError}</Text> : null}
@@ -504,7 +600,7 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
   return (
     <SafeAreaView style={sharedStyles.screen}>
       <DeckTopBar asideCount={setAside.length} onClose={exitToTimeline} onOpenAside={openAsideSheet} />
-      <DeckTicks coming={comingIndicator} position={deckPosition} total={deckTotal} />
+      <DeckTicks coming={comingIndicator} onPressComing={() => router.push({ pathname: '/(app)/gallery-import/progress' as never, params: { runId } })} position={deckPosition} total={deckTotal} />
       <View style={styles.deck}>
         {/* the next prints, peeking (gi-review.jsx ~124-131) */}
         <View pointerEvents="none" style={[styles.peek, styles.peekBack]} />
@@ -521,6 +617,7 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
           exitDirection={current.id === exitingCandidateId ? exitDirection : null}
           onChoosePhotos={() => setSheet('photos')}
           onCommit={fire}
+          onHeroUnavailable={() => resignHeroFor(current.id)}
           onShowSetAside={openAsideSheet}
           poolCount={dayPool.length > 0 ? dayPool.length : null}
           position={deckPosition}
@@ -539,9 +636,9 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
             <Text style={styles.keepActionText}>Keep this</Text>
           </Pressable>
         </View>
-        <Text style={styles.deckHint}>Keeping opens the memory so you can change the words, photos, date and who is in it before it is saved.</Text>
-        <DeckLedger asideCount={setAside.length} coming={comingIndicator} keptCount={keptCount} />
-        {actionError ? <Text style={sharedStyles.error}>{actionError}</Text> : null}
+        {actionError
+          ? <Text style={sharedStyles.error}>{actionError}</Text>
+          : <Text style={styles.previewNote} testID="gallery-import-preview-note">Small previews here. Kept photos save at full size.</Text>}
       </View>
       {sheets}
     </SafeAreaView>
@@ -593,31 +690,25 @@ function BreathingDot() {
   return <Animated.View style={[styles.comingDot, animatedStyle]} />;
 }
 
-// Round 4: "+N coming"/"N still coming" text for a GalleryImportComingIndicator
-// -- a real number when the server knows it, qualitative "more coming" copy
-// (no digit) when it does not, nothing once the run is genuinely caught up.
-// Shared by the tick row, the ledger, and the rest-point body below so all
-// three never drift from each other or from the server.
-function galleryImportComingLabel(coming: GalleryImportComingIndicator, style: 'tick' | 'ledger'): string | null {
+// Round 4: "+N coming" text for a GalleryImportComingIndicator -- a real
+// number when the server knows it, qualitative "more coming" copy (no
+// digit) when it does not, nothing once the run is genuinely caught up.
+function galleryImportComingLabel(coming: GalleryImportComingIndicator): string | null {
   if (coming.kind === 'none') return null;
-  if (coming.kind === 'count') return style === 'tick' ? `+${coming.count} coming` : `${coming.count} still coming`;
-  return style === 'tick' ? 'more coming' : 'more still coming';
-}
-function galleryImportComingSuffix(coming: GalleryImportComingIndicator): string {
-  const label = galleryImportComingLabel(coming, 'ledger');
-  return label ? `, and ${label}` : '';
+  if (coming.kind === 'count') return `+${coming.count} coming`;
+  return 'more coming';
 }
 
 // Per-suggestion segment ticks plus the breathing "+N coming" indicator --
 // never a continuous completion bar over an unknown total.
-function DeckTicks({ position, total, coming }: { position: number; total: number; coming: GalleryImportComingIndicator }) {
+function DeckTicks({ position, total, coming, onPressComing }: { position: number; total: number; coming: GalleryImportComingIndicator; onPressComing?: () => void }) {
   const tickCount = Math.min(total, DECK_TICK_MAX);
   // When the deck outgrows the tick row, ticks represent proportional
   // progress; the accessible label always carries the exact position.
   const activeTick = total <= DECK_TICK_MAX
     ? position - 1
     : Math.min(tickCount - 1, Math.floor(((position - 1) / total) * tickCount));
-  const comingLabel = galleryImportComingLabel(coming, 'tick');
+  const comingLabel = galleryImportComingLabel(coming);
   return (
     <View accessibilityLabel={`Suggestion ${position} of ${total}`} style={styles.ticksRow} testID="gallery-import-deck-progress">
       <View style={styles.ticks}>
@@ -629,32 +720,13 @@ function DeckTicks({ position, total, coming }: { position: number; total: numbe
         ))}
       </View>
       {comingLabel ? (
-        <View style={styles.coming} testID="gallery-import-still-coming">
+        // Tappable: with cards ready, every entry point routes to this deck,
+        // so this indicator is the one door to the progress screen (status,
+        // "Stop looking for more", fair-use pause).
+        <Pressable accessibilityLabel={`${comingLabel}. See progress.`} accessibilityRole="button" hitSlop={8} onPress={onPressComing} style={styles.coming} testID="gallery-import-still-coming">
           <BreathingDot />
           <Text style={styles.comingText}>{comingLabel}</Text>
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-// The quiet ledger (design: gi-shared.jsx GILedger): "4 kept · 3 set aside ·
-// 6 still coming".
-function DeckLedger({ keptCount, asideCount, coming }: { keptCount: number; asideCount: number; coming: GalleryImportComingIndicator }) {
-  const comingLabel = galleryImportComingLabel(coming, 'ledger');
-  return (
-    <View accessibilityLabel={`${keptCount} kept, ${asideCount} set aside${comingLabel ? `, ${comingLabel}` : ''}`} style={styles.ledger} testID="gallery-import-ledger">
-      <Text style={styles.ledgerNumber}>{keptCount}</Text>
-      <Text style={styles.ledgerLabel}>kept</Text>
-      <Text style={styles.ledgerDot}>·</Text>
-      <Text style={[styles.ledgerNumber, styles.ledgerNumberMuted]}>{asideCount}</Text>
-      <Text style={styles.ledgerLabel}>set aside</Text>
-      {comingLabel ? (
-        <>
-          <Text style={styles.ledgerDot}>·</Text>
-          <BreathingDot />
-          <Text style={styles.ledgerLabel}>{comingLabel}</Text>
-        </>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -743,29 +815,19 @@ const styles = StyleSheet.create({
   primaryActionText: { color: colors.white, fontFamily: fonts.sansBold, fontSize: 15 },
   ghostAction: { alignItems: 'center', minHeight: 44, justifyContent: 'center' },
   ghostActionText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 13 },
+  previewNote: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 12, lineHeight: 16, marginTop: 8, textAlign: 'center' },
   actionPressed: { opacity: 0.55 },
-  deckHint: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 11.5, lineHeight: 16, textAlign: 'center' },
-
-  ledger: { alignItems: 'center', flexDirection: 'row', gap: 5, justifyContent: 'center' },
-  ledgerNumber: { color: colors.primary, fontFamily: fonts.display, fontSize: 19 },
-  ledgerNumberMuted: { color: colors.ink2 },
-  ledgerLabel: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 12 },
-  ledgerDot: { color: colors.borderStrong, fontFamily: fonts.sans, fontSize: 12, marginHorizontal: 4 },
 
   // Between-batches waiting room (round 3): the same breathing dot the
   // deck's own "+N coming" indicator uses, next to the eyebrow instead of
   // buried in a progress bar.
   eyebrowRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
-  betweenBatchesLedgerWrap: { alignItems: 'flex-start', marginTop: spacing.lg },
 
   restContent: { paddingBottom: 160, paddingHorizontal: spacing.lg, paddingTop: 14 },
   restStrip: { flexDirection: 'row', gap: 7, marginTop: spacing.lg },
   restPrint: { borderRadius: radius.sm, flex: 1, height: 74, overflow: 'hidden' },
   restPrintImage: { height: '100%', width: '100%' },
   restPrintEmpty: { backgroundColor: colors.surface, height: '100%', width: '100%' },
-  placeSavedCard: { backgroundColor: colors.white, borderColor: colors.border, borderRadius: radius.lg, borderWidth: 1, marginTop: spacing.lg, padding: 15 },
-  placeSavedTitle: { color: colors.ink, fontFamily: fonts.sansBold, fontSize: 13.5 },
-  placeSavedBody: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 19, marginTop: 4 },
 
   doneGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: spacing.lg },
   doneTile: { aspectRatio: 1, borderRadius: 10, overflow: 'hidden', width: '31.5%' },

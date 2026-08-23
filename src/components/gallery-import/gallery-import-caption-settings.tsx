@@ -45,31 +45,11 @@ const SAVE_DELAY_MS = 500;
 const MAX_INSTRUCTIONS = GALLERY_CAPTION_INSTRUCTIONS_MAX_LENGTH;
 const COUNTER_WARN_THRESHOLD = MAX_INSTRUCTIONS - 50;
 
-const SAMPLE_CAPTIONS: Record<string, string> = {
-  'en-GB': 'A grey afternoon spent watching the rain run down the glass.',
-  'en-US': 'A gray afternoon spent watching the rain run down the glass.',
-  'pt-BR': 'Uma tarde cinzenta olhando a chuva escorrer no vidro.',
-  'pt-PT': 'Uma tarde cinzenta a ver a chuva a escorrer no vidro.',
-  'es-MX': 'Una tarde gris viendo la lluvia correr por el vidrio.',
-};
-
 const EXAMPLE_PILLS = [
   'Keep it to one short sentence.',
   'We call the baby Bear.',
   'No exclamation marks.',
   'Use British spelling.',
-];
-
-const CHANGE_ITEMS = [
-  'The language and regional spelling',
-  'How long and how formal a caption is',
-  'Words you prefer, like nicknames or “our girls”',
-];
-
-const CANNOT_ITEMS = [
-  'Which photos Momora suggests',
-  'Facts, since it will not invent names, places or occasions',
-  'Anything about your privacy or what leaves your phone',
 ];
 
 function Header() {
@@ -93,17 +73,6 @@ function SectionRule({ children }: { children: string }) {
     <View style={styles.ruleRow}>
       <Text style={styles.ruleLabel}>{children}</Text>
       <View style={styles.ruleLine} />
-    </View>
-  );
-}
-
-function TrustBullet({ tone, children }: { tone: 'check' | 'x'; children: string }) {
-  return (
-    <View style={styles.trustBullet}>
-      <Text style={[styles.trustGlyph, tone === 'check' ? styles.trustGlyphCheck : styles.trustGlyphX]}>
-        {tone === 'check' ? '✓' : '✕'}
-      </Text>
-      <Text style={styles.trustBulletText}>{children}</Text>
     </View>
   );
 }
@@ -178,8 +147,6 @@ export function GalleryImportCaptionSettingsScreen() {
     [fullOptions, recents],
   );
   const selectedLabel = formatGalleryCaptionLocaleLabel(selectedOption);
-  const sampleCaption = SAMPLE_CAPTIONS[language]
-    ?? `A short warm caption, written in ${selectedOption.englishLabel}.`;
 
   const handlePick = useCallback((tag: string) => {
     setIsPickerOpen(false);
@@ -276,26 +243,9 @@ export function GalleryImportCaptionSettingsScreen() {
           ))}
         </View>
 
-        <View style={styles.trustCard}>
-          <Text style={styles.trustTitle}>What your instructions change</Text>
-          <View style={styles.trustGroup}>
-            {CHANGE_ITEMS.map((item) => <TrustBullet key={item} tone="check">{item}</TrustBullet>)}
-          </View>
-          <View style={styles.trustDivider} />
-          <Text style={styles.trustTitle}>What they cannot change</Text>
-          <View style={styles.trustGroup}>
-            {CANNOT_ITEMS.map((item) => <TrustBullet key={item} tone="x">{item}</TrustBullet>)}
-          </View>
-        </View>
-
-        <SectionRule>An example draft</SectionRule>
-        <View style={styles.exampleCard}>
-          <View style={styles.examplePhoto} />
-          <View style={styles.exampleCopy}>
-            <Text style={styles.exampleTitle}>Rain at the window</Text>
-            <Text style={styles.exampleBody} testID="gallery-caption-example-draft">{sampleCaption}</Text>
-          </View>
-        </View>
+        <Text style={styles.hintLine} testID="gallery-caption-settings-hint">
+          Momora won’t invent names or change which photos were chosen.
+        </Text>
         <Text style={styles.footnote}>
           Changes apply to new drafts. Captions you have already edited stay as you wrote them.
         </Text>
@@ -682,30 +632,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   pillText: { color: colors.ink2, fontFamily: fonts.sansBold, fontSize: 12 },
-  trustCard: { backgroundColor: colors.surface, borderRadius: radius.lg, marginTop: spacing.xl, padding: spacing.md },
-  trustTitle: { color: colors.ink, fontFamily: fonts.sansBold, fontSize: 13.5 },
-  trustGroup: { gap: 7, marginTop: 10 },
-  trustBullet: { alignItems: 'flex-start', flexDirection: 'row', gap: 8 },
-  trustGlyph: { fontSize: 12, marginTop: 2, width: 14 },
-  trustGlyphCheck: { color: colors.success },
-  trustGlyphX: { color: colors.ink3 },
-  trustBulletText: { color: colors.ink2, flex: 1, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 18 },
-  trustDivider: { backgroundColor: colors.border, height: 1, marginVertical: 14 },
-  exampleCard: {
-    backgroundColor: colors.white,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: spacing.sm,
-    padding: 14,
-  },
-  examplePhoto: { backgroundColor: colors.primaryTint, borderRadius: radius.sm, height: 62, width: 62 },
-  exampleCopy: { flex: 1 },
-  exampleTitle: { color: colors.ink, fontFamily: fonts.sansBold, fontSize: 13.5 },
-  exampleBody: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 13, lineHeight: 19, marginTop: 4 },
-  footnote: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 11.5, lineHeight: 17, marginTop: 10 },
+  hintLine: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 12, lineHeight: 17, marginTop: spacing.lg },
+  footnote: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 11.5, lineHeight: 17, marginTop: 6 },
   saveRow: { alignItems: 'center', flexDirection: 'row', gap: 6, marginTop: spacing.lg, minHeight: 18 },
   saveText: { color: colors.seaInk, fontFamily: fonts.sans, fontSize: 11.5 },
   saveError: { color: colors.error },

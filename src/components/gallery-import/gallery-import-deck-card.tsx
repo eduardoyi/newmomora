@@ -70,6 +70,7 @@ export function GalleryImportDeckCard({
   onCommit,
   onChoosePhotos,
   onShowSetAside,
+  onHeroUnavailable,
 }: {
   candidate: GalleryImportCandidate;
   position: number;
@@ -82,6 +83,9 @@ export function GalleryImportDeckCard({
   onCommit: (direction: GalleryDeckSwipeDirection) => void;
   onChoosePhotos: () => void;
   onShowSetAside: () => void;
+  /** The hero preview is missing or failed to load (typically an expired
+   * signed URL). The parent re-signs quietly; this card just reports. */
+  onHeroUnavailable?: () => void;
 }) {
   const reducedMotion = useReducedMotion();
   const dx = useSharedValue(0);
@@ -233,7 +237,7 @@ export function GalleryImportDeckCard({
         {/* The hero print inside its photo mat, with the one script mark. */}
         <View style={styles.hero}>
           {heroUri ? (
-            <Image contentFit="cover" source={{ uri: heroUri }} style={styles.heroImage} testID="gallery-import-hero" />
+            <Image contentFit="cover" onError={onHeroUnavailable} source={{ uri: heroUri }} style={styles.heroImage} testID="gallery-import-hero" />
           ) : (
             <View style={styles.heroFallback} testID="gallery-import-hero-fallback"><Text style={styles.heroFallbackMark}>✦</Text></View>
           )}
@@ -243,8 +247,8 @@ export function GalleryImportDeckCard({
         {/* The event's other photos -- a preview you can open, not a control. */}
         <Pressable
           accessibilityLabel={poolCount
-            ? `${chosenCount} photos chosen, from ${poolCount} photos that day. Opens the day's photos.`
-            : `${chosenCount} photos chosen. Opens the day's photos.`}
+            ? `${chosenCount} ${chosenCount === 1 ? 'photo' : 'photos'} chosen, from ${poolCount} ${poolCount === 1 ? 'photo' : 'photos'} that day. Opens the day's photos.`
+            : `${chosenCount} ${chosenCount === 1 ? 'photo' : 'photos'} chosen. Opens the day's photos.`}
           accessibilityRole="button"
           disabled={disabled}
           onPress={onChoosePhotos}
@@ -258,7 +262,7 @@ export function GalleryImportDeckCard({
           </View>
           <View style={styles.stripCopy}>
             <Text style={styles.stripTitle}>{chosenCount} {chosenCount === 1 ? 'photo' : 'photos'} chosen</Text>
-            {poolCount ? <Text style={styles.stripSub}>from {poolCount} photos that day</Text> : null}
+            {poolCount ? <Text style={styles.stripSub}>from {poolCount} {poolCount === 1 ? 'photo' : 'photos'} that day</Text> : null}
           </View>
           <Text style={styles.stripChevron}>›</Text>
         </Pressable>

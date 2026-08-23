@@ -3,6 +3,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { BridgeError } from './bridge';
 import {
   failGalleryChunk,
+  failGalleryCluster,
   getGalleryChunkInput,
   markGalleryAttemptAmbiguous,
   publishGalleryClusterResult,
@@ -24,6 +25,13 @@ import type {
 } from './types';
 
 const BRIDGE_ATTEMPTS = 3;
+/**
+ * Applied before attempt index `n` is retried (never after the final
+ * attempt, which throws immediately). Only the first two entries are ever
+ * used at `BRIDGE_ATTEMPTS = 3`; the third is kept so the sequence still
+ * reads correctly if the attempt budget is ever raised.
+ */
+const BRIDGE_RETRY_BACKOFF_MS = [1_000, 3_000, 9_000] as const;
 const BRIDGE_STEP_RETRIES = { limit: 3, delay: '2 seconds', backoff: 'exponential' } as const;
 const MAX_WORKER_IMAGES_PER_CLUSTER = 10;
 const MAX_PREVIEW_BYTES = 1_500_000;
@@ -51,6 +59,19 @@ function errorCode(error: unknown): string {
   return 'GALLERY_CURATION_FAILED';
 }
 
+/**
+ * A `BridgeError` marked retryable is one classification of transient
+ * failure; a plain network failure (fetch could not even complete, or the
+ * request was aborted) is another -- neither proves the request reached the
+ * bridge, so both are worth a bounded retry here.
+ */
+function isRetryableBridgeFailure(error: unknown): boolean {
+  if (error instanceof BridgeError) return error.retryable;
+  if (error instanceof TypeError) return true;
+  if (typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError') return true;
+  return false;
+}
+
 async function bridgeRetry<T>(operation: () => Promise<T>): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt < BRIDGE_ATTEMPTS; attempt += 1) {
@@ -58,8 +79,8 @@ async function bridgeRetry<T>(operation: () => Promise<T>): Promise<T> {
       return await operation();
     } catch (error) {
       lastError = error;
-      if (!(error instanceof BridgeError) || !error.retryable || attempt === BRIDGE_ATTEMPTS - 1) throw error;
-      await new Promise<void>((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+      if (!isRetryableBridgeFailure(error) || attempt === BRIDGE_ATTEMPTS - 1) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, BRIDGE_RETRY_BACKOFF_MS[attempt]));
     }
   }
   throw lastError;
@@ -168,8 +189,7 @@ async function markAmbiguous(
   throw new GalleryWorkflowAmbiguousError(code);
 }
 
-interface GalleryStepSummary {
-  chunkId: string;
+interface GalleryClusterOutcome {
   stagedCandidates: number;
   skippedClusters: number;
 }
@@ -213,162 +233,167 @@ async function publishCluster(
 }
 
 /**
- * Performs all content-bearing work in one no-retry sensitive step.  Its
- * return value is deliberately scalar: captions, prompt text, provider output
- * and preview bytes never enter Workflow history, logs, or event payloads.
+ * Fetches and validates the whole-chunk input. This is the only place
+ * `INVALID_GALLERY_CHUNK_INPUT` (a whole-chunk structural failure, as
+ * opposed to one bad cluster) is raised.
  */
-export async function processGalleryChunk(env: Env, chunkId: string): Promise<GalleryStepSummary> {
+async function getValidatedGalleryChunk(env: Env, chunkId: string): Promise<GalleryChunkInput> {
   const { chunk } = await bridgeRetry(() => getGalleryChunkInput(env, chunkId));
   if (!validChunkInput(chunk, chunkId)) throw new Error('INVALID_GALLERY_CHUNK_INPUT');
+  return chunk;
+}
 
-  let stagedCandidates = 0;
-  let skippedClusters = 0;
-  for (const rawCluster of chunk.clusters) {
-    if (!validCluster(rawCluster, chunk.maxImagesPerCluster)) throw new Error('INVALID_GALLERY_CLUSTER_INPUT');
-    const cluster = dedupeClusterAssets(rawCluster);
-    if (cluster.assets.length < 1) {
-      // Dedup only drops later duplicates and always keeps one asset per
-      // hash, so an empty cluster cannot occur today; this guards a future
-      // dedup strategy that could remove every asset in a cluster.
-      await publishCluster(env, chunkId, rawCluster.clusterSignature, [], 'invalid_preview');
-      skippedClusters += 1;
-      continue;
-    }
-    let previews: ValidatedGalleryPreview[];
-    try {
-      previews = await loadClusterPreviews(env, cluster);
-    } catch (error) {
-      if (!(error instanceof GalleryPreviewError)) throw error;
-      await publishCluster(env, chunkId, cluster.clusterSignature, [], 'invalid_preview');
-      skippedClusters += 1;
-      continue;
-    }
+/**
+ * Performs all content-bearing work for one cluster in a single no-retry
+ * sensitive step. Its return value is deliberately scalar: captions, prompt
+ * text, provider output and preview bytes never enter Workflow history,
+ * logs, or event payloads. A thrown non-ambiguous error here fails only this
+ * cluster (via `fail_gallery_cluster`, applied by the caller) -- it must
+ * never propagate as a whole-chunk failure.
+ */
+async function processGalleryCluster(
+  env: Env,
+  chunkId: string,
+  chunk: GalleryChunkInput,
+  rawCluster: GalleryClusterInput,
+): Promise<GalleryClusterOutcome> {
+  if (!validCluster(rawCluster, chunk.maxImagesPerCluster)) throw new Error('INVALID_GALLERY_CLUSTER_INPUT');
+  const cluster = dedupeClusterAssets(rawCluster);
+  if (cluster.assets.length < 1) {
+    // Dedup only drops later duplicates and always keeps one asset per
+    // hash, so an empty cluster cannot occur today; this guards a future
+    // dedup strategy that could remove every asset in a cluster.
+    await publishCluster(env, chunkId, rawCluster.clusterSignature, [], 'invalid_preview');
+    return { stagedCandidates: 0, skippedClusters: 1 };
+  }
+  let previews: ValidatedGalleryPreview[];
+  try {
+    previews = await loadClusterPreviews(env, cluster);
+  } catch (error) {
+    if (!(error instanceof GalleryPreviewError)) throw error;
+    await publishCluster(env, chunkId, cluster.clusterSignature, [], 'invalid_preview');
+    return { stagedCandidates: 0, skippedClusters: 1 };
+  }
 
-    let published = false;
-    // A schema-conformant-but-invalid response is a DEFINITE completed call
-    // (never ambiguous), so it may reuse this cluster's existing attempt
-    // budget for exactly one corrective retry -- distinct from the 429/5xx
-    // retry path below, which may use the remaining budget without this cap.
-    let malformedRetryUsed = false;
-    let pendingCorrection: GalleryVisionValidationFailure | null = null;
-    for (let attemptNumber = 1; attemptNumber <= chunk.maxProviderAttempts; attemptNumber += 1) {
-      const reservation = await bridgeRetry(() => reserveGalleryAttempt(env, {
-        chunkId, clusterSignature: cluster.clusterSignature, attemptNumber,
-      }));
-      // A replayed reservation cannot prove whether the prior paid request
-      // reached OpenAI. Quarantine rather than issuing an automatic duplicate.
-      if (reservation.outcome !== 'reserved_now') {
-        // Denied attempts are durably closed. A later externally dispatched
-        // recovery may advance to a new ordinal; this Workflow invocation
-        // itself still has retries disabled after an ambiguous paid call.
-        if (reservation.outcome === 'denied') continue;
-        if (!reservation.attemptId || !reservation.reservationToken) throw new Error('INVALID_GALLERY_ATTEMPT_RESERVATION');
-        await markAmbiguous(env, chunkId, reservation.attemptId, reservation.reservationToken, 'PROVIDER_ATTEMPT_ALREADY_RESERVED');
-      }
+  // A schema-conformant-but-invalid response is a DEFINITE completed call
+  // (never ambiguous), so it may reuse this cluster's existing attempt
+  // budget for exactly one corrective retry -- distinct from the 429/5xx
+  // retry path below, which may use the remaining budget without this cap.
+  let malformedRetryUsed = false;
+  let pendingCorrection: GalleryVisionValidationFailure | null = null;
+  for (let attemptNumber = 1; attemptNumber <= chunk.maxProviderAttempts; attemptNumber += 1) {
+    const reservation = await bridgeRetry(() => reserveGalleryAttempt(env, {
+      chunkId, clusterSignature: cluster.clusterSignature, attemptNumber,
+    }));
+    // A replayed reservation cannot prove whether the prior paid request
+    // reached OpenAI. Quarantine rather than issuing an automatic duplicate.
+    if (reservation.outcome !== 'reserved_now') {
+      // Denied attempts are durably closed. A later externally dispatched
+      // recovery may advance to a new ordinal; this Workflow invocation
+      // itself still has retries disabled after an ambiguous paid call.
+      if (reservation.outcome === 'denied') continue;
       if (!reservation.attemptId || !reservation.reservationToken) throw new Error('INVALID_GALLERY_ATTEMPT_RESERVATION');
-      const attemptId = reservation.attemptId;
-      const reservationToken = reservation.reservationToken;
+      await markAmbiguous(env, chunkId, reservation.attemptId, reservation.reservationToken, 'PROVIDER_ATTEMPT_ALREADY_RESERVED');
+    }
+    if (!reservation.attemptId || !reservation.reservationToken) throw new Error('INVALID_GALLERY_ATTEMPT_RESERVATION');
+    const attemptId = reservation.attemptId;
+    const reservationToken = reservation.reservationToken;
 
-      const controller = new AbortController();
-      const remaining = Date.parse(chunk.providerDeadlineAt) - Date.now();
-      if (remaining <= 0) throw new Error('GALLERY_PROVIDER_TIMEOUT');
-      const timeout = setTimeout(() => controller.abort(), Math.min(remaining, 120_000));
+    const controller = new AbortController();
+    const remaining = Date.parse(chunk.providerDeadlineAt) - Date.now();
+    if (remaining <= 0) throw new Error('GALLERY_PROVIDER_TIMEOUT');
+    const timeout = setTimeout(() => controller.abort(), Math.min(remaining, 120_000));
+    try {
+      const correctionForThisAttempt = pendingCorrection;
+      pendingCorrection = null;
       let result: Awaited<ReturnType<typeof curateGalleryCluster>>;
       try {
-        const correctionForThisAttempt = pendingCorrection;
-        pendingCorrection = null;
-        try {
-          result = await curateGalleryCluster(
-            env, cluster, previews, chunk.captionLocale, chunk.captionInstructions, controller.signal,
-            correctionForThisAttempt,
-          );
-        } catch (error) {
-          if (error instanceof GalleryVisionError && error.ambiguous) {
-            await markAmbiguous(env, chunkId, attemptId, reservationToken, error.code);
-          }
-          try {
-            await bridgeRetry(() => recordGalleryUsage(env, {
-              chunkId, attemptId, reservationToken,
-              usage: usageRecord(error instanceof GalleryVisionError ? error.usage : null, false),
-            }));
-          } catch (usageError) {
-            if (usageError instanceof BridgeError && usageError.retryable) {
-              await markAmbiguous(env, chunkId, attemptId, reservationToken, 'GALLERY_USAGE_RECORD_AMBIGUOUS');
-            }
-            throw usageError;
-          }
-          if (error instanceof GalleryVisionError && error.code === 'VISION_RETRYABLE' && attemptNumber < chunk.maxProviderAttempts) continue;
-          if (error instanceof GalleryVisionError && error.code === 'VISION_MALFORMED_RESPONSE' &&
-            !malformedRetryUsed && attemptNumber < chunk.maxProviderAttempts) {
-            // Exactly one corrective retry per cluster, regardless of how
-            // much of the shared attempt budget remains.
-            malformedRetryUsed = true;
-            pendingCorrection = error.validationFailureCode;
-            continue;
-          }
-          if (error instanceof GalleryVisionError && error.code === 'VISION_REFUSAL') {
-            await publishCluster(env, chunkId, cluster.clusterSignature, [], 'provider_refusal');
-            skippedClusters += 1;
-            published = true;
-            break;
-          }
-          if (error instanceof GalleryVisionError && error.code === 'VISION_MALFORMED_RESPONSE') {
-            // Closed-code diagnostic only -- never the raw response, prompt,
-            // or caption content -- so future prompt/schema tuning has data
-            // on which validation rule the provider keeps missing.
-            console.warn('gallery_curation_invalid_provider_output', {
-              chunkId,
-              clusterSignature: cluster.clusterSignature,
-              validationFailureCode: error.validationFailureCode ?? 'unknown',
-              correctiveRetryAttempted: malformedRetryUsed,
-            });
-            await publishCluster(env, chunkId, cluster.clusterSignature, [], 'invalid_provider_output');
-            skippedClusters += 1;
-            published = true;
-            break;
-          }
-          throw error;
+        result = await curateGalleryCluster(
+          env, cluster, previews, chunk.captionLocale, chunk.captionInstructions, controller.signal,
+          correctionForThisAttempt,
+        );
+      } catch (error) {
+        if (error instanceof GalleryVisionError && error.ambiguous) {
+          await markAmbiguous(env, chunkId, attemptId, reservationToken, error.code);
         }
         try {
           await bridgeRetry(() => recordGalleryUsage(env, {
             chunkId, attemptId, reservationToken,
-            usage: usageRecord(result.usage, true),
+            usage: usageRecord(error instanceof GalleryVisionError ? error.usage : null, false),
           }));
-        } catch (error) {
-          if (error instanceof BridgeError && error.retryable) {
+        } catch (usageError) {
+          if (usageError instanceof BridgeError && usageError.retryable) {
             await markAmbiguous(env, chunkId, attemptId, reservationToken, 'GALLERY_USAGE_RECORD_AMBIGUOUS');
           }
-          throw error;
+          throw usageError;
         }
-        const acceptedGroups = result.groups.filter((group) => group.confidence >= DEFAULT_GALLERY_MIN_CONFIDENCE);
-        const droppedAllForLowConfidence = result.groups.length > 0 && acceptedGroups.length === 0;
-        const skipReason = acceptedGroups.length === 0
-          ? (droppedAllForLowConfidence ? 'low_confidence' : closedSkipReason(result.skipReason))
-          : null;
-        await publishCluster(env, chunkId, cluster.clusterSignature, acceptedGroups, skipReason);
-        stagedCandidates += acceptedGroups.length;
-        if (acceptedGroups.length === 0) skippedClusters += 1;
-        published = true;
-        break;
-      } finally {
-        clearTimeout(timeout);
+        if (error instanceof GalleryVisionError && error.code === 'VISION_RETRYABLE' && attemptNumber < chunk.maxProviderAttempts) continue;
+        if (error instanceof GalleryVisionError && error.code === 'VISION_MALFORMED_RESPONSE' &&
+          !malformedRetryUsed && attemptNumber < chunk.maxProviderAttempts) {
+          // Exactly one corrective retry per cluster, regardless of how
+          // much of the shared attempt budget remains.
+          malformedRetryUsed = true;
+          pendingCorrection = error.validationFailureCode;
+          continue;
+        }
+        if (error instanceof GalleryVisionError && error.code === 'VISION_REFUSAL') {
+          await publishCluster(env, chunkId, cluster.clusterSignature, [], 'provider_refusal');
+          return { stagedCandidates: 0, skippedClusters: 1 };
+        }
+        if (error instanceof GalleryVisionError && error.code === 'VISION_MALFORMED_RESPONSE') {
+          // Closed-code diagnostic only -- never the raw response, prompt,
+          // or caption content -- so future prompt/schema tuning has data
+          // on which validation rule the provider keeps missing.
+          console.warn('gallery_curation_invalid_provider_output', {
+            chunkId,
+            clusterSignature: cluster.clusterSignature,
+            validationFailureCode: error.validationFailureCode ?? 'unknown',
+            correctiveRetryAttempted: malformedRetryUsed,
+          });
+          await publishCluster(env, chunkId, cluster.clusterSignature, [], 'invalid_provider_output');
+          return { stagedCandidates: 0, skippedClusters: 1 };
+        }
+        throw error;
       }
+      try {
+        await bridgeRetry(() => recordGalleryUsage(env, {
+          chunkId, attemptId, reservationToken,
+          usage: usageRecord(result.usage, true),
+        }));
+      } catch (error) {
+        if (error instanceof BridgeError && error.retryable) {
+          await markAmbiguous(env, chunkId, attemptId, reservationToken, 'GALLERY_USAGE_RECORD_AMBIGUOUS');
+        }
+        throw error;
+      }
+      const acceptedGroups = result.groups.filter((group) => group.confidence >= DEFAULT_GALLERY_MIN_CONFIDENCE);
+      const droppedAllForLowConfidence = result.groups.length > 0 && acceptedGroups.length === 0;
+      const skipReason = acceptedGroups.length === 0
+        ? (droppedAllForLowConfidence ? 'low_confidence' : closedSkipReason(result.skipReason))
+        : null;
+      await publishCluster(env, chunkId, cluster.clusterSignature, acceptedGroups, skipReason);
+      return { stagedCandidates: acceptedGroups.length, skippedClusters: acceptedGroups.length === 0 ? 1 : 0 };
+    } finally {
+      clearTimeout(timeout);
     }
-    if (!published) throw new Error('GALLERY_ATTEMPT_CAP_EXHAUSTED');
   }
-  return { chunkId, stagedCandidates, skippedClusters };
+  throw new Error('GALLERY_ATTEMPT_CAP_EXHAUSTED');
 }
 
 export class GalleryImportWorkflow extends WorkflowEntrypoint<Env, GalleryWorkflowDispatchPayload> {
   async run(event: Readonly<WorkflowEvent<GalleryWorkflowDispatchPayload>>, step: WorkflowStep) {
     const { chunkId } = event.payload;
-    let summary: GalleryStepSummary;
+
+    // Deliberately NOT a step.do: a step's return value is persisted in
+    // Workflow history for replay (sensitive:'output' only redacts the
+    // dashboard, not history). The chunk input carries preview keys,
+    // captionInstructions, and cluster signatures, which must never enter
+    // step state -- so this is a plain await. bridgeRetry already bounds its
+    // retries, and a replay simply re-fetches: get_gallery_chunk_input only
+    // returns still-pending clusters, so this call is idempotent.
+    let chunk: GalleryChunkInput;
     try {
-      summary = await step.do(
-        'curate and publish gallery chunk',
-        { retries: { limit: 0, delay: '1 second' }, timeout: '5 minutes', sensitive: 'output' },
-        async () => await processGalleryChunk(this.env, chunkId),
-      );
+      chunk = await getValidatedGalleryChunk(this.env, chunkId);
     } catch (error) {
       if (error instanceof GalleryWorkflowAmbiguousError) throw error;
       const code = errorCode(error);
@@ -391,14 +416,46 @@ export class GalleryImportWorkflow extends WorkflowEntrypoint<Env, GalleryWorkfl
       return { chunkId, status: 'failed', code };
     }
 
+    let stagedCandidates = 0;
+    let skippedClusters = 0;
+    let failedClusters = 0;
+    for (let index = 0; index < chunk.clusters.length; index += 1) {
+      const cluster = chunk.clusters[index];
+      try {
+        const outcome = await step.do(
+          `cluster ${index}`,
+          { retries: { limit: 0, delay: '1 second' }, timeout: '4 minutes', sensitive: 'output' },
+          async () => await processGalleryCluster(this.env, chunkId, chunk, cluster),
+        );
+        stagedCandidates += outcome.stagedCandidates;
+        skippedClusters += outcome.skippedClusters;
+      } catch (error) {
+        // Ambiguous cluster failures fence a possibly-paid provider call
+        // that this invocation cannot safely retry. They abort the whole
+        // instance so reconciliation (S7) can re-dispatch a fresh attempt --
+        // they must never be treated as an ordinary per-cluster failure.
+        if (error instanceof GalleryWorkflowAmbiguousError) throw error;
+        const code = errorCode(error);
+        await step.do(
+          `fail cluster ${index}`,
+          { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds', sensitive: 'output' },
+          async () => {
+            await failGalleryCluster(this.env, { chunkId, clusterSignature: cluster.clusterSignature, errorCode: code });
+            return { chunkId, clusterSignature: cluster.clusterSignature, failed: true };
+          },
+        );
+        failedClusters += 1;
+      }
+    }
+
     await step.do(
-      'scrub published gallery chunk',
+      'scrub gallery chunk',
       { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds', sensitive: 'output' },
       async () => {
         await scrubGalleryChunk(this.env, chunkId);
         return { chunkId, scrubbed: true };
       },
     );
-    return { chunkId, status: 'ready', stagedCandidates: summary.stagedCandidates, skippedClusters: summary.skippedClusters };
+    return { chunkId, status: 'ready', stagedCandidates, skippedClusters, failedClusters };
   }
 }

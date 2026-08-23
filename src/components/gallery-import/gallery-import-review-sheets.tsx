@@ -165,17 +165,6 @@ export function GalleryImportPhotoChooser({
       title="Photos from that day"
     >
       <ScrollView keyboardShouldPersistTaps="handled">
-        <View style={styles.chooserNote}>
-          <Text style={styles.chooserNoteText}>
-            Momora already looked at small previews of these. The rest are shown from your phone;
-            choosing one does not send anything new anywhere.
-          </Text>
-        </View>
-        {mode === 'browse' ? (
-          <Text style={styles.chooserBrowseHint} testID="gallery-import-chooser-browse-hint">
-            Keeping opens the memory, where the photos can be changed.
-          </Text>
-        ) : null}
         <View style={styles.chooserGrid}>
           {pool.map((asset) => {
             const token = asset.assetToken;
@@ -228,19 +217,13 @@ export function GalleryImportSetAsideSheet({
     <GallerySheet
       closeLabel="Done"
       onClose={onClose}
-      subtitle="Nothing here was deleted. Bring any of them back for the next 30 days."
       testID="gallery-import-set-aside-sheet"
       title="Set aside"
     >
       <FlatList
         ListEmptyComponent={<Text style={styles.asideEmpty}>Nothing is set aside right now.</Text>}
         ListFooterComponent={
-          <View style={styles.asideReassure}>
-            <Text style={styles.asideReassureText}>
-              Setting something aside is not a judgement of the photo; it just means not this one.
-              Momora will not suggest it again in a future look through your photos.
-            </Text>
-          </View>
+          candidates.length > 0 ? <Text style={styles.asideReassureText}>Won’t be suggested again.</Text> : null
         }
         contentContainerStyle={styles.asideList}
         data={candidates}
@@ -295,9 +278,6 @@ const styles = StyleSheet.create({
   sheetBody: { flexShrink: 1 },
   sheetFooter: { borderTopColor: colors.border, borderTopWidth: 1, paddingHorizontal: spacing.lg, paddingTop: 12 },
 
-  chooserNote: { backgroundColor: colors.surface, borderRadius: radius.md, marginHorizontal: spacing.lg, marginTop: 14, padding: 12 },
-  chooserNoteText: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 19 },
-  chooserBrowseHint: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 12, lineHeight: 17, marginHorizontal: spacing.lg, marginTop: 10 },
   chooserGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, padding: spacing.lg, paddingTop: 14 },
   chooserTile: { aspectRatio: 1, borderRadius: radius.md, overflow: 'hidden', position: 'relative', width: '31.5%' },
   chooserTileBlocked: { opacity: 0.45 },
@@ -361,6 +341,5 @@ const styles = StyleSheet.create({
   },
   bringBackPressed: { opacity: 0.55 },
   bringBackText: { color: colors.ink2, fontFamily: fonts.sansBold, fontSize: 12.5 },
-  asideReassure: { backgroundColor: colors.surface, borderRadius: radius.md, marginTop: 4, padding: 13 },
-  asideReassureText: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 19 },
+  asideReassureText: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 12, marginTop: 4, textAlign: 'center' },
 });

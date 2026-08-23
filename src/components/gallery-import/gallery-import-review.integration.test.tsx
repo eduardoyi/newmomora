@@ -11,7 +11,7 @@ import * as galleryService from '@/services/gallery-import';
 
 let mockCheckpoint: any = null;
 
-jest.mock('expo-router', () => ({ router: { back: jest.fn(), push: jest.fn(), replace: jest.fn() } }));
+jest.mock('expo-router', () => ({ router: { back: jest.fn(), push: jest.fn(), replace: jest.fn() }, useFocusEffect: (effect: () => void) => { const { useEffect } = require('react'); useEffect(effect, [effect]); } }));
 jest.mock('expo-image', () => { const { View: MockView } = require('react-native'); return { Image: (props: any) => <MockView testID={props.testID} /> }; });
 jest.mock('react-native-safe-area-context', () => { const { View: MockView } = require('react-native'); return { SafeAreaView: MockView, useSafeAreaInsets: () => ({ bottom: 28, top: 0, left: 0, right: 0 }) }; });
 jest.mock('@/hooks/use-auth', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }));
@@ -204,6 +204,49 @@ describe('gallery import review deck', () => {
   // window -- this holds the mutation open past the animation and asserts
   // the acted-on card is never shown again from the moment the animation
   // ends, not only once the mutation eventually resolves.
+  it('drops a candidates poll response that was in flight when a set-aside committed, so the dismissed card never comes back', async () => {
+    const ordered = [candidateAt(1), candidateAt(2)];
+    const candidatesMock = galleryService.getGalleryImportCandidates as jest.Mock;
+    candidatesMock.mockResolvedValue({ data: { candidates: ordered }, error: null });
+    (galleryService.setGalleryImportCandidateSkip as jest.Mock).mockImplementation(
+      async (input: { candidateId: string }) => ({ data: { candidate: { ...ordered[0], id: input.candidateId, status: 'skipped', previewUrls: [] } }, error: null }),
+    );
+
+    // Fake timers from the start so the deck's 9 s poll interval is under
+    // the fake clock (it is registered in a mount effect).
+    jest.useFakeTimers();
+    try {
+      const screen = render(<GalleryImportReview runId="run-1" />);
+      await act(async () => { await jest.advanceTimersByTimeAsync(50); });
+      expect(screen.getByText('Moment 1')).toBeTruthy();
+
+      // The next poll is held open: its eventual response still reports
+      // candidate-1 as 'ready' (it left the server before the skip landed).
+      let resolvePoll: ((value: unknown) => void) | undefined;
+      candidatesMock.mockImplementationOnce(() => new Promise((resolve) => { resolvePoll = resolve; }));
+      await act(async () => { await jest.advanceTimersByTimeAsync(9_000); });
+      expect(resolvePoll).toBeDefined();
+
+      // The user sets candidate-1 aside while that poll is in flight.
+      fireEvent.press(screen.getByTestId('gallery-import-set-aside'));
+      await act(async () => { await jest.advanceTimersByTimeAsync(240); });
+      expect(screen.getByText('Moment 2')).toBeTruthy();
+      expect(screen.queryByText('Moment 1')).toBeNull();
+
+      // The stale poll response arrives AFTER the skip committed. Before the
+      // mutation-sequence guard this overwrote the list and resurrected
+      // candidate-1 on the front of the deck (device-observed).
+      await act(async () => {
+        resolvePoll?.({ data: { candidates: ordered }, error: null });
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText('Moment 2')).toBeTruthy();
+      expect(screen.queryByText('Moment 1')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('never shows the acted-on card again once its exit animation ends, even while its skip mutation is still in flight', async () => {
     const ordered = [candidateAt(1), candidateAt(2)];
     (galleryService.getGalleryImportCandidates as jest.Mock).mockResolvedValue({ data: { candidates: ordered }, error: null });
@@ -288,7 +331,10 @@ describe('gallery import review deck', () => {
         { state: State.END, translationX: 120, velocityX: 0 },
       ]);
     });
-    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/approve', params: { runId: 'run-1', candidateId: 'candidate-1' } }));
+    await waitFor(() => expect(mockRouter.push).toHaveBeenCalledWith({
+      pathname: '/(app)/gallery-import/approve',
+      params: { runId: 'run-1', candidateId: 'candidate-1', readyCount: '0' },
+    }));
     expect(galleryService.setGalleryImportCandidateSkip).not.toHaveBeenCalled();
   });
 
@@ -325,7 +371,7 @@ describe('gallery import review deck', () => {
     await waitFor(() => expect(galleryService.setGalleryImportCandidateSkip).toHaveBeenCalledWith(expect.objectContaining({ skip: true })));
   });
 
-  it('shows segment ticks, the +N coming indicator, and the kept/set-aside ledger from the server-reported pendingClusters count', async () => {
+  it('shows segment ticks and the +N coming indicator from the server-reported pendingClusters count', async () => {
     mockCheckpoint = checkpoint({ deckCursor: 3, deckTotal: 6 });
     (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: mockRun({ pendingClusters: 2 }), error: null });
     (galleryService.getGalleryImportCandidates as jest.Mock).mockResolvedValue({
@@ -338,8 +384,10 @@ describe('gallery import review deck', () => {
     expect(screen.getByTestId('gallery-import-deck-progress').props.accessibilityLabel).toBe('Suggestion 4 of 6');
     expect(screen.getByTestId('gallery-import-still-coming')).toBeTruthy();
     expect(screen.getByText('+2 coming')).toBeTruthy();
-    // deckCursor 3 with 1 skipped = 2 kept.
-    expect(screen.getByTestId('gallery-import-ledger').props.accessibilityLabel).toBe('2 kept, 1 set aside, 2 still coming');
+    // The bottom-of-screen kept/set-aside ledger was dropped as a duplicate
+    // of the ticks row's own "+N coming" indicator (I4a step 7) -- there is
+    // no second progress readout on this screen any more.
+    expect(screen.queryByTestId('gallery-import-ledger')).toBeNull();
   });
 
   // Round 4: when the server cannot (yet) compute pendingClusters, or the
@@ -351,11 +399,13 @@ describe('gallery import review deck', () => {
     const screen = render(<GalleryImportReview runId="run-1" />);
     await waitFor(() => expect(screen.getByTestId('gallery-import-deck-card')).toBeTruthy());
     expect(screen.getByText('more coming')).toBeTruthy();
-    expect(screen.getByTestId('gallery-import-ledger').props.accessibilityLabel).toBe('0 kept, 0 set aside, more still coming');
   });
 
   it('offers a rest point after six keeps, resumes on Keep going, and exits without completing the run', async () => {
     mockCheckpoint = checkpoint({ deckCursor: 6, deckTotal: 9 });
+    // readyCandidates is the server's own count (I4a step 7: every "N left"
+    // reads run.readyCandidates, not the locally-fetched page).
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: mockRun({ readyCandidates: 3 }), error: null });
     (galleryService.getGalleryImportCandidates as jest.Mock).mockResolvedValue({
       data: { candidates: [candidateAt(7), candidateAt(8), candidateAt(9)] },
       error: null,
@@ -363,7 +413,10 @@ describe('gallery import review deck', () => {
     const screen = render(<GalleryImportReview runId="run-1" />);
     await waitFor(() => expect(screen.getByTestId('gallery-import-rest-point')).toBeTruthy());
     expect(screen.getByText(/That is 6/)).toBeTruthy();
-    expect(screen.getByText('Your place is saved')).toBeTruthy();
+    // The "your place is saved" reassurance was dropped from this screen
+    // (I4a step 7: it lives once, on the trust screen).
+    expect(screen.queryByText('Your place is saved')).toBeNull();
+    expect(screen.getByText('3 more ready.')).toBeTruthy();
     expect(screen.getByText('Keep going · 3 ready')).toBeTruthy();
     // The rest-point footer gets the same sticky-footer treatment as the
     // deck and done state (defect #2 audit).
@@ -387,7 +440,7 @@ describe('gallery import review deck', () => {
     expect(galleryService.completeGalleryImportRun).not.toHaveBeenCalled();
   });
 
-  it('shows the done state with kept count, 30-day set-aside copy, and a route into the sheet', async () => {
+  it('shows the done state with kept count, no-hardcoded-days set-aside copy, and a route into the sheet', async () => {
     mockCheckpoint = checkpoint({ deckCursor: 4, deckTotal: 4 });
     (galleryService.getGalleryImportCandidates as jest.Mock).mockResolvedValue({
       data: { candidates: [candidateAt(2, 'skipped')] },
@@ -400,14 +453,14 @@ describe('gallery import review deck', () => {
     expect(screen.getByText(/3 memories,/)).toBeTruthy();
     expect(screen.getByText(/one quiet summary, not 3 notifications/)).toBeTruthy();
     expect(screen.getByText('1 set aside')).toBeTruthy();
-    expect(screen.getByText('Kept for 30 days if you change your mind. They will not come back in a future look.')).toBeTruthy();
+    // No hardcoded "30 days" (I4a step 7) -- matches the set-aside sheet's
+    // own footer line (gallery-import-review-sheets.tsx).
+    expect(screen.getByText('Won’t be suggested again.')).toBeTruthy();
+    expect(screen.queryByText(/30 days/)).toBeNull();
     expect(screen.queryByText(/future import/)).toBeNull();
-    // Kept > 0: the CTA still promises something to see, and the
-    // "will not come back" sentence lives exactly once (the aside-pill
-    // line above), not duplicated into the body copy too.
+    // Kept > 0: the CTA still promises something to see.
     expect(screen.getByText('See them in my journal')).toBeTruthy();
     expect(screen.queryByText('Go to my journal')).toBeNull();
-    expect(screen.getAllByText(/will not come back in a future look/).length).toBe(1);
     // The done-state footer gets the same sticky-footer treatment as the
     // deck and rest point (defect #2 audit).
     expect(StyleSheet.flatten(screen.getByTestId('gallery-import-action-area').props.style).borderTopWidth).toBeGreaterThan(0);
@@ -440,9 +493,7 @@ describe('gallery import review deck', () => {
     expect(screen.getByText('Nothing new to look at right now.')).toBeTruthy();
     expect(screen.getByText('Go to my journal')).toBeTruthy();
     expect(screen.queryByText('See them in my journal')).toBeNull();
-    // The "will not come back" sentence lives once, in the aside-pill line.
-    expect(screen.getByText('Kept for 30 days if you change your mind. They will not come back in a future look.')).toBeTruthy();
-    expect(screen.getAllByText(/will not come back in a future look/).length).toBe(1);
+    expect(screen.getByText('Won’t be suggested again.')).toBeTruthy();
 
     fireEvent.press(screen.getByTestId('gallery-import-complete'));
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/(app)/(tabs)/timeline'));
@@ -470,7 +521,8 @@ describe('gallery import review deck', () => {
     await waitFor(() => expect(screen.getByTestId('gallery-import-between-batches')).toBeTruthy());
     expect(screen.queryByTestId('gallery-import-done')).toBeNull();
     expect(screen.getByText('More on the way')).toBeTruthy();
-    expect(screen.getByText(/1 more suggestion/)).toBeTruthy();
+    expect(screen.getByText(/1 more/)).toBeTruthy();
+    expect(screen.getByText(/being written\./)).toBeTruthy();
 
     // The only exit here is plain navigation -- it must never complete the
     // run while chunks are still outstanding.
@@ -573,7 +625,29 @@ describe('gallery import review deck', () => {
     expect(galleryService.completeGalleryImportRun).not.toHaveBeenCalled();
   });
 
-  it('keeps the locked deck copy: the verbatim hint line and a film strip that opens the day pool', async () => {
+  // I4a step 7: the server can refuse to complete a 'reviewing' run with a
+  // generic `not_available` error when it still has reviewable candidates or
+  // in-flight chunks (I1's complete_gallery_import_run guard) -- this
+  // client cannot tell the two apart from the error alone, and does not
+  // need to: both mean "not actually done yet".
+  it('falls back to the between-batches view instead of a bare error when completeGalleryImportRun refuses with work still in flight', async () => {
+    mockCheckpoint = checkpoint({ deckCursor: 1, deckTotal: 1 });
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: mockRun({ status: 'reviewing', pendingClusters: 0 }), error: null });
+    (galleryService.getGalleryImportCandidates as jest.Mock).mockResolvedValue({ data: { candidates: [] }, error: null });
+    (galleryService.completeGalleryImportRun as jest.Mock).mockResolvedValue({
+      data: null,
+      error: { message: 'Gallery import is not available for this request', code: 'not_available' },
+    });
+    const screen = render(<GalleryImportReview runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-done')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('gallery-import-complete'));
+
+    await waitFor(() => expect(screen.getByTestId('gallery-import-between-batches')).toBeTruthy());
+    expect(mockRouter.replace).not.toHaveBeenCalledWith('/(app)/(tabs)/timeline');
+  });
+
+  it('keeps the locked deck copy: no permanent hint line, and a film strip that opens the day pool', async () => {
     mockCheckpoint = checkpoint({
       assetByToken: {
         'asset-1': { assetToken: 'asset-1', osAssetId: 'os-1', captureAtMs: Date.UTC(2025, 4, 12, 9, 0, 0), width: 100, height: 100, isFavorite: false },
@@ -583,7 +657,10 @@ describe('gallery import review deck', () => {
     });
     const screen = render(<GalleryImportReview runId="run-1" />);
     await waitFor(() => expect(screen.getByTestId('gallery-import-deck-card')).toBeTruthy());
-    expect(screen.getByText('Keeping opens the memory so you can change the words, photos, date and who is in it before it is saved.')).toBeTruthy();
+    // The permanent "Keeping opens the memory..." footer hint was dropped
+    // (I4a step 7, minimal-copy principle) -- the composer itself explains
+    // what it does once you get there.
+    expect(screen.queryByText('Keeping opens the memory so you can change the words, photos, date and who is in it before it is saved.')).toBeNull();
     expect(screen.getByText('Monday, May 12, 2025')).toBeTruthy();
     // Never the raw ISO date anywhere on the deck (defect #3 guard).
     expect(screen.queryByText('2025-05-12')).toBeNull();
@@ -592,8 +669,11 @@ describe('gallery import review deck', () => {
 
     fireEvent.press(screen.getByTestId('gallery-import-film-strip'));
     await waitFor(() => expect(screen.getByTestId('gallery-import-photo-chooser')).toBeTruthy());
-    // Browse-only from the read-only deck.
-    expect(screen.getByTestId('gallery-import-chooser-browse-hint')).toBeTruthy();
+    // Browse-only from the read-only deck -- I4b dropped the chooser's own
+    // browse hint (docs/plans/gallery-import-continuous.md I4b step 5), so
+    // browse mode now renders with no footer at all.
+    expect(screen.queryByTestId('gallery-import-chooser-browse-hint')).toBeNull();
+    expect(screen.queryByTestId('gallery-import-chooser-cap')).toBeNull();
     expect(screen.queryByTestId('gallery-import-chooser-use')).toBeNull();
   });
 

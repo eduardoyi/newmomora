@@ -28,6 +28,13 @@ import {
   loadLatestGalleryImportCheckpoint,
   type GalleryImportCheckpoint,
 } from '@/utils/gallery-import-checkpoint';
+import { deriveGalleryImportComingIndicator, isGalleryImportRunTerminal, type GalleryImportComingIndicator } from '@/utils/gallery-import-deck';
+import { loadGalleryImportFrontier, type GalleryImportFrontier } from '@/utils/gallery-import-frontier';
+import {
+  getGalleryImportDriverState,
+  subscribeGalleryImportDriver,
+  type GalleryImportDriverState,
+} from '@/services/gallery-import-driver';
 
 export function useGalleryImport() {
   const { user } = useAuth();
@@ -123,6 +130,13 @@ export function useGalleryImportEntryStatus(options: { enabled?: boolean } = {})
   run: GalleryImportRun | null;
   isLoading: boolean;
   refetch: () => Promise<void>;
+  /** The app-root driver's current phase/error/pause state (S10) -- see
+   * gallery-import-driver.ts. Read-only here; kick it via
+   * `kickGalleryImportDriver` directly. */
+  driverState: GalleryImportDriverState;
+  /** S9: server pending + local planned/failed clusters + moreHistory, in
+   * one place -- see deriveGalleryImportComingIndicator. */
+  comingIndicator: GalleryImportComingIndicator;
 } {
   const enabled = (options.enabled ?? true) && isGalleryImportFeatureEnabled;
   const { user } = useAuth();
@@ -130,22 +144,47 @@ export function useGalleryImportEntryStatus(options: { enabled?: boolean } = {})
   const userId = user?.id;
   const [checkpoint, setCheckpoint] = useState<GalleryImportCheckpoint | null>(null);
   const [isCheckpointLoading, setIsCheckpointLoading] = useState(true);
+  const [frontier, setFrontier] = useState<GalleryImportFrontier | null>(null);
+  const [driverState, setDriverState] = useState<GalleryImportDriverState>(getGalleryImportDriverState);
 
   const reloadCheckpoint = useCallback(async () => {
     if (!enabled || !userId || !familyId) {
       setCheckpoint(null);
+      setFrontier(null);
       setIsCheckpointLoading(false);
       return;
     }
     setIsCheckpointLoading(true);
-    const next = await loadLatestGalleryImportCheckpoint(userId, familyId);
+    const [next, nextFrontier] = await Promise.all([
+      loadLatestGalleryImportCheckpoint(userId, familyId),
+      loadGalleryImportFrontier(userId, familyId),
+    ]);
     setCheckpoint(next);
+    setFrontier(nextFrontier);
     setIsCheckpointLoading(false);
   }, [enabled, familyId, userId]);
 
   useEffect(() => {
     void reloadCheckpoint();
   }, [reloadCheckpoint]);
+
+  useEffect(() => subscribeGalleryImportDriver(setDriverState), []);
+
+  // The checkpoint is loaded once per user/family above, but this hook lives
+  // on screens that stay mounted under the tab bar (Settings, Timeline) while
+  // a sweep starts or finishes elsewhere. Re-read local state whenever the
+  // app-root driver reports a different run or changes phase, so a row like
+  // "Look through your photos" cannot stay stale next to a live sweep
+  // (device-observed 2026-08-23). The driver publishes these transitions
+  // synchronously from the same process, so this is cheap and exact.
+  const driverRunId = driverState.runId;
+  const driverPhase = driverState.phase;
+  useEffect(() => {
+    if (driverRunId !== (checkpoint?.runId ?? null) || driverPhase === 'done' || driverPhase === 'idle') {
+      void reloadCheckpoint();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed to driver transitions only.
+  }, [driverRunId, driverPhase]);
 
   const runQuery = useQuery<GalleryImportRun | null>({
     queryKey: galleryImportRunStatusQueryKey(checkpoint?.runId),
@@ -160,11 +199,27 @@ export function useGalleryImportEntryStatus(options: { enabled?: boolean } = {})
     },
     enabled: enabled && Boolean(checkpoint),
     staleTime: 15_000,
+    // Continuous model: a non-terminal run keeps producing candidates/pending
+    // counts server-side for as long as the sweep runs, sometimes with no
+    // local activity on THIS device to otherwise trigger a refetch (e.g. the
+    // driver is between windows). Poll while it's worth it; stop once the
+    // run has reached a terminal status.
+    refetchInterval: (query) => (isGalleryImportRunTerminal(query.state.data?.status) ? false : 15_000),
   });
 
   const status = useMemo(
     () => deriveGalleryImportEntryStatus(checkpoint, runQuery.data ?? null),
     [checkpoint, runQuery.data],
+  );
+
+  const comingIndicator = useMemo<GalleryImportComingIndicator>(
+    // No local checkpoint means no sweep on this device at all -- nothing is
+    // "coming". Without this guard deriveGalleryImportComingIndicator reads
+    // the absent run as 'unknown' (more on the way), which made the Settings
+    // row show "Looking through your photos · 0 ready" on a fresh install
+    // (device-observed 2026-08-23).
+    () => (checkpoint ? deriveGalleryImportComingIndicator(runQuery.data ?? null, checkpoint, frontier) : { kind: 'none' }),
+    [runQuery.data, checkpoint, frontier],
   );
 
   const refetch = useCallback(async () => {
@@ -178,6 +233,8 @@ export function useGalleryImportEntryStatus(options: { enabled?: boolean } = {})
     ...status,
     isLoading: isCheckpointLoading || (Boolean(checkpoint) && runQuery.isLoading),
     refetch,
+    driverState,
+    comingIndicator,
   };
 }
 

@@ -94,7 +94,17 @@ interface E2eCandidate {
 }
 
 interface E2eBackendState {
-  run: { id: string; familyId: string; status: string; reviewExpiresAt: string | null; limits: { maxClusters: number; maxAssetsPerCluster: number; maxChunks: number }; readyCandidates: number } | null;
+  run: {
+    id: string; familyId: string; status: string; reviewExpiresAt: string | null;
+    limits: { maxClusters: number; maxAssetsPerCluster: number; maxChunks: number };
+    readyCandidates: number;
+    // S1 additions -- fixture-only defaults, exercised end-to-end by the
+    // deterministic E2E backend below rather than a real server.
+    pendingClusters: number | null;
+    chunks: Array<{ ordinal: number; status: 'registered' | 'uploading' | 'dispatched' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'expired' }>;
+    liveCandidateAssetTokens: string[];
+    fairUse: { pausedUntil: string | null };
+  } | null;
   chunks: Array<{ id: string; ordinal: number; assetTokens: string[] }>;
   candidates: E2eCandidate[];
   captions: { language: string; instructions: string; updatedAt: string | null };
@@ -140,7 +150,11 @@ export async function invokeGalleryImportE2e<T>(functionName: string, body: Reco
   if (!isGalleryImportE2eAdapterEnabled) return undefined;
   const state = await loadBackendState();
   if (functionName === 'create-gallery-import-run') {
-    state.run = { id: 'e2e-gallery-run', familyId: bodyString(body, 'familyId'), status: 'processing', reviewExpiresAt: null, limits: { maxClusters: 12, maxAssetsPerCluster: 10, maxChunks: 3 }, readyCandidates: 0 };
+    state.run = {
+      id: 'e2e-gallery-run', familyId: bodyString(body, 'familyId'), status: 'processing', reviewExpiresAt: null,
+      limits: { maxClusters: 12, maxAssetsPerCluster: 10, maxChunks: 3 }, readyCandidates: 0,
+      pendingClusters: null, chunks: [], liveCandidateAssetTokens: [], fairUse: { pausedUntil: null },
+    };
     state.chunks = []; state.candidates = [];
     await saveBackendState(state);
     return { run: state.run, runCapability: 'e2e-gallery-capability' } as T;
@@ -149,6 +163,13 @@ export async function invokeGalleryImportE2e<T>(functionName: string, body: Reco
   if (functionName === 'register-gallery-import-chunk') {
     const ordinal = Number(body.ordinal); const assetTokens = assetsFromManifest(body); const id = `e2e-gallery-chunk-${ordinal}`;
     state.chunks = [...state.chunks.filter((chunk) => chunk.id !== id), { id, ordinal, assetTokens }];
+    if (state.run) {
+      state.run = {
+        ...state.run,
+        chunks: [...state.run.chunks.filter((chunk) => chunk.ordinal !== ordinal), { ordinal, status: 'registered' }],
+        pendingClusters: (state.run.pendingClusters ?? 0) + 1,
+      };
+    }
     await saveBackendState(state);
     return { chunkId: id, acceptedAssetTokens: assetTokens, suppressedClusterSignatures: [] } as T;
   }
@@ -160,7 +181,14 @@ export async function invokeGalleryImportE2e<T>(functionName: string, body: Reco
       const second = tokens.slice(first.length);
       const makeCandidate = (id: string, selectedAssetTokens: string[], caption: string): E2eCandidate => ({ id, caption, memoryDate: '2025-05-12', selectedAssetTokens, familyMemberIds: [], status: 'ready', previewUrls: selectedAssetTokens.map((token) => `e2e://gallery-import/preview/${token}`) });
       state.candidates = [makeCandidate('e2e-candidate-one', first, 'An afternoon worth keeping.'), makeCandidate('e2e-candidate-two', second.length > 0 ? second : first, 'A small family moment.')];
-      state.run = { ...state.run, status: 'reviewing', readyCandidates: state.candidates.length };
+      state.run = {
+        ...state.run,
+        status: 'reviewing',
+        readyCandidates: state.candidates.length,
+        pendingClusters: 0,
+        chunks: state.run.chunks.map((chunk) => ({ ...chunk, status: 'completed' as const })),
+        liveCandidateAssetTokens: state.candidates.flatMap((candidate) => candidate.selectedAssetTokens),
+      };
     }
     await saveBackendState(state);
     return { accepted: true } as T;

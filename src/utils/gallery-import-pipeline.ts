@@ -11,6 +11,7 @@ import {
   GalleryImportWaitingForWifiError,
   startGalleryImportRunner,
 } from '@/services/gallery-import-runner';
+import { kickGalleryImportDriver } from '@/services/gallery-import-driver';
 import { markGalleryImportRunnerActive, markGalleryImportRunnerInactive, publishGalleryImportLiveProgress } from '@/utils/gallery-import-live-progress';
 import { applyGalleryImportPendingScanProgress, getGalleryImportPendingStart, setGalleryImportPendingStart } from '@/utils/gallery-import-pending-start';
 import type { GalleryMediaLibraryAdapter } from '@/utils/gallery-import-scanner';
@@ -34,6 +35,13 @@ export interface BeginGalleryImportPipelineInput {
  * state while this keeps running in the background. */
 export function beginGalleryImportPipeline(input: BeginGalleryImportPipelineInput): void {
   setGalleryImportPendingStart({ status: 'starting', permissionMode: input.permissionMode });
+  // Captured locally (not read back from the pending-start slot) so a later
+  // `.catch` overwriting that slot with a runId-less 'waitingWifi'/'failed'
+  // state can never make `.finally` forget which run to mark inactive. This
+  // is the fix for the audited bug: the runner used to be marked active
+  // forever after a failure past `onRunStarted`, which froze the progress
+  // screen and blocked auto-resume.
+  let startedRunId: string | undefined;
   void startGalleryImportRunner({
     userId: input.userId,
     familyId: input.familyId,
@@ -48,8 +56,14 @@ export function beginGalleryImportPipeline(input: BeginGalleryImportPipelineInpu
       }
     },
     onRunStarted: (runId) => {
+      startedRunId = runId;
       markGalleryImportRunnerActive(runId);
       setGalleryImportPendingStart({ status: 'started', runId, permissionMode: input.permissionMode });
+      // Let the app-root driver learn the new run id right away (it sees the
+      // active flag above and only records state, never double-processes),
+      // so screens subscribed to it (Settings row, activity bell) reflect
+      // the live sweep immediately rather than on the next tick.
+      kickGalleryImportDriver('run-started');
     },
   })
     .then((result) => {
@@ -66,13 +80,20 @@ export function beginGalleryImportPipeline(input: BeginGalleryImportPipelineInpu
     })
     .catch((caught) => {
       if (caught instanceof GalleryImportWaitingForWifiError) {
-        setGalleryImportPendingStart({ status: 'waitingWifi', error: caught, permissionMode: input.permissionMode });
+        setGalleryImportPendingStart({ status: 'waitingWifi', error: caught, runId: startedRunId, permissionMode: input.permissionMode });
       } else {
-        setGalleryImportPendingStart({ status: 'failed', error: caught, permissionMode: input.permissionMode });
+        setGalleryImportPendingStart({ status: 'failed', error: caught, runId: startedRunId, permissionMode: input.permissionMode });
       }
     })
     .finally(() => {
-      const pending = getGalleryImportPendingStart();
-      if (pending?.runId) markGalleryImportRunnerInactive(pending.runId);
+      // Always keyed off the locally-captured id, never the (possibly
+      // overwritten) pending-start slot -- a run that started and then
+      // failed must always be marked inactive.
+      if (startedRunId) markGalleryImportRunnerInactive(startedRunId);
+      // The driver may have been sitting idle (nothing to do) since before
+      // this run existed, or may be about to double-check a stale wait --
+      // either way, don't leave window-extension/retry waiting for the next
+      // 60s tick now that fresh local state exists to act on.
+      kickGalleryImportDriver('start-finished');
     });
 }

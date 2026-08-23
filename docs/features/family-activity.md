@@ -1,7 +1,7 @@
 # Feature: Family activity
 
 **Status:** `done`
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-23
 **PRD reference:** — (post-MVP capability; see [docs/plans/family-activity.md](../plans/family-activity.md) for the decision record and rationale)
 
 ## Overview
@@ -19,10 +19,17 @@ the bell shows there's something new since the viewer last opened it.
 
 - **Bell:** top-right of the timeline header, next to "Your moments." Shown
   for every role, including solo families (whose feed is always empty — see
-  below). An 8px accent dot appears when there's unseen activity.
+  below). An 8px accent dot appears when there's unseen activity, OR when the
+  device's own continuous gallery-import sweep has an unseen batch of ready
+  suggestions (see the ephemeral row below and its own Extension guide entry
+  — this is the sweep's one re-entry point, replacing the old header glyph).
 - **Sheet:** tapping the bell opens a ~80%-height bottom sheet titled "Family
   activity," sectioned **Today / Yesterday / This week / Earlier**. Each
-  section only renders if it has rows.
+  section only renders if it has rows. When this device has an active or
+  recently-finished gallery-import sweep, one pinned row sits above the
+  sections (and above the empty state) with a short status line and, once
+  suggestions are ready, a **Review** pill — see
+  [Extension guide](#extension-guide) for why this row is not a real event.
 - **Row anatomy:** a sentence with the actor's name(s) in bold ("**Ana** added 3 memories," "**Grandma** and
   **Luis** liked a memory"), a muted second line (the comment snippet for a
   comment row, otherwise a short excerpt of the memory), a timestamp, and — for
@@ -119,7 +126,8 @@ only and never filter what shows up here.
 | Service | `src/services/family-activity.ts` | RPC wrappers, row → `FamilyActivityEvent` mapping, the pure `groupFamilyActivity()` grouping/sectioning function |
 | Copy | `src/utils/family-activity-copy.ts` | Sentence builder (`buildFamilyActivityCopy`) — bold-name segments + verb + object, never references the memory's creator |
 | Hooks | `src/hooks/useFamilyActivity.ts`, `src/hooks/queryKeys.ts` | `useFamilyActivity`, `useFamilyActivityUnread`, `useMarkFamilyActivitySeen` |
-| Components | `src/components/timeline-activity-bell.tsx`, `family-activity-sheet.tsx`, `family-activity-row.tsx` | Bell + dot, sheet (loading/error/empty/sectioned list), row rendering |
+| Components | `src/components/timeline-activity-bell.tsx`, `family-activity-sheet.tsx`, `family-activity-row.tsx` | Bell + dot, sheet (loading/error/empty/sectioned list), row rendering, and (sheet only) the gallery-import ephemeral row + its copy derivation |
+| Gallery-import re-entry (not a real event — see Extension guide) | `src/utils/gallery-import-bell-seen.ts`, `src/hooks/useGalleryImport.ts`'s `useGalleryImportEntryStatus` | AsyncStorage "seen this (runId, readyCount)" check for the bell dot; device-bound checkpoint/run/driver status feeding both the dot and the sheet's pinned row |
 | Screen | `app/(app)/(tabs)/timeline.tsx` | Bell in the header row, sheet mounted once, routing callbacks |
 | Shared util | `src/utils/bottom-sheet-dismiss.ts` | Pull-down-dismiss thresholds + bottom padding, shared with `MemoryCommentsDrawer` (see gotchas) |
 | Routes | `src/lib/routes.ts` | `memoryDetailRoute`, `memoryDetailCommentsRoute`, `sharingApprovalsRoute`, `sharingInviteRoute` |
@@ -177,6 +185,29 @@ always the **newest** member's timestamp.
 
 **Do not change without updating this doc**
 
+- **The gallery-import ephemeral row is not an event kind.** Continuous
+  gallery-import sweep re-entry (docs/plans/gallery-import-continuous.md
+  I4a step 3) is surfaced through an optional `galleryImport` prop on
+  `FamilyActivitySheet` (`{ readyCount, comingIndicator, phase, onOpen }`),
+  rendered as a pinned row above the sections *and* above the empty state by
+  `FamilyActivitySheetBody` (`family-activity-sheet.tsx`). It is deliberately
+  **not** a `family_activity_events` row: it is not persisted, not fetched by
+  `get_family_activity`, not grouped by `groupFamilyActivity`, and it
+  disappears entirely once there is nothing to say (no checkpoint/run, or
+  the run reached a terminal status) rather than sitting in history like
+  every other row here. `app/(app)/(tabs)/timeline.tsx` computes the prop
+  from `useGalleryImportEntryStatus()` and only passes it when
+  `Boolean(checkpoint) && !isGalleryImportRunTerminal(run?.status)`; the copy
+  itself (`describeGalleryImportActivityRow` in `family-activity-sheet.tsx`)
+  picks one of five states in priority order: ready count > 0 (Review pill,
+  routes to the review deck) beats a fair-use pause beats a Wi-Fi wait beats
+  a driver error beats a generic "still looking" line for an otherwise-active
+  sweep. Every other state hides the row. The activity bell's own dot is a
+  separate, AsyncStorage-backed "have I seen this exact (runId, readyCount)
+  pair" check (`src/utils/gallery-import-bell-seen.ts`), OR'd with the
+  existing `hasUnreadActivity` flag — not part of `get_family_activity_unread`.
+  Don't fold either piece into the real event pipeline; extend the prop/copy
+  function above instead.
 - The own-events-excluded and `member_pending`-role-filtered rules — these
   are enforced in the RPC (DB side), not the client; don't add a client-side
   filter that duplicates or diverges from them.
@@ -287,13 +318,15 @@ always the **newest** member's timestamp.
 |------|--------|
 | `src/services/family-activity.test.ts` | RPC row → event mapping, actor former-member fallback, `groupFamilyActivity` windows (30min/24h), no cross-day-section grouping, day-section bucketing, `buildFamilyActivityCopy` for every event kind incl. the gallery-import variant and grouped-likes "and N others" |
 | `src/components/timeline-activity-bell.test.tsx` | Dot visibility, a11y label (plain vs. "new"), press wiring |
+| `src/utils/gallery-import-bell-seen.test.ts` | Default-unseen, persists per (userId, familyId, runId, readyCount), reads unseen again once readyCount grows or the run changes, storage-failure fallbacks |
 
 ### Integration tests
 
 | File | Scenarios |
 |------|-----------|
 | `src/hooks/useFamilyActivity.integration.test.tsx` | `enabled` gating (including no-familyId), fetch on the disabled→enabled transition, `useFamilyActivityUnread` fetch, `useMarkFamilyActivitySeen` optimistic clear + rollback |
-| `src/components/family-activity-sheet.test.tsx` | Loading skeleton, error + retry, empty state (incl. solo-family invite CTA), Today/Yesterday/This week/Earlier sectioning, Review pill only on `member_pending` rows, deferred-navigation order for every tap target (route callback withheld until the sheet re-renders `visible={false}`), data hooks never called while closed |
+| `src/components/family-activity-sheet.test.tsx` | Loading skeleton, error + retry, empty state (incl. solo-family invite CTA), Today/Yesterday/This week/Earlier sectioning, Review pill only on `member_pending` rows, deferred-navigation order for every tap target (route callback withheld until the sheet re-renders `visible={false}`), data hooks never called while closed, and the gallery-import ephemeral row's five-state copy priority (ready beats fair-use beats Wi-Fi beats error beats generic "still looking"), its placement above both the list and the empty state, and its own deferred-navigation order |
+| `src/screen-tests/timeline.integration.test.tsx` | No header glyph/drawer; the photo invite renders at 0 and exactly 1 memories, never at 2+; the bell dot lights from an unseen ready gallery-import batch and clears on sheet-open; the `galleryImport` prop passed to `FamilyActivitySheet` (and its `onOpen` routing to review vs. progress) is omitted with no checkpoint or a terminal run |
 
 ### E2E (Maestro)
 
@@ -308,7 +341,9 @@ npm test -- --runInBand \
   src/services/family-activity.test.ts \
   src/components/family-activity-sheet.test.tsx \
   src/components/timeline-activity-bell.test.tsx \
-  src/hooks/useFamilyActivity.integration.test.tsx
+  src/utils/gallery-import-bell-seen.test.ts \
+  src/hooks/useFamilyActivity.integration.test.tsx \
+  src/screen-tests/timeline.integration.test.tsx
 maestro test .maestro/flows/engagement/family-activity.yaml
 ```
 
@@ -317,3 +352,4 @@ maestro test .maestro/flows/engagement/family-activity.yaml
 | Date | Change |
 |------|--------|
 | 2026-08-21 | Initial implementation: bell + unread dot, bottom sheet with sectioned/grouped feed, RPC-backed service and hooks, client-side grouping and copy rules. |
+| 2026-08-23 | Continuous gallery-import sweep re-entry (docs/plans/gallery-import-continuous.md I4a): the bell's dot also lights for an unseen ready batch, and the sheet gains a non-persisted, non-grouped pinned row above the sections/empty state pointing at the review deck or progress screen. Not a new event kind — see Extension guide. |

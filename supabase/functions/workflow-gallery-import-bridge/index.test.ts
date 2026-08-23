@@ -63,6 +63,60 @@ Deno.test('gallery bridge only accepts bounded, content-free usage schema', asyn
   assertEquals(calls.length, 0);
 });
 
+// S5: a single failed cluster inside an otherwise-healthy chunk gets its own
+// terminal outcome, distinct from fail_gallery_chunk (whole-chunk failure).
+Deno.test('gallery bridge maps fail_gallery_cluster to the matching RPC and validates the closed error code', async () => {
+  const { calls, overrides } = dependencies({ rpcData: true });
+  const response = await handleWorkflowGalleryImportBridge(await signedRequest({
+    operation: 'fail_gallery_cluster', chunkId: CHUNK, clusterSignature: 'b'.repeat(64), errorCode: 'VISION_REJECTED',
+  }, NONCE, 1_000_000), overrides);
+  assertEquals(response.status, 200);
+  assertEquals(calls, [{ name: 'fail_gallery_cluster', args: {
+    p_chunk_id: CHUNK, p_cluster_signature: 'b'.repeat(64), p_closed_error_code: 'VISION_REJECTED',
+  }}]);
+  assertEquals(await response.json(), { ok: true });
+
+  const invalid = await handleWorkflowGalleryImportBridge(await signedRequest({
+    operation: 'fail_gallery_cluster', chunkId: CHUNK, clusterSignature: 'b'.repeat(64), errorCode: 'not upper case',
+  }, '33333333-3333-4333-8333-333333333333', 1_000_000), overrides);
+  assertEquals(invalid.status, 400);
+});
+
+// S6: only the small non-retryable business/validation allowlist maps to the
+// original 409 bridge_rejected; every other Postgres error class (deadlock,
+// statement timeout, connection/resource exhaustion, or anything unexpected)
+// must map to a retryable 503 bridge_unavailable so the Worker's retry
+// policy can tell the two apart.
+Deno.test('gallery bridge maps only the non-retryable allowlist to 409, everything else to a retryable 503 (S6)', async () => {
+  const nonRetryableCodes = ['P0001', '22023', '42501', '28000'];
+  for (const [index, code] of nonRetryableCodes.entries()) {
+    const { overrides } = dependencies();
+    const nonce = `4444444${index}-4444-4444-8444-444444444444`;
+    const response = await handleWorkflowGalleryImportBridge(await signedRequest({
+      operation: 'scrub_gallery_chunk', chunkId: CHUNK,
+    }, nonce, 1_000_000), { ...overrides, createServiceClient: () => ({
+      from: () => ({ insert: async () => ({ error: null }) }),
+      rpc: async () => ({ data: null, error: { code } }),
+    }) as never });
+    assertEquals(response.status, 409, `expected 409 for ${code}`);
+    assertEquals((await response.json()).code, 'bridge_rejected');
+  }
+
+  const retryableCodes = ['40P01', '57014', '08006', '53300', 'P0002', 'unexpected'];
+  for (const [index, code] of retryableCodes.entries()) {
+    const { overrides } = dependencies();
+    const nonce = `5555555${index}-5555-4555-8555-555555555555`;
+    const response = await handleWorkflowGalleryImportBridge(await signedRequest({
+      operation: 'scrub_gallery_chunk', chunkId: CHUNK,
+    }, nonce, 1_000_000), { ...overrides, createServiceClient: () => ({
+      from: () => ({ insert: async () => ({ error: null }) }),
+      rpc: async () => ({ data: null, error: { code } }),
+    }) as never });
+    assertEquals(response.status, 503, `expected 503 for ${code}`);
+    assertEquals((await response.json()).code, 'bridge_unavailable');
+  }
+});
+
 Deno.test('gallery bridge maps per-cluster publication exactly', async () => {
   const { calls, overrides } = dependencies({ rpcData: 1 });
   const response = await handleWorkflowGalleryImportBridge(await signedRequest({

@@ -1,11 +1,13 @@
-import { render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 
 import TimelineScreen from '../../app/(app)/(tabs)/timeline';
 import { colors } from '@/constants/theme';
+import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyActivityUnread } from '@/hooks/useFamilyActivity';
 import { useFamilyMembers, useOnboardingStatus } from '@/hooks/useFamilyMembers';
+import { useGalleryImportEntryStatus } from '@/hooks/useGalleryImport';
 import { useMemories } from '@/hooks/useMemories';
 
 // Workstream A4: the old useFocusEffect(refetch) is gone -- freshness comes
@@ -17,7 +19,15 @@ import { useMemories } from '@/hooks/useMemories';
 jest.mock('expo-router', () => ({
   router: { push: jest.fn() },
 }));
+// The header glyph/drawer are gone (owner decision: the activity bell is the
+// one re-entry point) -- this flag defaults on here so the empty-state and
+// one-memory invite-card tests below can exercise TimelineGalleryImportInvite
+// for real, without needing to also mock its AsyncStorage-backed dismissal
+// check (jest-expo's AsyncStorage mock defaults every key to unset, i.e.
+// "not dismissed", which is exactly the state these tests want).
+jest.mock('@/utils/gallery-import-flags', () => ({ isGalleryImportFeatureEnabled: true }));
 
+jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/hooks/useFamilyMembers', () => ({
   useFamilyMembers: jest.fn(),
@@ -48,6 +58,17 @@ jest.mock('@/hooks/useContentSafety', () => ({
 // mock. Bell/dot behavior itself is covered by
 // timeline-activity-bell.test.tsx.
 jest.mock('@/hooks/useFamilyActivity', () => ({ useFamilyActivityUnread: jest.fn() }));
+// The continuous gallery-import sweep (docs/plans/gallery-import-continuous.md
+// I4a): this device-bound status hook reaches AsyncStorage + a live
+// TanStack Query -- mocked out here the same way useFamilyActivityUnread is,
+// so this screen test never needs a QueryClientProvider or an AsyncStorage
+// round trip just to render the Timeline. Its own behavior (state
+// derivation, driver wiring) is covered by useGalleryImport.integration.test.tsx.
+jest.mock('@/hooks/useGalleryImport', () => ({ useGalleryImportEntryStatus: jest.fn() }));
+jest.mock('@/utils/gallery-import-bell-seen', () => ({
+  hasSeenGalleryImportBell: jest.fn(async () => true),
+  markGalleryImportBellSeen: jest.fn(async () => undefined),
+}));
 
 jest.mock('@/components/memory-card', () => ({
   MemoryCard: () => null,
@@ -64,16 +85,37 @@ jest.mock('@/components/looking-back/package-rail', () => ({
 // Exercised in its own test suite (family-activity-sheet.test.tsx); mocked
 // out here (like the other child components above) so this screen test's
 // mocks don't have to reach into its transitive dependencies
-// (useMediaUrls -> @/lib/supabase).
+// (useMediaUrls -> @/lib/supabase). A jest.fn() component (rather than a
+// bare () => null) so this file can still assert on the `galleryImport`
+// prop TimelineScreen computes and hands it -- the row's own rendering is
+// covered by family-activity-sheet.test.tsx.
 jest.mock('@/components/family-activity-sheet', () => ({
-  FamilyActivitySheet: () => null,
+  FamilyActivitySheet: jest.fn(() => null),
 }));
 
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
+const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof useFamilyMembers>;
 const mockedUseOnboardingStatus = useOnboardingStatus as jest.MockedFunction<typeof useOnboardingStatus>;
 const mockedUseMemories = useMemories as jest.MockedFunction<typeof useMemories>;
 const mockedUseFamilyActivityUnread = useFamilyActivityUnread as jest.MockedFunction<typeof useFamilyActivityUnread>;
+const mockedUseGalleryImportEntryStatus = useGalleryImportEntryStatus as jest.MockedFunction<typeof useGalleryImportEntryStatus>;
+
+function galleryEntryStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    state: 'none',
+    attentionReason: null,
+    reviewDaysLeft: null,
+    readyCount: 0,
+    checkpoint: null,
+    run: null,
+    isLoading: false,
+    refetch: jest.fn(),
+    driverState: { phase: 'idle', runId: null, pausedUntil: null, lastError: null, isActive: false },
+    comingIndicator: { kind: 'none' },
+    ...overrides,
+  } as unknown as ReturnType<typeof useGalleryImportEntryStatus>;
+}
 
 const memory = {
   id: 'memory-1',
@@ -102,6 +144,13 @@ describe('TimelineScreen', () => {
     mockedRefetchActivityUnread = jest.fn();
 
     mockedUseFamily.mockReturnValue({ role: 'owner' } as ReturnType<typeof useFamily>);
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } } as unknown as ReturnType<typeof useAuth>);
+    mockedUseGalleryImportEntryStatus.mockReturnValue(galleryEntryStatus());
+    // jest.clearAllMocks() (below... actually above, called first) clears
+    // call history but NOT a previously-set mockResolvedValue -- reset the
+    // default explicitly every test so one test's override never leaks into
+    // the next.
+    jest.requireMock('@/utils/gallery-import-bell-seen').hasSeenGalleryImportBell.mockResolvedValue(true);
     mockedUseFamilyActivityUnread.mockReturnValue({
       unread: false,
       isLoading: false,
@@ -284,6 +333,152 @@ describe('TimelineScreen', () => {
       backgroundColor: colors.border,
       borderColor: colors.primary,
       borderWidth: 1.5,
+    });
+  });
+
+  // docs/plans/gallery-import-continuous.md I4a step 1/2/3: the header
+  // glyph/drawer are gone, the invite card renders at <=1 memory, and the
+  // activity bell/sheet are the sweep's one re-entry point.
+  describe('gallery import (activity bell/sheet re-entry, no glyph)', () => {
+    function familyActivitySheetMock() {
+      return jest.requireMock('@/components/family-activity-sheet').FamilyActivitySheet as jest.Mock;
+    }
+    function routerMock() {
+      return jest.requireMock('expo-router').router as { push: jest.Mock };
+    }
+
+    it('never renders the old header glyph or its drawer', () => {
+      const { queryByTestId } = render(<TimelineScreen />);
+      expect(queryByTestId('timeline-gallery-import-glyph')).toBeNull();
+      expect(queryByTestId('import-drawer-sheet')).toBeNull();
+    });
+
+    it('shows the photo invite card in the empty state', async () => {
+      mockedUseFamily.mockReturnValue({ role: 'owner', familyId: 'family-1' } as ReturnType<typeof useFamily>);
+      mockedUseMemories.mockReturnValue({
+        memories: [], isLoading: false, isRefetching: false, isError: false, error: null,
+        refetch: mockedRefetch, fetchNextPage: jest.fn(), hasNextPage: false, isFetchingNextPage: false,
+      } as unknown as ReturnType<typeof useMemories>);
+
+      const { getByTestId } = render(<TimelineScreen />);
+      // The invite defaults to hidden until its own AsyncStorage dismissal
+      // check resolves (flash-avoidance) -- see TimelineGalleryImportInvite.
+      await waitFor(() => expect(getByTestId('timeline-gallery-import')).toBeTruthy());
+    });
+
+    it('shows the photo invite card as the first list item when there is exactly one memory', async () => {
+      mockedUseFamily.mockReturnValue({ role: 'owner', familyId: 'family-1' } as ReturnType<typeof useFamily>);
+      // Default mockedUseMemories already returns exactly one memory.
+      const { getByTestId } = render(<TimelineScreen />);
+      await waitFor(() => expect(getByTestId('timeline-gallery-import')).toBeTruthy());
+    });
+
+    it('does not show the photo invite card once there are two or more memories', async () => {
+      mockedUseFamily.mockReturnValue({ role: 'owner', familyId: 'family-1' } as ReturnType<typeof useFamily>);
+      mockedUseMemories.mockReturnValue({
+        memories: [memory, { ...memory, id: 'memory-2' }],
+        isLoading: false, isRefetching: false, isError: false, error: null,
+        refetch: mockedRefetch, fetchNextPage: jest.fn(), hasNextPage: false, isFetchingNextPage: false,
+      } as unknown as ReturnType<typeof useMemories>);
+
+      const { queryByTestId } = render(<TimelineScreen />);
+      // Give the (never-relevant here) dismissal check a tick, then confirm
+      // the card never appears regardless of how that check resolves.
+      await waitFor(() => expect(mockedUseMemories).toHaveBeenCalled());
+      expect(queryByTestId('timeline-gallery-import')).toBeNull();
+    });
+
+    it('lights the bell dot once suggestions are ready and unseen', async () => {
+      const { hasSeenGalleryImportBell } = jest.requireMock('@/utils/gallery-import-bell-seen');
+      (hasSeenGalleryImportBell as jest.Mock).mockResolvedValue(false);
+      mockedUseFamily.mockReturnValue({ role: 'owner', familyId: 'family-1' } as ReturnType<typeof useFamily>);
+      mockedUseGalleryImportEntryStatus.mockReturnValue(galleryEntryStatus({
+        state: 'ready', readyCount: 5, checkpoint: { runId: 'run-1' }, run: { status: 'reviewing' },
+      }));
+
+      const { getByTestId } = render(<TimelineScreen />);
+      await waitFor(() => expect(getByTestId('timeline-activity-bell-dot')).toBeTruthy());
+      expect(hasSeenGalleryImportBell).toHaveBeenCalledWith('user-1', 'family-1', 'run-1', 5);
+    });
+
+    it('does not light the bell dot once the ready batch has already been seen', async () => {
+      mockedUseFamily.mockReturnValue({ role: 'owner', familyId: 'family-1' } as ReturnType<typeof useFamily>);
+      mockedUseGalleryImportEntryStatus.mockReturnValue(galleryEntryStatus({
+        state: 'ready', readyCount: 5, checkpoint: { runId: 'run-1' }, run: { status: 'reviewing' },
+      }));
+
+      const { queryByTestId, getByTestId } = render(<TimelineScreen />);
+      await waitFor(() => expect(mockedUseGalleryImportEntryStatus).toHaveBeenCalled());
+      // hasSeenGalleryImportBell defaults to resolving true (module mock
+      // above), the "already seen" case -- the dot stays off, and the bell
+      // itself still renders (family activity's own unread flag is false too).
+      expect(getByTestId('timeline-activity-bell')).toBeTruthy();
+      expect(queryByTestId('timeline-activity-bell-dot')).toBeNull();
+    });
+
+    it('marks the batch seen and clears the bell dot when the activity sheet opens', async () => {
+      const { hasSeenGalleryImportBell, markGalleryImportBellSeen } = jest.requireMock('@/utils/gallery-import-bell-seen');
+      (hasSeenGalleryImportBell as jest.Mock).mockResolvedValue(false);
+      mockedUseFamily.mockReturnValue({ role: 'owner', familyId: 'family-1' } as ReturnType<typeof useFamily>);
+      mockedUseGalleryImportEntryStatus.mockReturnValue(galleryEntryStatus({
+        state: 'ready', readyCount: 5, checkpoint: { runId: 'run-1' }, run: { status: 'reviewing' },
+      }));
+
+      const { getByTestId } = render(<TimelineScreen />);
+      await waitFor(() => expect(getByTestId('timeline-activity-bell-dot')).toBeTruthy());
+
+      fireEvent.press(getByTestId('timeline-activity-bell'));
+
+      expect(markGalleryImportBellSeen).toHaveBeenCalledWith('user-1', 'family-1', 'run-1', 5);
+    });
+
+    it('omits the galleryImport prop (hiding the sheet\'s pinned row) when there is no checkpoint', () => {
+      render(<TimelineScreen />);
+      const lastCall = familyActivitySheetMock().mock.calls.at(-1)![0];
+      expect(lastCall.galleryImport).toBeUndefined();
+    });
+
+    it('omits the galleryImport prop once the run reaches a terminal status', () => {
+      mockedUseGalleryImportEntryStatus.mockReturnValue(galleryEntryStatus({
+        checkpoint: { runId: 'run-1' }, run: { status: 'completed' },
+      }));
+      render(<TimelineScreen />);
+      const lastCall = familyActivitySheetMock().mock.calls.at(-1)![0];
+      expect(lastCall.galleryImport).toBeUndefined();
+    });
+
+    it('passes readyCount/comingIndicator/phase and an onOpen that routes to the review deck when ready', () => {
+      mockedUseGalleryImportEntryStatus.mockReturnValue(galleryEntryStatus({
+        readyCount: 7,
+        checkpoint: { runId: 'run-1' },
+        run: { status: 'reviewing' },
+        comingIndicator: { kind: 'count', count: 2 },
+        driverState: { phase: 'uploading', runId: 'run-1', pausedUntil: null, lastError: null, isActive: true },
+      }));
+      render(<TimelineScreen />);
+
+      const lastCall = familyActivitySheetMock().mock.calls.at(-1)![0];
+      expect(lastCall.galleryImport).toMatchObject({
+        readyCount: 7,
+        comingIndicator: { kind: 'count', count: 2 },
+        phase: 'uploading',
+      });
+
+      lastCall.galleryImport.onOpen();
+      expect(routerMock().push).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/review', params: { runId: 'run-1' } });
+    });
+
+    it('routes onOpen to the progress screen when nothing is ready yet', () => {
+      mockedUseGalleryImportEntryStatus.mockReturnValue(galleryEntryStatus({
+        readyCount: 0,
+        checkpoint: { runId: 'run-1' },
+        run: { status: 'processing' },
+      }));
+      render(<TimelineScreen />);
+
+      const lastCall = familyActivitySheetMock().mock.calls.at(-1)![0];
+      lastCall.galleryImport.onOpen();
+      expect(routerMock().push).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/progress', params: { runId: 'run-1' } });
     });
   });
 });

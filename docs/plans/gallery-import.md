@@ -1,5 +1,14 @@
 # Plan: gallery import — AI-staged memories from the camera roll
 
+> **Superseded as the current plan (2026-08-23).** The capped-run model this
+> document describes (60 clusters/run, 2 runs in the first 30 days then
+> 1/UTC-month, admission gates) was replaced by a continuous per-family
+> library sweep. See [gallery-import-continuous.md](./gallery-import-continuous.md)
+> for the current model, seam contracts, and deploy checklist. This document
+> remains the historical record of the original architecture/security review
+> and Phase 0 feasibility gates, which still apply before a production store
+> rollout.
+
 Repo: `/Users/eduardoyi/Coding/Momora2` (Expo SDK 56 + Supabase + Cloudflare
 Workers/R2)
 

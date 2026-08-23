@@ -31,6 +31,7 @@ function dependencies(input: { failKey?: string } = {}) {
       deleted.push(key);
       if (key === input.failKey) throw new Error('R2 unavailable');
     },
+    redispatchStaleGalleryChunks: async () => ({ claimed: 0, redispatched: 0 }),
   };
   return { rpcCalls, deleted, overrides };
 }
@@ -48,7 +49,7 @@ Deno.test('gallery cleanup deletes only claimed keys and finishes only fully suc
   const response = await handleCleanupGalleryImports(new Request('http://localhost', { method: 'POST' }), overrides);
 
   assertEquals(response.status, 200);
-  assertEquals(await response.json(), { success: true, completed: 1 });
+  assertEquals(await response.json(), { success: true, completed: 1, redispatched: 0 });
   assertEquals(deleted, [
     'owner/gallery-import/a/previews/one.jpg', 'owner/gallery-import/a/previews/two.jpg', 'owner/gallery-import/b/previews/three.jpg',
   ]);
@@ -59,4 +60,16 @@ Deno.test('gallery cleanup deletes only claimed keys and finishes only fully suc
     { name: 'get_gallery_import_cleanup_objects', args: { p_run_id: RUN_B, p_claim_token: 'claim-b' } },
     { name: 'cleanup_gallery_import_workflow_bridge_nonces', args: { p_limit: 500 } },
   ]);
+});
+
+Deno.test('gallery cleanup redispatches stale chunks after expiry work and reports the count', async () => {
+  const { overrides } = dependencies();
+  const redispatchCalls: unknown[] = [];
+  const response = await handleCleanupGalleryImports(new Request('http://localhost', { method: 'POST' }), {
+    ...overrides,
+    redispatchStaleGalleryChunks: async (deps) => { redispatchCalls.push(deps); return { claimed: 2, redispatched: 1 }; },
+  });
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { success: true, completed: 2, redispatched: 1 });
+  assertEquals(redispatchCalls.length, 1);
 });

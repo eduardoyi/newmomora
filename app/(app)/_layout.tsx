@@ -8,6 +8,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useNotificationResponseRouting } from '@/hooks/useNotifications';
 import { useAiUsageLimitNotices } from '@/hooks/useAiUsageLimitNotices';
+import { useGalleryImportDriver } from '@/hooks/useGalleryImportDriver';
 import { LookingBackSessionProvider } from '@/hooks/useLookingBackSession';
 import { noFamilyRoute } from '@/lib/routes';
 
@@ -15,6 +16,12 @@ export default function AppLayout() {
   const { session, isLoading: isAuthLoading } = useAuth();
   const { familyId, isLoading: isFamilyLoading, refetchMemberships } = useFamily();
   useAiUsageLimitNotices();
+  // Continuous gallery-import sweep (docs/plans/gallery-import-continuous.md,
+  // S10): the single app-root driver that resumes the runner on launch,
+  // AppState/NetInfo events, and a periodic tick. Screens only observe it
+  // (subscribeGalleryImportDriver) and kick it (kickGalleryImportDriver);
+  // this is the only place it is mounted.
+  useGalleryImportDriver();
   // Deep-link routing for tapped push notifications (plan §10) -- lives at
   // the app root so it's active for the whole authenticated session
   // regardless of which screen is focused. `ready` gates the cold-start

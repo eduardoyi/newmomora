@@ -10,7 +10,7 @@ import { useRunCheckpoint } from '@/components/gallery-import/gallery-import-sha
 import { buildGalleryImportDayPool } from '@/utils/gallery-import-deck';
 
 export default function GalleryImportApprovalRoute() {
-  const { runId, candidateId } = useLocalSearchParams<{ runId?: string; candidateId?: string }>();
+  const { runId, candidateId, readyCount } = useLocalSearchParams<{ runId?: string; candidateId?: string; readyCount?: string }>();
   const { checkpoint } = useRunCheckpoint(runId);
   // The composer hands over its current selection when the parent should open
   // the day-pool chooser (the documented onAddPhotos seam); the sheet returns
@@ -22,9 +22,19 @@ export default function GalleryImportApprovalRoute() {
     () => checkpoint && chooser ? buildGalleryImportDayPool(checkpoint, chooser.candidate.selectedAssetTokens) : [],
     [checkpoint, chooser],
   );
+  // The deck passes its own already-known run.readyCandidates through the
+  // route so this screen's initial "N left" reads real from the very first
+  // frame -- GalleryImportApproval still refreshes it in the background
+  // (see its own readyCount prop doc comment).
+  const parsedReadyCount = readyCount !== undefined ? Number(readyCount) : undefined;
   return (
     <>
-      <GalleryImportApproval candidateId={candidateId} onAddPhotos={setChooser} runId={runId} />
+      <GalleryImportApproval
+        candidateId={candidateId}
+        onAddPhotos={setChooser}
+        readyCount={Number.isFinite(parsedReadyCount) ? parsedReadyCount : undefined}
+        runId={runId}
+      />
       {chooser && checkpoint ? (
         <GalleryImportPhotoChooser
           candidate={chooser.candidate}

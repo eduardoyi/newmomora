@@ -7,11 +7,23 @@ const mockUseMemories = jest.fn();
 const mockUseContentSafety = jest.fn();
 const mockUseLookingBackPackages = jest.fn();
 const mockUseLookingBackSession = jest.fn();
+const mockUseAuth = jest.fn();
+const mockUseGalleryImportEntryStatus = jest.fn();
 const mockIsUserBlocked = jest.fn(() => false);
 const mockIsTargetReported = jest.fn(() => false);
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: () => mockUseFamily() }));
+jest.mock('@/hooks/use-auth', () => ({ useAuth: () => mockUseAuth() }));
+// The continuous gallery-import sweep's device-bound status hook (docs/plans/
+// gallery-import-continuous.md I4a) -- mocked the same way as in
+// timeline.integration.test.tsx so this sibling screen test never needs a
+// real QueryClient/AsyncStorage round trip just to render the Timeline.
+jest.mock('@/hooks/useGalleryImport', () => ({ useGalleryImportEntryStatus: () => mockUseGalleryImportEntryStatus() }));
+jest.mock('@/utils/gallery-import-bell-seen', () => ({
+  hasSeenGalleryImportBell: jest.fn(async () => true),
+  markGalleryImportBellSeen: jest.fn(async () => undefined),
+}));
 jest.mock('@/hooks/useFamilyMembers', () => ({
   useFamilyMembers: () => mockUseFamilyMembers(), useOnboardingStatus: () => mockUseOnboardingStatus(),
 }));
@@ -71,6 +83,13 @@ describe('Timeline Looking Back rail integration', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockUseAuth.mockReturnValue({ user: { id: 'user-1' } });
+    mockUseGalleryImportEntryStatus.mockReturnValue({
+      state: 'none', attentionReason: null, reviewDaysLeft: null, readyCount: 0,
+      checkpoint: null, run: null, isLoading: false, refetch: jest.fn(),
+      driverState: { phase: 'idle', runId: null, pausedUntil: null, lastError: null, isActive: false },
+      comingIndicator: { kind: 'none' },
+    });
     mockUseFamily.mockReturnValue({ familyId: 'family-a', role: 'owner' });
     mockUseFamilyMembers.mockReturnValue({ members: [{ id: 'child-1' }], isLoading: false });
     mockUseOnboardingStatus.mockReturnValue({ isLoading: false, needsFamilyMember: false });

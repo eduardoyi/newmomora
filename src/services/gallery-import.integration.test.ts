@@ -1,13 +1,15 @@
-import { FunctionsHttpError } from '@supabase/supabase-js';
+import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js';
 
 import {
   beginGalleryImportApproval,
   createGalleryImportRun,
+  dispatchGalleryImportChunk,
   getGalleryImportCandidates,
   getGalleryImportRun,
   registerGalleryImportChunk,
   updateGalleryCaptionSettings,
 } from '@/services/gallery-import';
+import { GALLERY_IMPORT_EDGE_TIMEOUT_MS } from '@/constants/gallery-import';
 import { supabase } from '@/lib/supabase';
 
 jest.mock('@/utils/gallery-import-flags', () => ({ isGalleryImportFeatureEnabled: true }));
@@ -49,6 +51,7 @@ describe('gallery import service integration', () => {
     );
     expect(invoke).toHaveBeenCalledWith('create-gallery-import-run', {
       body: { familyId: 'family-1', algorithmVersion: 'gallery-v1', consentVersion: 'v1', permissionMode: 'full' },
+      timeout: GALLERY_IMPORT_EDGE_TIMEOUT_MS,
     });
   });
 
@@ -74,7 +77,7 @@ describe('gallery import service integration', () => {
   it('treats no active run as a normal empty response', async () => {
     invoke.mockResolvedValue({ data: null, error: null } as never);
     await expect(getGalleryImportRun({ runId: 'run-1', runCapability: 'device-only' })).resolves.toEqual({ data: null, error: null });
-    expect(invoke).toHaveBeenCalledWith('get-gallery-import-run', { body: { runId: 'run-1', runCapability: 'device-only' } });
+    expect(invoke).toHaveBeenCalledWith('get-gallery-import-run', { body: { runId: 'run-1', runCapability: 'device-only' }, timeout: GALLERY_IMPORT_EDGE_TIMEOUT_MS });
   });
 
   it('surfaces the safe structured Edge error instead of a generic non-2xx transport message', async () => {
@@ -97,6 +100,51 @@ describe('gallery import service integration', () => {
     });
   });
 
+  it('maps a fair-use 429 into a retryable error carrying retryAfterSeconds (S2)', async () => {
+    invoke.mockResolvedValue({
+      data: null,
+      error: new FunctionsHttpError(new Response(JSON.stringify({
+        error: 'Gallery import daily limit reached',
+        code: 'fair_use',
+        retryAfterSeconds: 3600,
+      }), { status: 429, headers: { 'content-type': 'application/json' } })),
+    } as never);
+
+    await expect(registerGalleryImportChunk({ familyId: 'family-1', runId: 'run-1', runCapability: 'cap', ordinal: 0, clusters: [] }))
+      .resolves.toEqual({ data: null, error: { message: 'Gallery import daily limit reached', code: 'fair_use', retryAfterSeconds: 3600 } });
+  });
+
+  it('maps a request that exceeds the Edge timeout into a distinguishable, content-free retryable error', async () => {
+    const abortError = new Error('The operation was aborted.');
+    abortError.name = 'AbortError';
+    invoke.mockResolvedValue({ data: null, error: new FunctionsFetchError(abortError) } as never);
+
+    await expect(getGalleryImportRun({ runId: 'run-1', runCapability: 'cap' })).resolves.toEqual({
+      data: null,
+      error: expect.objectContaining({ code: 'timeout' }),
+    });
+    // Never leak the underlying fetch/abort message -- content-free per CLAUDE.md.
+    const { error } = await getGalleryImportRun({ runId: 'run-1', runCapability: 'cap' });
+    expect(error?.message).not.toMatch(/abort/i);
+  });
+
+  it('races every gallery Edge call against GALLERY_IMPORT_EDGE_TIMEOUT_MS', async () => {
+    invoke.mockResolvedValue({ data: { candidates: [] }, error: null } as never);
+    await getGalleryImportCandidates({ runId: 'run-1', capability: 'cap' });
+    expect(invoke).toHaveBeenCalledWith('get-gallery-import-candidates', expect.objectContaining({ timeout: GALLERY_IMPORT_EDGE_TIMEOUT_MS }));
+  });
+
+  it('passes unavailableAssetTokens through to dispatch (S3)', async () => {
+    invoke.mockResolvedValue({ data: { accepted: true }, error: null } as never);
+    await dispatchGalleryImportChunk({
+      familyId: 'family-1', runId: 'run-1', runCapability: 'cap', chunkId: 'chunk-1',
+      previewUploads: [], unavailableAssetTokens: ['gone-token'],
+    });
+    expect(invoke).toHaveBeenCalledWith('dispatch-gallery-import-chunk', expect.objectContaining({
+      body: expect.objectContaining({ unavailableAssetTokens: ['gone-token'] }),
+    }));
+  });
+
   it('rejects unsupported locale/instructions before calling the server', async () => {
     await expect(updateGalleryCaptionSettings({
       familyId: 'family-1', language: 'x-invalid', instructions: 'warm',
@@ -117,6 +165,7 @@ describe('gallery import service integration', () => {
         language: 'pt-BR',
         instructions: 'Use gentle Brazilian Portuguese.',
       },
+      timeout: GALLERY_IMPORT_EDGE_TIMEOUT_MS,
     });
   });
 

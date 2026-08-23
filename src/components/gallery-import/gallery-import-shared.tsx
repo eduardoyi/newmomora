@@ -6,7 +6,7 @@
 // checkpoint-loading hook, the two generic terminal notices, and the shared
 // StyleSheet.
 import { router } from 'expo-router';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -45,16 +45,39 @@ export function SecondaryButton({ label, onPress, testID, disabled }: { label: s
   return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.secondaryButton, (disabled || pressed) && styles.buttonPressed]} testID={testID}><Text style={styles.secondaryButtonText}>{label}</Text></Pressable>;
 }
 
+/**
+ * The one way OUT of the gallery-import surfaces and back to the journal.
+ * These screens present as iOS modals (app/(app)/_layout.tsx); a plain
+ * `router.replace('/(app)/(tabs)/timeline')` issued from inside a modal
+ * nested a fresh tab navigator inside the sheet -- the "app within an app"
+ * observed on a real iPhone (2026-08-23). Android's full-screen presentation
+ * masked it. Dismiss the modal stack first, then navigate the underlying
+ * tab navigator (navigate, not replace: reuse the existing tabs instance).
+ */
+export function exitGalleryImportToTimeline(): void {
+  // Optional-chained so a partial router (Jest mocks) degrades to the plain
+  // replace below; on-device expo-router always has all three.
+  if (router.canDismiss?.()) router.dismissAll?.();
+  if (router.navigate) router.navigate('/(app)/(tabs)/timeline' as never);
+  else router.replace('/(app)/(tabs)/timeline' as never);
+}
+
 export function useRunCheckpoint(runId: string | undefined) {
   const { user } = useAuth();
   const { familyId } = useFamily();
   const userId = user?.id ?? null;
   const [checkpoint, setCheckpoint] = useState<GalleryImportCheckpoint | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
   const refresh = useCallback(async () => {
     if (!userId || !familyId || !runId) { setCheckpoint(null); setIsLoading(false); return null; }
-    setIsLoading(true);
+    // Only the first read shows a loading state. Later re-reads (focus,
+    // the deck's quiet poll) are silent: flipping `isLoading` on each one
+    // unmounted the whole deck for a frame every few seconds
+    // (device-observed 2026-08-23).
+    if (!hasLoadedRef.current) setIsLoading(true);
     const next = await loadGalleryImportCheckpoint(userId, familyId, runId);
+    hasLoadedRef.current = true;
     setCheckpoint(next);
     setIsLoading(false);
     return next;

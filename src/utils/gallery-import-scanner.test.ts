@@ -28,6 +28,7 @@ import {
   type GalleryMediaLibraryAdapter,
   type LocalGalleryAsset,
 } from '@/utils/gallery-import-scanner';
+import { mergeGalleryImportFrontierCoverage } from '@/utils/gallery-import-frontier';
 
 const NOW = Date.UTC(2026, 7, 9, 12);
 
@@ -540,6 +541,205 @@ describe('gallery import scanner', () => {
       expect(result.scannedAssetCount).toBe(3);
       expect(result.wasTruncated).toBe(true);
       expect(result.reachedLibraryEnd).toBe(false);
+    });
+  });
+
+  describe('continuous model: windowed, contiguous-ordering scan (docs/plans/gallery-import-continuous.md)', () => {
+    const hour = 60 * 60 * 1000;
+
+    it('keeps a group\'s signature identical regardless of admission order (oldest_first vs newest_first)', () => {
+      const group = [asset('a', NOW), asset('b', NOW - 1_000), asset('c', NOW - 2_000)];
+      const newestFirst = clusterGalleryAssets(group, { order: 'newest_first' });
+      const oldestFirst = clusterGalleryAssets(group, { order: 'oldest_first' });
+      expect(newestFirst).toHaveLength(1);
+      expect(oldestFirst).toHaveLength(1);
+      expect(newestFirst[0].signature).toBe(oldestFirst[0].signature);
+      // Within-group asset order is normalized back to newest-first either way.
+      expect(newestFirst[0].assets.map((item) => item.osAssetId)).toEqual(['a', 'b', 'c']);
+      expect(oldestFirst[0].assets.map((item) => item.osAssetId)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('admits Phase A groups oldest-first (nearest the previously-covered boundary) up to the window', async () => {
+      // Three well-separated Phase A groups, newest last: group "far" is
+      // closest to "now", group "near" sits right above the frontier
+      // boundary. A window of 1 must keep "near" (contiguous extension),
+      // not "far" (which a naive newest-first slice would keep).
+      const getPhotoPage = jest.fn(async ({ offset, newerThanMs, olderThanMs, limit }: { offset: number; newerThanMs?: number; olderThanMs?: number; limit: number }) => {
+        if (olderThanMs !== undefined) return []; // Phase B: nothing further to deepen in this test.
+        if (newerThanMs === undefined) throw new Error('expected a bounded Phase A query');
+        if (offset > 0) return [];
+        return [
+          { id: 'far-1', creationTime: NOW, width: 1, height: 1, isFavorite: false },
+          { id: 'near-1', creationTime: NOW - 10 * hour, width: 1, height: 1, isFavorite: false },
+        ].slice(0, limit);
+      });
+      const adapter: GalleryMediaLibraryAdapter = {
+        getPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        requestPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        getPhotoPage,
+        resolveAssetUri: jest.fn(),
+      };
+      const frontier = { coveredThroughNewestMs: NOW - 11 * hour, oldestCoveredMs: NOW - 20 * hour, corpusMode: 'full_library_fallback' as const };
+      const result = await scanGallerySnapshot(adapter, {
+        nowMs: NOW, pageSize: 10, maxEnumeratedAssets: 10, frontier, targetClusterCount: 1,
+      });
+      expect(result.clusters).toHaveLength(1);
+      expect(result.clusters[0].assets.map((item) => item.osAssetId)).toEqual(['near-1']);
+    });
+
+    it('Phase A with more groups than the window, early-stopped, admits the groups adjacent to the old frontier with no gap in the merged frontier', async () => {
+      const hour = 60 * 60 * 1000;
+      const groupGap = 4 * hour; // > GALLERY_IMPORT_CLUSTER_GAP_MS (3h) so each asset is its own group.
+      const boundary = NOW - 50 * hour; // frontier.coveredThroughNewestMs
+      const groupCount = 10;
+      // group[i] is the (i+1)-th oldest asset newer than `boundary` -- index 0
+      // is adjacent to the old frontier, index 9 is closest to "now".
+      const groupTimestamps = Array.from({ length: groupCount }, (_, index) => boundary + (index + 1) * groupGap);
+
+      const getPhotoPage = jest.fn(async ({ offset, limit, newerThanMs, olderThanMs, ascending }: { offset: number; limit: number; newerThanMs?: number; olderThanMs?: number; ascending?: boolean }) => {
+        if (olderThanMs !== undefined) return []; // Phase B: nothing to deepen in this test.
+        if (newerThanMs === undefined) throw new Error('expected a bounded Phase A query');
+        if (!ascending) throw new Error('expected Phase A to enumerate ascending, oldest-of-the-range first');
+        return groupTimestamps
+          .slice(offset, offset + limit)
+          .map((creationTime, index) => ({ id: `group-${offset + index}`, creationTime, width: 1, height: 1, isFavorite: false }));
+      });
+      const adapter: GalleryMediaLibraryAdapter = {
+        getPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        requestPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        getPhotoPage,
+        resolveAssetUri: jest.fn(),
+      };
+      const frontier = { coveredThroughNewestMs: boundary, oldestCoveredMs: boundary - 1_000_000, corpusMode: 'full_library_fallback' as const };
+
+      const result = await scanGallerySnapshot(adapter, {
+        nowMs: NOW, pageSize: 1, maxEnumeratedAssets: 100, frontier, targetClusterCount: 3,
+      });
+
+      // (1) The admitted clusters are the 3 OLDEST Phase-A groups -- adjacent
+      // to coveredThroughNewestMs -- not an arbitrary or newest-first slice.
+      expect(result.clusters).toHaveLength(3);
+      const admittedTimestamps = result.clusters.map((cluster) => cluster.assets[0].captureAtMs).sort((left, right) => left - right);
+      expect(admittedTimestamps).toEqual(groupTimestamps.slice(0, 3));
+
+      // (2) No admitted asset is newer than the un-enumerated band's oldest
+      // asset -- the early stop must never skip ahead over un-scanned history.
+      const enumeratedCount = getPhotoPage.mock.calls.length;
+      expect(enumeratedCount).toBeLessThan(groupCount);
+      const unenumeratedBandOldest = groupTimestamps[enumeratedCount];
+      expect(Math.max(...admittedTimestamps)).toBeLessThan(unenumeratedBandOldest);
+
+      // (3) Merging this pass's registered coverage into the prior frontier
+      // yields coveredThroughNewestMs equal to the newest ADMITTED asset --
+      // no gap: the next Phase A resumes exactly where admission stopped.
+      const merged = mergeGalleryImportFrontierCoverage(
+        { ...frontier, completedLibrary: false, autoContinue: true },
+        { oldestCoveredMs: Math.min(...admittedTimestamps), newestCoveredMs: Math.max(...admittedTimestamps) },
+        false,
+        'full_library_fallback',
+      );
+      expect(merged?.coveredThroughNewestMs).toBe(Math.max(...admittedTimestamps));
+    });
+
+    it('admits Phase B groups newest-first (nearest the previously-covered boundary) for the remaining window', async () => {
+      const getPhotoPage = jest.fn(async ({ offset, newerThanMs, olderThanMs, limit }: { offset: number; newerThanMs?: number; olderThanMs?: number; limit: number }) => {
+        if (newerThanMs !== undefined) return [];
+        if (olderThanMs === undefined) throw new Error('expected a bounded Phase B query');
+        if (offset > 0) return [];
+        return [
+          { id: 'near-1', creationTime: olderThanMs - hour, width: 1, height: 1, isFavorite: false },
+          { id: 'far-1', creationTime: olderThanMs - 20 * hour, width: 1, height: 1, isFavorite: false },
+        ].slice(0, limit);
+      });
+      const adapter: GalleryMediaLibraryAdapter = {
+        getPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        requestPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        getPhotoPage,
+        resolveAssetUri: jest.fn(),
+      };
+      const frontier = { coveredThroughNewestMs: NOW, oldestCoveredMs: NOW - 10 * hour, corpusMode: 'full_library_fallback' as const };
+      const result = await scanGallerySnapshot(adapter, {
+        nowMs: NOW, pageSize: 10, maxEnumeratedAssets: 10, frontier, targetClusterCount: 1,
+      });
+      expect(result.clusters).toHaveLength(1);
+      expect(result.clusters[0].assets.map((item) => item.osAssetId)).toEqual(['near-1']);
+    });
+
+    it('stops enumerating a phase early once target+1 complete groups exist, before the byte budget is exhausted', async () => {
+      // 5 groups, each 1 asset, spaced far enough apart (>3h) to never merge.
+      // targetClusterCount 2 -> early stop should fire once 3 complete groups
+      // exist (index 3, i.e. 4 assets seen), well before maxEnumeratedAssets.
+      const allAssets = Array.from({ length: 5 }, (_, index) => ({
+        id: `g${index}`, creationTime: NOW - index * 4 * hour, width: 1, height: 1, isFavorite: false,
+      }));
+      const getPhotoPage = jest.fn(async ({ offset, limit }: { offset: number; limit: number }) => allAssets.slice(offset, offset + limit));
+      const adapter: GalleryMediaLibraryAdapter = {
+        getPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        requestPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        getPhotoPage,
+        resolveAssetUri: jest.fn(),
+      };
+      const result = await scanGallerySnapshot(adapter, {
+        nowMs: NOW, pageSize: 1, maxEnumeratedAssets: 100, targetClusterCount: 2,
+      });
+      // 3 complete groups (g0, g1, g2) confirmed by seeing g3's gap -> 4 pages.
+      expect(getPhotoPage).toHaveBeenCalledTimes(4);
+      expect(result.scannedAssetCount).toBe(4);
+      expect(result.wasTruncated).toBe(true);
+      expect(result.clusters).toHaveLength(2);
+      expect(result.clusters.map((cluster) => cluster.assets[0].osAssetId)).toEqual(['g0', 'g1']);
+    });
+
+    it('fixes completedLibrary: stays false when Phase B finished naturally but produced more groups than fit the window', async () => {
+      // Phase B enumerates its whole (small) range naturally (no truncation),
+      // but produces 2 groups while only 1 window slot remains -- the true
+      // oldest edge exists but was not admitted/registered this pass.
+      const getPhotoPage = jest.fn(async ({ offset, newerThanMs, olderThanMs, limit }: { offset: number; newerThanMs?: number; olderThanMs?: number; limit: number }) => {
+        if (newerThanMs !== undefined) return [];
+        if (olderThanMs === undefined) throw new Error('expected a bounded Phase B query');
+        if (offset > 0) return [];
+        return [
+          { id: 'near-1', creationTime: olderThanMs - hour, width: 1, height: 1, isFavorite: false },
+          { id: 'far-1', creationTime: olderThanMs - 20 * hour, width: 1, height: 1, isFavorite: false },
+        ].slice(0, limit);
+      });
+      const adapter: GalleryMediaLibraryAdapter = {
+        getPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        requestPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        getPhotoPage,
+        resolveAssetUri: jest.fn(),
+      };
+      const frontier = { coveredThroughNewestMs: NOW, oldestCoveredMs: NOW - 10 * hour, corpusMode: 'full_library_fallback' as const };
+      const result = await scanGallerySnapshot(adapter, {
+        nowMs: NOW, pageSize: 10, maxEnumeratedAssets: 10, frontier, targetClusterCount: 1,
+      });
+      expect(result.wasTruncated).toBe(false);
+      expect(result.clusters).toHaveLength(1);
+      // Both groups exist and enumeration was not cut off, but only 1 of the
+      // 2 groups Phase B found actually fit -- completedLibrary must not lie.
+      expect(result.reachedLibraryEnd).toBe(false);
+    });
+
+    it('sets completedLibrary true when Phase B finishes naturally AND every group it found is admitted', async () => {
+      const getPhotoPage = jest.fn(async ({ offset, newerThanMs, olderThanMs, limit }: { offset: number; newerThanMs?: number; olderThanMs?: number; limit: number }) => {
+        if (newerThanMs !== undefined) return [];
+        if (olderThanMs === undefined) throw new Error('expected a bounded Phase B query');
+        if (offset > 0) return [];
+        return [{ id: 'only-1', creationTime: olderThanMs - hour, width: 1, height: 1, isFavorite: false }].slice(0, limit);
+      });
+      const adapter: GalleryMediaLibraryAdapter = {
+        getPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        requestPermission: async () => ({ granted: true, canAskAgain: true, accessPrivileges: 'all' }),
+        getPhotoPage,
+        resolveAssetUri: jest.fn(),
+      };
+      const frontier = { coveredThroughNewestMs: NOW, oldestCoveredMs: NOW - 10 * hour, corpusMode: 'full_library_fallback' as const };
+      const result = await scanGallerySnapshot(adapter, {
+        nowMs: NOW, pageSize: 10, maxEnumeratedAssets: 10, frontier, targetClusterCount: 5,
+      });
+      expect(result.wasTruncated).toBe(false);
+      expect(result.clusters).toHaveLength(1);
+      expect(result.reachedLibraryEnd).toBe(true);
     });
   });
 });

@@ -27,6 +27,12 @@ export interface GalleryImportEntryStatus {
   attentionReason: GalleryImportAttentionReason;
   /** Whole days until `run.reviewExpiresAt`, rounded up. Null when unknown/not reviewing. */
   reviewDaysLeft: number | null;
+  /** Continuous model (S9, 2026-08-23): the server's own `readyCandidates`
+   * count, always exposed (0 when unknown/not reviewing/no run) so the
+   * activity bell and Settings status row (I4a) can show a real number
+   * without re-deriving it from `run` themselves. Distinct from `state`,
+   * which folds this into a coarser 'ready'/'resume'/'processing' bucket. */
+  readyCount: number;
 }
 
 function daysUntil(iso: string | null | undefined, now: Date): number | null {
@@ -42,7 +48,7 @@ export function deriveGalleryImportEntryStatus(
   now: Date = new Date(),
 ): GalleryImportEntryStatus {
   if (!checkpoint) {
-    return { state: 'none', attentionReason: null, reviewDaysLeft: null };
+    return { state: 'none', attentionReason: null, reviewDaysLeft: null, readyCount: 0 };
   }
 
   // Local-only condition: the runner paused itself waiting for Wi-Fi (see
@@ -50,28 +56,28 @@ export function deriveGalleryImportEntryStatus(
   // has no idea this happened, so this check must come before consulting
   // `run` at all.
   if (checkpoint.status === 'paused') {
-    return { state: 'attention', attentionReason: 'waiting_for_wifi', reviewDaysLeft: null };
+    return { state: 'attention', attentionReason: 'waiting_for_wifi', reviewDaysLeft: null, readyCount: 0 };
   }
 
   // No server run reachable for this checkpoint (never started, or the
   // server has already forgotten it) -- normal state, not an error
   // (getGalleryImportRun's allowEmptyData contract).
   if (!run) {
-    return { state: 'none', attentionReason: null, reviewDaysLeft: null };
+    return { state: 'none', attentionReason: null, reviewDaysLeft: null, readyCount: 0 };
   }
 
   if (run.status === 'failed') {
-    return { state: 'attention', attentionReason: 'run_failed', reviewDaysLeft: null };
+    return { state: 'attention', attentionReason: 'run_failed', reviewDaysLeft: null, readyCount: run.readyCandidates ?? 0 };
   }
 
   if (run.status === 'scanning' || run.status === 'processing') {
-    return { state: 'processing', attentionReason: null, reviewDaysLeft: null };
+    return { state: 'processing', attentionReason: null, reviewDaysLeft: null, readyCount: run.readyCandidates ?? 0 };
   }
 
   if (run.status === 'reviewing') {
     const reviewDaysLeft = daysUntil(run.reviewExpiresAt, now);
     if (reviewDaysLeft !== null && reviewDaysLeft <= GALLERY_IMPORT_EXPIRING_SOON_DAYS) {
-      return { state: 'expiring', attentionReason: null, reviewDaysLeft };
+      return { state: 'expiring', attentionReason: null, reviewDaysLeft, readyCount: run.readyCandidates ?? 0 };
     }
     // Round 4, device-tested finding: 'reviewing' does not mean "there is
     // something ready to look at" -- candidates stream in progressively, so
@@ -86,13 +92,13 @@ export function deriveGalleryImportEntryStatus(
       // card (see the checkpoint's own doc comment) -- a reliable "has this
       // device already started reviewing" signal without a second network call.
       if (checkpoint.deckCursor > 0) {
-        return { state: 'resume', attentionReason: null, reviewDaysLeft };
+        return { state: 'resume', attentionReason: null, reviewDaysLeft, readyCount: run.readyCandidates ?? 0 };
       }
-      return { state: 'ready', attentionReason: null, reviewDaysLeft };
+      return { state: 'ready', attentionReason: null, reviewDaysLeft, readyCount: run.readyCandidates ?? 0 };
     }
-    return { state: 'processing', attentionReason: null, reviewDaysLeft: null };
+    return { state: 'processing', attentionReason: null, reviewDaysLeft: null, readyCount: 0 };
   }
 
   // completed | cancelled | expired -- nothing left behind the glyph.
-  return { state: 'none', attentionReason: null, reviewDaysLeft: null };
+  return { state: 'none', attentionReason: null, reviewDaysLeft: null, readyCount: 0 };
 }

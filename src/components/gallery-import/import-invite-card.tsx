@@ -1,13 +1,18 @@
 // The post-onboarding Timeline invitation (design: gi-entry.jsx
 // GIImportInvite, ~L250-287). The one place this feature earns a spot in the
-// feed: dismissible, with a dedicated CTA (not a whole-card tap target), a
-// 5-photo placeholder strip, and the universal camera-roll reassure line.
+// feed: dismissible, with a dedicated CTA (not a whole-card tap target) and a
+// 5-photo placeholder strip.
 //
 // The design's strip is real photo stand-ins (GIPhoto) -- this card must
 // NEVER read the user's actual camera roll just to decorate an offer they
 // haven't accepted yet, so it uses flat theme-tinted blocks instead.
+//
+// Simplified per the 2026-08-23 copy pass (docs/plans/gallery-import-continuous.md
+// I4b): eyebrow, title, CTA, dismiss -- the body paragraph, the shield
+// reassurance line, and the "photos only" clarification duplicated the entry
+// screen (gallery-import-entry.tsx), which still carries all three right
+// before the OS permission prompt.
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 
@@ -30,25 +35,6 @@ function PhotoStripPlaceholder() {
   );
 }
 
-function ShieldIcon() {
-  return (
-    <Svg
-      fill="none"
-      height={14}
-      stroke={colors.sea}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={1.9}
-      style={styles.shieldIcon}
-      viewBox="0 0 24 24"
-      width={14}
-    >
-      <Path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6l7-3z" />
-      <Path d="M9 12l2 2 4-4" />
-    </Svg>
-  );
-}
-
 export interface ImportInviteCardProps {
   onStart: () => void;
   onDismiss: () => void;
@@ -58,7 +44,7 @@ export function ImportInviteCard({ onStart, onDismiss }: ImportInviteCardProps) 
   return (
     <View style={styles.card} testID="timeline-gallery-import">
       <View style={styles.headerRow}>
-        <Text style={styles.eyebrow}>Start with what you have</Text>
+        <Text style={styles.eyebrow}>From your photos</Text>
         <View style={styles.headerSpacer} />
         <Pressable
           accessibilityLabel="Not now"
@@ -72,10 +58,6 @@ export function ImportInviteCard({ onStart, onDismiss }: ImportInviteCardProps) 
         </Pressable>
       </View>
       <Text style={styles.title}>Your journal does not have to start empty.</Text>
-      <Text style={styles.body}>
-        Momora can look through the photos already on your phone and suggest a handful of moments worth
-        keeping. You decide which ones become memories.
-      </Text>
       <PhotoStripPlaceholder />
       <Pressable
         accessibilityRole="button"
@@ -85,13 +67,6 @@ export function ImportInviteCard({ onStart, onDismiss }: ImportInviteCardProps) 
       >
         <Text style={styles.ctaButtonText}>Look through my photos</Text>
       </Pressable>
-      <View style={styles.reassureRow}>
-        <ShieldIcon />
-        <Text style={styles.reassureText}>Nothing is added without you, and your camera roll is never changed.</Text>
-      </View>
-      {/* Approved clarification (docs/design/gallery-import/README.md): videos
-          are not suggested in v1, and this must not read as an accident. */}
-      <Text style={styles.videoNote}>Momora suggests photos only for now.</Text>
     </View>
   );
 }
@@ -134,13 +109,6 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     marginTop: 8,
   },
-  body: {
-    color: colors.ink2,
-    fontFamily: fonts.sans,
-    fontSize: 13.5,
-    lineHeight: 20,
-    marginTop: 7,
-  },
   strip: {
     flexDirection: 'row',
     gap: 5,
@@ -164,26 +132,5 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontFamily: fonts.sansBold,
     fontSize: 15,
-  },
-  reassureRow: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    gap: 7,
-    marginTop: 13,
-  },
-  shieldIcon: { marginTop: 2 },
-  reassureText: {
-    color: colors.ink3,
-    flex: 1,
-    fontFamily: fonts.sans,
-    fontSize: 12.5,
-    lineHeight: 18,
-  },
-  videoNote: {
-    color: colors.ink3,
-    fontFamily: fonts.sans,
-    fontSize: 11.5,
-    lineHeight: 16,
-    marginTop: 6,
   },
 });

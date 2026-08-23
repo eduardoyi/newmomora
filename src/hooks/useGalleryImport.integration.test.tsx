@@ -18,6 +18,16 @@ jest.mock('@/services/gallery-import', () => ({
   createGalleryImportRun: jest.fn(),
   getGalleryCaptionSettings: jest.fn(),
   updateGalleryCaptionSettings: jest.fn(),
+  getGalleryImportRun: jest.fn(),
+}));
+// The driver module transitively pulls in gallery-import-runner ->
+// gallery-import-preview -> gallery-import-scanner -> the real (native)
+// expo-media-library, which this suite has no reason to load -- mock the
+// driver's surface directly, same as other gallery-import test files mock
+// the runner/scanner modules they don't otherwise need.
+jest.mock('@/services/gallery-import-driver', () => ({
+  getGalleryImportDriverState: jest.fn(() => ({ phase: 'idle', runId: null, pausedUntil: null, lastError: null, isActive: false })),
+  subscribeGalleryImportDriver: jest.fn(() => () => undefined),
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
