@@ -1,6 +1,6 @@
 # Milestone Catalog — Draft v1
 
-**Status:** Draft — for Eduardo to cut/edit
+**Status:** Draft v1.1 — 14 entries cut by Eduardo 2026-08-17; birthdays made recurring
 **Date:** 2026-08-17
 **Parent plan:** [memory-book.md](memory-book.md) §5 Stage A (`analyze-memory` milestone axis)
 
@@ -77,8 +77,6 @@
 | sleeps-through-night | Sleeps through the night | 2m–3y | "slept through the night for the first time" |
 | own-room | First night in own room | 3m–4y | "first night in her own room" |
 | big-kid-bed | Moves to big-kid bed | 14m–5y | "first night in the big bed" |
-| drops-pacifier | Gives up pacifier | 10m–5y | "said goodbye to the pacifier" |
-| drops-nap | Stops napping | 2–6y | "officially done with naps" |
 | first-tooth | First tooth | 3–14m | "first tooth came in" |
 | loses-first-tooth | Loses first tooth | 4.5–8.5y | "lost his first tooth!" |
 
@@ -100,11 +98,9 @@
 | waves-bye | Waves bye-bye | 6–16m | "waved bye-bye for the first time" |
 | blows-kiss | Blows a kiss | 8m–2.5y | "blew her first kiss" |
 | first-friend | First friend | 1–6y | "made his first friend" |
-| first-playdate | First playdate | 6m–5y | "her first playdate" |
 | says-i-love-you | First "I love you" | 14m–4.5y | "said I love you for the first time" |
 | meets-sibling | Meets sibling for the first time | any | "meeting her little brother" |
 | meets-grandparents | Meets grandparent for the first time | 0–3y | "first time meeting abuela" |
-| first-share | First time sharing on their own | 1–5y | "shared his toys without being asked — a first" |
 
 ## School & learning
 
@@ -116,7 +112,6 @@
 | writes-name | Writes own name | 3–7y | "wrote her name for the first time" |
 | first-drawing | First recognizable drawing | 18m–5y | "drew his first person" |
 | learns-to-read | Reads first word/book | 3.5–8y | "read her first word all alone" |
-| first-performance | First recital / school performance | 2–10y | "his first school play" |
 | graduation | Preschool/kinder graduation | 4–8y | "graduation day" |
 | first-medal | First medal / trophy / prize | 2–12y | "won her first medal" |
 
@@ -125,7 +120,6 @@
 | id | Milestone | Band | Example explicit cues |
 |---|---|---|---|
 | first-bath | First bath | 0–2m | "first bath at home" |
-| first-outing | First walk / outing | 0–3m | "first stroll outside" |
 | first-haircut | First haircut | 3m–4y | "first haircut" |
 | first-beach | First time at the beach | 0–6y | "first time at the beach" |
 | first-pool | First swim / pool visit | 0–5y | "first dip in the pool" |
@@ -135,25 +129,17 @@
 | first-trip | First trip / vacation | any | "her first vacation" |
 | first-abroad | First time abroad | any | "first stamp in the passport" |
 | first-camping | First camping trip | 1–12y | "first night in a tent" |
-| first-movie-theater | First movie in a theater | 2–8y | "first trip to the movies" |
-| first-amusement-park | First amusement park | 1–10y | "first roller coaster / first time at the park" |
-| first-zoo-aquarium | First zoo / aquarium | 0–6y | "first visit to the zoo" |
-| first-museum | First museum | 0–10y | "first museum visit" |
-| first-concert-game | First concert / live sports game | 1–12y | "his first stadium game" |
 | first-sleepover | First sleepover away from parents | 2–11y | "first night away from us" |
 | first-pet | Meets first family pet | any | "welcoming our puppy — her first pet" |
-| first-birthday | First birthday | 11–13m | "our baby turned one" |
+| birthday | Birthday (every year, `detail` = age turned) | any | "turned three today", "cumple 2" — also qualifies via the deterministic birthday-event match (see notes) |
 | first-holiday-season | First Christmas / Hanukkah / holiday | 0–14m | "her first Christmas" |
 | first-halloween | First Halloween / costume | 0–2y | "first costume" |
 | first-tooth-fairy | First tooth-fairy visit | 4.5–8.5y | "tooth fairy's first visit" |
 | first-dentist | First dentist visit | 6m–5y | "first trip to the dentist" |
-| first-team | Joins first team / class (sports, dance, music) | 2–12y | "first soccer practice" |
-| first-instrument | First time playing an instrument | 2–12y | "first piano lesson" |
-| loses-training-item | Retires a beloved object (blanket, stuffed animal) | 1–8y | "gave up her lovey" |
 
 ## Notes for implementation
 
-- ~85 entries across 7 categories. The child's age on `memory_date` filters
+- 78 entries across 7 categories. The child's age on `memory_date` filters
   the catalog to in-band entries **before** the model call; `any`-band
   entries are always included. An explicit text claim outside the band is
   still surfaced, flagged `out_of_band: true`, for user confirmation rather
@@ -161,4 +147,12 @@
   approximate).
 - `tries-notable-food` and similar open-ended firsts capture a free-text
   `detail` field ("mango") alongside the id.
+- **`birthday` is recurring and is the one sanctioned non-text path.** Every
+  birthday is a milestone (`detail` = age turned, so a child accumulates
+  `birthday/1`, `birthday/2`, …). It qualifies either from explicit text OR
+  from the deterministic birthday-event match already defined in the plan
+  (topic `birthday` + tagged child within ±7 days of their DOB). That is a
+  database fact lookup, not model inference, so it does not violate the
+  explicit-text-only rule — a friend's party outside the window never
+  matches.
 - Storage decision (constant file vs table) is plan open-question §10.8.

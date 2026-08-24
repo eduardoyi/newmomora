@@ -388,7 +388,25 @@ mapping (the rest is chronological backbone); 674 raw catch-all tokens
 dropped (playtime, family time, …) and become negative examples in the V1c
 prompt; emotion/people/milestone/season demand confirmed as separate axes.
 Eduardo review applied 2026-08-23 (v2.1: cut tummy-time, errands-shopping,
-caregivers, games-puzzles, home-life). Next: V1c validation run.
+caregivers, games-puzzles, home-life).
+
+**V1c PASSED 2026-08-23** (run `2026-08-23T22-23-55-986Z`, Eduardo reviewed
+review.html): 221/726 memories (30%) got 1–2 topics; zero invented ids across
+726 calls; date gate caught 6 out-of-season occasion tags; detail fields
+work. Known calibration item for production: the model under-tags photo-only
+baby-routine memories (newborn-days 5 vs ~42 plausible, bedtime-sleep 0 vs
+~20) — production prompt must state that a photo alone is sufficient evidence
+for place/activity topics; expected settled coverage ~40–50%. Two fix rounds
+were needed on the eval (tolerant topic parsing + moving the vocabulary
+adjacent to its instruction — vocabulary at prompt end after the milestone
+catalog collapsed coverage to 2%); both lessons carry into the production
+prompt design.
+
+**V1 exit (next): ship production `analyze-memory`** — schema migration
+(topics/labels/description + milestone storage + topics_version), Edge
+Function replacing `analyze-emotion` at creation time, archive backfill,
+prompt calibration above; migration + regenerated types + TECH_SPEC +
+feature doc + tests in the same change per repo rules.
 
 ## 10. Open questions
 
