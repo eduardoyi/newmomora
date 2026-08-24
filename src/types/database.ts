@@ -2300,10 +2300,13 @@ export type Database = {
       }
       memories: {
         Row: {
+          analysis_version: number | null
+          analyzed_at: string | null
           audio_transcript: string | null
           content: string | null
           created_at: string
           creation_source: string
+          description: string | null
           emotion: string | null
           family_id: string
           id: string
@@ -2313,6 +2316,7 @@ export type Database = {
           illustration_key: string | null
           illustration_prompt: string | null
           illustration_status: string
+          labels: string[]
           link_previews: Json
           media_content_type: string | null
           media_key: string | null
@@ -2322,6 +2326,8 @@ export type Database = {
           onboarding_media_pending: boolean
           onboarding_media_pending_until: string | null
           share_card_key: string | null
+          topic_details: Json
+          topics: string[]
           updated_at: string
           usage_limit_epoch: number | null
           usage_limit_retry_after: string | null
@@ -2334,10 +2340,13 @@ export type Database = {
           user_id: string | null
         }
         Insert: {
+          analysis_version?: number | null
+          analyzed_at?: string | null
           audio_transcript?: string | null
           content?: string | null
           created_at?: string
           creation_source?: string
+          description?: string | null
           emotion?: string | null
           family_id: string
           id?: string
@@ -2347,6 +2356,7 @@ export type Database = {
           illustration_key?: string | null
           illustration_prompt?: string | null
           illustration_status?: string
+          labels?: string[]
           link_previews?: Json
           media_content_type?: string | null
           media_key?: string | null
@@ -2356,6 +2366,8 @@ export type Database = {
           onboarding_media_pending?: boolean
           onboarding_media_pending_until?: string | null
           share_card_key?: string | null
+          topic_details?: Json
+          topics?: string[]
           updated_at?: string
           usage_limit_epoch?: number | null
           usage_limit_retry_after?: string | null
@@ -2368,10 +2380,13 @@ export type Database = {
           user_id?: string | null
         }
         Update: {
+          analysis_version?: number | null
+          analyzed_at?: string | null
           audio_transcript?: string | null
           content?: string | null
           created_at?: string
           creation_source?: string
+          description?: string | null
           emotion?: string | null
           family_id?: string
           id?: string
@@ -2381,6 +2396,7 @@ export type Database = {
           illustration_key?: string | null
           illustration_prompt?: string | null
           illustration_status?: string
+          labels?: string[]
           link_previews?: Json
           media_content_type?: string | null
           media_key?: string | null
@@ -2390,6 +2406,8 @@ export type Database = {
           onboarding_media_pending?: boolean
           onboarding_media_pending_until?: string | null
           share_card_key?: string | null
+          topic_details?: Json
+          topics?: string[]
           updated_at?: string
           usage_limit_epoch?: number | null
           usage_limit_retry_after?: string | null
@@ -2698,6 +2716,67 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "memories"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      memory_milestones: {
+        Row: {
+          created_at: string
+          detail: string | null
+          family_id: string
+          family_member_id: string | null
+          id: string
+          memory_id: string
+          milestone_id: string
+          out_of_band: boolean
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          detail?: string | null
+          family_id: string
+          family_member_id?: string | null
+          id?: string
+          memory_id: string
+          milestone_id: string
+          out_of_band?: boolean
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          detail?: string | null
+          family_id?: string
+          family_member_id?: string | null
+          id?: string
+          memory_id?: string
+          milestone_id?: string
+          out_of_band?: boolean
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "memory_milestones_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "memory_milestones_family_member_id_fkey"
+            columns: ["family_member_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "memory_milestones_memory_family_fkey"
+            columns: ["memory_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "memories"
+            referencedColumns: ["id", "family_id"]
           },
         ]
       }

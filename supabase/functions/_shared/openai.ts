@@ -289,6 +289,96 @@ export async function chatJsonWithVision<T>(
   return JSON.parse(content) as T;
 }
 
+export interface ChatVisionUsage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
+export interface ChatVisionResult<T> {
+  data: T;
+  /** Null when the provider response carried no `usage` block. */
+  usage: ChatVisionUsage | null;
+}
+
+/**
+ * Multi-image variant of `chatJsonWithVision` for `analyze-memory`
+ * (docs/plans/memory-book.md §5 Stage A): up to 4 images per call, each sent
+ * at `detail: 'low'` (cheap -- these are context photos for tagging, not the
+ * illustration reference pipeline's identity-preservation images). Zero
+ * images is a valid call shape (text-only memories go through this same
+ * helper with `images: []`, keeping one call-path across memory types in
+ * analyze-memory-core.ts). Does not modify `chatJsonWithVision` above, which
+ * other callers (analyze-emotion's legacy single-image path) still use as-is.
+ *
+ * Returns `{data, usage}` rather than just the parsed body (phase 2,
+ * docs/plans/memory-book.md V1 exit backfill): `runMemoryAnalysis` forwards
+ * `usage` on its result so the backfill script can report real token counts
+ * and cost without a second OpenAI call or reimplementing this helper.
+ */
+export async function chatJsonWithVisionMulti<T>(
+  systemPrompt: string,
+  userText: string | null,
+  images: VisionImageInput[],
+  options: OpenAiRequestOptions = {},
+): Promise<ChatVisionResult<T>> {
+  const aiCallId = crypto.randomUUID();
+  const userContent: Array<{ type: string; text?: string; image_url?: { url: string; detail?: string } }> = [];
+
+  if (userText?.trim()) {
+    userContent.push({ type: 'text', text: userText.trim() });
+  }
+
+  for (const image of images) {
+    userContent.push({
+      type: 'image_url',
+      image_url: {
+        url: `data:${image.contentType};base64,${image.base64}`,
+        detail: 'low',
+      },
+    });
+  }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${getOpenAiKey()}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: DEFAULT_CHAT_MODEL,
+      temperature: 0.2,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+    }),
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: false });
+    throw new Error(`OpenAI vision chat failed (${response.status})`);
+  }
+
+  const payload = await response.json();
+  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: true, usage: payload.usage });
+  const content = payload.choices?.[0]?.message?.content;
+
+  if (!content || typeof content !== 'string') {
+    throw new Error('OpenAI vision chat returned empty content');
+  }
+
+  const usage: ChatVisionUsage | null = payload.usage
+    ? {
+        promptTokens: payload.usage.prompt_tokens ?? 0,
+        completionTokens: payload.usage.completion_tokens ?? 0,
+      }
+    : null;
+
+  return { data: JSON.parse(content) as T, usage };
+}
+
 export async function transcribeAudio(
   audioBase64: string,
   prompt: string,

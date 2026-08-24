@@ -3,20 +3,14 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole } from '../_shared/family-access.ts';
 import { stripUrls } from '../_shared/link-preview.ts';
+import { isAllowedImageMediaContentType, isVideoMediaContentType } from '../_shared/media-emotion.ts';
 import {
-  isAllowedImageMediaContentType,
-  isVideoMediaContentType,
-  normalizeEmotionLabel,
-  prepareVisionImageFromBytes,
-} from '../_shared/media-emotion.ts';
-import { chatJson, chatJsonWithVision } from '../_shared/openai.ts';
-import {
-  buildEmotionSystemPrompt,
-  buildEmotionVisionUserPrompt,
-  buildMediaEmotionSystemPrompt,
-  EMOTION_PALETTES,
-} from '../_shared/prompts.ts';
-import { getObjectBytes } from '../_shared/r2.ts';
+  fetchTaggedMembers,
+  runMemoryAnalysis,
+  updateMemoryAnalysisIfSnapshotMatches,
+  upsertMemoryMilestones,
+  type MediaAssetForAnalysis,
+} from '../_shared/analyze-memory-core.ts';
 import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
 import { checkBillingFamilyWrite } from '../_shared/billing.ts';
 
@@ -24,16 +18,43 @@ export interface AnalyzeEmotionRequest {
   memoryId: string;
 }
 
+/**
+ * `analyze-emotion`'s original response contract, preserved verbatim for old
+ * app versions. `analyze-memory` (the alias endpoint, same handler) returns
+ * the same shape.
+ */
 export interface AnalyzeEmotionResponse {
   emotion: string;
   colorPalette: string;
   skipped?: boolean;
 }
 
+/**
+ * A strict superset of `AnalyzeEmotionResponse` -- new fields are additive
+ * only (docs/plans/memory-book.md §5 Stage A, TECH_SPEC §4.2). Old clients
+ * that only read `emotion`/`colorPalette`/`skipped` are unaffected.
+ */
+export interface AnalyzeMemoryResponse extends AnalyzeEmotionResponse {
+  topics?: string[];
+  labels?: string[];
+  description?: string;
+}
+
+// `fetchTaggedMembers`/`updateMemoryAnalysisIfSnapshotMatches`/
+// `upsertMemoryMilestones` moved into `_shared/analyze-memory-core.ts`
+// (phase 2, docs/plans/memory-book.md V1 exit backfill) so
+// `supabase/scripts/backfill-memory-analysis.ts` can reuse them without
+// duplicating persistence logic. Re-exported here so this module's own
+// import path (`./index.ts`) stays stable for existing test imports and any
+// other caller.
+export { fetchTaggedMembers, updateMemoryAnalysisIfSnapshotMatches, upsertMemoryMilestones };
+
 interface MemoryRow {
   id: string;
+  family_id: string;
   content: string | null;
   memory_type: string;
+  memory_date: string;
   media_key: string | null;
   media_content_type: string | null;
   updated_at: string;
@@ -45,6 +66,7 @@ interface MemoryMediaRow {
   object_key: string;
   content_type: string;
   position: number;
+  preview_object_key: string | null;
 }
 
 const recentAnalysisByMemory = new Map<string, number>();
@@ -63,59 +85,21 @@ function markAnalysisRun(memoryId: string): void {
   recentAnalysisByMemory.set(memoryId, Date.now());
 }
 
-export async function analyzeTextIllustrationEmotion(
-  content: string,
-): Promise<{ emotion: string; colorPalette: string }> {
-  // URLs are stripped before every prompt call site (docs/plans/inline-links.md
-  // §8): they pollute the emotion prompt and fetched titles are untrusted
-  // third-party content that must never reach the model.
-  const result = await chatJson<{ emotion?: string; colorPalette?: string }>(
-    buildEmotionSystemPrompt(),
-    stripUrls(content),
-  );
-
-  const normalized = normalizeEmotionLabel(result.emotion, EMOTION_PALETTES);
-  return {
-    emotion: normalized.emotion,
-    colorPalette: result.colorPalette ?? normalized.colorPalette,
-  };
-}
-
-export async function analyzeMediaPhotoEmotion(input: {
-  content: string | null;
-  mediaKey: string;
-  mediaContentType: string;
-}): Promise<{ emotion: string; colorPalette: string }> {
-  const bytes = await getObjectBytes(input.mediaKey);
-  const prepared = await prepareVisionImageFromBytes(bytes, input.mediaContentType);
-
-  if ('code' in prepared) {
-    if (prepared.code === 'file_too_large') {
-      throw new Error('file_too_large');
-    }
-
-    throw new Error('unsupported_image_format');
-  }
-
-  const result = await chatJsonWithVision<{ emotion?: string; colorPalette?: string }>(
-    buildMediaEmotionSystemPrompt(),
-    buildEmotionVisionUserPrompt(input.content ? stripUrls(input.content) : input.content),
-    prepared,
-  );
-
-  const normalized = normalizeEmotionLabel(result.emotion, EMOTION_PALETTES);
-  return {
-    emotion: normalized.emotion,
-    colorPalette: result.colorPalette ?? normalized.colorPalette,
-  };
-}
-
 export interface MediaPhotoValidationError {
   status: number;
   message: string;
   code: string;
 }
 
+/**
+ * `media`-type request validation. A usable candidate is any asset with a
+ * `preview_object_key` (a photo preview OR a video poster frame -- both are
+ * JPEGs) or any non-video image asset -- this is what lets a video WITH a
+ * backfilled poster analyze like a photo (closing the "video has no emotion
+ * in MVP" gap: docs/plans/memory-book.md §5 Stage A). A memory whose only
+ * asset is video with no poster still hits the `video_not_supported` error
+ * below, same as before.
+ */
 export function validateMediaPhotoMemoryRow(
   row: Pick<MemoryRow, 'memory_type' | 'media_key' | 'media_content_type'>,
   mediaAssets: MemoryMediaRow[] = [],
@@ -131,11 +115,11 @@ export function validateMediaPhotoMemoryRow(
   // No caller-prefix key assertion here: membership in the memory's family
   // (checked before this is called) is the authorization signal, and these
   // keys come from the DB row (trusted), not from client input.
-  const imageAsset = mediaAssets.find((asset) =>
-    isAllowedImageMediaContentType(asset.content_type)
+  const hasUsableAsset = mediaAssets.some(
+    (asset) => isAllowedImageMediaContentType(asset.content_type) || Boolean(asset.preview_object_key),
   );
 
-  if (imageAsset) {
+  if (hasUsableAsset) {
     return null;
   }
 
@@ -176,52 +160,6 @@ export function validateMediaPhotoMemoryRow(
   return null;
 }
 
-export type AudioEmotionClassifierInput =
-  | { skip: true }
-  | { skip: false; input: string };
-
-/**
- * Audio memories classify over the visible description (content) plus the
- * invisible transcript -- either alone is enough to proceed
- * (docs/features/audio-memories.md). Neither present (babble/silence with no
- * user-typed caption) is not an error: emotion simply stays unset, same as a
- * video memory with nothing to analyze.
- */
-export function buildAudioEmotionClassifierInput(
-  row: Pick<MemoryRow, 'content' | 'audio_transcript'>,
-): AudioEmotionClassifierInput {
-  const strippedContent = row.content ? stripUrls(row.content).trim() : '';
-  const strippedTranscript = row.audio_transcript ? stripUrls(row.audio_transcript).trim() : '';
-
-  if (!strippedContent && !strippedTranscript) {
-    return { skip: true };
-  }
-
-  return { skip: false, input: [strippedContent, strippedTranscript].filter(Boolean).join(' ') };
-}
-
-export async function updateEmotionIfSnapshotMatches(
-  supabase: ReturnType<typeof createUserClient>,
-  memoryId: string,
-  emotion: string,
-  snapshot: { updated_at: string; content: string | null },
-): Promise<boolean> {
-  const query = supabase
-    .from('memories')
-    .update({ emotion })
-    .eq('id', memoryId)
-    .eq('updated_at', snapshot.updated_at);
-
-  const { data, error } = await query.select('id').maybeSingle();
-
-  if (error) {
-    console.error('analyze-emotion emotion update failed', error.message);
-    throw error;
-  }
-
-  return Boolean(data);
-}
-
 export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
   const corsResponse = handleCors(req);
   if (corsResponse) {
@@ -260,7 +198,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
   }
 
   const supabase = createUserClient(authHeader);
-  // Emotion writes must land through the service-role client: a viewer's
+  // Analysis writes must land through the service-role client: a viewer's
   // user-client UPDATE would silently match zero rows under the manager+
   // `memories` policy (200 with no-op), leaving `isEmotionAnalyzable` true
   // and causing a permanent client retry loop. Membership (any role, below)
@@ -269,7 +207,9 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
 
   const { data: memory, error: memoryError } = await supabase
     .from('memories')
-    .select('id, family_id, content, memory_type, media_key, media_content_type, audio_transcript, updated_at')
+    .select(
+      'id, family_id, content, memory_type, memory_date, media_key, media_content_type, audio_transcript, updated_at',
+    )
     .eq('id', memoryId)
     .maybeSingle();
 
@@ -315,79 +255,82 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
           'validation_error',
         );
       }
-
-      const analyzed = await analyzeTextIllustrationEmotion(row.content);
-      await serviceClient.from('memories').update({ emotion: analyzed.emotion }).eq('id', memoryId);
-
-      const response: AnalyzeEmotionResponse = {
-        emotion: analyzed.emotion,
-        colorPalette: analyzed.colorPalette,
-      };
-
-      return jsonResponse(response);
     }
 
-    if (row.memory_type === 'audio') {
-      const audioInput = buildAudioEmotionClassifierInput(row);
-      if (audioInput.skip) {
-        const response: AnalyzeEmotionResponse = { emotion: '', colorPalette: '', skipped: true };
-        return jsonResponse(response);
+    let orderedMedia: MemoryMediaRow[] = [];
+
+    if (row.memory_type === 'media') {
+      const { data: mediaRows, error: mediaError } = await supabase
+        .from('memory_media')
+        .select('object_key, content_type, position, preview_object_key')
+        .eq('memory_id', memoryId)
+        .order('position', { ascending: true });
+
+      if (mediaError) {
+        console.error('analyze-emotion media lookup failed', mediaError.message);
+        return errorResponse('Failed to load media assets', 500, 'internal_error');
       }
 
-      const analyzed = await analyzeTextIllustrationEmotion(audioInput.input);
-      await serviceClient.from('memories').update({ emotion: analyzed.emotion }).eq('id', memoryId);
+      orderedMedia = (mediaRows ?? []) as MemoryMediaRow[];
+      const mediaValidationError = validateMediaPhotoMemoryRow(row, orderedMedia);
+      if (mediaValidationError) {
+        return errorResponse(
+          mediaValidationError.message,
+          mediaValidationError.status,
+          mediaValidationError.code,
+        );
+      }
+    }
 
-      const response: AnalyzeEmotionResponse = {
-        emotion: analyzed.emotion,
-        colorPalette: analyzed.colorPalette,
-      };
+    const taggedMembers = await fetchTaggedMembers(supabase, memoryId);
 
+    const result = await runMemoryAnalysis({
+      memory: {
+        id: row.id,
+        content: row.content,
+        memoryType: row.memory_type,
+        memoryDate: row.memory_date,
+        audioTranscript: row.audio_transcript,
+      },
+      taggedMembers,
+      media: orderedMedia.map(
+        (asset): MediaAssetForAnalysis => ({
+          objectKey: asset.object_key,
+          contentType: asset.content_type,
+          position: asset.position,
+          previewObjectKey: asset.preview_object_key,
+        }),
+      ),
+    });
+
+    if (result.skipped) {
+      const response: AnalyzeMemoryResponse = { emotion: '', colorPalette: '', skipped: true };
       return jsonResponse(response);
     }
 
-    const { data: mediaRows, error: mediaError } = await supabase
-      .from('memory_media')
-      .select('object_key, content_type, position')
-      .eq('memory_id', memoryId)
-      .order('position', { ascending: true });
-
-    if (mediaError) {
-      console.error('analyze-emotion media lookup failed', mediaError.message);
-      return errorResponse('Failed to load media assets', 500, 'internal_error');
-    }
-
-    const orderedMedia = (mediaRows ?? []) as MemoryMediaRow[];
-    const mediaValidationError = validateMediaPhotoMemoryRow(row, orderedMedia);
-    if (mediaValidationError) {
-      return errorResponse(
-        mediaValidationError.message,
-        mediaValidationError.status,
-        mediaValidationError.code,
-      );
-    }
-
-    const imageAsset = orderedMedia.find((asset) =>
-      isAllowedImageMediaContentType(asset.content_type)
-    );
-    const mediaKey = imageAsset?.object_key ?? row.media_key!;
-    const mediaContentType = imageAsset?.content_type ?? row.media_content_type ?? '';
-
-    const analyzed = await analyzeMediaPhotoEmotion({
-      content: row.content,
-      mediaKey,
-      mediaContentType,
-    });
-
-    const updated = await updateEmotionIfSnapshotMatches(
+    const updated = await updateMemoryAnalysisIfSnapshotMatches(
       serviceClient,
       memoryId,
-      analyzed.emotion,
+      {
+        emotion: result.emotion,
+        topics: result.topics,
+        topicDetails: result.topicDetails,
+        labels: result.labels,
+        description: result.description,
+      },
       snapshot,
     );
 
-    const response: AnalyzeEmotionResponse = {
-      emotion: analyzed.emotion,
-      colorPalette: analyzed.colorPalette,
+    if (updated) {
+      await upsertMemoryMilestones(serviceClient, memoryId, row.family_id, result.milestones);
+    }
+
+    const response: AnalyzeMemoryResponse = {
+      emotion: result.emotion,
+      colorPalette: result.colorPalette,
+      topics: result.topics.map((topic) => topic.id),
+      labels: result.labels,
+      description: result.description,
       skipped: updated ? undefined : true,
     };
 

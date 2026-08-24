@@ -1,9 +1,7 @@
-import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
+import { assertEquals } from 'jsr:@std/assert@1';
 import {
-  analyzeTextIllustrationEmotion,
-  buildAudioEmotionClassifierInput,
   handleAnalyzeEmotion,
-  updateEmotionIfSnapshotMatches,
+  updateMemoryAnalysisIfSnapshotMatches,
   validateMediaPhotoMemoryRow,
 } from './index.ts';
 import { normalizeEmotionLabel } from '../_shared/media-emotion.ts';
@@ -27,98 +25,59 @@ Deno.test('normalizeEmotionLabel via shared helper resolves known emotions', () 
   assertEquals(typeof result.colorPalette, 'string');
 });
 
-Deno.test('analyzeTextIllustrationEmotion uses mocked OpenAI when OPENAI_API_KEY is test', async () => {
-  const originalFetch = globalThis.fetch;
-  const originalKey = Deno.env.get('OPENAI_API_KEY');
+// Text/URL-stripping coverage moved with the logic itself: analyze-emotion
+// no longer builds the classifier input directly (that's now
+// `buildAnalysisInput` in `_shared/analyze-memory-core.ts`, extended to
+// every memory type) -- see analyze-memory-core.test.ts's
+// "buildAnalysisInput: text_only strips URLs and sends no images" and the
+// audio join/skip cases for the equivalent, now-shared coverage (including
+// the inline-links §8 "URLs must never reach the prompt" rule).
 
-  Deno.env.set('OPENAI_API_KEY', 'test-key');
-
-  globalThis.fetch = async () =>
-    new Response(
-      JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                emotion: 'calm',
-                colorPalette: 'sage green, pale blue',
-              }),
-            },
-          },
-        ],
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } },
-    );
-
-  try {
-    const result = await analyzeTextIllustrationEmotion('Quiet afternoon at the park.');
-    assertEquals(result.emotion, 'calm');
-    assertEquals(result.colorPalette, 'sage green, pale blue');
-  } finally {
-    globalThis.fetch = originalFetch;
-
-    if (originalKey) {
-      Deno.env.set('OPENAI_API_KEY', originalKey);
-    } else {
-      Deno.env.delete('OPENAI_API_KEY');
-    }
-  }
-});
-
-// Inline links (docs/plans/inline-links.md §8): URLs must never reach the
-// emotion prompt -- they pollute classification and fetched titles are
-// untrusted third-party content (prompt-injection surface).
-Deno.test('analyzeTextIllustrationEmotion strips URLs from the prompt sent to OpenAI', async () => {
-  const originalFetch = globalThis.fetch;
-  const originalKey = Deno.env.get('OPENAI_API_KEY');
-
-  Deno.env.set('OPENAI_API_KEY', 'test-key');
-
-  let capturedUserContent = '';
-
-  globalThis.fetch = async (_url, init) => {
-    const body = JSON.parse((init as RequestInit).body as string);
-    capturedUserContent = body.messages[1].content;
-
-    return new Response(
-      JSON.stringify({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({ emotion: 'joy', colorPalette: 'warm gold' }),
-            },
-          },
-        ],
-      }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } },
-    );
-  };
-
-  try {
-    await analyzeTextIllustrationEmotion(
-      'Check out https://example.com/party-pics for more of the birthday party!',
-    );
-
-    assertEquals(capturedUserContent.includes('https://'), false);
-    assertStringIncludes(capturedUserContent, 'Check out');
-    assertStringIncludes(capturedUserContent, 'birthday party');
-  } finally {
-    globalThis.fetch = originalFetch;
-
-    if (originalKey) {
-      Deno.env.set('OPENAI_API_KEY', originalKey);
-    } else {
-      Deno.env.delete('OPENAI_API_KEY');
-    }
-  }
-});
-
-Deno.test('validateMediaPhotoMemoryRow rejects video media', () => {
+Deno.test('validateMediaPhotoMemoryRow rejects video media with no poster (no media rows loaded)', () => {
   const result = validateMediaPhotoMemoryRow({
     memory_type: 'media',
     media_key: 'user-1/memories/memory-1/media.mp4',
     media_content_type: 'video/mp4',
   });
+
+  assertEquals(result?.code, 'video_not_supported');
+});
+
+// Closes the "video has no emotion in MVP" gap (docs/plans/memory-book.md
+// §5 Stage A): a video WITH a backfilled poster frame is now a usable
+// candidate, same as a photo.
+Deno.test('validateMediaPhotoMemoryRow accepts a video WITH a poster (preview_object_key present)', () => {
+  const result = validateMediaPhotoMemoryRow(
+    {
+      memory_type: 'media',
+      media_key: 'user-1/memories/memory-1/media.mp4',
+      media_content_type: 'video/mp4',
+    },
+    [
+      {
+        object_key: 'user-1/memories/memory-1/media.mp4',
+        content_type: 'video/mp4',
+        position: 0,
+        preview_object_key: 'user-1/memories/memory-1/media-poster.jpg',
+      },
+    ],
+  );
+
+  assertEquals(result, null);
+});
+
+Deno.test('validateMediaPhotoMemoryRow still rejects an all-video media list with no poster on any asset', () => {
+  const result = validateMediaPhotoMemoryRow(
+    {
+      memory_type: 'media',
+      media_key: 'user-1/memories/memory-1/media.mp4',
+      media_content_type: 'video/mp4',
+    },
+    [
+      { object_key: 'clip-1.mp4', content_type: 'video/mp4', position: 0, preview_object_key: null },
+      { object_key: 'clip-2.mp4', content_type: 'video/mp4', position: 1, preview_object_key: null },
+    ],
+  );
 
   assertEquals(result?.code, 'video_not_supported');
 });
@@ -140,7 +99,7 @@ Deno.test('validateMediaPhotoMemoryRow accepts a media key under a different mem
 
 // Audio memories (docs/features/audio-memories.md, P1.4): the vision path's
 // media-only guard must keep rejecting `audio` even though it now has its
-// own text-classifier branch in the handler -- this pins the guard as
+// own text-input branch in analyze-memory-core.ts -- this pins the guard as
 // defense-in-depth against a misrouted call.
 Deno.test('validateMediaPhotoMemoryRow rejects audio on the vision (media) path', () => {
   const result = validateMediaPhotoMemoryRow({
@@ -152,47 +111,8 @@ Deno.test('validateMediaPhotoMemoryRow rejects audio on the vision (media) path'
   assertEquals(result?.code, 'invalid_memory_type');
 });
 
-Deno.test('buildAudioEmotionClassifierInput proceeds on description only', () => {
-  const result = buildAudioEmotionClassifierInput({
-    content: 'Lila singing Twinkle Twinkle in the bath',
-    audio_transcript: null,
-  });
-  assertEquals(result, { skip: false, input: 'Lila singing Twinkle Twinkle in the bath' });
-});
-
-Deno.test('buildAudioEmotionClassifierInput proceeds on transcript only', () => {
-  const result = buildAudioEmotionClassifierInput({
-    content: null,
-    audio_transcript: 'twinkle twinkle little star',
-  });
-  assertEquals(result, { skip: false, input: 'twinkle twinkle little star' });
-});
-
-Deno.test('buildAudioEmotionClassifierInput concatenates description and transcript when both are present', () => {
-  const result = buildAudioEmotionClassifierInput({
-    content: 'Lila singing in the bath',
-    audio_transcript: 'twinkle twinkle little star',
-  });
-  assertEquals(result, {
-    skip: false,
-    input: 'Lila singing in the bath twinkle twinkle little star',
-  });
-});
-
-Deno.test('buildAudioEmotionClassifierInput skips (no-op) when both description and transcript are empty', () => {
-  for (const row of [
-    { content: null, audio_transcript: null },
-    { content: '', audio_transcript: '' },
-    { content: '   ', audio_transcript: '   ' },
-    // URL-only content strips to nothing, same as the text_only/text_illustration gate.
-    { content: 'https://example.com/clip', audio_transcript: null },
-  ]) {
-    assertEquals(buildAudioEmotionClassifierInput(row), { skip: true });
-  }
-});
-
-Deno.test('updateEmotionIfSnapshotMatches returns false when no row matches', async () => {
-  // .update({emotion}).eq('id', ...).eq('updated_at', ...).select('id').maybeSingle()
+Deno.test('updateMemoryAnalysisIfSnapshotMatches returns false when no row matches', async () => {
+  // .update({...}).eq('id', ...).eq('updated_at', ...).select('id').maybeSingle()
   // is exactly two .eq() calls before .select() -- the mock chain must match.
   const terminalQuery = {
     select: () => ({
@@ -212,10 +132,10 @@ Deno.test('updateEmotionIfSnapshotMatches returns false when no row matches', as
     }),
   };
 
-  const updated = await updateEmotionIfSnapshotMatches(
+  const updated = await updateMemoryAnalysisIfSnapshotMatches(
     supabase as never,
     '22222222-2222-4222-8222-222222222222',
-    'joy',
+    { emotion: 'joy', topics: [], topicDetails: {}, labels: [], description: '' },
     {
       updated_at: '2026-05-26T00:00:00Z',
       content: 'caption',
@@ -225,15 +145,15 @@ Deno.test('updateEmotionIfSnapshotMatches returns false when no row matches', as
   assertEquals(updated, false);
 });
 
-// Family sharing: the handler now calls this with the SERVICE-ROLE client
-// rather than the caller's user client, specifically so a viewer-triggered
-// analysis still persists. A viewer's user-client UPDATE would match zero
-// rows under the manager+ `memories` RLS policy (200 with a silent no-op);
-// the service-role client bypasses that policy and the write succeeds
+// Family sharing: the handler calls this with the SERVICE-ROLE client rather
+// than the caller's user client, specifically so a viewer-triggered analysis
+// still persists. A viewer's user-client UPDATE would match zero rows under
+// the manager+ `memories` RLS policy (200 with a silent no-op); the
+// service-role client bypasses that policy and the write succeeds
 // regardless of the triggering caller's role. This test stands in for that
 // client swap: it proves the function itself just needs *a* client whose
 // UPDATE isn't blocked -- exactly what passing the service client achieves.
-Deno.test('updateEmotionIfSnapshotMatches persists the write when the snapshot matches (viewer-triggered, service-role client)', async () => {
+Deno.test('updateMemoryAnalysisIfSnapshotMatches persists the write when the snapshot matches (viewer-triggered, service-role client)', async () => {
   const terminalQuery = {
     select: () => ({
       maybeSingle: async () => ({ data: { id: 'memory-1' }, error: null }),
@@ -252,10 +172,16 @@ Deno.test('updateEmotionIfSnapshotMatches persists the write when the snapshot m
     }),
   };
 
-  const updated = await updateEmotionIfSnapshotMatches(
+  const updated = await updateMemoryAnalysisIfSnapshotMatches(
     serviceRoleClient as never,
     '22222222-2222-4222-8222-222222222222',
-    'calm',
+    {
+      emotion: 'calm',
+      topics: [{ id: 'beach', detail: null }],
+      topicDetails: {},
+      labels: ['sand'],
+      description: 'A beach day.',
+    },
     {
       updated_at: '2026-05-26T00:00:00Z',
       content: 'caption',

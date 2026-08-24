@@ -3,6 +3,7 @@ import {
   assertAiUsageWriteSucceeded,
   buildAiUsageLedgerAttribution,
   chatJson,
+  chatJsonWithVisionMulti,
   editImageWithReferences,
   generateImage,
   scheduleBestEffortUsageWrite,
@@ -195,6 +196,64 @@ Deno.test('generateImage does not retry another model after a deterministic prov
     } else {
       Deno.env.set('OPENAI_API_KEY', originalKey);
     }
+  }
+});
+
+Deno.test('chatJsonWithVisionMulti sends up to 4 images at detail:low alongside the text block', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  let capturedContent: Array<{ type: string; text?: string; image_url?: { url: string; detail?: string } }> = [];
+
+  Deno.env.set('OPENAI_API_KEY', TEST_OPENAI_KEY);
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse((init as RequestInit).body as string);
+    capturedContent = body.messages[1].content;
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  try {
+    const images = [
+      { base64: 'aaaa', contentType: 'image/jpeg' as const },
+      { base64: 'bbbb', contentType: 'image/jpeg' as const },
+    ];
+    await chatJsonWithVisionMulti('system', 'context text', images);
+
+    assertEquals(capturedContent[0], { type: 'text', text: 'context text' });
+    assertEquals(capturedContent.length, 3);
+    for (const entry of capturedContent.slice(1)) {
+      assertEquals(entry.type, 'image_url');
+      assertEquals(entry.image_url?.detail, 'low');
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});
+
+Deno.test('chatJsonWithVisionMulti supports zero images (text-only memories share the same call path)', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  let capturedContent: unknown[] = [];
+
+  Deno.env.set('OPENAI_API_KEY', TEST_OPENAI_KEY);
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse((init as RequestInit).body as string);
+    capturedContent = body.messages[1].content;
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  try {
+    await chatJsonWithVisionMulti('system', 'just text', []);
+    assertEquals(capturedContent, [{ type: 'text', text: 'just text' }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
   }
 });
 

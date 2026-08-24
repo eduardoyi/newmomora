@@ -12,6 +12,7 @@
     "npm:@supabase/supabase-js@2": "2.110.3",
     "npm:exifr@7.1.3": "7.1.3",
     "npm:image-size@1.1.1": "1.1.1",
+    "npm:image-size@1.2.1": "1.2.1",
     "npm:satori@0.29.0": "0.29.0",
     "npm:sharp@0.33": "0.33.5"
   },
@@ -556,6 +557,13 @@
     },
     "image-size@1.1.1": {
       "integrity": "sha512-541xKlUw6jr/6gGuk92F+mYM5zaFAc5ahphvkqvNe2bQ6gVBkd6bfrmVJ2t4KDAfikAYZyIqTnktX3i6/aQDrQ==",
+      "dependencies": [
+        "queue"
+      ],
+      "bin": true
+    },
+    "image-size@1.2.1": {
+      "integrity": "sha512-rH+46sQJ2dlwfjfhCyNx5thzrv+dtmBIhPHk0zgRUukHzZ/kRueTJXoYYsclBaKcSMBWuGbOFXtioLpzTb5euw==",
       "dependencies": [
         "queue"
       ],

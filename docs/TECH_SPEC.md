@@ -1375,20 +1375,22 @@ This `verify_jwt = false` internal function is not a browser API. It verifies ra
 
 ---
 
-### 4.2 `analyze-emotion`
+### 4.2 `analyze-emotion` / `analyze-memory`
 
-Classifies dominant emotion and color palette for memories.
+**Updated 2026-08-24** (docs/plans/memory-book.md §5 Stage A, V1 exit): `analyze-emotion` now runs the full `analyze-memory` enrichment pass — one multimodal OpenAI call per memory producing **emotion, topics, labels, description, and a milestone claim** — not emotion alone. The endpoint name, request shape, and response contract are all preserved for old app versions (see **Response** below); `analyze-memory` is a second, identically-behaving endpoint (same handler, `supabase/functions/analyze-memory/index.ts` re-exports `supabase/functions/analyze-emotion/index.ts`'s handler) for future clients that want the forward-looking name. Shared analysis logic lives in `supabase/functions/_shared/analyze-memory-core.ts`; see [memory-analysis.md](./features/memory-analysis.md) for the full behavior, data model, and extension guide (topic vocabulary, milestone catalog, date gating, deterministic birthday resolution). This entry keeps the request/response contract and the pieces that changed; memory-analysis.md is canonical for the pipeline itself.
 
-**Supported memory types**
+**Supported memory types (input building)**
 
-| `memory_type` | Input | Model |
-|---------------|-------|-------|
-| `text_illustration` | Non-empty `content` (text) | `gpt-4o-mini` chat |
-| `text_only` | Non-empty `content` (text) | `gpt-4o-mini` chat |
-| `media` (has photo) | First ordered image asset + optional caption | `gpt-4o-mini` vision |
-| `media` (all video) | — | Rejected/skipped (`400` `video_not_supported`) |
-| `audio` | `content` (description) + `audio_transcript`, concatenated — either alone is enough | `gpt-4o-mini` chat (2026-08-19, [audio-memories.md](./features/audio-memories.md)) |
-| `audio` (both empty) | — | `{ emotion: '', colorPalette: '', skipped: true }` — success-shaped, never an error (babble/silence with no typed caption) |
+| `memory_type` | Text sent | Images sent | Model |
+|---------------|-----------|-------------|-------|
+| `text_illustration` | Non-empty `content` (`stripUrls`'d) | none | `gpt-4o-mini` chat |
+| `text_only` | Non-empty `content` (`stripUrls`'d) | none | `gpt-4o-mini` chat |
+| `media` | Optional caption (`content`) | Up to 4 `memory_media` rows by position — each prefers `preview_object_key` (photo preview **or video poster frame**, both JPEG); falls back to the original only for jpeg/png/webp; HEIC-with-no-preview and video-with-no-poster assets are skipped | `gpt-4o-mini` vision (multi-image) |
+| `media` (no usable image and no caption) | — | — | `{ emotion: '', colorPalette: '', skipped: true }` |
+| `audio` | `content` (description) + `audio_transcript`, concatenated — either alone is enough | none | `gpt-4o-mini` chat (2026-08-19, [audio-memories.md](./features/audio-memories.md)) |
+| `audio` (both empty) | — | — | `{ emotion: '', colorPalette: '', skipped: true }` — success-shaped, never an error (babble/silence with no typed caption) |
+
+**Video memories with a backfilled poster now get emotion (and the rest of the analysis) — the "video has no emotion in MVP" gap is closed.** A video with no poster at all still has no usable image; if it also has no caption, the request validates as `400 video_not_supported` before any OpenAI call (same as before). A `media` request that clears validation but ends up with neither text nor a fetchable image (e.g. every candidate image fails to fetch/decode) degrades to the success-shaped `skipped: true` response above rather than a `file_too_large`/`unsupported_image_format` error — a deliberate behavior change from the single-image legacy path: with up to 4 images, one bad image no longer fails the whole call, so `file_too_large`/`unsupported_image_format` are effectively unreachable outside this all-images-failed edge case.
 
 **Triggers**
 
@@ -1398,13 +1400,13 @@ Classifies dominant emotion and color palette for memories.
 - `audio`: `use-pending-memory-uploads.tsx` after `postAudioMemory` resolves (`runAudioEmotionAnalysis`), only when `content` or `audio_transcript` is non-empty
 - Backfill: `useMemories` retries analysis once per session for any analyzable memory still missing an emotion (audio's analyzability check also considers `audio_transcript`, not just `content`)
 
-All client-side triggers retry once in the background after the per-memory cooldown; if both attempts fail the emotion is left empty.
+Client trigger sites are unchanged in this phase (phase 2: wiring `media`/video-poster and archive backfill into the client). All client-side triggers retry once in the background after the per-memory cooldown; if both attempts fail the emotion is left empty.
 
 Does **not** invoke `generate-illustration` for `media`.
 
-**Authorization (family-sharing Phase 3):** memory looked up by id alone; caller must be a **member (any role, including viewer)** of its family — analysis can be triggered by anyone who can see the memory. No caller-prefix assertions on media keys (they come from the trusted DB row). **The emotion write runs on the service-role client**, not the caller's user client: a viewer's user-client UPDATE would silently match zero rows under the manager+ `memories` RLS policy (200 with a no-op), leaving `isEmotionAnalyzable` true and causing a permanent client-side retry loop. Membership authorizes triggering analysis; the write itself is a system write.
+**Authorization (family-sharing Phase 3):** memory looked up by id alone; caller must be a **member (any role, including viewer)** of its family — analysis can be triggered by anyone who can see the memory. No caller-prefix assertions on media keys (they come from the trusted DB row). **The analysis write runs on the service-role client**, not the caller's user client: a viewer's user-client UPDATE would silently match zero rows under the manager+ `memories` RLS policy (200 with a no-op), leaving `isEmotionAnalyzable` true and causing a permanent client-side retry loop. Membership authorizes triggering analysis; the write itself is a system write.
 
-**Request**
+**Request** (unchanged)
 
 ```json
 {
@@ -1412,46 +1414,48 @@ Does **not** invoke `generate-illustration` for `media`.
 }
 ```
 
-**Logic (text_illustration / text_only)**
+**Logic**
 
-1. Fetch memory (JWT + RLS); assert caller is a family member
-2. Call `gpt-4o-mini` with text emotion prompt
-3. Update `memories.emotion` via the **service-role client**
+1. Fetch memory (JWT + RLS: `content`, `memory_type`, `memory_date`, `media_key`, `media_content_type`, `audio_transcript`, `updated_at`); assert caller is a family member; check billing write access
+2. Per-type request validation (unchanged error contract): empty-text 400 for `text_illustration`/`text_only`; for `media`, load ordered `memory_media` (now including `preview_object_key`) and validate — a usable candidate is any asset with a `preview_object_key` OR any non-video image asset; an all-video list with no poster on any asset is still `400 video_not_supported`
+3. Fetch tagged members (`memory_family_members` → `family_members` id/name/date_of_birth) for structured context and milestone resolution
+4. `runMemoryAnalysis` (`_shared/analyze-memory-core.ts`): builds the per-type text/image input, fetches and prepares up to 4 images (best-effort per image), builds the structured context block (date, tagged members' ages/child-adult/days-to-birthday, nearby holidays — `_shared/date-context.ts`) and the milestone catalog subset for the tagged members' age bands, makes the one multimodal OpenAI call, then post-processes every axis in code: topic vocabulary validation + date gating (`_shared/memory-topics.ts` + `gateTopicsByDate`), the milestone explicit-text-only rule + age-band plausibility + deterministic birthday resolution (`_shared/memory-milestones.ts`)
+5. No text and no usable image → `{ skipped: true }`, no DB write, no OpenAI call
+6. Otherwise: **guarded compare-and-set UPDATE** on `memories` (`emotion`, `topics`, `topic_details`, `labels`, `description`, `analysis_version` = `TOPICS_VERSION`, `analyzed_at`), matching on `updated_at` — extended from the media-photo-only guard that existed before this change; every memory type now shares it
+7. If the guarded update landed: upsert `memory_milestones` rows (unique on `memory_id, milestone_id`) via the service client. Milestone writes are skipped entirely when the guarded update was discarded (the analysis ran against superseded content) and are non-fatal on failure (logged, does not fail the request)
+8. Per-memory cooldown: 5s between calls (`429` `rate_limited`)
 
-**Logic (audio, 2026-08-19)**
-
-1. Fetch memory (the row SELECT now includes `audio_transcript`); assert caller is a family member
-2. Build classifier input: `content` + `audio_transcript`, `stripUrls`'d and joined; both empty → return `{ skipped: true }` immediately (no OpenAI call, no error — the empty-content 400 that `text_illustration`/`text_only` get does NOT apply here, since a transcript-only or description-only audio memory must still proceed)
-3. Call `gpt-4o-mini` with the same text emotion prompt as `text_illustration`/`text_only`
-4. Update `memories.emotion` via the **service-role client**
-
-**Logic (media photo)**
-
-1. Fetch memory including ordered `memory_media` assets and `updated_at`; assert caller is a family member
-2. Select the first ordered image asset
-3. Reject/skip all-video media memories
-4. Snapshot `updated_at` and `content` for stale-write guard
-5. `getObjectBytes` from R2; reject if `> 20 MB`
-6. Downscale via `capImageMaxEdge` (max edge 768px); reject undecodable HEIC (`unsupported_image_format`)
-7. Vision call: caption + image when caption present; image-only otherwise
-8. `UPDATE emotion` via the **service-role client**, only if `updated_at` still matches snapshot
-9. Per-memory cooldown: 5s between calls (`429` `rate_limited`)
-
-**Response**
+**Response** — a strict superset of the pre-2026-08-24 contract; new fields are additive only
 
 ```json
 {
-  "emotion": "joyful",
+  "emotion": "joy",
   "colorPalette": "warm golden yellows, soft peach, light sky blue accents",
+  "topics": ["beach", "grandparents"],
+  "labels": ["sand", "sun", "towel"],
+  "description": "Enzo and his grandmother building a sandcastle at the beach.",
   "skipped": false
 }
 ```
 
-`skipped: true` when analysis succeeded but the stale-write guard discarded the DB update.
+`topics`/`labels`/`description` are omitted (not just empty) when the request returned early via `skipped: true`. `skipped: true` when analysis succeeded but the stale-write guard discarded the DB update — `emotion`/`topics`/`labels`/`description` in the response still reflect the freshly analyzed values even though the persisted row wasn't updated.
 
 **Errors:** `MEMORY_NOT_FOUND`, `invalid_memory_type`, `video_not_supported`, `file_too_large`, `unsupported_image_format`, `forbidden`, `rate_limited`, `ANALYSIS_FAILED`
 
-**Privacy:** Photo bytes and optional captions are sent to OpenAI (same boundary as portrait generation). Production logs: memory id and status only.
+**Privacy:** Photo bytes and optional captions are sent to OpenAI (same boundary as portrait generation). Production logs: memory id and status/error codes only — never memory content, captions, transcripts, the model's `description`, or `labels` (memory-analysis.md's PII rule).
+
+**Schema (2026-08-24, `20260824100000_analyze_memory.sql`):**
+
+| Column (`memories`) | Type | Notes |
+|---|---|---|
+| `topics` | `text[]` | Controlled vocabulary ids (`_shared/memory-topics.ts`), 0-3, precision-first. GIN-indexed. |
+| `topic_details` | `jsonb` | Map of topic id → detail string; populated only for `other-holiday`, `national-holiday`, `ceremony`, `mothers-fathers-day`. |
+| `labels` | `text[]` | Open-vocabulary search labels, up to 10. |
+| `description` | `text` | One neutral sentence, search-only; never rendered client-side. |
+| `analysis_version` | `integer` | The `TOPICS_VERSION` this row was analyzed against. |
+| `analyzed_at` | `timestamptz` | When the full pass last wrote this row. |
+
+**New table `memory_milestones`:** `id`, `family_id`, `memory_id`, `family_member_id` (nullable, set null on member delete), `milestone_id` (text, catalog id), `detail`, `out_of_band` (boolean), `status` (`candidate`/`confirmed`/`dismissed`, default `candidate`), `created_at`, `updated_at`. Unique on `(memory_id, milestone_id)`. RLS: family members can `select`; no client insert/update/delete policies — only the service-role client writes. See memory-analysis.md for the resolution rules.
 
 ---
 
@@ -2808,6 +2812,7 @@ Momora2/
 │       ├── delete-portrait-version/
 │       ├── delete-family-member/
 │       ├── analyze-emotion/
+│       ├── analyze-memory/
 │       ├── generate-illustration/
 │       ├── workflow-illustration-bridge/
 │       ├── process-voice-memory/

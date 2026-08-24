@@ -139,7 +139,7 @@
 
 ## Notes for implementation
 
-- 78 entries across 7 categories. The child's age on `memory_date` filters
+- 77 entries across 8 categories. The child's age on `memory_date` filters
   the catalog to in-band entries **before** the model call; `any`-band
   entries are always included. An explicit text claim outside the band is
   still surfaced, flagged `out_of_band: true`, for user confirmation rather
