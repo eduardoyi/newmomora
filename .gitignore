@@ -80,3 +80,6 @@ supabase/scripts/eval-output/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Marketing assets are local-only (GBs of media; never pushed)
+marketing/
