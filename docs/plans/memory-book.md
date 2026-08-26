@@ -191,11 +191,38 @@ Two layers, mirroring what already exists:
    `family_member_portrait_versions` — age-stamped portrait history is
    already built), milestone/firsts pages, a light chronological backbone so
    the book still reads as a journey through time, closing page.
-2. **Themed spreads** slotted into the skeleton: cluster by topic + emotion,
-   rank by engagement (likes/comments as a "the good ones" proxy), photo
-   presence, and text richness; an AI pass selects and sequences memories
-   into named spreads ("Fun at the beach", "The funny ones"). The model
-   curates; it does not paginate — layout templates own geometry.
+2. **Themed spreads** slotted into the skeleton, from THREE deterministic
+   candidate generators (decided 2026-08-24 after first-outline review):
+   topic clusters (threshold ≥4, ≥3 on sparse scopes), **people-pair
+   spreads** from co-tag counts ("Moments with Enzo & Mara", "With abuela"
+   — the Looking Back pair recipe), and **emotion spreads** ("The funny
+   ones" — the Looking Back emotion recipe). An AI pass selects and
+   sequences from all candidates. The model curates; it does not
+   paginate — layout templates own geometry.
+
+   **Outline-review decisions (round 2, 2026-08-25):** relationship words in
+   spread titles only from tagged-member evidence (names/nicknames like
+   "nonno", "abuelo" — user-authored), never from image inference; unknown →
+   generic titles. Time-anchored spreads (newborn-days, seasonal date-gated
+   topics) pin near their median memory date, exempt from pacing. Birth-month
+   and birthday-month backbone segments get special AI-drafted titles
+   ("Welcome to the world, …"). Spread titles have two modes
+   (decided 2026-08-25): **quote titles** — verbatim from a member memory's
+   own text, code-verified against the source (never fabricated), preferred
+   for emotion/people spreads, typeset distinctly in V3 (Caveat) with source
+   attribution; and **descriptive titles** — any title naming a concrete
+   place/activity/object must be true of every included memory (generalize
+   or drop the outlier; applies even to genuine quotes that name concrete
+   things). Videos rank equal to photos in
+   backbone thinning (QR pages make them first-class).
+
+   **Outline-review decisions (2026-08-24):** the Firsts spread closes the
+   book ("big and small victories this year"), not opens it; themed spreads
+   are **paced** by code — no 3+ consecutive backbone month-segments when
+   spreads are available to interleave, chronological affinity demoted to a
+   soft preference; AI selection rationales are internal review notes only
+   (never book copy), must cite concrete evidence, and are labeled as
+   internal in every artifact.
 
 **Overlap and single placement (decided 2026-08-23):** topics are
 multi-label (0–3 per memory; `beach` + `grandparents`, `birthday` +
@@ -402,7 +429,16 @@ adjacent to its instruction — vocabulary at prompt end after the milestone
 catalog collapsed coverage to 2%); both lessons carry into the production
 prompt design.
 
-**V1 exit (next): ship production `analyze-memory`** — schema migration
+**V1 EXIT COMPLETE 2026-08-24:** production `analyze-memory` shipped —
+migration `20260824100000` applied to prod, `analyze-emotion` +
+`analyze-memory` functions deployed (contract superset; no app release), and
+the full archive backfilled: 727 canary (Eduardo's family, 0 errors, $0.68,
+35% topic coverage — up from the eval's 30% via the photo-alone calibration;
+23 milestone rows all child-resolved) + 93 remaining across 12 families
+(0 errors, $0.08). Every new memory is enriched at creation. Next: V2 —
+curation outline generator.
+
+Original V1-exit spec (implemented): **ship production `analyze-memory`** — schema migration
 (topics/labels/description + milestone storage + topics_version), Edge
 Function replacing `analyze-emotion` at creation time, archive backfill,
 prompt calibration above; migration + regenerated types + TECH_SPEC +
