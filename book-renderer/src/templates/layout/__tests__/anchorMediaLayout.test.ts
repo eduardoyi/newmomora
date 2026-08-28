@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
+import { tallSoloCanSitBesideHeader,
   classifyOrientation,
   layoutAnchorPair,
   layoutSoloAnchor,
@@ -513,5 +513,16 @@ describe('soloVideoScanPlacement / layoutSoloVideoAnchor (owner review round 9, 
     const belowHeightBudget = availableHeightMm - PHOTO_META_RESERVE_MM;
     const belowOnlyRect = layoutSoloAnchor(0.56, SAFE_BOX_MM, belowHeightBudget);
     expect(sideRect.hMm).toBeGreaterThanOrEqual(belowOnlyRect.hMm);
+  });
+});
+
+
+describe('tallSoloCanSitBesideHeader (round-16 follow-up: wrapping titles force the below-header layout)', () => {
+  it('allows beside-header placement for a short single-line month title', () => {
+    expect(tallSoloCanSitBesideHeader(190, 'mayo 2025', false)).toBe(true);
+  });
+
+  it('refuses beside-header placement when the title wraps (long special birth-month title) — the audit caught a real regenerated page where even the 50% floor cap started left of the modeled title edge', () => {
+    expect(tallSoloCanSitBesideHeader(190, 'El mes en que llegaste a casa', true)).toBe(false);
   });
 });

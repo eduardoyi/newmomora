@@ -456,6 +456,20 @@ export function tallSoloHeaderWidthCapMm(safeBoxWidthMm: number, title: string |
   return Math.max(floorMm, Math.min(clearanceCapMm, ceilingMm));
 }
 
+/**
+ * Round-16 follow-up (caught by the audit on a real regenerated page): a
+ * WRAPPING title — a 2-line special birth-month title spans up to the full
+ * header container (~80% of the safe width) — leaves no column the image
+ * could occupy without overlapping the title's own rows; even the 50%
+ * floor cap starts left of the title's modeled right edge. Beside-header
+ * placement is simply IMPOSSIBLE there: the page falls back to the
+ * ordinary below-header solo layout. One shared predicate so the template
+ * and the audit can never disagree about which composition a page uses.
+ */
+export function tallSoloCanSitBesideHeader(safeBoxWidthMm: number, title: string | null, special: boolean): boolean {
+  return !modelSectionHeaderTitle(safeBoxWidthMm, title, special).wraps;
+}
+
 export function layoutTallSoloBesideHeader(
   aspect: number,
   safeBoxWidthMm: number,

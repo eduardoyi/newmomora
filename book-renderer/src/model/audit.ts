@@ -12,7 +12,7 @@ import type {
 // same note in `fitter.ts`. `audit.ts` has no React/DOM dependency either.
 import type { FooterIndexEntry } from '../templates/common/FooterIndex.types';
 import type { SectionHeaderParams } from '../templates/common/SectionHeader.types';
-import {
+import { tallSoloCanSitBesideHeader,
   layoutAnchorPair,
   layoutTallSoloBesideHeader,
   layoutSoloVideoAnchor,
@@ -217,7 +217,13 @@ function auditGeometricOverlap(document: BookDocument): IntegrityViolation[] {
         // it was sized against (a solo otherwise has nothing else to
         // overlap — there's only ever one photo slot on this page).
         const sectionHeader = (page.params.sectionHeader ?? null) as SectionHeaderParams | null;
-        const isTall = sectionHeader && classifyOrientation(photoSlots[0].content.assetAspectRatio) === 'tall';
+        const isTall =
+          sectionHeader &&
+          classifyOrientation(photoSlots[0].content.assetAspectRatio) === 'tall' &&
+          // Round-16 follow-up: mirrors AnchorMedia.tsx exactly — a wrapping
+          // title forces the below-header composition, so the beside-header
+          // geometry (and its overlap checks) must not be recomputed here.
+          tallSoloCanSitBesideHeader(SAFE_BOX_MM, sectionHeader.title, sectionHeader.special);
         const isSoloVideo = Boolean(photoSlots[0].content.qr);
         if (isTall) {
           const availableHeightMm = SAFE_BOX_MM - FOOTER_RESERVE_MM;

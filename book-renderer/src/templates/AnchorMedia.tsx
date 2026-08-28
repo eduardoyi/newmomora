@@ -7,6 +7,7 @@ import { SectionHeader, type SectionHeaderParams } from './common/SectionHeader'
 import { Folio } from './common/Folio';
 import { getLanguage } from './furniture';
 import {
+  tallSoloCanSitBesideHeader,
   layoutSoloAnchor,
   layoutAnchorPair,
   layoutTallSoloBesideHeader,
@@ -66,7 +67,12 @@ export function AnchorMedia({ page, manifest, bookSlug, showGuides }: TemplatePr
   // header reserve, since the header shares the row with it rather than
   // sitting above it.
   const isTallSoloBesideHeader =
-    photoSlots.length === 1 && Boolean(sectionHeader) && classifyOrientation(photoSlots[0].content.assetAspectRatio) === 'tall';
+    photoSlots.length === 1 &&
+    Boolean(sectionHeader) &&
+    classifyOrientation(photoSlots[0].content.assetAspectRatio) === 'tall' &&
+    // Round-16 follow-up: a wrapping (e.g. 2-line special) title leaves no
+    // clear column — the page uses the ordinary below-header layout instead.
+    tallSoloCanSitBesideHeader(SAFE_BOX_MM, sectionHeader?.title ?? null, sectionHeader?.special ?? false);
   const canvasTopMm = isTallSoloBesideHeader ? 0 : headerReserve;
   const canvasHeightMm = isTallSoloBesideHeader ? SAFE_BOX_MM - FOOTER_RESERVE_MM : contentHeight;
 
