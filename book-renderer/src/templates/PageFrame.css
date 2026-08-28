@@ -1,0 +1,49 @@
+.page-frame {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  background: var(--color-white);
+  box-shadow: 0 1px 3px rgba(44, 36, 24, 0.08), 0 12px 32px rgba(44, 36, 24, 0.1);
+  overflow: hidden;
+  border-radius: 2px;
+  /*
+   * Establishes a query-container context sized to the frame's OWN rendered
+   * width. Every template sizes its type in `cqw` (see templates/mm.ts
+   * `ptCqw`) rather than raw px specifically so that a page rendered at full
+   * preview size and the SAME page rendered at book-map thumbnail size use
+   * the exact same relative type scale — this is what "scale-to-fit, not
+   * crop-zoomed" means for the thumbnails.
+   */
+  container-type: inline-size;
+  container-name: page;
+}
+
+.page-frame__content {
+  position: absolute;
+  inset: 0;
+}
+
+.page-frame__guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.page-frame__guide {
+  position: absolute;
+}
+
+.page-frame__guide--trim {
+  border: 1px dashed rgba(214, 62, 120, 0.55);
+}
+
+.page-frame__guide--safe {
+  border: 1px dashed rgba(142, 127, 184, 0.6);
+}
+
+.page-frame__guide--gutter {
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid rgba(44, 36, 24, 0.25);
+}

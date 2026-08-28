@@ -1,0 +1,75 @@
+{
+  "runId": "sample-run-2026-08-26",
+  "child": { "id": "sample-child-0001", "name": "Sample Child" },
+  "scope": { "type": "age-year", "ageYear": 1 },
+  "window": { "start": "2024-01-01", "endExclusive": "2025-01-01", "label": "Year One" },
+  "pageEstimate": 12,
+  "pageBudget": 20,
+  "counts": { "inWindow": 10, "eligible": 10, "taggedToChild": 10, "untaggedInWindow": 0, "excludedForBudget": 0 },
+  "elements": [
+    { "id": "cover", "kind": "cover", "title": "Cover", "memoryIds": [], "rationale": {} },
+    { "id": "title", "kind": "title", "title": "Sample Child — Year One", "memoryIds": [], "rationale": {} },
+    { "id": "through-the-years", "kind": "through-the-years", "title": "Through the years", "memoryIds": [], "rationale": {} },
+    {
+      "id": "backbone:2024-01",
+      "kind": "backbone",
+      "title": "January 2024",
+      "memoryIds": ["m-jan-1", "m-jan-2"],
+      "rationale": {}
+    },
+    {
+      "id": "emotion:funny",
+      "kind": "themed",
+      "title": "Vamos, vamos, banana!",
+      "memoryIds": ["m-feb-1", "m-feb-3", "m-feb-2"],
+      "rationale": { "m-feb-1": "funny wordplay; has_text" },
+      "spreadType": "emotion",
+      "titleMode": "quote",
+      "titleSourceMemoryId": "m-feb-1",
+      "highlights": ["m-feb-1"]
+    },
+    {
+      "id": "topic:travel",
+      "kind": "themed",
+      "title": "First flights",
+      "memoryIds": ["m-mar-1"],
+      "rationale": {},
+      "spreadType": "topic",
+      "titleMode": "descriptive",
+      "titleSourceMemoryId": null
+    },
+    {
+      "id": "backbone:2024-04",
+      "kind": "backbone",
+      "title": "April 2024",
+      "memoryIds": ["m-apr-1"],
+      "rationale": {}
+    },
+    {
+      "id": "backbone:2024-05",
+      "kind": "backbone",
+      "title": "May 2024",
+      "memoryIds": ["m-may-1"],
+      "rationale": {},
+      "highlights": ["m-may-1"]
+    },
+    {
+      "id": "firsts",
+      "kind": "firsts",
+      "title": "Big and small victories this year",
+      "memoryIds": ["m-firsts-1", "m-firsts-2"],
+      "rationale": {}
+    },
+    { "id": "closing", "kind": "closing", "title": "Closing", "memoryIds": [], "rationale": {} }
+  ],
+  "editorialNote": "This year was full of first steps, first words, and first flights — a small life turning into a whole world, one ordinary Tuesday at a time.",
+  "integrity": {
+    "violations": [],
+    "reassignments": [],
+    "dissolvedSpreadIds": [],
+    "dissolvedBirthdayAges": [],
+    "movedToBackbone": [],
+    "droppedElements": [],
+    "excludedMemoryIds": []
+  }
+}

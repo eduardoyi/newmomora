@@ -19,6 +19,7 @@
     "**/*.integration.test.tsx",
     "jest.setup.ts",
     "supabase/functions/**",
-    "supabase/scripts/**"
+    "supabase/scripts/**",
+    "book-renderer/**"
   ]
 }

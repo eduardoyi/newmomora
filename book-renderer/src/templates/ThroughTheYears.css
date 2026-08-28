@@ -1,0 +1,72 @@
+.through-the-years-page {
+  background: var(--color-white);
+}
+
+.ttty {
+  position: absolute;
+  inset: 0;
+}
+
+.ttty__portrait {
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+}
+
+.ttty__portrait-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ttty__meta {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9em;
+  padding-top: 0.9em;
+}
+
+.ttty__source {
+  flex: none;
+  width: 24%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.ttty__source-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ttty__labels {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  padding-top: 0.1em;
+}
+
+.ttty__age {
+  font-family: var(--font-display);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.ttty__date {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-ink3);
+}
+
+.ttty__empty {
+  position: absolute;
+  left: 10%;
+  top: 45%;
+  font-family: var(--font-sans);
+  color: var(--color-ink3);
+}

@@ -2,24 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "expo-web",
-      "runtimeExecutable": "/bin/bash",
-      "runtimeArgs": ["/tmp/expo-web-start.sh"],
-      "port": 8081,
-      "autoPort": false
-    },
-    {
-      "name": "expo-dev-client",
-      "runtimeExecutable": "/bin/bash",
-      "runtimeArgs": ["-lc", "source ~/.nvm/nvm.sh && nvm use 20 >/dev/null && EXPO_PUBLIC_GALLERY_IMPORT_ENABLED=true npx expo start --dev-client --port 8081"],
-      "port": 8081,
-      "autoPort": false
-    },
-    {
-      "name": "marketing-site",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["--yes", "serve", "-l", "4173", "/Users/eduardoyi/Coding/momora-marketing/dist"],
-      "port": 4173
+      "name": "book-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "book-renderer", "run", "dev"],
+      "port": 5173
     }
   ]
 }

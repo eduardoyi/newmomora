@@ -10,26 +10,35 @@ import {
   buildReadingOrder,
   buildSpecialSegmentTitlesByMonth,
   buildTaggedMemberFeatures,
+  classifyMemoryPageShape,
+  classifyOrientation,
+  computeFirstPhotoOrientation,
   computeMedianDate,
   computeMemoryEligibility,
   computePageEstimate,
+  computePlacedPanoramaGuaranteeCount,
   computeRequiredPacingGaps,
   computeScopeWindow,
+  computeThinningScore,
+  estimateElementPages,
   dissolveSmallThemedSpreads,
   dissolveThinBirthdaySpreads,
   emotionCandidatesToUnified,
   findAnchorSegmentIndex,
   flagSpecialBackboneSegments,
   formatMonthRangeLabel,
+  formatOrientationMarker,
   fromJulianDayNumber,
   isQuoteSupportedByContent,
   isTimeAnchoredCandidate,
+  loadMilestonesForMemories,
   normalizeForQuoteCheck,
+  CLI_USAGE,
   paceThemedSpreads,
+  parseArgs,
   parseOutlineResponse,
   peoplePairCandidatesToUnified,
   planNonBackboneBudget,
-  rankMemoryForThinning,
   remapInsertIndex,
   resolveBookScope,
   resolveChild,
@@ -47,7 +56,9 @@ import {
   type BudgetElement,
   type ChildCandidate,
   type FamilyMemberForTagging,
+  type MediaRow,
   type MemoryFeature,
+  type MemoryPageShape,
   type PacingCandidate,
   type PlacementCandidate,
 } from './eval-memory-book-outline.ts';
@@ -118,6 +129,48 @@ Deno.test('resolveBookScope rejects a lone --from', () => {
     threw = true;
   }
   assertEquals(threw, true);
+});
+
+// --- parseArgs (owner hardening fix, 2026-08-27: never-silently-drop
+// applies at the CLI level too -- an unrecognized token used to fall
+// through to a no-op default case, so a malformed invocation could proceed
+// with a silently-partial or entirely-unparsed set of options) -------------
+
+Deno.test('parseArgs: a known flag combination parses cleanly, including a repeated --exclude-memory-id', () => {
+  const options = parseArgs([
+    '--child', 'Enzo',
+    '--age-year', '1',
+    '--exclude-memory-id', 'm1',
+    '--exclude-memory-id', 'm2',
+    '--dry-run',
+  ]);
+  assertEquals(options.child, 'Enzo');
+  assertEquals(options.ageYear, 1);
+  assertEquals(options.excludeMemoryIds, ['m1', 'm2']);
+  assertEquals(options.dryRun, true);
+});
+
+Deno.test('parseArgs: an unknown argument throws with the offending token and usage, instead of being silently dropped', () => {
+  let error: Error | null = null;
+  try {
+    parseArgs(['--child', 'Enzo', '--totally-not-a-flag']);
+  } catch (e) {
+    error = e as Error;
+  }
+  assertEquals(error !== null, true);
+  assertEquals(error!.message.includes('--totally-not-a-flag'), true);
+  assertEquals(error!.message.includes(CLI_USAGE), true);
+});
+
+Deno.test('parseArgs: the reported incident -- a mangled multi-flag string arriving as one unrecognized token -- is rejected, not silently ignored', () => {
+  let error: Error | null = null;
+  try {
+    parseArgs(['--child', 'Enzo', '--exclude-memory-id m1 --exclude-memory-id m2 --exclude-memory-id m3']);
+  } catch (e) {
+    error = e as Error;
+  }
+  assertEquals(error !== null, true);
+  assertEquals(error!.message.includes('--exclude-memory-id m1'), true);
 });
 
 // --- Julian day round trip + addDays -------------------------------------
@@ -234,6 +287,65 @@ Deno.test('computeMemoryEligibility: untagged is eligible', () => {
 Deno.test('computeMemoryEligibility: sibling-only tagged is NOT eligible', () => {
   const result = computeMemoryEligibility(['sibling-1'], 'child-1');
   assertEquals(result, { eligible: false, taggedToChild: false, untaggedInWindow: false });
+});
+
+// --- loadMilestonesForMemories (owner round-4 decision, 2026-08-27: a
+// 'dismissed' memory_milestones row is the owner correcting a factually-
+// wrong match -- product-correct path, the future confirmation UI does
+// exactly this -- so it must never surface downstream. Firsts, per-memory
+// milestone context, and birthday detection all read the SAME query's
+// output, so filtering it here covers all three at once.) --------------
+
+/** A minimal fake of the supabase-js query-builder chain that records every
+ * method call, so the `.neq('status', 'dismissed')` filter is verifiable
+ * without a live database -- this script has no DB-mocking infrastructure
+ * elsewhere, so this stays intentionally tiny (just enough surface for
+ * `loadMilestonesForMemories`'s own chain) rather than a general client. */
+function fakeMilestonesSupabase(calls: string[]) {
+  const chain = {
+    select(columns: string) {
+      calls.push(`select:${columns}`);
+      return chain;
+    },
+    neq(column: string, value: string) {
+      calls.push(`neq:${column}:${value}`);
+      return chain;
+    },
+    in(column: string, values: string[]) {
+      calls.push(`in:${column}:${values.join(',')}`);
+      return chain;
+    },
+    order(column: string) {
+      calls.push(`order:${column}`);
+      return chain;
+    },
+    range(from: number, to: number) {
+      calls.push(`range:${from}:${to}`);
+      return Promise.resolve({ data: [], error: null });
+    },
+  };
+  return {
+    from(table: string) {
+      calls.push(`from:${table}`);
+      return chain;
+    },
+  } as unknown as Parameters<typeof loadMilestonesForMemories>[0];
+}
+
+Deno.test('loadMilestonesForMemories: filters out dismissed rows at the query level', async () => {
+  const calls: string[] = [];
+  await loadMilestonesForMemories(fakeMilestonesSupabase(calls), ['m1', 'm2']);
+  assertEquals(calls.includes('from:memory_milestones'), true);
+  assertEquals(calls.includes('neq:status:dismissed'), true);
+  // The filter must be applied to the SAME query Firsts/milestone-context/
+  // birthday detection all read -- not a second, separately-filtered call.
+  assertEquals(calls.filter((c) => c.startsWith('from:')).length, 1);
+});
+
+Deno.test('loadMilestonesForMemories: an empty memoryIds list never queries the database', async () => {
+  const calls: string[] = [];
+  await loadMilestonesForMemories(fakeMilestonesSupabase(calls), []);
+  assertEquals(calls, []);
 });
 
 // --- buildBackboneSegments (segmentation + merging) -------------------------
@@ -879,145 +991,332 @@ Deno.test('dissolveThinBirthdaySpreads: an empty birthday spread (0 memories) is
   assertEquals(result.dissolvedAges, []);
 });
 
-// --- rankMemoryForThinning + computePageEstimate + enforcePageBudget --------
+// --- classifyMemoryPageShape + estimateElementPages (owner round-3
+// decision, 2026-08-27: true page-yield model, mirroring the renderer's
+// real composition decision table instead of an images-per-page density
+// constant) -----------------------------------------------------------------
 
-Deno.test('rankMemoryForThinning: milestone always ranks highest', () => {
+function shapeInput(overrides: Partial<Parameters<typeof classifyMemoryPageShape>[0]> = {}) {
+  return { photoCount: 0, videoCount: 0, hasText: false, textLength: 0, isPanorama: false, isFullBleed: false, ...overrides };
+}
+
+Deno.test('classifyMemoryPageShape: a placed panorama candidate always wins, regardless of other fields', () => {
+  assertEquals(classifyMemoryPageShape(shapeInput({ isPanorama: true, photoCount: 1, hasText: true, textLength: 999 })), 'panorama');
+  assertEquals(classifyMemoryPageShape(shapeInput({ isPanorama: true, isFullBleed: true })), 'panorama');
+});
+
+Deno.test('classifyMemoryPageShape: a hero candidate is full-bleed (when not also a panorama)', () => {
+  assertEquals(classifyMemoryPageShape(shapeInput({ isFullBleed: true, photoCount: 1 })), 'full-bleed');
+});
+
+Deno.test('classifyMemoryPageShape: 3+ photos/videos on one memory is a single-memory grid', () => {
+  assertEquals(classifyMemoryPageShape(shapeInput({ photoCount: 3 })), 'photo-grid');
+  assertEquals(classifyMemoryPageShape(shapeInput({ photoCount: 2, videoCount: 1 })), 'photo-grid');
+});
+
+Deno.test('classifyMemoryPageShape: 1-2 photos/videos is a solo photo', () => {
+  assertEquals(classifyMemoryPageShape(shapeInput({ photoCount: 1 })), 'solo-photo');
+  assertEquals(classifyMemoryPageShape(shapeInput({ videoCount: 2 })), 'solo-photo');
+});
+
+Deno.test('classifyMemoryPageShape: short text-only splits into a bare quote vs. a short illustrated story at SHORT_TEXT_MAX_CHARS (owner round-3 refinement, 2026-08-27)', () => {
+  assertEquals(classifyMemoryPageShape(shapeInput({ hasText: true, textLength: 100 })), 'short-text');
+  assertEquals(classifyMemoryPageShape(shapeInput({ hasText: true, textLength: 101 })), 'short-illustrated-story');
+});
+
+Deno.test('classifyMemoryPageShape: short illustrated story vs. long illustrated story at SHORT_STORY_MAX_CHARS (lowered to 200, owner round-3 refinement, 2026-08-27)', () => {
+  assertEquals(classifyMemoryPageShape(shapeInput({ hasText: true, textLength: 200 })), 'short-illustrated-story');
+  assertEquals(classifyMemoryPageShape(shapeInput({ hasText: true, textLength: 201 })), 'long-story');
+});
+
+Deno.test('classifyMemoryPageShape: neither text nor visual falls back to a flat text-page rather than costing nothing', () => {
+  assertEquals(classifyMemoryPageShape(shapeInput()), 'text-page');
+});
+
+Deno.test('estimateElementPages: an empty list costs 0 pages', () => {
+  assertEquals(estimateElementPages([]), 0);
+});
+
+Deno.test('estimateElementPages: panorama 2, full-bleed/photo-grid/text-page/short-illustrated-story 1, long-story 2 -- each 1:1', () => {
+  assertEquals(estimateElementPages(['panorama']), 2);
+  assertEquals(estimateElementPages(['panorama', 'panorama']), 4);
+  assertEquals(estimateElementPages(['full-bleed']), 1);
+  assertEquals(estimateElementPages(['photo-grid']), 1);
+  assertEquals(estimateElementPages(['text-page']), 1);
+  assertEquals(estimateElementPages(['long-story']), 2);
+  assertEquals(estimateElementPages(['short-illustrated-story']), 1);
+});
+
+Deno.test('estimateElementPages: two short-illustrated-story memories sum to 2 pages -- naturally "share" one 2-page spread with no special pairing math', () => {
+  assertEquals(estimateElementPages(['short-illustrated-story', 'short-illustrated-story']), 2);
+});
+
+Deno.test('estimateElementPages: solo-photo pairs two-per-page, rounded up (unchanged)', () => {
+  assertEquals(estimateElementPages(['solo-photo', 'solo-photo']), 1);
+  assertEquals(estimateElementPages(['solo-photo', 'solo-photo', 'solo-photo']), 2); // odd one out still costs a page
+});
+
+Deno.test('estimateElementPages: short-text quotes accumulate at ~0.4 pages each, rounded up as a group (owner round-3 refinement, 2026-08-27)', () => {
+  assertEquals(estimateElementPages(['short-text']), 1); // ceil(0.4) -- a lone quote still costs a full page
+  assertEquals(estimateElementPages(['short-text', 'short-text']), 1); // ceil(0.8)
+  assertEquals(estimateElementPages(Array(3).fill('short-text')), 2); // ceil(1.2)
+  assertEquals(estimateElementPages(Array(5).fill('short-text')), 2); // ceil(2.0) -- a 5-up quote-collection spread
+  assertEquals(estimateElementPages(Array(6).fill('short-text')), 3); // ceil(2.4)
+});
+
+Deno.test('estimateElementPages: mixed shapes sum independently', () => {
+  // 1 panorama (2) + 1 full-bleed (1) + 3 solo-photo (ceil(3/2)=2) +
+  // 2 short-illustrated-story (2) + 3 short-text (ceil(1.2)=2) = 9.
   assertEquals(
-    rankMemoryForThinning({ hasMilestone: true, hasText: false, hasVisual: false, hasEngagement: false }),
-    4,
+    estimateElementPages([
+      'panorama', 'full-bleed',
+      'solo-photo', 'solo-photo', 'solo-photo',
+      'short-illustrated-story', 'short-illustrated-story',
+      'short-text', 'short-text', 'short-text',
+    ]),
+    9,
   );
 });
 
-Deno.test('rankMemoryForThinning: full ladder', () => {
-  assertEquals(rankMemoryForThinning({ hasMilestone: false, hasText: true, hasVisual: true, hasEngagement: false }), 3);
-  assertEquals(rankMemoryForThinning({ hasMilestone: false, hasText: false, hasVisual: true, hasEngagement: true }), 2);
-  assertEquals(rankMemoryForThinning({ hasMilestone: false, hasText: false, hasVisual: true, hasEngagement: false }), 1);
-  assertEquals(rankMemoryForThinning({ hasMilestone: false, hasText: true, hasVisual: false, hasEngagement: false }), 0);
+// --- computeThinningScore (owner round-3 decision, 2026-08-27:
+// content-neutral ranking -- replaces the type-privileged ladder that
+// caused a 77-illustration skew. Every signal is additive; none is an
+// automatic trump.) ----------------------------------------------------------
+
+function signals(overrides: Partial<Parameters<typeof computeThinningScore>[0]> = {}) {
+  return { isHighlighted: false, inThemedCluster: false, engagementCount: 0, hasText: false, textLength: 0, hasVisual: false, ...overrides };
+}
+
+Deno.test('computeThinningScore: no signals scores 0', () => {
+  assertEquals(computeThinningScore(signals()), 0);
 });
 
-// Plan round-2 decision (2026-08-25): a caption-less video ranks as a
-// visual, same as a photo -- QR pages make video/audio first-class, so
-// hasVisual = photoCount + videoCount > 0 is computed by the caller, not
-// hasPhoto alone. rankMemoryForThinning itself just needs to rank a
-// visual-only memory above a truly bare text-only one.
-Deno.test('rankMemoryForThinning: a video-only memory (hasVisual, no text) outranks a text-only one', () => {
-  const videoOnly = rankMemoryForThinning({ hasMilestone: false, hasText: false, hasVisual: true, hasEngagement: false });
-  const textOnly = rankMemoryForThinning({ hasMilestone: false, hasText: true, hasVisual: false, hasEngagement: false });
-  assertEquals(videoOnly, 1);
-  assertEquals(textOnly, 0);
-  assertEquals(videoOnly > textOnly, true);
+Deno.test('computeThinningScore: each signal contributes independently and additively', () => {
+  assertEquals(computeThinningScore(signals({ isHighlighted: true })), 4);
+  assertEquals(computeThinningScore(signals({ inThemedCluster: true })), 2);
+  assertEquals(computeThinningScore(signals({ hasVisual: true })), 2);
+  assertEquals(computeThinningScore(signals({ hasText: true, textLength: 0 })), 1);
 });
 
-Deno.test('computePageEstimate: fixed pages + themed/firsts/birthday (2 each) + backbone ceil(n/3)', () => {
+Deno.test('computeThinningScore: engagement is capped so one viral thread cannot dominate', () => {
+  assertEquals(computeThinningScore(signals({ engagementCount: 3 })), 3);
+  assertEquals(computeThinningScore(signals({ engagementCount: 5 })), 5);
+  assertEquals(computeThinningScore(signals({ engagementCount: 500 })), 5);
+});
+
+Deno.test('computeThinningScore: text richness grows with length, capped', () => {
+  assertEquals(computeThinningScore(signals({ hasText: true, textLength: 79 })), 1); // floor(79/80)=0
+  assertEquals(computeThinningScore(signals({ hasText: true, textLength: 80 })), 2); // floor(80/80)=1
+  assertEquals(computeThinningScore(signals({ hasText: true, textLength: 500 })), 4); // floor(500/80)=6, capped at 3 -> 1+3
+});
+
+Deno.test('computeThinningScore: never a type trump -- a richly engaged plain photo can outscore a bare highlight', () => {
+  const engagedPhoto = computeThinningScore(signals({ hasVisual: true, engagementCount: 5 })); // 2 + 5 = 7
+  const bareHighlight = computeThinningScore(signals({ isHighlighted: true })); // 4
+  assertEquals(engagedPhoto > bareHighlight, true);
+});
+
+Deno.test('computeThinningScore: signals stack across every category at once', () => {
+  // highlighted(4) + themedCluster(2) + visual(2) + text richness at 200 chars (1 + floor(200/80)=2 -> 3) = 11.
+  const score = computeThinningScore(
+    signals({ isHighlighted: true, inThemedCluster: true, hasVisual: true, hasText: true, textLength: 200 }),
+  );
+  assertEquals(score, 11);
+});
+
+// --- computePlacedPanoramaGuaranteeCount (owner round-3 decision,
+// 2026-08-27: "1 guaranteed + 1 per ~20 pages") ------------------------------
+
+Deno.test('computePlacedPanoramaGuaranteeCount: 1 guaranteed below the first 20-page tier', () => {
+  assertEquals(computePlacedPanoramaGuaranteeCount(0), 1);
+  assertEquals(computePlacedPanoramaGuaranteeCount(19), 1);
+});
+
+Deno.test('computePlacedPanoramaGuaranteeCount: gains one more per full 20-page tier', () => {
+  assertEquals(computePlacedPanoramaGuaranteeCount(20), 2);
+  assertEquals(computePlacedPanoramaGuaranteeCount(45), 3);
+});
+
+Deno.test('computePlacedPanoramaGuaranteeCount: never negative even for a negative estimate', () => {
+  assertEquals(computePlacedPanoramaGuaranteeCount(-100), 1);
+});
+
+// --- computePageEstimate (fixed pages + firsts/birthday flat 2 each +
+// backbone/themed via the shape-based page-yield model) ---------------------
+
+Deno.test('computePageEstimate: fixed pages + firsts/birthday (flat 2 each) + backbone/themed via shapes', () => {
   const elements: BudgetElement[] = [
-    { id: 'themed:beach', kind: 'themed', memoryCount: 5 },
-    { id: 'firsts', kind: 'firsts', memoryCount: 4 },
-    { id: 'birthday-1', kind: 'birthday', memoryCount: 6 },
-    { id: 'backbone:jan', kind: 'backbone', memoryCount: 7 }, // ceil(7/3) = 3
+    { id: 'themed:beach', kind: 'themed', memoryCount: 4, shapes: ['solo-photo', 'solo-photo', 'solo-photo', 'solo-photo'] }, // ceil(4/2)=2
+    { id: 'firsts', kind: 'firsts', memoryCount: 3 },
+    { id: 'birthday-1', kind: 'birthday', memoryCount: 2 },
+    { id: 'backbone:jan', kind: 'backbone', memoryCount: 3, shapes: ['photo-grid', 'photo-grid', 'photo-grid'] }, // 3
   ];
-  // 4 fixed + 2 + 2 + 2 + 3 = 13
+  // 4 fixed + 2 (themed) + 2 (firsts) + 2 (birthday) + 3 (backbone) = 13
   assertEquals(computePageEstimate(elements), 13);
 });
 
-// --- planNonBackboneBudget (priority a+b: non-droppable, then themed) ------
-
-Deno.test('planNonBackboneBudget: keeps every themed spread when (a)+(b) already fit the budget', () => {
-  const plan = planNonBackboneBudget(4, 4 /* firsts+1 birthday */, [
-    { id: 'themed:beach', memoryCount: 5 },
-    { id: 'themed:bath', memoryCount: 6 },
-  ], 20);
-  assertEquals(plan.keptThemedIds.sort(), ['themed:bath', 'themed:beach']);
-  assertEquals(plan.droppedThemedIds, []);
-  assertEquals(plan.nonBackbonePages, 4 + 4 + 2 + 2);
-  assertEquals(plan.backboneCapacityPages, 20 - plan.nonBackbonePages);
+Deno.test('computePageEstimate: an element with memories but no shapes still gets a 1-page floor', () => {
+  const elements: BudgetElement[] = [{ id: 'themed:words', kind: 'themed', memoryCount: 4, shapes: [] }];
+  assertEquals(computePageEstimate(elements), 4 + 1);
 });
 
-Deno.test('planNonBackboneBudget: never drops non-droppable pages, only themed, smallest-count-first', () => {
-  // fixed(4) + nonDroppable(6: firsts + 2 birthdays) + 3 themed*2 = 16.
-  // Budget 10 -> must drop themed spreads until fixed+nonDroppable+themed <= 10,
-  // i.e. drop until only 0 themed spreads remain (4+6=10 alone already fills it).
+Deno.test('computePageEstimate: a zero-memoryCount element contributes nothing', () => {
+  assertEquals(computePageEstimate([{ id: 'backbone:empty', kind: 'backbone', memoryCount: 0, shapes: [] }]), 4);
+});
+
+// --- planNonBackboneBudget (priority a+b: non-droppable, then themed,
+// shape-based sizing + drop order) ------------------------------------------
+
+Deno.test('planNonBackboneBudget: keeps every themed spread when (a)+(b) already fit the page cap', () => {
+  const plan = planNonBackboneBudget(4, 4 /* firsts+1 birthday */, [
+    { id: 'themed:beach', memoryCount: 5, shapes: ['solo-photo', 'solo-photo', 'solo-photo', 'solo-photo', 'solo-photo'] }, // ceil(5/2)=3
+    { id: 'themed:bath', memoryCount: 6, shapes: Array(6).fill('solo-photo') }, // ceil(6/2)=3
+  ], 30);
+  assertEquals(plan.keptThemedIds.sort(), ['themed:bath', 'themed:beach']);
+  assertEquals(plan.droppedThemedIds, []);
+  assertEquals(plan.nonBackbonePages, 4 + 4 + 3 + 3);
+  assertEquals(plan.backboneCapacityPages, 30 - plan.nonBackbonePages);
+});
+
+Deno.test('planNonBackboneBudget: drops lowest-PAGE-COST-first, not lowest-memory-count-first', () => {
+  // "themed:few-photos" has MORE memories but a LOWER page cost than
+  // "themed:many-photos" -- page cost must drive the drop order.
+  const plan = planNonBackboneBudget(4, 0, [
+    { id: 'themed:few-photos', memoryCount: 10, shapes: ['solo-photo'] }, // 1 page
+    { id: 'themed:many-photos', memoryCount: 3, shapes: ['photo-grid', 'photo-grid', 'photo-grid'] }, // 3 pages
+  ], 4 + 3); // just enough room for the 3-page spread alone
+  assertEquals(plan.droppedThemedIds, ['themed:few-photos']);
+  assertEquals(plan.keptThemedIds, ['themed:many-photos']);
+});
+
+Deno.test('planNonBackboneBudget: never drops non-droppable pages, only themed', () => {
+  // fixed(4) + nonDroppable(6) + 3 themed spreads (1 page each = 3) = 13.
+  // Cap 10 -> must drop themed spreads until fixed+nonDroppable+themed <= 10,
+  // i.e. drop all 3 (4+6=10 alone already fills it).
   const plan = planNonBackboneBudget(4, 6, [
-    { id: 'themed:a', memoryCount: 10 },
-    { id: 'themed:b', memoryCount: 4 },
-    { id: 'themed:c', memoryCount: 5 },
+    { id: 'themed:a', memoryCount: 10, shapes: ['text-page'] },
+    { id: 'themed:b', memoryCount: 4, shapes: ['text-page'] },
+    { id: 'themed:c', memoryCount: 5, shapes: ['text-page'] },
   ], 10);
   assertEquals(plan.keptThemedIds, []);
-  assertEquals(plan.droppedThemedIds, ['themed:b', 'themed:c', 'themed:a']); // smallest-count-first
+  assertEquals(plan.droppedThemedIds.sort(), ['themed:a', 'themed:b', 'themed:c']);
   assertEquals(plan.nonBackbonePages, 10);
   assertEquals(plan.backboneCapacityPages, 0);
 });
 
 Deno.test('planNonBackboneBudget: drops only as many themed spreads as needed', () => {
-  // fixed(4) + nonDroppable(0) + 2 themed*2 = 8. Budget 6 -> drop exactly one (the smaller).
+  // fixed(4) + nonDroppable(0) + small(1pg) + big(8pg) = 13.
+  // Cap 12 (= 4 + big's 8 pages alone) -> dropping just the smaller one is enough.
   const plan = planNonBackboneBudget(4, 0, [
-    { id: 'themed:small', memoryCount: 4 },
-    { id: 'themed:big', memoryCount: 9 },
-  ], 6);
+    { id: 'themed:small', memoryCount: 4, shapes: ['text-page'] },
+    { id: 'themed:big', memoryCount: 9, shapes: Array(8).fill('photo-grid') },
+  ], 12);
   assertEquals(plan.keptThemedIds, ['themed:big']);
   assertEquals(plan.droppedThemedIds, ['themed:small']);
-  assertEquals(plan.nonBackbonePages, 6);
-  assertEquals(plan.backboneCapacityPages, 0);
 });
 
-// --- selectBackboneMemories (priority c: backbone gets the leftover) -------
+// --- selectBackboneMemories (owner round-3 decision, 2026-08-27:
+// content-neutral ranking against a real PAGE budget -- starts with
+// everyone kept, never pads, drops the single lowest-scored unpinned
+// candidate at a time until the honest page-yield estimate fits) -----------
 
-Deno.test('selectBackboneMemories: keeps the highest-ranked candidates that fit the capacity', () => {
+function backboneCandidate(id: string, score: number, shape: MemoryPageShape, date = '2023-01-01', printable = true) {
+  return { id, date, score, shape, printable };
+}
+
+Deno.test('selectBackboneMemories: keeps everyone when the estimate already fits -- never pads, never pre-emptively drops', () => {
+  const candidates = [backboneCandidate('a', 1, 'text-page'), backboneCandidate('b', 9, 'photo-grid')];
+  assertEquals(selectBackboneMemories(candidates, 2).sort(), ['a', 'b']);
+});
+
+Deno.test('selectBackboneMemories: drops the lowest-scored candidate first when over budget', () => {
   const candidates = [
-    { id: 'text-only', date: '2023-01-01', rank: 0 as const },
-    { id: 'photo-only', date: '2023-01-02', rank: 1 as const },
-    { id: 'milestone', date: '2023-01-03', rank: 4 as const },
-    { id: 'photo-text', date: '2023-01-04', rank: 3 as const },
+    backboneCandidate('low', 1, 'solo-photo'),
+    backboneCandidate('mid', 5, 'solo-photo'),
+    backboneCandidate('high', 9, 'solo-photo'),
   ];
-  // capacityPages=1 -> capacity = 3 memories -> keep the 3 highest ranks.
+  // 3 solo-photo = ceil(3/2) = 2 pages; budget only 1 -> drop 'low', leaving
+  // 2 solo-photo = ceil(2/2) = 1, which fits.
   const kept = selectBackboneMemories(candidates, 1);
-  assertEquals(kept.sort(), ['milestone', 'photo-only', 'photo-text']);
+  assertEquals(kept.includes('low'), false);
+  assertEquals(kept.sort(), ['high', 'mid']);
 });
 
-Deno.test('selectBackboneMemories: ties break by date then id', () => {
+Deno.test('selectBackboneMemories: ties on score drop the LATEST date first', () => {
   const candidates = [
-    { id: 'z', date: '2023-01-05', rank: 1 as const },
-    { id: 'a', date: '2023-01-01', rank: 1 as const },
+    backboneCandidate('earlier', 5, 'photo-grid', '2023-01-01'),
+    backboneCandidate('later', 5, 'photo-grid', '2023-01-05'),
   ];
-  const kept = selectBackboneMemories(candidates, 1); // capacity 3, but only 2 candidates -- both kept, order not asserted here
-  assertEquals(kept.length, 2);
-  // Capacity 0 pages -> 0 memories kept regardless of rank.
-  assertEquals(selectBackboneMemories(candidates, 0), []);
+  // 2 photo-grid = 2 pages; budget 1 -> one must go.
+  const kept = selectBackboneMemories(candidates, 1);
+  assertEquals(kept, ['earlier']);
 });
 
-Deno.test('selectBackboneMemories: zero capacity keeps nothing', () => {
-  assertEquals(selectBackboneMemories([{ id: 'a', date: '2023-01-01', rank: 4 as const }], 0), []);
-});
-
-// Owner round-3 note (2026-08-25): pinned ids (a dissolved birthday spread's
-// memories) bypass rank-based thinning entirely, but still count toward capacity.
-
-Deno.test('selectBackboneMemories: a pinned low-rank memory survives even when capacity would otherwise cut it', () => {
+Deno.test('selectBackboneMemories: ties on score AND date drop the lexically-largest id first', () => {
   const candidates = [
-    { id: 'pinned-text-only', date: '2023-05-01', rank: 0 as const },
-    { id: 'high-rank-1', date: '2023-01-01', rank: 4 as const },
-    { id: 'high-rank-2', date: '2023-01-02', rank: 4 as const },
-    { id: 'high-rank-3', date: '2023-01-03', rank: 4 as const },
+    backboneCandidate('a', 5, 'photo-grid'),
+    backboneCandidate('z', 5, 'photo-grid'),
   ];
-  // capacityPages=1 -> capacity=3. Without pinning, "pinned-text-only" (rank
-  // 0) would be the first cut. With it pinned, it survives; the pin eats
-  // one of the 3 slots, leaving room for only 2 of the 3 rank-4 candidates.
-  const kept = selectBackboneMemories(candidates, 1, new Set(['pinned-text-only']));
-  assertEquals(kept.includes('pinned-text-only'), true);
-  assertEquals(kept.length, 3);
+  const kept = selectBackboneMemories(candidates, 1);
+  assertEquals(kept, ['a']);
 });
 
-Deno.test('selectBackboneMemories: pinning more memories than capacity still keeps every pinned one', () => {
+Deno.test('selectBackboneMemories: zero budget drops every unpinned candidate', () => {
+  assertEquals(selectBackboneMemories([backboneCandidate('a', 9, 'text-page')], 0), []);
+});
+
+// Owner round-3 decision (2026-08-27): pinned ids (birthday-beat merges AND
+// guaranteed panorama placements) bypass content-neutral ranking entirely,
+// but a pinned candidate's page cost still counts toward the budget.
+
+Deno.test('selectBackboneMemories: a pinned low-score candidate survives even when the budget would otherwise cut it', () => {
   const candidates = [
-    { id: 'p1', date: '2023-05-01', rank: 0 as const },
-    { id: 'p2', date: '2023-05-02', rank: 0 as const },
+    backboneCandidate('pinned-low-score', 0, 'solo-photo', '2023-05-01'),
+    backboneCandidate('high-1', 9, 'solo-photo', '2023-01-01'),
+    backboneCandidate('high-2', 9, 'solo-photo', '2023-01-02'),
+    backboneCandidate('high-3', 9, 'solo-photo', '2023-01-03'),
   ];
-  const kept = selectBackboneMemories(candidates, 0, new Set(['p1', 'p2'])); // capacity 0
+  // 4 solo-photo = ceil(4/2) = 2 pages; budget 1. Without pinning,
+  // "pinned-low-score" would be the first cut. With it pinned, dropping
+  // continues among the high-score trio until it fits.
+  const kept = selectBackboneMemories(candidates, 1, new Set(['pinned-low-score']));
+  assertEquals(kept.includes('pinned-low-score'), true);
+});
+
+Deno.test('selectBackboneMemories: every remaining candidate pinned stops the loop even over budget -- pins always win', () => {
+  const candidates = [backboneCandidate('p1', 1, 'photo-grid'), backboneCandidate('p2', 1, 'photo-grid')];
+  // 2 photo-grid = 2 pages; budget only 1; both pinned.
+  const kept = selectBackboneMemories(candidates, 1, new Set(['p1', 'p2']));
   assertEquals(kept.sort(), ['p1', 'p2']);
 });
 
-Deno.test('selectBackboneMemories: no pinnedIds argument behaves exactly as before', () => {
-  const candidates = [{ id: 'a', date: '2023-01-01', rank: 4 as const }];
-  assertEquals(selectBackboneMemories(candidates, 1), ['a']);
+Deno.test('selectBackboneMemories: no pinnedIds argument behaves exactly as an empty set', () => {
+  assertEquals(selectBackboneMemories([backboneCandidate('a', 9, 'text-page')], 1), ['a']);
+});
+
+Deno.test('selectBackboneMemories: segments the estimate exactly like the final book -- solo-photos in unrelated months never pair, and each segment pays its own 1-page floor (owner round-4 root-cause fix, 2026-08-27: a live regen persisted pageEstimate 128 against pageCap 122 because this loop used to run estimateElementPages over the WHOLE backbone as one flat group, undercounting the real per-segment cost and exiting the tightening loop too early)', () => {
+  // 3 separate months of 3 solo-photo memories each -- each month reaches
+  // buildBackboneSegments' own 3-printable threshold on its own, so each
+  // becomes its OWN segment: 3 segments x Math.max(1, ceil(3/2)=2) = 6 pages.
+  // The OLD flat model summed all 9 as one pairing group: ceil(9/2) = 5 --
+  // "fits" a 5-page budget, so it would have kept all 9 and been wrong by a
+  // full page. This test's budget (5) is chosen so the CORRECT (6-page)
+  // model must drop exactly one candidate while the OLD (5-page) model
+  // would not have dropped any.
+  const candidates = [
+    backboneCandidate('jan-low', 1, 'solo-photo', '2023-01-01'),
+    backboneCandidate('jan-2', 5, 'solo-photo', '2023-01-02'),
+    backboneCandidate('jan-3', 5, 'solo-photo', '2023-01-03'),
+    backboneCandidate('mar-1', 5, 'solo-photo', '2023-03-01'),
+    backboneCandidate('mar-2', 5, 'solo-photo', '2023-03-02'),
+    backboneCandidate('mar-3', 5, 'solo-photo', '2023-03-03'),
+    backboneCandidate('may-1', 5, 'solo-photo', '2023-05-01'),
+    backboneCandidate('may-2', 5, 'solo-photo', '2023-05-02'),
+    backboneCandidate('may-3', 5, 'solo-photo', '2023-05-03'),
+  ];
+  const kept = selectBackboneMemories(candidates, 5);
+  assertEquals(kept.includes('jan-low'), false); // lowest score, dropped first
+  assertEquals(kept.length, 8);
 });
 
 // --- remapInsertIndex (themed spread position survives re-segmentation) ----
@@ -1107,9 +1406,11 @@ Deno.test('buildReadingOrder: a surviving themed spread, Firsts spread, and birt
         memoryIds: ['bike-1', 'bike-2', 'bike-3'],
         insertAfterFinalSegmentIndex: 0, // right after the Jan segment
         rationale: { 'bike-1': 'first scooter ride' },
+        kicker: 'lo que más te gustó hacer',
       },
     ],
     backboneRationale: {},
+    highlightedMemoryIds: new Set(['jan1']),
   });
 
   const byId = new Map(sections.map((s) => [s.id, s]));
@@ -1126,6 +1427,13 @@ Deno.test('buildReadingOrder: a surviving themed spread, Firsts spread, and birt
   assertEquals(byId.get('topic:bikes-scooters')!.memoryIds, ['bike-1', 'bike-2', 'bike-3']);
   assertEquals(byId.get('topic:bikes-scooters')!.rationale, { 'bike-1': 'first scooter ride' });
   assertEquals(byId.get('topic:bikes-scooters')!.spreadType, 'topic');
+  assertEquals(byId.get('topic:bikes-scooters')!.kicker, 'lo que más te gustó hacer');
+
+  // Highlight persistence (design handoff decision, 2026-08-27): a
+  // highlighted memory inside the Jan segment shows up on that segment's
+  // `highlights`, scoped to just that segment's own members.
+  assertEquals(byId.get(`backbone:${finalBackboneSegments[0].id}`)!.highlights, ['jan1']);
+  assertEquals(byId.get(`backbone:${finalBackboneSegments[1].id}`)!.highlights, []);
 
   // Position: the birthday spread stays chronological (before the backbone
   // body); the themed spread sits right after the Jan backbone segment and
@@ -1159,6 +1467,27 @@ Deno.test('buildReadingOrder: Firsts falls back to FIRSTS_DEFAULT_TITLE when the
   assertEquals(firsts.title, 'Big and small victories this year');
 });
 
+Deno.test('buildReadingOrder: the firsts section carries warmNames, filtered to its own surviving memoryIds', () => {
+  const sections = buildReadingOrder({
+    childName: 'Enzo',
+    finalBackboneSegments: [],
+    firsts: {
+      present: true,
+      title: 'Grandes y pequeñas victorias',
+      memoryIds: ['m1'], // m2 lost its placement contest / didn't survive budget
+      warmNames: [
+        { memoryId: 'm1', milestoneId: 'first-steps', warmName: 'Diste tus primeros pasos.' },
+        { memoryId: 'm2', milestoneId: 'first-haircut', warmName: 'Tuviste tu primer corte de pelo.' },
+      ],
+    },
+    birthdaySpreads: [],
+    themedSpreads: [],
+    backboneRationale: {},
+  });
+  const firsts = sections.find((s) => s.id === 'firsts')!;
+  assertEquals(firsts.firstsWarmNames, [{ memoryId: 'm1', milestoneId: 'first-steps', warmName: 'Diste tus primeros pasos.' }]);
+});
+
 Deno.test('buildReadingOrder: an out-of-range insert index clamps to the last final segment instead of vanishing', () => {
   const finalBackboneSegments = buildBackboneSegments([backboneInput('a', '2023-01-01')]);
   const sections = buildReadingOrder({
@@ -1176,6 +1505,7 @@ Deno.test('buildReadingOrder: an out-of-range insert index clamps to the last fi
         memoryIds: ['x'],
         insertAfterFinalSegmentIndex: 99,
         rationale: {},
+        kicker: null,
       },
     ],
     backboneRationale: {},
@@ -1193,6 +1523,81 @@ Deno.test('buildReadingOrder: cover/title/through-the-years/closing always appea
     backboneRationale: {},
   });
   assertEquals(sections.map((s) => s.id), ['cover', 'title', 'through-the-years', 'closing']);
+});
+
+// --- Photo orientation (owner root-cause fix, 2026-08-27: panorama
+// candidates must be `wide` -- the AI had no way to judge orientation
+// because aspect_ratio was never surfaced at all) ----------------------------
+
+function mediaRow(overrides: Partial<MediaRow> = {}): MediaRow {
+  return {
+    id: 'media1',
+    memory_id: 'm1',
+    object_key: 'obj1',
+    content_type: 'image/jpeg',
+    position: 0,
+    preview_object_key: null,
+    aspect_ratio: null,
+    ...overrides,
+  };
+}
+
+Deno.test('classifyOrientation: clearly wide/tall/square', () => {
+  assertEquals(classifyOrientation(1.5), 'wide');
+  assertEquals(classifyOrientation(0.5), 'tall');
+  assertEquals(classifyOrientation(1.0), 'square');
+});
+
+Deno.test('classifyOrientation: boundary values fall to square (strict inequalities)', () => {
+  assertEquals(classifyOrientation(1.15), 'square');
+  assertEquals(classifyOrientation(0.87), 'square');
+});
+
+Deno.test('computeFirstPhotoOrientation: no media at all returns null', () => {
+  assertEquals(computeFirstPhotoOrientation([]), null);
+});
+
+Deno.test('computeFirstPhotoOrientation: media with only videos returns null', () => {
+  const media = [mediaRow({ id: 'v1', content_type: 'video/mp4', position: 0, aspect_ratio: 1.7 })];
+  assertEquals(computeFirstPhotoOrientation(media), null);
+});
+
+Deno.test('computeFirstPhotoOrientation: first photo lacking aspect_ratio returns null -- never falls back to a later photo', () => {
+  const media = [
+    mediaRow({ id: 'p1', position: 0, aspect_ratio: null }),
+    mediaRow({ id: 'p2', position: 1, aspect_ratio: 1.7 }),
+  ];
+  assertEquals(computeFirstPhotoOrientation(media), null);
+});
+
+Deno.test('computeFirstPhotoOrientation: returns the first photo\'s orientation and ratio', () => {
+  const media = [mediaRow({ id: 'p1', position: 0, aspect_ratio: 1.7 })];
+  assertEquals(computeFirstPhotoOrientation(media), { orientation: 'wide', ratio: 1.7 });
+});
+
+Deno.test('computeFirstPhotoOrientation: sorts by position first, regardless of input array order', () => {
+  const media = [
+    mediaRow({ id: 'p2', position: 1, aspect_ratio: 1.7 }),
+    mediaRow({ id: 'p1', position: 0, aspect_ratio: 0.5 }),
+  ];
+  assertEquals(computeFirstPhotoOrientation(media), { orientation: 'tall', ratio: 0.5 });
+});
+
+Deno.test('formatOrientationMarker: null info formats as null', () => {
+  assertEquals(formatOrientationMarker(null), null);
+});
+
+Deno.test('formatOrientationMarker: wide at or above the callout threshold spells out the ratio', () => {
+  assertEquals(formatOrientationMarker({ orientation: 'wide', ratio: 1.7 }), 'wide 1.7:1');
+});
+
+Deno.test('formatOrientationMarker: wide below the callout threshold has no ratio callout', () => {
+  assertEquals(formatOrientationMarker({ orientation: 'wide', ratio: 1.2 }), 'wide');
+});
+
+Deno.test('formatOrientationMarker: tall and square format plainly', () => {
+  assertEquals(formatOrientationMarker({ orientation: 'tall', ratio: 0.5 }), 'tall');
+  assertEquals(formatOrientationMarker({ orientation: 'square', ratio: 1.0 }), 'square');
 });
 
 // --- buildOutlineSystemPrompt (prompt-string assertions -- items 1 and 4 of
@@ -1232,6 +1637,91 @@ Deno.test('buildOutlineSystemPrompt: instructs special segment_titles only for f
   assertEquals(prompt.includes('the month you turned N'), true);
 });
 
+// Design handoff decision (2026-08-27): kicker + hero candidates.
+
+Deno.test('buildOutlineSystemPrompt: explains the kicker with its real examples, themed spreads only', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('KICKER'), true);
+  assertEquals(prompt.includes('kicker'), true);
+  assertEquals(prompt.includes('lo que nos hiciste reír'), true);
+  assertEquals(prompt.includes('lo que más te gustó hacer'), true);
+  assertEquals(prompt.includes('<=6 words'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: asks for up to 5 hero_candidates', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('HERO CANDIDATES'), true);
+  assertEquals(prompt.includes('hero_candidates'), true);
+  assertEquals(prompt.includes('up to 5'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: hero candidates are orientation-aware -- wide/square preferred, tall not forbidden (owner root-cause fix, 2026-08-27)', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('prefer `wide` or `square` for a full-bleed page'), true);
+  assertEquals(prompt.includes('a `tall` photo makes a poor full-page bleed'), true);
+  assertEquals(prompt.includes('not forbidden'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: panorama nomination is uncapped and best-first, never "up to 3"', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('PANORAMA CANDIDATES'), true);
+  assertEquals(prompt.includes('panorama_candidates'), true);
+  assertEquals(prompt.includes('no cap'), true);
+  assertEquals(prompt.includes('BEST-FIRST'), true);
+  assertEquals(prompt.includes('up to 3'), false); // superseded by the uncapped amendment
+});
+
+Deno.test('buildOutlineSystemPrompt: panorama candidates must be wide -- 2:1 double-page span, tall/square forbidden, empty list is valid (owner root-cause fix, 2026-08-27)', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('TWO PAGES at roughly 2:1'), true);
+  assertEquals(prompt.includes('a `tall` or `square` photo can NEVER work here'), true);
+  assertEquals(prompt.includes('MUST show `wide`'), true);
+  assertEquals(prompt.includes('returning an EMPTY list is the correct, expected answer'), true);
+  assertEquals(prompt.includes('never nominate a tall or square photo just to avoid an empty list'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: nominates panoramas generously -- aim 5-10, over-nomination is free (owner round-4 decision, 2026-08-27: nomination was the bottleneck, not resolution)', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('NOMINATE GENEROUSLY'), true);
+  assertEquals(prompt.includes('Aim for 5-10 candidates'), true);
+  assertEquals(prompt.includes('over-nomination costs nothing'), true);
+  assertEquals(prompt.includes('under-nomination kills a panoramic spread outright'), true);
+  // Validation rules (wide-only / 2:1 / empty-list-valid) survive the amendment unchanged.
+  assertEquals(prompt.includes('MUST show `wide`'), true);
+  assertEquals(prompt.includes('returning an EMPTY list is the correct, expected answer'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: asks for a dedication and back cover line, and never mentions spine/closing as AI fields', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('dedication'), true);
+  assertEquals(prompt.includes('back_cover_line'), true);
+  assertEquals(prompt.includes('spine'), false);
+});
+
+Deno.test('buildOutlineSystemPrompt: dedication must NOT open with a salutation -- the page furniture prints it (owner round-3 decision, 2026-08-27)', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('do NOT open with a salutation'), true);
+  assertEquals(prompt.includes('Para <name>'), true);
+  // The stale example duplicating the furniture's own greeting must be gone.
+  assertEquals(prompt.includes('Para Enzo'), false);
+});
+
+Deno.test('buildOutlineSystemPrompt: editorial_note is documented as INTERNAL ONLY, never printed', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('editorial_note'), true);
+  assertEquals(prompt.includes('INTERNAL ONLY'), true);
+  assertEquals(prompt.includes('never printed in the book'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: explains FIRSTS WARM NAMES with the real examples', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('FIRSTS WARM NAMES'), true);
+  assertEquals(prompt.includes('warm_name'), true);
+  assertEquals(prompt.includes('Aprendiste a montar bicicleta sin pedales'), true);
+  assertEquals(prompt.includes('Tuviste tu primer corte de pelo'), true);
+  assertEquals(prompt.includes('firsts_milestones'), true);
+});
+
 // --- buildOutlineUserPrompt (tagged-people metadata + flagged segments) ----
 
 function fixtureFeature(overrides: Partial<MemoryFeature> = {}): MemoryFeature {
@@ -1243,6 +1733,7 @@ function fixtureFeature(overrides: Partial<MemoryFeature> = {}): MemoryFeature {
     emotion: null,
     hasText: false,
     excerpt: null,
+    textLength: 0,
     photoCount: 0,
     videoCount: 0,
     previewKey: null,
@@ -1251,6 +1742,7 @@ function fixtureFeature(overrides: Partial<MemoryFeature> = {}): MemoryFeature {
     birthdayAgeTurned: null,
     taggedToChild: true,
     taggedMembers: [],
+    photoOrientation: null,
     ...overrides,
   };
 }
@@ -1278,6 +1770,30 @@ Deno.test('buildOutlineUserPrompt: includes each memory\'s tagged people with ch
   assertEquals(prompt.includes('Nonna(adult)'), true);
 });
 
+Deno.test('buildOutlineUserPrompt: per-memory row includes the orientation marker when present, omits the suffix when absent (owner root-cause fix, 2026-08-27)', () => {
+  const features = new Map([
+    ['m1', fixtureFeature({ id: 'm1', photoCount: 1, videoCount: 0, photoOrientation: { orientation: 'wide', ratio: 1.7 } })],
+    ['m2', fixtureFeature({ id: 'm2', photoCount: 1, videoCount: 0, photoOrientation: null })],
+  ]);
+  const prompt = buildOutlineUserPrompt(
+    {
+      childName: 'Enzo',
+      scopeLabel: 'Year One',
+      windowStart: '2023-01-01',
+      windowLastDay: '2023-12-31',
+      backboneSegments: [],
+      firstsCount: 0,
+      birthdaySpreads: [],
+      throughTheYearsCount: 0,
+      specialSegments: [],
+    },
+    [],
+    features,
+  );
+  assertEquals(prompt.includes('p1/v0/wide 1.7:1'), true);
+  assertEquals(prompt.includes('p1/v0 |'), true); // m2: no orientation marker suffix at all
+});
+
 Deno.test('buildOutlineUserPrompt: flags a special segment for the model with its kind', () => {
   const segments = buildBackboneSegments([backboneInput('a', '2022-05-10'), backboneInput('b', '2022-05-12'), backboneInput('c', '2022-05-20')]);
   const prompt = buildOutlineUserPrompt(
@@ -1296,6 +1812,34 @@ Deno.test('buildOutlineUserPrompt: flags a special segment for the model with it
     new Map(),
   );
   assertEquals(prompt.includes('FLAGGED: birth month'), true);
+});
+
+Deno.test('buildOutlineUserPrompt: a single genuine milestone still gets its own FIRSTS MILESTONES block (owner round-4 decision, 2026-08-27: a live regen had the owner dismiss a wrong match, leaving exactly ONE real milestone -- the OLD >=2 gate withheld the milestone_id slug entirely, and the model guessed the bare NAME instead, producing an unknown_firsts_milestone violation for a perfectly real milestone; a single genuine victory now earns the section)', () => {
+  const features = new Map([
+    ['m1', fixtureFeature({
+      id: 'm1',
+      milestones: [{ milestoneId: 'balance-bike', name: 'Rides scooter / balance bike', detail: null, outOfBand: false }],
+    })],
+  ]);
+  const promptSkeleton = {
+    childName: 'Enzo',
+    scopeLabel: 'Year One',
+    windowStart: '2023-01-01',
+    windowLastDay: '2023-12-31',
+    backboneSegments: [],
+    birthdaySpreads: [],
+    throughTheYearsCount: 0,
+    specialSegments: [],
+  };
+
+  const zero = buildOutlineUserPrompt({ ...promptSkeleton, firstsCount: 0 }, [], new Map());
+  assertEquals(zero.includes('FIRSTS MILESTONES'), false);
+  assertEquals(zero.includes('this spread CLOSES the book'), false);
+
+  const oneMileStone = buildOutlineUserPrompt({ ...promptSkeleton, firstsCount: 1 }, [], features);
+  assertEquals(oneMileStone.includes('Firsts (non-birthday explicit milestones) in scope: 1 -- this spread CLOSES the book'), true);
+  assertEquals(oneMileStone.includes('FIRSTS MILESTONES'), true);
+  assertEquals(oneMileStone.includes('memory_id="m1" milestone_id="balance-bike"'), true);
 });
 
 // --- Quote-title verification (owner amendment, round-2, 2026-08-25: "never
@@ -1372,6 +1916,7 @@ Deno.test('parseOutlineResponse: a valid quote spread keeps title_mode and its s
     new Set(['m1', 'm2', 'm3']),
     new Map([['emotion:funny', new Set(['m1', 'm2', 'm3'])]]),
     new Map([['emotion:funny', 'The funny ones']]),
+    new Map(),
   );
   assertEquals(violations, []);
   assertEquals(response.spreads[0].titleMode, 'quote');
@@ -1396,6 +1941,7 @@ Deno.test('parseOutlineResponse: quote mode with a source id outside the spread\
     new Set(['m1', 'm2', 'm3', 'not-in-this-spread']),
     new Map([['emotion:funny', new Set(['m1', 'm2', 'm3'])]]),
     new Map(),
+    new Map(),
   );
   assertEquals(response.spreads[0].titleMode, 'descriptive');
   assertEquals(response.spreads[0].titleSourceMemoryId, null);
@@ -1410,6 +1956,7 @@ Deno.test('parseOutlineResponse: quote mode with no title_source_memory_id at al
     new Set(['m1']),
     new Map([['emotion:funny', new Set(['m1'])]]),
     new Map(),
+    new Map(),
   );
   assertEquals(response.spreads[0].titleMode, 'descriptive');
   assertEquals(violations.some((v) => v.kind === 'quote_missing_source'), true);
@@ -1422,6 +1969,7 @@ Deno.test('parseOutlineResponse: missing title_mode defaults to descriptive with
     new Set(),
     new Set(['m1']),
     new Map([['topic:beach', new Set(['m1'])]]),
+    new Map(),
     new Map(),
   );
   assertEquals(response.spreads[0].titleMode, 'descriptive');
@@ -1437,6 +1985,7 @@ Deno.test('parseOutlineResponse: a garbled title_mode value is recorded as a vio
     new Set(['m1']),
     new Map([['topic:beach', new Set(['m1'])]]),
     new Map(),
+    new Map(),
   );
   assertEquals(response.spreads[0].titleMode, 'descriptive');
   assertEquals(violations.some((v) => v.kind === 'invalid_title_mode'), true);
@@ -1450,9 +1999,283 @@ Deno.test('parseOutlineResponse: parses segment_titles for a valid segment id an
     new Set(),
     new Map(),
     new Map(),
+    new Map(),
   );
   assertEquals(response.segmentTitles, { 'seg-1': 'Welcome to the world' });
   assertEquals(violations.some((v) => v.kind === 'unknown_segment_id'), true);
+});
+
+// --- kicker (design handoff decision, 2026-08-27) --------------------------
+
+Deno.test('parseOutlineResponse: parses a valid kicker and trims it', () => {
+  const { response, violations } = parseOutlineResponse(
+    { spreads: [{ candidate_id: 'emotion:funny', title: 'Ay Dios mío', kicker: '  lo que nos hiciste reír  ', memory_ids: ['m1'] }] },
+    new Set(['emotion:funny']),
+    new Set(),
+    new Set(['m1']),
+    new Map([['emotion:funny', new Set(['m1'])]]),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(violations, []);
+  assertEquals(response.spreads[0].kicker, 'lo que nos hiciste reír');
+});
+
+Deno.test('parseOutlineResponse: an omitted or blank kicker is null, not a violation', () => {
+  const { response: withoutKicker } = parseOutlineResponse(
+    { spreads: [{ candidate_id: 'topic:beach', title: 'A day at the beach', memory_ids: ['m1'] }] },
+    new Set(['topic:beach']),
+    new Set(),
+    new Set(['m1']),
+    new Map([['topic:beach', new Set(['m1'])]]),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(withoutKicker.spreads[0].kicker, null);
+
+  const { response: blankKicker } = parseOutlineResponse(
+    { spreads: [{ candidate_id: 'topic:beach', title: 'A day at the beach', kicker: '   ', memory_ids: ['m1'] }] },
+    new Set(['topic:beach']),
+    new Set(),
+    new Set(['m1']),
+    new Map([['topic:beach', new Set(['m1'])]]),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(blankKicker.spreads[0].kicker, null);
+});
+
+// --- backbone highlight segment-membership validation + heroCandidates
+// (design handoff decision, 2026-08-27) -------------------------------------
+
+Deno.test('parseOutlineResponse: a highlight id not a member of its claimed segment is dropped and recorded', () => {
+  const { response, violations } = parseOutlineResponse(
+    { backbone_highlights: [{ segment_id: 'seg-jan', memory_ids: ['m1', 'm2'] }] },
+    new Set(),
+    new Set(['seg-jan']),
+    new Set(['m1', 'm2']),
+    new Map(),
+    new Map(),
+    new Map([['seg-jan', new Set(['m1'])]]), // m2 is valid in-scope, but not IN this segment
+  );
+  assertEquals(response.backboneHighlights[0].memoryIds, ['m1']);
+  assertEquals(violations.some((v) => v.kind === 'highlight_not_in_segment'), true);
+});
+
+Deno.test('parseOutlineResponse: hero_candidates validates existence and caps at 5', () => {
+  const validIds = new Set(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
+  const { response, violations } = parseOutlineResponse(
+    { hero_candidates: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'ghost'] },
+    new Set(),
+    new Set(),
+    validIds,
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(response.heroCandidates, ['m1', 'm2', 'm3', 'm4', 'm5']);
+  assertEquals(violations.some((v) => v.kind === 'unknown_hero_candidate'), true);
+  assertEquals(violations.some((v) => v.kind === 'too_many_hero_candidates'), true);
+});
+
+Deno.test('parseOutlineResponse: hero_candidates deduplicates', () => {
+  const { response, violations } = parseOutlineResponse(
+    { hero_candidates: ['m1', 'm1'] },
+    new Set(),
+    new Set(),
+    new Set(['m1']),
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(response.heroCandidates, ['m1']);
+  assertEquals(violations.some((v) => v.kind === 'duplicate_memory_id'), true);
+});
+
+Deno.test('parseOutlineResponse: missing hero_candidates is an empty array, no violation', () => {
+  const { response, violations } = parseOutlineResponse({}, new Set(), new Set(), new Set(), new Map(), new Map(), new Map());
+  assertEquals(response.heroCandidates, []);
+  assertEquals(violations, []);
+});
+
+// --- panorama_candidates (owner decision 2026-08-27, amended twice same
+// day: uncapped + best-first, then root-cause-fixed to require `wide`
+// orientation specifically -- a tall/square photo can never span a 2:1
+// double-page panorama) -----------------------------------------------------
+
+Deno.test('parseOutlineResponse: panorama_candidates is uncapped -- no "too many" violation, order preserved', () => {
+  const manyIds = Array.from({ length: 12 }, (_, i) => `m${i}`);
+  const validIds = new Set(manyIds);
+  const { response, violations } = parseOutlineResponse(
+    { panorama_candidates: manyIds },
+    new Set(),
+    new Set(),
+    validIds,
+    new Map(),
+    new Map(),
+    new Map(),
+    validIds, // every id is wide-orientation for this test
+  );
+  assertEquals(response.panoramaCandidates, manyIds); // all 12 kept, best-first order preserved
+  assertEquals(violations, []);
+});
+
+Deno.test('parseOutlineResponse: panorama_candidates validates existence and wide orientation', () => {
+  const validIds = new Set(['m1', 'm2', 'm3']);
+  const wideOrientation = new Set(['m1', 'm2']); // m3 exists but is tall/square/unknown
+  const { response, violations } = parseOutlineResponse(
+    { panorama_candidates: ['m1', 'm2', 'm3', 'ghost'] },
+    new Set(),
+    new Set(),
+    validIds,
+    new Map(),
+    new Map(),
+    new Map(),
+    wideOrientation,
+  );
+  assertEquals(response.panoramaCandidates, ['m1', 'm2']);
+  assertEquals(violations.some((v) => v.kind === 'unknown_panorama_candidate' && v.detail === '"ghost"'), true);
+  assertEquals(violations.some((v) => v.kind === 'panorama_candidate_not_wide' && v.detail === 'm3'), true);
+});
+
+Deno.test('parseOutlineResponse: panorama_candidates deduplicates, preserving first-seen order', () => {
+  const validIds = new Set(['m1', 'm2']);
+  const { response, violations } = parseOutlineResponse(
+    { panorama_candidates: ['m1', 'm2', 'm1'] },
+    new Set(),
+    new Set(),
+    validIds,
+    new Map(),
+    new Map(),
+    new Map(),
+    validIds,
+  );
+  assertEquals(response.panoramaCandidates, ['m1', 'm2']);
+  assertEquals(violations.some((v) => v.kind === 'duplicate_memory_id'), true);
+});
+
+Deno.test('parseOutlineResponse: missing panorama_candidates is an empty array, no violation', () => {
+  const { response, violations } = parseOutlineResponse({}, new Set(), new Set(), new Set(), new Map(), new Map(), new Map());
+  assertEquals(response.panoramaCandidates, []);
+  assertEquals(violations, []);
+});
+
+// --- dedication / back_cover_line (owner decision 2026-08-27) --------------
+
+Deno.test('parseOutlineResponse: parses dedication and back_cover_line, trimmed', () => {
+  const { response } = parseOutlineResponse(
+    { dedication: '  Para Enzo...  ', back_cover_line: '  Un año de recuerdos.  ' },
+    new Set(),
+    new Set(),
+    new Set(),
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(response.dedication, 'Para Enzo...');
+  assertEquals(response.backCoverLine, 'Un año de recuerdos.');
+});
+
+Deno.test('parseOutlineResponse: missing or blank dedication/back_cover_line are null', () => {
+  const { response: missing } = parseOutlineResponse({}, new Set(), new Set(), new Set(), new Map(), new Map(), new Map());
+  assertEquals(missing.dedication, null);
+  assertEquals(missing.backCoverLine, null);
+
+  const { response: blank } = parseOutlineResponse(
+    { dedication: '   ', back_cover_line: '' },
+    new Set(),
+    new Set(),
+    new Set(),
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(blank.dedication, null);
+  assertEquals(blank.backCoverLine, null);
+});
+
+// --- firsts_milestones / warm_name (owner round-3 decision, 2026-08-27:
+// AI-drafted warm second-person milestone lines, never trusted without
+// checking against a REAL (memory, milestone) pair) --------------------------
+
+Deno.test('parseOutlineResponse: parses a valid firsts_milestones entry, trimmed', () => {
+  const validMilestoneKeys = new Set(['m1::first-steps']);
+  const { response, violations } = parseOutlineResponse(
+    { firsts_milestones: [{ memory_id: 'm1', milestone_id: 'first-steps', warm_name: '  Diste tus primeros pasos.  ' }] },
+    new Set(),
+    new Set(),
+    new Set(['m1']),
+    new Map(),
+    new Map(),
+    new Map(),
+    new Set(),
+    validMilestoneKeys,
+  );
+  assertEquals(response.firstsWarmNames, [{ memoryId: 'm1', milestoneId: 'first-steps', warmName: 'Diste tus primeros pasos.' }]);
+  assertEquals(violations, []);
+});
+
+Deno.test('parseOutlineResponse: a firsts_milestones entry for an unknown (memory, milestone) pair is dropped and recorded', () => {
+  const validMilestoneKeys = new Set(['m1::first-steps']);
+  const { response, violations } = parseOutlineResponse(
+    { firsts_milestones: [{ memory_id: 'm1', milestone_id: 'first-haircut', warm_name: 'Tuviste tu primer corte de pelo.' }] },
+    new Set(),
+    new Set(),
+    new Set(['m1']),
+    new Map(),
+    new Map(),
+    new Map(),
+    new Set(),
+    validMilestoneKeys,
+  );
+  assertEquals(response.firstsWarmNames, []);
+  assertEquals(violations.some((v) => v.kind === 'unknown_firsts_milestone' && v.detail === 'm1::first-haircut'), true);
+});
+
+Deno.test('parseOutlineResponse: a firsts_milestones entry with a missing/blank warm_name is dropped and recorded', () => {
+  const validMilestoneKeys = new Set(['m1::first-steps']);
+  const { response, violations } = parseOutlineResponse(
+    { firsts_milestones: [{ memory_id: 'm1', milestone_id: 'first-steps', warm_name: '   ' }] },
+    new Set(),
+    new Set(),
+    new Set(['m1']),
+    new Map(),
+    new Map(),
+    new Map(),
+    new Set(),
+    validMilestoneKeys,
+  );
+  assertEquals(response.firstsWarmNames, []);
+  assertEquals(violations.some((v) => v.kind === 'missing_firsts_warm_name'), true);
+});
+
+Deno.test('parseOutlineResponse: a duplicate firsts_milestones entry for the same pair is dropped and recorded', () => {
+  const validMilestoneKeys = new Set(['m1::first-steps']);
+  const { response, violations } = parseOutlineResponse(
+    {
+      firsts_milestones: [
+        { memory_id: 'm1', milestone_id: 'first-steps', warm_name: 'Diste tus primeros pasos.' },
+        { memory_id: 'm1', milestone_id: 'first-steps', warm_name: 'A second, unwanted draft.' },
+      ],
+    },
+    new Set(),
+    new Set(),
+    new Set(['m1']),
+    new Map(),
+    new Map(),
+    new Map(),
+    new Set(),
+    validMilestoneKeys,
+  );
+  assertEquals(response.firstsWarmNames.length, 1);
+  assertEquals(response.firstsWarmNames[0].warmName, 'Diste tus primeros pasos.');
+  assertEquals(violations.some((v) => v.kind === 'duplicate_firsts_milestone'), true);
+});
+
+Deno.test('parseOutlineResponse: missing firsts_milestones is an empty array, no violation', () => {
+  const { response, violations } = parseOutlineResponse({}, new Set(), new Set(), new Set(), new Map(), new Map(), new Map());
+  assertEquals(response.firstsWarmNames, []);
+  assertEquals(violations, []);
 });
 
 // --- parseOutlineResponse (integration-shaped: fabricated AI response) -----
@@ -1465,6 +2288,7 @@ Deno.test('parseOutlineResponse: drops unknown ids/candidates/segments and recor
   // "topic:beach" candidate's member list.
   const candidateMembersById = new Map([['topic:beach', new Set(['m1', 'm2'])]]);
   const candidateDefaultTitleById = new Map([['topic:beach', 'A day at the beach']]);
+  const segmentMembersById = new Map([['2023-01', new Set(['m1', 'm2', 'm3'])]]);
 
   const raw = {
     spreads: [
@@ -1499,6 +2323,7 @@ Deno.test('parseOutlineResponse: drops unknown ids/candidates/segments and recor
     validMemoryIds,
     candidateMembersById,
     candidateDefaultTitleById,
+    segmentMembersById,
   );
 
   assertEquals(response.spreads.length, 1);
@@ -1513,7 +2338,7 @@ Deno.test('parseOutlineResponse: drops unknown ids/candidates/segments and recor
   assertEquals(response.backboneHighlights[0].memoryIds, ['m1']);
 
   assertEquals(response.firstsTitle, 'Big and small wins');
-  assertEquals(response.editorialNote, 'A gentle first year.');
+  assertEquals(response.internalEditorialNote, 'A gentle first year.');
 
   const violationKinds = violations.map((v) => v.kind).sort();
   assertEquals(violationKinds.includes('unknown_candidate_id'), true);
@@ -1530,6 +2355,7 @@ Deno.test('parseOutlineResponse: rejects a candidate_id that is not one of the t
     new Set(['not-a-real-prefix']), // even if it were "valid" by id, the kind prefix check must still reject it
     new Set(),
     new Set(),
+    new Map(),
     new Map(),
     new Map(),
   );
@@ -1567,10 +2393,12 @@ Deno.test('parseOutlineResponse: empty/malformed raw input produces an empty-but
     new Set(),
     new Map(),
     new Map(),
+    new Map(),
   );
   assertEquals(response.spreads, []);
   assertEquals(response.backboneHighlights, []);
   assertEquals(response.firstsTitle, null);
-  assertEquals(response.editorialNote, '');
+  assertEquals(response.heroCandidates, []);
+  assertEquals(response.internalEditorialNote, '');
   assertEquals(violations, []);
 });

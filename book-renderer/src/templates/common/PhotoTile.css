@@ -1,0 +1,135 @@
+.photo-tile {
+  margin: 0;
+  position: absolute;
+  inset: 0;
+}
+
+/*
+ * Bug fix (owner review round 4, item 1): `.photo-tile__meta` used to be a
+ * flex-column sibling after the frame, competing for space within a cell
+ * sized to the image alone (the caller never reserves extra room for the
+ * numeral/scan row) — the frame's `flex:1` could shrink or the meta row
+ * could overflow unpredictably, reading as "drifting low". The frame now
+ * fills the cell exactly (matching what the caller actually computed), and
+ * the meta row is positioned absolutely at `top:100%` of the frame — a
+ * deterministic anchor to the image's own bottom edge, independent of any
+ * flex sizing. The cell itself has no `overflow:hidden` (see
+ * AnchorMedia.css/FlexGrid.css), so this row is free to extend into the
+ * page's own reserved footer space below.
+ */
+.photo-tile__frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.photo-tile__img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.photo-tile__meta {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 0.3em;
+  display: flex;
+  /* Top-align the whole meta row against the image's bottom edge (owner
+     round 5): the scan unit must hug the photo, not float centered. The
+     numeral keeps its own baseline look via line-height, not row align. */
+  align-items: flex-start;
+  gap: 0.6em;
+}
+
+.photo-tile__numeral {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+/* Scan-to-watch (owner review round 3 item 8, round 4 item 1): right-
+   aligned via its own auto margin — this holds whether or not a numeral is
+   also present (e.g. a companion photo with no footer index has no
+   numeral), unlike a parent `justify-content: space-between` which would
+   left-align a lone child instead. */
+.photo-tile__scan {
+  margin-left: auto;
+  display: flex;
+  /* Text top-aligns with the scan mark's top edge (owner round 5). */
+  align-items: flex-start;
+  gap: 0.3em;
+}
+
+.photo-tile__scan-text {
+  line-height: 1;
+}
+
+.photo-tile__scan-text {
+  font-family: var(--font-sans);
+  white-space: nowrap;
+}
+
+/*
+ * Round-9 item 4: SOLO video pages anchor the scan-to-watch group just
+ * OUTSIDE the image's bottom corner on its free side, instead of the
+ * ordinary below-image strip (`layoutSoloVideoAnchor` in
+ * anchorMediaLayout.ts decides which — see its own doc comment; only ever
+ * used for a solo video's single tile, never a pair/grid). `right:100%`/
+ * `left:100%` anchors the group just past the frame's own left/right edge,
+ * `width:max-content` keeps it from stretching the way the below-strip's
+ * `left:0;right:0` does, and it's still bottom-anchored (`top:auto;
+ * bottom:0`) so it hugs the image's bottom edge exactly like the below
+ * strip does relative to the top.
+ */
+.photo-tile__meta--left,
+.photo-tile__meta--right {
+  top: auto;
+  bottom: 0;
+  width: max-content;
+  max-width: none;
+  margin-top: 0;
+}
+
+.photo-tile__meta--left {
+  left: auto;
+  right: 100%;
+  margin-right: 0.6em;
+  /* Internally right-aligned so the text+QR hug the image's own left edge. */
+  align-items: flex-end;
+}
+
+.photo-tile__meta--right {
+  left: 100%;
+  right: auto;
+  margin-left: 0.6em;
+  /* Internally left-aligned so the text+QR hug the image's own right edge. */
+  align-items: flex-start;
+}
+
+/* In the side placements, the scan-to-watch row's own auto-margin
+   right-alignment (the ordinary below-strip rule) would fight the parent's
+   now-single-child alignment — neither numeral nor scan block needs it here
+   since there's only ever one child (a solo video never carries a numeral,
+   see PhotoTile.tsx's own doc comment on `metaPlacement`).
+   Owner round-10: in the side placements the text and QR stack VERTICALLY
+   (text above the mark) instead of sitting in a row — a narrower, tidier
+   block in the margin beside a tall video. The stack's own cross-axis
+   alignment mirrors the parent variant so both lines hug the image edge. */
+.photo-tile__meta--left .photo-tile__scan,
+.photo-tile__meta--right .photo-tile__scan {
+  margin-left: 0;
+  flex-direction: column;
+  gap: 0.4em;
+}
+
+.photo-tile__meta--left .photo-tile__scan {
+  align-items: flex-end;
+}
+
+.photo-tile__meta--right .photo-tile__scan {
+  align-items: flex-start;
+}

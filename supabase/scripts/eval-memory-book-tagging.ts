@@ -74,7 +74,22 @@ interface CliOptions {
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
 
-function parseArgs(args: string[]): CliOptions {
+/** Printed alongside a rejected argument (owner hardening fix, 2026-08-27:
+ * never-silently-drop applies at the CLI level too -- see the matching fix
+ * in eval-memory-book-outline.ts's `parseArgs`). */
+export const CLI_USAGE =
+  'Usage: eval-memory-book-tagging.ts [--limit <n>] [--offset <n>] ' +
+  '[--memory-id <uuid>]... [--model <name>] [--concurrency <n>] [--max-images <n>] ' +
+  '[--resume <path>] [--dry-run] [--mode discovery|strict|controlled]';
+
+/**
+ * Throws on any argument that isn't one of the known flags (or a value
+ * already consumed by one) -- owner hardening fix, 2026-08-27, matching
+ * eval-memory-book-outline.ts: an unrecognized token used to fall through
+ * `default: break` and be silently ignored. The caller (`main`) catches
+ * this and exits non-zero with the offending token + `CLI_USAGE`.
+ */
+export function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = {
     limit: Infinity,
     offset: 0,
@@ -128,7 +143,7 @@ function parseArgs(args: string[]): CliOptions {
         index += 1;
         break;
       default:
-        break;
+        throw new Error(`Unknown argument: "${arg}"\n${CLI_USAGE}`);
     }
   }
 
@@ -2280,7 +2295,13 @@ ${cards}
 // ── Main ─────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const options = parseArgs(Deno.args);
+  let options: CliOptions;
+  try {
+    options = parseArgs(Deno.args);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    Deno.exit(1);
+  }
   const userEmail = Deno.env.get('EVAL_USER_EMAIL') ?? 'eduardoyi@gmail.com';
   const apiKey = Deno.env.get('OPENAI_API_KEY') ?? null;
 

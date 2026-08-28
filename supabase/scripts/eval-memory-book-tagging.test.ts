@@ -4,6 +4,7 @@ import {
   ageInMonthsAtDate,
   buildSystemPrompt,
   classifyChildOrAdult,
+  CLI_USAGE,
   computeBirthdayMatch,
   daysToBirthday,
   formatMilestoneCatalogForPrompt,
@@ -12,6 +13,7 @@ import {
   isTopicWithinDateWindow,
   nearbyHolidays,
   NEGATIVE_EXAMPLES,
+  parseArgs,
   parseMilestoneCatalog,
   parseModelOutput,
   parseThemes,
@@ -22,6 +24,30 @@ import {
 } from './eval-memory-book-tagging.ts';
 
 const NO_VOCAB_IDS = new Set<string>();
+
+// --- parseArgs (owner hardening fix, 2026-08-27: never-silently-drop
+// applies at the CLI level too -- matches the fix in
+// eval-memory-book-outline.ts's parseArgs) ----------------------------------
+
+Deno.test('parseArgs: a known flag combination parses cleanly, including a repeated --memory-id', () => {
+  const options = parseArgs(['--limit', '20', '--memory-id', 'm1', '--memory-id', 'm2', '--mode', 'discovery', '--dry-run']);
+  assertEquals(options.limit, 20);
+  assertEquals(options.memoryIds, ['m1', 'm2']);
+  assertEquals(options.mode, 'discovery');
+  assertEquals(options.dryRun, true);
+});
+
+Deno.test('parseArgs: an unknown argument throws with the offending token and usage, instead of being silently dropped', () => {
+  let error: Error | null = null;
+  try {
+    parseArgs(['--limit', '20', '--totally-not-a-flag']);
+  } catch (e) {
+    error = e as Error;
+  }
+  assertEquals(error !== null, true);
+  assertEquals(error!.message.includes('--totally-not-a-flag'), true);
+  assertEquals(error!.message.includes(CLI_USAGE), true);
+});
 
 // --- parseMilestoneCatalog ---------------------------------------------
 

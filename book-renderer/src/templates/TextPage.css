@@ -1,0 +1,31 @@
+.text-page {
+  background: var(--color-white);
+}
+
+.text-page__entry {
+  display: flex;
+  flex-direction: column;
+  gap: 1em;
+  margin-bottom: 1.6em;
+}
+
+.text-page__rule {
+  width: 4em;
+  height: 1px;
+}
+
+.text-page__date {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.text-page__body {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1.72;
+  letter-spacing: -0.004em;
+  white-space: pre-wrap;
+}

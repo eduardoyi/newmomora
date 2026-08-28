@@ -238,12 +238,257 @@ this is what V2 of the validation plan (§9) inspects.
 
 ### Stage C — Layout
 
-Outline → **book document** (JSON): pages → template id → slots → content
-refs (memory text, photo asset, illustration asset, portrait, QR block).
-Template library covers: full-bleed photo spread, illustration + story page,
-multi-photo grid, quote/text-only page, through-the-years strip, media+QR
-page. Each template defines safe zones, bleed, and its 2–3 variants (the
-only "layout choice" users see).
+Outline → **book document** (JSON): pages → template id + parameters →
+slots → content refs (memory text, photo asset, illustration asset,
+portrait, QR block).
+
+**V3 design decisions (discussed 2026-08-26):**
+
+- **Parametric template system, not a template list.** Templates are
+  components that take parameters (slot count, slot proportions, text block
+  sizing) with aspect-ratio-aware placement rules — variation in photo
+  count/orientation/caption length is absorbed by one component flexing.
+  Only genuinely new *shapes* are separate templates (~6–10 kinds: flexible
+  photo grid, photo + story, text-only/long-entry page, full-bleed +
+  panorama spread, through-the-years strip, spread title page, anchor media
+  page, two cover kinds, closing).
+- **Outline → layout is DETERMINISTIC** (AI for taste, code for geometry):
+  a constraint fitter filters feasible templates per page, scores fit +
+  rhythm (no same template twice consecutively), picks the best; ranks 2–3
+  become the user-facing layout variants for free. Layout is a pure
+  function of the book document (preview = print; local refits on edit; no
+  per-page model calls). Editorial emphasis (hero slots) comes from the
+  outline's highlights — already decided by the reasoning model.
+- **Crop safety:** conservative center-weighted crops; prefer demoting a
+  photo to a smaller slot over aggressive cropping. Focal-point hints are a
+  future `analyze-memory` enrichment (per-photo fact, computed once),
+  consumed deterministically — never a layout-time model call.
+- **Layout-gaps report:** the renderer logs every page whose best fit
+  scores below threshold; rendering real books surfaces the missing-layout
+  backlog from data (same dogfood pattern as V1a discovery).
+- **QR treatment:** inline mini-QR (12–15mm, muted ink, caption-line
+  placement with quiet microcopy) is the DEFAULT for video/audio memories —
+  short redirect URLs keep QR versions low so small stays scannable. The
+  dedicated media page survives only for anchor moments (outline
+  highlights). QR must never be visually loud.
+- **Covers — user picks one of two:** (1) minimal flat color + big title
+  (lavender family, Newsreader, journal language); (2) full-bleed photo
+  (nominated by the outline generator, swappable in review; spread-safe
+  resolution required; gradient scrim or calm-region title placement for
+  legibility).
+- **Captions: always printed when present, verbatim and in full.** The
+  fitter selects a template that fits the text; text is never trimmed to
+  fit a template. Long entries get text-forward layouts. Caption-less
+  photos get a small date only — NO AI-generated filler captions, ever.
+- **Illustrations: upscale** (Real-ESRGAN-class, ~2.5×) rather than
+  regenerate (decided 2026-08-26); templates cap illustration slots at
+  sizes the upscale supports; V3 includes an upscale quality test on real
+  illustrations.
+- **Rendering runs server-side** (originals from R2, ~100–200MB per book;
+  never in the user's browser — previews use lightweight copies). V3
+  renders locally via the eval script; the production render-job home is a
+  V5 decision. Nothing in V3 may assume browser rendering.
+
+**Design source of truth (2026-08-27):** Claude Design handoff "Momora's
+Parametric Baby Book System" — assembled real Enzo book (1a) + spec board
+(1b): 6-col/27.5mm grid, 5mm baseline, 24mm no-face spine band, full
+type-role scale, composition catalog with deterministic applicability
+rules and fallbacks (full-bleed gated on highlight + ≥300ppi + face
+clearance, max 2 consecutive / 6 per book; panorama ≥1.7:1; impossible
+aspects contained on pale lavender, never cropped; audio-note inverts the
+scan mark into the page image at 26mm with a single Caveat word and NO
+printed transcription; antetítulo/kicker in PJS 700 small caps 6.5pt;
+max one Caveat accent per spread). Handoff v2 (2026-08-27) adds: wraparound covers (photo voice wraps 34mm
+into the back; mixed voice for vertical photos with stamp-scale portrait on
+the back; minimal voice 0.25pt collection rule at 60mm), spine tiers
+(15mm name+years / 9mm name / <8mm blank; years at 14mm from foot for
+shelf alignment), a formal first-match decision table, crop boxes ±20%,
+face-centroid crop rules, scan ink #4A3F35, video grouping (max 2 scan
+lines/spread), and the "never" list (photos never upscaled past native
+300ppi — illustrations exempt per the upscale decision). Original v2 zip
+(family content — NOT committed): ~/Downloads/Momora's Parametric Baby Book
+System-handoff (1).zip sha256 02605a5e8d05600780b6f3aa6a14415c3e8ec4567767c2c298474c9375ffc27d; working copy in gitignored
+book-renderer/book-data/design-handoff/. Implementation must reproduce the
+canvas, not reinterpret it. Ripples: outline emits `kicker` per themed
+spread + persists highlights (full-bleed gate input); face rules fail
+closed until focal-point enrichment exists.
+
+**Density & quality-first decisions (2026-08-27, owner review of first
+rendered books):** follow the canvas's real density — typically ONE photo
+per page, max TWO with clear size hierarchy (never an even pair) for
+photos from different memories; the one exception (middle path, decided
+2026-08-27): a single memory carrying 3-4 photos of one moment may render
+as one grid unit on its own page (5+ splits across a facing pair), since
+one moment told in several frames is not clutter. Thresholds are named
+constants for tuning after visual review. Longer
+books are accepted up to the 122-page hard cap; quality of output comes
+first, pricing adapts later (raise flat price or introduce tiers). The
+outline derives its IMAGE budget from density constraints (content pages ×
+~1.3 images) instead of cramming pages. Panorama spreads: 1 guaranteed +1 per ~20
+pages, NO cap — but only ever as many as have qualifying photos (native
+landscape, source ≥3500px wide ≈212dpi at 420mm; V4 proof must include one
+to validate the dpi compromise). The outline AI nominates ALL qualifying
+`panoramaCandidates` best-first (no faces near center — human-reviewed in
+the editor), which bypass the face gate as an interim until focal-point
+enrichment ships. Panoramas splice in as their own spread at chronological
+position, promoted out of their grid/spread; no folio/index on the spread;
+counts toward bleed-rhythm accounting. Crop: 2:1 center band; a vertical
+crop-position slider joins the V5 edit surface (decided 2026-08-27).
+V5 edit surface (decided 2026-08-28): pages holding a single PHOTO (not
+video or illustrated memory) get a per-page full-bleed toggle — the user
+can promote a normal solo page to full-bleed or demote a chosen full-bleed
+back — paired with a drag-to-reposition control that moves the photo
+within the bleed "cover" to adjust which band survives the square crop
+(same interaction family as the panorama crop slider above).
+Copy assignments: dedication body + back-cover colophon = AI fields in the
+outline response (editable connective text); spine text = deterministic
+(name + year range, never model-generated); closing line = localized
+furniture template with dynamic page count.
+Localization is total: furniture, dates, age labels, and milestone names
+(translated catalog) all follow the journal language — no mixed-language
+pages, ever. Firsts lists paginate rather than shrink type. Through-the-
+years chunks into multiple spreads of 2–3 pairs when portraits exceed one
+spread. Big scan marks are AUDIO-only; video is always photo-like + footer
+credit. Lavender containment is for grid-slot mismatches only, never solo
+pages. Back cover + spine designed as part of the wraparound cover PDF
+(Prodigi covers are one back+spine+front sheet).
+
+**Owner review round 3 decisions (2026-08-27):** outline ranks content-
+neutrally (quality/relevance/theme signals — never by memory type; the
+type-privileged ladder caused a 77-illustration skew); 122 pages is a
+CEILING not a target — book length flows from meaningful content; panorama
+gate is crop-based (landscape original ≥3500px → 2:1 center crop w/
+cropBand param; native-1.7:1 purity dropped — no phone photo qualifies);
+full-bleed goes through the same trusted-candidate path (heroCandidates/
+highlights + original ≥2500px, face gate bypassed as human-reviewed,
+fitter PREFERS full-bleed for heroes; new full-bleed single page with
+credit on the facing page's index — "nunca texto encima" preserved);
+captions for photo/video memories ALWAYS in the footer index (on-page
+captions retired; illustrated memories remain the sole on-page-text
+exception); scan-to-watch moves from footer to directly below the image
+(right-aligned text+mark, top-aligned); footnotes consolidate same-date
+entries ("¹ ² ³ 23 oct") with true superscripts; density rule v3: 3-4
+photo grids ONLY when all aspects compose with minimal cropping, else
+max-2; solo images large (150-170mm) at native aspect, lavender
+containment retired outside multi-grids; split long illustrated stories
+are parity-aware (text on left page, illustration on right, visible
+together); Firsts renders as a normal themed section (no index-list; AI
+writes warm second-person milestone lines in the journal language, e.g.
+"Aprendiste a montar bicicleta sin pedales" — owner chose AI over a
+deterministic table for language coverage); closing line = "Este libro
+recoge [X] recuerdos…" (memory count); the AI editorial_note is INTERNAL
+ONLY and must never print (leaked once); dedication body carries no
+salutation (furniture owns the greeting; byline generic "Escrito con
+amor, día a día"); `--exclude-memory-id` on the outline CLI for one-off
+editorial exclusions (collage/comparison composites out of the dogfood
+books).
+
+**Owner review rounds 4–7 (2026-08-27, summarized):** overlap fixes +
+photo-meta reserve; typed blank accounting + parity reorder ladder (6-step
+fallback, generalized group splitting 2→1+1 / 3→2+1 / 4→2+2, zero
+avoidable mid-book blanks enforced by audit); automated content-integrity
+audit (month continuity, orphan titles, geometric overlap, blank
+accounting, even count, fill-ratio, crop-loss) required to pass with 0
+violations on both dogfood books after every fit; min image side 60mm +
+subordinate ≥55% of dominant; fill-the-canvas solo/dominant sizing;
+full-bleed crop-loss gating (≤20% non-hero / ≤30% hero) + wide heroes
+(≥1.7) route to panorama; proportional full-bleed cap (~1 per 10 pages);
+smart video-still selection (5 candidates, Laplacian sharpness +
+brightness + midtone spread).
+
+**Owner review round 8 decisions (2026-08-27):** pairs STAY allowed on
+header pages, but never as a vertical stack when the content box is
+height-squeezed — side-by-side sharing the width axis instead (the
+owner-validated geometry); dominance invariant (dominant short side ≥
+subordinate's, else split to solos); tall solos on header pages sit
+BESIDE the header (right column, near-full height) instead of below it;
+section-header reserve re-measured against real header typography;
+illustrated-story width drift fixed (page-relative % applied inside an
+80%-width container silently shrank illos ~20% and defeated the split
+threshold); full-bleed non-hero crop-loss cap 20%→25% (a standard 4:3
+photo loses exactly 25% to square — the old cap excluded the entire
+phone-photo population), plus a paced soft target of ~1 full-bleed per
+15 pages (rolling slot release, so early months can't consume the whole
+budget) under the existing ~1-per-10 ceiling; exporter measures original
+dimensions for ALL photos (previously only outline-nominated candidates —
+the non-hero full-bleed path was de facto dead with 0 eligible photos in
+both books); video-still scoring gains a center-weighted region term
+(4×4 cell grid at 128px, subject sharpness beats background sharpness)
+and 9 candidates; page photo-count rule: exactly 1, 2, or 4 photos —
+NEVER 3, never >4 (3-photo groups split to pair+solo; enforced as an
+audit check).
+
+**Owner review round 9 decisions (2026-08-28):** illustrated-story pages
+gain a total-stack-height constraint (deterministic caption-height model;
+illustration sized to fit above an ~8mm folio clearance; the 110mm split
+threshold now checks the FITTED height) — root cause of folios rendering
+on top of illustrations (measured 236mm stack bottom on a 216mm page; the
+nominal 160mm big illustration never fit with text above it, masked
+pre-round-8 by the %-basis drift); a `parity:full-bleed` blank is never
+acceptable — the parity reorder models full-bleed pacing/budget state so
+a section-opening full-bleed moves later in its month, and the true last
+resort DEMOTES the full-bleed to a normal page (a full-bleed must open on
+an even page because its credit lives on the facing page — normal pages
+have no such constraint; owner confirmed blank > full-bleed trade);
+beside-header image width cap becomes title-aware (grow to 65% of safe
+width when the modeled title width leaves ~10mm clearance; 50% for long
+titles); solo-video scan+QR group moves beside the image's bottom corner
+(internally aligned to hug the image edge, below-image strip as fallback
+for wide stills), freeing the vertical meta reserve. Recurring lesson
+promoted to rule: every CSS percentage must be resolved against its
+element's ACTUAL containing block (two drift instances shipped in round
+8 — SafeArea is 190mm, the page frame 216mm), and every new page
+composition needs a matching geometric audit check in the same change.
+
+**Owner review rounds 10–12 decisions (2026-08-28):** footer reserve
+right-sized (22→15mm base; measured worst-case footer block is 7.9mm) with
+a video-aware variant (24mm when a below-image scan strip renders — the
+old 22mm was coincidentally tangent to the footer by 0.5mm); side-placed
+scan+QR groups stack vertically and side placement is PREFERRED
+(threshold 46→25mm) so solo videos render at the full 98×175mm; vertical
+pair stacks require clear hierarchy (dominant ≥1.15× subordinate short
+side, else side-by-side) and the pair fill gate returned to its documented
+FULL-safe-box basis (~28% of the physical page, header pages included —
+the content-box basis let 27%-fill header pairs through three reviews).
+Illustrated-density diagnosis: Enzo's 58 illustrated memories all fall in
+jul–oct 2025 (Sep: 21 illustrated vs 3 photos) — corpus seasonality, not
+curation — and photo-only cap demotion amplifies the skew. Owner decision:
+HYBRID fix. (b) illustrated-digest spread (owner-approved design: 4
+entries/spread, 82mm zigzag illustrations, 13pt text on a narrow measure,
+per-entry lavender antetítulo dates, no dividers) sweeps the tail of
+illustrated-heavy months (≥6 illustrated; top-2 ranked keep full
+compositions; milestone holders + quote-title sources never swept; never
+two digest spreads adjacent — promote a swept memory back to full as the
+separator; dissolve-not-blank parity; EVEN entry counts only — a spread
+holds exactly 4, and a single-PAGE digest variant holds exactly 2 (one
+column, parity-free ordinary page; a remainder of 3 renders 2-on-a-page +
+1 ordinary; enforced structurally by the audit)); plus (a) as pressure
+valve: when
+photo demotion exhausts under the 122 cap, lowest-rank digest-eligible
+illustrated become demotable too (same month floors, distinct gap
+reason).
+
+**Architecture follow-up (2026-08-27): make the fitter the yield oracle.**
+The outline currently duplicates the renderer's page-yield math in its own
+constants and the two drift (est 108 vs rendered 121 on Mara after several
+alignment rounds). The durable fix: the outline imports and calls the
+actual `fitBook` estimation (pure TS, dependency-light — Deno can import it
+from book-renderer/src/model/) instead of maintaining a parallel model.
+Until then, small est-vs-actual gaps surface as cap omissions listed in the
+gaps panel.
+
+**Calibration follow-up (2026-08-27):** the outline's page accounting
+(3 memories/backbone page etc.) predicts ~53 pages where the implemented
+design system yields ~70 — the design's richer compositions hold fewer
+memories per page. Before V4 print, calibrate the outline's page-accounting
+constants against the fitter's real per-composition yields (export a yield
+table from book-renderer) so the page budget means what it says.
+
+Renderer: `book-renderer/` workspace dir (React DOM + Vite + Puppeteer,
+isolated from the Expo app's deps). Momora design system: Newsreader
+narrative, Caveat for quote titles (per Stage B title modes), Plus Jakarta
+Sans UI, lavender palette accents. Each template defines safe zones and
+bleed.
 
 ### Stage D — Connective text
 

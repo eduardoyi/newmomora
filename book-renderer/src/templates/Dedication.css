@@ -1,0 +1,35 @@
+.dedication-page {
+  background: var(--color-white);
+}
+
+.dedication {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 1.6em;
+}
+
+.dedication__greeting {
+  font-family: var(--font-script);
+  font-weight: 500;
+  line-height: 1;
+}
+
+.dedication__body {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1.75;
+}
+
+.dedication__rule {
+  width: 3em;
+  height: 1px;
+}
+
+.dedication__signature {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}

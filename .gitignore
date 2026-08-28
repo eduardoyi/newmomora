@@ -78,6 +78,13 @@ yarn-error.log*
 supabase/functions/deno.lock
 supabase/scripts/eval-output/
 
+# Memory Book V3 asset export -- family content, own-account only, never committed.
+# The fabricated sample/ book (placeholder SVGs, no real memories) IS tracked --
+# it's the zero-real-data fixture the book-renderer preview + vitest tests need.
+book-renderer/book-data/*
+!book-renderer/book-data/sample/
+!book-renderer/book-data/sample/**
+
 # Claude Code local settings
 .claude/settings.local.json
 

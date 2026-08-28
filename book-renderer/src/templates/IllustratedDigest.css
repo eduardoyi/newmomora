@@ -1,0 +1,64 @@
+.illustrated-digest-page {
+  background: var(--color-white);
+}
+
+.illustrated-digest {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.illustrated-digest__column {
+  /* Rows are positioned individually (top/height in %) by the template,
+     driven by `layoutDigestColumn` (templates/layout/illustratedDigestLayout.ts)
+     — the SAME pure function the audit's geometric check recomputes, so the
+     two can never drift apart. No flex/gap/centering here anymore. */
+}
+
+.illustrated-digest__entry {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2.2em;
+}
+
+.illustrated-digest__entry--reverse {
+  flex-direction: row-reverse;
+}
+
+.illustrated-digest__illo {
+  flex: none;
+  overflow: hidden;
+}
+
+.illustrated-digest__illo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.illustrated-digest__textcol {
+  flex: 1;
+  /* Owner round-11: text reads better on a narrower measure next to the
+     larger illustration — cap the column instead of filling all leftover
+     width. */
+  max-width: 46%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55em;
+}
+
+.illustrated-digest__date {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.illustrated-digest__text {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1.55;
+}

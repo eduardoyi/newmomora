@@ -58,28 +58,58 @@ interface CliOptions {
   calendarYear: number | null;
   from: string | null;
   to: string | null;
-  pageBudget: number;
+  pageCap: number;
   model: string;
   dryRun: boolean;
+  /** Owner round-3 decision, 2026-08-27: one-off editorial exclusions
+   * (collage/comparison composites, etc.) -- repeatable
+   * `--exclude-memory-id <uuid>`. Excluded ids are removed from ELIGIBILITY
+   * entirely, before any candidate/backbone/firsts computation, so they can
+   * never surface in an element, a candidate spread, a highlight, or Firsts
+   * -- not merely dropped for budget later. */
+  excludeMemoryIds: string[];
 }
 
 // Owner amendment (2026-08-24): the outline is one call per book -- quality
 // over cost -- so the default model is intentionally not the cheap tagging
 // model. `gpt-5.6-sol` per explicit owner instruction; `--model` overrides.
 const DEFAULT_MODEL = 'gpt-5.6-sol';
-const DEFAULT_PAGE_BUDGET = 50;
+/** The layflat print product's hard physical page limit. Owner decision,
+ * 2026-08-27 ("Density & quality-first"): `--page-cap` now defaults to
+ * this and is the single BINDING constraint end to end, replacing the old
+ * soft 50-page default -- longer books are accepted up to this limit;
+ * quality of output comes first. */
 export const HARD_PAGE_CAP = 122;
 
-function parseArgs(args: string[]): CliOptions {
+/** Printed alongside a rejected argument (owner hardening fix, 2026-08-27:
+ * never-silently-drop applies at the CLI level too -- a malformed
+ * invocation once passed a single mangled string containing all five
+ * `--exclude-memory-id` flags, and the run proceeded WITHOUT exclusions,
+ * silently, because `parseArgs` swallowed the unrecognized token). */
+export const CLI_USAGE =
+  'Usage: eval-memory-book-outline.ts --child <id|name> ' +
+  '(--age-year <n> | --calendar-year <year> | --from <date> --to <date>) ' +
+  '[--page-cap <n>] [--model <name>] [--dry-run] [--exclude-memory-id <uuid>]...';
+
+/**
+ * Throws on any argument that isn't one of the known flags (or a value
+ * already consumed by one) -- owner hardening fix, 2026-08-27. Previously
+ * an unrecognized token fell through `default: break` and was silently
+ * ignored; the caller (`main`) catches this and exits non-zero with the
+ * offending token + `CLI_USAGE` rather than proceeding with a partially
+ * (or, in the reported incident, entirely) unparsed invocation.
+ */
+export function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = {
     child: null,
     ageYear: null,
     calendarYear: null,
     from: null,
     to: null,
-    pageBudget: DEFAULT_PAGE_BUDGET,
+    pageCap: HARD_PAGE_CAP,
     model: DEFAULT_MODEL,
     dryRun: false,
+    excludeMemoryIds: [],
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -107,8 +137,8 @@ function parseArgs(args: string[]): CliOptions {
         options.to = next ?? null;
         index += 1;
         break;
-      case '--page-budget':
-        options.pageBudget = next ? Number(next) || DEFAULT_PAGE_BUDGET : DEFAULT_PAGE_BUDGET;
+      case '--page-cap':
+        options.pageCap = next ? Number(next) || HARD_PAGE_CAP : HARD_PAGE_CAP;
         index += 1;
         break;
       case '--model':
@@ -118,8 +148,12 @@ function parseArgs(args: string[]): CliOptions {
       case '--dry-run':
         options.dryRun = true;
         break;
-      default:
+      case '--exclude-memory-id':
+        if (next) options.excludeMemoryIds.push(next);
+        index += 1;
         break;
+      default:
+        throw new Error(`Unknown argument: "${arg}"\n${CLI_USAGE}`);
     }
   }
 
@@ -296,13 +330,14 @@ interface MemoryRow {
   analyzed_at: string | null;
 }
 
-interface MediaRow {
+export interface MediaRow {
   id: string;
   memory_id: string;
   object_key: string;
   content_type: string;
   position: number;
   preview_object_key: string | null;
+  aspect_ratio: number | null;
 }
 
 interface TagRow {
@@ -461,7 +496,7 @@ async function loadMediaForMemories(supabase: AuthedClient, memoryIds: string[])
       (from, to) =>
         supabase
           .from('memory_media')
-          .select('id, memory_id, object_key, content_type, position, preview_object_key')
+          .select('id, memory_id, object_key, content_type, position, preview_object_key, aspect_ratio')
           .in('memory_id', ids)
           .order('memory_id', { ascending: true })
           .order('position', { ascending: true })
@@ -493,7 +528,7 @@ async function loadTagsForMemories(supabase: AuthedClient, memoryIds: string[]):
   return out;
 }
 
-async function loadMilestonesForMemories(supabase: AuthedClient, memoryIds: string[]): Promise<MilestoneRow[]> {
+export async function loadMilestonesForMemories(supabase: AuthedClient, memoryIds: string[]): Promise<MilestoneRow[]> {
   const out: MilestoneRow[] = [];
   for (const ids of chunk(memoryIds, CHUNK_SIZE)) {
     if (ids.length === 0) continue;
@@ -502,6 +537,16 @@ async function loadMilestonesForMemories(supabase: AuthedClient, memoryIds: stri
         supabase
           .from('memory_milestones')
           .select('id, memory_id, family_member_id, milestone_id, detail, out_of_band')
+          // Owner round-4 decision, 2026-08-27: a 'dismissed' row is the
+          // owner correcting a factually-wrong milestone match (product-
+          // correct path -- the future confirmation UI does exactly this),
+          // so it must never surface anywhere downstream: not the Firsts
+          // section, not per-memory milestone context, and not birthday
+          // detection -- `birthdayAgeTurned` is derived from this SAME
+          // query's `milestone_id === 'birthday'` rows in
+          // `buildMemoryFeature`, so filtering here covers all three paths
+          // at once (there is no separate, unfiltered birthday query).
+          .neq('status', 'dismissed')
           .in('memory_id', ids)
           .order('id', { ascending: true })
           .range(from, to),
@@ -628,6 +673,11 @@ export interface MemoryFeature {
   /** First 120 chars of `content`. Local review-artifact + AI-prompt use
    * only -- NEVER logged to stdout (PII rule). */
   excerpt: string | null;
+  /** Full content character count (owner round-3 decision, 2026-08-27:
+   * content-neutral ranking's "text richness" signal, and the page-yield
+   * model's short/long illustrated-story split) -- NEVER the content
+   * itself, just its length, so this stays safe to log per the PII rule. */
+  textLength: number;
   photoCount: number;
   videoCount: number;
   previewKey: string | null;
@@ -643,6 +693,11 @@ export interface MemoryFeature {
    * relationship words in titles/rationales (plan round-2 decision,
    * 2026-08-25) -- never inferred from photos or topic tags. */
   taggedMembers: TaggedMemberFeature[];
+  /** The first photo asset's orientation (owner root-cause fix,
+   * 2026-08-27), straight from `memory_media.aspect_ratio` -- null when no
+   * photo, or the first photo has no aspect data. Sent to the AI so it can
+   * actually judge panorama/hero suitability instead of guessing blind. */
+  photoOrientation: PhotoOrientationInfo | null;
 }
 
 export interface TaggedMemberFeature {
@@ -661,6 +716,57 @@ function firstUsablePreviewKey(media: MediaRow[]): string | null {
     if (row.content_type.startsWith(PHOTO_CONTENT_TYPE_PREFIX)) return row.object_key;
   }
   return null;
+}
+
+// ── Photo orientation (owner root-cause fix, 2026-08-27: the AI nominated
+// only portrait photos as panorama candidates because orientation was never
+// in its metadata at all) ────────────────────────────────────────────────
+
+export type PhotoOrientation = 'wide' | 'tall' | 'square';
+
+const WIDE_ASPECT_RATIO_THRESHOLD = 1.15;
+const TALL_ASPECT_RATIO_THRESHOLD = 0.87;
+/** A `wide` photo at or above this ratio gets its approximate ratio spelled
+ * out (e.g. "wide 1.7:1") since panorama nomination wants genuinely wide,
+ * not just technically-landscape. */
+const WIDE_RATIO_CALLOUT_THRESHOLD = 1.5;
+
+export function classifyOrientation(aspectRatio: number): PhotoOrientation {
+  if (aspectRatio > WIDE_ASPECT_RATIO_THRESHOLD) return 'wide';
+  if (aspectRatio < TALL_ASPECT_RATIO_THRESHOLD) return 'tall';
+  return 'square';
+}
+
+export interface PhotoOrientationInfo {
+  orientation: PhotoOrientation;
+  ratio: number;
+}
+
+/**
+ * The FIRST photo asset's orientation, by `position`, straight from
+ * `memory_media.aspect_ratio` -- never falls back to a later photo when the
+ * first one lacks aspect data (per the brief: "omit marker when no aspect
+ * data" for THAT memory, not "use whichever photo happens to have data").
+ * Videos and photos with no aspect_ratio are skipped only in the sense that
+ * a video never counts as "the first photo asset"; the first PHOTO
+ * specifically is what's inspected, whether or not it has aspect data.
+ */
+export function computeFirstPhotoOrientation(media: MediaRow[]): PhotoOrientationInfo | null {
+  const sorted = [...media].sort((a, b) => a.position - b.position);
+  const firstPhoto = sorted.find((m) => m.content_type.startsWith(PHOTO_CONTENT_TYPE_PREFIX));
+  if (!firstPhoto || firstPhoto.aspect_ratio === null || firstPhoto.aspect_ratio === undefined) return null;
+  return { orientation: classifyOrientation(firstPhoto.aspect_ratio), ratio: firstPhoto.aspect_ratio };
+}
+
+/** The compact marker appended to a memory's metadata row -- `null` when
+ * there's no aspect data to report (the field is simply omitted, never
+ * shown as "unknown"). */
+export function formatOrientationMarker(info: PhotoOrientationInfo | null): string | null {
+  if (!info) return null;
+  if (info.orientation === 'wide' && info.ratio >= WIDE_RATIO_CALLOUT_THRESHOLD) {
+    return `wide ${info.ratio.toFixed(1)}:1`;
+  }
+  return info.orientation;
 }
 
 export interface FamilyMemberForTagging {
@@ -720,6 +826,7 @@ export function buildMemoryFeature(
     emotion: memory.emotion,
     hasText: content.length > 0,
     excerpt: content ? content.slice(0, TEXT_EXCERPT_MAX_CHARS) : null,
+    textLength: content.length,
     photoCount,
     videoCount,
     previewKey: firstUsablePreviewKey(media),
@@ -733,6 +840,7 @@ export function buildMemoryFeature(
     birthdayAgeTurned: birthdayRow?.detail ? Number(birthdayRow.detail) : null,
     taggedToChild: taggedMemberIds.includes(childId),
     taggedMembers,
+    photoOrientation: computeFirstPhotoOrientation(media),
   };
 }
 
@@ -1212,16 +1320,25 @@ export function dissolveThinBirthdaySpreads(
 //      Firsts + every birthday spread. These are never dropped or thinned
 //      regardless of budget.
 //   b. Themed spreads accepted by the AI: next priority. Only dropped
-//      (lowest member-count first) if (a)+(b) alone exceed the budget.
-//   c. The backbone gets ONLY the pages left over after (a)+(b). All
-//      "unplaced" memories (every eligible memory not claimed by a
-//      surviving Firsts/birthday/themed spread -- including memories from a
-//      themed spread that got dropped in (b), which return to backbone
-//      eligibility instead of being excluded outright) compete on
-//      `rankMemoryForThinning`; the highest-ranked ones that fit (3/page)
-//      survive. The survivors are then re-segmented chronologically with
-//      `buildBackboneSegments`, which naturally merges/drops now-empty
-//      month segments.
+//      (lowest page-cost first) if (a)+(b) alone exceed the page cap.
+//   c. The backbone gets ONLY the pages left over after (a)+(b) -- a real
+//      PAGE budget (owner round-3 decision, 2026-08-27 -- see below).
+//
+// True page-yield model (owner round-3 decision, 2026-08-27, replacing the
+// prior round's images-per-page density constants; refined same day to
+// split short text-only memories into two renderer groupings): every
+// memory's page cost is estimated HONESTLY from its own shape (photo
+// count, text length, type), mirroring the renderer's real composition
+// decision table -- solo photo ~1 page/memory, two paired photos ~1
+// page/2 memories, a single memory's 3-4 photo grid ~1 page, a full-bleed
+// hero 1 page, a panorama 2 pages, a short (<=200 char) text-only memory
+// is EITHER a bare quote (~0.4 pages, 3-6 share a quote-collection spread)
+// or a short illustrated story (~1 page, two share a 2-page spread), a
+// long illustrated story 2 pages, a plain text page 1. `122`
+// (`HARD_PAGE_CAP`) is a CEILING, not a target: everything that clears a
+// meaningful-quality bar is selected; selection only tightens (dropping
+// the lowest-ranked memory) once the honest estimate exceeds the cap. A
+// content-poor scope naturally yields a shorter book -- never pad.
 
 export type BudgetElementKind = 'themed' | 'firsts' | 'birthday' | 'backbone';
 
@@ -1229,47 +1346,224 @@ export interface BudgetElement {
   id: string;
   kind: BudgetElementKind;
   memoryCount: number;
+  /** Per-member page shape (owner round-3 decision, 2026-08-27) -- drives
+   * this element's page cost for 'backbone'/'themed' kinds via
+   * `estimateElementPages`. Unused for 'firsts'/'birthday', which stay flat
+   * 2-page elements -- out of scope for this change (see plan's separate,
+   * not-yet-implemented "Firsts lists paginate" note). */
+  shapes?: MemoryPageShape[];
 }
 
 const FIXED_PAGES = 4; // cover + title/dedication + through-the-years + closing
 
+/**
+ * A single memory's rendered "shape" -- the composition kind the real
+ * renderer would choose for it, per the owner's round-3 yield table
+ * (2026-08-27, refined same day to add `short-text`). `panorama`/
+ * `full-bleed` are driven by whether this memory was actually nominated as
+ * a panorama/hero candidate (never guessed from photo count alone);
+ * everything else is inferred from photo/video count and text length.
+ * `short-text` and `short-illustrated-story` are BOTH "short" text-only
+ * memories (<=200 chars) but render differently: `short-text` is a bare
+ * quote that joins a 3-6-up quote-collection spread, `short-illustrated-
+ * story` gets its own small illustration and shares a spread with one
+ * other. Which of the two a given short memory becomes is not something
+ * this script's data can determine with certainty (no illustration-
+ * completion signal is tracked here) -- it is approximated by length via
+ * `SHORT_TEXT_MAX_CHARS`, a named constant for tuning after visual review.
+ */
+export type MemoryPageShape =
+  | 'panorama'
+  | 'full-bleed'
+  | 'photo-grid'
+  | 'solo-photo'
+  | 'short-text'
+  | 'short-illustrated-story'
+  | 'long-story'
+  | 'text-page';
+
+export interface MemoryPageShapeInput {
+  photoCount: number;
+  videoCount: number;
+  hasText: boolean;
+  textLength: number;
+  /** This memory is one of the model's nominated `panoramaCandidates`. */
+  isPanorama: boolean;
+  /** This memory is one of the model's nominated `heroCandidates`. */
+  isFullBleed: boolean;
+}
+
+/** Named constant for tuning after visual review (owner round-3
+ * refinement, 2026-08-27): a text-only memory at or under this length is a
+ * bare "quote" -- it joins the quote-collection grouping (`short-text`)
+ * rather than getting its own small illustration. Deliberately shorter
+ * than `SHORT_STORY_MAX_CHARS` -- the two thresholds carve the "short"
+ * (<=200 char) range into two different renderer groupings. */
+export const SHORT_TEXT_MAX_CHARS = 100;
+
+/** Named constant for tuning after visual review (owner round-3 decision,
+ * 2026-08-27, refined same day: lowered from 400 to ~200 alongside the
+ * `short-text` split): a text-only memory longer than this many characters
+ * renders as a 2-page "long illustrated story" instead of a short one that
+ * shares a spread with another. */
+export const SHORT_STORY_MAX_CHARS = 200;
+
+/**
+ * Classifies a single memory's page shape from its own content -- never
+ * from its "type" as a privileged category (owner round-3 decision,
+ * 2026-08-27: content-neutral ranking). A panorama/full-bleed nomination
+ * always wins (those are deliberate editorial placements, not a photo-count
+ * accident); otherwise a 3+ photo/video memory is a single-memory grid, any
+ * other visual memory is a solo photo, and a text-only memory splits by
+ * length into a bare quote, a short illustrated story, or a long one. A
+ * memory with neither text nor a visual (shouldn't occur given eligibility
+ * rules) falls back to a flat text-page cost rather than costing nothing.
+ */
+export function classifyMemoryPageShape(m: MemoryPageShapeInput): MemoryPageShape {
+  if (m.isPanorama) return 'panorama';
+  if (m.isFullBleed) return 'full-bleed';
+  const visualCount = m.photoCount + m.videoCount;
+  if (visualCount >= 3) return 'photo-grid';
+  if (visualCount >= 1) return 'solo-photo';
+  if (m.hasText) {
+    if (m.textLength <= SHORT_TEXT_MAX_CHARS) return 'short-text';
+    return m.textLength > SHORT_STORY_MAX_CHARS ? 'long-story' : 'short-illustrated-story';
+  }
+  return 'text-page';
+}
+
+/** Named constant for tuning after visual review (owner round-3
+ * refinement, 2026-08-27): a `short-text` quote costs ~0.4 pages on
+ * average in its 3-6-up quote-collection grouping -- an approximation, not
+ * a precise per-group derivation (a group can be anywhere from 3 to 6). */
+export const SHORT_TEXT_PAGES_PER_ENTRY = 0.4;
+
+/**
+ * Honest page cost of a group of memories' shapes, per the owner's round-3
+ * yield table (2026-08-27, refined same day): `panorama` 2,
+ * `full-bleed`/`photo-grid`/`text-page`/`short-illustrated-story` 1,
+ * `long-story` 2 -- each 1:1 per memory (two `short-illustrated-story`
+ * memories naturally sum to 2 pages, i.e. share one 2-page spread, with no
+ * special pairing math needed). `solo-photo` memories PAIR two-per-page
+ * (rounded up), mirroring "paired memories ~1 page/2 memories".
+ * `short-text` quotes accumulate at `SHORT_TEXT_PAGES_PER_ENTRY` pages each
+ * or, ROUNDED UP as a group (a lone short-text quote still costs a full
+ * page, same floor logic as `solo-photo`). An empty list costs 0 pages;
+ * callers needing "a non-empty element still needs at least 1 page" apply
+ * `Math.max(1, ...)`.
+ */
+export function estimateElementPages(shapes: MemoryPageShape[]): number {
+  let pages = 0;
+  let soloPhotoCount = 0;
+  let shortTextCount = 0;
+  for (const shape of shapes) {
+    switch (shape) {
+      case 'panorama':
+        pages += 2;
+        break;
+      case 'full-bleed':
+      case 'photo-grid':
+      case 'text-page':
+      case 'short-illustrated-story':
+        pages += 1;
+        break;
+      case 'long-story':
+        pages += 2;
+        break;
+      case 'solo-photo':
+        soloPhotoCount += 1;
+        break;
+      case 'short-text':
+        shortTextCount += 1;
+        break;
+    }
+  }
+  pages += Math.ceil(soloPhotoCount / 2);
+  pages += Math.ceil(shortTextCount * SHORT_TEXT_PAGES_PER_ENTRY);
+  return pages;
+}
+
 export function computePageEstimate(elements: BudgetElement[], fixedPages = FIXED_PAGES): number {
   let total = fixedPages;
   for (const el of elements) {
-    total += el.kind === 'backbone' ? Math.ceil(el.memoryCount / 3) : el.memoryCount > 0 ? 2 : 0;
+    if (el.memoryCount <= 0) continue;
+    if (el.kind === 'backbone' || el.kind === 'themed') {
+      total += Math.max(1, estimateElementPages(el.shapes ?? []));
+    } else {
+      total += 2; // firsts / birthday -- flat, unchanged (out of scope for this change).
+    }
   }
   return total;
 }
 
-export type ThinningRank = 0 | 1 | 2 | 3 | 4;
-
-export interface ThinningFeatures {
-  hasMilestone: boolean;
-  hasText: boolean;
-  /** photoCount + videoCount > 0 (plan round-2 decision 2026-08-25: videos
-   * rank as visuals, same as photos, in backbone thinning -- QR pages make
-   * video/audio first-class in the printed book, so a caption-less video
-   * should not rank at the bottom with truly bare text-only memories). */
-  hasVisual: boolean;
-  hasEngagement: boolean;
+/**
+ * The number of the model's best-first `panoramaCandidates` that MUST be
+ * placed in the book, not merely nominated (owner round-3 decision,
+ * 2026-08-27: "1 guaranteed + 1 per ~20 pages" -- the same pacing the
+ * system prompt already tells the model to expect). `pageEstimate` is a
+ * PRELIMINARY estimate (before any budget thinning) so a bigger book earns
+ * more guaranteed panoramas without the guarantee count depending on its
+ * own outcome.
+ */
+export function computePlacedPanoramaGuaranteeCount(pageEstimate: number): number {
+  return 1 + Math.floor(Math.max(0, pageEstimate) / 20);
 }
 
 /**
- * Plan's drop-priority ladder (milestone > has_text+visual > visual+engagement
- * > visual > text-only), expressed as a "keep" rank: 0 is dropped first, 4
- * dropped last.
+ * Content-neutral ranking signals (owner round-3 decision, 2026-08-27,
+ * replacing the type-privileged ladder -- milestone > has_text+photo >
+ * visual+engagement > visual > text-only -- that caused a 77-illustration
+ * skew by letting one memory "type" trump everything else). Every memory
+ * now competes on the SAME signals regardless of type: editorial highlight/
+ * hero status, engagement, thematic (topic-cluster) relevance, text
+ * richness, and photo/video presence -- each contributes additively, none
+ * is an automatic trump. Structural protections (Firsts-section membership,
+ * birthday pins, guaranteed panorama placement) are handled OUTSIDE this
+ * score entirely, as pins that bypass ranking (see `selectBackboneMemories`).
  */
-export function rankMemoryForThinning(f: ThinningFeatures): ThinningRank {
-  if (f.hasMilestone) return 4;
-  if (f.hasText && f.hasVisual) return 3;
-  if (f.hasVisual && f.hasEngagement) return 2;
-  if (f.hasVisual) return 1;
-  return 0;
+export interface ThinningSignals {
+  /** Marked as a backbone highlight OR nominated as a hero candidate. */
+  isHighlighted: boolean;
+  /** A member of at least one accepted topic/people-pair/emotion candidate
+   * spread, even though single-placement or budget left it in the backbone
+   * -- evidence of thematic relevance. */
+  inThemedCluster: boolean;
+  engagementCount: number;
+  hasText: boolean;
+  textLength: number;
+  /** photoCount + videoCount > 0 (videos rank as visuals, same as photos). */
+  hasVisual: boolean;
+}
+
+const HIGHLIGHT_SCORE = 4;
+const THEMED_CLUSTER_SCORE = 2;
+const ENGAGEMENT_SCORE_CAP = 5;
+const VISUAL_SCORE = 2;
+const TEXT_BASE_SCORE = 1;
+/** ~80 chars of text earns 1 richness point, capped -- named constant for
+ * tuning after visual review. */
+const TEXT_RICHNESS_CHAR_DIVISOR = 80;
+const TEXT_RICHNESS_CAP = 3;
+
+export function computeThinningScore(s: ThinningSignals): number {
+  let score = 0;
+  if (s.isHighlighted) score += HIGHLIGHT_SCORE;
+  if (s.inThemedCluster) score += THEMED_CLUSTER_SCORE;
+  score += Math.min(s.engagementCount, ENGAGEMENT_SCORE_CAP);
+  if (s.hasVisual) score += VISUAL_SCORE;
+  if (s.hasText) {
+    score += TEXT_BASE_SCORE + Math.min(Math.floor(s.textLength / TEXT_RICHNESS_CHAR_DIVISOR), TEXT_RICHNESS_CAP);
+  }
+  return score;
 }
 
 export interface ThemedBudgetElement {
   id: string;
   memoryCount: number;
+  /** Member page shapes -- drives this spread's page cost (owner round-3
+   * decision, 2026-08-27) and its drop order (lowest page-cost first,
+   * unchanged in spirit from the prior round's "lowest image count first"). */
+  shapes: MemoryPageShape[];
 }
 
 export interface NonBackboneBudgetPlan {
@@ -1277,29 +1571,36 @@ export interface NonBackboneBudgetPlan {
   nonBackbonePages: number;
   keptThemedIds: string[];
   droppedThemedIds: string[];
-  /** What's left of `pageBudget` for the backbone, floored at 0. */
+  /** What's left of `pageCap` for the backbone, in PAGES -- a real page
+   * budget now (owner round-3 decision, 2026-08-27), consumed directly by
+   * `selectBackboneMemories`. */
   backboneCapacityPages: number;
+}
+
+function themedSpreadPages(t: ThemedBudgetElement): number {
+  return t.memoryCount > 0 ? Math.max(1, estimateElementPages(t.shapes)) : 0;
 }
 
 /**
  * Priority steps (a) and (b): `nonDroppablePages` (already computed by the
- * caller as `2 * (Firsts present ? 1 : 0) + 2 * birthdayCount`) is never
- * touched. Themed spreads are dropped smallest-member-count-first, one at a
- * time, ONLY while (a)+(b) together still exceed `pageBudget` -- i.e. the
- * backbone is never consulted here at all.
+ * caller as `2 * (Firsts present ? 1 : 0) + 2 * birthdayCount`, plus any
+ * themed spread protected by a guaranteed-panorama pin) is never touched.
+ * Themed spreads are dropped lowest-page-cost-first, one at a time, ONLY
+ * while (a)+(b) together still exceed `pageCap` -- i.e. the backbone is
+ * never consulted here at all.
  */
 export function planNonBackboneBudget(
   fixedPages: number,
   nonDroppablePages: number,
   themedSpreads: ThemedBudgetElement[],
-  pageBudget: number,
+  pageCap: number,
 ): NonBackboneBudgetPlan {
   const kept = [...themedSpreads];
   const droppedThemedIds: string[] = [];
-  const themedPages = () => kept.filter((t) => t.memoryCount > 0).length * 2;
+  const themedPages = () => kept.reduce((sum, t) => sum + themedSpreadPages(t), 0);
 
-  while (fixedPages + nonDroppablePages + themedPages() > pageBudget && kept.some((t) => t.memoryCount > 0)) {
-    kept.sort((a, b) => a.memoryCount - b.memoryCount || a.id.localeCompare(b.id));
+  while (fixedPages + nonDroppablePages + themedPages() > pageCap && kept.some((t) => t.memoryCount > 0)) {
+    kept.sort((a, b) => themedSpreadPages(a) - themedSpreadPages(b) || a.memoryCount - b.memoryCount || a.id.localeCompare(b.id));
     const dropIndex = kept.findIndex((t) => t.memoryCount > 0);
     const [dropped] = kept.splice(dropIndex, 1);
     droppedThemedIds.push(dropped.id);
@@ -1310,44 +1611,86 @@ export function planNonBackboneBudget(
     nonBackbonePages,
     keptThemedIds: kept.filter((t) => t.memoryCount > 0).map((t) => t.id),
     droppedThemedIds,
-    backboneCapacityPages: Math.max(0, pageBudget - nonBackbonePages),
+    backboneCapacityPages: Math.max(0, pageCap - nonBackbonePages),
   };
 }
 
 export interface BackboneCandidate {
   id: string;
   date: string;
-  rank: ThinningRank;
+  score: number;
+  shape: MemoryPageShape;
+  /** Same `printable` predicate `buildOutline` feeds into the REAL final
+   * `buildBackboneSegments` call over the survivors (owner round-4
+   * root-cause fix, 2026-08-27) -- needed here so the tightening loop's own
+   * segmentation matches that final one exactly, month-merge behavior
+   * included. */
+  printable: boolean;
 }
 
 /**
- * Priority step (c): keeps the highest-ranked candidates that fit within
- * `capacityPages` (3 memories/page), highest rank first; ties break on date
- * (earlier first, so the chronological story stays intact) then id, for
- * full determinism. Returns the KEPT ids -- the complement is what page
- * budget excludes from the book entirely.
+ * The backbone's honest page cost SEGMENTED exactly like the final book
+ * (owner round-4 root-cause fix, 2026-08-27): re-runs `buildBackboneSegments`
+ * over whatever candidates are still kept, then sums each segment's own
+ * `Math.max(1, estimateElementPages(...))` -- the SAME per-element floor
+ * `computePageEstimate` applies to a 'backbone' element. This replaces a
+ * prior flat estimate that ran `estimateElementPages` over the WHOLE
+ * backbone as one ungrouped list, letting solo-photos in unrelated months
+ * pair together and charging only ONE floor for the entire backbone instead
+ * of one per segment -- a live regeneration hit pageEstimate 128 against a
+ * pageCap of 122 because this tightening loop had already declared itself
+ * "under budget" using that undercounted flat number. Segmenting here is
+ * what makes the loop's own notion of "does it fit" match what
+ * `computePageEstimate` will compute once selection is done.
+ */
+function backboneSegmentedPages(candidates: BackboneCandidate[]): number {
+  if (candidates.length === 0) return 0;
+  const shapeById = new Map(candidates.map((c) => [c.id, c.shape]));
+  const segments = buildBackboneSegments(
+    candidates.map((c) => ({ id: c.id, date: c.date, printable: c.printable })),
+  );
+  return segments.reduce(
+    (sum, s) => sum + Math.max(1, estimateElementPages(s.memoryIds.map((id) => shapeById.get(id)!))),
+    0,
+  );
+}
+
+/**
+ * Priority step (c) (owner round-3 decision, 2026-08-27): starts with EVERY
+ * candidate kept -- a content-poor scope naturally yields a shorter book,
+ * never padded -- and, only while the honest page-yield estimate
+ * (`backboneSegmentedPages`, segmented exactly like the final book -- owner
+ * round-4 root-cause fix, 2026-08-27) exceeds `pageBudget`, drops the single
+ * LOWEST-SCORED unpinned candidate at a time (ties: latest date first, then
+ * id, for full determinism) until it fits. Replaces the prior round's
+ * "text is free, only visual competes for an image budget" rule -- ALL
+ * memories now compete on the same content-neutral score.
  *
- * `pinnedIds` (owner round-3 note, 2026-08-25: birthday-beat merge)
- * bypasses rank-based thinning entirely -- every pinned candidate present
- * in `candidates` is always kept, regardless of rank -- but a pinned
- * memory still COUNTS toward `capacityPages`, reducing how many
- * rank-selected (unpinned) memories fit in the remaining room.
+ * `pinnedIds` (birthday-beat merges, and now guaranteed panorama
+ * placements -- owner round-3 decision, 2026-08-27) bypass ranking
+ * entirely: a pinned candidate is never dropped, though its page cost still
+ * counts toward `pageBudget`. If every remaining candidate is pinned and
+ * the budget is still exceeded, the loop stops -- pins always win, even
+ * over the cap (the caller records this as an explicit integrity note
+ * rather than silently persisting a pageEstimate above pageCap).
  */
 export function selectBackboneMemories(
   candidates: BackboneCandidate[],
-  capacityPages: number,
+  pageBudget: number,
   pinnedIds: ReadonlySet<string> = new Set(),
 ): string[] {
-  const capacity = Math.max(0, capacityPages) * 3;
-  const pinned = candidates.filter((c) => pinnedIds.has(c.id));
-  const unpinned = candidates.filter((c) => !pinnedIds.has(c.id));
+  let kept = [...candidates];
 
-  const sortedUnpinned = [...unpinned].sort(
-    (a, b) => b.rank - a.rank || a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
-  );
-  const remainingCapacity = Math.max(0, capacity - pinned.length);
+  while (backboneSegmentedPages(kept) > pageBudget) {
+    const droppable = kept
+      .filter((c) => !pinnedIds.has(c.id))
+      .sort((a, b) => a.score - b.score || b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+    if (droppable.length === 0) break; // Only pinned candidates remain -- pins always win.
+    const dropId = droppable[0].id;
+    kept = kept.filter((c) => c.id !== dropId);
+  }
 
-  return [...pinned.map((c) => c.id), ...sortedUnpinned.slice(0, remainingCapacity).map((c) => c.id)];
+  return kept.map((c) => c.id);
 }
 
 /**
@@ -1530,6 +1873,20 @@ export interface ReadingOrderSection {
    * title in quotation marks with a "quoted from <date>" attribution. */
   titleMode?: SpreadTitleMode;
   titleSourceMemoryId?: string | null;
+  /** Only set for `kind: 'themed'` sections (design handoff decision,
+   * 2026-08-27): a short thematic eyebrow line (antetítulo) above the
+   * title, rendered in small caps by the layout. */
+  kicker?: string | null;
+  /** Only set for `kind: 'backbone'` sections (design handoff decision,
+   * 2026-08-27): memory ids within this segment marked as a highlight --
+   * the design gates full-bleed pages on this. */
+  highlights?: string[];
+  /** Only set for the `kind: 'firsts'` section (owner round-3 decision,
+   * 2026-08-27): one AI-drafted warm second-person rephrasing per milestone
+   * row, persisted here so it lands in outline.json alongside the rest of
+   * this section. Connective text, editable downstream -- never alters the
+   * parent's own memory caption. */
+  firstsWarmNames?: ParsedFirstsWarmName[];
 }
 
 export interface ReadingOrderThemedSpreadInput {
@@ -1543,6 +1900,7 @@ export interface ReadingOrderThemedSpreadInput {
    * `remapInsertIndex` and `paceThemedSpreads`). */
   insertAfterFinalSegmentIndex: number;
   rationale: Record<string, string>;
+  kicker: string | null;
 }
 
 export interface ReadingOrderInput {
@@ -1552,7 +1910,7 @@ export interface ReadingOrderInput {
    * reframed as a year wrap-up -- "big and small victories this year".
    * `title` is the AI's journal-language draft of that framing; falls back
    * to `FIRSTS_DEFAULT_TITLE` when the model didn't supply one. */
-  firsts: { present: boolean; title: string | null; memoryIds: string[] } | null;
+  firsts: { present: boolean; title: string | null; memoryIds: string[]; warmNames?: ParsedFirstsWarmName[] } | null;
   birthdaySpreads: Array<{ ageTurned: number; memoryIds: string[] }>;
   themedSpreads: ReadingOrderThemedSpreadInput[];
   backboneRationale: Record<string, string>;
@@ -1561,6 +1919,14 @@ export interface ReadingOrderInput {
    * instead of the plain month label; the plain label survives as a
    * subtitle). Segments not present here render their plain `label`. */
   specialSegmentTitles?: Record<string, string>;
+  /** Every memory id marked as a highlight in ANY backbone segment (design
+   * handoff decision, 2026-08-27), already validated to belong to its
+   * claimed original segment. Each final segment's `highlights` is the
+   * intersection of this set with that segment's own `memoryIds` -- so a
+   * highlighted memory that got excluded by budget, or landed in a
+   * different final segment after re-segmentation, is still handled
+   * correctly with no separate bridging logic. */
+  highlightedMemoryIds?: ReadonlySet<string>;
 }
 
 /**
@@ -1614,9 +1980,12 @@ export function buildReadingOrder(input: ReadingOrderInput): ReadingOrderSection
         spreadType: spread.candidateKind,
         titleMode: spread.titleMode,
         titleSourceMemoryId: spread.titleSourceMemoryId,
+        kicker: spread.kicker,
       });
     }
   };
+
+  const highlightedMemoryIds = input.highlightedMemoryIds ?? new Set<string>();
 
   pushThemedAt(-1);
   input.finalBackboneSegments.forEach((segment, index) => {
@@ -1632,6 +2001,7 @@ export function buildReadingOrder(input: ReadingOrderInput): ReadingOrderSection
       subtitle: specialTitle ? segment.label : undefined,
       memoryIds: segment.memoryIds,
       rationale,
+      highlights: segment.memoryIds.filter((id) => highlightedMemoryIds.has(id)),
     });
     pushThemedAt(index);
   });
@@ -1646,6 +2016,7 @@ export function buildReadingOrder(input: ReadingOrderInput): ReadingOrderSection
       title: input.firsts.title?.trim() || FIRSTS_DEFAULT_TITLE,
       memoryIds: input.firsts.memoryIds,
       rationale: {},
+      firstsWarmNames: (input.firsts.warmNames ?? []).filter((w) => input.firsts!.memoryIds.includes(w.memoryId)),
     });
   }
 
@@ -1749,6 +2120,8 @@ export function buildOutlineSystemPrompt(): string {
     '- Never write "missing" or "behind" language about development -- celebrate what exists only.',
     '- If a Firsts spread is present (listed below), draft its title around the framing "big and small victories this year" -- in the family\'s own journal language (the same way you draft every other spread title), not a literal translation of that English phrase.',
     '',
+    'FIRSTS WARM NAMES: for EACH row listed under FIRSTS MILESTONES below (if any), write a `warm_name` -- the milestone rephrased as a warm second-person sentence, in the family\'s journal language, addressed to the child. Examples: "Monta bicicleta sin pedales" -> "Aprendiste a montar bicicleta sin pedales"; "Primer corte de pelo" -> "Tuviste tu primer corte de pelo". This is connective text (editable downstream) and must NEVER alter the parent\'s own memory caption -- it stands alongside it, not instead of it. Echo back the exact `memory_id` and `milestone_id` from that row so code can match your `warm_name` to the right entry.',
+    '',
     'RELATIONSHIP WORDS (aunt, uncle, grandma, "nonno", "abuelo", "zio", "mami", etc.) may ONLY come from the TAGGED PEOPLE listed on each memory below (their actual names/nicknames as the family wrote them -- reasoning from a name like "Nonna Rosa" or "Tio Mike" is fine, that is user-authored evidence). NEVER infer a relationship from what people look like in a photo, and NEVER infer one just because a topic tag like `extended-family` or `grandparents` is present -- a real failure titled a cluster of grandparent photos "Entre tias, tios y primos" (aunts, uncles, and cousins) purely from the topic tag, when the tagged people did not support that specific relationship mix. When you are not confident a specific relationship word is supported by the tagged people, use a warm generic title instead (spirit: "Look who came to see you") rather than guessing who someone is.',
     '',
     'SPREAD TITLES HAVE TWO MODES -- declare which one you used via `title_mode`:',
@@ -1765,6 +2138,16 @@ export function buildOutlineSystemPrompt(): string {
     '',
     'SPECIAL BACKBONE SEGMENT TITLES: some backbone segments below are flagged as the child\'s BIRTH month or a BIRTHDAY month. For ONLY those flagged segments (never any other segment), draft a special title in the family\'s journal language -- birth in the spirit of "welcome to the world", birthday in the spirit of "the month you turned N". Return these in `segment_titles`, keyed by the flagged segment\'s id. Do not add an entry for a segment that was not flagged.',
     '',
+    'KICKER (antetítulo): for a THEMED spread ONLY (never for months/Firsts/birthday), you may add a `kicker` -- a short thematic eyebrow line that sits above the title (the design renders it in small caps), <=6 words, journal language. It is connective text, editable later, never parent text. Examples: "lo que nos hiciste reír" above the title "Ay Dios mío"; "lo que más te gustó hacer" above the title "Construir y jugar". Optional -- omit it rather than force one.',
+    '',
+    'HERO CANDIDATES: across the WHOLE book (any eligible memory, not just ones you selected into a spread), pick up to 5 `hero_candidates` -- the strongest single images (not videos) of the year, worth a full-bleed page or the cover. Each memory\'s row shows its first photo\'s orientation (`wide`, `tall`, or `square`, omitted when unknown) -- prefer `wide` or `square` for a full-bleed page; a `tall` photo makes a poor full-page bleed on a square page, but it is not forbidden if it is genuinely the strongest image.',
+    '',
+    'PANORAMA CANDIDATES: across the WHOLE book, nominate EVERY qualifying memory as a `panorama_candidate` -- there is no cap, so do not ration these. NOMINATE GENEROUSLY: you cannot see pixel dimensions, only orientation, so under-nomination is the real failure mode -- a real incident had the model nominating only 1-2 candidates and losing every panorama to a downstream resolution check. Aim for 5-10 candidates whenever the archive plausibly has that many wide/scenic memories; over-nomination costs nothing (a resolution filter downstream silently drops anything too small to print at 2:1 -- that is its job, not yours), but under-nomination kills a panoramic spread outright. A panorama spans TWO PAGES at roughly 2:1 -- a `tall` or `square` photo can NEVER work here, no matter how scenic; a candidate MUST show `wide` in its metadata row (and the wider the better -- prefer a called-out ratio like "wide 1.7:1" over a plain "wide"). Beyond orientation, qualifying also means scenic: a landscape, a vista, an open space, with no faces near the center of the frame -- judge that part from the memory\'s topics/labels/description context (you are not shown the actual image). Order the list BEST-FIRST (widest and most scenic first) -- the renderer uses roughly 1 spread per ~20 pages, picking down your list in order, so ranking matters more than count. Every book should open up into at least one panoramic breath WHEN a genuinely wide, scenic memory exists -- but if none of the `wide` memories are actually scenic (or no memory is `wide` at all), returning an EMPTY list is the correct, expected answer; never nominate a tall or square photo just to avoid an empty list. A memory may be both a hero candidate and a panorama candidate. These are human-reviewed downstream, so nominate confidently and completely rather than leaving qualifying ones out of caution.',
+    '',
+    'DEDICATION AND BACK COVER LINE: two more pieces of connective text, same class as the kicker/editorial note (journal language, editable downstream, never parent text).',
+    '- `dedication`: a short dedication-page body, 2-3 sentences, referencing the scope\'s span and spirit. Owner round-3 rule: do NOT open with a salutation like "Para <name>," -- the printed page\'s own furniture already prints that greeting, so your text is only the body that follows it; opening with one duplicates it on the page. Canvas example (do not reuse verbatim, write fresh for this book): "Este año aprendiste a decir casi todo. Aquí está guardado lo que dijiste, lo que hiciste y lo que nos hiciste sentir, del 23 de octubre de 2024 al 22 de octubre de 2025."',
+    '- `back_cover_line`: one short colophon line for the back cover. Canvas spirit (do not reuse verbatim): "Este libro recoge un año de recuerdos, escrito día a día."',
+    '',
     'Return STRICT JSON with this shape:',
     '{',
     '  "spreads": [',
@@ -1774,6 +2157,7 @@ export function buildOutlineSystemPrompt(): string {
     '      "title": "<short warm page title>",',
     '      "title_mode": "quote" | "descriptive",',
     '      "title_source_memory_id": "<required when title_mode is quote -- must be one of this spread\'s own memory_ids -- omit/null for descriptive>",',
+    '      "kicker": "<optional, <=6 words, journal language -- see KICKER above>",',
     '      "memory_ids": ["<3 to 6 memory ids from that candidate\'s member list -- omit any that would break the title-fits-all rule>"],',
     '      "rationale": { "<memory_id>": "<internal, evidence-based, <=12 words -- see RATIONALES above>" }',
     '    }',
@@ -1781,14 +2165,37 @@ export function buildOutlineSystemPrompt(): string {
     '  "backbone_highlights": [',
     '    { "segment_id": "<a backbone segment id>", "memory_ids": ["<ids in that segment worth a full page>"], "rationale": { "<memory_id>": "<internal, evidence-based, <=12 words>" } }',
     '  ],',
+    '  "hero_candidates": ["<up to 5 memory ids -- see HERO CANDIDATES above>"],',
+    '  "panorama_candidates": ["<ALL qualifying memory ids, best-first, no cap -- see PANORAMA CANDIDATES above -- at least 1 whenever plausible>"],',
     '  "segment_titles": { "<flagged segment id>": "<special birth/birthday title in journal language -- see SPECIAL BACKBONE SEGMENT TITLES above>" },',
     '  "firsts_title": "<only if a Firsts spread is listed below -- its draft title, journal-language \'big and small victories this year\' framing>",',
-    '  "editorial_note": "<2-3 sentences on the arc of this book -- what story it tells>"',
+    '  "firsts_milestones": [',
+    '    { "memory_id": "<a memory id from a FIRSTS MILESTONES row>", "milestone_id": "<that row\'s milestone_id, echoed back exactly>", "warm_name": "<warm second-person rephrasing -- see FIRSTS WARM NAMES above>" }',
+    '  ],',
+    '  "dedication": "<2-3 sentence dedication-page body, NO salutation -- see DEDICATION AND BACK COVER LINE above>",',
+    '  "back_cover_line": "<one short colophon line -- see DEDICATION AND BACK COVER LINE above>",',
+    '  "editorial_note": "<INTERNAL ONLY, never printed in the book -- 2-3 sentences on the arc of this book for the human reviewer>"',
     '}',
     '',
     'Omit a candidate entirely if it is not worth including. Only reference memory ids and segment/candidate ids that were given to you.',
   ].join('\n');
 }
+
+/** Minimum non-birthday milestone memories required for the Firsts section
+ * to exist at all (owner round-4 decision, 2026-08-27: a live regeneration
+ * had the owner dismiss a wrong milestone match, leaving exactly ONE real
+ * milestone behind -- the OLD >=2 gate then dropped the whole Firsts
+ * section, silently losing that one genuine milestone from the book, AND
+ * left the model guessing a `milestone_id` from the bare name it saw on the
+ * backbone memory line (since the FIRSTS MILESTONES block -- the only place
+ * real `milestone_id` slugs are given out -- was withheld below the same
+ * threshold), producing an `unknown_firsts_milestone` violation for a
+ * milestone that was perfectly real. A single genuine victory still earns
+ * the closing section, so this is 1: every location that gates on "is
+ * Firsts present" (the prompt announcement, the FIRSTS MILESTONES block,
+ * and the placement decision in `buildOutline`) must read this SAME
+ * constant, never a hardcoded number, so they can never drift apart again. */
+const FIRSTS_MIN_MILESTONES = 1;
 
 export interface OutlineSkeletonSummaryInput {
   childName: string;
@@ -1817,7 +2224,7 @@ export function buildOutlineUserPrompt(
   );
   lines.push(`Through-the-years portraits in scope: ${skeleton.throughTheYearsCount}`);
   lines.push(
-    `Firsts (non-birthday explicit milestones) in scope: ${skeleton.firstsCount}${skeleton.firstsCount >= 2 ? ' -- this spread CLOSES the book, draft its title now' : ''}`,
+    `Firsts (non-birthday explicit milestones) in scope: ${skeleton.firstsCount}${skeleton.firstsCount >= FIRSTS_MIN_MILESTONES ? ' -- this spread CLOSES the book, draft its title now' : ''}`,
   );
   if (skeleton.birthdaySpreads.length > 0) {
     lines.push(
@@ -1825,6 +2232,24 @@ export function buildOutlineUserPrompt(
     );
   }
   lines.push('');
+
+  // Owner round-3 decision, 2026-08-27 (threshold lowered to 1 in round 4):
+  // only listed once Firsts itself is present (same FIRSTS_MIN_MILESTONES
+  // threshold as the title-drafting instruction above) -- this is the ONLY
+  // place the model is given a real `milestone_id` slug, so withholding it
+  // below the threshold is what left the model guessing a milestone NAME as
+  // the id in the round-4 incident; below the threshold there is no Firsts
+  // section at all, so there is nothing to reference.
+  if (skeleton.firstsCount >= FIRSTS_MIN_MILESTONES) {
+    lines.push('FIRSTS MILESTONES (write a warm_name for EACH row -- see FIRSTS WARM NAMES above):');
+    const sortedFeatures = [...features.values()].sort((a, b) => a.date.localeCompare(b.date));
+    for (const feature of sortedFeatures) {
+      for (const milestone of feature.milestones) {
+        lines.push(`- memory_id="${feature.id}" milestone_id="${milestone.milestoneId}" ("${milestone.name}")`);
+      }
+    }
+    lines.push('');
+  }
 
   lines.push('BACKBONE SEGMENTS (chronological, in order -- index is what insert_after_segment_index refers to):');
   const specialBySegmentId = new Map(skeleton.specialSegments.map((f) => [f.segmentId, f]));
@@ -1850,13 +2275,15 @@ export function buildOutlineUserPrompt(
   }
   lines.push('');
 
-  lines.push('MEMORIES (id | date | topics | emotion | hasText | excerpt | photos/videos | engagement | milestones | tagged people -- the ONLY sanctioned source of relationship words, see RELATIONSHIP WORDS above):');
+  lines.push('MEMORIES (id | date | topics | emotion | hasText | excerpt | photos/videos/orientation | engagement | milestones | tagged people -- the ONLY sanctioned source of relationship words, see RELATIONSHIP WORDS above):');
   for (const feature of [...features.values()].sort((a, b) => a.date.localeCompare(b.date))) {
     const milestoneDesc = feature.milestones.map((m) => m.name).join(';') || '-';
     const excerpt = feature.excerpt ? feature.excerpt.replace(/\n/g, ' ') : '(no text)';
     const peopleDesc = feature.taggedMembers.map((m) => `${m.firstName}(${m.personType})`).join(',') || '-';
+    const orientationMarker = formatOrientationMarker(feature.photoOrientation);
+    const assetDesc = `p${feature.photoCount}/v${feature.videoCount}${orientationMarker ? `/${orientationMarker}` : ''}`;
     lines.push(
-      `${feature.id} | ${feature.date} | [${feature.topics.join(',')}] | ${feature.emotion ?? '-'} | ${feature.hasText ? 'y' : 'n'} | "${excerpt}" | p${feature.photoCount}/v${feature.videoCount} | eng${feature.engagementCount} | ${milestoneDesc} | ${peopleDesc}`,
+      `${feature.id} | ${feature.date} | [${feature.topics.join(',')}] | ${feature.emotion ?? '-'} | ${feature.hasText ? 'y' : 'n'} | "${excerpt}" | ${assetDesc} | eng${feature.engagementCount} | ${milestoneDesc} | ${peopleDesc}`,
     );
   }
 
@@ -1965,6 +2392,13 @@ export interface ParsedSpreadSelection {
   titleSourceMemoryId: string | null;
   memoryIds: string[];
   rationale: Record<string, string>;
+  /** Design handoff decision (2026-08-27): a short thematic eyebrow line
+   * (antetítulo) above the title, journal language, <=6 words -- design
+   * renders it in small caps (PJS 700 6.5pt). Themed spreads only (never
+   * requested for months/firsts/birthday). Connective text, editable
+   * later, never parent text. Null when the model omitted it -- a kicker
+   * is optional, not every spread needs one. */
+  kicker: string | null;
 }
 
 export interface ParsedBackboneHighlight {
@@ -1986,7 +2420,54 @@ export interface ParsedOutlineResponse {
    * entries whose key was actually flagged are ever used by the caller --
    * see `buildSpecialSegmentTitlesByMonth`. */
   segmentTitles: Record<string, string>;
-  editorialNote: string;
+  /** Design handoff decision (2026-08-27): up to 5 book-wide candidates for
+   * a full-bleed page or the cover -- the strongest single images of the
+   * year. Not scoped to any spread/segment; validated only for existence
+   * in scope (see `parseOutlineResponse`). */
+  heroCandidates: string[];
+  /** Owner decision, 2026-08-27 ("Density & quality-first"), amended
+   * 2026-08-27: EVERY qualifying book-wide candidate for a full
+   * double-page panorama spread -- wide, scenic, no faces near center --
+   * uncapped, ordered best-first by the model (the renderer takes 1 + 1
+   * per ~20 pages down this list). May overlap `heroCandidates` (a memory
+   * can be both). Validated for existence AND for being `wide`-orientation
+   * (owner root-cause fix, 2026-08-27 -- a tall/square photo can never
+   * span a 2:1 panorama; see `parseOutlineResponse`); order is preserved
+   * as given, never re-sorted. */
+  panoramaCandidates: string[];
+  /** Owner decision, 2026-08-27: a 2-3 sentence dedication-page body
+   * addressed to the child, journal language, connective text (same class
+   * as `kicker`/`internalEditorialNote`). Owner round-3 amendment
+   * (2026-08-27): the body must NOT open with a salutation ("Para X,") --
+   * the printed page's own furniture supplies that greeting; a model that
+   * still emits one duplicates it on the page. Null when the model didn't
+   * supply one. */
+  dedication: string | null;
+  /** Owner decision, 2026-08-27: a one-line back-cover colophon, journal
+   * language, connective text. Null when the model didn't supply one.
+   * Spine text and the closing page's copy are deliberately NOT AI fields
+   * (deterministic furniture) -- never add them here. */
+  backCoverLine: string | null;
+  /** Owner round-3 decision, 2026-08-27: renamed from `editorialNote` and
+   * documented as INTERNAL ONLY -- a curator's note for human review of the
+   * book's arc, never printed on any page (it leaked into a closing page
+   * once under the old name). Every renderer must treat this as
+   * review-artifact-only, same as a spread's `rationale`. */
+  internalEditorialNote: string;
+  /** Owner round-3 decision, 2026-08-27: one AI-drafted warm second-person
+   * rephrasing per milestone row in scope (e.g. "Monta bicicleta sin
+   * pedales" -> "Aprendiste a montar bicicleta sin pedales"), journal
+   * language -- connective text, editable downstream, and NEVER alters the
+   * parent's own memory caption. Persisted per Firsts entry in outline.json
+   * via the `firsts` reading-order section. Empty when Firsts is absent
+   * from this book. */
+  firstsWarmNames: ParsedFirstsWarmName[];
+}
+
+export interface ParsedFirstsWarmName {
+  memoryId: string;
+  milestoneId: string;
+  warmName: string;
 }
 
 export interface OutlineIntegrityViolation {
@@ -2016,6 +2497,15 @@ export function parseOutlineResponse(
   validMemoryIds: Set<string>,
   candidateMembersById: Map<string, Set<string>>,
   candidateDefaultTitleById: Map<string, string>,
+  segmentMembersById: Map<string, Set<string>>,
+  /** owner root-cause fix, 2026-08-27: panorama candidates must be `wide`
+   * -- a tall/square/unknown-orientation photo can never span a 2:1
+   * double-page panorama, no matter how scenic. */
+  wideOrientationMemoryIds: Set<string> = new Set(),
+  /** owner round-3 decision, 2026-08-27: `"<memoryId>::<milestoneId>"` keys
+   * for every real (memory, milestone) pair in scope -- a `firsts_milestones`
+   * entry not matching one of these is dropped and recorded, never trusted. */
+  validMilestoneKeys: Set<string> = new Set(),
 ): { response: ParsedOutlineResponse; violations: OutlineIntegrityViolation[] } {
   const violations: OutlineIntegrityViolation[] = [];
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -2092,6 +2582,8 @@ export function parseOutlineResponse(
       }
     }
 
+    const kicker = typeof o.kicker === 'string' && o.kicker.trim() ? o.kicker.trim() : null;
+
     spreads.push({
       candidateId,
       candidateKind,
@@ -2101,6 +2593,7 @@ export function parseOutlineResponse(
       titleSourceMemoryId,
       memoryIds,
       rationale,
+      kicker,
     });
   }
 
@@ -2119,11 +2612,16 @@ export function parseOutlineResponse(
       continue;
     }
 
+    const segmentMemberSet = segmentMembersById.get(segmentId) ?? new Set<string>();
     const rawIds = Array.isArray(o.memory_ids) ? o.memory_ids : [];
     const memoryIds: string[] = [];
     for (const id of rawIds) {
       if (typeof id !== 'string' || !validMemoryIds.has(id)) {
         violations.push({ kind: 'unknown_memory_id', detail: previewJson(id) });
+        continue;
+      }
+      if (!segmentMemberSet.has(id)) {
+        violations.push({ kind: 'highlight_not_in_segment', detail: `${id} not a member of ${segmentId}` });
         continue;
       }
       if (memoryIds.includes(id)) {
@@ -2143,8 +2641,40 @@ export function parseOutlineResponse(
     backboneHighlights.push({ segmentId, memoryIds, rationale });
   }
 
-  const editorialNote = typeof obj.editorial_note === 'string' ? obj.editorial_note : '';
+  const internalEditorialNote = typeof obj.editorial_note === 'string' ? obj.editorial_note : '';
   const firstsTitle = typeof obj.firsts_title === 'string' && obj.firsts_title.trim() ? obj.firsts_title.trim() : null;
+
+  // Owner round-3 decision, 2026-08-27: one warm second-person rephrasing
+  // per (memory, milestone) pair -- never trust the model's own memory_id/
+  // milestone_id echo without checking it against a REAL milestone row.
+  const firstsMilestonesRaw = Array.isArray(obj.firsts_milestones) ? obj.firsts_milestones : [];
+  const firstsWarmNames: ParsedFirstsWarmName[] = [];
+  const seenFirstsMilestoneKeys = new Set<string>();
+  for (const item of firstsMilestonesRaw) {
+    if (!item || typeof item !== 'object') {
+      violations.push({ kind: 'malformed_firsts_milestone', detail: previewJson(item) });
+      continue;
+    }
+    const o = item as Record<string, unknown>;
+    const memoryId = typeof o.memory_id === 'string' ? o.memory_id : null;
+    const milestoneId = typeof o.milestone_id === 'string' ? o.milestone_id : null;
+    const key = `${memoryId}::${milestoneId}`;
+    if (!memoryId || !milestoneId || !validMilestoneKeys.has(key)) {
+      violations.push({ kind: 'unknown_firsts_milestone', detail: key });
+      continue;
+    }
+    const warmName = typeof o.warm_name === 'string' && o.warm_name.trim() ? o.warm_name.trim() : null;
+    if (!warmName) {
+      violations.push({ kind: 'missing_firsts_warm_name', detail: key });
+      continue;
+    }
+    if (seenFirstsMilestoneKeys.has(key)) {
+      violations.push({ kind: 'duplicate_firsts_milestone', detail: key });
+      continue;
+    }
+    seenFirstsMilestoneKeys.add(key);
+    firstsWarmNames.push({ memoryId, milestoneId, warmName });
+  }
 
   const segmentTitles: Record<string, string> = {};
   if (obj.segment_titles && typeof obj.segment_titles === 'object') {
@@ -2157,7 +2687,88 @@ export function parseOutlineResponse(
     }
   }
 
-  return { response: { spreads, backboneHighlights, firstsTitle, segmentTitles, editorialNote }, violations };
+  const heroCandidates = parseCappedIdList(
+    obj.hero_candidates,
+    validMemoryIds,
+    MAX_HERO_CANDIDATES,
+    { unknown: 'unknown_hero_candidate', tooMany: 'too_many_hero_candidates' },
+    violations,
+  );
+
+  // Owner amendment, 2026-08-27: panorama nomination is UNCAPPED (`cap:
+  // null`) -- the renderer paces itself off the best-first ordering, so
+  // nomination should never be the bottleneck. Order is preserved exactly
+  // as the model returned it (never re-sorted).
+  const panoramaCandidates = parseCappedIdList(
+    obj.panorama_candidates,
+    validMemoryIds,
+    null,
+    { unknown: 'unknown_panorama_candidate' },
+    violations,
+    { check: (id) => wideOrientationMemoryIds.has(id), failKind: 'panorama_candidate_not_wide' },
+  );
+
+  const dedication = typeof obj.dedication === 'string' && obj.dedication.trim() ? obj.dedication.trim() : null;
+  const backCoverLine = typeof obj.back_cover_line === 'string' && obj.back_cover_line.trim() ? obj.back_cover_line.trim() : null;
+
+  return {
+    response: {
+      spreads,
+      backboneHighlights,
+      firstsTitle,
+      segmentTitles,
+      heroCandidates,
+      panoramaCandidates,
+      dedication,
+      backCoverLine,
+      internalEditorialNote,
+      firstsWarmNames,
+    },
+    violations,
+  };
+}
+
+const MAX_HERO_CANDIDATES = 5;
+
+/**
+ * Shared parsing for the book-wide memory-id lists (`hero_candidates`,
+ * `panorama_candidates`): validates existence, an optional extra predicate
+ * (e.g. "must be photo-bearing"), dedupes (preserving first-seen order --
+ * load-bearing for panorama's best-first contract), and records a
+ * violation for anything dropped -- never silently. `cap: null` means
+ * uncapped (no "too many" check, nothing sliced off); a numeric `cap`
+ * requires `kinds.tooMany` and truncates + records a violation if exceeded.
+ */
+function parseCappedIdList(
+  raw: unknown,
+  validIds: Set<string>,
+  cap: number | null,
+  kinds: { unknown: string; tooMany?: string },
+  violations: OutlineIntegrityViolation[],
+  extra?: { check: (id: string) => boolean; failKind: string },
+): string[] {
+  const out: string[] = [];
+  const rawList = Array.isArray(raw) ? raw : [];
+  for (const id of rawList) {
+    if (typeof id !== 'string' || !validIds.has(id)) {
+      violations.push({ kind: kinds.unknown, detail: previewJson(id) });
+      continue;
+    }
+    if (extra && !extra.check(id)) {
+      violations.push({ kind: extra.failKind, detail: id });
+      continue;
+    }
+    if (out.includes(id)) {
+      violations.push({ kind: 'duplicate_memory_id', detail: id });
+      continue;
+    }
+    out.push(id);
+  }
+  if (cap === null) return out;
+  if (out.length > cap) {
+    violations.push({ kind: kinds.tooMany!, detail: `${out.length} > ${cap}` });
+  }
+  return out.slice(0, cap);
 }
 
 // ── Quote-title verification (owner amendment, round-2, 2026-08-25: "never
@@ -2230,7 +2841,13 @@ function previewJson(value: unknown): string {
 // ── Main ─────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const options = parseArgs(Deno.args);
+  let options: CliOptions;
+  try {
+    options = parseArgs(Deno.args);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    Deno.exit(1);
+  }
   const userEmail = Deno.env.get('EVAL_USER_EMAIL') ?? 'eduardoyi@gmail.com';
   const apiKey = Deno.env.get('OPENAI_API_KEY') ?? null;
 
@@ -2246,9 +2863,9 @@ async function main(): Promise<void> {
     Deno.exit(1);
   }
 
-  if (options.pageBudget > HARD_PAGE_CAP) {
-    console.warn(`--page-budget ${options.pageBudget} exceeds the hard physical cap of ${HARD_PAGE_CAP}; clamping.`);
-    options.pageBudget = HARD_PAGE_CAP;
+  if (options.pageCap > HARD_PAGE_CAP) {
+    console.warn(`--page-cap ${options.pageCap} exceeds the layflat hard physical limit of ${HARD_PAGE_CAP}; clamping.`);
+    options.pageCap = HARD_PAGE_CAP;
   }
 
   const runId = new Date().toISOString().replace(/[:.]/g, '-');
@@ -2273,7 +2890,27 @@ async function main(): Promise<void> {
   const window = computeScopeWindow(scope, child.dateOfBirth);
   console.log(`Child: ${child.id} -- scope: ${scope.type} -- window: ${window.start} to ${scopeWindowLastInclusiveDay(window)}`);
 
-  const familyMemories = await loadMemoriesInWindow(supabase, child.familyId, window);
+  let familyMemories = await loadMemoriesInWindow(supabase, child.familyId, window);
+
+  // Owner round-3 decision, 2026-08-27: `--exclude-memory-id` removes ids
+  // from ELIGIBILITY entirely, before any candidate/backbone/Firsts
+  // computation runs -- so an excluded id can never surface anywhere
+  // downstream (an element, a candidate spread, a highlight, Firsts), not
+  // merely get dropped for budget later.
+  const cliExcludeIdSet = new Set(options.excludeMemoryIds);
+  const cliExcludedMemoryIds: Array<{ memoryId: string; elementId: string; reason: string }> = [];
+  if (cliExcludeIdSet.size > 0) {
+    for (const memory of familyMemories) {
+      if (cliExcludeIdSet.has(memory.id)) {
+        cliExcludedMemoryIds.push({ memoryId: memory.id, elementId: 'cli', reason: 'cli_exclude_memory_id' });
+      }
+    }
+    familyMemories = familyMemories.filter((m) => !cliExcludeIdSet.has(m.id));
+    console.log(
+      `--exclude-memory-id: ${cliExcludedMemoryIds.length} of ${cliExcludeIdSet.size} requested id(s) matched a memory in window and were excluded.`,
+    );
+  }
+
   const memoryIds = familyMemories.map((m) => m.id);
   // Full content (not the 120-char excerpt) -- quote-title verification only,
   // never logged or otherwise surfaced (PII rule).
@@ -2351,6 +2988,7 @@ async function main(): Promise<void> {
   }));
   const backboneSegments = buildBackboneSegments(backboneInputs);
   const validSegmentIds = new Set(backboneSegments.map((s) => s.id));
+  const segmentMembersById = new Map(backboneSegments.map((s) => [s.id, new Set(s.memoryIds)]));
 
   const defaultBackboneByMemory = new Map<string, string>();
   for (const segment of backboneSegments) {
@@ -2358,7 +2996,7 @@ async function main(): Promise<void> {
   }
 
   const firstsMemories = [...features.values()].filter((f) => f.milestones.length > 0);
-  const firstsPresent = firstsMemories.length >= 2;
+  const firstsPresent = firstsMemories.length >= FIRSTS_MIN_MILESTONES;
 
   const birthdayGroups = new Map<number, string[]>();
   for (const feature of features.values()) {
@@ -2457,6 +3095,18 @@ async function main(): Promise<void> {
   const { content, usage } = await callOpenAiOutline(systemPrompt, userPrompt, options.model, apiKey!);
   const rawParsed = JSON.parse(content);
   const validMemoryIds = new Set(features.keys());
+  // owner root-cause fix, 2026-08-27: panorama candidates must be `wide` --
+  // a tall/square/unknown-orientation photo can never span a 2:1 spread.
+  const wideOrientationMemoryIds = new Set(
+    [...features.entries()].filter(([, f]) => f.photoOrientation?.orientation === 'wide').map(([id]) => id),
+  );
+  // Owner round-3 decision, 2026-08-27: every REAL (memory, milestone) pair
+  // in scope -- the only `firsts_milestones` entries `parseOutlineResponse`
+  // will accept a `warm_name` for.
+  const validMilestoneKeys = new Set(
+    [...features.values()].flatMap((f) => f.milestones.map((m) => `${f.id}::${m.milestoneId}`)),
+  );
+
   const { response, violations } = parseOutlineResponse(
     rawParsed,
     validCandidateIds,
@@ -2464,6 +3114,9 @@ async function main(): Promise<void> {
     validMemoryIds,
     candidateMembersById,
     candidateDefaultTitleById,
+    segmentMembersById,
+    wideOrientationMemoryIds,
+    validMilestoneKeys,
   );
 
   // Never trust the model's word that a quote is real -- verify against the
@@ -2570,12 +3223,80 @@ async function main(): Promise<void> {
     (firstsFinalPresent ? 2 : 0) +
     [...birthdayFinalMemoryIdsByAge.values()].filter((ids) => ids.length > 0).length * 2;
 
-  const candidateBudgetElements: ThemedBudgetElement[] = [...spreadCandidateIds].map((spreadId) => ({
-    id: spreadId,
-    memoryCount: [...afterDissolve.values()].filter((s) => s === spreadId).length,
-  }));
+  const isVisual = (memoryId: string) => {
+    const f = features.get(memoryId)!;
+    return f.photoCount + f.videoCount > 0;
+  };
 
-  const nonBackbonePlan = planNonBackboneBudget(FIXED_PAGES, nonDroppablePages, candidateBudgetElements, options.pageBudget);
+  // Owner root-cause fix, 2026-08-27: panorama/hero nominations drive each
+  // memory's page SHAPE (never guessed from photo count alone), which in
+  // turn drives its honest page cost -- see `classifyMemoryPageShape`.
+  const heroCandidateIdSet = new Set(response.heroCandidates);
+  const panoramaCandidateIdSet = new Set(response.panoramaCandidates);
+  const shapeFor = (memoryId: string): MemoryPageShape => {
+    const f = features.get(memoryId)!;
+    return classifyMemoryPageShape({
+      photoCount: f.photoCount,
+      videoCount: f.videoCount,
+      hasText: f.hasText,
+      textLength: f.textLength,
+      isPanorama: panoramaCandidateIdSet.has(memoryId),
+      isFullBleed: heroCandidateIdSet.has(memoryId),
+    });
+  };
+
+  // Owner round-3 decision, 2026-08-27: content-neutral ranking signals --
+  // "highlight/hero status" and "topic-cluster membership" -- computed once
+  // over the WHOLE book, independent of where a memory ends up landing.
+  const highlightedOrHeroIds = new Set([
+    ...response.backboneHighlights.flatMap((h) => h.memoryIds),
+    ...response.heroCandidates,
+  ]);
+  const themedClusterMemberIds = new Set(candidates.flatMap((c) => c.memoryIds));
+
+  const candidateBudgetElements: ThemedBudgetElement[] = [...spreadCandidateIds].map((spreadId) => {
+    const memberIds = [...afterDissolve.entries()].filter(([, s]) => s === spreadId).map(([id]) => id);
+    return { id: spreadId, memoryCount: memberIds.length, shapes: memberIds.map(shapeFor) };
+  });
+
+  // Placed-panorama guarantee (owner round-3 decision, 2026-08-27): "1 + 1
+  // per ~20 pages" of the model's best-first panorama nominations must be
+  // SELECTED into the book, not just nominated. `N` is derived from a
+  // PRELIMINARY estimate (nothing dropped yet) so the guarantee count never
+  // depends on its own outcome.
+  const preliminaryBackboneShapes = [...afterDissolve.entries()]
+    .filter(([, s]) => s.startsWith('backbone:'))
+    .map(([id]) => shapeFor(id));
+  const preliminaryPageEstimate =
+    FIXED_PAGES +
+    nonDroppablePages +
+    candidateBudgetElements.reduce((sum, t) => sum + themedSpreadPages(t), 0) +
+    Math.max(1, estimateElementPages(preliminaryBackboneShapes));
+  const panoramaGuaranteeCount = computePlacedPanoramaGuaranteeCount(preliminaryPageEstimate);
+  const guaranteedPanoramaIds = new Set(response.panoramaCandidates.slice(0, panoramaGuaranteeCount));
+
+  // A themed spread carrying a guaranteed panorama is protected from being
+  // dropped for budget -- the memory's guarantee would otherwise be
+  // undermined by dropping the whole spread it lives in.
+  const protectedThemedElements = candidateBudgetElements.filter((t) =>
+    [...afterDissolve.entries()].some(([mid, s]) => s === t.id && guaranteedPanoramaIds.has(mid)),
+  );
+  const protectedThemedIdSet = new Set(protectedThemedElements.map((t) => t.id));
+  const droppableThemedElements = candidateBudgetElements.filter((t) => !protectedThemedIdSet.has(t.id));
+  const protectedThemedPages = protectedThemedElements.reduce((sum, t) => sum + themedSpreadPages(t), 0);
+
+  const droppableNonBackbonePlan = planNonBackboneBudget(
+    FIXED_PAGES,
+    nonDroppablePages + protectedThemedPages,
+    droppableThemedElements,
+    options.pageCap,
+  );
+  const nonBackbonePlan: NonBackboneBudgetPlan = {
+    nonBackbonePages: droppableNonBackbonePlan.nonBackbonePages,
+    keptThemedIds: [...protectedThemedElements.map((t) => t.id), ...droppableNonBackbonePlan.keptThemedIds],
+    droppedThemedIds: droppableNonBackbonePlan.droppedThemedIds,
+    backboneCapacityPages: droppableNonBackbonePlan.backboneCapacityPages,
+  };
   const droppedCandidateSet = new Set(nonBackbonePlan.droppedThemedIds);
 
   // A budget-dropped candidate spread's memories return to backbone
@@ -2588,6 +3309,11 @@ async function main(): Promise<void> {
     if (backboneId) finalPlacement.set(memoryId, backboneId);
   }
 
+  // Content-neutral ranking (owner round-3 decision, 2026-08-27): every
+  // backbone candidate competes on the SAME signals regardless of type --
+  // never a milestone/text/photo "type" trump. Structural protections
+  // (Firsts membership, birthday pins) stay outside this score entirely;
+  // guaranteed panoramas join the same pin mechanism below.
   const backboneCandidates: BackboneCandidate[] = [...finalPlacement.entries()]
     .filter(([, spreadId]) => spreadId.startsWith('backbone:'))
     .map(([memoryId]) => {
@@ -2595,21 +3321,32 @@ async function main(): Promise<void> {
       return {
         id: memoryId,
         date: f.date,
-        rank: rankMemoryForThinning({
-          hasMilestone: f.milestones.length > 0 || f.birthdayAgeTurned !== null,
+        shape: shapeFor(memoryId),
+        // Same predicate as `finalBackboneInputs` below -- keeps this
+        // candidate's segmentation identical to the REAL final segmentation
+        // it will be re-run through once selection is done.
+        printable: f.hasText || f.photoCount + f.videoCount > 0,
+        score: computeThinningScore({
+          isHighlighted: highlightedOrHeroIds.has(memoryId),
+          inThemedCluster: themedClusterMemberIds.has(memoryId),
+          engagementCount: f.engagementCount,
           hasText: f.hasText,
+          textLength: f.textLength,
           hasVisual: f.photoCount + f.videoCount > 0,
-          hasEngagement: f.engagementCount > 0,
         }),
       };
     });
 
+  const allPinnedIds = new Set([...pinnedMemoryIds, ...guaranteedPanoramaIds]);
   const keptBackboneIds = new Set(
-    selectBackboneMemories(backboneCandidates, nonBackbonePlan.backboneCapacityPages, pinnedMemoryIds),
+    selectBackboneMemories(backboneCandidates, nonBackbonePlan.backboneCapacityPages, allPinnedIds),
   );
-  const excludedMemoryIds = backboneCandidates
-    .filter((c) => !keptBackboneIds.has(c.id))
-    .map((c) => ({ memoryId: c.id, elementId: 'backbone', reason: 'over_budget_backbone_not_selected' }));
+  const excludedMemoryIds = [
+    ...cliExcludedMemoryIds,
+    ...backboneCandidates
+      .filter((c) => !keptBackboneIds.has(c.id))
+      .map((c) => ({ memoryId: c.id, elementId: 'backbone', reason: 'over_budget_backbone_not_selected' })),
+  ];
 
   const finalBackboneInputs: BackboneMemoryInput[] = backboneCandidates
     .filter((c) => keptBackboneIds.has(c.id))
@@ -2622,20 +3359,31 @@ async function main(): Promise<void> {
   const finalBackboneSegments = buildBackboneSegments(finalBackboneInputs);
 
   const finalPageElements: BudgetElement[] = [
-    ...nonBackbonePlan.keptThemedIds.map((id) => ({
-      id,
-      kind: 'themed' as const,
-      memoryCount: [...finalPlacement.values()].filter((s) => s === id).length,
-    })),
+    ...nonBackbonePlan.keptThemedIds.map((id) => {
+      const memberIds = [...finalPlacement.entries()].filter(([, s]) => s === id).map(([mid]) => mid);
+      return { id, kind: 'themed' as const, memoryCount: memberIds.length, shapes: memberIds.map(shapeFor) };
+    }),
     ...(firstsFinalPresent ? [{ id: 'firsts', kind: 'firsts' as const, memoryCount: firstsFinalMemoryIds.length }] : []),
     ...[...birthdayFinalMemoryIdsByAge.entries()].map(([ageTurned, ids]) => ({
       id: `birthday-${ageTurned}`,
       kind: 'birthday' as const,
       memoryCount: ids.length,
     })),
-    ...finalBackboneSegments.map((s) => ({ id: `backbone:${s.id}`, kind: 'backbone' as const, memoryCount: s.memoryIds.length })),
+    ...finalBackboneSegments.map((s) => ({
+      id: `backbone:${s.id}`,
+      kind: 'backbone' as const,
+      memoryCount: s.memoryIds.length,
+      shapes: s.memoryIds.map(shapeFor),
+    })),
   ];
   const totalPages = computePageEstimate(finalPageElements);
+  const finalKeptMemoryIds = new Set<string>([
+    ...finalBackboneInputs.map((b) => b.id),
+    ...nonBackbonePlan.keptThemedIds.flatMap((id) => [...finalPlacement.entries()].filter(([, s]) => s === id).map(([mid]) => mid)),
+    ...firstsFinalMemoryIds,
+    ...[...birthdayFinalMemoryIdsByAge.values()].flat(),
+  ]);
+  const totalImageCount = [...finalKeptMemoryIds].filter(isVisual).length;
   const droppedElements = nonBackbonePlan.droppedThemedIds.map((id) => ({
     id,
     kind: 'themed' as const,
@@ -2643,8 +3391,30 @@ async function main(): Promise<void> {
   }));
 
   console.log(
-    `Page estimate: ${totalPages} (budget ${options.pageBudget}, hard cap ${HARD_PAGE_CAP}). Dropped ${droppedElements.length} candidate spread(s) for budget; ${excludedMemoryIds.length} memory(ies) didn't make the backbone cut.`,
+    `Page estimate: ${totalPages} (page cap ${options.pageCap} -- a CEILING, not a target; layflat hard limit ${HARD_PAGE_CAP}), via the per-composition page-yield model (owner round-3 decision, 2026-08-27). ${totalImageCount} visual (photo/video-bearing) memories kept. Dropped ${droppedElements.length} candidate spread(s) for budget; ${excludedMemoryIds.length} memory(ies) excluded (CLI + budget combined).`,
   );
+  console.log(
+    `Placed-panorama guarantee: ${guaranteedPanoramaIds.size} of ${response.panoramaCandidates.length} nominated (N = 1 + pageEstimate/20, from a preliminary estimate of ${preliminaryPageEstimate}).`,
+  );
+
+  // Owner round-4 decision, 2026-08-27: pageCap is supposed to be a hard
+  // ceiling -- `planNonBackboneBudget` and `selectBackboneMemories` both
+  // tighten until the honest estimate fits it. With both now segmenting the
+  // backbone exactly like this final tally (root-cause fix above), the ONLY
+  // way `totalPages` can still exceed `options.pageCap` here is if every
+  // page left standing is structurally non-droppable -- Firsts, birthdays,
+  // a themed spread protected by a guaranteed panorama, or a pinned
+  // backbone memory -- i.e. physically impossible to trim further. That is
+  // a real, visible fact about this book, not a bug to swallow silently, so
+  // it is recorded as an integrity note rather than just persisted.
+  if (totalPages > options.pageCap) {
+    const detail =
+      `pageEstimate ${totalPages} > pageCap ${options.pageCap} -- every remaining page is structurally ` +
+      'non-droppable (Firsts, birthdays, guaranteed-panorama-protected themed spreads, and/or pinned ' +
+      'backbone memories); there is nothing left to trim.';
+    violations.push({ kind: 'page_cap_exceeded_all_protected', detail });
+    console.warn(`INTEGRITY: page cap did not bind -- ${detail}`);
+  }
 
   // ── Pacing (plan 2026-08-24: no 3+ consecutive unbroken backbone segments
   // while a spread is available to interleave; chronological affinity is a
@@ -2691,6 +3461,7 @@ async function main(): Promise<void> {
         memoryIds,
         insertAfterFinalSegmentIndex: pacedAssignment.get(spreadId) ?? -1,
         rationale,
+        kicker: s.kicker,
       };
     });
 
@@ -2710,13 +3481,16 @@ async function main(): Promise<void> {
   const readingOrder = buildReadingOrder({
     childName: child.name,
     finalBackboneSegments,
-    firsts: firstsFinalPresent ? { present: true, title: response.firstsTitle, memoryIds: firstsFinalMemoryIds } : null,
+    firsts: firstsFinalPresent
+      ? { present: true, title: response.firstsTitle, memoryIds: firstsFinalMemoryIds, warmNames: response.firstsWarmNames }
+      : null,
     birthdaySpreads: [...birthdayFinalMemoryIdsByAge.entries()]
       .filter(([, ids]) => ids.length > 0)
       .map(([ageTurned, ids]) => ({ ageTurned, memoryIds: ids })),
     themedSpreads: readingOrderThemedSpreads,
     backboneRationale,
     specialSegmentTitles,
+    highlightedMemoryIds: new Set(response.backboneHighlights.flatMap((h) => h.memoryIds)),
   });
 
   // ── Render outputs ────────────────────────────────────────────────────
@@ -2733,7 +3507,7 @@ async function main(): Promise<void> {
     portraitVersions,
     features,
     readingOrder,
-    editorialNote: response.editorialNote,
+    internalEditorialNote: response.internalEditorialNote,
     violations,
     reassignments,
     dissolvedSpreadIds,
@@ -2742,7 +3516,13 @@ async function main(): Promise<void> {
     droppedElements,
     excludedMemoryIds,
     totalPages,
-    pageBudget: options.pageBudget,
+    totalImageCount,
+    pageCap: options.pageCap,
+    heroCandidates: response.heroCandidates,
+    panoramaCandidates: response.panoramaCandidates,
+    guaranteedPanoramaIds,
+    dedication: response.dedication,
+    backCoverLine: response.backCoverLine,
   });
 
   console.log('\nDone.');
@@ -2765,7 +3545,10 @@ interface RenderContext {
   /** Single source of truth for both outline.md and review.html -- see the
    * module comment above `buildReadingOrder`. */
   readingOrder: ReadingOrderSection[];
-  editorialNote: string;
+  /** Owner round-3 decision, 2026-08-27: renamed from `editorialNote` --
+   * INTERNAL ONLY, never printed in the book (it leaked into a closing page
+   * once under the old name). Rendered clearly labeled as such below. */
+  internalEditorialNote: string;
   violations: OutlineIntegrityViolation[];
   reassignments: SinglePlacementResult['reassignments'];
   dissolvedSpreadIds: string[];
@@ -2776,7 +3559,25 @@ interface RenderContext {
   droppedElements: Array<{ id: string; kind: BudgetElementKind; reason: string }>;
   excludedMemoryIds: Array<{ memoryId: string; elementId: string; reason: string }>;
   totalPages: number;
-  pageBudget: number;
+  /** Total visual (photo/video-bearing) memories in the final book. */
+  totalImageCount: number;
+  pageCap: number;
+  /** Design handoff decision (2026-08-27): up to 5 book-wide candidates for
+   * a full-bleed page or the cover. */
+  heroCandidates: string[];
+  /** Uncapped, best-first (owner amendment, 2026-08-27): every qualifying
+   * book-wide candidate for a full double-page panorama spread. */
+  panoramaCandidates: string[];
+  /** Owner round-3 decision, 2026-08-27: the best-first prefix of
+   * `panoramaCandidates` that was GUARANTEED a placement (backbone or
+   * spread membership), not merely nominated -- see
+   * `computePlacedPanoramaGuaranteeCount`. */
+  guaranteedPanoramaIds: ReadonlySet<string>;
+  /** Owner decision, 2026-08-27: dedication-page body + back-cover
+   * colophon line, both connective text (journal language, editable
+   * downstream). Null when the model didn't supply one. */
+  dedication: string | null;
+  backCoverLine: string | null;
 }
 
 /**
@@ -2819,13 +3620,14 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
   md.push('');
   md.push(`Run: ${ctx.runId}  `);
   md.push(`Scope: ${ctx.scope.type} (${ctx.window.label}), window ${ctx.window.start} to ${scopeWindowLastInclusiveDay(ctx.window)}  `);
-  md.push(`Page estimate: ${ctx.totalPages} / budget ${ctx.pageBudget} (hard cap ${HARD_PAGE_CAP})`);
+  md.push(`Page estimate: ${ctx.totalPages} / page cap ${ctx.pageCap} (a CEILING, not a target; layflat hard limit ${HARD_PAGE_CAP}) -- via the per-composition page-yield model (owner round-3 decision, 2026-08-27)`);
+  md.push(`Image count: ${ctx.totalImageCount} visual (photo/video-bearing) memories in the final book`);
   md.push('');
   md.push('## Memory counts');
   md.push('');
   md.push(`- Memories in window: ${ctx.familyMemoriesInWindow}`);
   md.push(`- Eligible: ${ctx.eligibleTotal} (tagged to child: ${ctx.taggedToChildCount}, untagged-in-window: ${ctx.untaggedInWindowCount})`);
-  md.push(`- Excluded for page budget: ${ctx.excludedMemoryIds.length}`);
+  md.push(`- Excluded (CLI + over budget): ${ctx.excludedMemoryIds.length}`);
   md.push('');
 
   md.push('## Reading order');
@@ -2870,11 +3672,17 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
     // sync with review.html because both walk this exact same list.
     const heading = resolveSectionHeading(section, ctx.features);
     md.push(`### ${heading.title}`);
+    if (section.kicker) md.push(`_(kicker, small caps): ${section.kicker}_`);
     if (heading.subtitle) md.push(`_(${heading.subtitle})_`);
     for (const id of section.memoryIds) {
       const feature = ctx.features.get(id);
       if (!feature) continue;
-      md.push(`- ${memoryLine(feature, section.rationale[id])}`);
+      const highlightMarker = section.highlights?.includes(id) ? '★ ' : '';
+      md.push(`- ${highlightMarker}${memoryLine(feature, section.rationale[id])}`);
+      if (section.kind === 'firsts') {
+        const warmNames = (section.firstsWarmNames ?? []).filter((w) => w.memoryId === id);
+        for (const w of warmNames) md.push(`  - warm_name: "${w.warmName}"`);
+      }
     }
     md.push('');
   }
@@ -2896,9 +3704,47 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
   }
   md.push('');
 
-  md.push('## Editorial note');
+  md.push('## Hero candidates (full-bleed / cover consideration)');
   md.push('');
-  md.push(ctx.editorialNote || '_(none returned)_');
+  if (ctx.heroCandidates.length === 0) {
+    md.push('_(none)_');
+  } else {
+    for (const id of ctx.heroCandidates) {
+      const feature = ctx.features.get(id);
+      if (feature) md.push(`- ${memoryLine(feature)}`);
+    }
+  }
+  md.push('');
+
+  md.push('## Panorama candidates (full double-page spread consideration)');
+  md.push('');
+  if (ctx.panoramaCandidates.length === 0) {
+    md.push('_(none -- flag for review: every book should have at least one when a plausible landscape exists)_');
+  } else {
+    md.push(
+      `_${ctx.guaranteedPanoramaIds.size} of ${ctx.panoramaCandidates.length} nominated are GUARANTEED a placement (owner round-3 decision, 2026-08-27: "1 + 1 per ~20 pages"), marked ✓ below._`,
+    );
+    for (const id of ctx.panoramaCandidates) {
+      const feature = ctx.features.get(id);
+      const guaranteedMarker = ctx.guaranteedPanoramaIds.has(id) ? '✓ ' : '';
+      if (feature) md.push(`- ${guaranteedMarker}${memoryLine(feature)}`);
+    }
+  }
+  md.push('');
+
+  md.push('## Dedication');
+  md.push('');
+  md.push(ctx.dedication || '_(none returned)_');
+  md.push('');
+
+  md.push('## Back cover');
+  md.push('');
+  md.push(ctx.backCoverLine || '_(none returned)_');
+  md.push('');
+
+  md.push('## Editorial note (INTERNAL ONLY -- never printed in the book)');
+  md.push('');
+  md.push(ctx.internalEditorialNote || '_(none returned)_');
   md.push('');
 
   md.push('## Integrity notes');
@@ -2923,16 +3769,31 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
     scope: ctx.scope,
     window: ctx.window,
     pageEstimate: ctx.totalPages,
-    pageBudget: ctx.pageBudget,
+    imageCount: ctx.totalImageCount,
+    pageCap: ctx.pageCap,
     counts: {
       inWindow: ctx.familyMemoriesInWindow,
       eligible: ctx.eligibleTotal,
       taggedToChild: ctx.taggedToChildCount,
       untaggedInWindow: ctx.untaggedInWindowCount,
-      excludedForBudget: ctx.excludedMemoryIds.length,
+      excluded: ctx.excludedMemoryIds.length,
     },
     elements: ctx.readingOrder,
-    editorialNote: ctx.editorialNote,
+    heroCandidates: ctx.heroCandidates,
+    panoramaCandidates: ctx.panoramaCandidates,
+    // Owner round-3 decision, 2026-08-27: "1 + 1 per ~20 pages" of
+    // `panoramaCandidates` (best-first prefix) that were GUARANTEED a
+    // placement, not merely nominated -- see
+    // `computePlacedPanoramaGuaranteeCount`.
+    guaranteedPanoramaIds: [...ctx.guaranteedPanoramaIds],
+    dedication: ctx.dedication,
+    backCoverLine: ctx.backCoverLine,
+    // Owner round-3 decision, 2026-08-27: renamed from `editorialNote` --
+    // INTERNAL ONLY, a curator's note for human review, NEVER printed on
+    // any book page (it leaked into a closing page once under the old
+    // name; see `internalEditorialNote`'s doc comment on
+    // `ParsedOutlineResponse`). No renderer should ever read this field.
+    internalEditorialNote: ctx.internalEditorialNote,
     integrity: {
       violations: ctx.violations,
       reassignments: ctx.reassignments,
@@ -2984,8 +3845,10 @@ async function renderReviewHtml(outputDir: URL, ctx: RenderContext): Promise<voi
         }
       }
 
+      const isHighlight = section.highlights?.includes(id) ?? false;
       memberCards.push(`
-      <div class="memory">
+      <div class="memory${isHighlight ? ' highlight' : ''}">
+        ${isHighlight ? '<div class="highlight-badge">★ highlight</div>' : ''}
         ${thumbTag}
         <div class="date">${escapeHtml(feature.date)}</div>
         <div class="excerpt">${escapeHtml(feature.excerpt ?? '(no text)')}</div>
@@ -2997,6 +3860,7 @@ async function renderReviewHtml(outputDir: URL, ctx: RenderContext): Promise<voi
     const heading = resolveSectionHeading(section, ctx.features);
     cards.push(`
     <section class="spread">
+      ${section.kicker ? `<div class="kicker">${escapeHtml(section.kicker)}</div>` : ''}
       <h2>${escapeHtml(heading.title)}</h2>
       ${heading.subtitle ? `<div class="section-subtitle">${escapeHtml(heading.subtitle)}</div>` : ''}
       <div class="grid">${memberCards.join('\n')}</div>
@@ -3013,6 +3877,9 @@ async function renderReviewHtml(outputDir: URL, ctx: RenderContext): Promise<voi
   h1 { font-size: 20px; }
   h2 { font-size: 16px; margin-bottom: 2px; }
   .section-subtitle { font-size: 12px; font-style: italic; color: #777; margin-bottom: 8px; }
+  .kicker { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #8b7ec8; margin-bottom: 2px; }
+  .memory.highlight { border-color: #8b7ec8; box-shadow: 0 0 0 2px rgba(139,126,200,0.3); }
+  .highlight-badge { font-size: 10px; font-weight: 700; color: #6a5ea8; margin-bottom: 4px; }
   .spread { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
   .memory { border: 1px solid #eee; border-radius: 8px; padding: 8px; }

@@ -1,0 +1,158 @@
+{
+  "child": { "id": "sample-child-0001", "name": "Sample Child" },
+  "scope": {
+    "kind": "age-year",
+    "label": "Year One",
+    "start": "2024-01-01",
+    "end": "2024-12-31"
+  },
+  "generatedAt": "2026-08-26T00:00:00.000Z",
+  "outlineRun": "sample-run-2026-08-26",
+  "memories": {
+    "m-cover-1": {
+      "date": "2024-01-02",
+      "type": "photo",
+      "text": "The morning we brought her home.",
+      "emotion": "tender",
+      "topics": ["family"],
+      "milestones": [],
+      "engagement": 3,
+      "taggedMembers": [{ "name": "Mom", "isChild": false }],
+      "assets": [
+        { "file": "assets/cover-photo.svg", "width": 2400, "height": 1600, "aspectRatio": 1.5, "kind": "photo", "durationMs": null }
+      ]
+    },
+    "m-jan-1": {
+      "date": "2024-01-08",
+      "type": "photo",
+      "text": null,
+      "emotion": null,
+      "topics": ["home"],
+      "milestones": [],
+      "engagement": 0,
+      "taggedMembers": [],
+      "assets": [
+        { "file": "assets/photo-square.svg", "width": 600, "height": 600, "aspectRatio": 1, "kind": "photo", "durationMs": null }
+      ]
+    },
+    "m-jan-2": {
+      "date": "2024-01-20",
+      "type": "text",
+      "text": "First time she laughed out loud at the dog.",
+      "emotion": "joy",
+      "topics": ["home"],
+      "milestones": [],
+      "engagement": 1,
+      "taggedMembers": [],
+      "assets": []
+    },
+    "m-feb-1": {
+      "date": "2024-02-14",
+      "type": "photo",
+      "text": "Vamos, vamos, banana!",
+      "emotion": "funny",
+      "topics": ["play"],
+      "milestones": [],
+      "engagement": 2,
+      "taggedMembers": [],
+      "assets": [
+        { "file": "assets/photo-portrait.svg", "width": 480, "height": 600, "aspectRatio": 0.8, "kind": "photo", "durationMs": null }
+      ]
+    },
+    "m-feb-2": {
+      "date": "2024-02-20",
+      "type": "photo",
+      "text": "She insisted on wearing the colander as a hat all day, marched around declaring herself queen of the kitchen, and refused every other hat we owned for the rest of the week, negotiating fiercely each morning over the terms of the crown, until the colander finally lost a battle with the dog and we all agreed the reign had come to a dignified, slightly dented end.",
+      "emotion": "funny",
+      "topics": ["play"],
+      "milestones": [],
+      "engagement": 0,
+      "taggedMembers": [],
+      "assets": [
+        { "file": "assets/photo-square.svg", "width": 600, "height": 600, "aspectRatio": 1, "kind": "photo", "durationMs": null }
+      ]
+    },
+    "m-feb-3": {
+      "date": "2024-02-25",
+      "type": "photo",
+      "text": "Doing her silly walk again.",
+      "emotion": "funny",
+      "topics": ["play"],
+      "milestones": [],
+      "engagement": 0,
+      "taggedMembers": [],
+      "assets": [
+        { "file": "assets/photo-portrait.svg", "width": 480, "height": 600, "aspectRatio": 0.8, "kind": "photo", "durationMs": null }
+      ]
+    },
+    "m-mar-1": {
+      "date": "2024-03-02",
+      "type": "photo",
+      "text": "First plane ride to see abuela.",
+      "emotion": "wonder",
+      "topics": ["travel"],
+      "milestones": [],
+      "engagement": 1,
+      "taggedMembers": [],
+      "assets": [
+        { "file": "assets/photo-panorama.svg", "width": 1320, "height": 600, "aspectRatio": 2.2, "kind": "photo", "durationMs": null }
+      ]
+    },
+    "m-apr-1": {
+      "date": "2024-04-11",
+      "type": "video",
+      "text": "Dancing in the kitchen to the radio.",
+      "emotion": "joy",
+      "topics": ["home"],
+      "milestones": [],
+      "engagement": 4,
+      "taggedMembers": [],
+      "assets": [
+        { "file": "assets/video-poster.svg", "width": 900, "height": 600, "aspectRatio": 1.5, "kind": "video-poster", "durationMs": 12000 }
+      ]
+    },
+    "m-may-1": {
+      "date": "2024-05-01",
+      "type": "audio",
+      "text": "First time she said 'te quiero'.",
+      "emotion": "tender",
+      "topics": ["family"],
+      "milestones": [],
+      "engagement": 2,
+      "taggedMembers": [],
+      "assets": []
+    },
+    "m-firsts-1": {
+      "date": "2024-06-01",
+      "type": "photo",
+      "text": "First steps, wobbly and proud.",
+      "emotion": "pride",
+      "topics": ["milestone"],
+      "milestones": [{ "id": "first-steps", "name": "First steps", "detail": "Took 3 steps unassisted" }],
+      "engagement": 5,
+      "taggedMembers": [],
+      "assets": [
+        { "file": "assets/photo-square.svg", "width": 600, "height": 600, "aspectRatio": 1, "kind": "photo", "durationMs": null }
+      ]
+    },
+    "m-firsts-2": {
+      "date": "2024-07-01",
+      "type": "photo",
+      "text": "First word: \"agua\".",
+      "emotion": "pride",
+      "topics": ["milestone"],
+      "milestones": [{ "id": "first-word", "name": "First word", "detail": "Said agua clearly, pointing at her cup" }],
+      "engagement": 1,
+      "taggedMembers": [],
+      "assets": [
+        { "file": "assets/photo-portrait.svg", "width": 480, "height": 600, "aspectRatio": 0.8, "kind": "photo", "durationMs": null }
+      ]
+    }
+  },
+  "portraits": [
+    { "file": "assets/portrait-1.svg", "date": "2024-01-15", "ageLabel": "Newborn" },
+    { "file": "assets/portrait-2.svg", "date": "2024-04-15", "ageLabel": "3 months" },
+    { "file": "assets/portrait-3.svg", "date": "2024-07-15", "ageLabel": "6 months" },
+    { "file": "assets/portrait-4.svg", "date": "2024-12-15", "ageLabel": "1 year" }
+  ]
+}

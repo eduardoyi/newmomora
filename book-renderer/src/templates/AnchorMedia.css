@@ -1,0 +1,13 @@
+.anchor-media {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.anchor-media__canvas {
+  position: relative;
+}
+
+.anchor-media__cell {
+  position: absolute;
+}

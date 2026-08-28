@@ -1,0 +1,66 @@
+.spread-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  padding: 24px;
+}
+
+.spread-pager__nav {
+  all: unset;
+  cursor: pointer;
+  font-size: 28px;
+  color: var(--color-ink2);
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+}
+
+.spread-pager__nav:hover {
+  background: var(--color-surface);
+}
+
+.spread-pager__stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 640px;
+  max-height: 100%;
+  width: 100%;
+  transition: max-width 0.2s ease;
+}
+
+.spread-pager__stage--zoomed {
+  max-width: 960px;
+}
+
+.spread-pager__frame {
+  width: 100%;
+}
+
+.spread-pager__frame--spread {
+  width: 100%;
+}
+
+.spread-pager__facing {
+  display: flex;
+  width: 100%;
+  /* A thin gutter seam between the two facing pages — purely a preview
+     affordance so the pair reads as a bound spread, not print geometry. */
+  gap: 1px;
+  background: rgba(44, 36, 24, 0.12);
+}
+
+.spread-pager__facing-half {
+  flex: 1;
+  min-width: 0;
+}
+
+.spread-pager__caption {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-ink3);
+  text-align: center;
+}

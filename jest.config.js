@@ -2,7 +2,7 @@ module.exports = {
   preset: 'jest-expo',
   setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
   testMatch: ['**/*.(test|integration.test).(ts|tsx)'],
-  testPathIgnorePatterns: ['/node_modules/', '/supabase/functions/', '/supabase/scripts/', '/cloudflare/memory-illustration-worker/test/', '/cloudflare/momora-export-worker/test/'],
+  testPathIgnorePatterns: ['/node_modules/', '/supabase/functions/', '/supabase/scripts/', '/cloudflare/memory-illustration-worker/test/', '/cloudflare/momora-export-worker/test/', '/book-renderer/'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^react-native-purchases$': '<rootDir>/__mocks__/react-native-purchases.ts',

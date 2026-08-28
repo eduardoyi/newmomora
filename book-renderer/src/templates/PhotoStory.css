@@ -1,0 +1,38 @@
+.photo-story {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1.4em;
+}
+
+.photo-story__photo {
+  position: relative;
+  width: 60%;
+  aspect-ratio: 4 / 3;
+  flex: none;
+}
+
+.photo-story__text {
+  max-width: 100%;
+}
+
+.photo-story__body {
+  margin: 0;
+  font-family: var(--font-display);
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.photo-story__scan {
+  margin-top: 0.6em;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.photo-story__scan-text {
+  font-family: var(--font-sans);
+  letter-spacing: 0.03em;
+}

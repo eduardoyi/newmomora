@@ -1,0 +1,11 @@
+.full-bleed-page {
+  background: var(--color-ink);
+}
+
+.full-bleed__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}

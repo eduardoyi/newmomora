@@ -1,0 +1,144 @@
+.cover-wrap-page {
+  background: var(--color-white);
+}
+
+.cover-wrap {
+  position: absolute;
+  inset: 0;
+}
+
+.cover-wrap__photo {
+  position: absolute;
+}
+
+.cover-wrap__photo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cover-wrap__scrim {
+  position: absolute;
+  inset: 0;
+  /* Simplification: the canvas picks white-on-photo vs ink-on-paper spine
+     text from sampled band luminance — this renderer has no pixel-luminance
+     sampling, so the photo voice always assumes a dark-enough band and uses
+     white text with this scrim for guaranteed legibility instead. */
+  background: linear-gradient(180deg, rgba(20, 14, 8, 0.32) 0%, rgba(20, 14, 8, 0) 30%, rgba(20, 14, 8, 0) 50%, rgba(20, 14, 8, 0.58) 100%);
+  pointer-events: none;
+}
+
+.cover-wrap__rule {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--color-borderStrong);
+}
+
+.cover-wrap__rule-gap {
+  position: absolute;
+  background: var(--color-white);
+}
+
+.cover-wrap__wordmark {
+  position: absolute;
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.cover-wrap__colophon {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7em;
+}
+
+.cover-wrap__years {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.cover-wrap__colophon-line {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+.cover-wrap__stamp {
+  position: absolute;
+  overflow: hidden;
+  background: var(--color-surface2);
+}
+
+.cover-wrap__stamp-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Owner review round 3 item 17: a soft tinted band + hairline fold rules so
+   the spine reads as its own visible zone (previously nothing distinguished
+   it from the back panel besides ~9mm of identical white). */
+.cover-wrap__spine-panel {
+  position: absolute;
+  background: var(--color-surface2);
+  border-left: 1px solid var(--color-borderStrong);
+  border-right: 1px solid var(--color-borderStrong);
+}
+
+.cover-wrap__spine {
+  position: absolute;
+  width: 0;
+}
+
+.cover-wrap__spine-name {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translate(-50%, -50%);
+  writing-mode: vertical-rl;
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.cover-wrap__spine-years {
+  position: absolute;
+  left: 0;
+  transform: translateX(-50%);
+  writing-mode: vertical-rl;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cover-wrap__title {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+
+.cover-wrap__name {
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 0.94;
+  letter-spacing: -0.03em;
+}
+
+.cover-wrap__scope {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}

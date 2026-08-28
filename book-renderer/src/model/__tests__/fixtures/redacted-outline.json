@@ -1,0 +1,66 @@
+{
+  "runId": "redacted-test-run",
+  "child": { "id": "redacted-child-id", "name": "Redacted Child" },
+  "scope": { "type": "age-year", "ageYear": 2 },
+  "window": { "start": "2024-01-01", "endExclusive": "2025-01-01", "label": "Year Two" },
+  "pageEstimate": 10,
+  "pageBudget": 20,
+  "counts": { "inWindow": 4, "eligible": 4, "taggedToChild": 4, "untaggedInWindow": 0, "excludedForBudget": 0 },
+  "elements": [
+    { "id": "cover", "kind": "cover", "title": "Cover", "memoryIds": [], "rationale": {} },
+    { "id": "title", "kind": "title", "title": "Title & dedication", "memoryIds": [], "rationale": {} },
+    {
+      "id": "through-the-years",
+      "kind": "through-the-years",
+      "title": "Through the years -- Redacted Child",
+      "memoryIds": [],
+      "rationale": {}
+    },
+    {
+      "id": "backbone:2024-01_2024-02",
+      "kind": "backbone",
+      "title": "The month you turned two",
+      "subtitle": "January-February 2024",
+      "memoryIds": ["redacted-mem-1", "redacted-mem-2"],
+      "rationale": { "redacted-mem-1": "birthday-tagged; two photos" }
+    },
+    {
+      "id": "emotion:funny",
+      "kind": "themed",
+      "title": "Redacted quote title",
+      "memoryIds": ["redacted-mem-3"],
+      "rationale": { "redacted-mem-3": "funny moment; has_text" },
+      "spreadType": "emotion",
+      "titleMode": "quote",
+      "titleSourceMemoryId": "redacted-mem-3"
+    },
+    {
+      "id": "topic:example",
+      "kind": "themed",
+      "title": "A descriptive topic title",
+      "memoryIds": ["redacted-mem-4"],
+      "rationale": {},
+      "spreadType": "topic",
+      "titleMode": "descriptive",
+      "titleSourceMemoryId": null
+    },
+    { "id": "firsts", "kind": "firsts", "title": "Big and small victories this year", "memoryIds": [], "rationale": {} },
+    { "id": "closing", "kind": "closing", "title": "Closing", "memoryIds": [], "rationale": {} }
+  ],
+  "editorialNote": "Redacted editorial note for testing.",
+  "integrity": {
+    "violations": [],
+    "reassignments": [
+      { "memoryId": "redacted-mem-1", "droppedFrom": ["backbone:2024-01"], "keptIn": "birthday-2" }
+    ],
+    "dissolvedSpreadIds": [],
+    "dissolvedBirthdayAges": [2],
+    "movedToBackbone": [
+      { "memoryId": "redacted-mem-1", "fromSpread": "birthday-2", "toSpread": "backbone:2024-01_2024-02" }
+    ],
+    "droppedElements": [],
+    "excludedMemoryIds": [
+      { "memoryId": "redacted-mem-5", "elementId": "backbone", "reason": "over_budget_backbone_not_selected" }
+    ]
+  }
+}

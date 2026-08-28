@@ -1,0 +1,62 @@
+.illustrated-story-page {
+  background: var(--color-white);
+}
+
+.illustrated-story {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* Owner review round 3 item 13 bug fix: the text and illustration used to
+   be two independently absolutely-positioned boxes (the illustration's
+   `top` a fixed constant), so a long enough caption could overlap it. The
+   stack is now the ONE absolutely-positioned box (matching the old text
+   position); text and illustration inside it are normal flow children, so
+   the illustration always sits below whatever height the text rendered at. */
+.illustrated-story__stack {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+}
+
+.illustrated-story__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9em;
+}
+
+.illustrated-story__date {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.illustrated-story__body {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1.58;
+}
+
+.illustrated-story__illo {
+  overflow: hidden;
+}
+
+.illustrated-story__illo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.illustrated-story__bleed {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 82%;
+  height: 82%;
+  object-fit: cover;
+  display: block;
+}
