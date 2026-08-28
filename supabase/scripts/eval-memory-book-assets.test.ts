@@ -14,6 +14,7 @@ import {
   buildTaggedMember,
   candidateFramePercentiles,
   CLI_USAGE,
+  coerceManifestLanguage,
   collectMemoryIdsFromElements,
   computeCandidateFrameOffsetsSeconds,
   computeCellSharpnessGrid,
@@ -42,6 +43,7 @@ import {
   POSTER_SCORING_GRID_SIZE,
   portraitFileName,
   portraitSourceFileName,
+  resolveManifestLanguageDefault,
   scorePosterFrameCandidate,
   selectMediaAsset,
   shouldMeasureOriginalDimensions,
@@ -1003,6 +1005,56 @@ Deno.test('parseArgs falls back to "en" for an unrecognized --language value', (
   assertEquals(options.language, 'en');
 });
 
+// --- parseArgs: languageExplicit (round-18) --------------------------------
+// distinguishes "the flag was never passed" from "an explicit --language en"
+// -- both otherwise leave `language` at DEFAULT_LANGUAGE ("en"), but only
+// the former should let main() apply the outline.json default.
+
+Deno.test('parseArgs: languageExplicit is false when --language was never passed', () => {
+  const options = parseArgs(['--outline-run', 'some-dir']);
+  assertEquals(options.languageExplicit, false);
+});
+
+Deno.test('parseArgs: languageExplicit is true for an explicit --language es', () => {
+  const options = parseArgs(['--outline-run', 'some-dir', '--language', 'es']);
+  assertEquals(options.languageExplicit, true);
+});
+
+Deno.test('parseArgs: languageExplicit is true even for an explicit --language en (still distinguishable from "never passed")', () => {
+  const options = parseArgs(['--outline-run', 'some-dir', '--language', 'en']);
+  assertEquals(options.languageExplicit, true);
+  assertEquals(options.language, 'en');
+});
+
+// --- coerceManifestLanguage / resolveManifestLanguageDefault (round-18) ----
+
+Deno.test('coerceManifestLanguage: maps any "es" primary subtag to "es"', () => {
+  assertEquals(coerceManifestLanguage('es'), 'es');
+  assertEquals(coerceManifestLanguage('es-MX'), 'es');
+  assertEquals(coerceManifestLanguage('ES-us'), 'es');
+});
+
+Deno.test('coerceManifestLanguage: everything else (including unset, "en", and an unrelated language) maps to "en"', () => {
+  assertEquals(coerceManifestLanguage(undefined), 'en');
+  assertEquals(coerceManifestLanguage('en'), 'en');
+  assertEquals(coerceManifestLanguage('fr'), 'en');
+  assertEquals(coerceManifestLanguage('pt-BR'), 'en');
+});
+
+Deno.test('resolveManifestLanguageDefault: an explicit CLI language always wins over the outline\'s own resolution', () => {
+  assertEquals(resolveManifestLanguageDefault(true, 'en', 'es'), 'en');
+  assertEquals(resolveManifestLanguageDefault(true, 'es', undefined), 'es');
+});
+
+Deno.test('resolveManifestLanguageDefault: when --language was not passed, defaults from the outline\'s resolved language', () => {
+  assertEquals(resolveManifestLanguageDefault(false, 'en', 'es'), 'es');
+  assertEquals(resolveManifestLanguageDefault(false, 'en', 'es-MX'), 'es');
+});
+
+Deno.test('resolveManifestLanguageDefault: when --language was not passed and the outline has no language field (old runs), falls back to "en" -- current behavior when absent, unchanged', () => {
+  assertEquals(resolveManifestLanguageDefault(false, 'en', undefined), 'en');
+});
+
 // --- parseArgs: --exclude-portrait-id (repeatable) --------------------------
 
 Deno.test('parseArgs defaults excludePortraitIds to [] when absent', () => {
@@ -1090,6 +1142,26 @@ Deno.test('parseOutlineJson throws when heroCandidates contains a non-string id'
     () => parseOutlineJson({ ...VALID_OUTLINE, heroCandidates: ['m7', 42] }),
     Error,
     'heroCandidates[1]',
+  );
+});
+
+// --- parseOutlineJson: language (round-18) ---------------------------------
+
+Deno.test('parseOutlineJson: language is undefined when absent (old outlines predate this field)', () => {
+  const result = parseOutlineJson(VALID_OUTLINE);
+  assertEquals(result.language, undefined);
+});
+
+Deno.test('parseOutlineJson: reads a present language field', () => {
+  const result = parseOutlineJson({ ...VALID_OUTLINE, language: 'es-MX' });
+  assertEquals(result.language, 'es-MX');
+});
+
+Deno.test('parseOutlineJson: throws when language is present but not a string', () => {
+  assertThrows(
+    () => parseOutlineJson({ ...VALID_OUTLINE, language: 42 }),
+    Error,
+    '"language" must be a string when present',
   );
 });
 

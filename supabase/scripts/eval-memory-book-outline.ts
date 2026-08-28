@@ -336,6 +336,15 @@ export function scopeWindowLastInclusiveDay(window: ScopeWindow): string {
 interface FamilyRow {
   id: string;
   name: string;
+  /** Round-18 (owner decision, "books are standalone"): the owner-managed
+   * BCP-47 caption locale (`families.gallery_caption_language`, see
+   * docs/features/gallery-import.md) -- source (2) of the outline's LANGUAGE
+   * resolution chain, behind the account's actual predominant caption
+   * language and ahead of the final 'en' fallback. Column default is
+   * `'en-US'` and NOT NULL in the schema, but this is read defensively (a
+   * blank/whitespace value is treated the same as unset) rather than
+   * assumed always-present. */
+  gallery_caption_language: string | null;
 }
 
 interface FamilyMemberRow {
@@ -487,9 +496,48 @@ function delay(ms: number): Promise<void> {
 // ── Data loading (RLS-scoped client for every read) ─────────────────────
 
 async function loadFamilies(supabase: AuthedClient): Promise<FamilyRow[]> {
-  const { data, error } = await supabase.from('families').select('id, name').is('deleted_at', null);
+  // Round-18: `gallery_caption_language` added to this SAME query (every
+  // family visible to the account is already loaded here to resolve
+  // `--child`) rather than a second round trip per book.
+  const { data, error } = await supabase
+    .from('families')
+    .select('id, name, gallery_caption_language')
+    .is('deleted_at', null);
   if (error) throw new Error(`Failed to load families: ${error.message}`);
   return (data ?? []) as FamilyRow[];
+}
+
+/**
+ * Up to `limit` recent non-empty `memories.content` values for the WHOLE
+ * family archive (never scoped to this book's window or child) -- LANGUAGE
+ * EVIDENCE ONLY, per the outline's LANGUAGE resolution chain (plan round-18,
+ * "books are standalone": "predominant caption language account-wide").
+ * Only called when the window's OWN caption count is sparse (see
+ * `WINDOW_CAPTION_SPARSE_THRESHOLD` in `main()`) -- most books never need
+ * this extra round trip. Each caption is trimmed and capped to
+ * `LANGUAGE_EVIDENCE_EXCERPT_MAX_CHARS`; this text is sent to the OpenAI
+ * prompt (same PII posture as every other memory excerpt in this file) but
+ * is NEVER printed to stdout.
+ */
+async function loadAccountWideCaptionSample(
+  supabase: AuthedClient,
+  familyId: string,
+  limit: number,
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('memories')
+    .select('content')
+    .eq('family_id', familyId)
+    .not('content', 'is', null)
+    .neq('content', '')
+    .order('memory_date', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Failed to load account-wide caption sample: ${error.message}`);
+  return ((data ?? []) as Array<{ content: string | null }>)
+    .map((row) => row.content?.trim() ?? '')
+    .filter((c) => c.length > 0)
+    .map((c) => (c.length > LANGUAGE_EVIDENCE_EXCERPT_MAX_CHARS ? `${c.slice(0, LANGUAGE_EVIDENCE_EXCERPT_MAX_CHARS)}…` : c));
 }
 
 async function loadFamilyMembers(supabase: AuthedClient, familyId: string): Promise<FamilyMemberRow[]> {
@@ -749,6 +797,64 @@ export interface TaggedMemberFeature {
 const TEXT_EXCERPT_MAX_CHARS = 120;
 const PHOTO_CONTENT_TYPE_PREFIX = 'image/';
 const VIDEO_CONTENT_TYPE_PREFIX = 'video/';
+
+// ── LANGUAGE resolution (plan round-18, "books are standalone": caption-less
+// books -- Enzo year one/two's caption-less photo eras -- came out in
+// ENGLISH because "the family's journal language" was inferred by the model
+// purely from captions it never had. Owner chain: (1) predominant language
+// of the ACCOUNT's captions (whole archive, not the window); (2)
+// `families.gallery_caption_language`; (3) 'en'. The MODEL resolves (1) --
+// it can read caption text, this script cannot -- and returns its choice as
+// a `language` field (see buildOutlineSystemPrompt's LANGUAGE block); this
+// script only supplies the evidence and a deterministic (2)/(3) fallback
+// for when the model's field is missing or malformed. ) ────────────────────
+
+/** Below this many in-WINDOW non-empty captions, the window's own MEMORIES
+ * block is too thin for the model to reliably judge a language from --
+ * `main()` then also loads `loadAccountWideCaptionSample` as LANGUAGE
+ * EVIDENCE ONLY. Deliberately small (mirrors `SPARSE_TOPIC_TRIGGER_COUNT`'s
+ * precedent above): a caption-less photo ERA (the reported incident) can
+ * have a window caption count of zero, but a normal book with even a
+ * handful of real captions should judge its own language from itself. */
+const WINDOW_CAPTION_SPARSE_THRESHOLD = 5;
+
+/** "up to ~40 recent account-wide non-empty captions" per the owner brief --
+ * enough for the model to confidently judge a predominant language without
+ * ballooning prompt size. */
+const LANGUAGE_EVIDENCE_SAMPLE_LIMIT = 40;
+
+/** Each LANGUAGE EVIDENCE caption is trimmed to this length -- the model
+ * only needs enough text to recognize the language, not the full story. */
+const LANGUAGE_EVIDENCE_EXCERPT_MAX_CHARS = 80;
+
+/** Loose BCP-47 check (same shape as the DB's own
+ * `families_gallery_caption_language_check` constraint) -- used both to
+ * validate the model's returned `language` field and the configured
+ * `gallery_caption_language` fallback value. Not a full BCP-47 validator
+ * (there isn't a canonical subtag registry here), just "plausibly a
+ * language tag" so a garbled model response never gets treated as a
+ * language. */
+export const BCP47_PATTERN = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
+
+/** The final code-level fallback (owner chain step 3) when neither the
+ * model's own resolution nor the configured language is usable. */
+export const FALLBACK_LANGUAGE = 'en';
+
+/**
+ * Code-level safety net around the model's own LANGUAGE resolution (owner
+ * chain, steps 2 and 3 -- step 1, "predominant caption language", is the
+ * model's job alone since only it can read the caption text given to it).
+ * `modelLanguage` is the model's raw `language` field (already trimmed;
+ * `null` when absent or blank); `configuredLanguage` is
+ * `families.gallery_caption_language` (already trimmed; `null` when unset/
+ * blank). Pure and exported so the fallback chain is unit-testable
+ * independent of the OpenAI round trip.
+ */
+export function resolveOutlineLanguage(modelLanguage: string | null, configuredLanguage: string | null): string {
+  if (modelLanguage && BCP47_PATTERN.test(modelLanguage)) return modelLanguage;
+  if (configuredLanguage && BCP47_PATTERN.test(configuredLanguage)) return configuredLanguage;
+  return FALLBACK_LANGUAGE;
+}
 
 function firstUsablePreviewKey(media: MediaRow[]): string | null {
   const sorted = [...media].sort((a, b) => a.position - b.position);
@@ -2292,12 +2398,20 @@ export interface SpecialSegmentFlag {
 }
 
 /**
- * Flags every segment containing the child's birth month (`kind: 'birth'`,
- * takes priority) or a month in which a birthday was celebrated (`kind:
- * 'birthday'`, one flag per segment even if multiple birthday months
- * happen to share a merged segment -- the first chronologically wins).
- * Pure and independent of budget/pacing so it can run identically on the
- * original (prompt-time) and final (render-time) segment lists.
+ * Flags every MONTH that is either the child's birth month (`kind: 'birth'`,
+ * takes priority over a birthday flag at that SAME month) or a flagged
+ * birthday month (`kind: 'birthday'`), keyed to whichever segment currently
+ * contains that month. Round-18 fix (owner-decided, "books are standalone"):
+ * this checks every month in a segment independently and never stops after
+ * the first hit, so a segment that happens to contain TWO distinct flagged
+ * months (a real case: a sparse year merges the opening and closing-run-up
+ * months into one backbone segment) gets BOTH flags, each keyed to its own
+ * month -- the old `break`-after-first-birthday-month and the old
+ * whole-segment `continue` on a birth-month hit silently dropped the second
+ * flag in exactly that case. Two flags can share a `segmentId` but never a
+ * `month` (a month cannot be both). Pure and independent of budget/pacing so
+ * it can run identically on the original (prompt-time) and final
+ * (render-time) segment lists.
  */
 export function flagSpecialBackboneSegments(
   segments: BackboneSegment[],
@@ -2306,19 +2420,65 @@ export function flagSpecialBackboneSegments(
 ): SpecialSegmentFlag[] {
   const flags: SpecialSegmentFlag[] = [];
   for (const segment of segments) {
-    if (birthMonth && segment.monthKeys.includes(birthMonth)) {
-      flags.push({ segmentId: segment.id, month: birthMonth, kind: 'birth' });
-      continue;
-    }
     for (const month of segment.monthKeys) {
+      if (birthMonth && month === birthMonth) {
+        flags.push({ segmentId: segment.id, month, kind: 'birth' });
+        continue;
+      }
       const ageTurned = birthdayMonthToAge.get(month);
       if (ageTurned !== undefined) {
         flags.push({ segmentId: segment.id, month, kind: 'birthday', ageTurned });
-        break;
       }
     }
   }
   return flags;
+}
+
+/**
+ * Owner decision (round-18, "books are standalone"): for an AGE-YEAR scope
+ * ONLY, `birthdayMonthToAge` above must be built DETERMINISTICALLY from the
+ * child's `date_of_birth` + the scope window -- never from whether a
+ * birthday-milestone-tagged memory happens to exist in the account. This
+ * replaces the data-dependent mechanism entirely for age-year scope (an
+ * age-year window's only two "birthday-shaped" months are its own opening
+ * and closing-run-up months by construction -- there is no interior case to
+ * also preserve).
+ *
+ * Root cause this fixes: the OLD `birthdayMonthToAge` was built purely from
+ * REAL `memory_milestones` rows with `milestone_id === 'birthday'` that
+ * happened to fall inside the window's own loaded memories. Two related
+ * bugs followed from that:
+ * (1) The CLOSING run-up month's birthday memory is, by construction, dated
+ *     ON the window's `endExclusive` boundary -- `loadMemoriesInWindow`
+ *     filters `memory_date < endExclusive`, so that memory can never even
+ *     be loaded into `features`, so its month can never appear in
+ *     `birthdayMonthToAge`, so the closing month can NEVER be flagged no
+ *     matter what data exists. This is why Enzo's year-two book got no
+ *     "the month you turned two" title at all.
+ * (2) The OPENING month's flag depended on a real birthday-milestone memory
+ *     actually landing in that exact month -- if the parent never logged
+ *     one there (or logged it a few days into the next month), the flag
+ *     silently never fired, even though the child's age-turned for that
+ *     month is fully determined by `date_of_birth` alone and needs no
+ *     memory to be true.
+ *
+ * Fix: read the ages straight off the window itself. `window.start` IS the
+ * opening month's first day (birthday N-1, this book's own scope start) and
+ * `window.endExclusive` IS the closing-run-up month's birthday day (age N,
+ * even though that exact day is excluded from the window's own memories --
+ * its MONTH still gets the special title). Age 0 (ageYear - 1 === 0, i.e.
+ * Year One's "opening" is literally the birth month itself) is omitted --
+ * the birth flag already covers that month and takes priority, and "the
+ * month you turned zero" is not a real birthday.
+ */
+export function computeAgeYearBirthdayMonths(scope: BookScope, window: ScopeWindow): Map<string, number> {
+  const map = new Map<string, number>();
+  if (scope.type !== 'age-year') return map;
+  if (scope.ageYear - 1 >= 1) {
+    map.set(window.start.slice(0, 7), scope.ageYear - 1);
+  }
+  map.set(window.endExclusive.slice(0, 7), scope.ageYear);
+  return map;
 }
 
 /**
@@ -2371,6 +2531,8 @@ export function buildOutlineSystemPrompt(): string {
     '- Never write "missing" or "behind" language about development -- celebrate what exists only.',
     '- If a Firsts spread is present (listed below), draft its title around the framing "big and small victories this year" -- in the family\'s own journal language (the same way you draft every other spread title), not a literal translation of that English phrase.',
     '',
+    'LANGUAGE: write EVERY piece of copy you generate below (spread titles, kickers, segment_titles, firsts_title, warm_name, dedication, back_cover_line, editorial_note) in ONE consistent language -- the family\'s own journal-writing language, resolved in this exact order: (1) the predominant language of the actual caption text you can see -- the excerpts on the MEMORIES lines below, plus a LANGUAGE EVIDENCE ONLY block when the window itself has few captions (see below) -- judged from the real weight of evidence, never from a single foreign word or name; (2) if you cannot see enough caption text anywhere to judge a language, the CONFIGURED LANGUAGE value given below (when one is provided); (3) if neither is available, English. A LANGUAGE EVIDENCE ONLY block, when present, is recent caption text from this family\'s wider archive shown SOLELY so you can judge their writing language -- it is not part of this book, never eligible for a spread/backbone/Firsts, and never quotable as a title source. Return your resolved choice as a `language` field (a BCP-47 code, e.g. "es", "es-MX", "en") -- this is REQUIRED and must be the language you actually wrote everything else in, not a separate guess.',
+    '',
     'FIRSTS WARM NAMES: for EACH row listed under FIRSTS MILESTONES below (if any), write a `warm_name` -- the milestone rephrased as a warm second-person sentence, in the family\'s journal language, addressed to the child. Examples: "Monta bicicleta sin pedales" -> "Aprendiste a montar bicicleta sin pedales"; "Primer corte de pelo" -> "Tuviste tu primer corte de pelo". This is connective text (editable downstream) and must NEVER alter the parent\'s own memory caption -- it stands alongside it, not instead of it. Echo back the exact `memory_id` and `milestone_id` from that row so code can match your `warm_name` to the right entry.',
     '',
     'RELATIONSHIP WORDS (aunt, uncle, grandma, "nonno", "abuelo", "zio", "mami", etc.) may ONLY come from the TAGGED PEOPLE listed on each memory below: either their OWN profile nickname (the "nn:" field -- see PEOPLE-PAIR SPREAD TITLES below, this needs no further evidence) or their first name as the family actually wrote it (reasoning from a name like "Nonna Rosa" or "Tio Mike" is fine, that is user-authored evidence). NEVER infer a relationship from what people look like in a photo, and NEVER infer one just because a topic tag like `extended-family` or `grandparents` is present -- a real failure titled a cluster of grandparent photos "Entre tias, tios y primos" (aunts, uncles, and cousins) purely from the topic tag, when the tagged people did not support that specific relationship mix. When you are not confident a specific relationship word is supported by the tagged people (profile nickname OR name), use a warm generic title instead (spirit: "Look who came to see you") rather than guessing who someone is.',
@@ -2382,6 +2544,8 @@ export function buildOutlineSystemPrompt(): string {
     '- "descriptive": any title that names a concrete place/activity/object.',
     '',
     'DESCRIPTIVE TITLES (and any QUOTE title that names something concrete, e.g. mentions a specific place) MUST BE TRUE OF EVERY MEMORY IN THE SPREAD. If member memories vary, choose a more general title that still fits all of them. If a single memory does not fit an otherwise-specific title, leave that memory OUT of the spread (it returns to backbone eligibility) rather than stretching the title. Real failure: a boat-trip memory was included inside a spread titled "¡Nos vamos en avión!" ("We\'re going by plane!") -- a boat is not a plane, so it should have been excluded from that spread, not included under a title that no longer fit every memory. A quote does not exempt a title from this rule.',
+    '',
+    'PROTAGONIST RULE (spread membership -- applies equally to topic, people-pair, AND emotion candidates, e.g. "the funny ones"): a caption-less memory -- no parent text (the MEMORIES line below reads hasText "n") -- that has this child tagged is ALWAYS admissible to a spread on that basis alone; being present in an untitled photo is enough, never require more evidence than that. The exclusion applies ONLY when a memory HAS an explicit narrative caption (parent text that tells a specific story, not just a label) AND that story clearly centers someone else, with this child merely mentioned or visible while the text is about another person\'s moment -- that memory stays in the chronological backbone instead (never dropped from the book, just not pulled into the spread). Real failure: a funny-moments spread included a caption telling a burger-dinner story that centers the child\'s brother -- it should have stayed in the backbone, not been pulled into the spread on the strength of a topic/emotion tag alone. When you are not sure whether a caption centers this child or someone else, leave the memory in the backbone rather than guessing it into a spread it may not have earned.',
     '',
     'RATIONALES ARE INTERNAL, NEVER BOOK COPY. Every `rationale` value is a private curation note for the human reviewing this outline -- it is never printed in the book. Each one must:',
     '- Cite concrete evidence: which topic/emotion/milestone applies, engagement (likes/comments), has_text, or "only photo of X" -- something checkable in the data you were given.',
@@ -2403,6 +2567,7 @@ export function buildOutlineSystemPrompt(): string {
     '',
     'Return STRICT JSON with this shape:',
     '{',
+    '  "language": "<REQUIRED -- resolved BCP-47 code for the language every field below is written in, e.g. \\"es\\", \\"es-MX\\", \\"en\\" -- see LANGUAGE above>",',
     '  "spreads": [',
     '    {',
     '      "candidate_id": "<one of the candidate ids given to you, e.g. \\"topic:beach\\", \\"people:<memberId>\\", \\"emotion:funny\\">",',
@@ -2463,6 +2628,19 @@ export interface OutlineSkeletonSummaryInput {
    * decision, 2026-08-25) -- computed on these SAME (original, pre-budget)
    * `backboneSegments` via `flagSpecialBackboneSegments`. */
   specialSegments: SpecialSegmentFlag[];
+  /** Round-18: `families.gallery_caption_language`, trimmed, `null` when
+   * unset/blank -- LANGUAGE resolution chain step (2), shown to the model
+   * in the LANGUAGE CONTEXT block below regardless of window caption
+   * count (it costs nothing to include and is the model's fallback when
+   * caption evidence runs out). */
+  configuredLanguage: string | null;
+  /** Round-18: up to `LANGUAGE_EVIDENCE_SAMPLE_LIMIT` recent account-wide
+   * non-empty captions (see `loadAccountWideCaptionSample`) -- populated by
+   * the caller ONLY when the window's own caption count is below
+   * `WINDOW_CAPTION_SPARSE_THRESHOLD`; `[]` otherwise (the window's own
+   * MEMORIES block is evidence enough on its own). LANGUAGE EVIDENCE ONLY:
+   * never eligible for a spread/backbone/Firsts, never a quote source. */
+  languageEvidenceCaptions: string[];
 }
 
 export function buildOutlineUserPrompt(
@@ -2475,6 +2653,17 @@ export function buildOutlineUserPrompt(
   lines.push(
     `BOOK: ${skeleton.childName} -- ${skeleton.scopeLabel} (${skeleton.windowStart} to ${skeleton.windowLastDay})`,
   );
+  lines.push(`CONFIGURED LANGUAGE: ${skeleton.configuredLanguage ?? '(not set)'} -- see LANGUAGE above`);
+  if (skeleton.languageEvidenceCaptions.length > 0) {
+    lines.push('');
+    lines.push(
+      'LANGUAGE EVIDENCE ONLY (recent account-wide captions -- for judging the family\'s writing language ONLY; not selectable, never quotable, not part of this book):',
+    );
+    for (const caption of skeleton.languageEvidenceCaptions) {
+      lines.push(`- "${caption.replace(/\n/g, ' ')}"`);
+    }
+  }
+  lines.push('');
   lines.push(`Through-the-years portraits in scope: ${skeleton.throughTheYearsCount}`);
   lines.push(
     `Firsts (non-birthday explicit milestones) in scope: ${skeleton.firstsCount}${skeleton.firstsCount >= FIRSTS_MIN_MILESTONES ? ' -- this spread CLOSES the book, draft its title now' : ''}`,
@@ -2663,6 +2852,15 @@ export interface ParsedBackboneHighlight {
 }
 
 export interface ParsedOutlineResponse {
+  /** Round-18 LANGUAGE resolution: the model's own resolved BCP-47 code,
+   * validated + code-safety-netted via `resolveOutlineLanguage` -- never
+   * the model's raw, unvalidated string. Always a plausibly-BCP-47 value
+   * (falls back to the configured language, then `FALLBACK_LANGUAGE`, when
+   * the model's own field is missing or malformed -- a malformed, non-blank
+   * value also records an `invalid_language` violation; a merely absent
+   * field does not, matching this file's convention for other optional
+   * AI-drafted fields). */
+  language: string;
   spreads: ParsedSpreadSelection[];
   backboneHighlights: ParsedBackboneHighlight[];
   /** The AI's journal-language draft of the Firsts spread's "big and small
@@ -2761,9 +2959,30 @@ export function parseOutlineResponse(
    * for every real (memory, milestone) pair in scope -- a `firsts_milestones`
    * entry not matching one of these is dropped and recorded, never trusted. */
   validMilestoneKeys: Set<string> = new Set(),
+  /** Round-18: `families.gallery_caption_language`, trimmed, `null` when
+   * unset/blank -- the LANGUAGE resolution chain's step (2) fallback, fed
+   * to `resolveOutlineLanguage` when the model's own `language` field is
+   * missing or fails the loose BCP-47 check. */
+  configuredLanguage: string | null = null,
 ): { response: ParsedOutlineResponse; violations: OutlineIntegrityViolation[] } {
   const violations: OutlineIntegrityViolation[] = [];
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+
+  // Round-18 LANGUAGE: parse + validate BEFORE anything else -- never trust
+  // the model's raw string un-checked (same "never trust the model" posture
+  // as every other field in this function). Mirrors this file's own
+  // established convention for other AI-drafted-but-optional fields
+  // (dedication/back_cover_line/firsts_title/kicker: absence alone is not a
+  // violation, only a garbled/invalid VALUE is) -- a well-behaved model is
+  // instructed this field is required, but a merely-absent field still
+  // degrades gracefully via `resolveOutlineLanguage`'s own fallback chain
+  // rather than being flagged as if it were malformed data.
+  const rawLanguage = typeof obj.language === 'string' ? obj.language.trim() : '';
+  const rawLanguageValid = rawLanguage.length > 0 && BCP47_PATTERN.test(rawLanguage);
+  if (rawLanguage && !rawLanguageValid) {
+    violations.push({ kind: 'invalid_language', detail: rawLanguage });
+  }
+  const language = resolveOutlineLanguage(rawLanguageValid ? rawLanguage : null, configuredLanguage);
 
   const spreadsRaw = Array.isArray(obj.spreads) ? obj.spreads : [];
   const spreads: ParsedSpreadSelection[] = [];
@@ -2968,6 +3187,7 @@ export function parseOutlineResponse(
 
   return {
     response: {
+      language,
       spreads,
       backboneHighlights,
       firstsTitle,
@@ -3271,13 +3491,26 @@ async function main(): Promise<void> {
   // window of the true anniversary from the deterministic DOB join), not the
   // exact anniversary date itself.
   const birthMonth = child.dateOfBirth ? child.dateOfBirth.slice(0, 7) : null;
-  const birthdayMonthToAge = new Map<string, number>();
-  for (const [ageTurned, ids] of birthdayGroups) {
-    for (const id of ids) {
-      const month = features.get(id)!.date.slice(0, 7);
-      if (!birthdayMonthToAge.has(month)) birthdayMonthToAge.set(month, ageTurned);
-    }
-  }
+  // Round-18 fix (owner-decided, "books are standalone"): an AGE-YEAR scope
+  // gets its opening/closing-run-up birthday months DETERMINISTICALLY from
+  // the window itself (`computeAgeYearBirthdayMonths`), never from whether
+  // a birthday-milestone memory happens to exist in the account -- see that
+  // function's doc comment for the two bugs this replaces. Calendar-year
+  // and custom-range scopes are unchanged: their birthday flag(s), if any,
+  // still come from real `birthday`-milestone memories inside the window
+  // (an "interior" birthday has no deterministic window-boundary analogue).
+  const birthdayMonthToAge = scope.type === 'age-year'
+    ? computeAgeYearBirthdayMonths(scope, window)
+    : (() => {
+        const map = new Map<string, number>();
+        for (const [ageTurned, ids] of birthdayGroups) {
+          for (const id of ids) {
+            const month = features.get(id)!.date.slice(0, 7);
+            if (!map.has(month)) map.set(month, ageTurned);
+          }
+        }
+        return map;
+      })();
   const originalSpecialFlags = flagSpecialBackboneSegments(backboneSegments, birthMonth, birthdayMonthToAge);
   if (originalSpecialFlags.length > 0) {
     console.log(`Special segments flagged: ${originalSpecialFlags.map((f) => `${f.segmentId}:${f.kind}`).join(', ')}.`);
@@ -3328,6 +3561,30 @@ async function main(): Promise<void> {
     return;
   }
 
+  // ── LANGUAGE resolution inputs (round-18) ──────────────────────────────
+  // Owner chain step (2): the family's configured caption locale, already
+  // loaded alongside every family visible to this account -- no extra
+  // round trip. Read defensively (blank/whitespace treated as unset) even
+  // though the column is NOT NULL with a default in the schema.
+  const familyRow = families.find((f) => f.id === child.familyId);
+  const configuredLanguage = familyRow?.gallery_caption_language?.trim() || null;
+
+  // Owner chain step (1) evidence: the model judges language from the
+  // window's own MEMORIES excerpts when there are enough of them; below
+  // WINDOW_CAPTION_SPARSE_THRESHOLD (the caption-less-era case this fixes),
+  // also fetch a recent account-wide sample as LANGUAGE EVIDENCE ONLY.
+  const windowCaptionCount = [...features.values()].filter((f) => f.hasText).length;
+  const languageEvidenceCaptions = windowCaptionCount < WINDOW_CAPTION_SPARSE_THRESHOLD
+    ? await loadAccountWideCaptionSample(supabase, child.familyId, LANGUAGE_EVIDENCE_SAMPLE_LIMIT)
+    : [];
+  console.log(
+    `Language evidence: ${windowCaptionCount} in-window caption(s)${
+      languageEvidenceCaptions.length > 0
+        ? ` (sparse -- below ${WINDOW_CAPTION_SPARSE_THRESHOLD}; loaded ${languageEvidenceCaptions.length} account-wide sample caption(s) as evidence)`
+        : ''
+    }, configured language: ${configuredLanguage ?? '(not set)'}.`,
+  );
+
   const systemPrompt = buildOutlineSystemPrompt();
   const userPrompt = buildOutlineUserPrompt(
     {
@@ -3342,6 +3599,8 @@ async function main(): Promise<void> {
         .map(([ageTurned, ids]) => ({ ageTurned, memoryCount: ids.length })),
       throughTheYearsCount: portraitVersions.length,
       specialSegments: originalSpecialFlags,
+      configuredLanguage,
+      languageEvidenceCaptions,
     },
     candidates,
     features,
@@ -3372,7 +3631,9 @@ async function main(): Promise<void> {
     segmentMembersById,
     wideOrientationMemoryIds,
     validMilestoneKeys,
+    configuredLanguage,
   );
+  console.log(`Resolved language: ${response.language}.`);
 
   // Never trust the model's word that a quote is real -- verify against the
   // actual memory content (owner amendment, round-2, 2026-08-25).
@@ -3769,6 +4030,7 @@ async function main(): Promise<void> {
     child,
     scope,
     window,
+    language: response.language,
     familyMemoriesInWindow: familyMemories.length,
     eligibleTotal,
     taggedToChildCount,
@@ -3806,6 +4068,11 @@ interface RenderContext {
   child: ChildCandidate;
   scope: BookScope;
   window: ScopeWindow;
+  /** Round-18: the resolved BCP-47 journal language (`ParsedOutlineResponse
+   * .language`) -- persisted here so it lands in both outline.md's header
+   * and outline.json, which `eval-memory-book-assets.ts` reads as its own
+   * `--language` default when the flag isn't passed explicitly. */
+  language: string;
   familyMemoriesInWindow: number;
   eligibleTotal: number;
   taggedToChildCount: number;
@@ -3898,6 +4165,7 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
   md.push('');
   md.push(`Run: ${ctx.runId}  `);
   md.push(`Scope: ${ctx.scope.type} (${ctx.window.label}), window ${ctx.window.start} to ${scopeWindowLastInclusiveDay(ctx.window)}  `);
+  md.push(`Language: ${ctx.language} (round-18 resolution chain -- see outline.json's "language")  `);
   md.push(`Page estimate: ${ctx.totalPages} / page cap ${ctx.pageCap} (a CEILING, not a target; layflat hard limit ${HARD_PAGE_CAP}) -- via the real book-renderer fitter (round-13 'fitter-as-oracle')`);
   md.push(`Image count: ${ctx.totalImageCount} visual (photo/video-bearing) memories in the final book`);
   md.push('');
@@ -4047,6 +4315,11 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
     child: { id: ctx.child.id, name: ctx.child.name },
     scope: ctx.scope,
     window: ctx.window,
+    // Round-18: resolved BCP-47 journal language -- `eval-memory-book-
+    // assets.ts` reads this as its own `--language` default when the flag
+    // is absent (see `resolveManifestLanguageDefault`/`coerceManifestLanguage`
+    // there).
+    language: ctx.language,
     pageEstimate: ctx.totalPages,
     imageCount: ctx.totalImageCount,
     pageCap: ctx.pageCap,

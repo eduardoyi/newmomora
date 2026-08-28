@@ -168,9 +168,12 @@
  *
  * `--language <es|en>` is written into manifest.json as `language` -- the
  * family's journal language, which book-renderer's furniture (section
- * labels, signatures, scan-mark microcopy) follows. Defaults to "en"
- * (there is no single correct global default); pass `--language es`
- * per book for a Spanish-journaling family.
+ * labels, signatures, scan-mark microcopy) follows. Round-18: when
+ * `--language` is omitted, this now defaults from the outline run's own
+ * resolved `outline.json` "language" (coerced to "es"/"en" -- see
+ * `coerceManifestLanguage`) instead of a hardcoded "en"; an explicit
+ * `--language` flag still always wins. Falls back to "en" exactly as
+ * before on an outline run that predates that field.
  *
  * Requires Supabase vars in supabase/.env.local and R2 vars for image/video
  * downloads, plus a local `ffmpeg` binary on PATH for full-resolution video
@@ -196,12 +199,23 @@ interface CliOptions {
   /**
    * The family's journal language, written into manifest.json as
    * `language` -- book-renderer's furniture (section labels, signatures,
-   * scan-mark microcopy) follows this, not the app UI language. Defaults
-   * to "en": there is no single correct default across every family, and
-   * defaulting to Spanish globally would be wrong for English-journaling
-   * families -- pass `--language es` explicitly per book.
+   * scan-mark microcopy) follows this, not the app UI language. Round-18:
+   * when `--language` is not passed, `main()` now defaults this from the
+   * outline run's own resolved `outline.json` "language" field instead of
+   * a hardcoded "en" -- see `resolveManifestLanguageDefault`. This field
+   * still starts as `DEFAULT_LANGUAGE` here (outline.json isn't loaded yet
+   * at CLI-parse time); `languageExplicit` below is what lets `main()` tell
+   * "the caller actually passed --language" apart from "still the default."
    */
   language: ManifestLanguage;
+  /**
+   * Round-18: true only when `--language` was actually passed on the CLI --
+   * distinguishes an explicit `--language en` from "the flag was never
+   * given," since both otherwise leave `language` at `DEFAULT_LANGUAGE`.
+   * `main()` only applies the outline.json default when this is false (an
+   * explicit CLI flag always wins over the outline's own resolution).
+   */
+  languageExplicit: boolean;
   /**
    * Owner editorial exclusion list: `family_member_portrait_versions` ids
    * to drop from the export entirely -- omitted from `manifest.portraits[]`
@@ -227,6 +241,40 @@ interface CliOptions {
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_LANGUAGE: ManifestLanguage = 'en';
 
+/**
+ * Narrows an arbitrary BCP-47 code (as resolved by the outline script's own
+ * round-18 LANGUAGE chain -- may be e.g. "es-MX", "en", "fr") down to this
+ * script's own bilingual `ManifestLanguage`. book-renderer's furniture
+ * currently only ships Spanish/English copy, so anything whose primary
+ * subtag is "es" maps to "es"; everything else (including a code this
+ * script doesn't recognize at all) maps to `DEFAULT_LANGUAGE` -- the same
+ * "no single correct global default" reasoning `DEFAULT_LANGUAGE` already
+ * documents, just applied per-outline instead of hardcoded.
+ */
+export function coerceManifestLanguage(bcp47: string | undefined): ManifestLanguage {
+  if (bcp47 && /^es(-|$)/i.test(bcp47.trim())) return 'es';
+  return DEFAULT_LANGUAGE;
+}
+
+/**
+ * Round-18: when `--language` was never passed, default to the outline
+ * run's own resolved `outline.json` "language" instead of the hardcoded
+ * "en" -- a caption-less book resolved e.g. "es" via the outline's own
+ * LANGUAGE chain should export as Spanish furniture without the caller
+ * having to know and repeat that choice. An EXPLICIT `--language` flag
+ * always wins over the outline's own resolution (owner precedent: the CLI
+ * flag was always the final word here). Pure so the default-vs-explicit
+ * precedence is unit-testable independent of the outline.json round trip.
+ */
+export function resolveManifestLanguageDefault(
+  languageExplicit: boolean,
+  cliLanguage: ManifestLanguage,
+  outlineLanguage: string | undefined,
+): ManifestLanguage {
+  if (languageExplicit) return cliLanguage;
+  return coerceManifestLanguage(outlineLanguage);
+}
+
 /** Printed alongside a rejected argument -- same hardening precedent as
  * eval-memory-book-outline.ts/eval-memory-book-tagging.ts's `CLI_USAGE`:
  * never silently drop an unrecognized token instead of erroring. */
@@ -248,6 +296,7 @@ export function parseArgs(args: string[]): CliOptions {
     out: null,
     concurrency: DEFAULT_CONCURRENCY,
     language: DEFAULT_LANGUAGE,
+    languageExplicit: false,
     excludePortraitIds: [],
     posterFrameCount: DEFAULT_POSTER_FRAME_COUNT,
   };
@@ -271,6 +320,7 @@ export function parseArgs(args: string[]): CliOptions {
         break;
       case '--language':
         options.language = next === 'es' ? 'es' : DEFAULT_LANGUAGE;
+        options.languageExplicit = true;
         index += 1;
         break;
       case '--exclude-portrait-id':
@@ -328,6 +378,12 @@ export interface ParsedOutline {
    * element's `memoryIds`. Absent on older outline runs -> `[]`. */
   panoramaCandidates: string[];
   heroCandidates: string[];
+  /** Round-18: the outline's own resolved BCP-47 journal language (see
+   * `eval-memory-book-outline.ts`'s `ParsedOutlineResponse.language`).
+   * `undefined` on outline runs that predate this field -- the CLI default
+   * then falls back to `DEFAULT_LANGUAGE`, matching pre-round-18 behavior
+   * exactly (see `resolveManifestLanguageDefault`). */
+  language?: string;
 }
 
 function requireString(value: unknown, field: string): string {
@@ -410,8 +466,16 @@ export function parseOutlineJson(raw: unknown): ParsedOutline {
 
   const panoramaCandidates = optionalStringArray(o.panoramaCandidates, 'panoramaCandidates');
   const heroCandidates = optionalStringArray(o.heroCandidates, 'heroCandidates');
+  // Round-18: optional, present on every outline run from that point on --
+  // same "absent on older runs" tolerance as panoramaCandidates/heroCandidates
+  // above, but a STRING field rather than an array, so it gets its own
+  // narrow check rather than reusing optionalStringArray.
+  if (o.language !== undefined && typeof o.language !== 'string') {
+    throw new Error('outline.json "language" must be a string when present');
+  }
+  const language = typeof o.language === 'string' ? o.language : undefined;
 
-  return { runId, child, scope, window, elements, panoramaCandidates, heroCandidates };
+  return { runId, child, scope, window, elements, panoramaCandidates, heroCandidates, language };
 }
 
 /** Union of every element's `memoryIds`, order-preserving + deduped -- the
@@ -1612,10 +1676,16 @@ async function main(): Promise<void> {
   const outline = parseOutlineJson(JSON.parse(rawOutline));
   const runBasename = runDir.split('/').filter(Boolean).pop() ?? runDir;
 
+  // Round-18: an explicit --language always wins; otherwise default from
+  // the outline's own resolved language (falls back to DEFAULT_LANGUAGE on
+  // an outline run that predates this field -- current behavior when
+  // absent, unchanged).
+  options.language = resolveManifestLanguageDefault(options.languageExplicit, options.language, outline.language);
+
   const outDir = (options.out ?? defaultOutDir(outline.child.name, outline.window.label)).replace(/\/+$/, '');
   await Deno.mkdir(`${outDir}/assets`, { recursive: true });
 
-  console.log(`Memory Book V3 asset export -- outline run ${runBasename} -- child ${outline.child.id}`);
+  console.log(`Memory Book V3 asset export -- outline run ${runBasename} -- child ${outline.child.id} -- language ${options.language}`);
 
   const memoryIds = mergeCandidateMemoryIds(
     collectMemoryIdsFromElements(outline.elements),

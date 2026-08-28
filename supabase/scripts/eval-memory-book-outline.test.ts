@@ -17,12 +17,16 @@ import {
   buildSpecialSegmentTitlesByMonth,
   buildTaggedMemberFeatures,
   classifyOrientation,
+  computeAgeYearBirthdayMonths,
   computeFirstPhotoOrientation,
   computeMedianDate,
   computeMemoryEligibility,
   computePlacedPanoramaGuaranteeCount,
   computeRequiredPacingGaps,
   computeScopeWindow,
+  resolveOutlineLanguage,
+  BCP47_PATTERN,
+  FALLBACK_LANGUAGE,
   dissolveSmallThemedSpreads,
   dissolveThinBirthdaySpreads,
   emotionCandidatesToUnified,
@@ -459,6 +463,140 @@ Deno.test('flagSpecialBackboneSegments: an unremarkable segment is not flagged',
 Deno.test('flagSpecialBackboneSegments: null birth month never flags anything as birth', () => {
   const segments = buildBackboneSegments([backboneInput('a', '2023-05-10'), backboneInput('b', '2023-05-12'), backboneInput('c', '2023-05-20')]);
   assertEquals(flagSpecialBackboneSegments(segments, null, new Map()), []);
+});
+
+// --- round-18 segment-merge case: a sparse year merges the opening and
+// closing-run-up months into ONE backbone segment -- both flags must
+// survive, each keyed to its own month, instead of the old `break`-after-
+// first-birthday-month silently dropping the second one -----------------
+
+Deno.test('flagSpecialBackboneSegments: a segment merging TWO distinct flagged months carries BOTH flags, each keyed to its own month', () => {
+  // 2023-01 has 1 printable memory, 2023-02 has 2 -- buildBackboneSegments
+  // merges them forward into ONE segment once the running count reaches 3.
+  const segments = buildBackboneSegments([
+    backboneInput('a', '2023-01-15'),
+    backboneInput('b', '2023-02-05'),
+    backboneInput('c', '2023-02-20'),
+  ]);
+  assertEquals(segments.length, 1);
+  assertEquals(segments[0].monthKeys, ['2023-01', '2023-02']);
+
+  const flags = flagSpecialBackboneSegments(
+    segments,
+    null,
+    new Map([
+      ['2023-01', 1],
+      ['2023-02', 2],
+    ]),
+  );
+  assertEquals(flags.length, 2);
+  assertEquals(flags.every((f) => f.segmentId === segments[0].id), true);
+  assertEquals(flags, [
+    { segmentId: segments[0].id, month: '2023-01', kind: 'birthday', ageTurned: 1 },
+    { segmentId: segments[0].id, month: '2023-02', kind: 'birthday', ageTurned: 2 },
+  ]);
+});
+
+Deno.test('flagSpecialBackboneSegments: a segment merging the birth month with a DIFFERENT month\'s birthday carries both -- birth priority is per-month, not whole-segment', () => {
+  const segments = buildBackboneSegments([
+    backboneInput('a', '2023-01-15'),
+    backboneInput('b', '2023-02-05'),
+    backboneInput('c', '2023-02-20'),
+  ]);
+  assertEquals(segments.length, 1);
+
+  const flags = flagSpecialBackboneSegments(segments, '2023-01', new Map([['2023-02', 1]]));
+  assertEquals(flags, [
+    { segmentId: segments[0].id, month: '2023-01', kind: 'birth' },
+    { segmentId: segments[0].id, month: '2023-02', kind: 'birthday', ageTurned: 1 },
+  ]);
+});
+
+// --- computeAgeYearBirthdayMonths (round-18 fix -- see its doc comment for
+// the two bugs this replaces: the closing run-up month's birthday memory is
+// dated ON the window's excluded endExclusive boundary and can never be
+// loaded, and the opening month's flag used to depend on a real
+// birthday-milestone memory happening to exist there) ----------------------
+
+Deno.test('computeAgeYearBirthdayMonths: Year One (ageYear 1) -- opening (age 0) is omitted, only the closing run-up month (age 1) is flagged', () => {
+  const scope = { type: 'age-year' as const, ageYear: 1 };
+  const window = computeScopeWindow(scope, '2023-05-10');
+  const months = computeAgeYearBirthdayMonths(scope, window);
+  assertEquals([...months.entries()], [['2024-05', 1]]);
+});
+
+Deno.test('computeAgeYearBirthdayMonths: Year Two (ageYear 2) -- BOTH the opening (age 1) and closing run-up (age 2) months are flagged', () => {
+  const scope = { type: 'age-year' as const, ageYear: 2 };
+  const window = computeScopeWindow(scope, '2023-05-10');
+  const months = computeAgeYearBirthdayMonths(scope, window);
+  assertEquals(months.get('2024-05'), 1); // opening month = birthday N-1 = turns 1
+  assertEquals(months.get('2025-05'), 2); // closing run-up month = birthday N = turns 2
+  assertEquals(months.size, 2);
+});
+
+Deno.test('computeAgeYearBirthdayMonths: calendar-year and custom-range scopes return an empty map -- interior birthdays keep the OLD data-dependent behavior', () => {
+  const window = computeScopeWindow({ type: 'calendar-year', year: 2023 }, null);
+  assertEquals(computeAgeYearBirthdayMonths({ type: 'calendar-year', year: 2023 }, window).size, 0);
+
+  const rangeWindow = computeScopeWindow({ type: 'custom-range', from: '2023-01-01', to: '2023-12-31' }, null);
+  assertEquals(
+    computeAgeYearBirthdayMonths({ type: 'custom-range', from: '2023-01-01', to: '2023-12-31' }, rangeWindow).size,
+    0,
+  );
+});
+
+Deno.test('computeAgeYearBirthdayMonths: end-to-end -- the real Enzo year-two incident (no specials at all) now flags both boundary months, and the closing month survives even though no memory is dated exactly on the boundary day', () => {
+  const scope = { type: 'age-year' as const, ageYear: 2 };
+  const window = computeScopeWindow(scope, '2023-05-10');
+  const months = computeAgeYearBirthdayMonths(scope, window);
+
+  // A sparse year-two archive: a few memories near the opening month, a few
+  // near the closing month, NONE dated on the actual (excluded) boundary day.
+  const segments = buildBackboneSegments([
+    backboneInput('a', '2024-05-12'), // opening month (2024-05), a couple days after the birthday
+    backboneInput('b', '2024-05-20'),
+    backboneInput('c', '2025-05-01'), // closing run-up month (2025-05), still before the boundary day (05-10)
+    backboneInput('d', '2025-05-05'),
+  ]);
+  const flags = flagSpecialBackboneSegments(segments, null, months);
+  assertEquals(
+    flags.some((f) => f.kind === 'birthday' && f.ageTurned === 1),
+    true,
+  );
+  assertEquals(
+    flags.some((f) => f.kind === 'birthday' && f.ageTurned === 2),
+    true,
+  );
+});
+
+// --- resolveOutlineLanguage (round-18 LANGUAGE resolution: the code-level
+// safety net around the model's own chain -- steps 2/3 only, step 1
+// "predominant caption language" is the model's job alone) ----------------
+
+Deno.test('resolveOutlineLanguage: a valid model language wins over the configured one', () => {
+  assertEquals(resolveOutlineLanguage('es', 'en-US'), 'es');
+});
+
+Deno.test('resolveOutlineLanguage: falls back to the configured language when the model omitted its own', () => {
+  assertEquals(resolveOutlineLanguage(null, 'es-MX'), 'es-MX');
+});
+
+Deno.test('resolveOutlineLanguage: falls back to English when neither is available', () => {
+  assertEquals(resolveOutlineLanguage(null, null), FALLBACK_LANGUAGE);
+  assertEquals(resolveOutlineLanguage(null, null), 'en');
+});
+
+Deno.test('resolveOutlineLanguage: a garbled configured language is treated as unusable, same as absent', () => {
+  assertEquals(resolveOutlineLanguage(null, 'not a language code!!'), 'en');
+});
+
+Deno.test('BCP47_PATTERN: accepts real-world codes, rejects garbage', () => {
+  for (const code of ['en', 'es', 'es-MX', 'pt-BR', 'zh-Hans-CN']) {
+    assertEquals(BCP47_PATTERN.test(code), true, code);
+  }
+  for (const code of ['', 'not a code', 'es_MX', '123']) {
+    assertEquals(BCP47_PATTERN.test(code), false, code);
+  }
 });
 
 Deno.test('buildSpecialSegmentTitlesByMonth: bridges the AI title from the original segment id to its month', () => {
@@ -1878,6 +2016,50 @@ Deno.test('buildOutlineSystemPrompt: explains FIRSTS WARM NAMES with the real ex
   assertEquals(prompt.includes('firsts_milestones'), true);
 });
 
+// --- round-18 LANGUAGE resolution ------------------------------------------
+
+Deno.test('buildOutlineSystemPrompt: explains the LANGUAGE resolution chain and requires a language field', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('LANGUAGE:'), true);
+  assertEquals(prompt.includes('predominant language'), true);
+  assertEquals(prompt.includes('CONFIGURED LANGUAGE'), true);
+  assertEquals(prompt.includes('LANGUAGE EVIDENCE ONLY'), true);
+  assertEquals(prompt.includes('REQUIRED'), true);
+  assertEquals(prompt.includes('`language` field'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: the JSON shape requires a top-level "language" field', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('"language": "<REQUIRED'), true);
+});
+
+// --- round-18 PROTAGONIST RULE (spread membership is caption-gated: a
+// caption-less tagged photo is always admissible; an explicit narrative
+// caption centering someone else keeps the memory in the backbone) --------
+
+Deno.test('buildOutlineSystemPrompt: the protagonist rule admits caption-less tagged memories unconditionally', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('PROTAGONIST RULE'), true);
+  assertEquals(prompt.includes('ALWAYS admissible'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: the protagonist rule excludes only a captioned memory that centers someone else, with the real burger-dinner example', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('centers someone else'), true);
+  assertEquals(prompt.includes('burger-dinner'), true);
+  assertEquals(prompt.includes('stays in the chronological backbone') || prompt.includes('stays in the backbone'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: the protagonist rule explicitly covers all three candidate kinds, including emotion spreads', () => {
+  const prompt = buildOutlineSystemPrompt();
+  const ruleStart = prompt.indexOf('PROTAGONIST RULE');
+  assertEquals(ruleStart >= 0, true);
+  const ruleLine = prompt.slice(ruleStart, prompt.indexOf('\n', ruleStart) + 400);
+  assertEquals(ruleLine.includes('topic'), true);
+  assertEquals(ruleLine.includes('people-pair'), true);
+  assertEquals(ruleLine.includes('emotion'), true);
+});
+
 // --- buildOutlineUserPrompt (tagged-people metadata + flagged segments) ----
 
 function fixtureFeature(overrides: Partial<MemoryFeature> = {}): MemoryFeature {
@@ -1918,6 +2100,8 @@ Deno.test('buildOutlineUserPrompt: includes each memory\'s tagged people with ch
       birthdaySpreads: [],
       throughTheYearsCount: 0,
       specialSegments: [],
+      configuredLanguage: null,
+      languageEvidenceCaptions: [],
     },
     [],
     features,
@@ -1949,6 +2133,8 @@ Deno.test('buildOutlineUserPrompt: round-16 (owner correction) -- a profile nick
       birthdaySpreads: [],
       throughTheYearsCount: 0,
       specialSegments: [],
+      configuredLanguage: null,
+      languageEvidenceCaptions: [],
     },
     [],
     features,
@@ -1973,6 +2159,8 @@ Deno.test('buildOutlineUserPrompt: per-memory row includes the orientation marke
       birthdaySpreads: [],
       throughTheYearsCount: 0,
       specialSegments: [],
+      configuredLanguage: null,
+      languageEvidenceCaptions: [],
     },
     [],
     features,
@@ -1994,6 +2182,8 @@ Deno.test('buildOutlineUserPrompt: flags a special segment for the model with it
       birthdaySpreads: [],
       throughTheYearsCount: 0,
       specialSegments: [{ segmentId: segments[0].id, month: '2022-05', kind: 'birth' }],
+      configuredLanguage: null,
+      languageEvidenceCaptions: [],
     },
     [],
     new Map(),
@@ -2017,6 +2207,8 @@ Deno.test('buildOutlineUserPrompt: a single genuine milestone still gets its own
     birthdaySpreads: [],
     throughTheYearsCount: 0,
     specialSegments: [],
+    configuredLanguage: null,
+    languageEvidenceCaptions: [],
   };
 
   const zero = buildOutlineUserPrompt({ ...promptSkeleton, firstsCount: 0 }, [], new Map());
@@ -2027,6 +2219,55 @@ Deno.test('buildOutlineUserPrompt: a single genuine milestone still gets its own
   assertEquals(oneMileStone.includes('Firsts (non-birthday explicit milestones) in scope: 1 -- this spread CLOSES the book'), true);
   assertEquals(oneMileStone.includes('FIRSTS MILESTONES'), true);
   assertEquals(oneMileStone.includes('memory_id="m1" milestone_id="balance-bike"'), true);
+});
+
+// --- round-18 LANGUAGE CONTEXT block ---------------------------------------
+
+function languageSkeleton(overrides: { configuredLanguage: string | null; languageEvidenceCaptions: string[] }) {
+  return {
+    childName: 'Enzo',
+    scopeLabel: 'Year One',
+    windowStart: '2023-01-01',
+    windowLastDay: '2023-12-31',
+    backboneSegments: [],
+    firstsCount: 0,
+    birthdaySpreads: [],
+    throughTheYearsCount: 0,
+    specialSegments: [],
+    ...overrides,
+  };
+}
+
+Deno.test('buildOutlineUserPrompt: shows "(not set)" for a null configured language and omits the evidence block when empty', () => {
+  const prompt = buildOutlineUserPrompt(
+    languageSkeleton({ configuredLanguage: null, languageEvidenceCaptions: [] }),
+    [],
+    new Map(),
+  );
+  assertEquals(prompt.includes('CONFIGURED LANGUAGE: (not set)'), true);
+  assertEquals(prompt.includes('LANGUAGE EVIDENCE ONLY'), false);
+});
+
+Deno.test('buildOutlineUserPrompt: shows the configured language value when set', () => {
+  const prompt = buildOutlineUserPrompt(
+    languageSkeleton({ configuredLanguage: 'es-MX', languageEvidenceCaptions: [] }),
+    [],
+    new Map(),
+  );
+  assertEquals(prompt.includes('CONFIGURED LANGUAGE: es-MX'), true);
+});
+
+Deno.test('buildOutlineUserPrompt: renders the LANGUAGE EVIDENCE ONLY block, marked not-selectable/not-quotable, when captions are supplied', () => {
+  const prompt = buildOutlineUserPrompt(
+    languageSkeleton({ configuredLanguage: null, languageEvidenceCaptions: ['Hoy fuimos al parque', 'Le encantó el columpio'] }),
+    [],
+    new Map(),
+  );
+  assertEquals(prompt.includes('LANGUAGE EVIDENCE ONLY'), true);
+  assertEquals(prompt.includes('not selectable'), true);
+  assertEquals(prompt.includes('never quotable'), true);
+  assertEquals(prompt.includes('Hoy fuimos al parque'), true);
+  assertEquals(prompt.includes('Le encantó el columpio'), true);
 });
 
 // --- Quote-title verification (owner amendment, round-2, 2026-08-25: "never
@@ -2084,6 +2325,70 @@ Deno.test('verifyQuoteTitles: a quote with no source content at all is flagged',
 
 // --- parseOutlineResponse: title_mode / title_source_memory_id (owner
 // amendment, round-2, 2026-08-25) ------------------------------------------
+
+// --- round-18: parseOutlineResponse's "language" field --------------------
+
+Deno.test('parseOutlineResponse: a valid model language is used verbatim, no violation', () => {
+  const { response, violations } = parseOutlineResponse(
+    { language: 'es' },
+    new Set(),
+    new Set(),
+    new Set(),
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(response.language, 'es');
+  assertEquals(violations, []);
+});
+
+Deno.test('parseOutlineResponse: a garbled model language falls back through the chain and records invalid_language', () => {
+  const { response, violations } = parseOutlineResponse(
+    { language: 'not a real code!!' },
+    new Set(),
+    new Set(),
+    new Set(),
+    new Map(),
+    new Map(),
+    new Map(),
+    new Set(),
+    new Set(),
+    'es-MX',
+  );
+  assertEquals(response.language, 'es-MX'); // falls back to the configured language
+  assertEquals(violations.some((v) => v.kind === 'invalid_language' && v.detail === 'not a real code!!'), true);
+});
+
+Deno.test('parseOutlineResponse: an absent model language falls back to the configured language silently, no violation (matches this file\'s convention for other optional AI fields)', () => {
+  const { response, violations } = parseOutlineResponse(
+    {},
+    new Set(),
+    new Set(),
+    new Set(),
+    new Map(),
+    new Map(),
+    new Map(),
+    new Set(),
+    new Set(),
+    'fr',
+  );
+  assertEquals(response.language, 'fr');
+  assertEquals(violations, []);
+});
+
+Deno.test('parseOutlineResponse: an absent model language AND no configured language falls back to English', () => {
+  const { response, violations } = parseOutlineResponse(
+    {},
+    new Set(),
+    new Set(),
+    new Set(),
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(response.language, 'en');
+  assertEquals(violations, []);
+});
 
 Deno.test('parseOutlineResponse: a valid quote spread keeps title_mode and its source memory id', () => {
   const { response, violations } = parseOutlineResponse(
