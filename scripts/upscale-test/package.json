@@ -1,0 +1,13 @@
+{
+  "name": "momora-upscale-test",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Standalone, non-production comparison harness for the illustration-upscale decision (V3 Phase 2, docs/plans/prodigi-order-spec.md's appended AI-upscale section). Not part of the app or book-renderer -- deliberately isolated with its own package.json so `sharp` never becomes an app/book-renderer dependency for what is a one-off decision artifact.",
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "devDependencies": {
+    "sharp": "^0.35.4"
+  }
+}

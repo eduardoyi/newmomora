@@ -481,7 +481,27 @@ were budget-model drift (pre-digest accounting), not taste — motivating
 executing the fitter-as-oracle refactor (below) before generating the
 next validation books (Enzo year one/two, Mara year two).
 
-**Architecture follow-up (2026-08-27): make the fitter the yield oracle.**
+**Owner decisions (2026-08-28, rounds 17-18 — validation-trio findings):**
+generated Enzo year-one/two + Mara year-two through the full pipeline.
+Findings + decisions: panorama parity blanks (6 across the trio) get the
+established ladder — reorder-predicted neighbor moves, then a one-page
+swap (round-4's "never swaps" relaxed exactly that far), then demote to a
+normal solo page, never a blank; audit tolerance removed. Language
+resolution is deterministic and standalone per account: predominant
+caption language account-wide → families.gallery_caption_language →
+English, resolved+committed by the model as a BCP-47 `language` field in
+outline.json which the asset exporter inherits (caption-less periods came
+out English before). Special month titles: BOOKS ARE STANDALONE — an
+age-year book flags birth month (if in window), the OPENING month
+("the month you turned N-1") AND the closing run-up month ("the month
+you turned N", though the birthday day itself is endExclusive). Themed-
+spread membership is protagonist-gated ONLY for captioned memories: a
+caption-less tagged photo is always admissible; an explicit narrative
+caption centering someone else keeps the memory in its chronological
+backbone. Printed parent text strips URL tokens via one shared sanitizer
+(fitter decisions, templates, audit all measure the same cleaned text;
+URL-only captions render as photo-only; quote titles never quote URLs) —
+the app renders links as cards, a book never prints a raw URL.
 The outline currently duplicates the renderer's page-yield math in its own
 constants and the two drift (est 108 vs rendered 121 on Mara after several
 alignment rounds). The durable fix: the outline imports and calls the

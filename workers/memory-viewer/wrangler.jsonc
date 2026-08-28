@@ -1,0 +1,48 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "momora-memory-viewer",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": {
+    "SUPABASE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co"
+  },
+  "secrets": {
+    "required": ["SUPABASE_SERVICE_ROLE_KEY"]
+  },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "momora-prod"
+    }
+  ],
+  // Custom domain for the QR viewer (docs/plans/memory-book.md §7). This is
+  // a NEW domain, distinct from the app's existing usemomora.com — see the
+  // README's "DNS" section for what the owner needs to do before this route
+  // can go live (add momora.app to the same Cloudflare account, or point it
+  // at this account via a partial/CNAME setup, then flip this on).
+  "routes": [
+    {
+      "pattern": "m.momora.app",
+      "custom_domain": true
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "momora-memory-viewer-staging",
+      "vars": {
+        "SUPABASE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co"
+      },
+      "secrets": {
+        "required": ["SUPABASE_SERVICE_ROLE_KEY"]
+      },
+      "r2_buckets": [
+        {
+          "binding": "MEDIA",
+          "bucket_name": "REPLACE_WITH_STAGING_MEDIA_BUCKET"
+        }
+      ]
+    }
+  }
+}
