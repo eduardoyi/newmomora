@@ -10,17 +10,13 @@ import {
   buildReadingOrder,
   buildSpecialSegmentTitlesByMonth,
   buildTaggedMemberFeatures,
-  classifyMemoryPageShape,
   classifyOrientation,
   computeFirstPhotoOrientation,
   computeMedianDate,
   computeMemoryEligibility,
-  computePageEstimate,
   computePlacedPanoramaGuaranteeCount,
   computeRequiredPacingGaps,
   computeScopeWindow,
-  computeThinningScore,
-  estimateElementPages,
   dissolveSmallThemedSpreads,
   dissolveThinBirthdaySpreads,
   emotionCandidatesToUnified,
@@ -57,15 +53,12 @@ import {
   buildSyntheticMemory,
   buildSyntheticOutline,
   buildSyntheticPortrait,
-  estimateElementPagesViaFitter,
   estimatePagesViaFitter,
   type BackboneMemoryInput,
-  type BudgetElement,
   type ChildCandidate,
   type FamilyMemberForTagging,
   type MediaRow,
   type MemoryFeature,
-  type MemoryPageShape,
   type OracleElementInput,
   type PacingCandidate,
   type PlacementCandidate,
@@ -999,141 +992,9 @@ Deno.test('dissolveThinBirthdaySpreads: an empty birthday spread (0 memories) is
   assertEquals(result.dissolvedAges, []);
 });
 
-// --- classifyMemoryPageShape + estimateElementPages (owner round-3
-// decision, 2026-08-27: true page-yield model, mirroring the renderer's
-// real composition decision table instead of an images-per-page density
-// constant) -----------------------------------------------------------------
-
-function shapeInput(overrides: Partial<Parameters<typeof classifyMemoryPageShape>[0]> = {}) {
-  return { photoCount: 0, videoCount: 0, hasText: false, textLength: 0, isPanorama: false, isFullBleed: false, ...overrides };
-}
-
-Deno.test('classifyMemoryPageShape: a placed panorama candidate always wins, regardless of other fields', () => {
-  assertEquals(classifyMemoryPageShape(shapeInput({ isPanorama: true, photoCount: 1, hasText: true, textLength: 999 })), 'panorama');
-  assertEquals(classifyMemoryPageShape(shapeInput({ isPanorama: true, isFullBleed: true })), 'panorama');
-});
-
-Deno.test('classifyMemoryPageShape: a hero candidate is full-bleed (when not also a panorama)', () => {
-  assertEquals(classifyMemoryPageShape(shapeInput({ isFullBleed: true, photoCount: 1 })), 'full-bleed');
-});
-
-Deno.test('classifyMemoryPageShape: 3+ photos/videos on one memory is a single-memory grid', () => {
-  assertEquals(classifyMemoryPageShape(shapeInput({ photoCount: 3 })), 'photo-grid');
-  assertEquals(classifyMemoryPageShape(shapeInput({ photoCount: 2, videoCount: 1 })), 'photo-grid');
-});
-
-Deno.test('classifyMemoryPageShape: 1-2 photos/videos is a solo photo', () => {
-  assertEquals(classifyMemoryPageShape(shapeInput({ photoCount: 1 })), 'solo-photo');
-  assertEquals(classifyMemoryPageShape(shapeInput({ videoCount: 2 })), 'solo-photo');
-});
-
-Deno.test('classifyMemoryPageShape: short text-only splits into a bare quote vs. a short illustrated story at SHORT_TEXT_MAX_CHARS (owner round-3 refinement, 2026-08-27)', () => {
-  assertEquals(classifyMemoryPageShape(shapeInput({ hasText: true, textLength: 100 })), 'short-text');
-  assertEquals(classifyMemoryPageShape(shapeInput({ hasText: true, textLength: 101 })), 'short-illustrated-story');
-});
-
-Deno.test('classifyMemoryPageShape: short illustrated story vs. long illustrated story at SHORT_STORY_MAX_CHARS (lowered to 200, owner round-3 refinement, 2026-08-27)', () => {
-  assertEquals(classifyMemoryPageShape(shapeInput({ hasText: true, textLength: 200 })), 'short-illustrated-story');
-  assertEquals(classifyMemoryPageShape(shapeInput({ hasText: true, textLength: 201 })), 'long-story');
-});
-
-Deno.test('classifyMemoryPageShape: neither text nor visual falls back to a flat text-page rather than costing nothing', () => {
-  assertEquals(classifyMemoryPageShape(shapeInput()), 'text-page');
-});
-
-Deno.test('estimateElementPages: an empty list costs 0 pages', () => {
-  assertEquals(estimateElementPages([]), 0);
-});
-
-Deno.test('estimateElementPages: panorama 2, full-bleed/photo-grid/text-page/short-illustrated-story 1, long-story 2 -- each 1:1', () => {
-  assertEquals(estimateElementPages(['panorama']), 2);
-  assertEquals(estimateElementPages(['panorama', 'panorama']), 4);
-  assertEquals(estimateElementPages(['full-bleed']), 1);
-  assertEquals(estimateElementPages(['photo-grid']), 1);
-  assertEquals(estimateElementPages(['text-page']), 1);
-  assertEquals(estimateElementPages(['long-story']), 2);
-  assertEquals(estimateElementPages(['short-illustrated-story']), 1);
-});
-
-Deno.test('estimateElementPages: two short-illustrated-story memories sum to 2 pages -- naturally "share" one 2-page spread with no special pairing math', () => {
-  assertEquals(estimateElementPages(['short-illustrated-story', 'short-illustrated-story']), 2);
-});
-
-Deno.test('estimateElementPages: solo-photo pairs two-per-page, rounded up (unchanged)', () => {
-  assertEquals(estimateElementPages(['solo-photo', 'solo-photo']), 1);
-  assertEquals(estimateElementPages(['solo-photo', 'solo-photo', 'solo-photo']), 2); // odd one out still costs a page
-});
-
-Deno.test('estimateElementPages: short-text quotes accumulate at ~0.4 pages each, rounded up as a group (owner round-3 refinement, 2026-08-27)', () => {
-  assertEquals(estimateElementPages(['short-text']), 1); // ceil(0.4) -- a lone quote still costs a full page
-  assertEquals(estimateElementPages(['short-text', 'short-text']), 1); // ceil(0.8)
-  assertEquals(estimateElementPages(Array(3).fill('short-text')), 2); // ceil(1.2)
-  assertEquals(estimateElementPages(Array(5).fill('short-text')), 2); // ceil(2.0) -- a 5-up quote-collection spread
-  assertEquals(estimateElementPages(Array(6).fill('short-text')), 3); // ceil(2.4)
-});
-
-Deno.test('estimateElementPages: mixed shapes sum independently', () => {
-  // 1 panorama (2) + 1 full-bleed (1) + 3 solo-photo (ceil(3/2)=2) +
-  // 2 short-illustrated-story (2) + 3 short-text (ceil(1.2)=2) = 9.
-  assertEquals(
-    estimateElementPages([
-      'panorama', 'full-bleed',
-      'solo-photo', 'solo-photo', 'solo-photo',
-      'short-illustrated-story', 'short-illustrated-story',
-      'short-text', 'short-text', 'short-text',
-    ]),
-    9,
-  );
-});
-
-// --- computeThinningScore (owner round-3 decision, 2026-08-27:
-// content-neutral ranking -- replaces the type-privileged ladder that
-// caused a 77-illustration skew. Every signal is additive; none is an
-// automatic trump.) ----------------------------------------------------------
-
-function signals(overrides: Partial<Parameters<typeof computeThinningScore>[0]> = {}) {
-  return { isHighlighted: false, inThemedCluster: false, engagementCount: 0, hasText: false, textLength: 0, hasVisual: false, ...overrides };
-}
-
-Deno.test('computeThinningScore: no signals scores 0', () => {
-  assertEquals(computeThinningScore(signals()), 0);
-});
-
-Deno.test('computeThinningScore: each signal contributes independently and additively', () => {
-  assertEquals(computeThinningScore(signals({ isHighlighted: true })), 4);
-  assertEquals(computeThinningScore(signals({ inThemedCluster: true })), 2);
-  assertEquals(computeThinningScore(signals({ hasVisual: true })), 2);
-  assertEquals(computeThinningScore(signals({ hasText: true, textLength: 0 })), 1);
-});
-
-Deno.test('computeThinningScore: engagement is capped so one viral thread cannot dominate', () => {
-  assertEquals(computeThinningScore(signals({ engagementCount: 3 })), 3);
-  assertEquals(computeThinningScore(signals({ engagementCount: 5 })), 5);
-  assertEquals(computeThinningScore(signals({ engagementCount: 500 })), 5);
-});
-
-Deno.test('computeThinningScore: text richness grows with length, capped', () => {
-  assertEquals(computeThinningScore(signals({ hasText: true, textLength: 79 })), 1); // floor(79/80)=0
-  assertEquals(computeThinningScore(signals({ hasText: true, textLength: 80 })), 2); // floor(80/80)=1
-  assertEquals(computeThinningScore(signals({ hasText: true, textLength: 500 })), 4); // floor(500/80)=6, capped at 3 -> 1+3
-});
-
-Deno.test('computeThinningScore: never a type trump -- a richly engaged plain photo can outscore a bare highlight', () => {
-  const engagedPhoto = computeThinningScore(signals({ hasVisual: true, engagementCount: 5 })); // 2 + 5 = 7
-  const bareHighlight = computeThinningScore(signals({ isHighlighted: true })); // 4
-  assertEquals(engagedPhoto > bareHighlight, true);
-});
-
-Deno.test('computeThinningScore: signals stack across every category at once', () => {
-  // highlighted(4) + themedCluster(2) + visual(2) + text richness at 200 chars (1 + floor(200/80)=2 -> 3) = 11.
-  const score = computeThinningScore(
-    signals({ isHighlighted: true, inThemedCluster: true, hasVisual: true, hasText: true, textLength: 200 }),
-  );
-  assertEquals(score, 11);
-});
-
 // --- computePlacedPanoramaGuaranteeCount (owner round-3 decision,
-// 2026-08-27: "1 guaranteed + 1 per ~20 pages") ------------------------------
+// 2026-08-27: "1 guaranteed + 1 per ~20 pages" -- round-14: reviewer-context
+// count only, formula unchanged, now fed by the pre-cap holistic estimate) --
 
 Deno.test('computePlacedPanoramaGuaranteeCount: 1 guaranteed below the first 20-page tier', () => {
   assertEquals(computePlacedPanoramaGuaranteeCount(0), 1);
@@ -1149,182 +1010,52 @@ Deno.test('computePlacedPanoramaGuaranteeCount: never negative even for a negati
   assertEquals(computePlacedPanoramaGuaranteeCount(-100), 1);
 });
 
-// --- computePageEstimate (fixed pages + firsts/birthday flat 2 each +
-// backbone/themed via the shape-based page-yield model) ---------------------
+// --- planNonBackboneBudget / selectBackboneMemories (round-14 owner
+// decision: outline-side BUDGET THINNING REMOVED ENTIRELY, following an A/B
+// test showing the round-13 shape-placeholder oracle over-thinned real
+// books -- see the "Themed-spread and backbone selection" section comment
+// in eval-memory-book-outline.ts. Both functions now unconditionally keep
+// everyone they are given; these tests assert that NO-CUT invariant plus
+// whatever structural rules survive -- there is no more page-cost, budget,
+// score, or pin behavior to test, because none of it exists anymore.) -----
 
-Deno.test('computePageEstimate: fixed pages + firsts/birthday (flat 2 each) + backbone/themed via shapes', () => {
-  const elements: BudgetElement[] = [
-    { id: 'themed:beach', kind: 'themed', memoryCount: 4, shapes: ['solo-photo', 'solo-photo', 'solo-photo', 'solo-photo'] }, // ceil(4/2)=2
-    { id: 'firsts', kind: 'firsts', memoryCount: 3 },
-    { id: 'birthday-1', kind: 'birthday', memoryCount: 2 },
-    { id: 'backbone:jan', kind: 'backbone', memoryCount: 3, shapes: ['photo-grid', 'photo-grid', 'photo-grid'] }, // 3
-  ];
-  // 4 fixed + 2 (themed) + 2 (firsts) + 2 (birthday) + 3 (backbone) = 13
-  assertEquals(computePageEstimate(elements), 13);
-});
-
-Deno.test('computePageEstimate: an element with memories but no shapes still gets a 1-page floor', () => {
-  const elements: BudgetElement[] = [{ id: 'themed:words', kind: 'themed', memoryCount: 4, shapes: [] }];
-  assertEquals(computePageEstimate(elements), 4 + 1);
-});
-
-Deno.test('computePageEstimate: a zero-memoryCount element contributes nothing', () => {
-  assertEquals(computePageEstimate([{ id: 'backbone:empty', kind: 'backbone', memoryCount: 0, shapes: [] }]), 4);
-});
-
-// --- planNonBackboneBudget (priority a+b: non-droppable, then themed,
-// shape-based sizing + drop order) ------------------------------------------
-
-Deno.test('planNonBackboneBudget: keeps every themed spread when (a)+(b) already fit the page cap', () => {
-  const plan = planNonBackboneBudget(4, 4 /* firsts+1 birthday */, [
-    { id: 'themed:beach', memoryCount: 5, shapes: ['solo-photo', 'solo-photo', 'solo-photo', 'solo-photo', 'solo-photo'] }, // ceil(5/2)=3
-    { id: 'themed:bath', memoryCount: 6, shapes: Array(6).fill('solo-photo') }, // ceil(6/2)=3
-  ], 30);
+Deno.test('planNonBackboneBudget: keeps every themed spread with at least one member, regardless of how many or how large', () => {
+  const plan = planNonBackboneBudget([
+    { id: 'themed:beach', memoryCount: 5 },
+    { id: 'themed:bath', memoryCount: 200 }, // absurdly large -- still kept, nothing here prices it
+  ]);
   assertEquals(plan.keptThemedIds.sort(), ['themed:bath', 'themed:beach']);
   assertEquals(plan.droppedThemedIds, []);
-  assertEquals(plan.nonBackbonePages, 4 + 4 + 3 + 3);
-  assertEquals(plan.backboneCapacityPages, 30 - plan.nonBackbonePages);
 });
 
-Deno.test('planNonBackboneBudget: drops lowest-PAGE-COST-first, not lowest-memory-count-first', () => {
-  // "themed:few-photos" has MORE memories but a LOWER page cost than
-  // "themed:many-photos" -- page cost must drive the drop order.
-  const plan = planNonBackboneBudget(4, 0, [
-    { id: 'themed:few-photos', memoryCount: 10, shapes: ['solo-photo'] }, // 1 page
-    { id: 'themed:many-photos', memoryCount: 3, shapes: ['photo-grid', 'photo-grid', 'photo-grid'] }, // 3 pages
-  ], 4 + 3); // just enough room for the 3-page spread alone
-  assertEquals(plan.droppedThemedIds, ['themed:few-photos']);
-  assertEquals(plan.keptThemedIds, ['themed:many-photos']);
+Deno.test('planNonBackboneBudget: a zero-memoryCount element is excluded (nothing to keep), not "dropped"', () => {
+  const plan = planNonBackboneBudget([{ id: 'themed:empty', memoryCount: 0 }, { id: 'themed:real', memoryCount: 1 }]);
+  assertEquals(plan.keptThemedIds, ['themed:real']);
+  assertEquals(plan.droppedThemedIds, []); // empty, never "dropped for budget" -- there is no budget
 });
 
-Deno.test('planNonBackboneBudget: never drops non-droppable pages, only themed', () => {
-  // fixed(4) + nonDroppable(6) + 3 themed spreads (1 page each = 3) = 13.
-  // Cap 10 -> must drop themed spreads until fixed+nonDroppable+themed <= 10,
-  // i.e. drop all 3 (4+6=10 alone already fills it).
-  const plan = planNonBackboneBudget(4, 6, [
-    { id: 'themed:a', memoryCount: 10, shapes: ['text-page'] },
-    { id: 'themed:b', memoryCount: 4, shapes: ['text-page'] },
-    { id: 'themed:c', memoryCount: 5, shapes: ['text-page'] },
-  ], 10);
+Deno.test('planNonBackboneBudget: an empty input list returns an empty (not undefined) plan', () => {
+  const plan = planNonBackboneBudget([]);
   assertEquals(plan.keptThemedIds, []);
-  assertEquals(plan.droppedThemedIds.sort(), ['themed:a', 'themed:b', 'themed:c']);
-  assertEquals(plan.nonBackbonePages, 10);
-  assertEquals(plan.backboneCapacityPages, 0);
+  assertEquals(plan.droppedThemedIds, []);
 });
 
-Deno.test('planNonBackboneBudget: drops only as many themed spreads as needed', () => {
-  // fixed(4) + nonDroppable(0) + small(1pg) + big(8pg) = 13.
-  // Cap 12 (= 4 + big's 8 pages alone) -> dropping just the smaller one is enough.
-  const plan = planNonBackboneBudget(4, 0, [
-    { id: 'themed:small', memoryCount: 4, shapes: ['text-page'] },
-    { id: 'themed:big', memoryCount: 9, shapes: Array(8).fill('photo-grid') },
-  ], 12);
-  assertEquals(plan.keptThemedIds, ['themed:big']);
-  assertEquals(plan.droppedThemedIds, ['themed:small']);
-});
-
-// --- selectBackboneMemories (owner round-3 decision, 2026-08-27:
-// content-neutral ranking against a real PAGE budget -- starts with
-// everyone kept, never pads, drops the single lowest-scored unpinned
-// candidate at a time until the honest page-yield estimate fits) -----------
-
-function backboneCandidate(id: string, score: number, shape: MemoryPageShape, date = '2023-01-01', printable = true) {
-  return { id, date, score, shape, printable };
+function backboneCandidate(id: string) {
+  return { id };
 }
 
-Deno.test('selectBackboneMemories: keeps everyone when the estimate already fits -- never pads, never pre-emptively drops', () => {
-  const candidates = [backboneCandidate('a', 1, 'text-page'), backboneCandidate('b', 9, 'photo-grid')];
-  assertEquals(selectBackboneMemories(candidates, 2).sort(), ['a', 'b']);
+Deno.test('selectBackboneMemories: keeps every candidate, regardless of how many', () => {
+  const candidates = [backboneCandidate('a'), backboneCandidate('b'), backboneCandidate('c')];
+  assertEquals(selectBackboneMemories(candidates).sort(), ['a', 'b', 'c']);
 });
 
-Deno.test('selectBackboneMemories: drops the lowest-scored candidate first when over budget', () => {
-  const candidates = [
-    backboneCandidate('low', 1, 'solo-photo'),
-    backboneCandidate('mid', 5, 'solo-photo'),
-    backboneCandidate('high', 9, 'solo-photo'),
-  ];
-  // 3 solo-photo = ceil(3/2) = 2 pages; budget only 1 -> drop 'low', leaving
-  // 2 solo-photo = ceil(2/2) = 1, which fits.
-  const kept = selectBackboneMemories(candidates, 1);
-  assertEquals(kept.includes('low'), false);
-  assertEquals(kept.sort(), ['high', 'mid']);
+Deno.test('selectBackboneMemories: an empty input list returns an empty (not undefined) result', () => {
+  assertEquals(selectBackboneMemories([]), []);
 });
 
-Deno.test('selectBackboneMemories: ties on score drop the LATEST date first', () => {
-  const candidates = [
-    backboneCandidate('earlier', 5, 'photo-grid', '2023-01-01'),
-    backboneCandidate('later', 5, 'photo-grid', '2023-01-05'),
-  ];
-  // 2 photo-grid = 2 pages; budget 1 -> one must go.
-  const kept = selectBackboneMemories(candidates, 1);
-  assertEquals(kept, ['earlier']);
-});
-
-Deno.test('selectBackboneMemories: ties on score AND date drop the lexically-largest id first', () => {
-  const candidates = [
-    backboneCandidate('a', 5, 'photo-grid'),
-    backboneCandidate('z', 5, 'photo-grid'),
-  ];
-  const kept = selectBackboneMemories(candidates, 1);
-  assertEquals(kept, ['a']);
-});
-
-Deno.test('selectBackboneMemories: zero budget drops every unpinned candidate', () => {
-  assertEquals(selectBackboneMemories([backboneCandidate('a', 9, 'text-page')], 0), []);
-});
-
-// Owner round-3 decision (2026-08-27): pinned ids (birthday-beat merges AND
-// guaranteed panorama placements) bypass content-neutral ranking entirely,
-// but a pinned candidate's page cost still counts toward the budget.
-
-Deno.test('selectBackboneMemories: a pinned low-score candidate survives even when the budget would otherwise cut it', () => {
-  const candidates = [
-    backboneCandidate('pinned-low-score', 0, 'solo-photo', '2023-05-01'),
-    backboneCandidate('high-1', 9, 'solo-photo', '2023-01-01'),
-    backboneCandidate('high-2', 9, 'solo-photo', '2023-01-02'),
-    backboneCandidate('high-3', 9, 'solo-photo', '2023-01-03'),
-  ];
-  // 4 solo-photo = ceil(4/2) = 2 pages; budget 1. Without pinning,
-  // "pinned-low-score" would be the first cut. With it pinned, dropping
-  // continues among the high-score trio until it fits.
-  const kept = selectBackboneMemories(candidates, 1, new Set(['pinned-low-score']));
-  assertEquals(kept.includes('pinned-low-score'), true);
-});
-
-Deno.test('selectBackboneMemories: every remaining candidate pinned stops the loop even over budget -- pins always win', () => {
-  const candidates = [backboneCandidate('p1', 1, 'photo-grid'), backboneCandidate('p2', 1, 'photo-grid')];
-  // 2 photo-grid = 2 pages; budget only 1; both pinned.
-  const kept = selectBackboneMemories(candidates, 1, new Set(['p1', 'p2']));
-  assertEquals(kept.sort(), ['p1', 'p2']);
-});
-
-Deno.test('selectBackboneMemories: no pinnedIds argument behaves exactly as an empty set', () => {
-  assertEquals(selectBackboneMemories([backboneCandidate('a', 9, 'text-page')], 1), ['a']);
-});
-
-Deno.test('selectBackboneMemories: segments the estimate exactly like the final book -- solo-photos in unrelated months never pair, and each segment pays its own 1-page floor (owner round-4 root-cause fix, 2026-08-27: a live regen persisted pageEstimate 128 against pageCap 122 because this loop used to run estimateElementPages over the WHOLE backbone as one flat group, undercounting the real per-segment cost and exiting the tightening loop too early)', () => {
-  // 3 separate months of 3 solo-photo memories each -- each month reaches
-  // buildBackboneSegments' own 3-printable threshold on its own, so each
-  // becomes its OWN segment: 3 segments x Math.max(1, ceil(3/2)=2) = 6 pages.
-  // The OLD flat model summed all 9 as one pairing group: ceil(9/2) = 5 --
-  // "fits" a 5-page budget, so it would have kept all 9 and been wrong by a
-  // full page. This test's budget (5) is chosen so the CORRECT (6-page)
-  // model must drop exactly one candidate while the OLD (5-page) model
-  // would not have dropped any.
-  const candidates = [
-    backboneCandidate('jan-low', 1, 'solo-photo', '2023-01-01'),
-    backboneCandidate('jan-2', 5, 'solo-photo', '2023-01-02'),
-    backboneCandidate('jan-3', 5, 'solo-photo', '2023-01-03'),
-    backboneCandidate('mar-1', 5, 'solo-photo', '2023-03-01'),
-    backboneCandidate('mar-2', 5, 'solo-photo', '2023-03-02'),
-    backboneCandidate('mar-3', 5, 'solo-photo', '2023-03-03'),
-    backboneCandidate('may-1', 5, 'solo-photo', '2023-05-01'),
-    backboneCandidate('may-2', 5, 'solo-photo', '2023-05-02'),
-    backboneCandidate('may-3', 5, 'solo-photo', '2023-05-03'),
-  ];
-  const kept = selectBackboneMemories(candidates, 5);
-  assertEquals(kept.includes('jan-low'), false); // lowest score, dropped first
-  assertEquals(kept.length, 8);
+Deno.test('selectBackboneMemories: preserves input order (no re-sorting by score/date/id -- there is no score anymore)', () => {
+  const candidates = [backboneCandidate('z'), backboneCandidate('a'), backboneCandidate('m')];
+  assertEquals(selectBackboneMemories(candidates), ['z', 'a', 'm']);
 });
 
 // --- remapInsertIndex (themed spread position survives re-segmentation) ----
@@ -2554,51 +2285,8 @@ Deno.test('estimatePagesViaFitter: an untrusted (non-nominated) wide memory NEVE
   assertEquals(asOrdinary, nominatedButUntrusted); // fails closed identically either way
 });
 
-Deno.test('estimateElementPagesViaFitter: an empty shape list costs 0 pages', () => {
-  assertEquals(estimateElementPagesViaFitter([]), 0);
-});
-
-Deno.test('estimateElementPagesViaFitter: the rare text-page fallback (neither text nor visual) is charged a flat 1 page, never routed through the fitter (infeasible input)', () => {
-  assertEquals(estimateElementPagesViaFitter(['text-page']), 1);
-  assertEquals(estimateElementPagesViaFitter(['text-page', 'text-page']), 2);
-});
-
-Deno.test('estimateElementPagesViaFitter: a panorama shape costs strictly more than a solo-photo shape (the real fitter\'s own 2-page panorama spread, not a guess)', () => {
-  const soloPages = estimateElementPagesViaFitter(['solo-photo']);
-  const panoramaPages = estimateElementPagesViaFitter(['panorama']);
-  assertEquals(panoramaPages > soloPages, true);
-});
-
-Deno.test('estimateElementPagesViaFitter: is a drop-in for estimateElementPages -- same call shape, used as the default-overriding `estimate` param throughout the thinning functions', () => {
-  // Not a numeric-equality test (the two models are INTENTIONALLY not
-  // required to agree -- that drift is the whole reason for this task) --
-  // just confirms the function is callable everywhere estimateElementPages
-  // is, with the same (shapes) => number contract.
-  const shapes: MemoryPageShape[] = ['solo-photo', 'solo-photo', 'short-text'];
-  const pages = estimateElementPagesViaFitter(shapes);
-  assertEquals(typeof pages, 'number');
-  assertEquals(pages > 0, true);
-});
-
-Deno.test('planNonBackboneBudget: accepts an injected oracle estimator and still only drops themed spreads, never non-droppable pages', () => {
-  const plan = planNonBackboneBudget(
-    4,
-    4,
-    [
-      { id: 'spread:a', memoryCount: 3, shapes: ['solo-photo', 'solo-photo', 'solo-photo'] },
-      { id: 'spread:b', memoryCount: 2, shapes: ['panorama'] },
-    ],
-    8,
-    estimateElementPagesViaFitter,
-  );
-  assertEquals(plan.nonBackbonePages <= 8 || plan.keptThemedIds.length === 0, true);
-});
-
-Deno.test('selectBackboneMemories: accepts an injected oracle estimator and still respects pins', () => {
-  const candidates = [
-    backboneCandidate('a', 1, 'solo-photo'),
-    backboneCandidate('b', 9, 'solo-photo'),
-  ];
-  const kept = selectBackboneMemories(candidates, 0, new Set(['a']), estimateElementPagesViaFitter);
-  assertEquals(kept.includes('a'), true); // pinned, survives even at a zero budget
-});
+// Round-14: `estimateElementPagesViaFitter` (the shape-placeholder oracle)
+// and the injectable `estimate` parameter on `planNonBackboneBudget`/
+// `selectBackboneMemories` are DELETED -- neither function prices anything
+// anymore, so there is nothing left to inject a price function into. See
+// the "planNonBackboneBudget / selectBackboneMemories" no-cut tests above.

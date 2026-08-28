@@ -16,11 +16,17 @@
  * selects/sequences: which themed candidates make the cut and where they
  * slot into the chronological flow, which memories go in each (3-6, with a
  * one-line rationale each), which backbone memories deserve a full-page
- * "highlight" treatment, and an overall editorial note. The model curates;
- * it never rewrites parent text and never paginates -- every downstream rule
- * (single placement, small-spread dissolution, page-budget trimming) is
- * enforced in CODE, never trusted from the model (plan §5 "Overlap and
- * single placement", "Code-enforced post-processing").
+ * "highlight" treatment, and an overall editorial note. The model curates
+ * for QUALITY only; it never rewrites parent text, never paginates, and
+ * (round-14 owner decision) is never asked to self-ration for a page count
+ * -- single placement and small-spread dissolution are enforced in CODE,
+ * never trusted from the model (plan §5 "Overlap and single placement",
+ * "Code-enforced post-processing"), but page-BUDGET fitting is no longer
+ * one of this script's own downstream rules at all: it happens once, later,
+ * entirely inside the renderer's fitter at render time (round-13's
+ * balanced cap-pressure demotion) -- see the "Fitter-as-oracle" section
+ * below for why and how this script still reports an (informational,
+ * non-binding) page estimate.
  *
  * This script is READ-ONLY against the database: every data read goes
  * through the RLS-scoped client (the service-role admin client only
@@ -36,7 +42,7 @@
  * Examples:
  *   npm run eval:memory-book-outline -- --child "Enzo" --age-year 1 --dry-run
  *   npm run eval:memory-book-outline -- --child <family_member-uuid> --calendar-year 2024
- *   npm run eval:memory-book-outline -- --child "Mara" --from 2023-06-01 --to 2023-12-31 --page-budget 40
+ *   npm run eval:memory-book-outline -- --child "Mara" --from 2023-06-01 --to 2023-12-31 --page-cap 100
  *
  * Requires Supabase vars in supabase/.env.local, R2 vars for thumbnail
  * fetches, and OPENAI_API_KEY (unless --dry-run).
@@ -94,9 +100,12 @@ interface CliOptions {
 const DEFAULT_MODEL = 'gpt-5.6-sol';
 /** The layflat print product's hard physical page limit. Owner decision,
  * 2026-08-27 ("Density & quality-first"): `--page-cap` now defaults to
- * this and is the single BINDING constraint end to end, replacing the old
- * soft 50-page default -- longer books are accepted up to this limit;
- * quality of output comes first. */
+ * this. Round-14: `--page-cap`/`HARD_PAGE_CAP` are no longer BINDING inside
+ * this script at all (nothing here drops anything for budget) -- they now
+ * feed only (a) the clamp warning below and (b) the "at-cap" oracle
+ * simulation in `main()`'s printed summary, which reports what the
+ * renderer's own fitter would do to this selection, never enforces it
+ * here. The renderer's fitter is the one place a page cap actually binds. */
 export const HARD_PAGE_CAP = 122;
 
 /** Printed alongside a rejected argument (owner hardening fix, 2026-08-27:
@@ -1276,9 +1285,12 @@ export interface BirthdayDissolveResult {
   placementByMemory: Map<string, string>;
   /** Ages (ascending) whose spread dissolved into the backbone. */
   dissolvedAges: number[];
-  /** The dissolved memories -- MUST survive backbone thinning (passed as
-   * `pinnedIds` to `selectBackboneMemories`), since a birthday memory
-   * folding into its month is the whole point of the merge. */
+  /** The dissolved memories (round-14: no longer consumed as `pinnedIds`
+   * anywhere -- `selectBackboneMemories` keeps everyone unconditionally
+   * now, so nothing needs pinning against thinning. Kept in the return
+   * shape as a record of which memories the birthday-beat merge touched,
+   * since a birthday memory folding into its month is still the whole
+   * point of the merge -- just no longer a protective mechanism.) */
   pinnedMemoryIds: Set<string>;
   movedToBackbone: Array<{ memoryId: string; fromSpread: string; toSpread: string }>;
 }
@@ -1287,11 +1299,11 @@ export interface BirthdayDissolveResult {
  * Mirrors `dissolveSmallThemedSpreads`'s mechanics exactly (same <3
  * threshold, same "move to the memory's own default backbone segment"
  * behavior) but is a distinct function because the birthday case ALSO
- * needs the dissolved memories flagged as pinned -- a themed-spread
- * dissolve just returns memories to backbone ELIGIBILITY (they can still
- * lose to rank-based thinning), but a dissolved birthday spread's memories
- * must GUARANTEE their birthday-flagged month keeps its special title, so
- * they can never be thinned away.
+ * flags the dissolved memories in its own `pinnedMemoryIds` set (round-14:
+ * no longer consumed for thinning protection -- see that field's doc
+ * comment -- but the distinct tracking stays, since a birthday-beat merge
+ * is still a semantically different event from an ordinary themed-spread
+ * dissolve).
  */
 export function dissolveThinBirthdaySpreads(
   placementByMemory: Map<string, string>,
@@ -1327,201 +1339,45 @@ export function dissolveThinBirthdaySpreads(
   return { placementByMemory: result, dissolvedAges: dissolvedAges.sort((a, b) => a - b), pinnedMemoryIds, movedToBackbone };
 }
 
-// ── Page accounting + priority-order budget enforcement ────────────────
+// ── Page accounting (round-14: outline-side BUDGET THINNING REMOVED) ────
 //
-// Corrected priority order (coordinator spec correction, 2026-08-24 -- the
-// original brief's "backbone is fixed, thin it last" framing inverted the
-// book's own goal): the chronological backbone is connective tissue, not
-// the book, so it is the LOWEST priority for page budget, not the highest.
+// Owner decision (round-14, following an A/B test): this script no longer
+// prices individual memories or spreads for page budget AT ALL, in any
+// form -- not the original round-3 hand-rolled shape-based model, and not
+// round-13's shape-placeholder oracle that replaced it (both are deleted).
+// The A/B showed the shape-placeholder oracle over-thinned real books
+// (Enzo fell to 93 selected memories, Mara to 96, when the OLD flow -- and
+// the renderer itself -- comfortably printed ~112+ at the page cap) because
+// pricing a memory in ISOLATION, via a canonical stand-in for its shape,
+// cannot see the pairing/digest-row compression the real fitter applies
+// once memories sit next to each other on a page. The fix is architectural,
+// not a better price: the outline's job is taste and structure (which
+// spreads, which memories, how they sequence); FITTING those choices to a
+// physical page count is the renderer's job alone, at render time, via
+// `book-renderer/src/model/fitter.ts`'s round-13 balanced cap-pressure
+// demotion (month floors, milestone/quote-source protections, photo/video/
+// illustrated keep-rate balancing -- see fitter.ts's own file-header
+// comment on `DemotionKind`). This script selects for QUALITY and lets the
+// selection be however long it honestly is; see `main()`'s "Panorama
+// guarantee + published pageEstimate" section for how the (now purely
+// informational) page estimate is still reported.
 //
-//   a. Non-droppable: cover/title/through-years/closing (4 fixed pages) +
-//      Firsts + every birthday spread. These are never dropped or thinned
-//      regardless of budget.
-//   b. Themed spreads accepted by the AI: next priority. Only dropped
-//      (lowest page-cost first) if (a)+(b) alone exceed the page cap.
-//   c. The backbone gets ONLY the pages left over after (a)+(b) -- a real
-//      PAGE budget (owner round-3 decision, 2026-08-27 -- see below).
-//
-// True page-yield model (owner round-3 decision, 2026-08-27, replacing the
-// prior round's images-per-page density constants; refined same day to
-// split short text-only memories into two renderer groupings): every
-// memory's page cost is estimated HONESTLY from its own shape (photo
-// count, text length, type), mirroring the renderer's real composition
-// decision table -- solo photo ~1 page/memory, two paired photos ~1
-// page/2 memories, a single memory's 3-4 photo grid ~1 page, a full-bleed
-// hero 1 page, a panorama 2 pages, a short (<=200 char) text-only memory
-// is EITHER a bare quote (~0.4 pages, 3-6 share a quote-collection spread)
-// or a short illustrated story (~1 page, two share a 2-page spread), a
-// long illustrated story 2 pages, a plain text page 1. `122`
-// (`HARD_PAGE_CAP`) is a CEILING, not a target: everything that clears a
-// meaningful-quality bar is selected; selection only tightens (dropping
-// the lowest-ranked memory) once the honest estimate exceeds the cap. A
-// content-poor scope naturally yields a shorter book -- never pad.
-
-export type BudgetElementKind = 'themed' | 'firsts' | 'birthday' | 'backbone';
-
-export interface BudgetElement {
-  id: string;
-  kind: BudgetElementKind;
-  memoryCount: number;
-  /** Per-member page shape (owner round-3 decision, 2026-08-27) -- drives
-   * this element's page cost for 'backbone'/'themed' kinds via
-   * `estimateElementPages`. Unused for 'firsts'/'birthday', which stay flat
-   * 2-page elements -- out of scope for this change (see plan's separate,
-   * not-yet-implemented "Firsts lists paginate" note). */
-  shapes?: MemoryPageShape[];
-}
-
-const FIXED_PAGES = 4; // cover + title/dedication + through-the-years + closing
+// The ONE surviving numeric estimate below (`computePlacedPanoramaGuaranteeCount`)
+// is not a budget mechanism -- it never drops or excludes anything -- it
+// only sizes how many of the model's best-first panorama nominations this
+// script reports as "expected to survive" for reviewer context.
 
 /**
- * A single memory's rendered "shape" -- the composition kind the real
- * renderer would choose for it, per the owner's round-3 yield table
- * (2026-08-27, refined same day to add `short-text`). `panorama`/
- * `full-bleed` are driven by whether this memory was actually nominated as
- * a panorama/hero candidate (never guessed from photo count alone);
- * everything else is inferred from photo/video count and text length.
- * `short-text` and `short-illustrated-story` are BOTH "short" text-only
- * memories (<=200 chars) but render differently: `short-text` is a bare
- * quote that joins a 3-6-up quote-collection spread, `short-illustrated-
- * story` gets its own small illustration and shares a spread with one
- * other. Which of the two a given short memory becomes is not something
- * this script's data can determine with certainty (no illustration-
- * completion signal is tracked here) -- it is approximated by length via
- * `SHORT_TEXT_MAX_CHARS`, a named constant for tuning after visual review.
- */
-export type MemoryPageShape =
-  | 'panorama'
-  | 'full-bleed'
-  | 'photo-grid'
-  | 'solo-photo'
-  | 'short-text'
-  | 'short-illustrated-story'
-  | 'long-story'
-  | 'text-page';
-
-export interface MemoryPageShapeInput {
-  photoCount: number;
-  videoCount: number;
-  hasText: boolean;
-  textLength: number;
-  /** This memory is one of the model's nominated `panoramaCandidates`. */
-  isPanorama: boolean;
-  /** This memory is one of the model's nominated `heroCandidates`. */
-  isFullBleed: boolean;
-}
-
-/** Named constant for tuning after visual review (owner round-3
- * refinement, 2026-08-27): a text-only memory at or under this length is a
- * bare "quote" -- it joins the quote-collection grouping (`short-text`)
- * rather than getting its own small illustration. Deliberately shorter
- * than `SHORT_STORY_MAX_CHARS` -- the two thresholds carve the "short"
- * (<=200 char) range into two different renderer groupings. */
-export const SHORT_TEXT_MAX_CHARS = 100;
-
-/** Named constant for tuning after visual review (owner round-3 decision,
- * 2026-08-27, refined same day: lowered from 400 to ~200 alongside the
- * `short-text` split): a text-only memory longer than this many characters
- * renders as a 2-page "long illustrated story" instead of a short one that
- * shares a spread with another. */
-export const SHORT_STORY_MAX_CHARS = 200;
-
-/**
- * Classifies a single memory's page shape from its own content -- never
- * from its "type" as a privileged category (owner round-3 decision,
- * 2026-08-27: content-neutral ranking). A panorama/full-bleed nomination
- * always wins (those are deliberate editorial placements, not a photo-count
- * accident); otherwise a 3+ photo/video memory is a single-memory grid, any
- * other visual memory is a solo photo, and a text-only memory splits by
- * length into a bare quote, a short illustrated story, or a long one. A
- * memory with neither text nor a visual (shouldn't occur given eligibility
- * rules) falls back to a flat text-page cost rather than costing nothing.
- */
-export function classifyMemoryPageShape(m: MemoryPageShapeInput): MemoryPageShape {
-  if (m.isPanorama) return 'panorama';
-  if (m.isFullBleed) return 'full-bleed';
-  const visualCount = m.photoCount + m.videoCount;
-  if (visualCount >= 3) return 'photo-grid';
-  if (visualCount >= 1) return 'solo-photo';
-  if (m.hasText) {
-    if (m.textLength <= SHORT_TEXT_MAX_CHARS) return 'short-text';
-    return m.textLength > SHORT_STORY_MAX_CHARS ? 'long-story' : 'short-illustrated-story';
-  }
-  return 'text-page';
-}
-
-/** Named constant for tuning after visual review (owner round-3
- * refinement, 2026-08-27): a `short-text` quote costs ~0.4 pages on
- * average in its 3-6-up quote-collection grouping -- an approximation, not
- * a precise per-group derivation (a group can be anywhere from 3 to 6). */
-export const SHORT_TEXT_PAGES_PER_ENTRY = 0.4;
-
-/**
- * Honest page cost of a group of memories' shapes, per the owner's round-3
- * yield table (2026-08-27, refined same day): `panorama` 2,
- * `full-bleed`/`photo-grid`/`text-page`/`short-illustrated-story` 1,
- * `long-story` 2 -- each 1:1 per memory (two `short-illustrated-story`
- * memories naturally sum to 2 pages, i.e. share one 2-page spread, with no
- * special pairing math needed). `solo-photo` memories PAIR two-per-page
- * (rounded up), mirroring "paired memories ~1 page/2 memories".
- * `short-text` quotes accumulate at `SHORT_TEXT_PAGES_PER_ENTRY` pages each
- * or, ROUNDED UP as a group (a lone short-text quote still costs a full
- * page, same floor logic as `solo-photo`). An empty list costs 0 pages;
- * callers needing "a non-empty element still needs at least 1 page" apply
- * `Math.max(1, ...)`.
- */
-export function estimateElementPages(shapes: MemoryPageShape[]): number {
-  let pages = 0;
-  let soloPhotoCount = 0;
-  let shortTextCount = 0;
-  for (const shape of shapes) {
-    switch (shape) {
-      case 'panorama':
-        pages += 2;
-        break;
-      case 'full-bleed':
-      case 'photo-grid':
-      case 'text-page':
-      case 'short-illustrated-story':
-        pages += 1;
-        break;
-      case 'long-story':
-        pages += 2;
-        break;
-      case 'solo-photo':
-        soloPhotoCount += 1;
-        break;
-      case 'short-text':
-        shortTextCount += 1;
-        break;
-    }
-  }
-  pages += Math.ceil(soloPhotoCount / 2);
-  pages += Math.ceil(shortTextCount * SHORT_TEXT_PAGES_PER_ENTRY);
-  return pages;
-}
-
-export function computePageEstimate(elements: BudgetElement[], fixedPages = FIXED_PAGES): number {
-  let total = fixedPages;
-  for (const el of elements) {
-    if (el.memoryCount <= 0) continue;
-    if (el.kind === 'backbone' || el.kind === 'themed') {
-      total += Math.max(1, estimateElementPages(el.shapes ?? []));
-    } else {
-      total += 2; // firsts / birthday -- flat, unchanged (out of scope for this change).
-    }
-  }
-  return total;
-}
-
-/**
- * The number of the model's best-first `panoramaCandidates` that MUST be
- * placed in the book, not merely nominated (owner round-3 decision,
- * 2026-08-27: "1 guaranteed + 1 per ~20 pages" -- the same pacing the
- * system prompt already tells the model to expect). `pageEstimate` is a
- * PRELIMINARY estimate (before any budget thinning) so a bigger book earns
- * more guaranteed panoramas without the guarantee count depending on its
- * own outcome.
+ * The number of the model's best-first `panoramaCandidates` reported as
+ * "guaranteed" survivors, for reviewer context only (owner round-3
+ * decision, 2026-08-27: "1 guaranteed + 1 per ~20 pages" -- the same
+ * pacing the system prompt already tells the model to expect; round-14:
+ * this no longer protects anything from being dropped -- nothing in this
+ * script drops anything anymore -- it is purely an informational count).
+ * `pageEstimate` is the PRE-CAP holistic oracle estimate of the FULL
+ * curated selection (round-14: fed by the one remaining oracle call in
+ * `main()`, not a preliminary-vs-final split -- there is no "final" thin
+ * to distinguish it from anymore).
  */
 export function computePlacedPanoramaGuaranteeCount(pageEstimate: number): number {
   return 1 + Math.floor(Math.max(0, pageEstimate) / 20);
@@ -1529,17 +1385,23 @@ export function computePlacedPanoramaGuaranteeCount(pageEstimate: number): numbe
 
 // ---------------------------------------------------------------------------
 // Fitter-as-oracle (round-13 architecture follow-up, docs/plans/memory-book.md
-// "make the fitter the yield oracle"): the hand-written page-accounting
-// model above (`estimateElementPages`/`computePageEstimate`) duplicates the
-// real renderer's page-yield math in its own constants, and the two have
-// drifted through 12 layout rounds (predicted 108 pages where the renderer
-// produced 121 on Mara; the hand model predates digest spreads entirely).
+// "make the fitter the yield oracle"; round-14 UPDATE below): the original
+// hand-written page-accounting model (since DELETED -- it duplicated the
+// real renderer's page-yield math in its own constants, and the two had
+// drifted through 12 layout rounds: predicted 108 pages where the renderer
+// produced 121 on Mara; the hand model predated digest spreads entirely).
 // This section imports the REAL fitter (`fitBook`) and calls it directly on
 // a SYNTHETIC `BookManifest`/`BookOutline` built from data this script
-// already loads, so every BINDING page number (the published `pageEstimate`,
-// the preliminary estimate that sizes the panorama guarantee, and the
-// backbone-thinning/candidate-dropping loops) reflects the real renderer,
-// not a parallel guess.
+// already loads, so every BINDING page number reflects the real renderer,
+// not a parallel guess. Round-13 ALSO tried routing the outline's own
+// backbone-thinning/candidate-dropping loops through a per-shape oracle
+// approximation; round-14 found (via A/B) that pricing a memory in
+// ISOLATION over-thinned real books, and the owner decision was to remove
+// outline-side thinning ENTIRELY rather than chase a better per-candidate
+// price -- see the "Themed-spread and backbone selection" section below.
+// What remains here is purely the HOLISTIC oracle: one real-fitter call
+// over a full assembled selection, used for the published pageEstimate,
+// the panorama-guarantee sizing input, and the at-cap summary report.
 //
 // Outline-time unknowns (fail closed, never guessed -- task spec):
 //   - Asset PIXEL dimensions: this script has `memory_media.aspect_ratio`
@@ -1771,345 +1633,52 @@ export function estimatePagesViaFitter(
   return capacity.totalPages;
 }
 
-// ── Shape-based oracle (drop-in for `estimateElementPages`, used inside the
-// backbone-thinning/candidate-dropping loops below) ────────────────────────
+// ── Themed-spread and backbone selection (round-14: no more thinning) ────
 //
-// `selectBackboneMemories`/`planNonBackboneBudget` iterate candidate-by-
-// candidate and need a page-COST function keyed by each candidate's already-
-// classified `MemoryPageShape` -- a real memory id isn't threaded through
-// those loops' internal per-element grouping today (see `ThemedBudgetElement`/
-// `BackboneCandidate.shape`); restructuring them to carry real memory ids
-// end-to-end is a larger change than this one, deferred. Instead, this
-// builds one CANONICAL synthetic placeholder memory per shape and asks the
-// real fitter what a group of them costs -- still the real renderer's own
-// composition math, just over representative stand-ins rather than the
-// archive's actual memories. `estimateElementPages` (the hand-rolled model)
-// remains the DEFAULT parameter on every function below, for backward
-// compatibility with the existing test suite; `main()` explicitly passes
-// this oracle version in production.
-
-let syntheticShapeCounter = 0;
-
-function syntheticShapePhotoAsset(id: string, aspectRatio: number, trusted: boolean): ManifestAsset {
-  const dims = syntheticAssetDimensions(aspectRatio, trusted);
-  return {
-    file: `synthetic/${id}.jpg`,
-    width: dims.width,
-    height: dims.height,
-    aspectRatio,
-    kind: 'photo',
-    durationMs: null,
-    originalWidth: dims.originalWidth,
-    originalHeight: dims.originalHeight,
-  };
-}
-
-function syntheticShapeTextMemory(id: string, textLength: number): ManifestMemory {
-  return {
-    date: '2024-06-15',
-    type: 'text_illustration',
-    text: 'x'.repeat(textLength),
-    emotion: null,
-    topics: [],
-    milestones: [],
-    engagement: 0,
-    taggedMembers: [],
-    assets: [],
-    illustration: { file: `synthetic/${id}-illo.webp`, width: 1000, height: 1000, aspectRatio: 1 },
-  };
-}
-
-function syntheticShapePhotoMemory(assets: ManifestAsset[]): ManifestMemory {
-  return {
-    date: '2024-06-15',
-    type: assets.some((a) => a.kind === 'video-poster') ? 'video' : 'photo',
-    text: null,
-    emotion: null,
-    topics: [],
-    milestones: [],
-    engagement: 0,
-    taggedMembers: [],
-    assets,
-    illustration: null,
-  };
-}
-
-/** Representative textLength stand-ins -- comfortably inside each of this script's own `SHORT_TEXT_MAX_CHARS`/`SHORT_STORY_MAX_CHARS` bands (the fitter has its own, independently-tuned thresholds; these only need to land in the shape's own INTENDED band, not match the fitter's exactly). */
-const SYNTHETIC_SHORT_TEXT_CHARS = 80;
-const SYNTHETIC_SHORT_STORY_CHARS = 150;
-const SYNTHETIC_LONG_STORY_CHARS = 300;
-
-/** One canonical placeholder `ManifestMemory` per `MemoryPageShape` (round-13 oracle) -- never a real memory, just a representative stand-in so `estimateElementPagesViaFitter` can ask the real fitter what a GROUP of a given shape mix costs. */
-function syntheticMemoryForShape(shape: MemoryPageShape): { id: string; memory: ManifestMemory; panorama: boolean; hero: boolean } | null {
-  syntheticShapeCounter += 1;
-  const id = `oracle-shape-${shape}-${syntheticShapeCounter}`;
-  switch (shape) {
-    case 'panorama':
-      return { id, memory: syntheticShapePhotoMemory([syntheticShapePhotoAsset(id, 2.4, true)]), panorama: true, hero: false };
-    case 'full-bleed':
-      return { id, memory: syntheticShapePhotoMemory([syntheticShapePhotoAsset(id, 1.4, true)]), panorama: false, hero: true };
-    case 'photo-grid':
-      return {
-        id,
-        memory: syntheticShapePhotoMemory([
-          syntheticShapePhotoAsset(id, 1.33, false),
-          syntheticShapePhotoAsset(id, 1.33, false),
-          syntheticShapePhotoAsset(id, 1.33, false),
-        ]),
-        panorama: false,
-        hero: false,
-      };
-    case 'solo-photo':
-      return { id, memory: syntheticShapePhotoMemory([syntheticShapePhotoAsset(id, 1.5, false)]), panorama: false, hero: false };
-    case 'short-text':
-      return { id, memory: syntheticShapeTextMemory(id, SYNTHETIC_SHORT_TEXT_CHARS), panorama: false, hero: false };
-    case 'short-illustrated-story':
-      return { id, memory: syntheticShapeTextMemory(id, SYNTHETIC_SHORT_STORY_CHARS), panorama: false, hero: false };
-    case 'long-story':
-      return { id, memory: syntheticShapeTextMemory(id, SYNTHETIC_LONG_STORY_CHARS), panorama: false, hero: false };
-    case 'text-page':
-      // The old model's rare fallback (a memory with neither text nor a
-      // visual -- shouldn't occur given eligibility rules). Such a memory
-      // is infeasible by the real fitter's own rules (no page, no gap --
-      // see fitter.test.ts "a memory with neither a photo nor text...
-      // produces no page and no gap"), so there is no honest synthetic
-      // stand-in; the caller charges it a flat 1 page directly instead of
-      // routing it through the fitter.
-      return null;
-  }
-}
-
-/**
- * Oracle drop-in for `estimateElementPages` (round-13): same signature
- * (`(shapes: MemoryPageShape[]) => number`), real fitter under the hood.
- * See the section comment above for why this operates on canonical
- * per-shape placeholders rather than real memory ids.
- */
-export function estimateElementPagesViaFitter(shapes: MemoryPageShape[]): number {
-  if (shapes.length === 0) return 0;
-  const memories: Record<string, ManifestMemory> = {};
-  const memoryIds: string[] = [];
-  const panoramaCandidates: string[] = [];
-  const heroCandidates: string[] = [];
-  let textPageFallbackCount = 0;
-  for (const shape of shapes) {
-    const built = syntheticMemoryForShape(shape);
-    if (!built) {
-      textPageFallbackCount += 1;
-      continue;
-    }
-    memories[built.id] = built.memory;
-    memoryIds.push(built.id);
-    if (built.panorama) panoramaCandidates.push(built.id);
-    if (built.hero) heroCandidates.push(built.id);
-  }
-  if (memoryIds.length === 0) return textPageFallbackCount;
-  const manifest = emptySyntheticManifest(memories, { id: 'oracle-child', name: 'Oracle', dateOfBirth: null });
-  const pages = estimatePagesViaFitter(
-    [{ id: 'oracle-shape-group', kind: 'backbone', memoryIds }],
-    manifest,
-    panoramaCandidates,
-    heroCandidates,
-  );
-  return pages + textPageFallbackCount;
-}
-
-/**
- * Content-neutral ranking signals (owner round-3 decision, 2026-08-27,
- * replacing the type-privileged ladder -- milestone > has_text+photo >
- * visual+engagement > visual > text-only -- that caused a 77-illustration
- * skew by letting one memory "type" trump everything else). Every memory
- * now competes on the SAME signals regardless of type: editorial highlight/
- * hero status, engagement, thematic (topic-cluster) relevance, text
- * richness, and photo/video presence -- each contributes additively, none
- * is an automatic trump. Structural protections (Firsts-section membership,
- * birthday pins, guaranteed panorama placement) are handled OUTSIDE this
- * score entirely, as pins that bypass ranking (see `selectBackboneMemories`).
- */
-export interface ThinningSignals {
-  /** Marked as a backbone highlight OR nominated as a hero candidate. */
-  isHighlighted: boolean;
-  /** A member of at least one accepted topic/people-pair/emotion candidate
-   * spread, even though single-placement or budget left it in the backbone
-   * -- evidence of thematic relevance. */
-  inThemedCluster: boolean;
-  engagementCount: number;
-  hasText: boolean;
-  textLength: number;
-  /** photoCount + videoCount > 0 (videos rank as visuals, same as photos). */
-  hasVisual: boolean;
-}
-
-const HIGHLIGHT_SCORE = 4;
-const THEMED_CLUSTER_SCORE = 2;
-const ENGAGEMENT_SCORE_CAP = 5;
-const VISUAL_SCORE = 2;
-const TEXT_BASE_SCORE = 1;
-/** ~80 chars of text earns 1 richness point, capped -- named constant for
- * tuning after visual review. */
-const TEXT_RICHNESS_CHAR_DIVISOR = 80;
-const TEXT_RICHNESS_CAP = 3;
-
-export function computeThinningScore(s: ThinningSignals): number {
-  let score = 0;
-  if (s.isHighlighted) score += HIGHLIGHT_SCORE;
-  if (s.inThemedCluster) score += THEMED_CLUSTER_SCORE;
-  score += Math.min(s.engagementCount, ENGAGEMENT_SCORE_CAP);
-  if (s.hasVisual) score += VISUAL_SCORE;
-  if (s.hasText) {
-    score += TEXT_BASE_SCORE + Math.min(Math.floor(s.textLength / TEXT_RICHNESS_CHAR_DIVISOR), TEXT_RICHNESS_CAP);
-  }
-  return score;
-}
+// `planNonBackboneBudget`/`selectBackboneMemories` used to iteratively drop
+// the lowest-page-cost themed spread / lowest-scored backbone memory until
+// an estimate fit a page budget (round-3 through round-13, several
+// generations of increasingly accurate but still ultimately WRONG-BY-
+// CONSTRUCTION price models -- see the "Page accounting" section comment
+// above). Round-14 owner decision removes that cutting entirely: both
+// functions now simply return everyone they were given. They are kept
+// (rather than deleted outright) as the stable, discoverable answer to
+// "does the outline still limit themed spreads/backbone memories by page
+// cost" -- unconditionally no, not even a little, for either. All
+// budget-only fields/parameters (`shapes`, `pageCap`, `pageBudget`,
+// `pinnedIds`, `estimate`, `score`) are removed as vestigial; nothing in
+// these two functions ever needed them for anything BUT the cutting that
+// no longer happens.
 
 export interface ThemedBudgetElement {
   id: string;
   memoryCount: number;
-  /** Member page shapes -- drives this spread's page cost (owner round-3
-   * decision, 2026-08-27) and its drop order (lowest page-cost first,
-   * unchanged in spirit from the prior round's "lowest image count first"). */
-  shapes: MemoryPageShape[];
 }
 
 export interface NonBackboneBudgetPlan {
-  /** fixed + non-droppable (Firsts/birthdays) + surviving themed spreads. */
-  nonBackbonePages: number;
   keptThemedIds: string[];
+  /** Always `[]` -- round-14: nothing is ever dropped here anymore. Kept
+   * in the return shape (rather than removed) so a caller checking "were
+   * any candidate spreads dropped for budget" gets an honest, typed "no"
+   * instead of the field vanishing out from under it. */
   droppedThemedIds: string[];
-  /** What's left of `pageCap` for the backbone, in PAGES -- a real page
-   * budget now (owner round-3 decision, 2026-08-27), consumed directly by
-   * `selectBackboneMemories`. */
-  backboneCapacityPages: number;
 }
 
-/**
- * The page-cost function for a group of `MemoryPageShape`s: `(shapes) =>
- * pages`. Every function below defaults to `estimateElementPages` (the
- * hand-rolled model) for backward compatibility with the existing test
- * suite; `main()` explicitly passes `estimateElementPagesViaFitter` (round-
- * 13 oracle) in production -- see the "Fitter-as-oracle" section above.
- */
-type EstimatePagesFn = (shapes: MemoryPageShape[]) => number;
-
-function themedSpreadPages(t: ThemedBudgetElement, estimate: EstimatePagesFn = estimateElementPages): number {
-  return t.memoryCount > 0 ? Math.max(1, estimate(t.shapes)) : 0;
-}
-
-/**
- * Priority steps (a) and (b): `nonDroppablePages` (already computed by the
- * caller as `2 * (Firsts present ? 1 : 0) + 2 * birthdayCount`, plus any
- * themed spread protected by a guaranteed-panorama pin) is never touched.
- * Themed spreads are dropped lowest-page-cost-first, one at a time, ONLY
- * while (a)+(b) together still exceed `pageCap` -- i.e. the backbone is
- * never consulted here at all. `estimate` (round-13): the page-cost
- * function driving every decision here -- see `EstimatePagesFn`.
- */
-export function planNonBackboneBudget(
-  fixedPages: number,
-  nonDroppablePages: number,
-  themedSpreads: ThemedBudgetElement[],
-  pageCap: number,
-  estimate: EstimatePagesFn = estimateElementPages,
-): NonBackboneBudgetPlan {
-  const kept = [...themedSpreads];
-  const droppedThemedIds: string[] = [];
-  const themedPages = () => kept.reduce((sum, t) => sum + themedSpreadPages(t, estimate), 0);
-
-  while (fixedPages + nonDroppablePages + themedPages() > pageCap && kept.some((t) => t.memoryCount > 0)) {
-    kept.sort(
-      (a, b) => themedSpreadPages(a, estimate) - themedSpreadPages(b, estimate) || a.memoryCount - b.memoryCount || a.id.localeCompare(b.id),
-    );
-    const dropIndex = kept.findIndex((t) => t.memoryCount > 0);
-    const [dropped] = kept.splice(dropIndex, 1);
-    droppedThemedIds.push(dropped.id);
-  }
-
-  const nonBackbonePages = fixedPages + nonDroppablePages + themedPages();
+/** Keeps every themed spread candidate with at least one member -- see the section comment above. */
+export function planNonBackboneBudget(themedSpreads: ThemedBudgetElement[]): NonBackboneBudgetPlan {
   return {
-    nonBackbonePages,
-    keptThemedIds: kept.filter((t) => t.memoryCount > 0).map((t) => t.id),
-    droppedThemedIds,
-    backboneCapacityPages: Math.max(0, pageCap - nonBackbonePages),
+    keptThemedIds: themedSpreads.filter((t) => t.memoryCount > 0).map((t) => t.id),
+    droppedThemedIds: [],
   };
 }
 
 export interface BackboneCandidate {
   id: string;
-  date: string;
-  score: number;
-  shape: MemoryPageShape;
-  /** Same `printable` predicate `buildOutline` feeds into the REAL final
-   * `buildBackboneSegments` call over the survivors (owner round-4
-   * root-cause fix, 2026-08-27) -- needed here so the tightening loop's own
-   * segmentation matches that final one exactly, month-merge behavior
-   * included. */
-  printable: boolean;
 }
 
-/**
- * The backbone's honest page cost SEGMENTED exactly like the final book
- * (owner round-4 root-cause fix, 2026-08-27): re-runs `buildBackboneSegments`
- * over whatever candidates are still kept, then sums each segment's own
- * `Math.max(1, estimateElementPages(...))` -- the SAME per-element floor
- * `computePageEstimate` applies to a 'backbone' element. This replaces a
- * prior flat estimate that ran `estimateElementPages` over the WHOLE
- * backbone as one ungrouped list, letting solo-photos in unrelated months
- * pair together and charging only ONE floor for the entire backbone instead
- * of one per segment -- a live regeneration hit pageEstimate 128 against a
- * pageCap of 122 because this tightening loop had already declared itself
- * "under budget" using that undercounted flat number. Segmenting here is
- * what makes the loop's own notion of "does it fit" match what
- * `computePageEstimate` will compute once selection is done.
- */
-function backboneSegmentedPages(candidates: BackboneCandidate[], estimate: EstimatePagesFn = estimateElementPages): number {
-  if (candidates.length === 0) return 0;
-  const shapeById = new Map(candidates.map((c) => [c.id, c.shape]));
-  const segments = buildBackboneSegments(
-    candidates.map((c) => ({ id: c.id, date: c.date, printable: c.printable })),
-  );
-  return segments.reduce(
-    (sum, s) => sum + Math.max(1, estimate(s.memoryIds.map((id) => shapeById.get(id)!))),
-    0,
-  );
-}
-
-/**
- * Priority step (c) (owner round-3 decision, 2026-08-27): starts with EVERY
- * candidate kept -- a content-poor scope naturally yields a shorter book,
- * never padded -- and, only while the honest page-yield estimate
- * (`backboneSegmentedPages`, segmented exactly like the final book -- owner
- * round-4 root-cause fix, 2026-08-27) exceeds `pageBudget`, drops the single
- * LOWEST-SCORED unpinned candidate at a time (ties: latest date first, then
- * id, for full determinism) until it fits. Replaces the prior round's
- * "text is free, only visual competes for an image budget" rule -- ALL
- * memories now compete on the same content-neutral score.
- *
- * `pinnedIds` (birthday-beat merges, and now guaranteed panorama
- * placements -- owner round-3 decision, 2026-08-27) bypass ranking
- * entirely: a pinned candidate is never dropped, though its page cost still
- * counts toward `pageBudget`. If every remaining candidate is pinned and
- * the budget is still exceeded, the loop stops -- pins always win, even
- * over the cap (the caller records this as an explicit integrity note
- * rather than silently persisting a pageEstimate above pageCap).
- */
-export function selectBackboneMemories(
-  candidates: BackboneCandidate[],
-  pageBudget: number,
-  pinnedIds: ReadonlySet<string> = new Set(),
-  estimate: EstimatePagesFn = estimateElementPages,
-): string[] {
-  let kept = [...candidates];
-
-  while (backboneSegmentedPages(kept, estimate) > pageBudget) {
-    const droppable = kept
-      .filter((c) => !pinnedIds.has(c.id))
-      .sort((a, b) => a.score - b.score || b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
-    if (droppable.length === 0) break; // Only pinned candidates remain -- pins always win.
-    const dropId = droppable[0].id;
-    kept = kept.filter((c) => c.id !== dropId);
-  }
-
-  return kept.map((c) => c.id);
+/** Keeps every backbone candidate it's given -- see the section comment above. */
+export function selectBackboneMemories(candidates: BackboneCandidate[]): string[] {
+  return candidates.map((c) => c.id);
 }
 
 /**
@@ -2533,6 +2102,7 @@ export function buildOutlineSystemPrompt(): string {
     '',
     "RULES:",
     "- The parent's text is sacred and will be printed verbatim later. You are selecting and sequencing memories, never rewriting or paraphrasing their words.",
+    '- Select for QUALITY, never for a page count. You are NOT told a target page count and must never invent one, guess one, or aim for one. The printed book\'s physical page budget is enforced DOWNSTREAM, automatically, by the renderer -- selecting more spreads/memories than end up fitting is normal and EXPECTED, not a mistake to correct. Never omit an otherwise-worthy candidate spread or memory just to keep the book "shorter" or because you suspect there are "too many" already -- that is not your job and second-guessing it makes the book worse, not better.',
     '- Prefer emotional variety over repetition: do not fill a book with near-duplicate moments when other emotions/topics are available.',
     '- When a memory fits several spreads, it belongs where it is scarcest -- prefer placing it in the spread it will do more work for, since code will only keep it in one place.',
     '- Never invent milestones, dates, or facts not present in the data you were given.',
@@ -2596,7 +2166,7 @@ export function buildOutlineSystemPrompt(): string {
     '  "editorial_note": "<INTERNAL ONLY, never printed in the book -- 2-3 sentences on the arc of this book for the human reviewer>"',
     '}',
     '',
-    'Omit a candidate entirely if it is not worth including. Only reference memory ids and segment/candidate ids that were given to you.',
+    'Omit a candidate entirely if it is not worth including -- a QUALITY judgment (repetition, weak evidence, does not hold together), never a page-budget one; see the "Select for QUALITY, never for a page count" rule above. Only reference memory ids and segment/candidate ids that were given to you.',
   ].join('\n');
 }
 
@@ -3596,14 +3166,14 @@ async function main(): Promise<void> {
 
   // Birthday-beat merge rule (owner round-3 note, 2026-08-25): a birthday
   // spread with <3 memories duplicates the beat its birthday-flagged month
-  // segment already carries, and can't fill 2 pages anyway -- dissolve it
-  // into the backbone, pinned so it survives thinning and the segment keeps
-  // its special title.
+  // segment already carries -- dissolve it into the backbone; the segment
+  // keeps its special title. (Round-14: `dissolveThinBirthdaySpreads` still
+  // returns a `pinnedMemoryIds` set, unused here now that nothing thins --
+  // see its own doc comment.)
   const birthdaySpreadIdSet = new Set([...birthdayGroups.keys()].map((ageTurned) => `birthday-${ageTurned}`));
   const {
     placementByMemory: afterDissolve,
     dissolvedAges: dissolvedBirthdayAges,
-    pinnedMemoryIds,
     movedToBackbone: birthdayMovedToBackbone,
   } = dissolveThinBirthdaySpreads(afterThemedDissolve, birthdaySpreadIdSet, defaultBackboneCandidateByMemory);
   const movedToBackbone = [...themedMovedToBackbone, ...birthdayMovedToBackbone];
@@ -3632,196 +3202,73 @@ async function main(): Promise<void> {
     [...birthdayFinalMemoryIdsByAge.entries()].filter(([, ids]) => ids.length >= 3).map(([ageTurned]) => ageTurned),
   );
 
-  // ── Priority-order page budget: (a) non-droppable, (b) candidate spreads,
-  // (c) backbone gets only the leftover pages (coordinator spec correction,
-  // 2026-08-24) -- a dissolved birthday spread's 2 pages are freed back into
-  // the budget here automatically, since `nonDroppablePages` only counts
-  // ages whose list (above) is still non-empty ─────────────────────────────
-
-  const nonDroppablePages =
-    (firstsFinalPresent ? 2 : 0) +
-    [...birthdayFinalMemoryIdsByAge.values()].filter((ids) => ids.length > 0).length * 2;
+  // ── Panorama guarantee + published pageEstimate (round-14: outline-side
+  // BUDGET THINNING REMOVED ENTIRELY) ──────────────────────────────────────
+  //
+  // Owner decision, following an A/B test: the shape-placeholder oracle's
+  // per-candidate pricing (round-13) lacked pairing/digest-row compression
+  // knowledge and over-thinned real books (Enzo fell to 93 selected
+  // memories, Mara to 96, vs. the ~112+ the OLD flow -- and the real
+  // renderer itself -- comfortably printed at the cap). Fix: this script no
+  // longer thins anything for page budget, ever. `planNonBackboneBudget`/
+  // `selectBackboneMemories` above now unconditionally keep everyone they
+  // are given, so `keptThemedIds` below is simply "every themed spread the
+  // AI accepted" and the backbone selection is simply "every eligible
+  // memory not placed into Firsts/a birthday/a themed spread". Fitting all
+  // of this to the printer's page cap is the RENDERER's job alone, at
+  // render time (book-renderer/src/model/fitter.ts's round-13 balanced
+  // cap-pressure demotion -- month floors, milestone/quote-source
+  // protections, photo/video/illustrated keep-rate balancing).
 
   const isVisual = (memoryId: string) => {
     const f = features.get(memoryId)!;
     return f.photoCount + f.videoCount > 0;
   };
 
-  // Owner root-cause fix, 2026-08-27: panorama/hero nominations drive each
-  // memory's page SHAPE (never guessed from photo count alone), which in
-  // turn drives its honest page cost -- see `classifyMemoryPageShape`.
-  const heroCandidateIdSet = new Set(response.heroCandidates);
-  const panoramaCandidateIdSet = new Set(response.panoramaCandidates);
-  const shapeFor = (memoryId: string): MemoryPageShape => {
-    const f = features.get(memoryId)!;
-    return classifyMemoryPageShape({
-      photoCount: f.photoCount,
-      videoCount: f.videoCount,
-      hasText: f.hasText,
-      textLength: f.textLength,
-      isPanorama: panoramaCandidateIdSet.has(memoryId),
-      isFullBleed: heroCandidateIdSet.has(memoryId),
-    });
-  };
-
-  // Owner round-3 decision, 2026-08-27: content-neutral ranking signals --
-  // "highlight/hero status" and "topic-cluster membership" -- computed once
-  // over the WHOLE book, independent of where a memory ends up landing.
+  // Owner round-3 decision, 2026-08-27: "highlight/hero status" -- computed
+  // once over the WHOLE book -- still feeds the oracle's per-element
+  // `highlights` (drives full-bleed/hero-slot composition, never budget).
   const highlightedOrHeroIds = new Set([
     ...response.backboneHighlights.flatMap((h) => h.memoryIds),
     ...response.heroCandidates,
   ]);
-  const themedClusterMemberIds = new Set(candidates.flatMap((c) => c.memoryIds));
 
-  const candidateBudgetElements: ThemedBudgetElement[] = [...spreadCandidateIds].map((spreadId) => {
-    const memberIds = [...afterDissolve.entries()].filter(([, s]) => s === spreadId).map(([id]) => id);
-    return { id: spreadId, memoryCount: memberIds.length, shapes: memberIds.map(shapeFor) };
+  const candidateBudgetElements: ThemedBudgetElement[] = [...spreadCandidateIds].map((spreadId) => ({
+    id: spreadId,
+    memoryCount: [...afterDissolve.entries()].filter(([, s]) => s === spreadId).length,
+  }));
+  const nonBackbonePlan = planNonBackboneBudget(candidateBudgetElements);
+
+  const finalPlacement = afterDissolve; // round-14: nothing is ever reassigned for budget anymore.
+
+  const backboneCandidates: BackboneCandidate[] = [...finalPlacement.entries()]
+    .filter(([, spreadId]) => spreadId.startsWith('backbone:'))
+    .map(([memoryId]) => ({ id: memoryId }));
+  const keptBackboneIds = new Set(selectBackboneMemories(backboneCandidates));
+  const excludedMemoryIds = [...cliExcludedMemoryIds]; // round-14: budget can no longer exclude anyone.
+
+  const finalBackboneInputs: BackboneMemoryInput[] = [...keptBackboneIds].map((id) => {
+    const f = features.get(id)!;
+    return { id, date: f.date, printable: f.hasText || f.photoCount + f.videoCount > 0 };
   });
+  // Re-segment chronologically from scratch -- buildBackboneSegments
+  // already merges/drops now-empty month segments.
+  const finalBackboneSegments = buildBackboneSegments(finalBackboneInputs);
 
   // Round-13 "fitter-as-oracle": ONE synthetic manifest, built once and
-  // reused for every real-id oracle call below (preliminary AND final
-  // pageEstimate) -- the manifest itself never changes, only which outline
-  // elements reference it. Every model-nominated panorama/hero candidate
-  // (not just the ones that end up GUARANTEED a placement -- that's a
-  // downstream, narrower concept) gets trusted synthetic dimensions, same
-  // as the real export pipeline trusting a nominee's measured dimensions;
-  // the fitter's own internal panorama/full-bleed budget still caps how
-  // many actually get placed, exactly like production.
+  // reused for both oracle calls below. Every model-nominated panorama/hero
+  // candidate gets trusted synthetic dimensions, same as the real export
+  // pipeline trusting a nominee's measured dimensions; the fitter's own
+  // internal panorama/full-bleed budget still caps how many actually get
+  // placed, exactly like production.
   const oracleTrustedWideIds = new Set([...response.panoramaCandidates, ...response.heroCandidates]);
   const oraclePortraits = portraitVersions
     .filter((p) => p.reference_date)
     .map((p) => buildSyntheticPortrait(p.reference_date!));
   const oracleManifest = buildSyntheticManifest(features, mediaByMemory, child, oracleTrustedWideIds, oraclePortraits);
 
-  /** Segments `memoryIds` by calendar month (round-13) -- mirrors `backboneSegmentedPages`'s own "segmented exactly like the final book" fix, applied here to the PRELIMINARY estimate too (the old hand-rolled preliminary model never got that fix and treated the whole backbone as one ungrouped list). */
-  const oracleBackboneElements = (memoryIds: string[]): OracleElementInput[] => {
-    const inputs: BackboneMemoryInput[] = memoryIds.map((id) => {
-      const f = features.get(id)!;
-      return { id, date: f.date, printable: f.hasText || f.photoCount + f.videoCount > 0 };
-    });
-    return buildBackboneSegments(inputs).map((s) => ({ id: `oracle:backbone:${s.id}`, kind: 'backbone' as const, memoryIds: s.memoryIds }));
-  };
-
-  // Placed-panorama guarantee (owner round-3 decision, 2026-08-27): "1 + 1
-  // per ~20 pages" of the model's best-first panorama nominations must be
-  // SELECTED into the book, not just nominated. `N` is derived from a
-  // PRELIMINARY estimate (nothing dropped yet) so the guarantee count never
-  // depends on its own outcome. Round-13: this estimate now comes from the
-  // real fitter (`estimatePagesViaFitter`), not the hand-rolled model.
-  const preliminaryThemedElements: OracleElementInput[] = [...spreadCandidateIds].map((spreadId) => ({
-    id: spreadId,
-    kind: 'themed' as const,
-    memoryIds: [...afterDissolve.entries()].filter(([, s]) => s === spreadId).map(([id]) => id),
-  }));
-  const preliminaryBackboneIds = [...afterDissolve.entries()].filter(([, s]) => s.startsWith('backbone:')).map(([id]) => id);
-  const preliminaryPageEstimate =
-    FIXED_PAGES +
-    nonDroppablePages +
-    estimatePagesViaFitter(
-      [...preliminaryThemedElements, ...oracleBackboneElements(preliminaryBackboneIds)],
-      oracleManifest,
-      response.panoramaCandidates,
-      response.heroCandidates,
-    );
-  const panoramaGuaranteeCount = computePlacedPanoramaGuaranteeCount(preliminaryPageEstimate);
-  const guaranteedPanoramaIds = new Set(response.panoramaCandidates.slice(0, panoramaGuaranteeCount));
-
-  // A themed spread carrying a guaranteed panorama is protected from being
-  // dropped for budget -- the memory's guarantee would otherwise be
-  // undermined by dropping the whole spread it lives in.
-  const protectedThemedElements = candidateBudgetElements.filter((t) =>
-    [...afterDissolve.entries()].some(([mid, s]) => s === t.id && guaranteedPanoramaIds.has(mid)),
-  );
-  const protectedThemedIdSet = new Set(protectedThemedElements.map((t) => t.id));
-  const droppableThemedElements = candidateBudgetElements.filter((t) => !protectedThemedIdSet.has(t.id));
-  const protectedThemedPages = protectedThemedElements.reduce((sum, t) => sum + themedSpreadPages(t), 0);
-
-  const droppableNonBackbonePlan = planNonBackboneBudget(
-    FIXED_PAGES,
-    nonDroppablePages + protectedThemedPages,
-    droppableThemedElements,
-    options.pageCap,
-    estimateElementPagesViaFitter, // round-13: the real fitter drives the drop/keep decision, not the hand-rolled model.
-  );
-  const nonBackbonePlan: NonBackboneBudgetPlan = {
-    nonBackbonePages: droppableNonBackbonePlan.nonBackbonePages,
-    keptThemedIds: [...protectedThemedElements.map((t) => t.id), ...droppableNonBackbonePlan.keptThemedIds],
-    droppedThemedIds: droppableNonBackbonePlan.droppedThemedIds,
-    backboneCapacityPages: droppableNonBackbonePlan.backboneCapacityPages,
-  };
-  const droppedCandidateSet = new Set(nonBackbonePlan.droppedThemedIds);
-
-  // A budget-dropped candidate spread's memories return to backbone
-  // ELIGIBILITY (they compete on rank below) rather than being excluded
-  // outright -- backbone thinning already handles overflow.
-  const finalPlacement = new Map(afterDissolve);
-  for (const [memoryId, spreadId] of afterDissolve) {
-    if (!droppedCandidateSet.has(spreadId)) continue;
-    const backboneId = defaultBackboneCandidateByMemory.get(memoryId);
-    if (backboneId) finalPlacement.set(memoryId, backboneId);
-  }
-
-  // Content-neutral ranking (owner round-3 decision, 2026-08-27): every
-  // backbone candidate competes on the SAME signals regardless of type --
-  // never a milestone/text/photo "type" trump. Structural protections
-  // (Firsts membership, birthday pins) stay outside this score entirely;
-  // guaranteed panoramas join the same pin mechanism below.
-  const backboneCandidates: BackboneCandidate[] = [...finalPlacement.entries()]
-    .filter(([, spreadId]) => spreadId.startsWith('backbone:'))
-    .map(([memoryId]) => {
-      const f = features.get(memoryId)!;
-      return {
-        id: memoryId,
-        date: f.date,
-        shape: shapeFor(memoryId),
-        // Same predicate as `finalBackboneInputs` below -- keeps this
-        // candidate's segmentation identical to the REAL final segmentation
-        // it will be re-run through once selection is done.
-        printable: f.hasText || f.photoCount + f.videoCount > 0,
-        score: computeThinningScore({
-          isHighlighted: highlightedOrHeroIds.has(memoryId),
-          inThemedCluster: themedClusterMemberIds.has(memoryId),
-          engagementCount: f.engagementCount,
-          hasText: f.hasText,
-          textLength: f.textLength,
-          hasVisual: f.photoCount + f.videoCount > 0,
-        }),
-      };
-    });
-
-  const allPinnedIds = new Set([...pinnedMemoryIds, ...guaranteedPanoramaIds]);
-  const keptBackboneIds = new Set(
-    // round-13: the real fitter drives the drop/keep decision, not the hand-rolled model.
-    selectBackboneMemories(backboneCandidates, nonBackbonePlan.backboneCapacityPages, allPinnedIds, estimateElementPagesViaFitter),
-  );
-  const excludedMemoryIds = [
-    ...cliExcludedMemoryIds,
-    ...backboneCandidates
-      .filter((c) => !keptBackboneIds.has(c.id))
-      .map((c) => ({ memoryId: c.id, elementId: 'backbone', reason: 'over_budget_backbone_not_selected' })),
-  ];
-
-  const finalBackboneInputs: BackboneMemoryInput[] = backboneCandidates
-    .filter((c) => keptBackboneIds.has(c.id))
-    .map((c) => {
-      const f = features.get(c.id)!;
-      return { id: c.id, date: c.date, printable: f.hasText || f.photoCount + f.videoCount > 0 };
-    });
-  // Re-segment chronologically from scratch over just the survivors --
-  // buildBackboneSegments already merges/drops now-empty month segments.
-  const finalBackboneSegments = buildBackboneSegments(finalBackboneInputs);
-
-  // Round-13 "fitter-as-oracle": the published `pageEstimate` -- the number
-  // this script's whole priority-order budget above is trying to hit -- now
-  // comes from ONE holistic real-fitter call over every FINAL element,
-  // fixed pages included, at the REAL page cap (so pairing AND the fitter's
-  // own cap-pressure demotion both apply exactly like the real renderer,
-  // rather than a hand-rolled sum of per-element approximations). A
-  // birthday spread renders as an ordinary 'themed' element in the real
-  // outline (`BudgetElementKind`'s 'birthday' has no fitter-side analogue --
-  // see `OutlineElementKind`), so it maps the same way here.
   const spreadMetaById = new Map(response.spreads.map((s) => [`spread:${s.candidateId}`, s]));
-  const finalThemedOracleElements: OracleElementInput[] = nonBackbonePlan.keptThemedIds.map((id) => {
+  const themedOracleElements: OracleElementInput[] = nonBackbonePlan.keptThemedIds.map((id) => {
     const memberIds = [...finalPlacement.entries()].filter(([, s]) => s === id).map(([mid]) => mid);
     const meta = spreadMetaById.get(id);
     return {
@@ -3834,16 +3281,16 @@ async function main(): Promise<void> {
       highlights: memberIds.filter((mid) => highlightedOrHeroIds.has(mid)),
     };
   });
-  const finalFirstsOracleElement: OracleElementInput[] = firstsFinalPresent
+  const firstsOracleElement: OracleElementInput[] = firstsFinalPresent
     ? [{ id: 'firsts', kind: 'firsts', memoryIds: firstsFinalMemoryIds }]
     : [];
-  const finalBirthdayOracleElements: OracleElementInput[] = [...birthdayFinalMemoryIdsByAge.entries()].map(([ageTurned, ids]) => ({
+  const birthdayOracleElements: OracleElementInput[] = [...birthdayFinalMemoryIdsByAge.entries()].map(([ageTurned, ids]) => ({
     id: `birthday-${ageTurned}`,
     kind: 'themed',
     memoryIds: ids,
     highlights: ids.filter((mid) => highlightedOrHeroIds.has(mid)),
   }));
-  const finalBackboneOracleElements: OracleElementInput[] = finalBackboneSegments.map((s) => ({
+  const backboneOracleElements: OracleElementInput[] = finalBackboneSegments.map((s) => ({
     id: `backbone:${s.id}`,
     kind: 'backbone',
     memoryIds: s.memoryIds,
@@ -3855,19 +3302,50 @@ async function main(): Promise<void> {
     { id: 'through-the-years', kind: 'through-the-years', memoryIds: [] },
     { id: 'closing', kind: 'closing', memoryIds: [] },
   ];
+  const fullSelectionElements: OracleElementInput[] = [
+    ...fixedOracleElements,
+    ...themedOracleElements,
+    ...firstsOracleElement,
+    ...birthdayOracleElements,
+    ...backboneOracleElements,
+  ];
+
+  // Round-14: ONE holistic, UNCAPPED oracle call over the FULL curated
+  // selection is both (a) the panorama-guarantee sizing input and (b) the
+  // published "pre-cap" pageEstimate -- may exceed the printer's hard cap;
+  // that is EXPECTED and FINE now (see the section comment above). There is
+  // no more preliminary-vs-final split, since nothing is thinned in
+  // between anymore.
   const totalPages = estimatePagesViaFitter(
-    [
-      ...fixedOracleElements,
-      ...finalThemedOracleElements,
-      ...finalFirstsOracleElement,
-      ...finalBirthdayOracleElements,
-      ...finalBackboneOracleElements,
-    ],
+    fullSelectionElements,
     oracleManifest,
     response.panoramaCandidates,
     response.heroCandidates,
-    options.pageCap,
   );
+  const panoramaGuaranteeCount = computePlacedPanoramaGuaranteeCount(totalPages);
+  const guaranteedPanoramaIds = new Set(response.panoramaCandidates.slice(0, panoramaGuaranteeCount));
+
+  // Round-14: a SECOND oracle call, this time AT the real page cap --
+  // purely for the printed summary below (what the renderer's own round-13
+  // balanced cap-pressure demotion would actually do to this exact
+  // selection: post-demotion page count + which KINDS it would trim). This
+  // never feeds back into selection above -- it is reporting only, and
+  // reports ids/counts alone, never memory content (PII rule).
+  const atCapOutline = buildSyntheticOutline(fullSelectionElements, response.panoramaCandidates, response.heroCandidates);
+  const atCapResult = fitBook(atCapOutline, oracleManifest, { maxPages: options.pageCap });
+  const capPageEstimate = atCapResult.capacity.totalPages;
+  const omittedByKind = { photo: 0, video: 0, illustrated: 0 };
+  for (const omittedId of atCapResult.capacity.omittedMemoryIds) {
+    const f = features.get(omittedId);
+    if (!f) continue;
+    // Mirrors the real fitter's own kind classification (fitter.ts
+    // `classifyMemoryKind`): text -> illustrated (every text memory gets an
+    // illustration); otherwise photo/video by which asset kind is present.
+    if (f.hasText) omittedByKind.illustrated += 1;
+    else if (f.videoCount > 0) omittedByKind.video += 1;
+    else if (f.photoCount > 0) omittedByKind.photo += 1;
+  }
+
   const finalKeptMemoryIds = new Set<string>([
     ...finalBackboneInputs.map((b) => b.id),
     ...nonBackbonePlan.keptThemedIds.flatMap((id) => [...finalPlacement.entries()].filter(([, s]) => s === id).map(([mid]) => mid)),
@@ -3875,37 +3353,17 @@ async function main(): Promise<void> {
     ...[...birthdayFinalMemoryIdsByAge.values()].flat(),
   ]);
   const totalImageCount = [...finalKeptMemoryIds].filter(isVisual).length;
-  const droppedElements = nonBackbonePlan.droppedThemedIds.map((id) => ({
-    id,
-    kind: 'themed' as const,
-    reason: 'over_budget_dropped_themed_spread',
-  }));
+  const droppedElements: Array<{ id: string; kind: 'themed'; reason: string }> = []; // round-14: budget can no longer drop a whole spread.
 
   console.log(
-    `Page estimate: ${totalPages} (page cap ${options.pageCap} -- a CEILING, not a target; layflat hard limit ${HARD_PAGE_CAP}), via the real book-renderer fitter (round-13 'fitter-as-oracle'). ${totalImageCount} visual (photo/video-bearing) memories kept. Dropped ${droppedElements.length} candidate spread(s) for budget; ${excludedMemoryIds.length} memory(ies) excluded (CLI + budget combined).`,
+    `Pre-cap page estimate (full curated selection, before the renderer's own cap-pressure demotion): ${totalPages} pages -- the outline no longer self-rations, so this may exceed the ${options.pageCap}-page cap; that is expected. ${totalImageCount} visual (photo/video-bearing) memories kept, ${finalKeptMemoryIds.size} total.`,
   );
   console.log(
-    `Placed-panorama guarantee: ${guaranteedPanoramaIds.size} of ${response.panoramaCandidates.length} nominated (N = 1 + pageEstimate/20, from a preliminary estimate of ${preliminaryPageEstimate}).`,
+    `At-cap estimate (what the renderer would actually print, via its own round-13 balanced cap-pressure demotion): ${capPageEstimate} pages, omitting ${atCapResult.capacity.omittedMemoryIds.length} memory(ies) to fit -- photo ${omittedByKind.photo}, video ${omittedByKind.video}, illustrated ${omittedByKind.illustrated} (ids/counts only; see the review artifact for per-page detail).`,
   );
-
-  // Owner round-4 decision, 2026-08-27: pageCap is supposed to be a hard
-  // ceiling -- `planNonBackboneBudget` and `selectBackboneMemories` both
-  // tighten until the honest estimate fits it. With both now segmenting the
-  // backbone exactly like this final tally (root-cause fix above), the ONLY
-  // way `totalPages` can still exceed `options.pageCap` here is if every
-  // page left standing is structurally non-droppable -- Firsts, birthdays,
-  // a themed spread protected by a guaranteed panorama, or a pinned
-  // backbone memory -- i.e. physically impossible to trim further. That is
-  // a real, visible fact about this book, not a bug to swallow silently, so
-  // it is recorded as an integrity note rather than just persisted.
-  if (totalPages > options.pageCap) {
-    const detail =
-      `pageEstimate ${totalPages} > pageCap ${options.pageCap} -- every remaining page is structurally ` +
-      'non-droppable (Firsts, birthdays, guaranteed-panorama-protected themed spreads, and/or pinned ' +
-      'backbone memories); there is nothing left to trim.';
-    violations.push({ kind: 'page_cap_exceeded_all_protected', detail });
-    console.warn(`INTEGRITY: page cap did not bind -- ${detail}`);
-  }
+  console.log(
+    `Placed-panorama guarantee: ${guaranteedPanoramaIds.size} of ${response.panoramaCandidates.length} nominated (N = 1 + pageEstimate/20, from the pre-cap estimate of ${totalPages} -- reviewer context only; round-14: no longer a protective mechanism, since nothing is dropped by this script anymore).`,
+  );
 
   // ── Pacing (plan 2026-08-24: no 3+ consecutive unbroken backbone segments
   // while a spread is available to interleave; chronological affinity is a
@@ -4047,7 +3505,9 @@ interface RenderContext {
    * round-3 note, 2026-08-25: birthday-beat merge rule). */
   dissolvedBirthdayAges: number[];
   movedToBackbone: DissolveResult['movedToBackbone'];
-  droppedElements: Array<{ id: string; kind: BudgetElementKind; reason: string }>;
+  /** Always `[]` (round-14: the outline no longer drops a whole candidate
+   * spread for budget) -- kept in the output shape rather than removed. */
+  droppedElements: Array<{ id: string; kind: 'themed'; reason: string }>;
   excludedMemoryIds: Array<{ memoryId: string; elementId: string; reason: string }>;
   totalPages: number;
   /** Total visual (photo/video-bearing) memories in the final book. */
