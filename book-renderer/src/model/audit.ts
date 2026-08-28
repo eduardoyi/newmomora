@@ -377,21 +377,26 @@ function auditBlankAccounting(document: BookDocument): IntegrityViolation[] {
       });
     }
   }
-  // Round-9 item 2c: a `parity:full-bleed` blank is NEVER acceptable
-  // anywhere now, section boundary or not — the fitter's demotion fallback
-  // (processGroup in fitter.ts) exists precisely so a full-bleed's parity
-  // need can ALWAYS be resolved without a blank (either the reorder pass
-  // routes around it, or, as the true last resort, the page demotes to an
-  // ordinary anchor-media solo instead). Unlike the other parity reasons
-  // below, this one gets NO boundary exemption — a full-bleed is optional
-  // beauty, a blank page is a defect, and demotion means there is never a
-  // structural reason left to accept the trade.
+  // Round-9 item 2c (extended Task 1, round-17, for panorama): a
+  // `parity:full-bleed` or `parity:panorama-spread` blank is NEVER
+  // acceptable anywhere now, section boundary or not — the fitter's
+  // demotion fallback (`processGroup` for full-bleed; the panorama unit
+  // handler in `buildContentPages`, mirroring it, for panorama) exists
+  // precisely so either one's parity need can ALWAYS be resolved without a
+  // blank (the reorder pass routes around it, a local swap absorbs it, or,
+  // as the true last resort, the page demotes to an ordinary anchor-media
+  // solo instead). Unlike the other parity reasons below, these two get NO
+  // boundary exemption — a full-bleed or panorama-spread's facing
+  // treatment is optional beauty, a blank page is a defect, and demotion
+  // means there is never a structural reason left to accept the trade.
+  const UNCONDITIONAL_PARITY_BLANK_REASONS: ReadonlySet<string> = new Set(['parity:full-bleed', 'parity:panorama-spread']);
   for (const page of document.pages) {
-    if (page.templateId === 'blank' && page.blankReason === 'parity:full-bleed') {
+    if (page.templateId === 'blank' && page.blankReason && UNCONDITIONAL_PARITY_BLANK_REASONS.has(page.blankReason)) {
+      const kind = page.blankReason === 'parity:full-bleed' ? 'Full-bleed' : 'Panorama-spread';
       violations.push({
         check: 'blank-accounting',
         pageId: page.id,
-        message: `Full-bleed parity blank ${page.id} should never occur — the fitter's demotion fallback should have rendered this page as anchor-media instead of paying a blank.`,
+        message: `${kind} parity blank ${page.id} should never occur — the fitter's demotion fallback should have rendered this page as anchor-media instead of paying a blank.`,
       });
     }
   }
@@ -402,12 +407,12 @@ function auditBlankAccounting(document: BookDocument): IntegrityViolation[] {
   // blanks (front matter, closing-total) carry non-parity reasons and are
   // exempt; a parity blank at a section boundary (neighbors from different
   // elements) is tolerated as the genuine last resort — EXCEPT
-  // `parity:full-bleed`, which is checked unconditionally above instead.
+  // `parity:full-bleed`/`parity:panorama-spread`, checked unconditionally above instead.
   for (let i = 1; i < document.pages.length - 1; i++) {
     const page = document.pages[i];
     if (page.templateId !== 'blank' || !page.blankReason?.startsWith('parity:')) continue;
     if (page.blankReason === 'parity:closing-total') continue;
-    if (page.blankReason === 'parity:full-bleed') continue; // handled unconditionally above
+    if (page.blankReason && UNCONDITIONAL_PARITY_BLANK_REASONS.has(page.blankReason)) continue; // handled unconditionally above
     const prev = document.pages[i - 1];
     const next = document.pages[i + 1];
     const isContent = (p: typeof page) => p.templateId !== 'blank';

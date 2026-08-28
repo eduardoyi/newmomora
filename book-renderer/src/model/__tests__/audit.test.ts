@@ -151,6 +151,33 @@ describe('auditBookDocument — (d) blank-page accounting', () => {
     expect(violations.filter((v) => v.check === 'blank-accounting')).toHaveLength(0);
   });
 
+  it('flags a parity:panorama-spread blank unconditionally — no section-boundary exemption (round-17, matches parity:full-bleed)', () => {
+    // p1 (the blank) sits at a SECTION BOUNDARY: its previous page belongs
+    // to a DIFFERENT element (backbone:a) than the blank itself
+    // (backbone:b) — the exact shape the generic parity-blank check below
+    // tolerates for every OTHER parity reason. A panorama's own demotion
+    // fallback (fitter.ts's panorama unit handler) means this should never
+    // happen in practice, but if one somehow slipped through, it must never
+    // get a free pass just for landing at a boundary.
+    const document = docWith([
+      emptyPage({ id: 'p0', sourceElementId: 'backbone:a', templateId: 'anchor-media' }),
+      emptyPage({ id: 'p1', sourceElementId: 'backbone:b', templateId: 'blank', blankReason: 'parity:panorama-spread' }),
+      emptyPage({ id: 'p2', sourceElementId: 'backbone:b', templateId: 'panorama-spread', isSpread: true }),
+    ]);
+    const violations = auditBookDocument(document, makeOutline([]), makeManifest({}));
+    expect(violations.some((v) => v.check === 'blank-accounting' && v.pageId === 'p1')).toBe(true);
+  });
+
+  it('still tolerates a boundary parity blank for a reason OTHER than full-bleed/panorama-spread (the exemption is not gone entirely)', () => {
+    const document = docWith([
+      emptyPage({ id: 'p0', sourceElementId: 'backbone:a', templateId: 'anchor-media' }),
+      emptyPage({ id: 'p1', sourceElementId: 'backbone:b', templateId: 'blank', blankReason: 'parity:quote-collection' }),
+      emptyPage({ id: 'p2', sourceElementId: 'backbone:b', templateId: 'quote-collection', isSpread: true }),
+    ]);
+    const violations = auditBookDocument(document, makeOutline([]), makeManifest({}));
+    expect(violations.some((v) => v.check === 'blank-accounting' && v.pageId === 'p1')).toBe(false);
+  });
+
   it('fitBook itself never produces an unaccounted blank on real pairing/parity scenarios', () => {
     const manifest = makeManifest({
       'mem-0': makeMemory({ assets: [makeAsset()] }),
@@ -538,7 +565,11 @@ describe('auditBookDocument — (j) illustrated-digest geometry (Task 1, round-1
 
 describe('auditBookDocument — real books (owner review round 5, item 1: zero violations required)', () => {
   const BOOK_DATA_DIR = resolve(process.cwd(), 'book-data');
-  const REAL_BOOKS = ['enzo-year-three', 'mara-year-one'];
+  // Round-17 (Task 1): all five real books, not just the two pre-existing
+  // ones — enzo-year-one/enzo-year-two/mara-year-two are the photo-heavy
+  // validation books whose panorama parity blanks this round fixes, and
+  // this is the permanent regression backstop for that fix.
+  const REAL_BOOKS = ['enzo-year-one', 'enzo-year-two', 'enzo-year-three', 'mara-year-one', 'mara-year-two'];
 
   for (const slug of REAL_BOOKS) {
     const manifestPath = resolve(BOOK_DATA_DIR, slug, 'manifest.json');

@@ -1235,6 +1235,166 @@ describe('fitBook — panorama splicing (outline.panoramaCandidates)', () => {
   });
 });
 
+describe('fitBook — panorama parity: reorder prediction + swap + demotion ladder (round-17, live-data finding)', () => {
+  it('rung (b): a REAL local swap lands the panorama even when the reorder-pass sim could not predict a preceding pair splitting past its min-size floor', () => {
+    // mem-marginal's two assets (2.5 / 0.5 aspect) fail MIN_IMAGE_SIDE_MM as
+    // a pair and split into two solo pages at REAL assembly time — a
+    // divergence the parity-reorder pass's own sim can't see (it predicts
+    // this unit as a single page, `unitParityMeta`'s ordinary movable-single
+    // case, not the 2-page split `trySplitGroupUnit` never gets asked to
+    // model here). The sim therefore believes the panorama already lands
+    // even and does no pre-arranging; real assembly lands it odd instead —
+    // exactly the drift diagnosed on enzo-year-one's `backbone:2023-03` —
+    // and rung (b)'s REAL swap (reading the ACTUAL page parity, immune to
+    // any sim drift) absorbs it with zero blanks.
+    const manifest = makeManifest({
+      'mem-a': makeMemory({ assets: [makeAsset()] }),
+      'mem-marginal': makeMemory({ assets: [makeAsset({ aspectRatio: 2.5 }), makeAsset({ aspectRatio: 0.5 })] }),
+      'mem-pano': makeMemory({ assets: [makeAsset({ width: 4000, height: 2000, aspectRatio: 2 })] }),
+    });
+    const outline = makeOutline(
+      [makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-a', 'mem-marginal', 'mem-pano'] })],
+      { panoramaCandidates: ['mem-pano'] },
+    );
+
+    const { document, gaps } = fitBook(outline, manifest);
+    expect(gaps).toHaveLength(0);
+    expect(document.pages.filter((p) => p.templateId === 'blank')).toHaveLength(0);
+    const panoramaPages = document.pages.filter((p) => p.templateId === 'panorama-spread');
+    expect(panoramaPages).toHaveLength(1);
+    // mem-marginal's split (id suffix ':minsize-a'/':minsize-b') never
+    // dropped either asset.
+    const splitPages = document.pages.filter((p) => p.id.includes(':minsize-'));
+    expect(splitPages).toHaveLength(2);
+    const files = splitPages.flatMap((p) => p.slots.filter((s) => s.kind === 'photo').map((s) => (s.content as PhotoSlotContent).assetFile));
+    expect(new Set(files).size).toBe(2);
+    // The swap is visible as a scrambled unit order: the second split half
+    // (unit-index 1) lands AFTER the panorama (unit-index 2) instead of
+    // immediately before it.
+    const panoIndex = document.pages.findIndex((p) => p.templateId === 'panorama-spread');
+    expect(document.pages[panoIndex + 1]?.id).toContain(':1');
+  });
+
+  it('rung (c): demotes to an ordinary anchor-media solo instead of a blank when the section has no other unit to reorder or swap with (the true last resort)', () => {
+    const manifest = makeManifest({
+      'mem-a': makeMemory({ assets: [makeAsset()] }), // odd-start setup, same pattern as full-bleed's own demotion test
+      'mem-pano': makeMemory({ assets: [makeAsset({ width: 4000, height: 2000, aspectRatio: 2 })] }), // the section's ONLY unit
+    });
+    const outline = makeOutline(
+      [
+        makeElement({ id: 'backbone:a', kind: 'backbone', memoryIds: ['mem-a'] }),
+        makeElement({ id: 'backbone:b', kind: 'backbone', memoryIds: ['mem-pano'] }),
+      ],
+      { panoramaCandidates: ['mem-pano'] },
+    );
+
+    const { document, gaps } = fitBook(outline, manifest);
+    expect(gaps).toHaveLength(0);
+    expect(document.pages.filter((p) => p.templateId === 'blank')).toHaveLength(0);
+    // No panorama-spread at all — it demoted rather than paying a blank for
+    // its facing-credit promise, the same owner-approved trade full-bleed
+    // already makes.
+    expect(document.pages.some((p) => p.templateId === 'panorama-spread')).toBe(false);
+    const demoted = document.pages.find((p) => p.sourceElementId === 'backbone:b');
+    expect(demoted).toBeTruthy();
+    expect(demoted!.templateId).toBe('anchor-media');
+    expect(demoted!.slots.some((s) => s.kind === 'photo')).toBe(true);
+    const photo = demoted!.slots.find((s) => s.kind === 'photo')!.content as PhotoSlotContent;
+    expect(photo.memoryId).toBe('mem-pano');
+  });
+
+  it('sim/assembly consistency: auditBookDocument reports zero avoidable parity:panorama-spread blanks for either outcome above', () => {
+    const swapManifest = makeManifest({
+      'mem-a': makeMemory({ assets: [makeAsset()] }),
+      'mem-marginal': makeMemory({ assets: [makeAsset({ aspectRatio: 2.5 }), makeAsset({ aspectRatio: 0.5 })] }),
+      'mem-pano': makeMemory({ assets: [makeAsset({ width: 4000, height: 2000, aspectRatio: 2 })] }),
+    });
+    const swapOutline = makeOutline(
+      [makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-a', 'mem-marginal', 'mem-pano'] })],
+      { panoramaCandidates: ['mem-pano'] },
+    );
+    const demoteManifest = makeManifest({
+      'mem-a': makeMemory({ assets: [makeAsset()] }),
+      'mem-pano': makeMemory({ assets: [makeAsset({ width: 4000, height: 2000, aspectRatio: 2 })] }),
+    });
+    const demoteOutline = makeOutline(
+      [
+        makeElement({ id: 'backbone:a', kind: 'backbone', memoryIds: ['mem-a'] }),
+        makeElement({ id: 'backbone:b', kind: 'backbone', memoryIds: ['mem-pano'] }),
+      ],
+      { panoramaCandidates: ['mem-pano'] },
+    );
+
+    for (const [outline, manifest] of [
+      [swapOutline, swapManifest],
+      [demoteOutline, demoteManifest],
+    ] as const) {
+      const { document } = fitBook(outline, manifest);
+      const violations = auditBookDocument(document, outline, manifest);
+      expect(violations.filter((v) => v.check === 'blank-accounting')).toHaveLength(0);
+    }
+  });
+});
+
+describe('fitBook — Task 2 (round-17): printable caption sanitization end to end', () => {
+  it('a photo memory whose caption is JUST a URL renders as caption-less — photo-only path, no footer note, no on-image caption', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ text: 'https://example.com/some/photo/link', assets: [makeAsset()] }),
+    });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const { document, gaps } = fitBook(outline, manifest);
+    expect(gaps).toHaveLength(0);
+    const page = document.pages.find((p) => p.sourceElementId === 'backbone:x' && p.slots.some((s) => s.kind === 'photo'));
+    expect(page).toBeTruthy();
+    const photo = page!.slots.find((s) => s.kind === 'photo')!.content as PhotoSlotContent;
+    expect(photo.caption).toBeNull();
+    const footerIndex = (page!.params.footerIndex as Array<{ note: string | null }> | undefined) ?? [];
+    expect(footerIndex.every((e) => !e.note)).toBe(true);
+  });
+
+  it('a zero-asset memory whose caption is JUST a URL is dropped entirely — no photo AND no caption left to print, exactly like a memory with no text at all', () => {
+    const manifest = makeManifest({
+      'mem-a': makeMemory({ assets: [makeAsset()] }), // keeps the section non-empty
+      'mem-url-only': makeMemory({ text: '   https://example.com   ', assets: [] }),
+    });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-a', 'mem-url-only'] })]);
+    const { document } = fitBook(outline, manifest);
+    const touchesUrlOnlyMemory = document.pages.some((p) =>
+      p.slots.some((s) => (s.kind === 'text' && (s.content as TextSlotContent).memoryId === 'mem-url-only') || (s.kind === 'photo' && (s.content as PhotoSlotContent).memoryId === 'mem-url-only')),
+    );
+    expect(touchesUrlOnlyMemory).toBe(false);
+  });
+
+  it('a URL never prints anywhere in a full book run — real-shaped multi-memory regression coverage', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ text: 'Beach day! https://photos.example.com/album/123 so much fun', assets: [makeAsset()] }),
+      'mem-2': makeMemory({
+        type: 'text_illustration',
+        text: 'De paseo por el parque, ver www.momora.example/foo para más fotos',
+        assets: [],
+        illustration: { file: 'illo.webp', width: 800, height: 800, aspectRatio: 1 },
+      }),
+    });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1', 'mem-2'] })]);
+    const { document } = fitBook(outline, manifest);
+    const allText = document.pages
+      .flatMap((p) => p.slots)
+      .map((s) => {
+        if (s.kind === 'text') return (s.content as TextSlotContent).text;
+        if (s.kind === 'photo') return (s.content as PhotoSlotContent).caption ?? '';
+        return '';
+      })
+      .concat(
+        document.pages.flatMap((p) => ((p.params.footerIndex as Array<{ note: string | null }> | undefined) ?? []).map((e) => e.note ?? '')),
+      )
+      .join(' ');
+    expect(allText).not.toContain('http');
+    expect(allText).not.toContain('www.');
+    expect(allText).toContain('Beach day!');
+    expect(allText).toContain('De paseo por el parque');
+  });
+});
+
 describe('fitBook — scan-to-watch moved off the footer, onto each photo (owner review round 3, item 8)', () => {
   it('every video slot carries its own qr flag regardless of how many share a page — no per-page cap anymore', () => {
     // The scan-to-watch affordance now renders directly under each photo
@@ -2302,10 +2462,14 @@ describe('fitBook — single-image pages drop the index numeral (owner review ro
   it('a genuine two-photo pair keeps its numerals — there IS something to disambiguate', () => {
     // A single memory with two assets — always ONE 2-photo group regardless
     // of any cap, so pairing/demotion interactions don't muddy this test.
-    // The aspect combination (wide + tall) clears the min-size floor
-    // comfortably as a pair (round-5 amendment) rather than splitting.
+    // The aspect combination (moderately wide + near-square) clears the
+    // min-size floor comfortably as a pair (round-5 amendment) rather than
+    // splitting — neither asset is a highlight, so (round-17 fix) the
+    // render's own `hero[0] || !hero[1]` dominance fallback makes the FIRST
+    // asset dominant; these aspects clear the floor either way dominance
+    // shakes out, unlike a more extreme wide/tall combination.
     const manifest = makeManifest({
-      'mem-1': makeMemory({ assets: [makeAsset({ aspectRatio: 1.8 }), makeAsset({ aspectRatio: 0.6 })] }),
+      'mem-1': makeMemory({ assets: [makeAsset({ aspectRatio: 1.5 }), makeAsset({ aspectRatio: 1.0 })] }),
     });
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
     const { document } = fitBook(outline, manifest);
@@ -2407,6 +2571,41 @@ describe('fitBook — illustrated 1-vs-2-page split threshold (owner review roun
     expect(storyPage).toBeTruthy();
     expect(storyPage!.params.sectionHeader).toBeFalsy();
     expect(storyPage!.params.mode ?? 'both').not.toBe('text-only');
+  });
+
+  it('Task 2 (round-17): a caption pushed over ILLUSTRATED_SPLIT_MIN_CHARS ONLY by a pasted URL must NOT split — the split decision measures the SANITIZED length', () => {
+    // The short, genuinely-short caption text alone is nowhere near the
+    // 320-char threshold — but appending a long pasted URL pushes the RAW
+    // length comfortably past it. `illustratedStoryNeedsSplit` must measure
+    // `printableCaption`'s sanitized length (URL stripped), not the raw
+    // manifest text, or a memory would split purely because of a link a
+    // parent happened to paste in — a link that never even prints.
+    const shortishText = 'A short-ish caption that stays comfortably under the line-count floor.';
+    const longUrl = 'https://example.com/' + 'path-segment/'.repeat(20); // well over 240 chars on its own
+    const textWithUrl = `${shortishText} ${longUrl}`;
+    expect(textWithUrl.length).toBeGreaterThan(320); // raw text alone would force the split
+    const manifest = makeManifest({
+      'mem-0': makeMemory({ assets: [makeAsset()] }),
+      'mem-1': makeMemory({
+        type: 'text_illustration',
+        text: textWithUrl,
+        assets: [],
+        illustration: { file: 'illo.webp', width: 800, height: 1600, aspectRatio: 0.5 }, // tall enough to clear the floor
+      }),
+    });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-0', 'mem-1'] })]);
+    const { document } = fitBook(outline, manifest);
+    const storyPage = document.pages.find((p) => p.templateId === 'illustrated-story');
+    expect(storyPage).toBeTruthy();
+    expect(storyPage!.params.mode ?? 'both').not.toBe('text-only');
+    // The URL never prints, on this page or anywhere else in the book.
+    const printedText = document.pages
+      .flatMap((p) => p.slots)
+      .filter((s) => s.kind === 'text')
+      .map((s) => (s.content as TextSlotContent).text)
+      .join(' ');
+    expect(printedText).not.toContain('https://');
+    expect(printedText).toContain('short-ish caption');
   });
 
   it('round-9 item 1c: a section-header page ALWAYS forces the split now — the header reserve alone leaves less than the 110mm floor once the folio clearance and even a single caption line are accounted for', () => {
@@ -2521,8 +2720,12 @@ describe('fitBook — minimum image size (owner review round 5 amendment)', () =
   });
 
   it('still pairs when the aspect combination clears the floor comfortably', () => {
+    // Neither asset is a highlight, so (round-17 fix) the render's own
+    // `hero[0] || !hero[1]` dominance fallback makes the FIRST asset
+    // dominant — these aspects clear the floor under that dominance,
+    // unlike a more extreme wide/tall combination.
     const manifest = makeManifest({
-      'mem-1': makeMemory({ assets: [makeAsset({ aspectRatio: 1.8 }), makeAsset({ aspectRatio: 0.6 })] }),
+      'mem-1': makeMemory({ assets: [makeAsset({ aspectRatio: 1.5 }), makeAsset({ aspectRatio: 1.0 })] }),
     });
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
     const { document } = fitBook(outline, manifest);

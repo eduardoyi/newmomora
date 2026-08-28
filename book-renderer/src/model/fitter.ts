@@ -35,7 +35,7 @@ import type { FooterIndexEntry } from '../templates/common/FooterIndex.types';
 import type { SectionHeaderParams } from '../templates/common/SectionHeader.types';
 import { localizeMonthLabel } from '../templates/common/formatDate';
 import { getFurniture, getLanguage } from '../templates/furniture';
-import { illustratedIlloFitHeightMm, SAFE_BOX_MM, SECTION_HEADER_RESERVE_MM, footerReserveMm } from '../templates/mm';
+import { illustratedIlloFitHeightMm, SAFE_BOX_MM, SECTION_HEADER_RESERVE_MM, footerReserveMm, printableCaption } from '../templates/mm';
 import { anchorPairMeetsMinSize } from '../templates/layout/anchorMediaLayout';
 import { resolveElementMemories } from './loader';
 
@@ -354,7 +354,23 @@ function isAudioMemory(memory: ManifestMemory): boolean {
 }
 
 function isIllustratedMemory(memory: ManifestMemory): boolean {
-  return Boolean(memory.illustration) && Boolean(memory.text);
+  return Boolean(memory.illustration) && Boolean(captionOf(memory));
+}
+
+/**
+ * Task 2 (round-17): the ONE place `fitter.ts` reads a memory's caption
+ * text — every length check, eligibility gate, and rendered-text builder
+ * below goes through this instead of `memory.text` directly, so a caption
+ * that only clears a threshold BECAUSE of a pasted URL never actually
+ * causes a different layout decision than what the printed page will show
+ * (the URL is gone there too, via the exact same `printableCaption`
+ * templates and the audit both call). A caption that sanitizes to empty is
+ * caption-less, same as a memory with no text at all — every truthy/length
+ * check below reflects that automatically since `''` is falsy and
+ * length-0.
+ */
+function captionOf(memory: ManifestMemory): string {
+  return printableCaption(memory.text ?? '');
 }
 
 /**
@@ -509,9 +525,18 @@ function predictUnitTemplateId(
  * time a HEADER_CAPABLE template is predicted.
  */
 function advanceReorderSim(sim: ReorderSimState, unit: ContentUnit, predictedTemplateId: TemplateId | null): void {
-  if (unit.kind === 'panorama') {
+  if (unit.kind === 'panorama' && predictedTemplateId === 'panorama-spread') {
     sim.fullBleedBudget.consecutive += 1;
     sim.lastTemplateId = 'panorama-spread';
+  } else if (unit.kind === 'panorama') {
+    // Task 1 (round-17), rung (c): a panorama unit `finalizeUnit`'d with a
+    // demoted `predictedTemplateId` (currently only ever `'anchor-media'`,
+    // see `unitParityMeta`'s pinned-first check above) advances the sim
+    // exactly like any other plain single — same branch an ordinary
+    // demoted group takes below, just spelled out here since the `kind`
+    // check above would otherwise shadow it.
+    sim.fullBleedBudget.consecutive = 0;
+    sim.lastTemplateId = predictedTemplateId;
   } else if (unit.kind === 'quote-collection') {
     sim.fullBleedBudget.consecutive = 0;
     sim.lastTemplateId = 'quote-collection';
@@ -540,6 +565,21 @@ function unitParityMeta(
   sim: ReorderSimState,
   pinned: PinnedTemplates,
 ): UnitParityMeta {
+  // Round-9.1 / Task 1 (round-17): the pinned check comes FIRST, before any
+  // kind-based branch — a unit's WHOLE disposition is permanent from its
+  // first finalize onward, not just its templateId — otherwise a de-split
+  // ("both" mode, see the illustrated-story split handling below) or a
+  // demoted (`anchor-media`) unit would still re-derive `needsEven`/`span`
+  // from scratch on the next lookup (e.g. `illustratedStoryNeedsSplit` is a
+  // pure function of caption length that can never itself change, and a
+  // demoted panorama's `unit.kind` is still structurally `'panorama'`) and
+  // immediately contradict the very decision that was just pinned. Every
+  // finalized unit, by definition, already had whatever problem it had
+  // resolved — it's stable, plain, single-page content going forward.
+  const pinnedTemplateId = pinned.get(unit);
+  if (pinnedTemplateId !== undefined) {
+    return { span: 1, needsEven: false, movableSingle: true, isPairSecond: false, isPairFirst: false, predictedTemplateId: pinnedTemplateId };
+  }
   if (unit.kind === 'panorama') {
     return { span: 2, needsEven: true, movableSingle: false, isPairSecond: false, isPairFirst: false, predictedTemplateId: 'panorama-spread' };
   }
@@ -564,20 +604,6 @@ function unitParityMeta(
   }
   if (group.illustratedPairRole === 'first') {
     return { span: 2, needsEven: true, movableSingle: false, isPairSecond: false, isPairFirst: true, predictedTemplateId: 'illustrated-story' };
-  }
-  const pinnedTemplateId = pinned.get(unit);
-  if (pinnedTemplateId !== undefined) {
-    // Round-9.1: once a unit has been finalized once, its WHOLE
-    // disposition is permanent, not just its templateId — otherwise a
-    // de-split ("both" mode, see the illustrated-story split handling
-    // below) or a demoted (`anchor-media`) unit would still re-derive
-    // `needsEven`/`span` from scratch on the next lookup (e.g.
-    // `illustratedStoryNeedsSplit` is a pure function of caption length
-    // that can never itself change) and immediately contradict the very
-    // decision that was just pinned. Every finalized unit, by definition,
-    // already had whatever problem it had resolved — it's stable, plain,
-    // single-page content going forward.
-    return { span: 1, needsEven: false, movableSingle: true, isPairSecond: false, isPairFirst: false, predictedTemplateId: pinnedTemplateId };
   }
   const predictedTemplateId = predictUnitTemplateId(unit, element, outline, sim, pinned);
   if (predictedTemplateId === 'full-bleed') {
@@ -779,6 +805,22 @@ export function reorderUnitsForParity(
         parityEven = !parityEven; // a de-split "both" mode render is always a plain 1-page single (odd span)
         continue;
       }
+      // Task 1 (round-17), rung (c) of the panorama ladder: a panorama unit
+      // that reaches here found NO movable neighbor anywhere in the
+      // lookahead window (fallbacks 0-3 all failed) — the same "nothing
+      // left to trade with" condition that drives full-bleed's own
+      // demotion above. Real assembly's rung (b) local swap needs a
+      // FLEXIBLE_SWAPPABLE_TEMPLATES-rendering immediate predecessor, which
+      // is (by construction) exactly what `movableSingle` models here — so
+      // if fallback 0 couldn't find one, assembly's swap won't either.
+      // Model the demotion here too, so budget/pacing state stays in sync
+      // with what assembly will really do (a demoted page is a plain
+      // anchor-media single, no even-landing requirement of its own).
+      if (arr[i].kind === 'panorama') {
+        finalizeUnit(arr[i], 'anchor-media');
+        parityEven = !parityEven; // a demoted page is always a plain 1-page single (odd span)
+        continue;
+      }
       // Last resort: assembly will insert a blank (or swap) to reach even —
       // model that here, or the simulated parity diverges from the real one
       // for the rest of the section.
@@ -846,7 +888,7 @@ export function reorderUnitsForParity(
  * never less.
  */
 function illustratedStoryNeedsSplit(memory: ManifestMemory, hasSectionHeader: boolean, stagger = false): boolean {
-  const len = memory.text?.length ?? 0;
+  const len = captionOf(memory).length;
   if (len >= ILLUSTRATED_SPLIT_MIN_CHARS) return true;
   if (!memory.illustration) return false;
   const heightMm = illustratedIlloFitHeightMm(len, hasSectionHeader, stagger, memory.illustration.aspectRatio);
@@ -861,7 +903,7 @@ function illustratedStoryNeedsSplit(memory: ManifestMemory, hasSectionHeader: bo
  * text memory and a short "illustrated-light" one in one check.
  */
 function isQuoteEligible(memory: ManifestMemory): boolean {
-  const len = memory.text?.length ?? 0;
+  const len = captionOf(memory).length;
   if (len === 0 || len > QUOTE_ENTRY_MAX_CHARS) return false;
   if (memory.assets.length > 0) return false;
   if (isAudioMemory(memory)) return false; // audio-note owns that composition entirely
@@ -892,8 +934,9 @@ function isQuoteEligible(memory: ManifestMemory): boolean {
  * it was ALSO safe to fold into a digest row in the first place.
  */
 function isDigestEligibleMemory(memoryId: string, memory: ManifestMemory, element: OutlineElement): boolean {
-  if (!memory.illustration || !memory.text) return false;
-  if (memory.text.length === 0 || memory.text.length > DIGEST_ENTRY_MAX_CHARS) return false;
+  if (!memory.illustration) return false;
+  const len = captionOf(memory).length;
+  if (len === 0 || len > DIGEST_ENTRY_MAX_CHARS) return false;
   const aspect = memory.illustration.aspectRatio;
   if (aspect < DIGEST_ASPECT_MIN || aspect > DIGEST_ASPECT_MAX) return false;
   if ((memory.milestones ?? []).length > 0) return false;
@@ -999,7 +1042,7 @@ function buildPhotoSlot(
     assetAspectRatio: asset.aspectRatio,
     memoryId,
     date: memory.date,
-    caption: memory.text,
+    caption: captionOf(memory) || null,
     hero: opts.hero,
     qr: isVideoAsset(asset),
     taggedMembers: memory.taggedMembers,
@@ -1050,7 +1093,7 @@ function buildQuoteCollectionSlots(items: ResolvedMemory[]): LayoutSlot[] {
   // null. Left on `QuoteEntryContent` for shape stability (a future entry
   // point could set it deliberately) rather than removing the field.
   return items.map(({ id, memory }) => {
-    const content: QuoteEntryContent = { kind: 'quote-entry', memoryId: id, date: memory.date, text: memory.text ?? '', illustration: null };
+    const content: QuoteEntryContent = { kind: 'quote-entry', memoryId: id, date: memory.date, text: captionOf(memory), illustration: null };
     return { id: nextSlotId('quote'), kind: 'quote-entry', content };
   });
 }
@@ -1071,7 +1114,7 @@ export function buildDigestEntrySlots(items: ResolvedMemory[]): LayoutSlot[] {
       kind: 'digest-entry',
       memoryId: id,
       date: memory.date,
-      text: memory.text ?? '',
+      text: captionOf(memory),
       illustration: {
         file: memory.illustration!.file,
         width: memory.illustration!.width,
@@ -1162,7 +1205,7 @@ function toGroup(memories: ResolvedMemory[]): MemoryGroup {
     for (const asset of memory.assets) {
       photoAssets.push({ memoryId: id, memory, asset });
     }
-    const len = memory.text?.length ?? 0;
+    const len = captionOf(memory).length;
     totalTextChars += len;
     if (len > PHOTO_STORY_MAX) hasLongText = true;
   }
@@ -1211,7 +1254,7 @@ function splitAnchorPairToSoloGroups(group: MemoryGroup): [MemoryGroup, MemoryGr
 }
 
 function isCaptionless(memory: ManifestMemory): boolean {
-  return !memory.text || memory.text.length === 0;
+  return captionOf(memory).length === 0;
 }
 
 /** The memory with a caption leads (its story gets the dominant frame); otherwise reading order leads. */
@@ -1291,7 +1334,7 @@ function scoreFlexGrid(group: MemoryGroup): number | null {
 }
 
 function scoreTextPage(group: MemoryGroup): number | null {
-  const anyText = group.memories.some(({ memory }) => (memory.text?.length ?? 0) > 0);
+  const anyText = group.memories.some(({ memory }) => captionOf(memory).length > 0);
   if (!anyText) return null;
   if (group.memories.some(({ memory }) => isIllustratedMemory(memory))) return null;
   // Best when there is no photo pulling attention away, or when a memory's
@@ -1539,8 +1582,9 @@ function buildSlotsForTemplate(
       // Text-only memories bundled into this group (no assets of their own)
       // still get their caption printed verbatim — never silently dropped.
       for (const { id, memory } of group.memories) {
-        if (memory.assets.length === 0 && memory.text) {
-          slots.push(buildTextSlot(memory.text, id, memory.date));
+        const caption = captionOf(memory);
+        if (memory.assets.length === 0 && caption) {
+          slots.push(buildTextSlot(caption, id, memory.date));
         }
       }
       return slots;
@@ -1560,19 +1604,20 @@ function buildSlotsForTemplate(
       for (const asset of memory.assets) {
         slots.push(buildPhotoSlot(id, memory, asset, { hero: isHighlight(element, outline, id), index: null, natural: true }));
       }
-      slots.push(buildTextSlot(memory.text ?? '', id, memory.date));
+      slots.push(buildTextSlot(captionOf(memory), id, memory.date));
       return slots;
     }
     case 'illustrated-story': {
       const { id, memory } = group.memories[0];
       const illo = buildIllustrationSlot(id, memory);
       if (illo) slots.push(illo);
-      slots.push(buildTextSlot(memory.text ?? '', id, memory.date));
+      slots.push(buildTextSlot(captionOf(memory), id, memory.date));
       return slots;
     }
     case 'text-page': {
       for (const { id, memory } of group.memories) {
-        if (memory.text) slots.push(buildTextSlot(memory.text, id, memory.date));
+        const caption = captionOf(memory);
+        if (caption) slots.push(buildTextSlot(caption, id, memory.date));
       }
       // 241-900 chars with a real photo: small companion — built separately
       // as its own facing page by buildTextPageGroup, not inline here.
@@ -1582,7 +1627,8 @@ function buildSlotsForTemplate(
       for (const { id, memory } of group.memories) {
         const content: AudioNoteContent = { kind: 'audio-note', memoryId: id, date: memory.date, shortCode: placeholderShortCode(id) };
         slots.push({ id: nextSlotId('audio'), kind: 'audio-note', content });
-        if (memory.text) slots.push(buildTextSlot(memory.text, id, memory.date));
+        const caption = captionOf(memory);
+        if (caption) slots.push(buildTextSlot(caption, id, memory.date));
       }
       return slots;
     }
@@ -1767,7 +1813,7 @@ function chunkMemories(memories: ResolvedMemory[], pairingLevel: PairingLevel = 
     // this function even sees it — this only ever fires for a lone pair).
     if (isIllustratedMemory(memory)) {
       const group = toGroup([item]);
-      const isShort = (memory.text?.length ?? 0) <= ILLUSTRATED_PAIR_MAX_CHARS;
+      const isShort = captionOf(memory).length <= ILLUSTRATED_PAIR_MAX_CHARS;
       if (isShort && pendingIllustratedPairFirst) {
         pendingIllustratedPairFirst.illustratedPairRole = 'first';
         group.illustratedPairRole = 'second';
@@ -1782,7 +1828,7 @@ function chunkMemories(memories: ResolvedMemory[], pairingLevel: PairingLevel = 
     }
     pendingIllustratedPairFirst = null;
 
-    const textLen = memory.text?.length ?? 0;
+    const textLen = captionOf(memory).length;
     const soloPanorama = memory.assets.length === 1 && isPanoramicAsset(memory.assets[0]);
 
     if (memory.assets.length === 0) {
@@ -1790,8 +1836,11 @@ function chunkMemories(memories: ResolvedMemory[], pairingLevel: PairingLevel = 
       // bundled with a neighboring photo's page) — its caption is never
       // dropped, it just gets a small page of its own rather than riding
       // along in someone else's footer index (density rule: every page
-      // reads as one clear thing, not a grid of unrelated fragments).
-      if (memory.text) groups.push(toGroup([item]));
+      // reads as one clear thing, not a grid of unrelated fragments). A
+      // memory whose text sanitizes to empty (Task 2) has neither a photo
+      // nor a caption left to print — dropped, same as one with no text at
+      // all.
+      if (textLen > 0) groups.push(toGroup([item]));
       continue;
     }
 
@@ -2508,12 +2557,55 @@ function buildContentPages(
       // since it spans two page NUMBERS as one continuous image, starting
       // on an odd number would straddle two different book OPENINGS
       // (never a valid two-page spread in binding terms), and would throw
-      // off every facing-pair computation after it in the preview. Never
-      // swaps — panorama splicing's own contract is to land at its exact
-      // chronological position, never displace an adjacent memory.
-      const reswap = ensureEvenLanding(index, 'parity:panorama-spread', false);
+      // off every facing-pair computation after it in the preview.
+      //
+      // Task 1 (round-17, owner-approved ladder — the same demote-not-blank
+      // trade full-bleed made in round 9, and digest in round 12): rung (a)
+      // is `reorderUnitsForParity` above, which pre-arranges a movable
+      // neighbor so this unit lands even without ever touching a blank —
+      // but that pass predicts page counts with a pure simulation
+      // (`unitParityMeta`/`predictWinningTemplateId`) that can drift from
+      // what a neighboring group *actually* renders as (e.g. an
+      // anchor-media pair that fails the min-image-size floor and splits
+      // into two solo pages, one page more than the sim assumed). When
+      // that drift still lands this unit odd here, rung (b) is a REAL
+      // local swap with the immediately preceding flexible page —
+      // `ensureEvenLanding`'s own swap, reads the ACTUAL current page
+      // parity so it's immune to any sim drift. This relaxes round-4's
+      // "never swaps" promise exactly this far: a one-page reflow with an
+      // adjacent page is a nudge, not a chronology break, and the owner
+      // has signed off on the same trade full-bleed already makes. Rung
+      // (c), when even that swap isn't available (the immediately
+      // preceding page isn't a flexible template), DEMOTES the panorama to
+      // an ordinary anchor-media solo — its photo renders at native aspect
+      // as a plain large image, never a blank — and returns its spot in
+      // the book's panorama budget so a later candidate elsewhere isn't
+      // blocked by this one's now-unused quota.
       const { id, memory } = unit.item;
       const asset = memory.assets[0];
+      if (currentPageParity([...outerPages, ...pages]) !== 'even' && lastSwappablePageIndex !== pages.length - 1) {
+        const demoteGroup = toGroup([unit.item]);
+        const demotedSlots = buildSlotsForTemplate('anchor-media', demoteGroup, element, outline);
+        const demotedParams = buildParamsForTemplate('anchor-media', demoteGroup, demotedSlots, state, headerPending);
+        if (headerPending) headerPending = null; // anchor-media is HEADER_CAPABLE
+        pages.push(
+          emptyPage({
+            id: `${element.id}:${index}:panorama:demoted`,
+            sourceElementId: element.id,
+            templateId: 'anchor-media',
+            params: demotedParams,
+            slots: demotedSlots,
+          }),
+        );
+        lastSwappablePageIndex = pages.length - 1;
+        state.fullBleedBudget.consecutive = 0;
+        state.pendingCredit = null;
+        state.lastTemplateId = 'anchor-media';
+        state.contentPageCount += 1;
+        state.panoramaBudgetUsed -= 1;
+        return;
+      }
+      const reswap = ensureEvenLanding(index, 'parity:panorama-spread', true);
       const slot = buildPhotoSlot(id, memory, asset, { hero: false, index: null, cropBand: 'center' });
       pages.push(
         emptyPage({
@@ -2538,7 +2630,7 @@ function buildContentPages(
         index: -1,
         indices: [-1],
         date: memory.date,
-        note: memory.text,
+        note: captionOf(memory) || null,
         qr: isVideoAsset(asset),
       };
       state.lastTemplateId = 'panorama-spread';
@@ -2683,9 +2775,24 @@ function buildContentPages(
       const pairHasVideo = group.photoAssets.slice(0, 2).some((p) => p.asset.kind === 'video-poster');
       const contentHeight = SAFE_BOX_MM - headerReserve - footerReserveMm(pairHasVideo);
       const [first, second] = group.photoAssets;
-      const dominantIsFirst = group.pairedDominantMemoryId
-        ? first.memoryId === group.pairedDominantMemoryId
-        : isHighlight(element, outline, first.memoryId);
+      // Round-17 fix (owner-reported drift, `backbone:2023-03` on
+      // enzo-year-one): derive dominance the SAME way AnchorMedia.tsx and
+      // the audit's own fill-ratio recheck both do (`hero[0] ||
+      // !hero[1]`), reading the ACTUAL hero flags `fit.variants[0].slots`
+      // already carries — not an independent `isHighlight()` re-derivation.
+      // The two disagree exactly when NEITHER photo is a highlight:
+      // `isHighlight(first)` reports false (so this gate checked the pair
+      // with SECOND treated as dominant), while the render's own
+      // OR-fallback still treats FIRST as dominant when neither has `hero`
+      // — silently passing a pair through whose actual rendered layout has
+      // LESS combined photo area than this gate verified.
+      const winningPhotoSlots = (fit.variants[0]?.slots ?? []).filter((s): s is typeof s & { content: PhotoSlotContent } => s.kind === 'photo');
+      const dominantIsFirst =
+        winningPhotoSlots.length === 2
+          ? Boolean(winningPhotoSlots[0].content.hero) || !winningPhotoSlots[1].content.hero
+          : group.pairedDominantMemoryId
+            ? first.memoryId === group.pairedDominantMemoryId
+            : isHighlight(element, outline, first.memoryId);
       const fitsFloor = anchorPairMeetsMinSize(
         first.asset.aspectRatio,
         second.asset.aspectRatio,
@@ -2711,9 +2818,9 @@ function buildContentPages(
     // > 1600 chars: a double text-page spread, one paragraph-safe half per
     // page — the paragraph itself is never split across the gutter.
     const soloMemory = group.memories.length === 1 ? group.memories[0].memory : null;
-    if (fit.templateId === 'text-page' && soloMemory && (soloMemory.text?.length ?? 0) > TEXT_PAGE_DOUBLE_MIN) {
+    if (fit.templateId === 'text-page' && soloMemory && captionOf(soloMemory).length > TEXT_PAGE_DOUBLE_MIN) {
       const { id, memory } = group.memories[0];
-      const [first, second] = splitLongText(memory.text ?? '');
+      const [first, second] = splitLongText(captionOf(memory));
       pages.push(
         emptyPage({
           id: pageId(':a'),
@@ -2900,7 +3007,7 @@ function buildContentPages(
           index: -1,
           indices: [-1],
           date: solo.memory.date,
-          note: solo.memory.text,
+          note: captionOf(solo.memory) || null,
           qr: isVideoAsset(solo.asset),
         };
       }
@@ -2922,7 +3029,7 @@ function buildContentPages(
     const group = unit.group;
     if (group.memories.length !== 1) return;
     const { id, memory } = group.memories[0];
-    const len = memory.text?.length ?? 0;
+    const len = captionOf(memory).length;
     if (len <= PHOTO_STORY_MAX) return;
     if (memory.assets.length === 0) return;
     // The >1600-char case split this group into two pages (`:a` / `:b`,
@@ -3167,9 +3274,9 @@ type DemotionKind = 'photo' | 'video' | 'illustrated';
  */
 const KIND_TIEBREAK_ORDER: readonly DemotionKind[] = ['photo', 'video', 'illustrated'];
 
-/** True for a memory with no narrative value beyond its image — a `photo` or `video` demotion candidate. */
+/** True for a memory with no narrative value beyond its image — a `photo` or `video` demotion candidate. A caption that sanitizes to empty (Task 2) counts as no text, same as having none at all. */
 function isPhotoOnlyMemory(memory: ManifestMemory): boolean {
-  return !memory.text && !memory.illustration && memory.assets.length > 0;
+  return !captionOf(memory) && !memory.illustration && memory.assets.length > 0;
 }
 
 /** `photo` vs `video` split of `isPhotoOnlyMemory` — a video-poster asset makes it a `video` candidate. */
@@ -3190,7 +3297,7 @@ function photoOnlyKind(memory: ManifestMemory): 'photo' | 'video' {
  * audio note).
  */
 function classifyMemoryKind(memory: ManifestMemory): DemotionKind | null {
-  if (memory.illustration && memory.text) return 'illustrated';
+  if (memory.illustration && captionOf(memory)) return 'illustrated';
   if (isPhotoOnlyMemory(memory)) return photoOnlyKind(memory);
   return null;
 }

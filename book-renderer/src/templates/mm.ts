@@ -15,6 +15,90 @@ export const AUDIO_MARK_SIZE_MM = 26;
 export const SAFE_BOX_MM = PHYSICAL.pageSizeMm - PHYSICAL.safeMarginMm * 2;
 /** Safe content box in baseline units (190mm / 5mm = 38 lines/page, per the system board). */
 export const SAFE_BOX_BASELINES = SAFE_BOX_MM / PHYSICAL.baselineMm;
+
+// ---------------------------------------------------------------------------
+// Printable caption sanitization (Task 2, round-17) — a parent can paste a
+// URL into a memory's caption; the app renders it as a link CARD in-product,
+// but a PRINTED book must never show a raw URL. `printableCaption` is the
+// ONE shared, pure function every caption-LENGTH decision (the illustrated
+// split threshold, digest/quote eligibility, caption-height estimates),
+// every TEMPLATE render (IllustratedStory, IllustratedDigest,
+// QuoteCollection, the footer index, TextPage), and the audit's own
+// caption-height recomputation all route through — so none of them can
+// ever measure or display a different string than what actually prints.
+// A caption that sanitizes down to an empty string is caption-less, exactly
+// like a memory with no text at all (photo-only path; isDigestEligible/text
+// checks see empty).
+// ---------------------------------------------------------------------------
+
+/** A whitespace-delimited token that contains (not just starts with, so a leading paren/quote doesn't hide it) an http(s):// or www. URL. */
+const URL_TOKEN_PATTERN = /(https?:\/\/|www\.)/i;
+
+/**
+ * A short connective word that reads as orphaned when a URL right next to
+ * it, at the very EDGE of the caption, gets removed (e.g. "...video de
+ * https://x.com" -> "...video de" once the URL — the LAST token — is gone)
+ * — trimmed as part of the SAME conservative cleanup, and ONLY at the edge
+ * a removed URL actually sat at, never elsewhere in the sentence (a URL in
+ * the MIDDLE of a caption never touches its neighbors' words, only itself
+ * — "Visit www.x.com for more" stays "Visit for more", not "Visit more":
+ * "for" is real content here, not a dangling leftover, because the URL
+ * wasn't the first or last token). English + Spanish (Momora families
+ * write in both), kept deliberately short: only bare prepositions/
+ * articles/conjunctions a URL would plausibly have been introducing or
+ * following, nothing that could ever be a meaningful word on its own.
+ */
+const DANGLING_CONNECTIVES: ReadonlySet<string> = new Set([
+  'a', 'an', 'the', 'at', 'in', 'on', 'to', 'of', 'for', 'from', 'via', 'and',
+  'de', 'del', 'al', 'en', 'con', 'por', 'para', 'y', 'el', 'la', 'los', 'las', 'un', 'una',
+]);
+
+/** A word stripped of any punctuation wrapping it (for matching against `DANGLING_CONNECTIVES`), lowercased. */
+function bareWord(word: string): string {
+  return word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toLowerCase();
+}
+
+/** Trims one dangling leading/trailing punctuation mark (a colon, dash, or comma left introducing/following a now-removed URL) at the very edges of the whole caption. */
+function trimDanglingPunctuation(s: string): string {
+  return s.replace(/^[,:;\-–—]+\s*/, '').replace(/\s*[,:;\-–—]+$/, '');
+}
+
+export function printableCaption(text: string): string {
+  if (!text) return '';
+  const words = text.split(/\s+/).filter((w) => w.length > 0);
+  const isUrl = (w: string) => URL_TOKEN_PATTERN.test(w);
+  if (!words.some(isUrl)) return text; // no URL token found — untouched, verbatim (never reworded)
+
+  const remove = new Set<number>();
+  words.forEach((w, i) => {
+    if (isUrl(w)) remove.add(i);
+  });
+  // Trim ONE dangling connective word, but ONLY at whichever edge of the
+  // WHOLE caption a removed URL actually sat at — a URL that was the very
+  // LAST token can leave its preceding word orphaned; one that was the
+  // very FIRST can leave its following word orphaned. A URL in the middle
+  // never touches its neighbors: they still have real content on their
+  // other side. Never recursive, never anywhere else in the sentence.
+  for (const i of Array.from(remove)) {
+    if (i === words.length - 1) {
+      const prev = i - 1;
+      if (prev >= 0 && !remove.has(prev) && !isUrl(words[prev]) && DANGLING_CONNECTIVES.has(bareWord(words[prev]))) {
+        remove.add(prev);
+      }
+    }
+    if (i === 0) {
+      const next = i + 1;
+      if (next < words.length && !remove.has(next) && !isUrl(words[next]) && DANGLING_CONNECTIVES.has(bareWord(words[next]))) {
+        remove.add(next);
+      }
+    }
+  }
+
+  const kept = words.filter((_, i) => !remove.has(i));
+  const out = trimDanglingPunctuation(kept.join(' ')).trim();
+  return out;
+}
+
 /**
  * Vertical space a section header (kicker + title) reserves at the top of
  * whichever page renders it — shared by anchor-media/flex-grid,
