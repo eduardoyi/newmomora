@@ -343,6 +343,12 @@ interface FamilyMemberRow {
   family_id: string;
   name: string;
   date_of_birth: string | null;
+  /** Round-16 (owner correction): the PROFILE'S own kinship/pet nicknames
+   * (`family_members.nicknames text[]`) -- the authoritative source for a
+   * person's name in generated copy, never text-mined from memory
+   * captions (a caption may incidentally contain the same word, but that's
+   * not where this comes from). */
+  nicknames: string[] | null;
 }
 
 interface MemoryRow {
@@ -489,7 +495,7 @@ async function loadFamilies(supabase: AuthedClient): Promise<FamilyRow[]> {
 async function loadFamilyMembers(supabase: AuthedClient, familyId: string): Promise<FamilyMemberRow[]> {
   const { data, error } = await supabase
     .from('family_members')
-    .select('id, family_id, name, date_of_birth')
+    .select('id, family_id, name, date_of_birth, nicknames')
     .eq('family_id', familyId);
   if (error) throw new Error(`Failed to load family_members: ${error.message}`);
   return (data ?? []) as FamilyMemberRow[];
@@ -647,6 +653,9 @@ export interface ChildCandidate {
   familyId: string;
   name: string;
   dateOfBirth: string | null;
+  /** Round-16: profile nicknames (`family_members.nicknames`), normalized
+   * to `[]` when the profile has none. */
+  nicknames: string[];
 }
 
 /**
@@ -730,6 +739,11 @@ export interface MemoryFeature {
 export interface TaggedMemberFeature {
   firstName: string;
   personType: 'child' | 'adult' | 'unknown';
+  /** Round-16: this member's own profile nicknames (`family_members.nicknames`),
+   * `[]` when the profile has none -- surfaced so the AI can prefer a
+   * nickname over the first name in generated copy (never text-mined; see
+   * `buildTaggedMemberFeatures`). */
+  nicknames: string[];
 }
 
 const TEXT_EXCERPT_MAX_CHARS = 120;
@@ -800,15 +814,23 @@ export interface FamilyMemberForTagging {
   id: string;
   name: string;
   dateOfBirth: string | null;
+  /** Round-16: profile nicknames (`family_members.nicknames`) -- the
+   * authoritative source for how the AI should name this person in
+   * generated copy (people-pair titles, etc.), never text-mined. */
+  nicknames: string[];
 }
 
 /**
- * Resolves each tagged member id into the name/nickname the family actually
- * gave them plus a child/adult classification at the memory's date -- the
- * ONLY sanctioned source of relationship words for the AI (plan round-2
- * decision, 2026-08-25). Unresolvable ids (shouldn't happen -- every tag
- * references a real family member) are silently skipped rather than thrown,
- * matching this script's tolerant-read style.
+ * Resolves each tagged member id into their first name, profile
+ * nicknames, and a child/adult classification at the memory's date. The
+ * first name/child-adult classification are the ONLY sanctioned source of
+ * RELATIONSHIP WORDS for the AI (plan round-2 decision, 2026-08-25) --
+ * `nicknames` is a SEPARATE, round-16 addition: the profile's own data,
+ * not text evidence, and not a relationship claim -- see the system
+ * prompt's "PEOPLE-PAIR SPREAD TITLES AND NAMES IN COPY" section.
+ * Unresolvable ids (shouldn't happen -- every tag references a real family
+ * member) are silently skipped rather than thrown, matching this script's
+ * tolerant-read style.
  */
 export function buildTaggedMemberFeatures(
   taggedMemberIds: string[],
@@ -823,6 +845,7 @@ export function buildTaggedMemberFeatures(
     out.push({
       firstName: member.name.trim().split(/\s+/)[0] || member.name,
       personType: classifyChildOrAdult(ageYears),
+      nicknames: member.nicknames,
     });
   }
   return out;
@@ -1918,6 +1941,236 @@ export interface ReadingOrderInput {
 }
 
 /**
+ * Round-15 owner-approved spacing rule (mirrors the digest non-adjacency
+ * rule): in the reading order, no two THEMED spreads may ever be adjacent,
+ * and at most ONE themed spread may occupy the run between any two
+ * consecutive backbone elements -- i.e. at most one per "gap", where a gap
+ * is `insertAfterFinalSegmentIndex` (`-1` = before the first backbone
+ * segment, `0..lastValidIndex-1` = between two segments, `lastValidIndex` =
+ * after the last). `buildReadingOrder` pushes every spread sharing a gap
+ * back-to-back with nothing else between them (see `themedByIndex`), so
+ * ">1 occupant at a gap" IS exactly the adjacency violation -- both halves
+ * of the owner's rule collapse into this one invariant.
+ *
+ * Context: this was previously satisfied only as a side effect of page-
+ * budget scarcity (rounds 3-13 thinned most candidate spreads away before
+ * they could ever collide); round-14 removed that thinning, so Enzo's 11
+ * surviving spreads -- most anchored to the same jul-oct text-heavy window
+ * -- started stacking 4-in-a-row with no backbone between them.
+ *
+ * Resolution: every spread wants its own anchor gap
+ * (`insertAfterFinalSegmentIndex`, already remapped + paced by
+ * `remapInsertIndex`/`paceThemedSpreads` upstream -- this function runs
+ * LAST, after both). Spreads are processed in a deterministic PRIORITY
+ * order -- highest priority claims its anchor gap first. This outline has
+ * no independent per-spread ranking signal to reuse (checked: `Candidate`/
+ * `ThemedCandidate`/`PeoplePairCandidate`/`EmotionCandidate` and
+ * `ReadingOrderThemedSpreadInput` carry only `memoryIds`, nothing else
+ * survives this far), so priority is member count DESC, then candidateId
+ * ASC for full determinism. Because higher-priority spreads claim first, an
+ * oversubscribed anchor is always WON by its highest-priority claimant;
+ * every other claimant on that anchor is the "overflow" that SPILLS to the
+ * nearest still-free gap in the full valid range -- smaller
+ * `|gap - ownAnchor|` wins (ascending search order makes an exact tie
+ * resolve to the earlier/lower gap automatically, satisfying "tie -> earlier
+ * gap" without a separate branch). A time-anchored spread's own anchor
+ * computation is untouched by this function -- it can still spill when
+ * oversubscribed, which is exactly how the owner decision keeps a
+ * time-anchored exemption "satisfied" even when it cannot sit exactly on
+ * its own month: nearest available gap, not its literal anchor.
+ *
+ * If spreads ever outnumber available gaps (`lastValidIndex + 2` slots --
+ * pathological; not observed on either real book), the excess keeps its
+ * own anchor rather than crashing or losing a spread -- spacing is
+ * best-effort under true exhaustion, never a hard failure.
+ */
+export function enforceThemedSpreadSpacing(
+  spreads: Array<{ id: string; memberCount: number; anchorGap: number }>,
+  lastValidIndex: number,
+): Map<string, number> {
+  const minGap = -1;
+  const totalGaps = lastValidIndex - minGap + 1;
+
+  const ordered = [...spreads].sort((a, b) => b.memberCount - a.memberCount || a.id.localeCompare(b.id));
+
+  const taken = new Set<number>();
+  const assignment = new Map<string, number>();
+
+  for (const spread of ordered) {
+    const anchor = Math.min(Math.max(spread.anchorGap, minGap), lastValidIndex);
+    if (!taken.has(anchor)) {
+      taken.add(anchor);
+      assignment.set(spread.id, anchor);
+      continue;
+    }
+    if (taken.size >= totalGaps) {
+      // Pathological exhaustion -- nothing free anywhere in the whole
+      // valid range; keep the anchor (spacing not achievable, but a spread
+      // is never dropped or crashed on).
+      assignment.set(spread.id, anchor);
+      continue;
+    }
+    let best = anchor;
+    let bestDist = Infinity;
+    for (let gap = minGap; gap <= lastValidIndex; gap++) {
+      if (taken.has(gap)) continue;
+      const dist = Math.abs(gap - anchor);
+      if (dist < bestDist) {
+        best = gap;
+        bestDist = dist;
+      }
+    }
+    taken.add(best);
+    assignment.set(spread.id, best);
+  }
+
+  return assignment;
+}
+
+// ── Themed-spread admission: seasonal bound + spread budget + dissolve
+// (round-16 owner-approved rules, following the round-15 regeneration:
+// round-15's UNBOUNDED spacing rule technically satisfied "no two adjacent",
+// but at a taste cost the owner rejected -- 12 spreads saturated every
+// month boundary, and one spilled a jul-oct-dated spread between Oct-Nov
+// 2024 and Dec 2024, wildly out of season in a chronological book) ────────
+
+/** Owner-tunable: a themed spread may spill at most this many gaps away
+ * from its own seasonal anchor gap before it is considered unplaceable
+ * (round-16 rule (a)). Small enough that a spill still reads as "nearby",
+ * unlike round-15's unbounded search. */
+export const SPREAD_SPILL_BOUND = 2;
+
+/** Owner-tunable, same shape as the renderer's own full-bleed pacing rule
+ * (`FULL_BLEED_BUDGET_PER_PAGES` in book-renderer's fitter.ts: roughly
+ * 1 per N pages) -- round-16 rule (b): at most `floor(min(preCapPageEstimate,
+ * pageCap) / SPREAD_BUDGET_PAGES_PER_SPREAD)` themed spreads survive per
+ * book. For a full 122-page book that's `floor(122/15) = 8`. */
+export const SPREAD_BUDGET_PAGES_PER_SPREAD = 15;
+
+/**
+ * Round-16 rule (b)'s budget formula: `min(preCapPageEstimate, pageCap)`
+ * caps the input at the printer's hard limit first (a book that would
+ * naturally run longer than the cap doesn't earn extra spreads for pages
+ * it will never print), THEN divides by the per-spread page cost.
+ */
+export function computeThemedSpreadBudget(preCapPageEstimate: number, pageCap: number): number {
+  return Math.floor(Math.max(0, Math.min(preCapPageEstimate, pageCap)) / SPREAD_BUDGET_PAGES_PER_SPREAD);
+}
+
+export interface ThemedSpreadAdmissionCandidate {
+  id: string;
+  memberCount: number;
+  /** The spread's own seasonal anchor gap (already remapped + paced --
+   * same input `enforceThemedSpreadSpacing` takes). */
+  anchorGap: number;
+}
+
+export interface ThemedSpreadAdmissionResult {
+  /** Survivors and the gap each was placed at -- spacing (round-15) AND
+   * the spill bound (round-16 rule (a)) both already satisfied. */
+  placedGapById: Map<string, number>;
+  /** Ids that DISSOLVE (round-16 rule (c)): either cut for budget, or
+   * budget-admitted but unplaceable within the spill bound of their own
+   * anchor. Sorted for determinism. Never "dropped" -- see
+   * `reassignDissolvedSpreadMembers`, which is how a dissolved spread's
+   * members return to their chronological backbone home. */
+  dissolvedIds: string[];
+}
+
+/**
+ * Admits themed spreads within a page BUDGET, then places the survivors
+ * within a bounded SEASONAL SPILL distance of their own anchor -- anything
+ * that loses either contest dissolves rather than drops (round-16 rules
+ * (a)+(b)+(c)).
+ *
+ * Priority for both the budget cut AND who wins a contested gap is the
+ * SAME signal round-15 already established (documented there: this outline
+ * has no independent per-spread ranking signal, so member count DESC, then
+ * id ASC, is the deterministic stand-in) -- the budget keeps the highest-
+ * priority `budget` spreads outright; among THOSE survivors, spacing runs
+ * exactly like `enforceThemedSpreadSpacing`, except the spill search is
+ * bounded to `[anchor - maxSpillDistance, anchor + maxSpillDistance]`
+ * (clamped to the valid range) instead of the whole book -- a spread with
+ * no free gap in that window dissolves instead of spilling further, which
+ * is precisely the fix for round-15's "travel" spread (dated jul-oct 2025)
+ * landing next to Oct-Nov 2024/Dec 2024, months away from its own season.
+ */
+export function admitThemedSpreads(
+  spreads: ThemedSpreadAdmissionCandidate[],
+  lastValidIndex: number,
+  budget: number,
+  maxSpillDistance: number = SPREAD_SPILL_BOUND,
+): ThemedSpreadAdmissionResult {
+  const minGap = -1;
+  const ordered = [...spreads].sort((a, b) => b.memberCount - a.memberCount || a.id.localeCompare(b.id));
+
+  const withinBudget = ordered.slice(0, Math.max(0, budget));
+  const dissolvedIds: string[] = ordered.slice(Math.max(0, budget)).map((s) => s.id);
+
+  const taken = new Set<number>();
+  const placedGapById = new Map<string, number>();
+
+  for (const spread of withinBudget) {
+    const anchor = Math.min(Math.max(spread.anchorGap, minGap), lastValidIndex);
+    if (!taken.has(anchor)) {
+      taken.add(anchor);
+      placedGapById.set(spread.id, anchor);
+      continue;
+    }
+    let best: number | null = null;
+    let bestDist = Infinity;
+    const searchStart = Math.max(minGap, anchor - maxSpillDistance);
+    const searchEnd = Math.min(lastValidIndex, anchor + maxSpillDistance);
+    for (let gap = searchStart; gap <= searchEnd; gap++) {
+      if (taken.has(gap)) continue;
+      const dist = Math.abs(gap - anchor);
+      if (dist < bestDist) {
+        best = gap;
+        bestDist = dist;
+      }
+    }
+    if (best === null) {
+      dissolvedIds.push(spread.id); // unplaceable within the spill bound -- dissolves, never dropped.
+      continue;
+    }
+    taken.add(best);
+    placedGapById.set(spread.id, best);
+  }
+
+  return { placedGapById, dissolvedIds: dissolvedIds.sort() };
+}
+
+/**
+ * Round-16 rule (c), "dissolve, never drop": reverses a themed-spread
+ * placement for every dissolved spread's members -- each memory returns to
+ * its OWN natural chronological backbone home, exactly as if it had never
+ * been grouped into a spread at all. This is the SAME reassignment concept
+ * the pre-round-14 budget-thinning code used for a dropped candidate spread
+ * (`finalPlacement.set(memoryId, backboneId)`), reapplied here for the new
+ * dissolve trigger. A memory whose id has no entry in `defaultBackboneByMemory`
+ * (shouldn't happen -- every eligible memory has a backbone home) is left
+ * at its current placement rather than silently vanishing.
+ *
+ * ZERO memories are ever lost by this function: it only ever changes WHERE
+ * an already-placed memory id points, never removes an entry -- the union
+ * of `placementByMemory`'s keys is identical before and after.
+ */
+export function reassignDissolvedSpreadMembers(
+  placementByMemory: ReadonlyMap<string, string>,
+  dissolvedSpreadMemberIds: ReadonlyMap<string, readonly string[]>,
+  defaultBackboneByMemory: ReadonlyMap<string, string>,
+): Map<string, string> {
+  const result = new Map(placementByMemory);
+  for (const memoryIds of dissolvedSpreadMemberIds.values()) {
+    for (const memoryId of memoryIds) {
+      const backboneId = defaultBackboneByMemory.get(memoryId);
+      if (backboneId) result.set(memoryId, backboneId);
+    }
+  }
+  return result;
+}
+
+/**
  * Builds the full reading order as a flat, ordered list of sections. Both
  * `outline.md` and `review.html` iterate this SAME list, so there is only
  * one place that decides "does this spread appear, and where" -- fixing the
@@ -1948,12 +2201,21 @@ export function buildReadingOrder(input: ReadingOrderInput): ReadingOrderSection
   }
 
   const lastValidIndex = input.finalBackboneSegments.length - 1;
+
+  // Round-15: enforce the spacing invariant LAST, after remap + pacing have
+  // already produced their own `insertAfterFinalSegmentIndex` -- see
+  // `enforceThemedSpreadSpacing`'s doc comment.
+  const spacedGapByCandidateId = enforceThemedSpreadSpacing(
+    input.themedSpreads.map((s) => ({ id: s.candidateId, memberCount: s.memoryIds.length, anchorGap: s.insertAfterFinalSegmentIndex })),
+    lastValidIndex,
+  );
+
   const themedByIndex = new Map<number, ReadingOrderThemedSpreadInput[]>();
   for (const spread of input.themedSpreads) {
-    const clamped = Math.min(Math.max(spread.insertAfterFinalSegmentIndex, -1), lastValidIndex);
-    const list = themedByIndex.get(clamped) ?? [];
+    const gap = spacedGapByCandidateId.get(spread.candidateId) ?? -1;
+    const list = themedByIndex.get(gap) ?? [];
     list.push(spread);
-    themedByIndex.set(clamped, list);
+    themedByIndex.set(gap, list);
   }
 
   const pushThemedAt = (index: number) => {
@@ -2111,7 +2373,9 @@ export function buildOutlineSystemPrompt(): string {
     '',
     'FIRSTS WARM NAMES: for EACH row listed under FIRSTS MILESTONES below (if any), write a `warm_name` -- the milestone rephrased as a warm second-person sentence, in the family\'s journal language, addressed to the child. Examples: "Monta bicicleta sin pedales" -> "Aprendiste a montar bicicleta sin pedales"; "Primer corte de pelo" -> "Tuviste tu primer corte de pelo". This is connective text (editable downstream) and must NEVER alter the parent\'s own memory caption -- it stands alongside it, not instead of it. Echo back the exact `memory_id` and `milestone_id` from that row so code can match your `warm_name` to the right entry.',
     '',
-    'RELATIONSHIP WORDS (aunt, uncle, grandma, "nonno", "abuelo", "zio", "mami", etc.) may ONLY come from the TAGGED PEOPLE listed on each memory below (their actual names/nicknames as the family wrote them -- reasoning from a name like "Nonna Rosa" or "Tio Mike" is fine, that is user-authored evidence). NEVER infer a relationship from what people look like in a photo, and NEVER infer one just because a topic tag like `extended-family` or `grandparents` is present -- a real failure titled a cluster of grandparent photos "Entre tias, tios y primos" (aunts, uncles, and cousins) purely from the topic tag, when the tagged people did not support that specific relationship mix. When you are not confident a specific relationship word is supported by the tagged people, use a warm generic title instead (spirit: "Look who came to see you") rather than guessing who someone is.',
+    'RELATIONSHIP WORDS (aunt, uncle, grandma, "nonno", "abuelo", "zio", "mami", etc.) may ONLY come from the TAGGED PEOPLE listed on each memory below: either their OWN profile nickname (the "nn:" field -- see PEOPLE-PAIR SPREAD TITLES below, this needs no further evidence) or their first name as the family actually wrote it (reasoning from a name like "Nonna Rosa" or "Tio Mike" is fine, that is user-authored evidence). NEVER infer a relationship from what people look like in a photo, and NEVER infer one just because a topic tag like `extended-family` or `grandparents` is present -- a real failure titled a cluster of grandparent photos "Entre tias, tios y primos" (aunts, uncles, and cousins) purely from the topic tag, when the tagged people did not support that specific relationship mix. When you are not confident a specific relationship word is supported by the tagged people (profile nickname OR name), use a warm generic title instead (spirit: "Look who came to see you") rather than guessing who someone is.',
+    '',
+    'PEOPLE-PAIR SPREAD TITLES AND NAMES IN COPY: when naming a family member -- a people-pair spread title ("Con <Name>"), or anywhere else you write that person\'s name in generated copy -- PREFER their own profile nickname (the "nn:" field on their tagged-people entry in MEMORIES below) over their first name. This is PROFILE data, not text evidence -- it needs no separate confirmation, the profile IS the evidence. Use it in the family\'s journal language with natural article handling: a kinship nickname usually takes an article ("la nonna", "el nonno", "la mami"), a pet name usually does not ("Con Billy"). Examples: "Con la nonna", "Con papi", "Tus momentos con Billy". If a person has more than one profile nickname, pick whichever reads most naturally as a title -- you do not need to use all of them. Fall back to their first name ("Con Mirian") ONLY when their tagged-people entry has no "nn:" field at all -- never invent a nickname that is not listed. This is separate from a RELATIONSHIP WORD you might want to CLAIM about someone (see RELATIONSHIP WORDS above) -- a profile nickname is just how you address them, not a claim about who they are.',
     '',
     'SPREAD TITLES HAVE TWO MODES -- declare which one you used via `title_mode`:',
     '- "quote": verbatim (or lightly trimmed) text lifted from a memory INSIDE the spread. Preferred when a great one exists, especially for emotion/people-pair spreads (real examples that worked: "Ay Dios mío" on a funny spread, "Papi, con amor, por favor" on a tender one). Set `title_source_memory_id` to that memory\'s id -- code verifies the title actually appears in that memory\'s real text, so never fabricate or paraphrase a "quote".',
@@ -2264,11 +2528,13 @@ export function buildOutlineUserPrompt(
   }
   lines.push('');
 
-  lines.push('MEMORIES (id | date | topics | emotion | hasText | excerpt | photos/videos/orientation | engagement | milestones | tagged people -- the ONLY sanctioned source of relationship words, see RELATIONSHIP WORDS above):');
+  lines.push('MEMORIES (id | date | topics | emotion | hasText | excerpt | photos/videos/orientation | engagement | milestones | tagged people -- first name is the ONLY sanctioned source of relationship words, see RELATIONSHIP WORDS above; a "nn:" suffix is that person\'s OWN profile nickname(s) -- see PEOPLE-PAIR SPREAD TITLES AND NAMES IN COPY above, prefer it in generated copy):');
   for (const feature of [...features.values()].sort((a, b) => a.date.localeCompare(b.date))) {
     const milestoneDesc = feature.milestones.map((m) => m.name).join(';') || '-';
     const excerpt = feature.excerpt ? feature.excerpt.replace(/\n/g, ' ') : '(no text)';
-    const peopleDesc = feature.taggedMembers.map((m) => `${m.firstName}(${m.personType})`).join(',') || '-';
+    const peopleDesc = feature.taggedMembers
+      .map((m) => `${m.firstName}(${m.personType}${m.nicknames.length > 0 ? `;nn:${m.nicknames.join('/')}` : ''})`)
+      .join(',') || '-';
     const orientationMarker = formatOrientationMarker(feature.photoOrientation);
     const assetDesc = `p${feature.photoCount}/v${feature.videoCount}${orientationMarker ? `/${orientationMarker}` : ''}`;
     lines.push(
@@ -2871,7 +3137,7 @@ async function main(): Promise<void> {
   for (const family of families) {
     const members = await loadFamilyMembers(supabase, family.id);
     for (const m of members) {
-      allMembers.push({ id: m.id, familyId: m.family_id, name: m.name, dateOfBirth: m.date_of_birth });
+      allMembers.push({ id: m.id, familyId: m.family_id, name: m.name, dateOfBirth: m.date_of_birth, nicknames: m.nicknames ?? [] });
     }
   }
 
@@ -2935,7 +3201,7 @@ async function main(): Promise<void> {
   }
 
   const familyMembersById = new Map<string, FamilyMemberForTagging>(
-    allMembers.map((m) => [m.id, { id: m.id, name: m.name, dateOfBirth: m.dateOfBirth }]),
+    allMembers.map((m) => [m.id, { id: m.id, name: m.name, dateOfBirth: m.dateOfBirth, nicknames: m.nicknames }]),
   );
 
   let taggedToChildCount = 0;
@@ -3383,6 +3649,56 @@ async function main(): Promise<void> {
 
   const pacedAssignment = paceThemedSpreads(finalBackboneSegments.length, pacingInputs);
 
+  // ── Themed-spread admission: seasonal bound + spread budget + dissolve
+  // (round-16 owner-approved rules -- see `admitThemedSpreads`'s doc
+  // comment). Runs AFTER pacing (pacing's `idealGapIndex` becomes each
+  // spread's admission "anchor") and BEFORE the reading order is assembled.
+  // `totalPages` above is deliberately the PRE-admission estimate (every
+  // themed candidate still included) -- that IS `preCapPageEstimate`, the
+  // budget's own input; admission narrows the SELECTION, it doesn't change
+  // what "the full curated book" was estimated at. ───────────────────────
+
+  const admissionCandidates: ThemedSpreadAdmissionCandidate[] = nonBackbonePlan.keptThemedIds.map((spreadId) => ({
+    id: spreadId,
+    memberCount: [...finalPlacement.entries()].filter(([, sid]) => sid === spreadId).length,
+    anchorGap: pacedAssignment.get(spreadId) ?? -1,
+  }));
+  const themedSpreadBudget = computeThemedSpreadBudget(totalPages, options.pageCap);
+  const { placedGapById: survivingSpreadGapById, dissolvedIds: budgetDissolvedSpreadIds } = admitThemedSpreads(
+    admissionCandidates,
+    finalBackboneSegments.length - 1,
+    themedSpreadBudget,
+  );
+
+  // Round-16 rule (c), "dissolve, never drop": every dissolved spread's
+  // members return to their OWN natural chronological backbone home --
+  // exactly the reassignment the pre-round-14 budget-thinning code used
+  // for a dropped candidate spread, reapplied here for the new trigger.
+  const dissolvedSpreadMemberIds = new Map<string, string[]>(
+    budgetDissolvedSpreadIds.map((spreadId) => [
+      spreadId,
+      [...finalPlacement.entries()].filter(([, sid]) => sid === spreadId).map(([id]) => id),
+    ]),
+  );
+  const readingOrderPlacement = reassignDissolvedSpreadMembers(finalPlacement, dissolvedSpreadMemberIds, defaultBackboneCandidateByMemory);
+
+  // The backbone must be REBUILT from the updated placement -- a dissolved
+  // spread's members are now backbone-eligible where they weren't before,
+  // and re-running `buildBackboneSegments` from scratch (rather than
+  // patching the existing segments) is what makes this "as if never
+  // grouped": identical to how the memory would have segmented if it had
+  // never been offered to a themed spread at all.
+  const readingOrderBackboneIds = [...readingOrderPlacement.entries()]
+    .filter(([, spreadId]) => spreadId.startsWith('backbone:'))
+    .map(([memoryId]) => memoryId);
+  const readingOrderBackboneInputs: BackboneMemoryInput[] = readingOrderBackboneIds.map((id) => {
+    const f = features.get(id)!;
+    return { id, date: f.date, printable: f.hasText || f.photoCount + f.videoCount > 0 };
+  });
+  const readingOrderBackboneSegments = buildBackboneSegments(readingOrderBackboneInputs);
+
+  const survivingThemedSpreadIds = nonBackbonePlan.keptThemedIds.filter((id) => !budgetDissolvedSpreadIds.includes(id));
+
   // ── Assemble the reading order (single source of truth for both renderers) ─
 
   const backboneRationale: Record<string, string> = {};
@@ -3393,10 +3709,10 @@ async function main(): Promise<void> {
   }
 
   const readingOrderThemedSpreads: ReadingOrderThemedSpreadInput[] = response.spreads
-    .filter((s) => nonBackbonePlan.keptThemedIds.includes(`spread:${s.candidateId}`))
+    .filter((s) => survivingThemedSpreadIds.includes(`spread:${s.candidateId}`))
     .map((s) => {
       const spreadId = `spread:${s.candidateId}`;
-      const memoryIds = [...finalPlacement.entries()].filter(([, sid]) => sid === spreadId).map(([id]) => id);
+      const memoryIds = [...readingOrderPlacement.entries()].filter(([, sid]) => sid === spreadId).map(([id]) => id);
       const rationale: Record<string, string> = {};
       for (const id of memoryIds) {
         if (s.rationale[id]) rationale[id] = s.rationale[id];
@@ -3408,18 +3724,18 @@ async function main(): Promise<void> {
         titleMode: s.titleMode,
         titleSourceMemoryId: s.titleSourceMemoryId,
         memoryIds,
-        insertAfterFinalSegmentIndex: pacedAssignment.get(spreadId) ?? -1,
+        insertAfterFinalSegmentIndex: survivingSpreadGapById.get(spreadId) ?? -1,
         rationale,
         kicker: s.kicker,
       };
     });
 
   // Bridge the AI's segment_titles (keyed by ORIGINAL segment id) onto the
-  // FINAL (post-budget, re-segmented) segment list via the flagged month --
-  // segment ids/boundaries can change across re-segmentation, but the
-  // calendar month that triggered a flag cannot.
+  // FINAL (post-budget, post-dissolve, re-segmented) segment list via the
+  // flagged month -- segment ids/boundaries can change across
+  // re-segmentation, but the calendar month that triggered a flag cannot.
   const specialTitleByMonth = buildSpecialSegmentTitlesByMonth(originalSpecialFlags, response.segmentTitles);
-  const finalSpecialFlags = flagSpecialBackboneSegments(finalBackboneSegments, birthMonth, birthdayMonthToAge);
+  const finalSpecialFlags = flagSpecialBackboneSegments(readingOrderBackboneSegments, birthMonth, birthdayMonthToAge);
   const applicableSpecialFlags = suppressSurvivingBirthdaySpecialTitles(finalSpecialFlags, survivingBirthdayAges);
   const specialSegmentTitles: Record<string, string> = {};
   for (const flag of applicableSpecialFlags) {
@@ -3429,7 +3745,7 @@ async function main(): Promise<void> {
 
   const readingOrder = buildReadingOrder({
     childName: child.name,
-    finalBackboneSegments,
+    finalBackboneSegments: readingOrderBackboneSegments,
     firsts: firstsFinalPresent
       ? { present: true, title: response.firstsTitle, memoryIds: firstsFinalMemoryIds, warmNames: response.firstsWarmNames }
       : null,
@@ -3441,6 +3757,10 @@ async function main(): Promise<void> {
     specialSegmentTitles,
     highlightedMemoryIds: new Set(response.backboneHighlights.flatMap((h) => h.memoryIds)),
   });
+
+  console.log(
+    `Themed-spread admission (round-16): budget ${themedSpreadBudget} (floor(min(${totalPages}, ${options.pageCap})/${SPREAD_BUDGET_PAGES_PER_SPREAD})), spill bound ±${SPREAD_SPILL_BOUND} gaps -- ${survivingThemedSpreadIds.length} of ${nonBackbonePlan.keptThemedIds.length} candidate spread(s) survive; ${budgetDissolvedSpreadIds.length} dissolved (never dropped -- members returned to their own backbone month): ${budgetDissolvedSpreadIds.join(', ') || 'none'}.`,
+  );
 
   // ── Render outputs ────────────────────────────────────────────────────
 
@@ -3460,6 +3780,7 @@ async function main(): Promise<void> {
     violations,
     reassignments,
     dissolvedSpreadIds,
+    budgetDissolvedSpreadIds,
     dissolvedBirthdayAges,
     movedToBackbone,
     droppedElements,
@@ -3501,6 +3822,12 @@ interface RenderContext {
   violations: OutlineIntegrityViolation[];
   reassignments: SinglePlacementResult['reassignments'];
   dissolvedSpreadIds: string[];
+  /** Round-16 owner-approved rule: a candidate spread cut for the themed-
+   * spread page budget, or budget-admitted but unplaceable within its
+   * seasonal spill bound -- DISSOLVED (never dropped), its members
+   * returned to their own chronological backbone month. See
+   * `admitThemedSpreads`/`reassignDissolvedSpreadMembers`. */
+  budgetDissolvedSpreadIds: string[];
   /** Ages whose birthday spread dissolved into its backbone month (owner
    * round-3 note, 2026-08-25: birthday-beat merge rule). */
   dissolvedBirthdayAges: number[];
@@ -3705,6 +4032,7 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
   md.push(`- Single-placement reassignments: ${ctx.reassignments.length}`);
   for (const r of ctx.reassignments) md.push(`  - ${r.memoryId}: kept in ${r.keptIn}, dropped from ${r.droppedFrom.join(', ')}`);
   md.push(`- Dissolved candidate spreads (fell below 3 after dedup): ${ctx.dissolvedSpreadIds.join(', ') || 'none'}`);
+  md.push(`- Dissolved candidate spreads (round-16: over the themed-spread page budget, or unplaceable within the seasonal spill bound -- never dropped, members returned to their own backbone month): ${ctx.budgetDissolvedSpreadIds.join(', ') || 'none'}`);
   md.push(
     `- Dissolved birthday spreads (fell below 3, merged into their birthday month, pinned): ${ctx.dissolvedBirthdayAges.length > 0 ? ctx.dissolvedBirthdayAges.map((age) => `turns ${age}`).join(', ') : 'none'}`,
   );
@@ -3749,6 +4077,7 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
       violations: ctx.violations,
       reassignments: ctx.reassignments,
       dissolvedSpreadIds: ctx.dissolvedSpreadIds,
+      budgetDissolvedSpreadIds: ctx.budgetDissolvedSpreadIds,
       dissolvedBirthdayAges: ctx.dissolvedBirthdayAges,
       movedToBackbone: ctx.movedToBackbone,
       droppedElements: ctx.droppedElements,

@@ -7,7 +7,13 @@ import {
   buildOutlineRequestBody,
   buildOutlineSystemPrompt,
   buildOutlineUserPrompt,
+  admitThemedSpreads,
   buildReadingOrder,
+  computeThemedSpreadBudget,
+  enforceThemedSpreadSpacing,
+  reassignDissolvedSpreadMembers,
+  SPREAD_BUDGET_PAGES_PER_SPREAD,
+  SPREAD_SPILL_BOUND,
   buildSpecialSegmentTitlesByMonth,
   buildTaggedMemberFeatures,
   classifyOrientation,
@@ -60,6 +66,7 @@ import {
   type MediaRow,
   type MemoryFeature,
   type OracleElementInput,
+  type ReadingOrderThemedSpreadInput,
   type PacingCandidate,
   type PlacementCandidate,
 } from './eval-memory-book-outline.ts';
@@ -240,9 +247,9 @@ Deno.test('ageYearLabel spells out ordinals', () => {
 // --- resolveChild ----------------------------------------------------------
 
 const MEMBERS: ChildCandidate[] = [
-  { id: 'id-1', familyId: 'fam-1', name: 'Enzo', dateOfBirth: '2020-01-01' },
-  { id: 'id-2', familyId: 'fam-1', name: 'Mara', dateOfBirth: '2022-01-01' },
-  { id: 'id-3', familyId: 'fam-2', name: 'Enzo', dateOfBirth: '2019-01-01' },
+  { id: 'id-1', familyId: 'fam-1', name: 'Enzo', dateOfBirth: '2020-01-01', nicknames: [] },
+  { id: 'id-2', familyId: 'fam-1', name: 'Mara', dateOfBirth: '2022-01-01', nicknames: [] },
+  { id: 'id-3', familyId: 'fam-2', name: 'Enzo', dateOfBirth: '2019-01-01', nicknames: [] },
 ];
 
 Deno.test('resolveChild matches by id', () => {
@@ -544,13 +551,13 @@ Deno.test('buildReadingOrder: a backbone segment with no special title renders i
 
 Deno.test('buildTaggedMemberFeatures: resolves name and child/adult classification at the memory date', () => {
   const membersById = new Map<string, FamilyMemberForTagging>([
-    ['child-id', { id: 'child-id', name: 'Enzo Ray', dateOfBirth: '2021-01-01' }],
-    ['grandma-id', { id: 'grandma-id', name: 'Nonna Rosa', dateOfBirth: '1955-01-01' }],
+    ['child-id', { id: 'child-id', name: 'Enzo Ray', dateOfBirth: '2021-01-01', nicknames: [] }],
+    ['grandma-id', { id: 'grandma-id', name: 'Nonna Rosa', dateOfBirth: '1955-01-01', nicknames: [] }],
   ]);
   const result = buildTaggedMemberFeatures(['child-id', 'grandma-id'], membersById, '2023-06-01');
   assertEquals(result, [
-    { firstName: 'Enzo', personType: 'child' },
-    { firstName: 'Nonna', personType: 'adult' },
+    { firstName: 'Enzo', personType: 'child', nicknames: [] },
+    { firstName: 'Nonna', personType: 'adult', nicknames: [] },
   ]);
 });
 
@@ -561,10 +568,31 @@ Deno.test('buildTaggedMemberFeatures: unresolvable member ids are skipped, not t
 
 Deno.test('buildTaggedMemberFeatures: unknown date of birth yields personType unknown', () => {
   const membersById = new Map<string, FamilyMemberForTagging>([
-    ['id-1', { id: 'id-1', name: 'Mystery Guest', dateOfBirth: null }],
+    ['id-1', { id: 'id-1', name: 'Mystery Guest', dateOfBirth: null, nicknames: [] }],
   ]);
   const result = buildTaggedMemberFeatures(['id-1'], membersById, '2023-06-01');
-  assertEquals(result, [{ firstName: 'Mystery', personType: 'unknown' }]);
+  assertEquals(result, [{ firstName: 'Mystery', personType: 'unknown', nicknames: [] }]);
+});
+
+// --- Round-16 (owner correction): nicknames come from the family_members
+// PROFILE column, never text-mined -- this is the "roster plumbing" pure
+// part: a loaded member row's `nicknames` flows through
+// `buildTaggedMemberFeatures` into the per-memory prompt input untouched. --
+
+Deno.test('buildTaggedMemberFeatures: a profile nickname flows through untouched into the tagged-member feature', () => {
+  const membersById = new Map<string, FamilyMemberForTagging>([
+    ['grandma-id', { id: 'grandma-id', name: 'Rosa', dateOfBirth: '1955-01-01', nicknames: ['nonna', 'nona'] }],
+  ]);
+  const result = buildTaggedMemberFeatures(['grandma-id'], membersById, '2023-06-01');
+  assertEquals(result, [{ firstName: 'Rosa', personType: 'adult', nicknames: ['nonna', 'nona'] }]);
+});
+
+Deno.test('buildTaggedMemberFeatures: a member with no profile nicknames gets an empty array, never invented', () => {
+  const membersById = new Map<string, FamilyMemberForTagging>([
+    ['id-1', { id: 'id-1', name: 'Eduardo', dateOfBirth: '1990-01-01', nicknames: [] }],
+  ]);
+  const result = buildTaggedMemberFeatures(['id-1'], membersById, '2023-06-01');
+  assertEquals(result[0].nicknames, []);
 });
 
 // --- selectThemedCandidates (candidate thresholding) -------------------------
@@ -1115,6 +1143,285 @@ Deno.test('remapInsertIndex: an anchor after all final segments lands after the 
   assertEquals(remapInsertIndex(1, original, final), 0);
 });
 
+// --- enforceThemedSpreadSpacing (round-15 owner-approved rule: no two
+// themed spreads adjacent, at most one per backbone gap -- previously only
+// satisfied by page-budget scarcity; round-14 removed that thinning and
+// exposed real stacking, e.g. Enzo's jul-oct quote-anchored spreads landing
+// 4-in-a-row) -------------------------------------------------------------
+
+function spacingSpread(id: string, anchorGap: number, memberCount = 1) {
+  return { id, anchorGap, memberCount };
+}
+
+Deno.test('enforceThemedSpreadSpacing: a no-op when every spread already has its own distinct gap', () => {
+  const spreads = [spacingSpread('a', 0), spacingSpread('b', 2), spacingSpread('c', 5)];
+  const assignment = enforceThemedSpreadSpacing(spreads, 6);
+  assertEquals(assignment.get('a'), 0);
+  assertEquals(assignment.get('b'), 2);
+  assertEquals(assignment.get('c'), 5);
+});
+
+Deno.test('enforceThemedSpreadSpacing: an oversubscribed gap is won by the highest member-count spread; the rest spill', () => {
+  // Reconstructs the Enzo shape: 4 spreads all anchored to the same gap
+  // (a shared jul-oct seasonal window), distinct member counts.
+  const spreads = [
+    spacingSpread('topic:eating-out', 3, 4),
+    spacingSpread('topic:toys-building', 3, 6), // highest -- wins the anchor
+    spacingSpread('people:tender', 3, 5),
+    spacingSpread('topic:travel', 3, 4),
+  ];
+  const assignment = enforceThemedSpreadSpacing(spreads, 10);
+  assertEquals(assignment.get('topic:toys-building'), 3); // winner keeps the anchor
+  // Every OTHER occupant of gap 3 moved off it.
+  const others = ['topic:eating-out', 'people:tender', 'topic:travel'].map((id) => assignment.get(id));
+  assertEquals(others.every((gap) => gap !== 3), true);
+  // No two spreads ever share a gap -- the whole point of the rule.
+  const allGaps = [...assignment.values()];
+  assertEquals(new Set(allGaps).size, allGaps.length);
+});
+
+Deno.test('enforceThemedSpreadSpacing: priority for a contested gap is member count desc, then id asc (no independent ranking signal exists in this outline)', () => {
+  // Two spreads tied on member count -- id breaks the tie.
+  const spreads = [spacingSpread('topic:zzz', 4, 3), spacingSpread('topic:aaa', 4, 3)];
+  const assignment = enforceThemedSpreadSpacing(spreads, 10);
+  assertEquals(assignment.get('topic:aaa'), 4); // lexically-earlier id wins the anchor
+  assertEquals(assignment.get('topic:zzz') !== 4, true);
+});
+
+Deno.test('enforceThemedSpreadSpacing: an overflow spread spills to the NEAREST free gap from its own anchor', () => {
+  // Gap 5 is contested; gap 4 is already free and closer than gap 7.
+  const spreads = [spacingSpread('winner', 5, 10), spacingSpread('loser', 5, 1)];
+  const assignment = enforceThemedSpreadSpacing(spreads, 10);
+  assertEquals(assignment.get('winner'), 5);
+  assertEquals(assignment.get('loser'), 4); // nearest free gap either side of 5
+});
+
+Deno.test('enforceThemedSpreadSpacing: a tied spill distance resolves to the EARLIER (lower) gap', () => {
+  // Gap 5 contested by 3 spreads: the winner keeps 5; gap 4 and gap 6 are
+  // both free and equidistant from 5 for the next spread in priority order
+  // -- it must take gap 4 (earlier), leaving the LAST spread gap 6.
+  const spreads = [
+    spacingSpread('winner', 5, 10),
+    spacingSpread('second', 5, 5),
+    spacingSpread('third', 5, 1),
+  ];
+  const assignment = enforceThemedSpreadSpacing(spreads, 10);
+  assertEquals(assignment.get('winner'), 5);
+  assertEquals(assignment.get('second'), 4); // tie between gap 4 and gap 6 -> earlier
+  assertEquals(assignment.get('third'), 6); // only gap left within the search
+});
+
+Deno.test('enforceThemedSpreadSpacing: a time-anchored spread can still spill when its own season is oversubscribed', () => {
+  // The function has no "anchored" concept of its own -- an upstream
+  // time-anchored spread is simply another spread with a fixed anchorGap;
+  // if two of them collide, the lower-priority one still spills (the owner
+  // decision: "nearest available gap" IS how a time-anchored exemption
+  // stays satisfied under a collision, not a literal same-gap guarantee).
+  const spreads = [spacingSpread('newborn-days', 2, 3), spacingSpread('halloween-anchor', 2, 8)];
+  const assignment = enforceThemedSpreadSpacing(spreads, 10);
+  assertEquals(assignment.get('halloween-anchor'), 2);
+  assertEquals(assignment.get('newborn-days'), 1); // spilled to the nearest free gap
+});
+
+Deno.test('enforceThemedSpreadSpacing: out-of-range anchors clamp into [-1, lastValidIndex] before spacing runs', () => {
+  const spreads = [spacingSpread('a', 99), spacingSpread('b', -50)];
+  const assignment = enforceThemedSpreadSpacing(spreads, 3);
+  assertEquals([...assignment.values()].every((g) => g >= -1 && g <= 3), true);
+});
+
+Deno.test('enforceThemedSpreadSpacing: pathological exhaustion (more spreads than gaps) never drops a spread or crashes', () => {
+  // lastValidIndex 1 -> only 3 valid gaps (-1, 0, 1); 5 spreads all anchored
+  // to gap 0.
+  const spreads = Array.from({ length: 5 }, (_, i) => spacingSpread(`s${i}`, 0, 5 - i));
+  const assignment = enforceThemedSpreadSpacing(spreads, 1);
+  assertEquals(assignment.size, 5); // every spread still gets SOME assignment
+});
+
+// --- computeThemedSpreadBudget (round-16 rule (b): at most
+// floor(min(preCapPageEstimate, pageCap) / SPREAD_BUDGET_PAGES_PER_SPREAD)
+// themed spreads per book -- same shape as the renderer's own full-bleed
+// pacing rule) ---------------------------------------------------------------
+
+Deno.test('computeThemedSpreadBudget: a full 122-page book budgets 8 spreads (the owner\'s own example)', () => {
+  assertEquals(SPREAD_BUDGET_PAGES_PER_SPREAD, 15);
+  assertEquals(computeThemedSpreadBudget(122, 122), 8); // floor(122/15) = 8
+});
+
+Deno.test('computeThemedSpreadBudget: caps the input at pageCap first -- a book that would run longer than the cap earns no extra spreads for pages it will never print', () => {
+  assertEquals(computeThemedSpreadBudget(300, 122), 8); // min(300,122)=122 -> floor(122/15)=8, NOT floor(300/15)=20
+});
+
+Deno.test('computeThemedSpreadBudget: a smaller book budgets proportionally fewer spreads', () => {
+  assertEquals(computeThemedSpreadBudget(40, 122), 2); // floor(40/15) = 2
+  assertEquals(computeThemedSpreadBudget(14, 122), 0); // floor(14/15) = 0 -- a tiny book earns none
+});
+
+Deno.test('computeThemedSpreadBudget: never negative even for a degenerate (negative or zero) estimate', () => {
+  assertEquals(computeThemedSpreadBudget(-50, 122), 0);
+  assertEquals(computeThemedSpreadBudget(0, 122), 0);
+});
+
+// --- admitThemedSpreads (round-16 owner-approved rules (a)+(b)+(c): a
+// spill BOUND on top of round-15's unbounded spacing, a page BUDGET, and
+// DISSOLVE (never drop) for anything that loses either contest -- fixes the
+// round-15 regeneration's taste regression: 12 spreads saturating every
+// gap, one spilling a jul-oct-dated spread next to Oct-Nov 2024/Dec 2024) --
+
+function admissionSpread(id: string, anchorGap: number, memberCount = 1) {
+  return { id, anchorGap, memberCount };
+}
+
+Deno.test('admitThemedSpreads: a no-op when every spread already has its own gap and fits the budget', () => {
+  const spreads = [admissionSpread('a', 0), admissionSpread('b', 2), admissionSpread('c', 5)];
+  const { placedGapById, dissolvedIds } = admitThemedSpreads(spreads, 10, 10);
+  assertEquals(placedGapById.get('a'), 0);
+  assertEquals(placedGapById.get('b'), 2);
+  assertEquals(placedGapById.get('c'), 5);
+  assertEquals(dissolvedIds, []);
+});
+
+Deno.test('admitThemedSpreads: rule (b) -- spreads beyond the budget dissolve outright, lowest priority first (member count desc, then id asc)', () => {
+  const spreads = [
+    admissionSpread('big', 0, 10),
+    admissionSpread('mid', 1, 5),
+    admissionSpread('small', 2, 1),
+  ];
+  const { placedGapById, dissolvedIds } = admitThemedSpreads(spreads, 10, 2); // budget of 2 -- only the top 2 survive
+  assertEquals([...placedGapById.keys()].sort(), ['big', 'mid']);
+  assertEquals(dissolvedIds, ['small']);
+});
+
+Deno.test('admitThemedSpreads: rule (a) -- a spread exactly at the spill bound distance is placeable', () => {
+  // Processed in priority order (member count desc): "winner" claims gap 5;
+  // "filler4"/"filler6" claim their OWN anchors (4 and 6) before the lowest-
+  // priority "contender" (also anchored at 5) is ever considered -- by the
+  // time it runs, gaps 4-6 are all taken, so it must spill exactly 2 away.
+  const spreads = [
+    admissionSpread('winner', 5, 10),
+    admissionSpread('filler4', 4, 9),
+    admissionSpread('filler6', 6, 8),
+    admissionSpread('contender', 5, 1),
+  ];
+  const { placedGapById, dissolvedIds } = admitThemedSpreads(spreads, 10, 4); // budget 4 -- everyone fits
+  assertEquals(placedGapById.get('winner'), 5);
+  assertEquals(placedGapById.get('filler4'), 4);
+  assertEquals(placedGapById.get('filler6'), 6);
+  // Exactly SPREAD_SPILL_BOUND away from its own anchor (5), and the EARLIER
+  // of the two equidistant options (3 vs 7) per the documented tie-break.
+  assertEquals(placedGapById.get('contender'), 5 - SPREAD_SPILL_BOUND);
+  assertEquals(dissolvedIds, []);
+});
+
+Deno.test('admitThemedSpreads: rule (a) boundary -- one gap beyond the spill bound is unplaceable and DISSOLVES, never drops silently', () => {
+  // Every gap within 2 of anchor 5 (3,4,5,6,7) is already taken -- the
+  // contender has nowhere to land within its bound and must dissolve.
+  const spreads = [
+    admissionSpread('g3', 3, 10),
+    admissionSpread('g4', 4, 10),
+    admissionSpread('g5', 5, 10),
+    admissionSpread('g6', 6, 10),
+    admissionSpread('g7', 7, 10),
+    admissionSpread('contender', 5, 1), // lowest priority -- loses every gap in [3,7]
+  ];
+  const { placedGapById, dissolvedIds } = admitThemedSpreads(spreads, 10, 6); // budget 6 -- everyone fits the BUDGET, only the BOUND is being tested
+  assertEquals(dissolvedIds, ['contender']);
+  assertEquals(placedGapById.has('contender'), false);
+  // Everyone else still placed, none doubled up.
+  const allGaps = [...placedGapById.values()];
+  assertEquals(new Set(allGaps).size, allGaps.length);
+});
+
+Deno.test('admitThemedSpreads: reconstructs the real Enzo shape -- 12 candidate spreads over a 9-segment backbone, budget 8, every survivor within the spill bound of its own anchor', () => {
+  // Mirrors the round-16 bug report: most candidates anchor to the shared
+  // jul-oct window (segments 6-8), a few scattered earlier.
+  const spreads = [
+    admissionSpread('bikes-scooters', 0, 4),
+    admissionSpread('funny', 1, 6),
+    admissionSpread('people-a', 2, 6),
+    admissionSpread('treats', 3, 5),
+    admissionSpread('eating-out', 6, 4),
+    admissionSpread('toys-building', 6, 5),
+    admissionSpread('tender', 7, 6),
+    admissionSpread('people-b', 7, 6),
+    admissionSpread('people-c', 7, 6),
+    admissionSpread('travel', 7, 3), // lowest member count in the jul-oct cluster
+    admissionSpread('days-out', 8, 5),
+    admissionSpread('extra-thin', 8, 2), // lowest priority overall -- expected to dissolve for budget
+  ];
+  const lastValidIndex = 8; // 9 backbone segments
+  const budget = computeThemedSpreadBudget(122, 122); // 8, the owner's own example
+  const { placedGapById, dissolvedIds } = admitThemedSpreads(spreads, lastValidIndex, budget);
+
+  // At most `budget` survive -- the jul-oct cluster is dense enough that
+  // ONE budget-admitted spread ("days-out") also fails to find a free gap
+  // within its own spill bound and dissolves too, landing below budget.
+  // This is expected: the budget cut and the spill bound are two
+  // INDEPENDENT ways to lose, not a guarantee of exactly `budget` survivors.
+  assertEquals(placedGapById.size <= budget, true);
+  assertEquals(placedGapById.size + dissolvedIds.length, spreads.length); // nobody vanishes -- every id is accounted for
+  // Every survivor is within SPREAD_SPILL_BOUND of its OWN anchor.
+  const anchorById = new Map(spreads.map((s) => [s.id, s.anchorGap]));
+  for (const [id, gap] of placedGapById) {
+    assertEquals(Math.abs(gap - anchorById.get(id)!) <= SPREAD_SPILL_BOUND, true);
+  }
+  // No two survivors share a gap.
+  const allGaps = [...placedGapById.values()];
+  assertEquals(new Set(allGaps).size, allGaps.length);
+  // The lowest-priority spread in the whole set dissolves for budget, and
+  // the jul-oct cluster is dense enough that at least one more dissolves
+  // purely from being unplaceable within its own bound.
+  assertEquals(dissolvedIds.includes('extra-thin'), true);
+  assertEquals(dissolvedIds.length > spreads.length - budget, true);
+});
+
+// --- reassignDissolvedSpreadMembers (round-16 rule (c), "dissolve, never
+// drop": a dissolved spread's memories return to their OWN natural
+// chronological backbone home, as if never grouped) -------------------------
+
+Deno.test('reassignDissolvedSpreadMembers: routes a dissolved spread\'s members to their own default backbone segment', () => {
+  const placement = new Map([
+    ['m1', 'spread:travel'],
+    ['m2', 'spread:travel'],
+    ['m3', 'backbone:2025-08'],
+  ]);
+  const dissolved = new Map([['spread:travel', ['m1', 'm2']]]);
+  const defaultBackbone = new Map([
+    ['m1', 'backbone:2025-08'],
+    ['m2', 'backbone:2025-09'],
+  ]);
+  const result = reassignDissolvedSpreadMembers(placement, dissolved, defaultBackbone);
+  assertEquals(result.get('m1'), 'backbone:2025-08');
+  assertEquals(result.get('m2'), 'backbone:2025-09');
+  assertEquals(result.get('m3'), 'backbone:2025-08'); // untouched -- was never in a dissolved spread
+});
+
+Deno.test('reassignDissolvedSpreadMembers: ZERO memories are ever lost -- the key set is identical before and after', () => {
+  const placement = new Map([
+    ['m1', 'spread:travel'],
+    ['m2', 'spread:tender'],
+    ['m3', 'backbone:2025-08'],
+    ['m4', 'firsts'],
+  ]);
+  const dissolved = new Map([
+    ['spread:travel', ['m1']],
+    ['spread:tender', ['m2']],
+  ]);
+  const defaultBackbone = new Map([
+    ['m1', 'backbone:2025-08'],
+    ['m2', 'backbone:2025-09'],
+  ]);
+  const result = reassignDissolvedSpreadMembers(placement, dissolved, defaultBackbone);
+  assertEquals(new Set(result.keys()), new Set(placement.keys())); // same union of memory ids
+  assertEquals(result.size, placement.size);
+});
+
+Deno.test('reassignDissolvedSpreadMembers: a memory with no default-backbone entry is left at its current placement rather than vanishing', () => {
+  const placement = new Map([['m1', 'spread:travel']]);
+  const dissolved = new Map([['spread:travel', ['m1']]]);
+  const result = reassignDissolvedSpreadMembers(placement, dissolved, new Map()); // no default entry for m1
+  assertEquals(result.get('m1'), 'spread:travel'); // stays put, never lost
+});
+
 // --- buildReadingOrder (the assembly-bug regression: a surviving themed,
 // Firsts, and birthday spread must all appear in the rendered order; plan
 // 2026-08-24: Firsts now closes the book, right before Closing) -----------
@@ -1252,6 +1559,101 @@ Deno.test('buildReadingOrder: an out-of-range insert index clamps to the last fi
   assertEquals(sections.some((s) => s.id === 'topic:beach'), true);
 });
 
+function readingOrderThemedSpread(
+  candidateId: string,
+  insertAfterFinalSegmentIndex: number,
+  memoryIds: string[],
+): ReadingOrderThemedSpreadInput {
+  return {
+    candidateId,
+    candidateKind: 'topic',
+    title: candidateId,
+    titleMode: 'descriptive',
+    titleSourceMemoryId: null,
+    memoryIds,
+    insertAfterFinalSegmentIndex,
+    rationale: {},
+    kicker: null,
+  };
+}
+
+Deno.test('buildReadingOrder: round-15 -- four spreads anchored to the same backbone gap (the real Enzo shape) never end up adjacent, and no gap holds more than one', () => {
+  const finalBackboneSegments = buildBackboneSegments([
+    backboneInput('aug1', '2025-08-05'),
+    backboneInput('aug2', '2025-08-10'),
+    backboneInput('aug3', '2025-08-15'),
+    backboneInput('sep1', '2025-09-05'),
+    backboneInput('sep2', '2025-09-10'),
+    backboneInput('sep3', '2025-09-15'),
+    backboneInput('oct1', '2025-10-05'),
+    backboneInput('oct2', '2025-10-10'),
+    backboneInput('oct3', '2025-10-15'),
+  ]);
+  assertEquals(finalBackboneSegments.length, 3); // Aug, Sep, Oct
+
+  // All four candidates anchor to the SAME gap (index 0 -- right after Aug),
+  // exactly the "stacked 4-in-a-row" bug report: eating-out, toys-building,
+  // tender, and travel all draw from the shared jul-oct window.
+  const sections = buildReadingOrder({
+    childName: 'Enzo',
+    finalBackboneSegments,
+    firsts: null,
+    birthdaySpreads: [],
+    themedSpreads: [
+      readingOrderThemedSpread('topic:eating-out', 0, ['m1', 'm2', 'm3', 'm4']),
+      readingOrderThemedSpread('topic:toys-building', 0, ['m5', 'm6', 'm7', 'm8', 'm9', 'm10']),
+      readingOrderThemedSpread('emotion:tender', 0, ['m11', 'm12', 'm13', 'm14', 'm15']),
+      readingOrderThemedSpread('topic:travel', 0, ['m16', 'm17', 'm18', 'm19']),
+    ],
+    backboneRationale: {},
+  });
+
+  const kinds = sections.map((s) => s.kind);
+  // Invariant (1): no two themed sections are ever adjacent in the reading order.
+  for (let i = 0; i < kinds.length - 1; i++) {
+    assertEquals(kinds[i] === 'themed' && kinds[i + 1] === 'themed', false);
+  }
+  // Invariant (2): at most one themed spread between any two consecutive
+  // backbone elements -- i.e. every maximal run of 'themed' sections has length 1.
+  let runLength = 0;
+  for (const kind of kinds) {
+    runLength = kind === 'themed' ? runLength + 1 : 0;
+    assertEquals(runLength <= 1, true);
+  }
+  // All four spreads still appear -- nobody was dropped, only relocated.
+  const themedIds = sections.filter((s) => s.kind === 'themed').map((s) => s.id);
+  assertEquals(themedIds.sort(), ['emotion:tender', 'topic:eating-out', 'topic:toys-building', 'topic:travel'].sort());
+});
+
+Deno.test('buildReadingOrder: already-spaced themed spreads are a no-op -- round-15 changes nothing when there was no conflict', () => {
+  const finalBackboneSegments = buildBackboneSegments([
+    backboneInput('jan1', '2023-01-05'),
+    backboneInput('jan2', '2023-01-10'),
+    backboneInput('jan3', '2023-01-15'),
+    backboneInput('feb1', '2023-02-05'),
+    backboneInput('feb2', '2023-02-10'),
+    backboneInput('feb3', '2023-02-15'),
+  ]);
+  const sections = buildReadingOrder({
+    childName: 'Mara',
+    finalBackboneSegments,
+    firsts: null,
+    birthdaySpreads: [],
+    themedSpreads: [
+      readingOrderThemedSpread('topic:a', -1, ['m1']),
+      readingOrderThemedSpread('topic:b', 0, ['m2']),
+    ],
+    backboneRationale: {},
+  });
+  const order = sections.map((s) => s.id);
+  assertEquals(order.indexOf('topic:a') < order.indexOf(`backbone:${finalBackboneSegments[0].id}`), true);
+  assertEquals(
+    order.indexOf('topic:b') > order.indexOf(`backbone:${finalBackboneSegments[0].id}`) &&
+      order.indexOf('topic:b') < order.indexOf(`backbone:${finalBackboneSegments[1].id}`),
+    true,
+  );
+});
+
 Deno.test('buildReadingOrder: cover/title/through-the-years/closing always appear even with an empty book', () => {
   const sections = buildReadingOrder({
     childName: 'Enzo',
@@ -1350,6 +1752,21 @@ Deno.test('buildOutlineSystemPrompt: relationship words may only come from tagge
   // The real failure this rule exists to prevent.
   assertEquals(prompt.includes('Entre tias, tios y primos'), true);
   assertEquals(prompt.includes('Look who came to see you'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: round-16 (owner correction) -- prefers a member\'s own profile nickname over their first name in generated copy, with the real examples and article guidance', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('PEOPLE-PAIR SPREAD TITLES AND NAMES IN COPY'), true);
+  assertEquals(prompt.includes('PREFER their own profile nickname'), true);
+  assertEquals(prompt.includes('"nn:" field'), true);
+  assertEquals(prompt.includes('natural article handling'), true);
+  assertEquals(prompt.includes('"Con la nonna"'), true);
+  assertEquals(prompt.includes('"Con papi"'), true);
+  assertEquals(prompt.includes('"Tus momentos con Billy"'), true);
+  // Never invent one -- fall back only when the profile has none.
+  assertEquals(prompt.includes('never invent a nickname that is not listed'), true);
+  // The profile itself is the evidence -- no separate text-mining requirement.
+  assertEquals(prompt.includes('it needs no separate confirmation'), true);
 });
 
 Deno.test('buildOutlineSystemPrompt: explains the quote/descriptive title modes with the real examples', () => {
@@ -1488,7 +1905,7 @@ function fixtureFeature(overrides: Partial<MemoryFeature> = {}): MemoryFeature {
 
 Deno.test('buildOutlineUserPrompt: includes each memory\'s tagged people with child/adult markers', () => {
   const features = new Map([
-    ['m1', fixtureFeature({ taggedMembers: [{ firstName: 'Enzo', personType: 'child' }, { firstName: 'Nonna', personType: 'adult' }] })],
+    ['m1', fixtureFeature({ taggedMembers: [{ firstName: 'Enzo', personType: 'child', nicknames: [] }, { firstName: 'Nonna', personType: 'adult', nicknames: [] }] })],
   ]);
   const prompt = buildOutlineUserPrompt(
     {
@@ -1507,6 +1924,37 @@ Deno.test('buildOutlineUserPrompt: includes each memory\'s tagged people with ch
   );
   assertEquals(prompt.includes('Enzo(child)'), true);
   assertEquals(prompt.includes('Nonna(adult)'), true);
+});
+
+Deno.test('buildOutlineUserPrompt: round-16 (owner correction) -- a profile nickname is surfaced as an "nn:" suffix on the tagged-person entry, never for a person with no profile nickname', () => {
+  const features = new Map([
+    [
+      'm1',
+      fixtureFeature({
+        taggedMembers: [
+          { firstName: 'Rosa', personType: 'adult', nicknames: ['nonna', 'nona'] },
+          { firstName: 'Enzo', personType: 'child', nicknames: [] },
+        ],
+      }),
+    ],
+  ]);
+  const prompt = buildOutlineUserPrompt(
+    {
+      childName: 'Enzo',
+      scopeLabel: 'Year One',
+      windowStart: '2023-01-01',
+      windowLastDay: '2023-12-31',
+      backboneSegments: [],
+      firstsCount: 0,
+      birthdaySpreads: [],
+      throughTheYearsCount: 0,
+      specialSegments: [],
+    },
+    [],
+    features,
+  );
+  assertEquals(prompt.includes('Rosa(adult;nn:nonna/nona)'), true);
+  assertEquals(prompt.includes('Enzo(child)'), true); // no nicknames -- no "nn:" suffix, never invented
 });
 
 Deno.test('buildOutlineUserPrompt: per-memory row includes the orientation marker when present, omits the suffix when absent (owner root-cause fix, 2026-08-27)', () => {
@@ -2205,7 +2653,7 @@ Deno.test('buildSyntheticMemory: milestones and tagged members carry through in 
   const memory = buildSyntheticMemory(
     fixtureFeature({
       milestones: [{ milestoneId: 'first-steps', name: 'First steps', detail: '', outOfBand: false }],
-      taggedMembers: [{ firstName: 'Enzo', personType: 'child' }],
+      taggedMembers: [{ firstName: 'Enzo', personType: 'child', nicknames: [] }],
       engagementCount: 3,
     }),
     [],
