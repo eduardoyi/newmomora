@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Momora — Print</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      Same Google Fonts link index.html uses for the interactive preview
+      (see that file's own TODO note). The print pipeline (scripts/render-
+      pdf.mts) explicitly awaits `document.fonts.ready` before capturing a
+      page, so a network font load is safe here, but it is still a
+      deterministic-print-quality caveat worth carrying forward: embedding
+      these three families locally (woff2 baked into the bundle) would
+      remove the network dependency entirely. Not done in this phase — see
+      the render script's own reported caveats.
+    -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400;1,6..72,500&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Caveat:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /*
+       * Base reset only — the exact `@page`/html/body physical size for the
+       * requested page/half/cover is injected at runtime by PrintApp.tsx
+       * once it knows which one was requested (see its `usePageBox` sizing
+       * effect), because it varies per request (216x216mm single page,
+       * 213x216mm spread half, or the cover's own back+spine+front width).
+       */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #fff;
+      }
+      #root {
+        line-height: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/print/main.tsx"></script>
+  </body>
+</html>
