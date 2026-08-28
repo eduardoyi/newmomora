@@ -43,7 +43,8 @@
     "test:e2e:usage-limits:seed": "deno run --allow-env --allow-net supabase/scripts/usage-limits-e2e-fixture.ts",
     "test:e2e:usage-limits:clean": "deno run --allow-env --allow-net supabase/scripts/usage-limits-e2e-fixture.ts --cleanup",
     "test:e2e:usage-limits": "npm run test:e2e:usage-limits:seed && (maestro test .maestro/flows/usage-limits/memory-limit.yaml; status=$?; npm run test:e2e:usage-limits:clean; exit $status)",
-    "book:preview": "npm --prefix book-renderer run dev"
+    "book:preview": "npm --prefix book-renderer run dev",
+    "eval:memory-book-coverage": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-memory-book-coverage.ts"
   },
   "dependencies": {
     "@expo-google-fonts/caveat": "^0.4.2",
