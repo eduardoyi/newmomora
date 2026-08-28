@@ -24,8 +24,15 @@ import type {
   TextSlotContent,
 } from './types';
 import { PHYSICAL } from './types';
-import type { FooterIndexEntry } from '../templates/common/FooterIndex';
-import type { SectionHeaderParams } from '../templates/common/SectionHeader';
+// Round-13: these two come from `.types.ts` companions, not the `.tsx`
+// component files directly — `fitter.ts` is pure TS with no React/DOM
+// dependency (the memory-book outline eval script imports it under Deno;
+// see supabase/scripts/eval-memory-book-outline.ts), and a type-only import
+// of a `.tsx` file still drags its whole JSX/React import graph into the
+// checker. See `FooterIndex.types.ts` / `SectionHeader.types.ts` for the
+// full rationale — same types, zero behavior change either side.
+import type { FooterIndexEntry } from '../templates/common/FooterIndex.types';
+import type { SectionHeaderParams } from '../templates/common/SectionHeader.types';
 import { localizeMonthLabel } from '../templates/common/formatDate';
 import { getFurniture, getLanguage } from '../templates/furniture';
 import { illustratedIlloFitHeightMm, SAFE_BOX_MM, SECTION_HEADER_RESERVE_MM, footerReserveMm } from '../templates/mm';
@@ -310,10 +317,13 @@ function resolveMemoriesInOrder(
 ): ResolvedMemory[] {
   const resolved = resolveElementMemories(manifest, element);
   if (omittedIds.size === 0) return resolved;
-  // Page-cap overflow demotion (final-fix-round item 2): these ids were
-  // dropped by `tightenToPageCap` after maximum pairing still left the book
-  // over the printer's hard limit — never text/illustrated memories, only
-  // the lowest-rank photo/video-only ones (see `demotionCandidates`).
+  // Page-cap overflow demotion (final-fix-round item 2, rebalanced round
+  // 13): these ids were dropped by `fitBook`'s Lever 2 after maximum
+  // pairing still left the book over the printer's hard limit — a mix of
+  // photo, video, and (only when digest-eligible) illustrated memories
+  // chosen to keep the three kinds' keep-rates close to parity; a
+  // milestone holder or quote-title source is never demoted (see
+  // `gatherDemotionCandidates` / `gatherIllustratedDemotionCandidates`).
   return resolved.filter(({ id }) => !omittedIds.has(id));
 }
 
@@ -3120,23 +3130,75 @@ function numberPages(pages: BookPage[]): number {
 }
 
 // ---------------------------------------------------------------------------
-// Page-cap enforcement (final-fix-round item 2): the fitter must never hand
-// back more pages than the layflat printer can physically bind. `fitBook`
-// runs the deterministic fit below once; if it comes back over the cap, it
-// re-runs at escalating pairing aggressiveness, and if even maximum pairing
-// isn't enough, demotes the lowest-rank photo/video-only memories (never
-// text/illustrated ones) one at a time until the book fits or there is
-// nothing left that's safe to cut.
+// Page-cap enforcement (final-fix-round item 2, rebalanced round 13): the
+// fitter must never hand back more pages than the layflat printer can
+// physically bind. `fitBook` runs the deterministic fit below once; if it
+// comes back over the cap, it re-runs at escalating pairing aggressiveness,
+// and if even maximum pairing isn't enough, demotes memories one at a time
+// until the book fits or there is nothing left that's safe to cut.
+//
+// Round-13 owner decision: the demotion ladder used to be strictly
+// photo/video-first, reaching a digest-eligible illustrated memory only as
+// the very last resort ("text is sacred"). Measured on Enzo that produced
+// ~75% keep-rate for text/illustrated memories vs ~40% for photo/video — too
+// skewed. The new policy classifies every candidate into one of THREE kinds
+// — `photo`, `video`, `illustrated` (text + illustration) — and at each
+// demotion step cuts from whichever kind CURRENTLY has the highest keep-rate
+// among kinds that still have a demotable candidate, so the three kinds'
+// keep-rates converge toward parity as the squeeze proceeds. All existing
+// protections are unchanged: the month floor still binds first (a kind's
+// candidate is only "available" for the keep-rate comparison once the floor
+// has nothing better to offer any kind), milestone holders and quote-title
+// sources are never candidates, and an illustrated memory is only ever a
+// candidate when it is also digest-eligible (`isDigestEligibleMemory` —
+// "text is sacred" survives as that guard plus the tie-break below, not as
+// an absolute). Ties in keep-rate prefer photo/video over illustrated (the
+// owner is REBALANCING an existing preference, not inverting it) — see
+// `KIND_TIEBREAK_ORDER`.
 // ---------------------------------------------------------------------------
 
-/** True for a memory with no narrative value beyond its image — safe to omit first when the book must shed pages. */
+/** The three page-cap demotion kinds (round-13 rebalance). */
+type DemotionKind = 'photo' | 'video' | 'illustrated';
+
+/**
+ * Preference order when two or more kinds are tied on keep-rate: photo and
+ * video before illustrated (owner: rebalancing the old photo/video-first
+ * ladder, not inverting it into an illustrated-first one).
+ */
+const KIND_TIEBREAK_ORDER: readonly DemotionKind[] = ['photo', 'video', 'illustrated'];
+
+/** True for a memory with no narrative value beyond its image — a `photo` or `video` demotion candidate. */
 function isPhotoOnlyMemory(memory: ManifestMemory): boolean {
   return !memory.text && !memory.illustration && memory.assets.length > 0;
+}
+
+/** `photo` vs `video` split of `isPhotoOnlyMemory` — a video-poster asset makes it a `video` candidate. */
+function photoOnlyKind(memory: ManifestMemory): 'photo' | 'video' {
+  return memory.assets.some(isVideoAsset) ? 'video' : 'photo';
+}
+
+/**
+ * Classifies ANY backbone/themed memory into a demotion kind for keep-rate
+ * accounting — including memories that are protected from demotion (a
+ * milestone holder, a quote-title source, a non-digest-eligible illustrated
+ * memory). Those still count toward their kind's fixed total (the
+ * denominator of its keep-rate) since they were "selected" by the outline;
+ * they just never leave the numerator, which is exactly what SHOULD make a
+ * heavily-protected kind's keep-rate stay high and get selected for further
+ * cuts less often as the squeeze proceeds. Returns null for anything that
+ * isn't one of the three kinds (e.g. an illustration-less text memory, an
+ * audio note).
+ */
+function classifyMemoryKind(memory: ManifestMemory): DemotionKind | null {
+  if (memory.illustration && memory.text) return 'illustrated';
+  if (isPhotoOnlyMemory(memory)) return photoOnlyKind(memory);
+  return null;
 }
 
 interface DemotionCandidate {
   id: string;
   elementId: string;
+  kind: DemotionKind;
   /** Calendar month (YYYY-MM) of the memory — the month-preservation floor
    * applies per CALENDAR month, not per (possibly merged) backbone segment:
    * a merged "2024-10_2024-11" segment previously counted as ONE month
@@ -3144,7 +3206,7 @@ interface DemotionCandidate {
    * "still 2 left" off November's memories (owner round 6, Enzo's empty
    * October). */
   month: string;
-  /** Ascending — lowest rank is demoted first. Engagement is the primary signal; a book highlight is protected as a tie-breaker, never outright immune. */
+  /** Ascending — lowest rank is demoted first WITHIN its kind. Engagement is the primary signal; a book highlight is protected as a tie-breaker, never outright immune. */
   rank: number;
 }
 
@@ -3200,6 +3262,7 @@ function gatherDemotionCandidates(outline: BookOutline, manifest: BookManifest):
       candidates.push({
         id,
         elementId: element.id,
+        kind: photoOnlyKind(memory),
         month: memory.date.slice(0, 7),
         rank: memory.engagement * 10 + (highlighted ? 5 : 0),
       });
@@ -3209,17 +3272,16 @@ function gatherDemotionCandidates(outline: BookOutline, manifest: BookManifest):
 }
 
 /**
- * Task 2 hybrid cap-pressure demotion pool (owner decision, blend of options
- * (a) and (b)): once the photo/video-only pool (`gatherDemotionCandidates`)
- * is exhausted — respecting `MIN_MEMORIES_PER_MONTH` — the pool EXTENDS to
- * illustrated memories, lowest-rank first, but only ones that are
- * digest-ELIGIBLE by the exact same guard Task 1's sweep uses
- * (`isDigestEligibleMemory` — never a milestone holder, never an element's
- * own quote-title source memory). "Text is sacred" stays true: a memory
- * with text but NO illustration (an ordinary text-page/quote entry) is
- * still never in this pool, same as before — only a SHORT, already
- * digest-worthy illustrated memory ever becomes cuttable, and only as the
- * second lever, after the photo/video pool has nothing left to give.
+ * Round-13 rebalance (formerly the "Task 2 hybrid" pool, reached only once
+ * `gatherDemotionCandidates` was exhausted — now one of three co-equal
+ * pools compared by keep-rate, see the file-header comment above): the
+ * `illustrated` demotion pool, gathered from digest-ELIGIBLE memories only
+ * — the exact same guard Task 1's digest sweep uses (`isDigestEligibleMemory`
+ * — never a milestone holder, never an element's own quote-title source
+ * memory). "Text is sacred" survives as this guard: a memory with text but
+ * NO illustration (an ordinary text-page/quote entry) is never in this pool
+ * — only a SHORT, already digest-worthy illustrated memory is ever
+ * cuttable.
  */
 function gatherIllustratedDemotionCandidates(outline: BookOutline, manifest: BookManifest): DemotionCandidate[] {
   const candidates: DemotionCandidate[] = [];
@@ -3231,12 +3293,77 @@ function gatherIllustratedDemotionCandidates(outline: BookOutline, manifest: Boo
       candidates.push({
         id,
         elementId: element.id,
+        kind: 'illustrated',
         month: memory.date.slice(0, 7),
         rank: memory.engagement * 10 + (highlighted ? 5 : 0),
       });
     }
   }
   return candidates;
+}
+
+/**
+ * Fixed per-kind totals (the keep-rate denominators), computed ONCE from the
+ * untouched outline/manifest — every backbone/themed memory that classifies
+ * into one of the three kinds counts, whether or not it's actually a
+ * demotion candidate (a milestone holder or quote-title source is "selected
+ * but permanently kept", which is exactly what should make its kind's
+ * keep-rate decline more slowly). Firsts memories are excluded — same scope
+ * as the demotion pools themselves (see `gatherDemotionCandidates`); a
+ * firsts entry is never a demotion candidate, so counting it would dilute
+ * the ratio without ever being able to move it.
+ */
+function backboneThemedKindTotals(outline: BookOutline, manifest: BookManifest): Record<DemotionKind, number> {
+  const totals: Record<DemotionKind, number> = { photo: 0, video: 0, illustrated: 0 };
+  for (const element of outline.elements) {
+    if (element.kind !== 'backbone' && element.kind !== 'themed') continue;
+    for (const { memory } of resolveMemoriesInOrder(manifest, element)) {
+      const kind = classifyMemoryKind(memory);
+      if (kind) totals[kind]++;
+    }
+  }
+  return totals;
+}
+
+/**
+ * Highest keep-rate among `kinds` wins; ties resolve via `KIND_TIEBREAK_ORDER`
+ * (photo/video preferred over illustrated). `totals`/`omittedCountByKind`
+ * give the current kept-fraction for each kind — see the file-header
+ * comment for why the comparison converges the three kinds' keep-rates
+ * toward parity.
+ */
+function pickHighestKeepRateKind(
+  kinds: readonly DemotionKind[],
+  totals: Record<DemotionKind, number>,
+  omittedCountByKind: Record<DemotionKind, number>,
+): DemotionKind {
+  let best: DemotionKind | null = null;
+  let bestRate = -Infinity;
+  for (const kind of KIND_TIEBREAK_ORDER) {
+    if (!kinds.includes(kind)) continue;
+    const total = totals[kind];
+    const rate = total > 0 ? (total - omittedCountByKind[kind]) / total : -Infinity;
+    if (rate > bestRate) {
+      bestRate = rate;
+      best = kind;
+    }
+  }
+  // `kinds` is always non-empty when called below, so `best` is always set;
+  // the fallback only guards the type (a kind with a candidate always has
+  // total > 0, since candidates are a subset of the totals count).
+  return best ?? kinds[0];
+}
+
+/** Distinct gap-reason text per kind (round-13: the preview's gaps panel must show the kind mix, not just "omitted"). */
+function demotionGapReason(kind: DemotionKind, cap: number, rank: number): string {
+  switch (kind) {
+    case 'photo':
+      return `Omitted (photo) to respect the ${cap}-page cap (rank ${rank}, lowest-engagement photo-only memory remaining, chosen to keep photo/video/illustrated keep-rates close to parity).`;
+    case 'video':
+      return `Omitted (video) to respect the ${cap}-page cap (rank ${rank}, lowest-engagement video-only memory remaining, chosen to keep photo/video/illustrated keep-rates close to parity).`;
+    case 'illustrated':
+      return `Omitted (illustrated) to respect the ${cap}-page cap (rank ${rank}, lowest-rank digest-eligible illustrated memory remaining, chosen to keep photo/video/illustrated keep-rates close to parity).`;
+  }
 }
 
 /** One full deterministic fit at a given pairing level / omission set — no cap awareness of its own. */
@@ -3438,74 +3565,74 @@ export function fitBook(outline: BookOutline, manifest: BookManifest, options: F
     result = runFit(outline, manifest, options, pairingLevel, EMPTY_ID_SET);
   }
 
-  // Lever 2: demote the lowest-rank photo/video-only memories, one at a
-  // time (lowest engagement first), never touching text/illustrated ones.
-  // Round-5 item 2a (root cause of Enzo's Oct/Nov/Dec 2024 vanishing
-  // entirely): a flat global sort-and-cut concentrated every omission on
-  // whichever run of months happened to score lowest, with nothing
-  // stopping it from erasing them completely while other months still had
-  // plenty of margin. `MIN_MEMORIES_PER_MONTH` now protects a backbone
-  // (calendar-month) element's remaining count — but only WHILE some other
-  // month still has more than its own floor to give; if every month is
-  // already down to the floor and the book still doesn't fit, the floor
-  // yields rather than leave an unprintable book (see `auditBookDocument`
-  // check (a), a permanent regression backstop for month continuity).
+  // Lever 2 (round-13 rebalance): demote memories one at a time until the
+  // book fits, choosing EACH step from whichever of the three kinds (photo,
+  // video, illustrated) currently has the highest keep-rate among kinds
+  // that still have a demotable candidate — see the file-header comment
+  // above `DemotionKind` for the full policy and the owner rationale.
+  //
+  // The month floor still comes first, exactly as before round-13: a
+  // candidate is only compared for the keep-rate pick once it's confirmed
+  // "available" — `MIN_MEMORIES_PER_MONTH` protects a backbone
+  // (calendar-month) element's remaining count while some OTHER month still
+  // has more than its own floor to give (round-5 item 2a, the root cause of
+  // Enzo's Oct/Nov/Dec 2024 vanishing entirely); once every month is down to
+  // the floor, it yields rather than leave an unprintable book (see
+  // `auditBookDocument` check (a), a permanent regression backstop for
+  // month continuity).
   const omittedIds = new Set<string>();
   const omittedGaps: LayoutGap[] = [];
   if (result.document.totalPages > cap) {
-    const photoCandidates = gatherDemotionCandidates(outline, manifest).sort((a, b) => a.rank - b.rank);
-    // Task 2 hybrid pool: the SAME candidate list every iteration below
-    // reads from — only ever reached once the photo/video pool has nothing
-    // left ABOVE the month floor to give (see the ordering below). Gathered
-    // once, up front, same as the photo pool.
-    const illustratedCandidates = gatherIllustratedDemotionCandidates(outline, manifest).sort((a, b) => a.rank - b.rank);
+    const pools: Record<DemotionKind, DemotionCandidate[]> = { photo: [], video: [], illustrated: [] };
+    for (const c of gatherDemotionCandidates(outline, manifest)) pools[c.kind].push(c);
+    for (const c of gatherIllustratedDemotionCandidates(outline, manifest)) pools.illustrated.push(c);
+    for (const kind of KIND_TIEBREAK_ORDER) pools[kind].sort((a, b) => a.rank - b.rank);
+
+    const totals = backboneThemedKindTotals(outline, manifest);
+    const omittedCountByKind: Record<DemotionKind, number> = { photo: 0, video: 0, illustrated: 0 };
 
     while (result.document.totalPages > cap) {
-      const remainingPhoto = photoCandidates.filter((c) => !omittedIds.has(c.id));
-      const remainingIllustrated = illustratedCandidates.filter((c) => !omittedIds.has(c.id));
-      if (remainingPhoto.length === 0 && remainingIllustrated.length === 0) break; // nothing left anywhere — terminate
+      const remaining: Partial<Record<DemotionKind, DemotionCandidate[]>> = {};
+      for (const kind of KIND_TIEBREAK_ORDER) {
+        const list = pools[kind].filter((c) => !omittedIds.has(c.id));
+        if (list.length > 0) remaining[kind] = list;
+      }
+      const activeKinds = Object.keys(remaining) as DemotionKind[];
+      if (activeKinds.length === 0) break; // nothing left anywhere — terminate
 
       const counts = backboneRemainingCounts(outline, manifest, omittedIds);
       const isAboveFloor = (c: DemotionCandidate) => (counts.get(c.month) ?? Infinity) > MIN_MEMORIES_PER_MONTH;
 
-      // Lever 2a: photo/video-only, still above its month's floor — the
-      // existing (pre-hybrid) preference, unchanged.
-      // Lever 2b: photo/video-only pool has nothing left above floor — only
-      // THEN does the pool extend to a digest-eligible illustrated memory,
-      // also still above its month's floor (owner decision: "text is
-      // sacred" stays true — this never reaches a memory that ISN'T also
-      // digest-eligible, i.e. never a milestone holder, a title source, or
-      // a memory with no illustration at all).
-      // Lever 2c: both above-floor pools are exhausted — the floor yields
-      // rather than leave an unprintable book (same trade the pre-hybrid
-      // code already made), photo/video preferred first to keep the exact
-      // same tie-break the original behavior had.
-      const photoPick = remainingPhoto.find(isAboveFloor) ?? remainingPhoto[0] ?? null;
-      const illustratedPick = remainingIllustrated.find(isAboveFloor) ?? remainingIllustrated[0] ?? null;
-      const photoAboveFloor = photoPick != null && isAboveFloor(photoPick);
-      const illustratedAboveFloor = illustratedPick != null && isAboveFloor(illustratedPick);
-      let chosen: DemotionCandidate;
-      let isIllustrated: boolean;
-      if (photoAboveFloor) {
-        chosen = photoPick!;
-        isIllustrated = false;
-      } else if (illustratedAboveFloor) {
-        chosen = illustratedPick!;
-        isIllustrated = true;
-      } else if (photoPick) {
-        chosen = photoPick;
-        isIllustrated = false;
-      } else {
-        chosen = illustratedPick!; // guaranteed non-null — the length check above ensures at least one pool is non-empty
-        isIllustrated = true;
+      // Tier A: every kind's own lowest-rank candidate that's still above
+      // its month's floor — the floor protection, unchanged from before
+      // round-13. Compared by keep-rate among whichever kinds can offer one.
+      const aboveFloorPickByKind: Partial<Record<DemotionKind, DemotionCandidate>> = {};
+      for (const kind of activeKinds) {
+        const pick = remaining[kind]!.find(isAboveFloor);
+        if (pick) aboveFloorPickByKind[kind] = pick;
       }
+      const tierAKinds = Object.keys(aboveFloorPickByKind) as DemotionKind[];
+
+      let chosenKind: DemotionKind;
+      let chosen: DemotionCandidate;
+      if (tierAKinds.length > 0) {
+        chosenKind = pickHighestKeepRateKind(tierAKinds, totals, omittedCountByKind);
+        chosen = aboveFloorPickByKind[chosenKind]!;
+      } else {
+        // Tier B: every remaining candidate, in every active kind, is at or
+        // below its month's floor — the floor yields (same trade the
+        // pre-round-13 code already made) rather than leave an unprintable
+        // book; still compared by keep-rate, lowest-rank-per-kind first.
+        chosenKind = pickHighestKeepRateKind(activeKinds, totals, omittedCountByKind);
+        chosen = remaining[chosenKind]![0];
+      }
+
       omittedIds.add(chosen.id);
+      omittedCountByKind[chosenKind]++;
       result = runFit(outline, manifest, options, pairingLevel, omittedIds);
       omittedGaps.push({
         elementId: chosen.elementId,
-        reason: isIllustrated
-          ? `Omitted (illustrated) to respect the ${cap}-page cap (rank ${chosen.rank}, lowest-rank digest-eligible illustrated memory remaining after the photo/video demotion pool was exhausted, spread fairly across months).`
-          : `Omitted to respect the ${cap}-page cap (rank ${chosen.rank}, lowest-engagement photo/video-only memory remaining, spread fairly across months).`,
+        reason: demotionGapReason(chosenKind, cap, chosen.rank),
         memoryIds: [chosen.id],
       });
     }

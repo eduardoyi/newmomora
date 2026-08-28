@@ -1,23 +1,8 @@
 import { ptCqw } from '../mm';
 import { colors, lavender } from '../../theme';
+import type { SectionHeaderParams } from './SectionHeader.types';
 
-/**
- * "Apertura de mes" header (Momora Book Layout System 1b §3): antetítulo
- * kicker (PJS 700 small-caps 6.5pt, +16% tracking) + a Newsreader title,
- * living at the top of the safe box on a backbone (month) segment's first
- * content page — the title does NOT get its own dedicated spread the way a
- * themed spread-title does; it lives inline, on the page, above the first
- * photos. Special (birth-month) titles print at 44pt; ordinary month
- * titles at 34pt. Never Caveat — that voice is reserved for the parent/
- * child's own words.
- */
-export interface SectionHeaderParams {
-  /** Date-range antetítulo, e.g. "October–November 2024". Absent when the
-   *  outline hasn't supplied one yet — never invented. */
-  kicker: string | null;
-  title: string;
-  special: boolean;
-}
+export type { SectionHeaderParams } from './SectionHeader.types';
 
 export function SectionHeader({ kicker, title, special, isSpread }: SectionHeaderParams & { isSpread: boolean }) {
   return (

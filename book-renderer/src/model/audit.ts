@@ -8,8 +8,10 @@ import type {
   TextSlotContent,
   DigestEntryContent,
 } from './types';
-import type { FooterIndexEntry } from '../templates/common/FooterIndex';
-import type { SectionHeaderParams } from '../templates/common/SectionHeader';
+// Round-13: pure-TS `.types.ts` companions, not the `.tsx` files — see the
+// same note in `fitter.ts`. `audit.ts` has no React/DOM dependency either.
+import type { FooterIndexEntry } from '../templates/common/FooterIndex.types';
+import type { SectionHeaderParams } from '../templates/common/SectionHeader.types';
 import {
   layoutAnchorPair,
   layoutTallSoloBesideHeader,

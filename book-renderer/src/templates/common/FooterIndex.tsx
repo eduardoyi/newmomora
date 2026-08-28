@@ -3,6 +3,9 @@ import { formatIndexDate } from './formatDate';
 import { getFurniture, type Language } from '../furniture';
 import { ScanMark } from './ScanMark';
 import { lavender, colors } from '../../theme';
+import type { FooterIndexEntry } from './FooterIndex.types';
+
+export type { FooterIndexEntry } from './FooterIndex.types';
 
 /**
  * Numbered footer index (Momora Book Layout System 1b §4, revised by owner
@@ -47,17 +50,6 @@ import { lavender, colors } from '../../theme';
  * photo already shows its own scan mark via `common/PhotoTile`) —
  * `footerIndexFor` never sets it; only `pendingCredit` construction does.
  */
-export interface FooterIndexEntry {
-  /** Primary (lowest) numeral — the React key and the consolidation sort key. */
-  index: number;
-  /** Every numeral this line represents, ascending — usually `[index]`, 2+ when same-date/caption entries consolidated (item 9). */
-  indices: number[];
-  date: string;
-  /** The memory's own text, verbatim — never invented. */
-  note: string | null;
-  qr?: boolean;
-}
-
 export function FooterIndex({
   entries,
   isSpread,

@@ -52,6 +52,13 @@ import {
   suppressSurvivingBirthdaySpecialTitles,
   topicCandidatesToUnified,
   verifyQuoteTitles,
+  buildSyntheticAsset,
+  buildSyntheticManifest,
+  buildSyntheticMemory,
+  buildSyntheticOutline,
+  buildSyntheticPortrait,
+  estimateElementPagesViaFitter,
+  estimatePagesViaFitter,
   type BackboneMemoryInput,
   type BudgetElement,
   type ChildCandidate,
@@ -59,6 +66,7 @@ import {
   type MediaRow,
   type MemoryFeature,
   type MemoryPageShape,
+  type OracleElementInput,
   type PacingCandidate,
   type PlacementCandidate,
 } from './eval-memory-book-outline.ts';
@@ -2401,4 +2409,196 @@ Deno.test('parseOutlineResponse: empty/malformed raw input produces an empty-but
   assertEquals(response.heroCandidates, []);
   assertEquals(response.internalEditorialNote, '');
   assertEquals(violations, []);
+});
+
+// --- Fitter-as-oracle (round-13): synthetic manifest/outline builders ----
+
+Deno.test('buildSyntheticAsset: an ordinary (non-trusted) asset gets nominal dimensions well under every fitter trust threshold, with no originalWidth/Height', () => {
+  const asset = buildSyntheticAsset(mediaRow({ aspect_ratio: 1.5 }), false);
+  assertEquals(asset.aspectRatio, 1.5);
+  assertEquals(asset.kind, 'photo');
+  assertEquals(asset.originalWidth, null);
+  assertEquals(asset.originalHeight, null);
+  assertEquals(asset.width < 2500, true); // under BOTH the panorama (3500) and full-bleed (2500) trust thresholds
+});
+
+Deno.test('buildSyntheticAsset: a trusted (nominated) asset gets an explicit originalWidth/Height comfortably over every trust threshold', () => {
+  const asset = buildSyntheticAsset(mediaRow({ aspect_ratio: 2.4 }), true);
+  assertEquals((asset.originalWidth ?? 0) >= 3500, true);
+  assertEquals((asset.originalHeight ?? 0) > 0, true);
+});
+
+Deno.test('buildSyntheticAsset: video content-type maps to the video-poster asset kind', () => {
+  const asset = buildSyntheticAsset(mediaRow({ content_type: 'video/mp4', aspect_ratio: 1.7 }), false);
+  assertEquals(asset.kind, 'video-poster');
+});
+
+Deno.test('buildSyntheticAsset: a null aspect_ratio falls back to an ordinary landscape ratio, never trusted-path-relevant', () => {
+  const asset = buildSyntheticAsset(mediaRow({ aspect_ratio: null }), false);
+  assertEquals(asset.aspectRatio, 1.5);
+});
+
+Deno.test('buildSyntheticMemory: a text memory becomes text_illustration, with a length-only placeholder string and a square (1.0) illustration', () => {
+  const memory = buildSyntheticMemory(fixtureFeature({ hasText: true, textLength: 42 }), [], false);
+  assertEquals(memory.type, 'text_illustration');
+  assertEquals(memory.text?.length, 42);
+  assertEquals(memory.illustration?.aspectRatio, 1);
+});
+
+Deno.test('buildSyntheticMemory: never carries the real memory content -- only a placeholder of the same length', () => {
+  // textLength is the ONLY signal that ever reaches the synthetic memory --
+  // there is no real `content` field passed into `buildSyntheticMemory` at
+  // all, so this is a structural guarantee, not just a spot-check: assert
+  // the placeholder is uniform filler, never anything resembling prose.
+  const memory = buildSyntheticMemory(fixtureFeature({ hasText: true, textLength: 20 }), [], false);
+  assertEquals(memory.text, 'x'.repeat(20));
+});
+
+Deno.test('buildSyntheticMemory: a photo-only memory (no text) becomes type photo, with no illustration', () => {
+  const memory = buildSyntheticMemory(fixtureFeature({ hasText: false, photoCount: 1 }), [mediaRow()], false);
+  assertEquals(memory.type, 'photo');
+  assertEquals(memory.illustration, null);
+  assertEquals(memory.assets.length, 1);
+});
+
+Deno.test('buildSyntheticMemory: a video-only memory becomes type video', () => {
+  const memory = buildSyntheticMemory(
+    fixtureFeature({ hasText: false, videoCount: 1 }),
+    [mediaRow({ content_type: 'video/mp4' })],
+    false,
+  );
+  assertEquals(memory.type, 'video');
+});
+
+Deno.test('buildSyntheticMemory: milestones and tagged members carry through in the fitter\'s own shape', () => {
+  const memory = buildSyntheticMemory(
+    fixtureFeature({
+      milestones: [{ milestoneId: 'first-steps', name: 'First steps', detail: '', outOfBand: false }],
+      taggedMembers: [{ firstName: 'Enzo', personType: 'child' }],
+      engagementCount: 3,
+    }),
+    [],
+    false,
+  );
+  assertEquals(memory.milestones, [{ id: 'first-steps', name: 'First steps', detail: '' }]);
+  assertEquals(memory.taggedMembers, [{ name: 'Enzo', isChild: true }]);
+  assertEquals(memory.engagement, 3);
+});
+
+Deno.test('buildSyntheticManifest: builds one memory per feature id, trusting only ids in trustedWideIds', () => {
+  const features = new Map([
+    ['m1', fixtureFeature({ photoCount: 1 })],
+    ['m2', fixtureFeature({ photoCount: 1 })],
+  ]);
+  const media = new Map([
+    ['m1', [mediaRow({ aspect_ratio: 2.4 })]],
+    ['m2', [mediaRow({ aspect_ratio: 2.4 })]],
+  ]);
+  const manifest = buildSyntheticManifest(features, media, { id: 'c1', name: 'Child', dateOfBirth: null }, new Set(['m1']));
+  assertEquals(Object.keys(manifest.memories).sort(), ['m1', 'm2']);
+  assertEquals(manifest.memories['m1'].assets[0].originalWidth !== null, true);
+  assertEquals(manifest.memories['m2'].assets[0].originalWidth, null);
+  assertEquals(manifest.child.id, 'c1');
+});
+
+Deno.test('buildSyntheticManifest: passes portraits through untouched (drives through-the-years page yield)', () => {
+  const manifest = buildSyntheticManifest(
+    new Map(),
+    new Map(),
+    { id: 'c1', name: 'Child', dateOfBirth: null },
+    new Set(),
+    [buildSyntheticPortrait('2024-01-01'), buildSyntheticPortrait('2024-06-01')],
+  );
+  assertEquals(manifest.portraits.length, 2);
+});
+
+Deno.test('buildSyntheticOutline: wraps elements with defaults, preserving panorama/hero candidate lists', () => {
+  const elements: OracleElementInput[] = [{ id: 'backbone:x', kind: 'backbone', memoryIds: ['m1'] }];
+  const outline = buildSyntheticOutline(elements, ['m1'], ['m2']);
+  assertEquals(outline.elements.length, 1);
+  assertEquals(outline.elements[0].kind, 'backbone');
+  assertEquals(outline.elements[0].memoryIds, ['m1']);
+  assertEquals(outline.elements[0].highlights, []);
+  assertEquals(outline.panoramaCandidates, ['m1']);
+  assertEquals(outline.heroCandidates, ['m2']);
+});
+
+Deno.test('estimatePagesViaFitter: an empty element list costs 0 pages', () => {
+  const manifest = buildSyntheticManifest(new Map(), new Map(), { id: 'c1', name: 'Child', dateOfBirth: null }, new Set());
+  assertEquals(estimatePagesViaFitter([], manifest), 0);
+  assertEquals(estimatePagesViaFitter([{ id: 'x', kind: 'backbone', memoryIds: [] }], manifest), 0);
+});
+
+Deno.test('estimatePagesViaFitter: trusting a wide, panorama-nominated memory actually changes the fitter\'s page yield (the trust wiring is load-bearing, not decorative)', () => {
+  const features = new Map([['m1', fixtureFeature({ photoCount: 1 })]]);
+  const media = new Map([['m1', [mediaRow({ aspect_ratio: 2.4 })]]]);
+  const trustedManifest = buildSyntheticManifest(features, media, { id: 'c1', name: 'Child', dateOfBirth: null }, new Set(['m1']));
+  const untrustedManifest = buildSyntheticManifest(features, media, { id: 'c1', name: 'Child', dateOfBirth: null }, new Set());
+  const elements: OracleElementInput[] = [{ id: 'x', kind: 'backbone', memoryIds: ['m1'] }];
+
+  const trustedPages = estimatePagesViaFitter(elements, trustedManifest, ['m1'], []);
+  const untrustedPages = estimatePagesViaFitter(elements, untrustedManifest, ['m1'], []);
+  // A nominated-but-NOT-dimensionally-trusted memory fails closed -- treated
+  // as an ordinary photo, exactly like a non-nominated one -- while the
+  // trusted nominee gets the real (larger) panorama page cost.
+  assertEquals(trustedPages > untrustedPages, true);
+});
+
+Deno.test('estimatePagesViaFitter: an untrusted (non-nominated) wide memory NEVER gets panorama treatment, even if aspect ratio alone would look wide enough', () => {
+  const features = new Map([['m1', fixtureFeature({ photoCount: 1 })]]);
+  const media = new Map([['m1', [mediaRow({ aspect_ratio: 2.4 })]]]);
+  const manifest = buildSyntheticManifest(features, media, { id: 'c1', name: 'Child', dateOfBirth: null }, new Set());
+  const elements: OracleElementInput[] = [{ id: 'x', kind: 'backbone', memoryIds: ['m1'] }];
+  const asOrdinary = estimatePagesViaFitter(elements, manifest, [], []); // not even nominated
+  const nominatedButUntrusted = estimatePagesViaFitter(elements, manifest, ['m1'], []); // nominated, but manifest never marked it trusted
+  assertEquals(asOrdinary, nominatedButUntrusted); // fails closed identically either way
+});
+
+Deno.test('estimateElementPagesViaFitter: an empty shape list costs 0 pages', () => {
+  assertEquals(estimateElementPagesViaFitter([]), 0);
+});
+
+Deno.test('estimateElementPagesViaFitter: the rare text-page fallback (neither text nor visual) is charged a flat 1 page, never routed through the fitter (infeasible input)', () => {
+  assertEquals(estimateElementPagesViaFitter(['text-page']), 1);
+  assertEquals(estimateElementPagesViaFitter(['text-page', 'text-page']), 2);
+});
+
+Deno.test('estimateElementPagesViaFitter: a panorama shape costs strictly more than a solo-photo shape (the real fitter\'s own 2-page panorama spread, not a guess)', () => {
+  const soloPages = estimateElementPagesViaFitter(['solo-photo']);
+  const panoramaPages = estimateElementPagesViaFitter(['panorama']);
+  assertEquals(panoramaPages > soloPages, true);
+});
+
+Deno.test('estimateElementPagesViaFitter: is a drop-in for estimateElementPages -- same call shape, used as the default-overriding `estimate` param throughout the thinning functions', () => {
+  // Not a numeric-equality test (the two models are INTENTIONALLY not
+  // required to agree -- that drift is the whole reason for this task) --
+  // just confirms the function is callable everywhere estimateElementPages
+  // is, with the same (shapes) => number contract.
+  const shapes: MemoryPageShape[] = ['solo-photo', 'solo-photo', 'short-text'];
+  const pages = estimateElementPagesViaFitter(shapes);
+  assertEquals(typeof pages, 'number');
+  assertEquals(pages > 0, true);
+});
+
+Deno.test('planNonBackboneBudget: accepts an injected oracle estimator and still only drops themed spreads, never non-droppable pages', () => {
+  const plan = planNonBackboneBudget(
+    4,
+    4,
+    [
+      { id: 'spread:a', memoryCount: 3, shapes: ['solo-photo', 'solo-photo', 'solo-photo'] },
+      { id: 'spread:b', memoryCount: 2, shapes: ['panorama'] },
+    ],
+    8,
+    estimateElementPagesViaFitter,
+  );
+  assertEquals(plan.nonBackbonePages <= 8 || plan.keptThemedIds.length === 0, true);
+});
+
+Deno.test('selectBackboneMemories: accepts an injected oracle estimator and still respects pins', () => {
+  const candidates = [
+    backboneCandidate('a', 1, 'solo-photo'),
+    backboneCandidate('b', 9, 'solo-photo'),
+  ];
+  const kept = selectBackboneMemories(candidates, 0, new Set(['a']), estimateElementPagesViaFitter);
+  assertEquals(kept.includes('a'), true); // pinned, survives even at a zero budget
 });

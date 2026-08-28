@@ -468,6 +468,19 @@ photo demotion exhausts under the 122 cap, lowest-rank digest-eligible
 illustrated become demotable too (same month floors, distinct gap
 reason).
 
+**Owner decisions (2026-08-28, round 13):** coverage diff (read-only
+eval:memory-book-coverage) showed the outline layer is type-neutral (75%
+text / 66% photo / 85% video kept) but the CAP layer's photos-first
+demotion skews end-to-end keep-rates to ~75% text vs ~40% photo/video —
+owner wants the cap layer BALANCED: demote from whichever kind currently
+has the highest keep-rate (ties prefer photo/video), all protections
+unchanged (month floors, milestone holders, title sources, digest-eligible
+guard for illustrated). "Text is sacred" is retired as an absolute; it
+survives as tie-break + protections. The outline's 19 dropped Enzo texts
+were budget-model drift (pre-digest accounting), not taste — motivating
+executing the fitter-as-oracle refactor (below) before generating the
+next validation books (Enzo year one/two, Mara year two).
+
 **Architecture follow-up (2026-08-27): make the fitter the yield oracle.**
 The outline currently duplicates the renderer's page-yield math in its own
 constants and the two drift (est 108 vs rendered 121 on Mara after several

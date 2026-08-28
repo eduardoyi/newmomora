@@ -49,6 +49,24 @@ import { getObjectBytes } from '../functions/_shared/r2.ts';
 import { addYears, classifyChildOrAdult, toJulianDayNumber } from '../functions/_shared/date-context.ts';
 import { DATE_GATED_TOPIC_IDS, TOPICS } from '../functions/_shared/memory-topics.ts';
 import { getMilestoneById } from '../functions/_shared/memory-milestones.ts';
+// Round-13 "fitter-as-oracle" architecture follow-up (docs/plans/memory-book.md):
+// the real renderer's page-yield model, imported directly -- pure TS, no
+// React/DOM (see the file-header comment on the "Fitter-as-oracle" section
+// below for why this needs `--sloppy-imports` at the CLI, and why two of
+// fitter.ts's own type-only imports were split into `.types.ts` companions
+// to keep this graph React-free). This REPLACES the hand-rolled page-
+// accounting constants as the source of every BINDING page estimate.
+import { fitBook } from '../../book-renderer/src/model/fitter.ts';
+import type {
+  BookManifest,
+  BookOutline,
+  ManifestAsset,
+  ManifestMemory,
+  ManifestPortrait,
+  OutlineElementKind,
+  SpreadType,
+  TitleMode,
+} from '../../book-renderer/src/model/types.ts';
 
 // ── CLI ──────────────────────────────────────────────────────────────────
 
@@ -1509,6 +1527,393 @@ export function computePlacedPanoramaGuaranteeCount(pageEstimate: number): numbe
   return 1 + Math.floor(Math.max(0, pageEstimate) / 20);
 }
 
+// ---------------------------------------------------------------------------
+// Fitter-as-oracle (round-13 architecture follow-up, docs/plans/memory-book.md
+// "make the fitter the yield oracle"): the hand-written page-accounting
+// model above (`estimateElementPages`/`computePageEstimate`) duplicates the
+// real renderer's page-yield math in its own constants, and the two have
+// drifted through 12 layout rounds (predicted 108 pages where the renderer
+// produced 121 on Mara; the hand model predates digest spreads entirely).
+// This section imports the REAL fitter (`fitBook`) and calls it directly on
+// a SYNTHETIC `BookManifest`/`BookOutline` built from data this script
+// already loads, so every BINDING page number (the published `pageEstimate`,
+// the preliminary estimate that sizes the panorama guarantee, and the
+// backbone-thinning/candidate-dropping loops) reflects the real renderer,
+// not a parallel guess.
+//
+// Outline-time unknowns (fail closed, never guessed -- task spec):
+//   - Asset PIXEL dimensions: this script has `memory_media.aspect_ratio`
+//     but never measures real width/height. Every synthetic asset gets a
+//     nominal width/height at the SAME aspect ratio, deliberately scaled
+//     well under every trust threshold in the fitter (panorama 3500px,
+//     full-bleed 2500px -- `SYNTHETIC_NOMINAL_LONG_SIDE_PX` below) so an
+//     ordinary photo can never accidentally pass a trust gate.
+//     `originalWidth`/`originalHeight` are left undefined, exactly like a
+//     real outline-time export would be.
+//   - The two exceptions are the outline's OWN `panoramaCandidates` and
+//     `heroCandidates` nominations: wired into the synthetic manifest with
+//     an explicit trusted `originalWidth` (mirroring how the real export
+//     pipeline measures dimensions specifically for nominated candidates),
+//     so the fitter's panorama/full-bleed splice logic can activate for
+//     them and the yield estimate accounts for the extra pages those
+//     compositions actually consume.
+//   - Illustration pixel dimensions are never tracked here either: every
+//     text memory's synthetic illustration gets aspect ratio 1.0 (task
+//     spec: "a text memory ⇒ illustration aspect 1.0").
+//   - Memory TEXT CONTENT never flows into a synthetic manifest, only its
+//     LENGTH (`MemoryFeature.textLength`, already the PII-safe signal this
+//     script logs elsewhere -- see its own doc comment) -- a placeholder
+//     string of the same length stands in, since every one of the fitter's
+//     page-shape decisions depends on length, never content.
+// ---------------------------------------------------------------------------
+
+/** Deliberately well under every trust threshold in fitter.ts (panorama
+ * 3500px, full-bleed 2500px) -- an ordinary, non-nominated synthetic photo
+ * can never accidentally pass a trust gate. */
+const SYNTHETIC_NOMINAL_LONG_SIDE_PX = 1600;
+/** Comfortably over BOTH trust thresholds -- a nominated (panorama/hero)
+ * synthetic photo always passes. */
+const SYNTHETIC_TRUSTED_LONG_SIDE_PX = 4000;
+
+function syntheticAssetDimensions(
+  aspectRatio: number,
+  trusted: boolean,
+): { width: number; height: number; originalWidth: number | null; originalHeight: number | null } {
+  const longSide = trusted ? SYNTHETIC_TRUSTED_LONG_SIDE_PX : SYNTHETIC_NOMINAL_LONG_SIDE_PX;
+  const width = aspectRatio >= 1 ? longSide : Math.round(longSide * aspectRatio);
+  const height = aspectRatio >= 1 ? Math.round(longSide / aspectRatio) : longSide;
+  return { width, height, originalWidth: trusted ? width : null, originalHeight: trusted ? height : null };
+}
+
+/**
+ * One `memory_media` row -> one synthetic `ManifestAsset` (round-13 oracle).
+ * Pixel dimensions are nominal/outline-time (see section comment above);
+ * `trusted` wires a panorama/hero nomination's dimensions so the fitter's
+ * trust gates can activate for it.
+ */
+export function buildSyntheticAsset(media: MediaRow, trusted: boolean): ManifestAsset {
+  const aspectRatio = media.aspect_ratio ?? 1.5; // rare null -- ordinary landscape fallback, never trusted-path-relevant
+  const dims = syntheticAssetDimensions(aspectRatio, trusted);
+  return {
+    file: `synthetic/${media.id}.jpg`,
+    width: dims.width,
+    height: dims.height,
+    aspectRatio,
+    kind: media.content_type.startsWith(VIDEO_CONTENT_TYPE_PREFIX) ? 'video-poster' : 'photo',
+    durationMs: null,
+    originalWidth: dims.originalWidth,
+    originalHeight: dims.originalHeight,
+  };
+}
+
+/**
+ * One eligible memory's already-computed `MemoryFeature` + its raw media
+ * rows -> one synthetic `ManifestMemory` (round-13 oracle). Never carries
+ * real text content -- see section comment above.
+ */
+export function buildSyntheticMemory(feature: MemoryFeature, media: MediaRow[], trusted: boolean): ManifestMemory {
+  const assets = media
+    .filter((m) => m.content_type.startsWith(PHOTO_CONTENT_TYPE_PREFIX) || m.content_type.startsWith(VIDEO_CONTENT_TYPE_PREFIX))
+    .map((m) => buildSyntheticAsset(m, trusted));
+  const hasVideo = assets.some((a) => a.kind === 'video-poster');
+  return {
+    date: feature.date,
+    type: feature.hasText ? 'text_illustration' : hasVideo ? 'video' : assets.length > 0 ? 'photo' : 'text',
+    text: feature.hasText ? 'x'.repeat(feature.textLength) : null,
+    emotion: feature.emotion,
+    topics: feature.topics,
+    milestones: feature.milestones.map((m) => ({ id: m.milestoneId, name: m.name, detail: '' })),
+    engagement: feature.engagementCount,
+    taggedMembers: feature.taggedMembers.map((m) => ({ name: m.firstName, isChild: m.personType === 'child' })),
+    assets,
+    // A text memory always gets an illustration in production; aspect 1.0
+    // is the task's own outline-time simplification -- outline time never
+    // knows the real generated illustration's pixel dimensions.
+    illustration: feature.hasText
+      ? { file: `synthetic/${feature.id}-illo.webp`, width: 1000, height: 1000, aspectRatio: 1 }
+      : null,
+  };
+}
+
+function emptySyntheticManifest(
+  memories: Record<string, ManifestMemory>,
+  child: { id: string; name: string; dateOfBirth: string | null },
+  portraits: ManifestPortrait[] = [],
+): BookManifest {
+  return {
+    child: { id: child.id, name: child.name, dateOfBirth: child.dateOfBirth },
+    scope: { kind: 'oracle', label: 'Oracle estimate', start: '1970-01-01', end: '2999-12-31' },
+    generatedAt: new Date(0).toISOString(),
+    outlineRun: 'oracle',
+    memories,
+    portraits,
+  };
+}
+
+/** A `family_member_portrait_versions` row -> a synthetic `ManifestPortrait` (round-13 oracle) -- only `manifest.portraits.length` and rough chunking matter for page yield (see `buildThroughTheYearsPage`'s `partitionPortraits`), so the file/label are placeholders. */
+export function buildSyntheticPortrait(referenceDate: string): ManifestPortrait {
+  return { file: 'synthetic/portrait.jpg', date: referenceDate, ageLabel: '' };
+}
+
+/**
+ * Builds a synthetic `BookManifest` covering every id in `features`
+ * (round-13 oracle) -- called ONCE per run and reused across every oracle
+ * call below, since the manifest itself never changes across thinning
+ * iterations, only which outline elements reference it. `trustedWideIds`
+ * (the union of the outline's own `panoramaCandidates`/`heroCandidates`)
+ * get trusted pixel dims; everything else fails closed.
+ */
+export function buildSyntheticManifest(
+  features: ReadonlyMap<string, MemoryFeature>,
+  mediaByMemory: ReadonlyMap<string, MediaRow[]>,
+  child: { id: string; name: string; dateOfBirth: string | null },
+  trustedWideIds: ReadonlySet<string>,
+  portraits: ManifestPortrait[] = [],
+): BookManifest {
+  const memories: Record<string, ManifestMemory> = {};
+  for (const [id, feature] of features) {
+    memories[id] = buildSyntheticMemory(feature, mediaByMemory.get(id) ?? [], trustedWideIds.has(id));
+  }
+  return emptySyntheticManifest(memories, child, portraits);
+}
+
+/**
+ * One outline element reduced to exactly what `fitBook` needs to estimate
+ * its page cost (round-13 oracle): usually a backbone segment, a kept
+ * themed spread, or Firsts, but the FINAL holistic pageEstimate call also
+ * includes the fixed cover/title/through-the-years/closing kinds (empty
+ * `memoryIds` -- their content comes from `manifest`/`outline` directly,
+ * not from a memory list).
+ */
+export interface OracleElementInput {
+  id: string;
+  kind: OutlineElementKind;
+  memoryIds: string[];
+  titleMode?: TitleMode;
+  titleSourceMemoryId?: string | null;
+  spreadType?: SpreadType;
+  highlights?: string[];
+}
+
+/**
+ * Wraps a set of already-decided elements into a full synthetic
+ * `BookOutline` the fitter can run (round-13 oracle) -- fixed cover/title/
+ * through-the-years/closing elements are OMITTED on purpose: this is an
+ * ISOLATED cost estimate for just `elements`' own content, and `fitBook`
+ * tolerates a partial element list (an absent kind simply contributes 0
+ * pages, see `runFit`'s `default: continue` branch).
+ */
+export function buildSyntheticOutline(
+  elements: OracleElementInput[],
+  panoramaCandidates: string[] = [],
+  heroCandidates: string[] = [],
+): BookOutline {
+  return {
+    runId: 'oracle',
+    child: { id: 'oracle-child', name: 'Oracle' },
+    scope: { type: 'oracle' },
+    window: { start: '1970-01-01', endExclusive: '2999-12-31', label: 'Oracle' },
+    pageEstimate: 0,
+    pageBudget: 0,
+    counts: {},
+    elements: elements.map((el) => ({
+      id: el.id,
+      kind: el.kind,
+      title: el.id,
+      memoryIds: el.memoryIds,
+      rationale: {},
+      spreadType: el.spreadType,
+      titleMode: el.titleMode,
+      titleSourceMemoryId: el.titleSourceMemoryId ?? null,
+      highlights: el.highlights ?? [],
+    })),
+    editorialNote: '',
+    integrity: {
+      violations: [],
+      reassignments: [],
+      dissolvedSpreadIds: [],
+      dissolvedBirthdayAges: [],
+      movedToBackbone: [],
+      droppedElements: [],
+      excludedMemoryIds: [],
+    },
+    heroCandidates,
+    panoramaCandidates,
+  };
+}
+
+/**
+ * An oracle call wants the NATURAL (unconstrained) page yield of exactly
+ * the given elements by default -- never the fitter's OWN cap-pressure
+ * demotion silently masking the count, which is a separate, later concern.
+ * Callers that specifically want the printer-honest, post-demotion count
+ * (the final published `pageEstimate`) pass the real page cap instead.
+ */
+const ORACLE_UNCAPPED_MAX_PAGES = 100_000;
+
+/**
+ * Runs the real fitter over a synthetic outline+manifest and returns its
+ * total page count (round-13 oracle) -- the function every BINDING
+ * pageEstimate/thinning call site in `main()` routes through. `maxPages`
+ * defaults to effectively uncapped (see `ORACLE_UNCAPPED_MAX_PAGES`); pass
+ * the real page cap to instead read the post-demotion, printer-honest count.
+ */
+export function estimatePagesViaFitter(
+  elements: OracleElementInput[],
+  manifest: BookManifest,
+  panoramaCandidates: string[] = [],
+  heroCandidates: string[] = [],
+  maxPages: number = ORACLE_UNCAPPED_MAX_PAGES,
+): number {
+  if (elements.every((el) => el.memoryIds.length === 0)) return 0;
+  const outline = buildSyntheticOutline(elements, panoramaCandidates, heroCandidates);
+  const { capacity } = fitBook(outline, manifest, { maxPages });
+  return capacity.totalPages;
+}
+
+// ── Shape-based oracle (drop-in for `estimateElementPages`, used inside the
+// backbone-thinning/candidate-dropping loops below) ────────────────────────
+//
+// `selectBackboneMemories`/`planNonBackboneBudget` iterate candidate-by-
+// candidate and need a page-COST function keyed by each candidate's already-
+// classified `MemoryPageShape` -- a real memory id isn't threaded through
+// those loops' internal per-element grouping today (see `ThemedBudgetElement`/
+// `BackboneCandidate.shape`); restructuring them to carry real memory ids
+// end-to-end is a larger change than this one, deferred. Instead, this
+// builds one CANONICAL synthetic placeholder memory per shape and asks the
+// real fitter what a group of them costs -- still the real renderer's own
+// composition math, just over representative stand-ins rather than the
+// archive's actual memories. `estimateElementPages` (the hand-rolled model)
+// remains the DEFAULT parameter on every function below, for backward
+// compatibility with the existing test suite; `main()` explicitly passes
+// this oracle version in production.
+
+let syntheticShapeCounter = 0;
+
+function syntheticShapePhotoAsset(id: string, aspectRatio: number, trusted: boolean): ManifestAsset {
+  const dims = syntheticAssetDimensions(aspectRatio, trusted);
+  return {
+    file: `synthetic/${id}.jpg`,
+    width: dims.width,
+    height: dims.height,
+    aspectRatio,
+    kind: 'photo',
+    durationMs: null,
+    originalWidth: dims.originalWidth,
+    originalHeight: dims.originalHeight,
+  };
+}
+
+function syntheticShapeTextMemory(id: string, textLength: number): ManifestMemory {
+  return {
+    date: '2024-06-15',
+    type: 'text_illustration',
+    text: 'x'.repeat(textLength),
+    emotion: null,
+    topics: [],
+    milestones: [],
+    engagement: 0,
+    taggedMembers: [],
+    assets: [],
+    illustration: { file: `synthetic/${id}-illo.webp`, width: 1000, height: 1000, aspectRatio: 1 },
+  };
+}
+
+function syntheticShapePhotoMemory(assets: ManifestAsset[]): ManifestMemory {
+  return {
+    date: '2024-06-15',
+    type: assets.some((a) => a.kind === 'video-poster') ? 'video' : 'photo',
+    text: null,
+    emotion: null,
+    topics: [],
+    milestones: [],
+    engagement: 0,
+    taggedMembers: [],
+    assets,
+    illustration: null,
+  };
+}
+
+/** Representative textLength stand-ins -- comfortably inside each of this script's own `SHORT_TEXT_MAX_CHARS`/`SHORT_STORY_MAX_CHARS` bands (the fitter has its own, independently-tuned thresholds; these only need to land in the shape's own INTENDED band, not match the fitter's exactly). */
+const SYNTHETIC_SHORT_TEXT_CHARS = 80;
+const SYNTHETIC_SHORT_STORY_CHARS = 150;
+const SYNTHETIC_LONG_STORY_CHARS = 300;
+
+/** One canonical placeholder `ManifestMemory` per `MemoryPageShape` (round-13 oracle) -- never a real memory, just a representative stand-in so `estimateElementPagesViaFitter` can ask the real fitter what a GROUP of a given shape mix costs. */
+function syntheticMemoryForShape(shape: MemoryPageShape): { id: string; memory: ManifestMemory; panorama: boolean; hero: boolean } | null {
+  syntheticShapeCounter += 1;
+  const id = `oracle-shape-${shape}-${syntheticShapeCounter}`;
+  switch (shape) {
+    case 'panorama':
+      return { id, memory: syntheticShapePhotoMemory([syntheticShapePhotoAsset(id, 2.4, true)]), panorama: true, hero: false };
+    case 'full-bleed':
+      return { id, memory: syntheticShapePhotoMemory([syntheticShapePhotoAsset(id, 1.4, true)]), panorama: false, hero: true };
+    case 'photo-grid':
+      return {
+        id,
+        memory: syntheticShapePhotoMemory([
+          syntheticShapePhotoAsset(id, 1.33, false),
+          syntheticShapePhotoAsset(id, 1.33, false),
+          syntheticShapePhotoAsset(id, 1.33, false),
+        ]),
+        panorama: false,
+        hero: false,
+      };
+    case 'solo-photo':
+      return { id, memory: syntheticShapePhotoMemory([syntheticShapePhotoAsset(id, 1.5, false)]), panorama: false, hero: false };
+    case 'short-text':
+      return { id, memory: syntheticShapeTextMemory(id, SYNTHETIC_SHORT_TEXT_CHARS), panorama: false, hero: false };
+    case 'short-illustrated-story':
+      return { id, memory: syntheticShapeTextMemory(id, SYNTHETIC_SHORT_STORY_CHARS), panorama: false, hero: false };
+    case 'long-story':
+      return { id, memory: syntheticShapeTextMemory(id, SYNTHETIC_LONG_STORY_CHARS), panorama: false, hero: false };
+    case 'text-page':
+      // The old model's rare fallback (a memory with neither text nor a
+      // visual -- shouldn't occur given eligibility rules). Such a memory
+      // is infeasible by the real fitter's own rules (no page, no gap --
+      // see fitter.test.ts "a memory with neither a photo nor text...
+      // produces no page and no gap"), so there is no honest synthetic
+      // stand-in; the caller charges it a flat 1 page directly instead of
+      // routing it through the fitter.
+      return null;
+  }
+}
+
+/**
+ * Oracle drop-in for `estimateElementPages` (round-13): same signature
+ * (`(shapes: MemoryPageShape[]) => number`), real fitter under the hood.
+ * See the section comment above for why this operates on canonical
+ * per-shape placeholders rather than real memory ids.
+ */
+export function estimateElementPagesViaFitter(shapes: MemoryPageShape[]): number {
+  if (shapes.length === 0) return 0;
+  const memories: Record<string, ManifestMemory> = {};
+  const memoryIds: string[] = [];
+  const panoramaCandidates: string[] = [];
+  const heroCandidates: string[] = [];
+  let textPageFallbackCount = 0;
+  for (const shape of shapes) {
+    const built = syntheticMemoryForShape(shape);
+    if (!built) {
+      textPageFallbackCount += 1;
+      continue;
+    }
+    memories[built.id] = built.memory;
+    memoryIds.push(built.id);
+    if (built.panorama) panoramaCandidates.push(built.id);
+    if (built.hero) heroCandidates.push(built.id);
+  }
+  if (memoryIds.length === 0) return textPageFallbackCount;
+  const manifest = emptySyntheticManifest(memories, { id: 'oracle-child', name: 'Oracle', dateOfBirth: null });
+  const pages = estimatePagesViaFitter(
+    [{ id: 'oracle-shape-group', kind: 'backbone', memoryIds }],
+    manifest,
+    panoramaCandidates,
+    heroCandidates,
+  );
+  return pages + textPageFallbackCount;
+}
+
 /**
  * Content-neutral ranking signals (owner round-3 decision, 2026-08-27,
  * replacing the type-privileged ladder -- milestone > has_text+photo >
@@ -1577,8 +1982,17 @@ export interface NonBackboneBudgetPlan {
   backboneCapacityPages: number;
 }
 
-function themedSpreadPages(t: ThemedBudgetElement): number {
-  return t.memoryCount > 0 ? Math.max(1, estimateElementPages(t.shapes)) : 0;
+/**
+ * The page-cost function for a group of `MemoryPageShape`s: `(shapes) =>
+ * pages`. Every function below defaults to `estimateElementPages` (the
+ * hand-rolled model) for backward compatibility with the existing test
+ * suite; `main()` explicitly passes `estimateElementPagesViaFitter` (round-
+ * 13 oracle) in production -- see the "Fitter-as-oracle" section above.
+ */
+type EstimatePagesFn = (shapes: MemoryPageShape[]) => number;
+
+function themedSpreadPages(t: ThemedBudgetElement, estimate: EstimatePagesFn = estimateElementPages): number {
+  return t.memoryCount > 0 ? Math.max(1, estimate(t.shapes)) : 0;
 }
 
 /**
@@ -1587,20 +2001,24 @@ function themedSpreadPages(t: ThemedBudgetElement): number {
  * themed spread protected by a guaranteed-panorama pin) is never touched.
  * Themed spreads are dropped lowest-page-cost-first, one at a time, ONLY
  * while (a)+(b) together still exceed `pageCap` -- i.e. the backbone is
- * never consulted here at all.
+ * never consulted here at all. `estimate` (round-13): the page-cost
+ * function driving every decision here -- see `EstimatePagesFn`.
  */
 export function planNonBackboneBudget(
   fixedPages: number,
   nonDroppablePages: number,
   themedSpreads: ThemedBudgetElement[],
   pageCap: number,
+  estimate: EstimatePagesFn = estimateElementPages,
 ): NonBackboneBudgetPlan {
   const kept = [...themedSpreads];
   const droppedThemedIds: string[] = [];
-  const themedPages = () => kept.reduce((sum, t) => sum + themedSpreadPages(t), 0);
+  const themedPages = () => kept.reduce((sum, t) => sum + themedSpreadPages(t, estimate), 0);
 
   while (fixedPages + nonDroppablePages + themedPages() > pageCap && kept.some((t) => t.memoryCount > 0)) {
-    kept.sort((a, b) => themedSpreadPages(a) - themedSpreadPages(b) || a.memoryCount - b.memoryCount || a.id.localeCompare(b.id));
+    kept.sort(
+      (a, b) => themedSpreadPages(a, estimate) - themedSpreadPages(b, estimate) || a.memoryCount - b.memoryCount || a.id.localeCompare(b.id),
+    );
     const dropIndex = kept.findIndex((t) => t.memoryCount > 0);
     const [dropped] = kept.splice(dropIndex, 1);
     droppedThemedIds.push(dropped.id);
@@ -1643,14 +2061,14 @@ export interface BackboneCandidate {
  * what makes the loop's own notion of "does it fit" match what
  * `computePageEstimate` will compute once selection is done.
  */
-function backboneSegmentedPages(candidates: BackboneCandidate[]): number {
+function backboneSegmentedPages(candidates: BackboneCandidate[], estimate: EstimatePagesFn = estimateElementPages): number {
   if (candidates.length === 0) return 0;
   const shapeById = new Map(candidates.map((c) => [c.id, c.shape]));
   const segments = buildBackboneSegments(
     candidates.map((c) => ({ id: c.id, date: c.date, printable: c.printable })),
   );
   return segments.reduce(
-    (sum, s) => sum + Math.max(1, estimateElementPages(s.memoryIds.map((id) => shapeById.get(id)!))),
+    (sum, s) => sum + Math.max(1, estimate(s.memoryIds.map((id) => shapeById.get(id)!))),
     0,
   );
 }
@@ -1678,10 +2096,11 @@ export function selectBackboneMemories(
   candidates: BackboneCandidate[],
   pageBudget: number,
   pinnedIds: ReadonlySet<string> = new Set(),
+  estimate: EstimatePagesFn = estimateElementPages,
 ): string[] {
   let kept = [...candidates];
 
-  while (backboneSegmentedPages(kept) > pageBudget) {
+  while (backboneSegmentedPages(kept, estimate) > pageBudget) {
     const droppable = kept
       .filter((c) => !pinnedIds.has(c.id))
       .sort((a, b) => a.score - b.score || b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
@@ -3259,19 +3678,51 @@ async function main(): Promise<void> {
     return { id: spreadId, memoryCount: memberIds.length, shapes: memberIds.map(shapeFor) };
   });
 
+  // Round-13 "fitter-as-oracle": ONE synthetic manifest, built once and
+  // reused for every real-id oracle call below (preliminary AND final
+  // pageEstimate) -- the manifest itself never changes, only which outline
+  // elements reference it. Every model-nominated panorama/hero candidate
+  // (not just the ones that end up GUARANTEED a placement -- that's a
+  // downstream, narrower concept) gets trusted synthetic dimensions, same
+  // as the real export pipeline trusting a nominee's measured dimensions;
+  // the fitter's own internal panorama/full-bleed budget still caps how
+  // many actually get placed, exactly like production.
+  const oracleTrustedWideIds = new Set([...response.panoramaCandidates, ...response.heroCandidates]);
+  const oraclePortraits = portraitVersions
+    .filter((p) => p.reference_date)
+    .map((p) => buildSyntheticPortrait(p.reference_date!));
+  const oracleManifest = buildSyntheticManifest(features, mediaByMemory, child, oracleTrustedWideIds, oraclePortraits);
+
+  /** Segments `memoryIds` by calendar month (round-13) -- mirrors `backboneSegmentedPages`'s own "segmented exactly like the final book" fix, applied here to the PRELIMINARY estimate too (the old hand-rolled preliminary model never got that fix and treated the whole backbone as one ungrouped list). */
+  const oracleBackboneElements = (memoryIds: string[]): OracleElementInput[] => {
+    const inputs: BackboneMemoryInput[] = memoryIds.map((id) => {
+      const f = features.get(id)!;
+      return { id, date: f.date, printable: f.hasText || f.photoCount + f.videoCount > 0 };
+    });
+    return buildBackboneSegments(inputs).map((s) => ({ id: `oracle:backbone:${s.id}`, kind: 'backbone' as const, memoryIds: s.memoryIds }));
+  };
+
   // Placed-panorama guarantee (owner round-3 decision, 2026-08-27): "1 + 1
   // per ~20 pages" of the model's best-first panorama nominations must be
   // SELECTED into the book, not just nominated. `N` is derived from a
   // PRELIMINARY estimate (nothing dropped yet) so the guarantee count never
-  // depends on its own outcome.
-  const preliminaryBackboneShapes = [...afterDissolve.entries()]
-    .filter(([, s]) => s.startsWith('backbone:'))
-    .map(([id]) => shapeFor(id));
+  // depends on its own outcome. Round-13: this estimate now comes from the
+  // real fitter (`estimatePagesViaFitter`), not the hand-rolled model.
+  const preliminaryThemedElements: OracleElementInput[] = [...spreadCandidateIds].map((spreadId) => ({
+    id: spreadId,
+    kind: 'themed' as const,
+    memoryIds: [...afterDissolve.entries()].filter(([, s]) => s === spreadId).map(([id]) => id),
+  }));
+  const preliminaryBackboneIds = [...afterDissolve.entries()].filter(([, s]) => s.startsWith('backbone:')).map(([id]) => id);
   const preliminaryPageEstimate =
     FIXED_PAGES +
     nonDroppablePages +
-    candidateBudgetElements.reduce((sum, t) => sum + themedSpreadPages(t), 0) +
-    Math.max(1, estimateElementPages(preliminaryBackboneShapes));
+    estimatePagesViaFitter(
+      [...preliminaryThemedElements, ...oracleBackboneElements(preliminaryBackboneIds)],
+      oracleManifest,
+      response.panoramaCandidates,
+      response.heroCandidates,
+    );
   const panoramaGuaranteeCount = computePlacedPanoramaGuaranteeCount(preliminaryPageEstimate);
   const guaranteedPanoramaIds = new Set(response.panoramaCandidates.slice(0, panoramaGuaranteeCount));
 
@@ -3290,6 +3741,7 @@ async function main(): Promise<void> {
     nonDroppablePages + protectedThemedPages,
     droppableThemedElements,
     options.pageCap,
+    estimateElementPagesViaFitter, // round-13: the real fitter drives the drop/keep decision, not the hand-rolled model.
   );
   const nonBackbonePlan: NonBackboneBudgetPlan = {
     nonBackbonePages: droppableNonBackbonePlan.nonBackbonePages,
@@ -3339,7 +3791,8 @@ async function main(): Promise<void> {
 
   const allPinnedIds = new Set([...pinnedMemoryIds, ...guaranteedPanoramaIds]);
   const keptBackboneIds = new Set(
-    selectBackboneMemories(backboneCandidates, nonBackbonePlan.backboneCapacityPages, allPinnedIds),
+    // round-13: the real fitter drives the drop/keep decision, not the hand-rolled model.
+    selectBackboneMemories(backboneCandidates, nonBackbonePlan.backboneCapacityPages, allPinnedIds, estimateElementPagesViaFitter),
   );
   const excludedMemoryIds = [
     ...cliExcludedMemoryIds,
@@ -3358,25 +3811,63 @@ async function main(): Promise<void> {
   // buildBackboneSegments already merges/drops now-empty month segments.
   const finalBackboneSegments = buildBackboneSegments(finalBackboneInputs);
 
-  const finalPageElements: BudgetElement[] = [
-    ...nonBackbonePlan.keptThemedIds.map((id) => {
-      const memberIds = [...finalPlacement.entries()].filter(([, s]) => s === id).map(([mid]) => mid);
-      return { id, kind: 'themed' as const, memoryCount: memberIds.length, shapes: memberIds.map(shapeFor) };
-    }),
-    ...(firstsFinalPresent ? [{ id: 'firsts', kind: 'firsts' as const, memoryCount: firstsFinalMemoryIds.length }] : []),
-    ...[...birthdayFinalMemoryIdsByAge.entries()].map(([ageTurned, ids]) => ({
-      id: `birthday-${ageTurned}`,
-      kind: 'birthday' as const,
-      memoryCount: ids.length,
-    })),
-    ...finalBackboneSegments.map((s) => ({
-      id: `backbone:${s.id}`,
-      kind: 'backbone' as const,
-      memoryCount: s.memoryIds.length,
-      shapes: s.memoryIds.map(shapeFor),
-    })),
+  // Round-13 "fitter-as-oracle": the published `pageEstimate` -- the number
+  // this script's whole priority-order budget above is trying to hit -- now
+  // comes from ONE holistic real-fitter call over every FINAL element,
+  // fixed pages included, at the REAL page cap (so pairing AND the fitter's
+  // own cap-pressure demotion both apply exactly like the real renderer,
+  // rather than a hand-rolled sum of per-element approximations). A
+  // birthday spread renders as an ordinary 'themed' element in the real
+  // outline (`BudgetElementKind`'s 'birthday' has no fitter-side analogue --
+  // see `OutlineElementKind`), so it maps the same way here.
+  const spreadMetaById = new Map(response.spreads.map((s) => [`spread:${s.candidateId}`, s]));
+  const finalThemedOracleElements: OracleElementInput[] = nonBackbonePlan.keptThemedIds.map((id) => {
+    const memberIds = [...finalPlacement.entries()].filter(([, s]) => s === id).map(([mid]) => mid);
+    const meta = spreadMetaById.get(id);
+    return {
+      id,
+      kind: 'themed',
+      memoryIds: memberIds,
+      titleMode: meta?.titleMode,
+      titleSourceMemoryId: meta?.titleSourceMemoryId,
+      spreadType: meta?.candidateKind,
+      highlights: memberIds.filter((mid) => highlightedOrHeroIds.has(mid)),
+    };
+  });
+  const finalFirstsOracleElement: OracleElementInput[] = firstsFinalPresent
+    ? [{ id: 'firsts', kind: 'firsts', memoryIds: firstsFinalMemoryIds }]
+    : [];
+  const finalBirthdayOracleElements: OracleElementInput[] = [...birthdayFinalMemoryIdsByAge.entries()].map(([ageTurned, ids]) => ({
+    id: `birthday-${ageTurned}`,
+    kind: 'themed',
+    memoryIds: ids,
+    highlights: ids.filter((mid) => highlightedOrHeroIds.has(mid)),
+  }));
+  const finalBackboneOracleElements: OracleElementInput[] = finalBackboneSegments.map((s) => ({
+    id: `backbone:${s.id}`,
+    kind: 'backbone',
+    memoryIds: s.memoryIds,
+    highlights: s.memoryIds.filter((mid) => highlightedOrHeroIds.has(mid)),
+  }));
+  const fixedOracleElements: OracleElementInput[] = [
+    { id: 'cover', kind: 'cover', memoryIds: [] },
+    { id: 'title', kind: 'title', memoryIds: [] },
+    { id: 'through-the-years', kind: 'through-the-years', memoryIds: [] },
+    { id: 'closing', kind: 'closing', memoryIds: [] },
   ];
-  const totalPages = computePageEstimate(finalPageElements);
+  const totalPages = estimatePagesViaFitter(
+    [
+      ...fixedOracleElements,
+      ...finalThemedOracleElements,
+      ...finalFirstsOracleElement,
+      ...finalBirthdayOracleElements,
+      ...finalBackboneOracleElements,
+    ],
+    oracleManifest,
+    response.panoramaCandidates,
+    response.heroCandidates,
+    options.pageCap,
+  );
   const finalKeptMemoryIds = new Set<string>([
     ...finalBackboneInputs.map((b) => b.id),
     ...nonBackbonePlan.keptThemedIds.flatMap((id) => [...finalPlacement.entries()].filter(([, s]) => s === id).map(([mid]) => mid)),
@@ -3391,7 +3882,7 @@ async function main(): Promise<void> {
   }));
 
   console.log(
-    `Page estimate: ${totalPages} (page cap ${options.pageCap} -- a CEILING, not a target; layflat hard limit ${HARD_PAGE_CAP}), via the per-composition page-yield model (owner round-3 decision, 2026-08-27). ${totalImageCount} visual (photo/video-bearing) memories kept. Dropped ${droppedElements.length} candidate spread(s) for budget; ${excludedMemoryIds.length} memory(ies) excluded (CLI + budget combined).`,
+    `Page estimate: ${totalPages} (page cap ${options.pageCap} -- a CEILING, not a target; layflat hard limit ${HARD_PAGE_CAP}), via the real book-renderer fitter (round-13 'fitter-as-oracle'). ${totalImageCount} visual (photo/video-bearing) memories kept. Dropped ${droppedElements.length} candidate spread(s) for budget; ${excludedMemoryIds.length} memory(ies) excluded (CLI + budget combined).`,
   );
   console.log(
     `Placed-panorama guarantee: ${guaranteedPanoramaIds.size} of ${response.panoramaCandidates.length} nominated (N = 1 + pageEstimate/20, from a preliminary estimate of ${preliminaryPageEstimate}).`,
@@ -3620,7 +4111,7 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
   md.push('');
   md.push(`Run: ${ctx.runId}  `);
   md.push(`Scope: ${ctx.scope.type} (${ctx.window.label}), window ${ctx.window.start} to ${scopeWindowLastInclusiveDay(ctx.window)}  `);
-  md.push(`Page estimate: ${ctx.totalPages} / page cap ${ctx.pageCap} (a CEILING, not a target; layflat hard limit ${HARD_PAGE_CAP}) -- via the per-composition page-yield model (owner round-3 decision, 2026-08-27)`);
+  md.push(`Page estimate: ${ctx.totalPages} / page cap ${ctx.pageCap} (a CEILING, not a target; layflat hard limit ${HARD_PAGE_CAP}) -- via the real book-renderer fitter (round-13 'fitter-as-oracle')`);
   md.push(`Image count: ${ctx.totalImageCount} visual (photo/video-bearing) memories in the final book`);
   md.push('');
   md.push('## Memory counts');

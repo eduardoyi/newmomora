@@ -9,6 +9,11 @@ function photoMemory(aspectRatio: number, engagement = 0, date = '2024-06-01') {
   return makeMemory({ assets: [makeAsset({ aspectRatio })], engagement, date });
 }
 
+/** Builds a video-only memory (a `video-poster` asset) — the `video` demotion-kind fixture (round-13 rebalance). */
+function videoMemory(aspectRatio: number, engagement = 0, date = '2024-06-01') {
+  return makeMemory({ assets: [makeAsset({ aspectRatio, kind: 'video-poster' })], engagement, date, type: 'video' });
+}
+
 /** Builds a digest-ELIGIBLE illustrated memory (Task 1, round-12): illustration + short text, near-square aspect, no milestones — the shared fixture shape for the illustrated-digest tests below. */
 function digestMemory(date: string, overrides: Partial<ManifestMemory> = {}) {
   return makeMemory({
@@ -3095,53 +3100,119 @@ describe('fitBook — illustrated-digest parity (Task 1, round-12)', () => {
   });
 });
 
-describe('fitBook — hybrid cap-pressure demotion (Task 2, round-12)', () => {
-  it('never touches an illustrated memory while the photo/video pool still has candidates above the month floor', () => {
-    const memories: Record<string, ManifestMemory> = {
-      'photo-0': photoMemory(1.5, 0),
-      'photo-1': photoMemory(1.5, 1),
-      'digest-0': digestMemory('2024-06-01'),
-      'digest-1': digestMemory('2024-06-02'),
-    };
-    const outline = makeOutline([
-      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['photo-0', 'photo-1', 'digest-0', 'digest-1'] }),
-    ]);
+describe('fitBook — proportional cap-pressure demotion (round-13 rebalance)', () => {
+  it('demotes from the kind with the CURRENTLY highest keep-rate, converging photo/illustrated keep-rates to exact parity when pools are equal size', () => {
+    // 6 photo, 6 digest-eligible illustrated, one big low-pressure month
+    // each (plenty of margin above the floor) — a pool-size tie removes any
+    // floor interaction from the comparison.
+    const photoIds = Array.from({ length: 6 }, (_, i) => `photo-${i}`);
+    const digestIds = Array.from({ length: 6 }, (_, i) => `digest-${i}`);
+    const memories: Record<string, ManifestMemory> = {};
+    photoIds.forEach((id, i) => (memories[id] = photoMemory(1.5, i, `2024-01-${10 + i}`)));
+    digestIds.forEach((id, i) => (memories[id] = digestMemory(`2024-01-${20 + i}`, { engagement: i })));
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: [...photoIds, ...digestIds] })]);
 
-    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 3 });
-    expect(capacity.omittedMemoryIds.length).toBeGreaterThan(0);
-    expect(capacity.omittedMemoryIds).not.toContain('digest-0');
-    expect(capacity.omittedMemoryIds).not.toContain('digest-1');
+    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 6 });
+    const omittedPhoto = photoIds.filter((id) => capacity.omittedMemoryIds.includes(id)).length;
+    const omittedDigest = digestIds.filter((id) => capacity.omittedMemoryIds.includes(id)).length;
+    expect(capacity.omittedMemoryIds.length).toBe(6);
+    // Old ladder would have drained all 6 photo before ever touching digest;
+    // the new policy alternates and lands exactly even (3 each — parity,
+    // not "text is sacred until last resort").
+    expect(omittedPhoto).toBe(3);
+    expect(omittedDigest).toBe(3);
   });
 
-  it('extends to a digest-eligible illustrated memory, lowest-rank first, once the photo/video pool is exhausted', () => {
-    // Only 2 photo-only candidates exist — a squeeze that needs more than
-    // 2 omissions MUST reach into the illustrated pool.
-    const memories: Record<string, ManifestMemory> = {
-      'photo-0': photoMemory(1.5, 0),
-      'photo-1': photoMemory(1.5, 1),
-      'digest-lo': digestMemory('2024-06-01', { engagement: 0 }),
-      'digest-hi': digestMemory('2024-06-02', { engagement: 10 }),
-      'digest-mid-1': digestMemory('2024-06-03', { engagement: 5 }),
-      'digest-mid-2': digestMemory('2024-06-04', { engagement: 5 }),
-      'digest-mid-3': digestMemory('2024-06-05', { engagement: 5 }),
-      'digest-mid-4': digestMemory('2024-06-06', { engagement: 5 }),
-      'text-only': makeMemory({ text: 'Protected text-only memory, never omit.', assets: [], date: '2024-06-07' }),
-    };
+  it('reaches the illustrated pool well BEFORE the photo pool is exhausted when photo is the much larger pool (the regression the old photo/video-first ladder would fail)', () => {
+    // 10 photo vs 4 digest-eligible illustrated, in separate low-pressure
+    // months. The old ladder never touches illustrated until all 10 photo
+    // are gone; the rebalanced policy reaches illustrated as soon as its
+    // keep-rate catches up to photo's.
+    const photoIds = Array.from({ length: 10 }, (_, i) => `photo-${i}`);
+    const digestIds = Array.from({ length: 4 }, (_, i) => `digest-${i}`);
+    const memories: Record<string, ManifestMemory> = {};
+    photoIds.forEach((id, i) => (memories[id] = photoMemory(1.5, i, `2024-01-${10 + i}`)));
+    digestIds.forEach((id, i) => (memories[id] = digestMemory(`2024-02-${10 + i}`, { engagement: i })));
     const outline = makeOutline([
-      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: Object.keys(memories) }),
+      makeElement({ id: 'backbone:a', kind: 'backbone', memoryIds: photoIds }),
+      makeElement({ id: 'backbone:b', kind: 'backbone', memoryIds: digestIds }),
     ]);
 
-    const { capacity, document } = fitBook(outline, makeManifest(memories), { maxPages: 4 });
-    expect(capacity.omittedMemoryIds).toContain('photo-0');
-    expect(capacity.omittedMemoryIds).toContain('photo-1');
-    // The photo pool (2) is exhausted, so the squeeze had to reach the illustrated pool.
-    expect(capacity.omittedMemoryIds).toContain('digest-lo');
-    // The lowest-rank illustrated candidate is cut before a higher-rank one.
-    expect(capacity.omittedMemoryIds).not.toContain('digest-hi');
-    // "Text is sacred" still holds — an illustration-less text memory is never in the pool.
+    // A squeeze of only 6 omissions — the photo pool (10) is nowhere near
+    // exhausted — must still reach into the illustrated pool.
+    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 6 });
+    const omittedPhoto = photoIds.filter((id) => capacity.omittedMemoryIds.includes(id)).length;
+    const omittedDigest = digestIds.filter((id) => capacity.omittedMemoryIds.includes(id)).length;
+    expect(omittedPhoto).toBeGreaterThan(0);
+    expect(omittedPhoto).toBeLessThan(photoIds.length); // photo pool NOT exhausted
+    expect(omittedDigest).toBeGreaterThan(0); // yet illustrated was already reached
+  });
+
+  it('tie-break: when photo, video, and illustrated keep-rates are exactly tied, demotes photo, then video, then illustrated, in that order (rebalancing the old preference, not inverting it)', () => {
+    const photoIds = Array.from({ length: 4 }, (_, i) => `photo-${i}`);
+    const videoIds = Array.from({ length: 4 }, (_, i) => `video-${i}`);
+    const digestIds = Array.from({ length: 4 }, (_, i) => `digest-${i}`);
+    const memories: Record<string, ManifestMemory> = {};
+    photoIds.forEach((id, i) => (memories[id] = photoMemory(1.5, i, `2024-01-${10 + i}`)));
+    videoIds.forEach((id, i) => (memories[id] = videoMemory(1.5, i, `2024-02-${10 + i}`)));
+    digestIds.forEach((id, i) => (memories[id] = digestMemory(`2024-03-${10 + i}`, { engagement: i })));
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:a', kind: 'backbone', memoryIds: photoIds }),
+      makeElement({ id: 'backbone:b', kind: 'backbone', memoryIds: videoIds }),
+      makeElement({ id: 'backbone:c', kind: 'backbone', memoryIds: digestIds }),
+    ]);
+
+    // Every kind starts at a 100% keep-rate (a three-way tie), and stays
+    // tied after each single cut removes one from each kind — a clean
+    // round-robin in tie-break order: photo, then video, then illustrated.
+    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 8 });
+    expect(capacity.omittedMemoryIds).toEqual(['photo-0', 'video-0', 'digest-0']);
+  });
+
+  it('reports a distinct gap-reason string per kind (photo / video / illustrated) so the gaps panel shows the mix', () => {
+    const photoIds = Array.from({ length: 4 }, (_, i) => `photo-${i}`);
+    const videoIds = Array.from({ length: 4 }, (_, i) => `video-${i}`);
+    const digestIds = Array.from({ length: 4 }, (_, i) => `digest-${i}`);
+    const memories: Record<string, ManifestMemory> = {};
+    photoIds.forEach((id, i) => (memories[id] = photoMemory(1.5, i, `2024-01-${10 + i}`)));
+    videoIds.forEach((id, i) => (memories[id] = videoMemory(1.5, i, `2024-02-${10 + i}`)));
+    digestIds.forEach((id, i) => (memories[id] = digestMemory(`2024-03-${10 + i}`, { engagement: i })));
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:a', kind: 'backbone', memoryIds: photoIds }),
+      makeElement({ id: 'backbone:b', kind: 'backbone', memoryIds: videoIds }),
+      makeElement({ id: 'backbone:c', kind: 'backbone', memoryIds: digestIds }),
+    ]);
+
+    const { gaps } = fitBook(outline, makeManifest(memories), { maxPages: 8 });
+    const photoGap = gaps.find((g) => g.memoryIds.includes('photo-0'));
+    const videoGap = gaps.find((g) => g.memoryIds.includes('video-0'));
+    const digestGap = gaps.find((g) => g.memoryIds.includes('digest-0'));
+    expect(photoGap?.reason).toContain('Omitted (photo)');
+    expect(videoGap?.reason).toContain('Omitted (video)');
+    expect(digestGap?.reason).toContain('Omitted (illustrated)');
+    const reasons = new Set([photoGap?.reason, videoGap?.reason, digestGap?.reason]);
+    expect(reasons.size).toBe(3); // all three distinct
+  });
+
+  it('terminates and reports overCap rather than looping forever when every kind is exhausted or fully protected and the cap still can\'t be met', () => {
+    const memories: Record<string, ManifestMemory> = {
+      'digest-milestone': digestMemory('2024-06-01', { milestones: [{ id: 'm1', name: 'First steps', detail: '' }] }),
+      'text-only': makeMemory({ text: 'Protected text-only memory, never a demotion candidate.', assets: [], date: '2024-06-02' }),
+      'photo-0': photoMemory(1.5, 0, '2024-06-03'),
+    };
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: Object.keys(memories) })]);
+
+    // An unreachably tiny cap: the ONLY demotable candidate is 'photo-0'
+    // (one memory below the month floor of 2, which must yield since
+    // nothing else can be cut) — the loop must still terminate rather than
+    // spin once every pool is exhausted.
+    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 1 });
+    expect(capacity.omittedMemoryIds).not.toContain('digest-milestone');
     expect(capacity.omittedMemoryIds).not.toContain('text-only');
-    const allText = JSON.stringify(document);
-    expect(allText).toContain('Protected text-only memory');
+    // Nothing left to cut beyond the one demotable photo — omissions cannot
+    // exceed the total demotable pool size (proof the "nothing left
+    // anywhere" break fired instead of looping).
+    expect(capacity.omittedMemoryIds.length).toBeLessThanOrEqual(1);
   });
 
   it('never demotes an illustrated memory that is not digest-eligible — a milestone holder or the section title source — even under extreme pressure', () => {
@@ -3168,10 +3239,10 @@ describe('fitBook — hybrid cap-pressure demotion (Task 2, round-12)', () => {
     expect(capacity.omittedMemoryIds).not.toContain('digest-titlesource');
   });
 
-  it('respects the month-preservation floor across BOTH pools before letting the floor yield', () => {
+  it('respects the month-preservation floor across ALL kinds before letting the floor yield (protections still bind under the rebalanced policy)', () => {
     // Month A: rich in both photo and illustrated content. Month B: a
     // single photo-only memory, right at what will become its floor. The
-    // squeeze should drain A (both pools) well before ever touching B.
+    // squeeze should drain A (both kinds) well before ever touching B.
     const aIds = Array.from({ length: 6 }, (_, i) => `a-photo-${i}`);
     const aDigestIds = Array.from({ length: 6 }, (_, i) => `a-digest-${i}`);
     const memories: Record<string, ManifestMemory> = {};
@@ -3190,23 +3261,6 @@ describe('fitBook — hybrid cap-pressure demotion (Task 2, round-12)', () => {
     expect(remainingB).toBe(2); // untouched, at its own floor
     expect(capacity.omittedMemoryIds.length).toBeGreaterThan(0);
     expect(aIds.some((id) => capacity.omittedMemoryIds.includes(id))).toBe(true);
-    expect(aDigestIds.some((id) => capacity.omittedMemoryIds.includes(id))).toBe(true); // both pools reached in A
-  });
-
-  it('reports a distinct gap reason string for an illustrated omission vs a photo omission', () => {
-    const memories: Record<string, ManifestMemory> = {
-      'photo-0': photoMemory(1.5, 0),
-      'digest-0': digestMemory('2024-06-01', { engagement: 0 }),
-    };
-    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['photo-0', 'digest-0'] })]);
-
-    const { gaps, capacity } = fitBook(outline, makeManifest(memories), { maxPages: 1 });
-    expect(capacity.omittedMemoryIds).toContain('photo-0');
-    expect(capacity.omittedMemoryIds).toContain('digest-0');
-    const photoGap = gaps.find((g) => g.memoryIds.includes('photo-0'));
-    const digestGap = gaps.find((g) => g.memoryIds.includes('digest-0'));
-    expect(photoGap?.reason).not.toEqual(digestGap?.reason);
-    expect(digestGap?.reason).toContain('illustrated');
-    expect(photoGap?.reason).not.toContain('(illustrated)');
+    expect(aDigestIds.some((id) => capacity.omittedMemoryIds.includes(id))).toBe(true); // both kinds reached in A
   });
 });

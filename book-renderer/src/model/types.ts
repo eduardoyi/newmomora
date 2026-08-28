@@ -541,10 +541,14 @@ export interface PageCapacityReport {
    */
   pairingLevelUsed: 0 | 1 | 2 | 3;
   /**
-   * Photo/video-only memories (no text, no illustration) dropped from the
-   * backbone/themed flow, lowest-engagement first, only after maximum
-   * pairing still left the book over the cap. Text and illustrated memories
-   * are never demoted this way.
+   * Memories dropped from the backbone/themed flow after maximum pairing
+   * still left the book over the cap (round-13 rebalance): a mix of photo,
+   * video, and — only when digest-eligible (has an illustration, short
+   * enough text, near-square art, not a milestone holder or the section's
+   * own quote-title source) — illustrated memories, chosen kind-by-kind to
+   * keep the three kinds' keep-rates close to parity rather than draining
+   * photo/video first. An ordinary text-only-with-no-illustration memory,
+   * a milestone holder, or a quote-title source is never in this list.
    */
   omittedMemoryIds: string[];
 }
