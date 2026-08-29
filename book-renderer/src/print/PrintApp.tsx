@@ -12,8 +12,24 @@ import { FULL_PAGE_MM, SPREAD_WIDTH_MM, SPREAD_HEIGHT_MM } from '../templates/mm
  * promise as the preview: `TemplateRenderer` is the SAME component tree the
  * interactive preview (`src/preview/App.tsx`) uses — this file only adds the
  * exact-physical-size scaffolding a PDF capture needs (a `@page` CSS rule +
- * a matching html/body box, and — for a spread — a crop to one printable
- * half) on top of it. It never re-implements layout.
+ * a matching html/body box, plus a crop-to-trim window) on top of it. It
+ * never re-implements layout.
+ *
+ * Round-22 (Prodigi's real layflat file spec, per the downloaded print
+ * guide — docs/plans/prodigi-order-spec.md): Prodigi's system "automatically
+ * generate[s]" bleed and cut marks on its own end — a submitted content page
+ * "should be the same size as the book size" (210x210mm trim, NO bleed), and
+ * the wraparound cover file is `2*210 + spineMm` wide, also with no bleed.
+ * The templates/design-canvas model is untouched (every template still
+ * renders its own natural 216mm-bleed single-page canvas, 426mm-bleed spread
+ * canvas, or bleed-inclusive cover canvas — see templates/mm.ts) — this file
+ * is the ONE place that then CROPS that natural render down to the exact
+ * trim box Prodigi wants, by rendering the template at its natural size
+ * inside an absolutely-positioned box shifted up/left by exactly the bleed
+ * amount, inside an `overflow: hidden` window sized to the trim box. A
+ * spread's two halves each crop to their own 210x210mm trim (no bleed
+ * anywhere, including the outer edge that used to carry it) — same idea,
+ * just also picking which half of the spread's natural width to show.
  *
  * URL contract (query string), read once at mount:
  *   ?slug=<bookSlug>                       required
@@ -35,9 +51,32 @@ import { FULL_PAGE_MM, SPREAD_WIDTH_MM, SPREAD_HEIGHT_MM } from '../templates/mm
 interface PrintTarget {
   page: BookPage;
   manifest: BookManifest;
-  /** Physical size (mm) of the html/body box + `@page` rule this specific render must produce. */
-  widthMm: number;
-  heightMm: number;
+  /**
+   * Final PDF page box (mm) — the `@page` rule, the html/body box, and the
+   * outer crop window all use this. Always the TRIM size (no bleed): Prodigi
+   * adds bleed/cut-marks itself, so shipping bleed here is exactly the
+   * "216x216 instead of 210x210" mistake that got the first order rejected.
+   */
+  outputWidthMm: number;
+  outputHeightMm: number;
+  /**
+   * The template's own natural (bleed-inclusive) rendered size — UNCHANGED
+   * design/canvas model (FULL_PAGE_MM/SPREAD_WIDTH_MM/SPREAD_HEIGHT_MM, or
+   * the cover's own back+spine+front+bleed box). The inner div is sized to
+   * exactly this so every cqw-based measurement inside the template computes
+   * against the same width it always has.
+   */
+  naturalWidthMm: number;
+  naturalHeightMm: number;
+  /**
+   * How far (mm) the natural canvas's own top-left corner sits outside the
+   * output crop window on each axis — i.e. how much bleed (or, for a
+   * spread's right half, bleed + one whole trim page) to hide. The inner div
+   * is shifted by `-cropLeftMm`/`-cropTopMm` so the window shows exactly the
+   * trim box.
+   */
+  cropLeftMm: number;
+  cropTopMm: number;
   /** Set only when rendering one printable half of a genuine spread template — see `SpreadHalf` below. */
   half: 'left' | 'right' | null;
 }
@@ -56,8 +95,10 @@ function readParams() {
   return { slug, kind, pageIndex, half, spineMm };
 }
 
-/** A spread half's own printable box: bleed on its outer edge only, none at the gutter — mirrors PageFrame/mm.ts's SPREAD_WIDTH_MM = 2*pageSizeMm + 2*bleedMm math (the two halves' widths sum back to exactly that). */
-const SPREAD_HALF_WIDTH_MM = PHYSICAL.pageSizeMm + PHYSICAL.bleedMm;
+/** Every submitted content page (single or one spread half) is exactly the book's trim size — no bleed (round-22: Prodigi generates bleed/cut-marks itself). */
+const TRIM_MM = PHYSICAL.pageSizeMm;
+/** Bleed hidden off each edge of the template's natural canvas to reach the trim box. */
+const BLEED_MM = PHYSICAL.bleedMm;
 
 export function PrintApp() {
   const { slug, kind, pageIndex, half, spineMm } = useMemo(readParams, []);
@@ -108,27 +149,51 @@ export function PrintApp() {
           }
         }
 
-        let widthMm: number;
-        let heightMm: number;
+        // Every kind below is resolved to the SAME shape: the template's own
+        // natural (bleed-inclusive) canvas size, unchanged, plus a crop
+        // (outputWidthMm/outputHeightMm + cropLeftMm/cropTopMm) that hides
+        // exactly the bleed Prodigi doesn't want submitted. cropTopMm is
+        // always BLEED_MM (every canvas has the same top bleed); cropLeftMm
+        // is BLEED_MM too, except for a spread's right half, which must skip
+        // past the left half's whole trim width first.
+        let naturalWidthMm: number;
+        let naturalHeightMm: number;
+        let outputWidthMm: number;
+        let outputHeightMm: number;
+        let cropLeftMm: number = BLEED_MM;
+        const cropTopMm: number = BLEED_MM;
         let resolvedHalf: 'left' | 'right' | null = null;
 
         if (kind === 'cover') {
           const spineMmResolved = Number((page.params as { spineMm?: number }).spineMm ?? 0);
-          widthMm = PHYSICAL.pageSizeMm * 2 + spineMmResolved + PHYSICAL.bleedMm * 2;
-          heightMm = PHYSICAL.pageSizeMm + PHYSICAL.bleedMm * 2;
+          naturalWidthMm = PHYSICAL.pageSizeMm * 2 + spineMmResolved + PHYSICAL.bleedMm * 2;
+          naturalHeightMm = PHYSICAL.pageSizeMm + PHYSICAL.bleedMm * 2;
+          outputWidthMm = naturalWidthMm - PHYSICAL.bleedMm * 2; // = 2*210 + spineMm, no bleed
+          outputHeightMm = naturalHeightMm - PHYSICAL.bleedMm * 2; // = 210
         } else if (page.isSpread) {
           if (half !== 'left' && half !== 'right') {
             throw new Error(`page ${pageIndex} (${page.templateId}) is a spread — half=left|right is required`);
           }
           resolvedHalf = half;
-          widthMm = SPREAD_HALF_WIDTH_MM;
-          heightMm = SPREAD_HEIGHT_MM;
+          naturalWidthMm = SPREAD_WIDTH_MM;
+          naturalHeightMm = SPREAD_HEIGHT_MM;
+          outputWidthMm = TRIM_MM;
+          outputHeightMm = TRIM_MM;
+          // Left half's trim starts right after the left bleed (BLEED_MM);
+          // right half's trim starts one whole trim page further in (past
+          // the left half entirely — there's no bleed at the gutter to skip).
+          cropLeftMm = half === 'right' ? BLEED_MM + TRIM_MM : BLEED_MM;
         } else {
-          widthMm = FULL_PAGE_MM;
-          heightMm = FULL_PAGE_MM;
+          naturalWidthMm = FULL_PAGE_MM;
+          naturalHeightMm = FULL_PAGE_MM;
+          outputWidthMm = TRIM_MM;
+          outputHeightMm = TRIM_MM;
         }
 
-        setState({ status: 'ready', target: { page: page!, manifest, widthMm, heightMm, half: resolvedHalf } });
+        setState({
+          status: 'ready',
+          target: { page: page!, manifest, outputWidthMm, outputHeightMm, naturalWidthMm, naturalHeightMm, cropLeftMm, cropTopMm, half: resolvedHalf },
+        });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -150,13 +215,13 @@ export function PrintApp() {
   // mm dimensions are known.
   useEffect(() => {
     if (state.status !== 'ready') return;
-    const { widthMm, heightMm } = state.target;
+    const { outputWidthMm, outputHeightMm } = state.target;
     const style = document.createElement('style');
     style.textContent = `
-      @page { size: ${widthMm}mm ${heightMm}mm; margin: 0; }
+      @page { size: ${outputWidthMm}mm ${outputHeightMm}mm; margin: 0; }
       html, body {
         margin: 0; padding: 0;
-        width: ${widthMm}mm; height: ${heightMm}mm;
+        width: ${outputWidthMm}mm; height: ${outputHeightMm}mm;
         overflow: hidden;
         background: #fff;
       }
@@ -174,34 +239,38 @@ export function PrintApp() {
     return <div data-print-loading="true" />;
   }
 
-  const { page, manifest, widthMm, heightMm, half: resolvedHalf } = state.target;
+  const { page, manifest, outputWidthMm, outputHeightMm, naturalWidthMm, naturalHeightMm, cropLeftMm, cropTopMm } = state.target;
   const bookSlug = readParams().slug as string;
 
-  const content =
-    resolvedHalf === null ? (
-      <TemplateRenderer page={page} manifest={manifest} bookSlug={bookSlug} showGuides={false} />
-    ) : (
-      // Crop one printable half out of the full spread render. The spread
-      // template renders itself at its own natural SPREAD_WIDTH_MM (426mm)
-      // — everything inside it (cqw type sizes, the gutter guide, slot
-      // positions) is computed relative to THAT width via PageFrame's own
-      // container-query sizing (see mm.ts's `mmToPctWidth`/`ptCqw`), so the
-      // spread must be laid out at its full width and then visually cropped
-      // to the requested half, never re-rendered at the half's own width
-      // (which would silently rescale every cqw-based measurement).
-      <div style={{ position: 'relative', width: `${widthMm}mm`, height: `${heightMm}mm`, overflow: 'hidden' }}>
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: resolvedHalf === 'right' ? `-${widthMm}mm` : 0,
-            width: `${SPREAD_WIDTH_MM}mm`,
-          }}
-        >
-          <TemplateRenderer page={page} manifest={manifest} bookSlug={bookSlug} showGuides={false} />
-        </div>
+  // One crop window for every kind (single page, spread half, cover): the
+  // template renders itself at its own natural (bleed-inclusive) size —
+  // unchanged, since everything inside it (cqw type sizes, the gutter guide,
+  // slot positions, the wraparound cover's own xPct/yPct math) is computed
+  // relative to THAT natural width via PageFrame's own container-query
+  // sizing (see mm.ts's `mmToPctWidth`/`ptCqw` and WraparoundCover's
+  // `explicitDimsMm`) — re-rendering at the trim width directly would
+  // silently rescale every one of those measurements. Instead, the natural
+  // render is positioned inside an `overflow: hidden` window sized to the
+  // exact trim box, shifted up/left by exactly the bleed being hidden (plus,
+  // for a spread's right half, one whole trim page to skip past the left
+  // half). Both boxes get EXPLICIT width AND height — a known Chromium
+  // print-capture bug class silently mis-sizes an absolutely-positioned box
+  // that only has one dimension set explicitly.
+  const content = (
+    <div style={{ position: 'relative', width: `${outputWidthMm}mm`, height: `${outputHeightMm}mm`, overflow: 'hidden' }}>
+      <div
+        style={{
+          position: 'absolute',
+          left: `-${cropLeftMm}mm`,
+          top: `-${cropTopMm}mm`,
+          width: `${naturalWidthMm}mm`,
+          height: `${naturalHeightMm}mm`,
+        }}
+      >
+        <TemplateRenderer page={page} manifest={manifest} bookSlug={bookSlug} showGuides={false} />
       </div>
-    );
+    </div>
+  );
 
   return (
     <div data-print-ready="true" data-print-template={page.templateId} data-print-page-id={page.id}>

@@ -27,14 +27,20 @@ import type { BookPage } from '../src/model/types';
  *
  * PDF method: Puppeteer's native `page.pdf({ preferCSSPageSize: true })`
  * reading an `@page { size: ... }` rule PrintApp.tsx injects once it knows
- * the exact physical box (216x216mm single page, 213x216mm spread half,
- * or the cover's own back+spine+front box) — not a screenshot-to-PDF
+ * the exact physical box — round-22: always the TRIM size now (210x210mm
+ * single page or spread half, or the cover's own back+spine+front box with
+ * NO bleed), per Prodigi's real layflat file spec (their system generates
+ * bleed/cut-marks itself — docs/plans/prodigi-order-spec.md). PrintApp.tsx
+ * still renders each template at its own natural bleed-inclusive canvas
+ * size and crops down to this trim box — not a screenshot-to-PDF
  * conversion, so there's no raster/DPI step to get wrong for a vector-safe
  * layout (text stays real text in the PDF).
  *
  * Usage:
- *   npm run book:pdf -- --slug <slug> [--spine-mm 9] [--out-dir <dir>]
+ *   npm run book:pdf -- --slug <slug> --spine-mm <mm> [--out-dir <dir>]
  *                        [--port 4321] [--concurrency 4]
+ *   (--spine-mm is required — query Prodigi's spine API for the real value
+ *   per page count, see docs/plans/prodigi-order-spec.md §3; never guessed.)
  */
 
 // ---------------------------------------------------------------------------
@@ -61,10 +67,26 @@ function parseArgs(argv: string[]) {
 const args = parseArgs(process.argv.slice(2));
 const slug = args.slug;
 if (!slug) {
-  console.error('Usage: npm run book:pdf -- --slug <slug> [--spine-mm 9] [--out-dir <dir>] [--port 4321] [--concurrency 4]');
+  console.error('Usage: npm run book:pdf -- --slug <slug> --spine-mm <mm> [--out-dir <dir>] [--port 4321] [--concurrency 4]');
   process.exit(1);
 }
-const spineMm = args['spine-mm'] !== undefined ? Number(args['spine-mm']) : undefined;
+// Round-22: required, not optional. The fitter's own DEFAULT_SPINE_MM (9mm)
+// is a placeholder for local/preview use only — a real order's cover MUST
+// use the exact width Prodigi's spine API quoted for this book's actual
+// page count (see docs/plans/prodigi-order-spec.md §3; 28mm for both of our
+// current 122-page candidates) or the cover ships mis-sized. Silently
+// falling back here is exactly the class of mistake that got the first
+// order rejected — fail loudly instead.
+if (args['spine-mm'] === undefined) {
+  console.error('Usage: npm run book:pdf -- --slug <slug> --spine-mm <mm> [--out-dir <dir>] [--port 4321] [--concurrency 4]');
+  console.error('[render-pdf] --spine-mm is required — query Prodigi\'s /products/spine endpoint for this book\'s real page count, never guess/default it (see docs/plans/prodigi-order-spec.md §3).');
+  process.exit(1);
+}
+const spineMm = Number(args['spine-mm']);
+if (!Number.isFinite(spineMm) || spineMm <= 0) {
+  console.error(`[render-pdf] --spine-mm must be a positive number, got: ${args['spine-mm']}`);
+  process.exit(1);
+}
 const port = args.port !== undefined ? Number(args.port) : 4321;
 const concurrency = args.concurrency !== undefined ? Number(args.concurrency) : 4;
 
@@ -104,11 +126,16 @@ if (!fs.existsSync(manifestPath) || !fs.existsSync(outlinePath)) {
 
 const manifest = parseManifest(readJson(manifestPath));
 const outline = parseOutline(readJson(outlinePath));
-const fit = fitBook(outline, manifest, spineMm !== undefined ? { spineMm } : {});
+const fit = fitBook(outline, manifest, { spineMm });
 const document_ = fit.document;
 
 // Never print memory content — ids and counts only (project-wide rule).
-console.log(`[render-pdf] ${slug}: fitBook totalPages=${document_.totalPages} (highest page number, cover uncounted), ${document_.pages.length} page entries`);
+// Round-22 renumbering: `totalPages` is the highest PRINTED folio number —
+// neither the cover nor the front-matter-verso blank consumes one anymore
+// (see `numberPages` in fitter.ts), so it already matches the interior PDF's
+// real page count with no +-1 adjustment needed (contrast the old scheme,
+// where numbering started at 2 and the blank WAS counted).
+console.log(`[render-pdf] ${slug}: fitBook totalPages=${document_.totalPages} (highest printed folio; cover and front-matter-verso blank uncounted), ${document_.pages.length} page entries`);
 console.log(
   `[render-pdf] ${slug}: capacity — cap ${fit.capacity.cap}, overCap ${fit.capacity.overCap}, pairingLevelUsed ${fit.capacity.pairingLevelUsed}, omitted ${fit.capacity.omittedMemoryIds.length}`,
 );
@@ -130,9 +157,32 @@ if (!coverPage) {
   process.exit(1);
 }
 
+// Round-22: the fitter's own front-matter-verso blank (the deliberately
+// blank page facing the dedication — see buildDedicationPages in fitter.ts)
+// is never submitted to Prodigi. That page exists to make the APP PREVIEW's
+// pagination read correctly (dedication lands on the right-hand page), but
+// Prodigi's separate-file API setup (docs/plans/prodigi-order-spec.md
+// §"Submission format") inserts an inside-front-cover blank of its OWN,
+// automatically, ahead of the inner-pages file's first page — submitting
+// ours too would duplicate it and shift every page after it by one, wrecking
+// the exact left/right parity the fitter carefully computed (dedication
+// would land on the WRONG side, and so would every spread after it). Every
+// OTHER blank the fitter emits (mid-flow parity padding, the even-total
+// closer) is a real content-flow page with no Prodigi-side equivalent and
+// must stay. `numberPages` already reflects this: the front-matter-verso
+// blank's own `pageNumbers` is `null`, exactly like the cover's, so it's
+// skipped here the SAME way the cover is — never entering the interior job
+// list to begin with, rather than being built then discarded.
+const FRONT_MATTER_VERSO_REASON = 'front-matter-verso';
+let frontMatterVersoPage: BookPage | null = null;
+
 const jobs: RenderJob[] = [];
 document_.pages.forEach((page: BookPage, pageIndex: number) => {
   if (page.templateId === 'cover-wrap') return; // handled separately, not part of the interior sequence
+  if (page.templateId === 'blank' && page.blankReason === FRONT_MATTER_VERSO_REASON) {
+    frontMatterVersoPage = page; // never printed — see doc comment above
+    return;
+  }
   if (page.isSpread) {
     const [leftNum, rightNum] = page.pageNumbers ?? [];
     if (leftNum === undefined || rightNum === undefined) {
@@ -149,31 +199,46 @@ document_.pages.forEach((page: BookPage, pageIndex: number) => {
   }
 });
 
+if (!frontMatterVersoPage) {
+  console.error(`[render-pdf] ${slug}: FATAL — no front-matter-verso blank found in the fitted document; expected exactly one (see buildDedicationPages in fitter.ts)`);
+  process.exit(1);
+}
+console.log(
+  `[render-pdf] ${slug}: skipped front-matter-verso blank (id ${(frontMatterVersoPage as BookPage).id}, no printed folio) from interior PDF — Prodigi's system inserts this inside-front-cover blank automatically`,
+);
+
 jobs.sort((a, b) => a.physicalPageNumber - b.physicalPageNumber);
 
 // Fail loudly, per the brief, rather than silently ship a short/long/gappy
 // interior PDF. Validated against the render jobs' OWN `pageNumbers` data
-// (contiguous, starting at 2 — the fitter's numbering convention: the cover
-// is an implicit, unprinted "page 1", see `numberPages` in fitter.ts), not
-// against `document.totalPages` directly — that field is the highest
-// assigned page NUMBER (what a "your book has N pages" line would show,
-// cover included), which is one more than the actual interior PDF's page
-// COUNT precisely because numbering starts at 2, not 1. Both numbers are
-// logged below for visibility.
+// (contiguous, starting at 1 — round-22's physical-folio numbering: neither
+// the cover nor the front-matter-verso blank consumes a printed number, see
+// `numberPages` in fitter.ts, and both are already excluded from `jobs`
+// above), not against `document.totalPages` directly as a separate check —
+// though the two must agree exactly now (no +-1 adjustment for an "uncounted
+// cover" the way the old scheme needed, since `totalPages` itself no longer
+// counts the cover OR the blank).
 const expectedNumbers = jobs.map((j) => j.physicalPageNumber);
-const contiguousFrom2 = expectedNumbers.every((n, i) => n === i + 2);
-if (!contiguousFrom2) {
-  console.error(`[render-pdf] ${slug}: FATAL — render job page numbers aren't contiguous starting at 2: ${JSON.stringify(expectedNumbers)}`);
+const contiguousFrom1 = expectedNumbers.every((n, i) => n === i + 1);
+if (!contiguousFrom1) {
+  console.error(`[render-pdf] ${slug}: FATAL — render job page numbers aren't contiguous starting at 1: ${JSON.stringify(expectedNumbers)}`);
   process.exit(1);
 }
-const interiorPageCount = jobs.length; // == document_.totalPages - 1, see note above
-if (interiorPageCount !== document_.totalPages - 1) {
+if (jobs.length !== document_.totalPages) {
   console.error(
-    `[render-pdf] ${slug}: FATAL — ${interiorPageCount} interior render jobs, but fitBook's totalPages (${document_.totalPages}) minus the uncounted cover doesn't match — numbering assumption above no longer holds, stopping rather than guessing`,
+    `[render-pdf] ${slug}: FATAL — ${jobs.length} interior render jobs, but fitBook's totalPages (${document_.totalPages}) doesn't match — numbering assumption above no longer holds, stopping rather than guessing`,
   );
   process.exit(1);
 }
-console.log(`[render-pdf] ${slug}: ${interiorPageCount} interior PDF pages will be produced (fitBook totalPages=${document_.totalPages}, cover uncounted)`);
+
+const interiorPageCount = jobs.length;
+if (interiorPageCount % 2 !== 0) {
+  console.error(
+    `[render-pdf] ${slug}: FATAL — interior PDF has ${interiorPageCount} pages (odd); Prodigi's inner-pages file must have an even page count`,
+  );
+  process.exit(1);
+}
+console.log(`[render-pdf] ${slug}: ${interiorPageCount} interior PDF pages will be produced (fitBook totalPages=${document_.totalPages}, cover and front-matter-verso blank uncounted)`);
 
 // ---------------------------------------------------------------------------
 // Step 2: production build (once — serves both index.html and print.html).
@@ -244,9 +309,9 @@ interface RenderedPage {
 }
 
 function jobUrl(job: RenderJob | { kind: 'cover' }): string {
-  if ('kind' in job) return `${baseUrl}/print.html?slug=${encodeURIComponent(slug!)}${spineMm !== undefined ? `&spineMm=${spineMm}` : ''}&kind=cover`;
+  if ('kind' in job) return `${baseUrl}/print.html?slug=${encodeURIComponent(slug!)}&spineMm=${spineMm}&kind=cover`;
   const half = job.half ? `&half=${job.half}` : '';
-  return `${baseUrl}/print.html?slug=${encodeURIComponent(slug!)}${spineMm !== undefined ? `&spineMm=${spineMm}` : ''}&kind=page&pageIndex=${job.pageIndex}${half}`;
+  return `${baseUrl}/print.html?slug=${encodeURIComponent(slug!)}&spineMm=${spineMm}&kind=page&pageIndex=${job.pageIndex}${half}`;
 }
 
 /** Navigates one print.html target, waits for real readiness (data-print-ready, fonts, decoded images), and captures its exact-size PDF page. */
@@ -314,7 +379,7 @@ try {
     rendered.push({ job, pdfBytes: bytes, widthPt: pdfPage.getWidth(), heightPt: pdfPage.getHeight() });
   }
 
-  console.log(`[render-pdf] ${slug}: rendering cover (spine ${spineMm ?? '(fitter default)'}mm)…`);
+  console.log(`[render-pdf] ${slug}: rendering cover (spine ${spineMm}mm)…`);
   coverBytes = await renderOne(browser, jobUrl({ kind: 'cover' }));
 } finally {
   await cleanup(browser);
@@ -325,8 +390,12 @@ const renderMs = Date.now() - renderStart;
 // Step 5: validate every page's exact physical size.
 // ---------------------------------------------------------------------------
 
-const SINGLE_PAGE_MM = PHYSICAL.pageSizeMm + PHYSICAL.bleedMm * 2; // 216mm
-const SPREAD_HALF_MM = PHYSICAL.pageSizeMm + PHYSICAL.bleedMm; // 213mm
+// Round-22: every submitted page (single, spread half, or cover) is the
+// exact TRIM size — no bleed. Prodigi's own system "will automatically
+// generate" bleed and cut marks (docs/plans/prodigi-order-spec.md, citing
+// the print guide p.4) — shipping 216mm (210 trim + 3mm bleed on each side)
+// here is exactly the mistake that got the first order rejected.
+const TRIM_PAGE_MM = PHYSICAL.pageSizeMm; // 210mm
 const TOLERANCE_PT = 0.5;
 
 function assertSizeMm(label: string, widthPt: number, heightPt: number, expectedWidthMm: number, expectedHeightMm: number) {
@@ -342,15 +411,16 @@ function assertSizeMm(label: string, widthPt: number, heightPt: number, expected
 }
 
 for (const r of rendered) {
-  const expectedMm = r.job.half ? SPREAD_HALF_MM : SINGLE_PAGE_MM;
-  assertSizeMm(`interior page ${r.job.physicalPageNumber} (${r.job.templateId}${r.job.half ? ` ${r.job.half} half` : ''})`, r.widthPt, r.heightPt, expectedMm, SINGLE_PAGE_MM);
+  // Every content page — single or spread half — is the same 210x210mm trim square now (no bleed-inclusive 216/213mm distinction left to make).
+  assertSizeMm(`interior page ${r.job.physicalPageNumber} (${r.job.templateId}${r.job.half ? ` ${r.job.half} half` : ''})`, r.widthPt, r.heightPt, TRIM_PAGE_MM, TRIM_PAGE_MM);
 }
 
 const coverDoc = await PDFDocument.load(coverBytes);
 const [coverPdfPage] = coverDoc.getPages();
 const coverSpineMm = Number((coverPage.params as { spineMm?: number }).spineMm ?? 0);
-const coverWidthMm = PHYSICAL.pageSizeMm * 2 + coverSpineMm + PHYSICAL.bleedMm * 2;
-assertSizeMm('cover', coverPdfPage.getWidth(), coverPdfPage.getHeight(), coverWidthMm, SINGLE_PAGE_MM);
+// Trim-only cover width: 2*210 + spine, no bleed (round-22 — was previously +PHYSICAL.bleedMm*2, the same 216-style mistake as the content pages).
+const coverWidthMm = PHYSICAL.pageSizeMm * 2 + coverSpineMm;
+assertSizeMm('cover', coverPdfPage.getWidth(), coverPdfPage.getHeight(), coverWidthMm, TRIM_PAGE_MM);
 
 // ---------------------------------------------------------------------------
 // Step 6: assemble the interior PDF, in physical page order, and write both files.
@@ -384,7 +454,7 @@ const samplePage = rendered[0];
 
 console.log('');
 console.log(`[render-pdf] ${slug}: DONE`);
-console.log(`  interior: ${interiorPath} — ${merged.getPageCount()} pages, ${interiorSizeMb.toFixed(1)}MB`);
-console.log(`  cover:    ${coverPath} — 1 page, ${coverSizeMb.toFixed(1)}MB (spine ${coverSpineMm}mm, ${coverWidthMm}x${SINGLE_PAGE_MM}mm)`);
+console.log(`  interior: ${interiorPath} — ${merged.getPageCount()} pages @ ${TRIM_PAGE_MM}x${TRIM_PAGE_MM}mm trim (no bleed), ${interiorSizeMb.toFixed(1)}MB`);
+console.log(`  cover:    ${coverPath} — 1 page, ${coverSizeMb.toFixed(1)}MB (spine ${coverSpineMm}mm, ${coverWidthMm}x${TRIM_PAGE_MM}mm trim, no bleed)`);
 console.log(`  sample page ${samplePage.job.physicalPageNumber} (${samplePage.job.templateId}): ${samplePage.widthPt.toFixed(2)}x${samplePage.heightPt.toFixed(2)}pt`);
 console.log(`  render wall time: ${(renderMs / 1000).toFixed(1)}s (${jobs.length} interior pages + 1 cover, concurrency ${concurrency})`);

@@ -3223,13 +3223,19 @@ function buildFirstsTitlePage(element: OutlineElement, manifest: BookManifest): 
 // ---------------------------------------------------------------------------
 
 function numberPages(pages: BookPage[]): number {
-  // The cover occupies an implicit, unprinted "page 1" (bookbinding
-  // convention) — the design canvas's own numbering sequence starts at 2 on
-  // the blank page facing the dedication, so the first counted page after
-  // the cover must land on 2, not 1.
-  let n = 2;
+  // Round-22 renumbering: printed folios must match the PHYSICAL Prodigi
+  // book. Their system adds the inside-front-cover blank itself and our
+  // front-matter-verso blank is dropped from the interior PDF entirely
+  // (render-pdf.mts), so the first content page after the cover IS physical
+  // page 1 — a right-hand recto, odd, exactly as the old scheme's "page 3"
+  // was (the -2 shift preserves every page's parity). The cover and the
+  // never-printed front-matter-verso blank carry no number.
+  let n = 1;
   for (const page of pages) {
-    if (page.templateId === 'cover-wrap') {
+    if (
+      page.templateId === 'cover-wrap' ||
+      (page.templateId === 'blank' && page.blankReason === 'front-matter-verso')
+    ) {
       page.pageNumbers = null;
       page.isEvenPage = null;
       continue;

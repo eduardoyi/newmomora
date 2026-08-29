@@ -1000,7 +1000,7 @@ describe('fitBook — structural pages', () => {
     expect(withCustom.pages[0].params.spineMm).toBe(15);
   });
 
-  it('numbers pages starting at 2 (the cover is uncounted) and gives the closing page a dynamic MEMORY count (item 16 — not a page count)', () => {
+  it('leaves the cover and front-matter-verso blank unnumbered, counting starts at 1 on the dedication (round-22 physical-folio renumbering), and gives the closing page a dynamic MEMORY count (item 16 — not a page count)', () => {
     const manifest = makeManifest({
       'mem-1': makeMemory({ assets: [makeAsset()] }),
       'mem-2': makeMemory({ text: 'A caption.', assets: [makeAsset()] }),
@@ -1017,8 +1017,12 @@ describe('fitBook — structural pages', () => {
     const blank = document.pages.find((p) => p.templateId === 'blank')!;
     const dedication = document.pages.find((p) => p.templateId === 'dedication')!;
     const closing = document.pages.find((p) => p.templateId === 'closing')!;
-    expect(blank.pageNumbers).toEqual([2]);
-    expect(dedication.pageNumbers).toEqual([3]);
+    // Prodigi adds the inside-front-cover blank itself and our own
+    // front-matter-verso blank never reaches the interior PDF (render-pdf.mts)
+    // — neither carries a printed folio.
+    expect(blank.pageNumbers).toBeNull();
+    expect(blank.isEvenPage).toBeNull();
+    expect(dedication.pageNumbers).toEqual([1]);
     expect(closing.params.memoryCount).toBe(2);
     expect(closing.params.editorialNote).toBeUndefined(); // never printed — see the dedicated leak-regression test
   });
@@ -1508,10 +1512,13 @@ describe('fitBook — cross-memory pairing as a real feature (final-fix-round it
       makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-a', 'mem-b', 'mem-c', 'mem-d'] }),
     ]);
 
-    // Unpaired: 4 pages (totalPages 5). Pairing ONLY the caption-less pair
-    // gets to 3 pages (totalPages 4) — enough to hit this cap without ever
-    // touching the two captioned memories.
-    const { document, capacity } = fitBook(outline, manifest, { maxPages: 4 });
+    // Unpaired: 4 pages (totalPages 4 — round-22 renumbering: no cover/
+    // dedication front matter in this fixture, so `numberPages` counts from
+    // 1 with nothing to skip, one lower than the pre-round-22 count).
+    // Pairing ONLY the caption-less pair gets to 3 pages (totalPages 3) —
+    // enough to hit this cap without ever touching the two captioned
+    // memories.
+    const { document, capacity } = fitBook(outline, manifest, { maxPages: 3 });
     expect(capacity.pairingLevelUsed).toBe(1);
     expect(document.pages).toHaveLength(3);
     expect(document.pages[0].templateId).toBe('anchor-media');
@@ -1534,7 +1541,11 @@ describe('fitBook — cross-memory pairing as a real feature (final-fix-round it
     });
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-a', 'mem-b'] })]);
 
-    const { document, capacity } = fitBook(outline, manifest, { maxPages: 2 });
+    // Cap of 1 (not 2 — round-22 renumbering: no front matter here, so
+    // `totalPages` counts one lower than before): 2 unpaired pages don't fit
+    // at either level 0 or 1 (no second caption-less memory to pair with),
+    // forcing the escalation to level 2.
+    const { document, capacity } = fitBook(outline, manifest, { maxPages: 1 });
     expect(capacity.pairingLevelUsed).toBe(2);
     expect(document.pages).toHaveLength(1);
     expect(document.pages[0].templateId).toBe('anchor-media');
@@ -1550,7 +1561,8 @@ describe('fitBook — cross-memory pairing as a real feature (final-fix-round it
     });
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-a', 'mem-b'] })]);
 
-    const { document, capacity } = fitBook(outline, manifest, { maxPages: 2 });
+    // Cap of 1, not 2 — see the escalation test above for why (round-22 renumbering).
+    const { document, capacity } = fitBook(outline, manifest, { maxPages: 1 });
     expect(capacity.pairingLevelUsed).toBe(3);
     expect(document.pages).toHaveLength(1);
     expect(document.pages[0].templateId).toBe('anchor-media');
@@ -1636,7 +1648,13 @@ describe('fitBook — page-cap enforcement + overflow reporting (final-fix-round
     });
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1', 'mem-2', 'mem-3'] })]);
 
-    const { capacity } = fitBook(outline, manifest, { maxPages: 2 });
+    // Cap of 1, not 2 — round-22 renumbering: these 3 short text-only
+    // memories sweep into a single quote-collection spread (totalPages 2,
+    // one lower than pre-round-22 since this fixture has no cover/
+    // dedication front matter), which would fit under a cap of 2 with
+    // nothing to cut. A cap of 1 keeps the test's original intent: over cap
+    // even at the collection's minimum footprint, nothing safe to omit.
+    const { capacity } = fitBook(outline, manifest, { maxPages: 1 });
     expect(capacity.overCap).toBe(true);
     expect(capacity.omittedMemoryIds).toHaveLength(0); // no photo-only memory existed to safely cut
   });
@@ -1770,7 +1788,10 @@ describe('fitBook — native aspect everywhere outside grids (owner review round
       'mem-b': makeMemory({ assets: [makeAsset({ aspectRatio: 1.3 })] }),
     });
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-a', 'mem-b'] })], {});
-    const { document } = fitBook(outline, manifest, { maxPages: 2 }); // force pairing
+    // maxPages: 1, not 2 — round-22 renumbering: no cover/dedication front
+    // matter here, so totalPages counts one lower than before; 1 still
+    // forces pairing (2 unpaired solo pages wouldn't fit).
+    const { document } = fitBook(outline, manifest, { maxPages: 1 }); // force pairing
     const photoSlots = document.pages[0].slots.filter((s) => s.kind === 'photo') as Array<{ content: PhotoSlotContent }>;
     expect(photoSlots).toHaveLength(2);
     for (const slot of photoSlots) {
@@ -1798,7 +1819,14 @@ describe('fitBook — full-bleed parity-aware facing credit (owner review round 
     const fullBleedIndex = document.pages.findIndex((p) => p.templateId === 'full-bleed');
     expect(fullBleedIndex).toBeGreaterThan(-1);
     const fullBleedPage = document.pages[fullBleedIndex];
-    expect(fullBleedPage.isEvenPage).toBe(true);
+    // The parity-landing DECISION itself is unchanged (still governed by
+    // `currentPageParity`'s own internal, unmodified bookkeeping) — only the
+    // PRINTED folio parity flips here, because this fixture has no cover/
+    // dedication front matter: `numberPages` now starts counting at 1
+    // instead of 2 for a document with no front-matter-verso blank to skip,
+    // an odd (-1) shift that flips which physical folio side "the position
+    // `currentPageParity` calls even" ends up landing on.
+    expect(fullBleedPage.isEvenPage).toBe(false);
     // The very next page (its true facing partner) carries the credit as index 1.
     const facingPage = document.pages[fullBleedIndex + 1];
     expect(facingPage.templateId).not.toBe('blank');
@@ -1830,7 +1858,11 @@ describe('fitBook — reflow-first parity (owner review round 4, item 3)', () =>
     expect(document.pages.every((p) => p.templateId !== 'blank')).toBe(true);
     const fullBleedIndex = document.pages.findIndex((p) => p.templateId === 'full-bleed');
     expect(fullBleedIndex).toBeGreaterThan(-1);
-    expect(document.pages[fullBleedIndex].isEvenPage).toBe(true);
+    // See the sibling "forces a blank filler" test above for why this is
+    // `false`, not `true`, on a fixture with no cover/dedication front
+    // matter — the landing decision itself is unchanged, only the printed
+    // folio parity (round-22 renumbering) flips.
+    expect(document.pages[fullBleedIndex].isEvenPage).toBe(false);
     // mem-0's page was reordered to directly AFTER the hero (chronological
     // order is locally disturbed by design — see fitter.ts's ensureEvenLanding
     // doc comment — but no page budget was spent on a blank).
@@ -1852,7 +1884,10 @@ describe('fitBook — reflow-first parity (owner review round 4, item 3)', () =>
     const { document } = fitBook(outline, manifest);
     const fullBleedIndex = document.pages.findIndex((p) => p.templateId === 'full-bleed');
     expect(fullBleedIndex).toBeGreaterThan(-1);
-    expect(document.pages[fullBleedIndex].isEvenPage).toBe(true);
+    // A 'cover' element with no 'title' element still has no front-matter-
+    // verso blank to skip, so the same -1 (parity-flipping) shift applies
+    // here as the blank-less fixtures above — see that test's comment.
+    expect(document.pages[fullBleedIndex].isEvenPage).toBe(false);
   });
 });
 
@@ -1875,10 +1910,15 @@ describe('fitBook — parity-aware split illustrated stories (owner review round
     expect(textPageIndex).toBeGreaterThan(-1);
     const textPage = document.pages[textPageIndex];
     const illoPage = document.pages[textPageIndex + 1];
-    expect(textPage.isEvenPage).toBe(true);
+    // No cover/dedication front matter in this fixture, so the round-22
+    // renumbering's -1 (parity-flipping) shift applies — see the full-bleed
+    // parity tests above for the full explanation. The landing DECISION is
+    // unchanged (text still lands on the page `currentPageParity` calls
+    // even internally); only the printed folio parity is now inverted.
+    expect(textPage.isEvenPage).toBe(false);
     expect(illoPage.templateId).toBe('illustrated-story');
     expect(illoPage.params.mode).toBe('illustration-only');
-    expect(illoPage.isEvenPage).toBe(false);
+    expect(illoPage.isEvenPage).toBe(true);
   });
 });
 
@@ -2101,9 +2141,12 @@ describe('fitBook — quote-collection spread (acceptance-review follow-up, item
     for (const page of storyPages) {
       expect(page.slots.some((s) => s.kind === 'illustration')).toBe(true);
     }
-    // Paired: first even/left, second odd/right, immediately adjacent.
-    expect(storyPages[0].isEvenPage).toBe(true);
-    expect(storyPages[1].isEvenPage).toBe(false);
+    // Paired, immediately adjacent. No cover/dedication front matter in
+    // this fixture, so the round-22 renumbering's -1 (parity-flipping)
+    // shift applies (see the full-bleed parity tests above): first is odd/
+    // right, second even/left — still exactly one folio apart.
+    expect(storyPages[0].isEvenPage).toBe(false);
+    expect(storyPages[1].isEvenPage).toBe(true);
   });
 
   it('a text entry over ~200 chars is not quote-eligible and keeps its own page even inside an otherwise-eligible run', () => {
@@ -2170,9 +2213,12 @@ describe('fitBook — illustrated-story pairing actually fires (acceptance-revie
     expect(gaps).toHaveLength(0);
     const storyPages = document.pages.filter((p) => p.templateId === 'illustrated-story');
     expect(storyPages).toHaveLength(2);
-    // Genuine facing pair: first even (left), second odd (right), immediately adjacent.
-    expect(storyPages[0].isEvenPage).toBe(true);
-    expect(storyPages[1].isEvenPage).toBe(false);
+    // Genuine facing pair, immediately adjacent. No cover/dedication front
+    // matter in this fixture, so the round-22 renumbering's -1 (parity-
+    // flipping) shift applies (see the full-bleed parity tests above):
+    // first is odd (right), second even (left).
+    expect(storyPages[0].isEvenPage).toBe(false);
+    expect(storyPages[1].isEvenPage).toBe(true);
     expect(storyPages[0].pageNumbers![0] + 1).toBe(storyPages[1].pageNumbers![0]);
     // Alternating, never a coincidental match.
     expect(storyPages[0].params.stagger).toBe(false);
@@ -2244,8 +2290,11 @@ describe('fitBook — illustrated-story pairing actually fires (acceptance-revie
     const templates = document.pages.map((p) => p.templateId);
     expect(templates).toEqual(['illustrated-story', 'illustrated-story', 'anchor-media']);
     const storyPages = document.pages.filter((p) => p.templateId === 'illustrated-story');
-    expect(storyPages[0].isEvenPage).toBe(true);
-    expect(storyPages[1].isEvenPage).toBe(false);
+    // No cover/dedication front matter in this fixture, so the round-22
+    // renumbering's -1 (parity-flipping) shift applies (see the full-bleed
+    // parity tests above).
+    expect(storyPages[0].isEvenPage).toBe(false);
+    expect(storyPages[1].isEvenPage).toBe(true);
     expect(storyPages[0].pageNumbers![0] + 1).toBe(storyPages[1].pageNumbers![0]);
     // mem-0's page was reordered to directly after the completed pair.
     expect(document.pages[2].templateId).toBe('anchor-media');
@@ -2409,8 +2458,10 @@ describe('fitBook — month-preservation floor under page-cap demotion (owner re
 
     // A much tighter cap: both months get squeezed all the way down to
     // (and, for B, past) the floor — a printable book beats a phantom
-    // protection nothing can actually satisfy.
-    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 2 });
+    // protection nothing can actually satisfy. (maxPages: 1, not 2 —
+    // round-22 renumbering: no front matter in this fixture, so totalPages
+    // counts one lower than before, and 2 no longer squeezes hard enough.)
+    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 1 });
     const remainingB = bIds.filter((id) => !capacity.omittedMemoryIds.includes(id)).length;
     expect(remainingB).toBeLessThan(2);
   });
@@ -2781,7 +2832,10 @@ describe('fitBook — full-bleed parity: reorder prediction + demotion fallback 
     expect(document.pages.filter((p) => p.templateId === 'blank')).toHaveLength(0);
     const fullBleedPage = document.pages.find((p) => p.templateId === 'full-bleed');
     expect(fullBleedPage).toBeTruthy();
-    expect(fullBleedPage!.isEvenPage).toBe(true);
+    // No cover/dedication front matter in this fixture, so the round-22
+    // renumbering's -1 (parity-flipping) shift applies — see the earlier
+    // full-bleed parity tests for the full explanation.
+    expect(fullBleedPage!.isEvenPage).toBe(false);
     // mem-after was never dropped by the reorder — it still renders somewhere.
     const memAfterPage = document.pages.find((p) =>
       p.slots.some((s) => s.kind === 'photo' && (s.content as PhotoSlotContent).memoryId === 'mem-after'),
@@ -3315,7 +3369,9 @@ describe('fitBook — proportional cap-pressure demotion (round-13 rebalance)', 
     digestIds.forEach((id, i) => (memories[id] = digestMemory(`2024-01-${20 + i}`, { engagement: i })));
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: [...photoIds, ...digestIds] })]);
 
-    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 6 });
+    // maxPages: 5, not 6 — round-22 renumbering: no cover/dedication front
+    // matter in this fixture, so totalPages counts one lower than before.
+    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 5 });
     const omittedPhoto = photoIds.filter((id) => capacity.omittedMemoryIds.includes(id)).length;
     const omittedDigest = digestIds.filter((id) => capacity.omittedMemoryIds.includes(id)).length;
     expect(capacity.omittedMemoryIds.length).toBe(6);
@@ -3368,7 +3424,9 @@ describe('fitBook — proportional cap-pressure demotion (round-13 rebalance)', 
     // Every kind starts at a 100% keep-rate (a three-way tie), and stays
     // tied after each single cut removes one from each kind — a clean
     // round-robin in tie-break order: photo, then video, then illustrated.
-    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 8 });
+    // maxPages: 7, not 8 — round-22 renumbering: no cover/dedication front
+    // matter in this fixture, so totalPages counts one lower than before.
+    const { capacity } = fitBook(outline, makeManifest(memories), { maxPages: 7 });
     expect(capacity.omittedMemoryIds).toEqual(['photo-0', 'video-0', 'digest-0']);
   });
 
@@ -3386,7 +3444,9 @@ describe('fitBook — proportional cap-pressure demotion (round-13 rebalance)', 
       makeElement({ id: 'backbone:c', kind: 'backbone', memoryIds: digestIds }),
     ]);
 
-    const { gaps } = fitBook(outline, makeManifest(memories), { maxPages: 8 });
+    // maxPages: 7, not 8 — round-22 renumbering: no cover/dedication front
+    // matter in this fixture, so totalPages counts one lower than before.
+    const { gaps } = fitBook(outline, makeManifest(memories), { maxPages: 7 });
     const photoGap = gaps.find((g) => g.memoryIds.includes('photo-0'));
     const videoGap = gaps.find((g) => g.memoryIds.includes('video-0'));
     const digestGap = gaps.find((g) => g.memoryIds.includes('digest-0'));

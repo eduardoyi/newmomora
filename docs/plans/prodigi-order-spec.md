@@ -538,6 +538,81 @@ final `book:pdf --spine-mm 28` render (in flight). Color: OWNER DECIDED
 is the color-fidelity test. Revisit FOGRA39 conversion only if the
 samples come back visibly off.
 
+## Round-22: first order rejected for file errors — spec correction
+
+**Prodigi rejected the first submitted order for file errors.** Root cause,
+confirmed against Prodigi's own downloaded layflat file-setup guide
+(`layflat-photo-book-print-guide.pdf`, the same one cited throughout §1-§4
+above): the render pipeline (`book-renderer/scripts/render-pdf.mts` +
+`src/print/PrintApp.tsx`) was submitting content pages at **216×216mm**
+(210mm trim + 3mm bleed added on all four sides) and the wraparound cover at
+**454×216mm** (same +3mm-per-edge bleed baked in) — even though §4 above
+already correctly transcribed the guide's own words ("Do not add bleed... our
+system will automatically generate these"). The doc had the rule right; the
+*code* had drifted from it. **Mark any dimension elsewhere in this file that
+doesn't match the box below as superseded by this section.**
+
+**Authoritative, re-verified page-by-page against the guide PDF:**
+
+- **Content pages: exactly 210×210mm trim, no bleed, no cut marks** (guide
+  p.3 "your content should be the same size as the book size"; p.4 "Do not
+  add bleed or cut marks, as our system will automatically generate these").
+- **Separate-file API setup** (guide p.7, "For API orders, we also support
+  an alternative file setup: you can provide a single cover file containing
+  the front cover, back cover and spine, plus a separate file containing the
+  inner pages") — this is what our pipeline uses:
+  - **Cover file:** front + back + spine, one sheet, exact size
+    `2×210mm + spineMm` wide × `210mm` tall — 448×210mm at our confirmed
+    28mm spine (122 pages). No bleed.
+  - **Inner-pages file:** content pages only, **even page count required**
+    (guide p.4).
+- **Prodigi auto-inserts the inside-front-cover and inside-back-cover
+  blanks** (guide p.6 "Layout" diagram) — the inner-pages file's own FIRST
+  page becomes the book's first CONTENT page and prints on the **right-hand**
+  side; from there pages alternate left/right normally.
+
+**Two fixes landed in the render pipeline to match:**
+
+1. **Bleed crop.** Every template still renders its own natural
+   bleed-inclusive canvas (216×216mm single page / 426×216mm spread / the
+   cover's own back+spine+front+bleed box) — the design/canvas model is
+   unchanged. `PrintApp.tsx` now crops that natural render down to the exact
+   trim box before Puppeteer captures the PDF page (an `overflow:hidden`
+   window sized to the trim box, with the natural-size render inside it
+   shifted up/left by exactly the 3mm bleed being hidden). Verified: interior
+   pages capture at 210×210mm (595.28pt) and the cover at
+   `2×210+spineMm`×210mm — both confirmed via `pdf-lib` page-box readback
+   after a real render.
+2. **Front-matter-verso blank dropped from print output.** Our own fitter
+   inserts a deliberately blank page facing the dedication (see
+   `buildDedicationPages` in `fitter.ts`, `blankReason: 'front-matter-verso'`)
+   so the interactive app preview's pagination reads correctly. Submitting
+   that page to Prodigi as well would duplicate the inside-front-cover blank
+   their system inserts automatically, shifting every subsequent page by one
+   and flipping every left/right assignment from the dedication onward.
+   `render-pdf.mts` now drops exactly that one page from the assembled
+   interior PDF (logging what was skipped) before rendering — every OTHER
+   blank the fitter emits (mid-flow parity padding, the even-total closer at
+   the end) is genuine content-flow padding with no Prodigi-side equivalent
+   and is left in place. The script also now hard-fails if the resulting
+   interior page count is odd, instead of silently submitting a file Prodigi
+   would reject again.
+
+**Verified on both real books** (`--spine-mm 28`, both 122 fitter-numbered
+pages): `enzo-year-three` interior page count 119 → **118** (even) after the
+drop; `mara-year-one` 121 → **120** (even). Both interior PDFs measure
+exactly 210×210mm per page; both covers measure exactly 448×210mm. Visual
+spot-check (rasterized sample pages): interior page 1 is the dedication
+(not blank), the Through-The-Years spread splits correctly across pages 2-3
+(left/right), a full-bleed photo page runs the image to every edge with no
+white bleed strip, and the cover's spine text stays centered at
+`210mm + spineMm/2` from the left edge after the crop.
+
+**`--spine-mm` is now a required CLI flag** on `npm run book:pdf` (was
+previously optional, silently falling back to the fitter's 9mm placeholder
+default) — a real order's cover must always use the exact Prodigi-quoted
+width for that book's real page count, never a guessed/default value.
+
 ## Order edit window (owner-configured 2026-08-29)
 
 The Prodigi dashboard now holds every new order for **2 hours** before

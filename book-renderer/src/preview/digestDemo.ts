@@ -39,11 +39,12 @@ export function buildDigestDemoPages(manifest: BookManifest): BookPage[] {
     .sort((a, b) => a.memory.date.localeCompare(b.memory.date));
 
   const pages: BookPage[] = [];
-  // Page numbering starts at 2 (same convention `numberPages` in fitter.ts
-  // uses) — tracked with a running counter here since a spread advances it
-  // by 2 and a single page by only 1, unlike the old spread-only demo's
-  // fixed `spreadIndex * 2 + 2` formula.
-  let nextPageNumber = 2;
+  // Round-22: page numbering starts at 1 (same convention `numberPages` in
+  // fitter.ts now uses — the cover and the front-matter-verso blank are
+  // both unnumbered) — tracked with a running counter here since a spread
+  // advances it by 2 and a single page by only 1, unlike the old spread-only
+  // demo's fixed `spreadIndex * 2 + 2` formula.
+  let nextPageNumber = 1;
   let i = 0;
   while (i + PER_SPREAD <= entries.length) {
     const chunk = entries.slice(i, i + PER_SPREAD);
