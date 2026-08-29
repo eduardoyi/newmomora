@@ -19,6 +19,21 @@
  * through the RLS-scoped client (the service-role admin client only
  * bootstraps the auth session), exactly like eval-memory-book-outline.ts.
  *
+ * Round-19 exception -- share tokens (docs/plans/memory-book.md §8, revocable
+ * QR links): this script now also performs ONE kind of database WRITE --
+ * `ensureShareTokens` mints a `media_share_tokens` row (SELECT active by
+ * memory_id, INSERT when absent) for every exported memory whose page
+ * carries a QR/scan mark (video or audio, see `memoryNeedsShareToken`).
+ * Both the SELECT and the INSERT go through the service-role admin client
+ * (`createAdminClient`, factored out of `createAuthedClient`'s own internal
+ * one), not the RLS-scoped session client -- `media_share_tokens` has no
+ * `authenticated` INSERT policy at all (service-role only, matching
+ * `memory_milestones`' write posture). Minting failure is FATAL (throws,
+ * uncaught -> non-zero exit): a book whose printed QR code encodes a token
+ * that doesn't resolve is a silently broken physical artifact, worse than a
+ * failed export run. This does not weaken the "read-only" story for
+ * `memories`/`memory_media`/etc. above -- those are still only ever read.
+ *
  * PII rule: `manifest.json`/`book.outline.json`/`assets/*` are written under
  * `book-renderer/book-data/` -- gitignored, own-account only, and (per the
  * renderer's own data contract) DELIBERATELY contain full memory text, since
@@ -155,6 +170,7 @@
  *   npm run eval:memory-book-assets -- --outline-run <dir> --language es
  *   npm run eval:memory-book-assets -- --outline-run <dir> --exclude-portrait-id 1dbc29b2-43d0-42e0-811c-26d58959dfbd
  *   npm run eval:memory-book-assets -- --outline-run <dir> --poster-frames 1
+ *   npm run eval:memory-book-assets -- --outline-run <dir> --print-assets
  *
  * `--exclude-portrait-id <uuid>` (repeatable) drops a
  * `family_member_portrait_versions` id from the export entirely -- omitted
@@ -174,6 +190,48 @@
  * `coerceManifestLanguage`) instead of a hardcoded "en"; an explicit
  * `--language` flag still always wins. Falls back to "en" exactly as
  * before on an outline run that predates that field.
+ *
+ * Round-20 -- `--print-assets`: the default (preview) loop exports the
+ * ~1280px `preview_object_key` JPEG for every photo asset -- fine for a fast
+ * iteration loop, but book-renderer/scripts/render-pdf.mts (Puppeteer)
+ * embeds whatever sits in `assets/` verbatim, so a print PDF built from a
+ * preview-mode export carries ~170dpi photos. `--print-assets` downloads the
+ * ORIGINAL R2 object (`memory_media.object_key`) as the exported photo asset
+ * instead -- the same object the original-dimensions measurement step
+ * (`measureOriginalDimensions`) already fetches for every photo regardless
+ * of this flag (see the "original dimensions for every photo" note above);
+ * in print mode that one fetch is reused as the exported file itself
+ * (written to disk, not discarded) rather than fetched a second time, and
+ * its measured dimensions become BOTH the asset's own `width`/`height` AND
+ * `originalWidth`/`originalHeight` (`shouldDownloadOriginalForPrint`).
+ * Video-poster assets are unaffected either way -- they already extract a
+ * full-resolution frame from the original video unconditionally (see above).
+ *
+ * Puppeteer/Chromium cannot render HEIC. `isHeicContentType` gates a
+ * transcode-to-JPEG attempt (`transcodeHeicBytesToJpeg`) via `npm:sharp@0.33`
+ * -- the exact package + version backfill-media-previews.ts already relies
+ * on, in this same Deno/npm-compat runtime, to decode HEIC uploads and
+ * produce JPEG previews in production (`downloadAndResize`'s
+ * `sharp(originalBuffer)` runs for every `ALLOWED_IMAGE_CONTENT_TYPES`
+ * member, heic/heif included) -- proven working here, unlike shelling out to
+ * a local `ffmpeg` binary's HEIC decode support, which depends on that
+ * binary having been compiled with libheif (not guaranteed, and would need
+ * its own availability probe the way the poster path probes `ffmpeg`/
+ * `ffprobe`). No resize on transcode -- `PRINT_ASSET_HEIC_JPEG_QUALITY` (95)
+ * is a near-lossless JPEG quality appropriate for print, not the lower
+ * `PREVIEW_JPEG_QUALITY` (80) backfill-media-previews.ts uses for in-app
+ * thumbnails. A transcode failure (including sharp being unavailable) never
+ * fails the export: that one asset falls back to the already-selected
+ * preview file (`job.key`, always a JPEG) and is counted in
+ * `printAssetHeicFallbackCount`, reported loudly at the end ("N assets fell
+ * back to preview resolution") and NOT retried as an original -- callers
+ * decide whether the fallback rate is acceptable for a given print run.
+ *
+ * Preview-mode (`--print-assets` omitted) behavior, byte-for-byte, is
+ * unchanged -- the flag only branches the photo-asset download path.
+ * `manifest.assetMode` ('preview' | 'print') records which mode produced a
+ * given export, so the renderer/audit tooling could later distinguish a
+ * preview-quality `book-data/` directory from a print-ready one.
  *
  * Requires Supabase vars in supabase/.env.local and R2 vars for image/video
  * downloads, plus a local `ffmpeg` binary on PATH for full-resolution video
@@ -236,6 +294,18 @@ interface CliOptions {
    * owner round-8).
    */
   posterFrameCount: number;
+  /**
+   * Round-20: when set, photo assets download the ORIGINAL R2 object
+   * (`memory_media.object_key`) instead of the ~1280px
+   * `preview_object_key` -- see the header note "`--print-assets`" for the
+   * full rationale (Puppeteer print PDFs embedding preview-resolution
+   * photos). Defaults to `false` -- the fast preview loop is unchanged
+   * unless this flag is passed. Video-poster assets always extract a
+   * full-resolution frame from the original video regardless of this flag,
+   * so it only ever branches the PHOTO download path
+   * (`shouldDownloadOriginalForPrint`).
+   */
+  printAssets: boolean;
 }
 
 const DEFAULT_CONCURRENCY = 6;
@@ -281,7 +351,7 @@ export function resolveManifestLanguageDefault(
 export const CLI_USAGE =
   'Usage: eval-memory-book-assets.ts --outline-run <dir> ' +
   '[--out <dir>] [--concurrency <n>] [--language <es|en>] [--exclude-portrait-id <uuid>]... ' +
-  '[--poster-frames <n>]';
+  '[--poster-frames <n>] [--print-assets]';
 
 /**
  * Throws on any argument that isn't one of the known flags (or a value
@@ -299,6 +369,7 @@ export function parseArgs(args: string[]): CliOptions {
     languageExplicit: false,
     excludePortraitIds: [],
     posterFrameCount: DEFAULT_POSTER_FRAME_COUNT,
+    printAssets: false,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -333,6 +404,10 @@ export function parseArgs(args: string[]): CliOptions {
         index += 1;
         break;
       }
+      case '--print-assets':
+        // Boolean flag -- no value to consume, unlike every other case above.
+        options.printAssets = true;
+        break;
       default:
         throw new Error(`Unknown argument: "${arg}"\n${CLI_USAGE}`);
     }
@@ -628,6 +703,57 @@ export function extensionFromKey(key: string): string {
 export function mediaAssetFileName(memoryId: string, position: number, ext: string): string {
   return `assets/${memoryId}-${position}.${ext}`;
 }
+
+// ── Pure helpers: --print-assets download-path selection (round-20) ────────
+// See the header note "`--print-assets`" for the full rationale -- these
+// three are the ONLY decisions this feature makes ahead of time (before any
+// actual network/ffmpeg/sharp work runs), so they're kept pure/unit-testable
+// independent of the download itself.
+
+/** True for `image/heic`/`image/heif` -- the two content types Puppeteer/
+ * Chromium cannot render, so a print-mode original in either of these needs
+ * a JPEG transcode attempt (`transcodeHeicBytesToJpeg`) before it can be
+ * embedded in the printed PDF. */
+export function isHeicContentType(contentType: string): boolean {
+  return contentType === 'image/heic' || contentType === 'image/heif';
+}
+
+/**
+ * Whether a media job's PRIMARY download should be the ORIGINAL R2 object
+ * (`memory_media.object_key`) rather than the `selectMediaAsset`-chosen
+ * key (preview, or original-as-fallback for jpeg/png/webp without one).
+ * Only ever true for a `photo` job with `--print-assets` set --
+ * `video-poster` jobs already extract a full-resolution frame from the
+ * original video unconditionally (see `extractFullResolutionPosterFrame`),
+ * regardless of this flag, so routing them through the original-download
+ * path here would just mean downloading the raw video bytes as a "photo,"
+ * which is never correct.
+ */
+export function shouldDownloadOriginalForPrint(printAssets: boolean, kind: ManifestAssetKind): boolean {
+  return printAssets && kind === 'photo';
+}
+
+/**
+ * The file extension a print-mode photo asset will be written under --
+ * decided ahead of the actual download so `mediaAssetFileName` can be
+ * computed once, at job-build time, same as the preview-mode path. A HEIC/
+ * HEIF original ALWAYS ends up as `jpg` on disk, whether the transcode
+ * attempt succeeds (re-encoded to JPEG) or fails (falls back to the
+ * already-selected preview file, which `selectMediaAsset` guarantees is
+ * itself a JPEG whenever a HEIC job reached this point at all -- see
+ * `selectMediaAsset`'s "skip HEIC without a preview" rule). Anything else
+ * keeps the original object key's own extension unchanged.
+ */
+export function resolvePrintPhotoExtension(contentType: string, objectKey: string): string {
+  if (isHeicContentType(contentType)) return 'jpg';
+  return extensionFromKey(objectKey);
+}
+
+/** sharp's 1-100 JPEG quality scale -- near-lossless, appropriate for a
+ * print-bound HEIC transcode (`transcodeHeicBytesToJpeg`). Deliberately
+ * higher than backfill-media-previews.ts's `PREVIEW_JPEG_QUALITY` (80),
+ * which is tuned for a small in-app preview, not a printed page. */
+export const PRINT_ASSET_HEIC_JPEG_QUALITY = 95;
 
 /** `memories.illustration_key` export target (brief item 1 -- illustrations
  * live outside `memory_media` entirely, so this is a separate file/id
@@ -1175,6 +1301,65 @@ export interface ManifestMilestone {
   detail: string | null;
 }
 
+// ── Share tokens (Round-19 -- revocable QR links, docs/plans/memory-book.md
+// §8). Replaces the earlier raw-memoryId QR URLs: the memory-viewer worker
+// and book-renderer's scan marks now resolve/encode an opaque token from
+// `media_share_tokens` instead of the memory id itself, so a lost/stolen
+// printed book can be revoked without touching the underlying memory. ─────
+
+/** Base62 alphabet for `generateShareToken` -- 62 distinct URL-safe
+ * characters (digits, then uppercase, then lowercase; the ordering itself
+ * has no significance). */
+const SHARE_TOKEN_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+/** 22 base62 characters ~= 22 * log2(62) ~= 131 bits of entropy -- brief's
+ * own suggestion ("22 chars base62"), comfortably unguessable for a public,
+ * unauthenticated `GET /m/:token` route where the token itself is the only
+ * access control (see workers/memory-viewer's "Privacy model" -- no PIN). */
+export const SHARE_TOKEN_LENGTH = 22;
+
+/**
+ * Cryptographically random, URL-safe token generator (brief: "generate
+ * URL-safe random, e.g. 22 chars base62 from crypto.getRandomValues").
+ * Uses rejection sampling -- bytes >= 248 (the largest multiple of 62 that
+ * fits in a byte) are discarded rather than reduced mod 62 -- so all 62
+ * output characters have exactly equal probability; a plain `byte % 62`
+ * would slightly bias the alphabet's first (256 mod 62 = 8) characters.
+ * `randomBytes` is injectable for deterministic tests; production always
+ * uses the real `crypto.getRandomValues` (available globally in Deno).
+ */
+export function generateShareToken(
+  randomBytes: (count: number) => Uint8Array = (count) => crypto.getRandomValues(new Uint8Array(count)),
+): string {
+  const REJECTION_CEILING = SHARE_TOKEN_ALPHABET.length * Math.floor(256 / SHARE_TOKEN_ALPHABET.length); // 248
+  let token = '';
+  while (token.length < SHARE_TOKEN_LENGTH) {
+    const batch = randomBytes(SHARE_TOKEN_LENGTH - token.length);
+    for (const byte of batch) {
+      if (token.length === SHARE_TOKEN_LENGTH) break;
+      if (byte >= REJECTION_CEILING) continue; // discard -- would bias the low end of the alphabet.
+      token += SHARE_TOKEN_ALPHABET[byte % SHARE_TOKEN_ALPHABET.length];
+    }
+  }
+  return token;
+}
+
+/**
+ * Whether a memory's book page carries a QR/scan mark, and therefore needs
+ * a `media_share_tokens` row minted for it. Mirrors book-renderer's own
+ * QR-eligibility exactly (`isVideoAsset`/`isAudioMemory` in
+ * book-renderer/src/model/fitter.ts): an audio memory (the scan mark IS the
+ * page -- see templates/AudioNote.tsx), or a `media` memory with at least
+ * one video-poster asset (an inline "scan to watch" credit line on an
+ * otherwise photo-shaped page -- see `PhotoSlotContent.qr` /
+ * `templates/common/PhotoTile.tsx`). A photo-only memory needs no token --
+ * it has no QR page at all.
+ */
+export function memoryNeedsShareToken(memoryType: string, assets: Array<{ kind: ManifestAssetKind }>): boolean {
+  if (memoryType === 'audio') return true;
+  return memoryType === 'media' && assets.some((asset) => asset.kind === 'video-poster');
+}
+
 export function buildManifestMilestone(milestoneId: string, detail: string | null): ManifestMilestone {
   return { id: milestoneId, name: getMilestoneById(milestoneId)?.name ?? milestoneId, detail };
 }
@@ -1230,6 +1415,16 @@ export interface ManifestMemory {
   /** `null` when the memory has no `illustration_key` (most memories --
    * illustration is an opt-in AI feature, not every memory has one). */
   illustration: ManifestIllustration | null;
+  /**
+   * Round-19: the active `media_share_tokens.token` a QR-eligible memory's
+   * scan mark encodes -- `null` for every memory that doesn't carry a QR
+   * page (`memoryNeedsShareToken` false) AND, defensively, for a
+   * QR-eligible one whose mint somehow still came back empty (shouldn't
+   * happen -- `ensureShareTokens` throws rather than leaving a gap -- but
+   * this field stays nullable rather than widening to `string` so a caller
+   * can never accidentally treat "no token" as unreachable).
+   */
+  shareToken: string | null;
 }
 
 export interface ManifestMemorySourceRow {
@@ -1247,6 +1442,7 @@ export function buildManifestMemory(input: {
   taggedMembers: ManifestTaggedMember[];
   engagement: number;
   illustration: ManifestIllustration | null;
+  shareToken: string | null;
 }): ManifestMemory {
   return {
     date: input.memory.memory_date,
@@ -1259,6 +1455,7 @@ export function buildManifestMemory(input: {
     taggedMembers: input.taggedMembers,
     assets: input.assets,
     illustration: input.illustration,
+    shareToken: input.shareToken,
   };
 }
 
@@ -1285,6 +1482,15 @@ export function buildManifestPortrait(params: {
   };
 }
 
+/** Round-20: which download path produced a `book-data/<slug>/` export --
+ * `'preview'` (default, fast iteration loop -- ~1280px `preview_object_key`
+ * photos) or `'print'` (`--print-assets` -- original-resolution photos, see
+ * the header note "`--print-assets`"). Recorded top-level rather than
+ * per-asset because the whole export runs in one mode or the other; kept
+ * minimal so the renderer/audit tooling can distinguish the two without
+ * having to infer it from file sizes. */
+export type ManifestAssetMode = 'preview' | 'print';
+
 export interface BookManifest {
   child: { id: string; name: string };
   scope: ManifestScope;
@@ -1299,6 +1505,8 @@ export interface BookManifest {
    * manifest rather than pointing at a file that was never written; this is
    * how the renderer (and we) see the gap. Always `[]` on a clean run. */
   downloadFailures: DownloadFailure[];
+  /** See `ManifestAssetMode`. */
+  assetMode: ManifestAssetMode;
 }
 
 export function buildManifest(input: {
@@ -1309,6 +1517,10 @@ export function buildManifest(input: {
   portraits: ManifestPortrait[];
   language: ManifestLanguage;
   downloadFailures: DownloadFailure[];
+  /** Defaults to `'preview'` -- every caller that predates round-20 (incl.
+   * this file's own pre-existing tests) gets the same behavior as before
+   * this field existed. */
+  assetMode?: ManifestAssetMode;
   now?: Date;
 }): BookManifest {
   return {
@@ -1320,6 +1532,7 @@ export function buildManifest(input: {
     portraits: input.portraits,
     language: input.language,
     downloadFailures: input.downloadFailures,
+    assetMode: input.assetMode ?? 'preview',
   };
 }
 
@@ -1396,19 +1609,38 @@ export function isClockSkewAuthError(message: string | null | undefined): boolea
 
 // ── Auth (same pattern as eval-memory-book-outline.ts) ──────────────────────
 
-async function createAuthedClient() {
+/**
+ * The service-role admin client -- factored out of `createAuthedClient`
+ * (below), which originally built one of these ONLY to bootstrap a
+ * magic-link session, never exposing it further ("the service-role admin
+ * client only bootstraps the auth session", per this file's header). Round-19
+ * needs a second, longer-lived use for it: `ensureShareTokens` mints
+ * `media_share_tokens` rows, which has no `authenticated` RLS policy at all
+ * (service-role only -- see the migration).
+ */
+function createAdminClient() {
   const supabaseUrl = Deno.env.get('EXPO_PUBLIC_SUPABASE_URL') ?? Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error('Missing Supabase env vars in supabase/.env.local (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)');
+  }
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
+
+type AdminClient = ReturnType<typeof createAdminClient>;
+
+async function createAuthedClient() {
+  const supabaseUrl = Deno.env.get('EXPO_PUBLIC_SUPABASE_URL') ?? Deno.env.get('SUPABASE_URL');
   const anonKey = Deno.env.get('EXPO_PUBLIC_SUPABASE_ANON_KEY') ?? Deno.env.get('SUPABASE_ANON_KEY');
   const userEmail = Deno.env.get('EVAL_USER_EMAIL') ?? 'eduardoyi@gmail.com';
 
-  if (!supabaseUrl || !serviceRoleKey || !anonKey) {
+  if (!supabaseUrl || !anonKey) {
     throw new Error('Missing Supabase env vars in supabase/.env.local');
   }
 
-  const admin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
+  const admin = createAdminClient();
 
   const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
     type: 'magiclink',
@@ -1439,6 +1671,68 @@ async function createAuthedClient() {
 }
 
 type AuthedClient = Awaited<ReturnType<typeof createAuthedClient>>;
+
+// ── Share token minting (Round-19 -- see this file's header note on the
+// "READ-ONLY... one exception" and `memoryNeedsShareToken` above). Both
+// functions use the ADMIN client, never the RLS-scoped `AuthedClient` --
+// `media_share_tokens` INSERT has no `authenticated` policy to satisfy in
+// the first place. ──────────────────────────────────────────────────────
+
+interface ShareTokenRow {
+  memory_id: string;
+  token: string;
+}
+
+async function loadActiveShareTokens(admin: AdminClient, memoryIds: string[]): Promise<Map<string, string>> {
+  const tokensByMemory = new Map<string, string>();
+  for (const idChunk of chunk(memoryIds, CHUNK_SIZE)) {
+    if (idChunk.length === 0) continue;
+    const { data, error } = await admin
+      .from('media_share_tokens')
+      .select('memory_id, token')
+      .in('memory_id', idChunk)
+      .is('revoked_at', null);
+    if (error) throw new Error(`Failed to load media_share_tokens: ${error.message}`);
+    for (const row of (data ?? []) as ShareTokenRow[]) {
+      tokensByMemory.set(row.memory_id, row.token);
+    }
+  }
+  return tokensByMemory;
+}
+
+/**
+ * Ensures every id in `memoryIds` (every QR-eligible memory in this export,
+ * per `memoryNeedsShareToken`) has an active `media_share_tokens` row:
+ * reads whatever already exists, then mints (INSERTs) a fresh
+ * `generateShareToken()` row for whichever ids come back without one.
+ * Returns memoryId -> token, guaranteed to cover every id in `memoryIds` on
+ * success.
+ *
+ * Fails LOUDLY (throws, uncaught by any caller -> the whole run exits
+ * non-zero) on any read or write error -- unlike this file's R2 download
+ * path (retry, record, keep going), a QR page that encodes an unminted
+ * token is a silently broken printed artifact discovered only after the
+ * book is in someone's hands. No partial-failure tolerance here.
+ */
+async function ensureShareTokens(admin: AdminClient, memoryIds: string[]): Promise<Map<string, string>> {
+  if (memoryIds.length === 0) return new Map();
+
+  const tokensByMemory = await loadActiveShareTokens(admin, memoryIds);
+  const missingIds = memoryIds.filter((id) => !tokensByMemory.has(id));
+
+  if (missingIds.length > 0) {
+    const newRows = missingIds.map((memory_id) => ({ memory_id, token: generateShareToken() }));
+    const { error } = await admin.from('media_share_tokens').insert(newRows);
+    if (error) {
+      throw new Error(
+        `Failed to mint media_share_tokens for ${missingIds.length} memor${missingIds.length === 1 ? 'y' : 'ies'}: ${error.message}`,
+      );
+    }
+    for (const row of newRows) tokensByMemory.set(row.memory_id, row.token);
+  }
+
+  return tokensByMemory;
+}
 
 // ── Row shapes (hand-typed -- matches src/types/database.ts) ───────────────
 
@@ -1685,7 +1979,10 @@ async function main(): Promise<void> {
   const outDir = (options.out ?? defaultOutDir(outline.child.name, outline.window.label)).replace(/\/+$/, '');
   await Deno.mkdir(`${outDir}/assets`, { recursive: true });
 
-  console.log(`Memory Book V3 asset export -- outline run ${runBasename} -- child ${outline.child.id} -- language ${options.language}`);
+  console.log(
+    `Memory Book V3 asset export -- outline run ${runBasename} -- child ${outline.child.id} -- ` +
+      `language ${options.language} -- assets ${options.printAssets ? 'print' : 'preview'}`,
+  );
 
   const memoryIds = mergeCandidateMemoryIds(
     collectMemoryIdsFromElements(outline.elements),
@@ -1694,6 +1991,11 @@ async function main(): Promise<void> {
   );
 
   let supabase = await createAuthedClient();
+  // Round-19: the service-role client `ensureShareTokens` mints
+  // media_share_tokens rows with, further down. Created once up front (no
+  // I/O of its own -- unlike `supabase` above, this doesn't touch the
+  // network until first used) rather than re-derived at the point of use.
+  const admin = createAdminClient();
 
   // Hardening fix: the first query against a freshly-minted session
   // occasionally races the server's clock and comes back as a JWT
@@ -1760,16 +2062,25 @@ async function main(): Promise<void> {
 
   interface MediaJob {
     memoryId: string;
+    /** `row.position` -- kept alongside `file` so a print-mode preview
+     * fallback (see `shouldDownloadOriginalForPrint`) can recompute the
+     * exported filename's extension without re-deriving it from scratch. */
+    position: number;
     file: string;
     kind: ManifestAssetKind;
     durationMs: number | null;
     dbAspectRatio: number | null;
     /** Resolved preview/original key for a photo; resolved preview key
-     * (the video-poster fallback source) for a video. */
+     * (the video-poster fallback source) for a video. Also the print-mode
+     * fallback source for a photo whose original couldn't be used (HEIC
+     * transcode failure, or the original itself failed to download) --
+     * always a JPEG in that role, per `selectMediaAsset`. */
     key: string;
     /** Raw `object_key` -- for a video-poster job, the ORIGINAL video this
-     * script extracts a full-resolution frame from (brief item 2). Unused
-     * for photo jobs. */
+     * script extracts a full-resolution frame from (brief item 2). For a
+     * `--print-assets` photo job, the ORIGINAL photo this script downloads
+     * as the exported asset itself (round-20, `shouldDownloadOriginalForPrint`).
+     * Unused for a preview-mode photo job. */
     objectKey: string;
     contentType: string;
   }
@@ -1789,9 +2100,17 @@ async function main(): Promise<void> {
         mediaSkippedCount += 1;
         continue;
       }
+      // Round-20: a print-mode photo's exported file is the ORIGINAL
+      // object, so its extension comes from the original (HEIC/HEIF always
+      // planned as 'jpg' -- see `resolvePrintPhotoExtension`), not from
+      // `selected.key` (which stays the PREVIEW-mode/fallback source).
+      const fileExtension = shouldDownloadOriginalForPrint(options.printAssets, selected.kind)
+        ? resolvePrintPhotoExtension(row.content_type, row.object_key)
+        : extensionFromKey(selected.key);
       mediaJobs.push({
         memoryId,
-        file: mediaAssetFileName(memoryId, row.position, extensionFromKey(selected.key)),
+        position: row.position,
+        file: mediaAssetFileName(memoryId, row.position, fileExtension),
         kind: selected.kind,
         durationMs: row.duration_ms,
         dbAspectRatio: row.aspect_ratio,
@@ -1805,6 +2124,14 @@ async function main(): Promise<void> {
   const mediaSlots: Array<ManifestAsset | null> = new Array(mediaJobs.length).fill(null);
   let mediaFailedCount = 0;
   let videoPosterFallbackCount = 0;
+  /** Round-20 (`--print-assets`): a photo asset that could NOT use its
+   * original -- either a HEIC/HEIF transcode failure (`transcodeHeicBytesToJpeg`)
+   * or the original object itself failing to download/decode after retries
+   * -- and fell back to the already-selected preview file instead. Always
+   * `0` outside print mode. Reported loudly at the end (never silent --
+   * a print run with a meaningful fallback count means the printed book
+   * will carry some preview-resolution photos). */
+  let printAssetPreviewFallbackCount = 0;
 
   // ── Reliability fix: retry every R2 object fetch, never crash the run on
   // one, and keep a record of whatever still fails after retries ──────────
@@ -1859,6 +2186,62 @@ async function main(): Promise<void> {
     } catch {
       return null; // already recorded into downloadFailures by fetchObjectBytesWithRetries.
     }
+  }
+
+  /**
+   * Round-20 (`--print-assets`): fetches the ORIGINAL photo bytes for `job`
+   * -- reusing `fetchObjectBytesWithRetries`/`job.objectKey`, the exact same
+   * fetch+retry `measureOriginalDimensions` above already performs -- and
+   * returns them alongside their real dimensions (`image-size` reads a
+   * HEIC/HEIF box header without a full decode, so this works even when the
+   * content is HEIC and the transcode step below hasn't run yet). Unlike
+   * `measureOriginalDimensions`, the bytes are NOT discarded: in print mode
+   * they (or their HEIC transcode) become the EXPORTED asset file itself,
+   * so this is the ONE original-fetch print mode needs per photo, not a
+   * measure-then-discard-then-fetch-again. Returns `null` on any failure
+   * (non-image original, fetch exhausted its retries, unreadable
+   * dimensions) -- the caller falls back to the stored preview file for
+   * that one asset, same posture as every other per-asset failure in this
+   * script.
+   */
+  async function fetchOriginalPhotoForPrint(
+    job: MediaJob,
+  ): Promise<{ bytes: Uint8Array; width: number; height: number } | null> {
+    if (!job.contentType.startsWith('image/')) return null; // photo kind should always be an image; defensive.
+    try {
+      const originalBytes = await fetchObjectBytesWithRetries(job.objectKey, 'media-original');
+      const { imageSize } = await import('npm:image-size@1.2.1');
+      const { width, height } = imageSize(originalBytes);
+      if (!width || !height) {
+        console.warn(`  print-asset original unreadable, falling back to preview (${objectKeyBasename(job.objectKey)})`);
+        return null;
+      }
+      return { bytes: originalBytes, width, height };
+    } catch {
+      return null; // already recorded into downloadFailures by fetchObjectBytesWithRetries.
+    }
+  }
+
+  /**
+   * Round-20 (`--print-assets`): transcodes HEIC/HEIF original bytes to a
+   * near-lossless JPEG (`PRINT_ASSET_HEIC_JPEG_QUALITY`) via `npm:sharp@0.33`
+   * -- Puppeteer/Chromium cannot render HEIC. Same package + exact version
+   * backfill-media-previews.ts already relies on to decode HEIC uploads
+   * successfully in this same Deno/npm-compat runtime (see this file's
+   * header note on `--print-assets` for the full comparison against
+   * shelling out to `ffmpeg`). Dynamically imported -- like every other npm
+   * import in this file's worker functions -- so the default preview loop
+   * never pays for loading sharp's native binary unless print mode actually
+   * encounters a HEIC original. No resize: print quality, not preview
+   * quality. Throws on any decode/encode failure or missing binary; the
+   * only caller wraps this in try/catch and falls back to the preview file
+   * for that one asset (`printAssetPreviewFallbackCount`) rather than
+   * failing the whole export.
+   */
+  async function transcodeHeicBytesToJpeg(bytes: Uint8Array): Promise<Uint8Array> {
+    const { default: sharp } = await import('npm:sharp@0.33');
+    const jpegBuffer = await sharp(bytes).jpeg({ quality: PRINT_ASSET_HEIC_JPEG_QUALITY }).toBuffer();
+    return new Uint8Array(jpegBuffer);
   }
 
   /** Best-effort clip duration via `ffprobe` -- used only when the DB's own
@@ -1987,6 +2370,7 @@ async function main(): Promise<void> {
   await runPool(mediaJobs, options.concurrency, async (job, index) => {
     try {
       let bytes: Uint8Array;
+      let originalDimensions: { width: number; height: number } | null = null;
 
       if (job.kind === 'video-poster') {
         try {
@@ -1998,6 +2382,41 @@ async function main(): Promise<void> {
             extractionError instanceof Error ? extractionError.message : extractionError,
           );
           bytes = await fetchObjectBytesWithRetries(job.key, 'video-poster-fallback'); // stored preview_object_key poster.
+        }
+      } else if (shouldDownloadOriginalForPrint(options.printAssets, job.kind)) {
+        // Round-20 (`--print-assets`): the ORIGINAL object becomes the
+        // exported photo asset -- one fetch (`fetchOriginalPhotoForPrint`)
+        // serves both the export AND the originalWidth/originalHeight
+        // measurement, instead of preview mode's separate
+        // fetch-then-discard `measureOriginalDimensions` call below.
+        const original = await fetchOriginalPhotoForPrint(job);
+        if (original && isHeicContentType(job.contentType)) {
+          // image-size can read HEIC/HEIF dimensions from the box header
+          // alone, so these are already known even if the transcode itself
+          // fails below.
+          originalDimensions = { width: original.width, height: original.height };
+          try {
+            bytes = await transcodeHeicBytesToJpeg(original.bytes);
+          } catch (transcodeError) {
+            printAssetPreviewFallbackCount += 1;
+            console.warn(
+              `  print-asset HEIC transcode failed, falling back to preview resolution (${objectKeyBasename(job.objectKey)}):`,
+              transcodeError instanceof Error ? transcodeError.message : transcodeError,
+            );
+            bytes = await fetchObjectBytesWithRetries(job.key, 'media'); // stored preview_object_key -- always JPEG.
+          }
+        } else if (original) {
+          bytes = original.bytes;
+          originalDimensions = { width: original.width, height: original.height };
+        } else {
+          printAssetPreviewFallbackCount += 1;
+          console.warn(`  print-asset original unavailable, falling back to preview resolution (${objectKeyBasename(job.objectKey)})`);
+          bytes = await fetchObjectBytesWithRetries(job.key, 'media');
+          // The planned filename assumed the original's own extension
+          // (round-20's resolvePrintPhotoExtension) -- since the fallback
+          // bytes are the stored preview (always JPEG), keep the written
+          // filename truthful to what's actually on disk.
+          job.file = mediaAssetFileName(job.memoryId, job.position, 'jpg');
         }
       } else {
         bytes = await fetchObjectBytesWithRetries(job.key, 'media');
@@ -2011,10 +2430,14 @@ async function main(): Promise<void> {
       await Deno.writeFile(`${outDir}/${job.file}`, bytes);
 
       // Owner round-8: every photo asset gets original dimensions measured
-      // now (not just panorama/hero candidates) -- see measureOriginalDimensions.
-      const originalDimensions = shouldMeasureOriginalDimensions(job.kind)
-        ? await measureOriginalDimensions(job)
-        : null;
+      // (not just panorama/hero candidates) -- see measureOriginalDimensions.
+      // Round-20: print mode already set this above from the same original
+      // fetch used for the export itself; only fall through to a SEPARATE
+      // fetch-and-discard when it didn't (preview mode, or a print-mode
+      // asset whose original was entirely unavailable).
+      if (originalDimensions === null && shouldMeasureOriginalDimensions(job.kind)) {
+        originalDimensions = await measureOriginalDimensions(job);
+      }
 
       mediaSlots[index] = buildManifestAsset({
         file: job.file,
@@ -2150,6 +2573,26 @@ async function main(): Promise<void> {
     if (illustration) illustrationsByMemory.set(job.memoryId, illustration);
   });
 
+  // ── Share tokens (Round-19) ─────────────────────────────────────────────
+  // Every memory whose EXPORTED page will actually carry a QR/scan mark --
+  // computed from the same post-download `assetsByMemory` the manifest
+  // itself is about to be built from (a video whose poster failed every
+  // download retry has no photo slot in this export, so it needs no token
+  // either). Minted/looked-up once, in a single batch, before the
+  // per-memory loop below so buildManifestMemory can just look the result
+  // up rather than making its own DB call per memory.
+  const shareTokenEligibleIds = memoryIds.filter((id) => {
+    const memoryRow = memoriesById.get(id);
+    if (!memoryRow) return false;
+    return memoryNeedsShareToken(memoryRow.memory_type, assetsByMemory.get(id) ?? []);
+  });
+  const shareTokensByMemory = await ensureShareTokens(admin, shareTokenEligibleIds);
+  if (shareTokenEligibleIds.length > 0) {
+    console.log(
+      `Share tokens ensured for ${shareTokenEligibleIds.length} QR-eligible memor${shareTokenEligibleIds.length === 1 ? 'y' : 'ies'}.`,
+    );
+  }
+
   // ── Manifest memories ────────────────────────────────────────────────
 
   const manifestMemories: Record<string, ManifestMemory> = {};
@@ -2186,6 +2629,7 @@ async function main(): Promise<void> {
       taggedMembers,
       engagement: engagementCounts.get(memoryId) ?? 0,
       illustration: illustrationsByMemory.get(memoryId) ?? null,
+      shareToken: shareTokensByMemory.get(memoryId) ?? null,
     });
   }
 
@@ -2201,6 +2645,7 @@ async function main(): Promise<void> {
     portraits,
     language: options.language,
     downloadFailures: downloadFailureSummary.failures,
+    assetMode: options.printAssets ? 'print' : 'preview',
   });
 
   await Deno.writeTextFile(`${outDir}/manifest.json`, JSON.stringify(manifest, null, 2));
@@ -2219,6 +2664,9 @@ async function main(): Promise<void> {
     console.log(
       `Video posters using the stored preview fallback (ffmpeg unavailable/failed or 300MB size guard): ${videoPosterFallbackCount}`,
     );
+  }
+  if (printAssetPreviewFallbackCount > 0) {
+    console.warn(`WARNING: ${printAssetPreviewFallbackCount} assets fell back to preview resolution`);
   }
   console.log(`Download failures after retries: ${downloadFailureSummary.failedCount}`);
   console.log(`Wrote ${outDir}/manifest.json + book.outline.json + assets/`);

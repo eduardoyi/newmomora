@@ -17,14 +17,15 @@
       "bucket_name": "momora-prod"
     }
   ],
-  // Custom domain for the QR viewer (docs/plans/memory-book.md §7). This is
-  // a NEW domain, distinct from the app's existing usemomora.com — see the
-  // README's "DNS" section for what the owner needs to do before this route
-  // can go live (add momora.app to the same Cloudflare account, or point it
-  // at this account via a partial/CNAME setup, then flip this on).
+  // Custom domain for the QR viewer (docs/plans/memory-book.md §7/§8).
+  // Owner decision (Round-19): m.usemomora.com -- a subdomain of the app's
+  // EXISTING usemomora.com, matching every other public-facing Momora link
+  // (see app.json's applinks:usemomora.com, docs/features/family-sharing.md),
+  // not the earlier placeholder momora.app. See the README's "DNS" section
+  // for the one record the owner adds before this route can go live.
   "routes": [
     {
-      "pattern": "m.momora.app",
+      "pattern": "m.usemomora.com",
       "custom_domain": true
     }
   ],

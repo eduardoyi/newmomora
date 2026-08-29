@@ -171,10 +171,12 @@ ${captionHtml}
 </html>`;
 }
 
-/** Shared by: malformed/missing memory id, no matching memory, no media
- * asset, or an unsupported media type. Deliberately says nothing about
- * *why* -- see README "Privacy model" (a distinguishing error message
- * would let someone probe whether an id exists at all). */
+/** Shared by: malformed/missing share token, an unknown (never-minted)
+ * token, no matching memory, no media asset, or an unsupported media type.
+ * Deliberately says nothing about *why* -- see README "Privacy model" (a
+ * distinguishing error message would let someone probe whether a token was
+ * ever minted at all). A REVOKED token gets its own, different page --
+ * `renderRevokedPage` below -- rather than this one. */
 export function renderNotFoundPage(): string {
   return `<!doctype html>
 <html lang="en">
@@ -189,6 +191,36 @@ export function renderNotFoundPage(): string {
 <main class="wrap">
 <h1>This memory isn&rsquo;t available</h1>
 <p>The link may be mistyped, or the memory it points to may have been removed. If you scanned this from a printed Momora book, please check with whoever shared the book with you.</p>
+<p class="brand">Momora</p>
+</main>
+</body>
+</html>`;
+}
+
+/**
+ * Round-19: shown for a share token that WAS minted but has since been
+ * revoked (`media_share_tokens.revoked_at` set) -- see `classifyShareToken`
+ * in resolve.ts. Distinct copy from `renderNotFoundPage`: the person
+ * scanning this code once had a real, working link, so "this link is no
+ * longer active" is a truer explanation than "isn't available" (which
+ * reads as "you mistyped/mis-scanned it"). Still says nothing about *why*
+ * it was revoked -- same privacy posture as the unknown-token page, just
+ * more honest about which of the two situations this is.
+ */
+export function renderRevokedPage(): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Link no longer active &middot; Momora</title>
+<style>${NOT_FOUND_STYLE}</style>
+</head>
+<body>
+<main class="wrap">
+<h1>This link is no longer active</h1>
+<p>Whoever shared this Momora book has turned this link off. If you think that&rsquo;s a mistake, check with them directly.</p>
 <p class="brand">Momora</p>
 </main>
 </body>

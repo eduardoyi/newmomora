@@ -1,30 +1,42 @@
 import scanMarkUrl from '../../assets/scan-mark.svg';
 import { mmCqw, QR_SIZE_MM, AUDIO_MARK_SIZE_MM } from '../mm';
 import { QrCode } from './QrCode';
-import { memoryViewerUrl } from '../../model/qr';
+import { shareViewerUrl } from '../../model/qr';
 
 /**
  * The scan mark. Two sizes, one meaning: 13mm on a credit line (video/audio
  * inline default) and 26mm for audio-note, where the mark IS the page image.
  *
- * Phase 2 (real QR): when the caller has a `memoryId` (every video/audio
- * call site does — the two that don't yet, see below), this renders an
- * actual scannable QR encoding `memoryViewerUrl(memoryId)` (`model/qr.ts`),
- * drawn as pure SVG at the same warm-ink #4A3F35 color and mm size the
- * static mark always used — the visual contract is unchanged, only the
- * pattern inside it is now real.
+ * Real QR, Round-19 (revocable tokens): when the caller has a `shareToken`
+ * (a `media_share_tokens.token` resolved from the manifest's own
+ * `ManifestMemory.shareToken` — every video/audio call site does, when the
+ * export pipeline minted one), this renders an actual scannable QR encoding
+ * `shareViewerUrl(shareToken)` (`model/qr.ts`), drawn as pure SVG at the
+ * same warm-ink #4A3F35 color and mm size the static mark always used — the
+ * visual contract is unchanged, only the pattern inside it is now real.
+ * This deliberately takes the TOKEN, never the raw memory id — see
+ * `model/qr.ts`'s header note on why (revocability).
  *
- * Without a `memoryId` this still falls back to the static brand-mark asset
- * (design-handoff/assets/scan-mark.svg) — the ONE remaining caller is
- * `FooterIndex.tsx`'s synthetic full-bleed/panorama-video credit line,
- * whose `FooterIndexEntry` (built in `fitter.ts`, out of scope for this
- * change) doesn't carry a memoryId to encode. Never fabricates one.
+ * Without a `shareToken` this still falls back to the static brand-mark
+ * asset (design-handoff/assets/scan-mark.svg) — either a manifest exported
+ * before tokens existed (predates Round-19 — never fabricate a link from
+ * the memory id in that case), or `FooterIndex.tsx`'s synthetic full-bleed/
+ * panorama-video credit line, whose `FooterIndexEntry` (built in
+ * `fitter.ts`, out of scope for this change) doesn't carry one to encode.
  */
-export function ScanMark({ size, isSpread, memoryId }: { size: 'inline' | 'audio'; isSpread: boolean; memoryId?: string }) {
+export function ScanMark({
+  size,
+  isSpread,
+  shareToken,
+}: {
+  size: 'inline' | 'audio';
+  isSpread: boolean;
+  shareToken?: string | null;
+}) {
   const mm = size === 'audio' ? AUDIO_MARK_SIZE_MM : QR_SIZE_MM;
 
-  if (memoryId) {
-    return <QrCode value={memoryViewerUrl(memoryId)} mm={mm} isSpread={isSpread} className="scan-mark" />;
+  if (shareToken) {
+    return <QrCode value={shareViewerUrl(shareToken)} mm={mm} isSpread={isSpread} className="scan-mark" />;
   }
 
   return (

@@ -30,6 +30,7 @@ export function makeMemory(overrides: Partial<ManifestMemory> = {}): ManifestMem
     taggedMembers: [],
     assets: [],
     illustration: null,
+    shareToken: null,
     ...overrides,
   };
 }

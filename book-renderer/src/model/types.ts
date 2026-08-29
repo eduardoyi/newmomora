@@ -74,6 +74,16 @@ export interface ManifestMemory {
    * older manifest exports predate the field — treat absence like null.
    */
   illustration?: ManifestIllustration | null;
+  /**
+   * Round-19: the active `media_share_tokens.token` this memory's QR/scan
+   * mark should encode (`null` for a memory with no QR page — see
+   * `PhotoSlotContent.qr` / `AudioNoteContent`). Optional on the type
+   * because a manifest exported before this field existed predates tokens
+   * entirely — treat absence exactly like `null`: fall back to the static
+   * placeholder scan mark (`ScanMark.tsx`), never fabricate a link from the
+   * memory id.
+   */
+  shareToken?: string | null;
 }
 
 export interface ManifestPortrait {
@@ -289,6 +299,14 @@ export interface PhotoSlotContent {
   hero: boolean;
   /** Video memories get photo-style placement plus an inline scan-mark affordance. */
   qr: boolean;
+  /**
+   * Round-19: the memory's `media_share_tokens.token` to encode when `qr` is
+   * true — `null` when the memory has no active token (predates Round-19,
+   * or `qr` is false and this is simply unused). `ScanMark.tsx` falls back
+   * to the static placeholder mark whenever this is `null`, never
+   * fabricating a link from `memoryId`.
+   */
+  shareToken: string | null;
   taggedMembers: ManifestTaggedMember[];
   /** Structured milestone facts (Firsts spread badges) — empty outside that context. */
   milestones: ManifestMilestone[];
@@ -372,6 +390,10 @@ export interface AudioNoteContent {
   date: string;
   /** Phase 2 wires the real short URL; phase 1 renders a neutral short-code placeholder. */
   shortCode: string;
+  /** Round-19: see `PhotoSlotContent.shareToken` — the scan mark IS the
+   * page for an audio-note, so this is `null` only for a memory that
+   * predates tokens (falls back to the static placeholder mark). */
+  shareToken: string | null;
 }
 
 /**

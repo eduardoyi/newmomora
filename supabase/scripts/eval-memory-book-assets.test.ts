@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects, assertThrows } from 'jsr:@std/assert@1';
+import { assertEquals, assertMatch, assertRejects, assertThrows } from 'jsr:@std/assert@1';
 
 import {
   buildDownloadFailure,
@@ -28,12 +28,15 @@ import {
   exceedsVideoPosterSizeGuard,
   excludePortraitVersionIds,
   extensionFromKey,
+  generateShareToken,
   GrayscaleFrame,
   illustrationFileName,
   isClockSkewAuthError,
+  isHeicContentType,
   mapScopeKind,
   MAX_VIDEO_POSTER_SOURCE_BYTES,
   mediaAssetFileName,
+  memoryNeedsShareToken,
   mergeCandidateMemoryIds,
   objectKeyBasename,
   parseArgs,
@@ -43,9 +46,13 @@ import {
   POSTER_SCORING_GRID_SIZE,
   portraitFileName,
   portraitSourceFileName,
+  PRINT_ASSET_HEIC_JPEG_QUALITY,
   resolveManifestLanguageDefault,
+  resolvePrintPhotoExtension,
   scorePosterFrameCandidate,
   selectMediaAsset,
+  SHARE_TOKEN_LENGTH,
+  shouldDownloadOriginalForPrint,
   shouldMeasureOriginalDimensions,
   slugify,
   SUBJECT_SHARPNESS_WEIGHT,
@@ -154,6 +161,35 @@ Deno.test('extensionFromKey recognizes png/webp/heic/heif', () => {
   assertEquals(extensionFromKey('a/b.webp'), 'webp');
   assertEquals(extensionFromKey('a/b.heic'), 'heic');
   assertEquals(extensionFromKey('a/b.heif'), 'heif');
+});
+
+// --- print-assets (--print-assets, round-20): download-path selection -----
+
+Deno.test('isHeicContentType recognizes heic and heif, nothing else', () => {
+  assertEquals(isHeicContentType('image/heic'), true);
+  assertEquals(isHeicContentType('image/heif'), true);
+  assertEquals(isHeicContentType('image/jpeg'), false);
+  assertEquals(isHeicContentType('image/png'), false);
+  assertEquals(isHeicContentType('image/webp'), false);
+  assertEquals(isHeicContentType('video/mp4'), false);
+});
+
+Deno.test('shouldDownloadOriginalForPrint is true only for a photo job with print mode on', () => {
+  assertEquals(shouldDownloadOriginalForPrint(true, 'photo'), true);
+  assertEquals(shouldDownloadOriginalForPrint(false, 'photo'), false);
+  assertEquals(shouldDownloadOriginalForPrint(true, 'video-poster'), false);
+  assertEquals(shouldDownloadOriginalForPrint(false, 'video-poster'), false);
+});
+
+Deno.test('resolvePrintPhotoExtension always plans jpg for a HEIC/HEIF original', () => {
+  assertEquals(resolvePrintPhotoExtension('image/heic', 'orig/photo.heic'), 'jpg');
+  assertEquals(resolvePrintPhotoExtension('image/heif', 'orig/photo.heif'), 'jpg');
+});
+
+Deno.test('resolvePrintPhotoExtension keeps the original key\'s own extension for non-HEIC content types', () => {
+  assertEquals(resolvePrintPhotoExtension('image/jpeg', 'orig/photo.jpg'), 'jpg');
+  assertEquals(resolvePrintPhotoExtension('image/png', 'orig/photo.png'), 'png');
+  assertEquals(resolvePrintPhotoExtension('image/webp', 'orig/photo.webp'), 'webp');
 });
 
 Deno.test('mediaAssetFileName and portraitFileName derivation', () => {
@@ -932,6 +968,7 @@ Deno.test('buildManifestMemory assembles the full per-memory shape, including an
     taggedMembers: [{ name: 'Enzo', isChild: true }],
     engagement: 3,
     illustration: { file: 'assets/m1-illustration.jpg', width: 1024, height: 1024, aspectRatio: 1 },
+    shareToken: null,
   });
 
   assertEquals(result, {
@@ -945,7 +982,27 @@ Deno.test('buildManifestMemory assembles the full per-memory shape, including an
     taggedMembers: [{ name: 'Enzo', isChild: true }],
     assets: [{ file: 'assets/m1-0.jpg', width: 800, height: 600, aspectRatio: 800 / 600, kind: 'photo', durationMs: null }],
     illustration: { file: 'assets/m1-illustration.jpg', width: 1024, height: 1024, aspectRatio: 1 },
+    shareToken: null,
   });
+});
+
+Deno.test('buildManifestMemory threads a minted share token straight through, verbatim', () => {
+  const result = buildManifestMemory({
+    memory: {
+      memory_date: '2024-03-10',
+      memory_type: 'media',
+      content: 'A video of first steps.',
+      emotion: 'joy',
+      topics: [],
+    },
+    assets: [{ file: 'assets/m1-0.jpg', width: 800, height: 600, aspectRatio: 800 / 600, kind: 'video-poster', durationMs: 9000 }],
+    milestones: [],
+    taggedMembers: [],
+    engagement: 0,
+    illustration: null,
+    shareToken: 'aB3xQ9zK1mN7pR5tW2yC4d',
+  });
+  assertEquals(result.shareToken, 'aB3xQ9zK1mN7pR5tW2yC4d');
 });
 
 Deno.test('buildManifestMemory normalizes blank content to null text and defaults illustration to null', () => {
@@ -956,9 +1013,11 @@ Deno.test('buildManifestMemory normalizes blank content to null text and default
     taggedMembers: [],
     engagement: 0,
     illustration: null,
+    shareToken: null,
   });
   assertEquals(result.text, null);
   assertEquals(result.illustration, null);
+  assertEquals(result.shareToken, null);
 });
 
 // --- buildManifest (top-level assembly) ------------------------------------
@@ -985,7 +1044,31 @@ Deno.test('buildManifest assembles the full BookManifest shape, including langua
     portraits: [],
     language: 'es',
     downloadFailures: [{ kind: 'media', objectKey: 'photo.jpg' }],
+    assetMode: 'preview',
   });
+});
+
+Deno.test('buildManifest records assetMode "print" when explicitly given (round-20, --print-assets)', () => {
+  const result = buildManifest({
+    child: { id: 'child-1', name: 'Enzo' },
+    scope: { kind: 'age-year', label: 'Year One', start: '2023-06-01', end: '2024-05-31' },
+    outlineRun: 'child-1-2026-08-26T10-00-00-000Z',
+    memories: {},
+    portraits: [],
+    language: 'en',
+    downloadFailures: [],
+    assetMode: 'print',
+    now: new Date('2026-08-26T12:00:00.000Z'),
+  });
+  assertEquals(result.assetMode, 'print');
+});
+
+Deno.test('PRINT_ASSET_HEIC_JPEG_QUALITY is a near-lossless JPEG quality, above the preview quality', () => {
+  // Sanity bound only -- this file has no access to backfill-media-previews.ts's
+  // own PREVIEW_JPEG_QUALITY (80) constant, so this just pins "high" and
+  // "sharp's 1-100 scale" rather than duplicating that import across files.
+  assertEquals(PRINT_ASSET_HEIC_JPEG_QUALITY > 80, true);
+  assertEquals(PRINT_ASSET_HEIC_JPEG_QUALITY <= 100, true);
 });
 
 // --- parseArgs: --language --------------------------------------------------
@@ -1072,6 +1155,30 @@ Deno.test('parseArgs collects repeated --exclude-portrait-id flags in order', ()
     'another-version-id',
   ]);
   assertEquals(options.excludePortraitIds, ['1dbc29b2-43d0-42e0-811c-26d58959dfbd', 'another-version-id']);
+});
+
+// --- parseArgs: --print-assets (round-20) ----------------------------------
+
+Deno.test('parseArgs defaults printAssets to false when --print-assets is absent', () => {
+  const options = parseArgs(['--outline-run', 'some-dir']);
+  assertEquals(options.printAssets, false);
+});
+
+Deno.test('parseArgs sets printAssets to true when --print-assets is passed (no value consumed)', () => {
+  const options = parseArgs(['--outline-run', 'some-dir', '--print-assets']);
+  assertEquals(options.printAssets, true);
+  assertEquals(options.outlineRun, 'some-dir');
+});
+
+Deno.test('parseArgs: --print-assets does not swallow the next flag as its own value', () => {
+  const options = parseArgs(['--print-assets', '--outline-run', 'some-dir', '--language', 'es']);
+  assertEquals(options.printAssets, true);
+  assertEquals(options.outlineRun, 'some-dir');
+  assertEquals(options.language, 'es');
+});
+
+Deno.test('CLI_USAGE documents --print-assets', () => {
+  assertMatch(CLI_USAGE, /--print-assets/);
 });
 
 // --- parseArgs: unknown-argument rejection guard (same hardening fix as the
@@ -1183,4 +1290,80 @@ Deno.test('parseOutlineJson throws when window.endExclusive is missing', () => {
 Deno.test('parseOutlineJson throws when an element is missing memoryIds', () => {
   const broken = { ...VALID_OUTLINE, elements: [{ id: 'cover', kind: 'cover' }] };
   assertThrows(() => parseOutlineJson(broken), Error, 'memoryIds');
+});
+
+// --- generateShareToken (Round-19 -- revocable QR share tokens) -----------
+
+Deno.test('generateShareToken produces a 22-char base62 string by default', () => {
+  const token = generateShareToken();
+  assertEquals(token.length, SHARE_TOKEN_LENGTH);
+  assertMatch(token, /^[0-9A-Za-z]{22}$/);
+});
+
+Deno.test('generateShareToken draws from a real (non-repeating) entropy source across many calls', () => {
+  const tokens = new Set<string>();
+  for (let i = 0; i < 500; i += 1) tokens.add(generateShareToken());
+  assertEquals(tokens.size, 500); // no collisions across 500 samples.
+});
+
+Deno.test('generateShareToken applies rejection sampling: bytes >= 248 are discarded, not reduced mod 62', () => {
+  // 248 (= 62*4, the rejection ceiling) must be skipped entirely rather than
+  // folded into the alphabet via `248 % 62 === 0` -- if it weren't, this
+  // fixed byte queue would start with alphabet[0] ('0'), not alphabet[1].
+  const queue = [248, 0, 1, 61, ...Array(SHARE_TOKEN_LENGTH - 3).fill(2)];
+  let cursor = 0;
+  const fakeRandomBytes = (count: number) => {
+    const bytes = new Uint8Array(count);
+    for (let i = 0; i < count; i += 1) bytes[i] = queue[cursor++] ?? 2;
+    return bytes;
+  };
+  const token = generateShareToken(fakeRandomBytes);
+  // '248' rejected; '0'->'0', '1'->'1', '61'->'z' (last char of the base62
+  // alphabet); every remaining byte is '2'->'2', spanning a second
+  // randomBytes() call once the first batch's one rejection leaves the
+  // token one character short -- exercising the "keep pulling more bytes
+  // until full" loop, not just a single pass.
+  assertEquals(token, '01z' + '2'.repeat(19));
+  assertEquals(token.length, SHARE_TOKEN_LENGTH);
+});
+
+Deno.test('generateShareToken never emits a character for a rejected byte', () => {
+  // Every byte in [248, 255] rejected; only the trailing valid bytes count.
+  const queue = [255, 254, 253, 252, 251, 250, 249, 248, 5, 5];
+  let cursor = 0;
+  const fakeRandomBytes = (count: number) => {
+    const bytes = new Uint8Array(count);
+    for (let i = 0; i < count; i += 1) bytes[i] = queue[cursor++] ?? 5;
+    return bytes;
+  };
+  const token = generateShareToken(fakeRandomBytes);
+  assertEquals(token, '5'.repeat(SHARE_TOKEN_LENGTH));
+});
+
+// --- memoryNeedsShareToken (QR-eligibility, mirrors book-renderer's own
+// isVideoAsset/isAudioMemory rules) -----------------------------------------
+
+Deno.test('memoryNeedsShareToken: an audio memory always needs a token', () => {
+  assertEquals(memoryNeedsShareToken('audio', []), true);
+});
+
+Deno.test('memoryNeedsShareToken: a media memory with a video-poster asset needs a token', () => {
+  assertEquals(memoryNeedsShareToken('media', [{ kind: 'video-poster' }]), true);
+});
+
+Deno.test('memoryNeedsShareToken: a media memory with only photo assets needs no token', () => {
+  assertEquals(memoryNeedsShareToken('media', [{ kind: 'photo' }]), false);
+});
+
+Deno.test('memoryNeedsShareToken: a media memory with a mix still needs a token (any video-poster asset qualifies)', () => {
+  assertEquals(memoryNeedsShareToken('media', [{ kind: 'photo' }, { kind: 'video-poster' }]), true);
+});
+
+Deno.test('memoryNeedsShareToken: a media memory with no assets needs no token', () => {
+  assertEquals(memoryNeedsShareToken('media', []), false);
+});
+
+Deno.test('memoryNeedsShareToken: text memory types never need a token', () => {
+  assertEquals(memoryNeedsShareToken('text_illustration', []), false);
+  assertEquals(memoryNeedsShareToken('text_only', []), false);
 });

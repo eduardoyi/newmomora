@@ -1,4 +1,4 @@
-import type { MemoryHeaderRow, MemoryMediaAssetRow } from './resolve';
+import type { MemoryHeaderRow, MemoryMediaAssetRow, ShareTokenRow } from './resolve';
 
 /**
  * Thin Supabase REST (PostgREST) client -- same shape as
@@ -7,10 +7,14 @@ import type { MemoryHeaderRow, MemoryMediaAssetRow } from './resolve';
  * and unauthenticated by design (owner decision, see README "Privacy
  * model"), so there is no end-user JWT to verify. Every request uses the
  * service-role key (bypasses RLS) because there is no `auth.uid()` to
- * evaluate the `memories`/`memory_media` SELECT policies against -- this
- * worker IS the authorization boundary (memory id must be a valid,
- * resolvable UUID; nothing else gates read access, matching the "public
- * unguessable-enough link" model already agreed for QR pages).
+ * evaluate the `memories`/`memory_media`/`media_share_tokens` SELECT
+ * policies against -- this worker IS the authorization boundary. Round-19:
+ * that boundary is now the `media_share_tokens` row itself (an unguessable
+ * token that resolves to an ACTIVE row), not the memory id -- a token whose
+ * row has been revoked (`revoked_at` set) or never existed is rejected
+ * before the underlying memory is ever looked up (see `classifyShareToken`
+ * in resolve.ts and `fetchShareToken` below), which is exactly the
+ * revocation lever the old raw-memoryId scheme lacked.
  */
 
 const JSON_HEADERS = { Accept: 'application/json' };
@@ -33,6 +37,24 @@ async function supabaseRequest<T>(env: Env, resource: string, query: Record<stri
     throw new Error(`supabase_${response.status}`);
   }
   return (await response.json()) as T;
+}
+
+/**
+ * Round-19: resolves a share token to its `media_share_tokens` row --
+ * SELECTs `memory_id`/`revoked_at` regardless of revocation status (the
+ * caller, `classifyShareToken` in resolve.ts, needs to tell "never minted"
+ * apart from "minted, since revoked" to pick the right response page). The
+ * table has no `authenticated` SELECT-through-RLS path this worker could
+ * use anyway (see the migration) -- service-role is required here exactly
+ * like every other read in this file.
+ */
+export async function fetchShareToken(env: Env, token: string): Promise<ShareTokenRow | null> {
+  const rows = await supabaseRequest<ShareTokenRow[]>(env, 'media_share_tokens', {
+    select: 'memory_id,revoked_at',
+    token: `eq.${token}`,
+    limit: '1',
+  });
+  return rows[0] ?? null;
 }
 
 export async function fetchMemoryHeader(env: Env, memoryId: string): Promise<MemoryHeaderRow | null> {

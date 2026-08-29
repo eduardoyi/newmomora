@@ -21,7 +21,7 @@ import { mmCqw } from '../mm';
 const QUIET_ZONE_MODULES = 4;
 
 export interface QrCodeProps {
-  /** The exact string encoded — always `memoryViewerUrl(memoryId)` from `model/qr.ts`, never anything else. */
+  /** The exact string encoded — always `shareViewerUrl(shareToken)` from `model/qr.ts`, never anything else. */
   value: string;
   /** Rendered size (both width and height — a QR is always square) in mm, at the page's own scale. */
   mm: number;

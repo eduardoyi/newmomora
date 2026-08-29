@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { renderNotFoundPage, renderViewerPage } from '../src/page';
+import { renderNotFoundPage, renderRevokedPage, renderViewerPage } from '../src/page';
 import type { ResolvedMedia } from '../src/resolve';
 
 const baseMedia: ResolvedMedia = {
@@ -70,5 +70,25 @@ describe('renderNotFoundPage', () => {
     expect(html).toContain('Momora');
     expect(html).not.toContain('undefined');
     expect(html).not.toContain('null');
+  });
+});
+
+describe('renderRevokedPage', () => {
+  it('renders distinct copy from renderNotFoundPage, with the Momora brand mark', () => {
+    const html = renderRevokedPage();
+    expect(html).toContain('This link is no longer active');
+    expect(html).toContain('Momora');
+    expect(html).not.toContain('undefined');
+    expect(html).not.toContain('null');
+  });
+
+  it('never says the not-found page\'s "isn\'t available" copy -- the two pages read distinctly', () => {
+    const html = renderRevokedPage();
+    expect(html).not.toContain('isn&rsquo;t available');
+  });
+
+  it('marks the page noindex and non-caching, same as the not-found page', () => {
+    const html = renderRevokedPage();
+    expect(html).toContain('name="robots" content="noindex, nofollow"');
   });
 });

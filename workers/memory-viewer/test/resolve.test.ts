@@ -1,40 +1,83 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseMemoryId, resolveViewerMedia, type MemoryHeaderRow, type MemoryMediaAssetRow } from '../src/resolve';
+import {
+  classifyShareToken,
+  parseShareToken,
+  resolveViewerMedia,
+  type MemoryHeaderRow,
+  type MemoryMediaAssetRow,
+  type ShareTokenRow,
+} from '../src/resolve';
 
 const VALID_ID = '0fbc1354-eaf7-552c-b659-78a0f751691e';
+const VALID_TOKEN = 'aB3xQ9zK1mN7pR5tW2yC4d'; // 22 base62 chars, matches generateShareToken's shape.
 
-describe('parseMemoryId', () => {
-  it('extracts a valid viewer-path memory id', () => {
-    expect(parseMemoryId(`/m/${VALID_ID}`, '/m/')).toBe(VALID_ID);
+describe('parseShareToken', () => {
+  it('extracts a valid viewer-path share token', () => {
+    expect(parseShareToken(`/m/${VALID_TOKEN}`, '/m/')).toBe(VALID_TOKEN);
   });
 
-  it('extracts a valid media-path memory id', () => {
-    expect(parseMemoryId(`/media/${VALID_ID}`, '/media/')).toBe(VALID_ID);
+  it('extracts a valid media-path share token', () => {
+    expect(parseShareToken(`/media/${VALID_TOKEN}`, '/media/')).toBe(VALID_TOKEN);
   });
 
-  it('lowercases an uppercase UUID', () => {
-    expect(parseMemoryId(`/m/${VALID_ID.toUpperCase()}`, '/m/')).toBe(VALID_ID);
+  it('preserves case -- unlike the retired UUID path, base62 tokens are case-sensitive', () => {
+    const mixedCase = 'aB3xQ9zK1mN7pR5tW2yC4d';
+    expect(parseShareToken(`/m/${mixedCase}`, '/m/')).toBe(mixedCase);
+    expect(parseShareToken(`/m/${mixedCase}`, '/m/')).not.toBe(mixedCase.toLowerCase());
+  });
+
+  it('accepts a token containing - and _ (URL-safe extras beyond base62)', () => {
+    const token = 'aB3-xQ9_zK1mN7pR5tW2y';
+    expect(parseShareToken(`/m/${token}`, '/m/')).toBe(token);
   });
 
   it('rejects a path under the wrong prefix', () => {
-    expect(parseMemoryId(`/media/${VALID_ID}`, '/m/')).toBeNull();
+    expect(parseShareToken(`/media/${VALID_TOKEN}`, '/m/')).toBeNull();
   });
 
-  it('rejects a non-UUID segment', () => {
-    expect(parseMemoryId('/m/not-a-uuid', '/m/')).toBeNull();
+  it('rejects a token shorter than the minimum length', () => {
+    expect(parseShareToken('/m/short', '/m/')).toBeNull();
+  });
+
+  it('rejects a token with disallowed characters (e.g. a slash-adjacent or space)', () => {
+    expect(parseShareToken('/m/has a space here', '/m/')).toBeNull();
   });
 
   it('rejects trailing path segments', () => {
-    expect(parseMemoryId(`/m/${VALID_ID}/extra`, '/m/')).toBeNull();
+    expect(parseShareToken(`/m/${VALID_TOKEN}/extra`, '/m/')).toBeNull();
   });
 
   it('rejects an empty segment', () => {
-    expect(parseMemoryId('/m/', '/m/')).toBeNull();
+    expect(parseShareToken('/m/', '/m/')).toBeNull();
   });
 
   it('rejects the bare root path', () => {
-    expect(parseMemoryId('/', '/m/')).toBeNull();
+    expect(parseShareToken('/', '/m/')).toBeNull();
+  });
+
+  it('still tolerates a legacy UUID-shaped path segment (it happens to match the token pattern too)', () => {
+    // Not a meaningful behavior to preserve on purpose -- just documents
+    // that the pattern widened rather than narrowed, so an old bookmarked
+    // /m/<uuid> link 404s downstream (no matching media_share_tokens row)
+    // rather than being rejected at the routing layer itself.
+    expect(parseShareToken(`/m/${VALID_ID}`, '/m/')).toBe(VALID_ID);
+  });
+});
+
+describe('classifyShareToken', () => {
+  it('classifies a missing row as not_found', () => {
+    expect(classifyShareToken(null)).toEqual({ status: 'not_found' });
+  });
+
+  it('classifies a row with revoked_at set as revoked', () => {
+    const row: ShareTokenRow = { memory_id: VALID_ID, revoked_at: '2026-08-01T00:00:00.000Z' };
+    expect(classifyShareToken(row)).toEqual({ status: 'revoked' });
+  });
+
+  it('classifies a row with revoked_at null as active, carrying the memory id', () => {
+    const row: ShareTokenRow = { memory_id: VALID_ID, revoked_at: null };
+    expect(classifyShareToken(row)).toEqual({ status: 'active', memoryId: VALID_ID });
   });
 });
 

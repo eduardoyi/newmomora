@@ -55,7 +55,7 @@ export function AudioNote({ page, manifest, showGuides }: TemplateProps) {
                 </>
               )}
               <div className="audio-note__mark">
-                <ScanMark size="audio" isSpread={false} memoryId={note.content.memoryId} />
+                <ScanMark size="audio" isSpread={false} shareToken={note.content.shareToken} />
                 <div className="audio-note__mark-text">
                   <span className="audio-note__word" style={{ fontSize: ptCqw(canvasPxToPt(34), false), color: colors.ink }}>
                     {furniture.listenToIt}

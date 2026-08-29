@@ -75,7 +75,7 @@ export function PhotoTile({
               <span className="photo-tile__scan-text" style={{ fontSize: ptCqw(6, isSpread), color: colors.ink3 }}>
                 {furniture.scanToWatch}
               </span>
-              <ScanMark size="inline" isSpread={isSpread} memoryId={content.memoryId} />
+              <ScanMark size="inline" isSpread={isSpread} shareToken={content.shareToken} />
             </div>
           )}
         </div>

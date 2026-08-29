@@ -1,7 +1,7 @@
-import { parseMemoryId, resolveViewerMedia, type ResolvedMedia } from './resolve';
+import { parseShareToken, classifyShareToken, resolveViewerMedia, type ResolvedMedia } from './resolve';
 import { parseRangeHeader, formatContentRange } from './range';
-import { fetchMemoryHeader, fetchPrimaryMediaAsset } from './supabase';
-import { renderViewerPage, renderNotFoundPage } from './page';
+import { fetchShareToken, fetchMemoryHeader, fetchPrimaryMediaAsset } from './supabase';
+import { renderViewerPage, renderNotFoundPage, renderRevokedPage } from './page';
 
 function htmlResponse(body: string, status: number): Response {
   return new Response(body, {
@@ -9,7 +9,8 @@ function htmlResponse(body: string, status: number): Response {
     headers: {
       'content-type': 'text/html; charset=utf-8',
       // Every response here is either PII (a memory's photo/video/caption)
-      // or the generic 404 -- never cache either at a shared/CDN layer.
+      // or a generic/revoked-link page -- never cache any of them at a
+      // shared/CDN layer.
       'cache-control': 'no-store',
     },
   });
@@ -19,37 +20,76 @@ function notFoundPage(): Response {
   return htmlResponse(renderNotFoundPage(), 404);
 }
 
+/** Round-19: distinct from `notFoundPage()` -- a REVOKED token was real at
+ * some point (the owner deliberately turned it off), so it gets its own
+ * copy and its own status. 410 Gone is the semantically correct code for
+ * "this resource existed, is now permanently gone" (vs. 404's "not found" /
+ * possibly never existed) -- and revealing that distinction over the wire
+ * doesn't weaken the privacy model: the requester already holds the exact
+ * unguessable token either way, so a 404-vs-410 split only ever tells them
+ * something about a link THEY ALREADY HAVE, never lets them probe an
+ * id/token they don't. */
+function revokedPage(): Response {
+  return htmlResponse(renderRevokedPage(), 410);
+}
+
 /**
- * Resolve `memoryId` to what should be rendered/streamed. Both Supabase
- * lookups run concurrently since they're independent reads keyed on the
- * same id. Any resolution failure (network error, non-2xx from
- * PostgREST) is logged WITHOUT memory content (PII rule, see root
- * CLAUDE.md) and mapped to the same 404 a genuinely-missing id gets --
- * this worker has no authenticated owner to show a 5xx to, so fail-closed
- * to the friendly page rather than leaking an error page.
+ * A `/m/:token` or `/media/:token` request resolves to exactly one of three
+ * outcomes: the token was never minted (`not_found`), it was minted and has
+ * since been revoked (`revoked`), or it's active and resolves to real,
+ * renderable media (`media`). Both Supabase lookups (share token, then
+ * memory+asset once the token proves active) run in sequence -- the second
+ * pair needs the `memory_id` the first one resolves -- unlike the old
+ * memoryId-keyed version, which could run its two lookups concurrently.
+ * Any resolution failure (network error, non-2xx from PostgREST) is logged
+ * WITHOUT memory content (PII rule, see root CLAUDE.md) and mapped to
+ * `not_found` -- this worker has no authenticated owner to show a 5xx to,
+ * so fail-closed to the friendly page rather than leaking an error page.
  */
-async function resolveMedia(env: Env, memoryId: string): Promise<ResolvedMedia | null> {
+export type MediaResolution = { kind: 'not_found' } | { kind: 'revoked' } | { kind: 'media'; media: ResolvedMedia };
+
+async function resolveMedia(env: Env, token: string): Promise<MediaResolution> {
   try {
+    const tokenRow = await fetchShareToken(env, token);
+    const classified = classifyShareToken(tokenRow);
+    if (classified.status === 'not_found') return { kind: 'not_found' };
+    if (classified.status === 'revoked') return { kind: 'revoked' };
+
     const [memory, asset] = await Promise.all([
-      fetchMemoryHeader(env, memoryId),
-      fetchPrimaryMediaAsset(env, memoryId),
+      fetchMemoryHeader(env, classified.memoryId),
+      fetchPrimaryMediaAsset(env, classified.memoryId),
     ]);
-    return resolveViewerMedia(memory, asset);
+    const media = resolveViewerMedia(memory, asset);
+    return media ? { kind: 'media', media } : { kind: 'not_found' };
   } catch (error) {
     console.error('memory-viewer: resolve failed', error instanceof Error ? error.message : 'unknown');
-    return null;
+    return { kind: 'not_found' };
   }
 }
 
-async function handleViewerPage(env: Env, memoryId: string): Promise<Response> {
-  const media = await resolveMedia(env, memoryId);
-  if (!media) return notFoundPage();
-  return htmlResponse(renderViewerPage(media, `/media/${memoryId}`), 200);
+/** Maps a non-`media` resolution to its response. Returns `null` for
+ * `kind: 'media'` -- callers only reach for this after already handling
+ * that case themselves (they need the resolved `media` payload, which this
+ * function deliberately doesn't have). */
+function nonMediaResponse(resolution: MediaResolution): Response | null {
+  if (resolution.kind === 'not_found') return notFoundPage();
+  if (resolution.kind === 'revoked') return revokedPage();
+  return null;
 }
 
-async function handleMediaBytes(env: Env, request: Request, memoryId: string): Promise<Response> {
-  const media = await resolveMedia(env, memoryId);
-  if (!media) return notFoundPage();
+async function handleViewerPage(env: Env, token: string): Promise<Response> {
+  const resolution = await resolveMedia(env, token);
+  if (resolution.kind !== 'media') return nonMediaResponse(resolution)!;
+  // The rendered page's <img>/<video>/<audio> src points at THIS SAME
+  // token's /media/ route -- not the underlying memory id, which never
+  // reaches the client.
+  return htmlResponse(renderViewerPage(resolution.media, `/media/${token}`), 200);
+}
+
+async function handleMediaBytes(env: Env, request: Request, token: string): Promise<Response> {
+  const resolution = await resolveMedia(env, token);
+  if (resolution.kind !== 'media') return nonMediaResponse(resolution)!;
+  const media = resolution.media;
 
   const range = parseRangeHeader(request.headers.get('Range'));
   const object = range
@@ -98,11 +138,11 @@ export default {
       });
     }
 
-    const viewerId = parseMemoryId(url.pathname, '/m/');
-    if (viewerId) return handleViewerPage(env, viewerId);
+    const viewerToken = parseShareToken(url.pathname, '/m/');
+    if (viewerToken) return handleViewerPage(env, viewerToken);
 
-    const mediaId = parseMemoryId(url.pathname, '/media/');
-    if (mediaId) return handleMediaBytes(env, request, mediaId);
+    const mediaToken = parseShareToken(url.pathname, '/media/');
+    if (mediaToken) return handleMediaBytes(env, request, mediaToken);
 
     return notFoundPage();
   },

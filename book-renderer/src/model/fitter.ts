@@ -1045,6 +1045,7 @@ function buildPhotoSlot(
     caption: captionOf(memory) || null,
     hero: opts.hero,
     qr: isVideoAsset(asset),
+    shareToken: memory.shareToken ?? null,
     taggedMembers: memory.taggedMembers,
     milestones: memory.milestones,
     targetAspect,
@@ -1625,7 +1626,13 @@ function buildSlotsForTemplate(
     }
     case 'audio-note': {
       for (const { id, memory } of group.memories) {
-        const content: AudioNoteContent = { kind: 'audio-note', memoryId: id, date: memory.date, shortCode: placeholderShortCode(id) };
+        const content: AudioNoteContent = {
+          kind: 'audio-note',
+          memoryId: id,
+          date: memory.date,
+          shortCode: placeholderShortCode(id),
+          shareToken: memory.shareToken ?? null,
+        };
         slots.push({ id: nextSlotId('audio'), kind: 'audio-note', content });
         const caption = captionOf(memory);
         if (caption) slots.push(buildTextSlot(caption, id, memory.date));

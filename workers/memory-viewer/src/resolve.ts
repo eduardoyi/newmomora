@@ -1,24 +1,67 @@
 /**
- * Pure routing + memory-to-media resolution logic for the QR memory
+ * Pure routing + token-to-media resolution logic for the QR memory
  * viewer. No I/O here on purpose -- kept separate from src/supabase.ts and
  * src/index.ts so it's unit-testable without Miniflare, R2, or a Supabase
  * mock server.
  */
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/**
+ * Share-token shape (Round-19, revocable QR links -- see
+ * `supabase/scripts/eval-memory-book-assets.ts`'s `generateShareToken`,
+ * which currently emits exactly 22 base62 characters). Deliberately looser
+ * than an exact 22-char base62 match: this worker doesn't own token
+ * generation (the export pipeline does, in a different repo/runtime), so it
+ * validates the SHAPE a URL-safe opaque token must have -- no slashes, no
+ * query-string leakage, a sane length bound -- rather than hardcoding the
+ * exact current alphabet/length, the same "copy the contract loosely, don't
+ * couple to the exact implementation" stance this file already takes for
+ * content-type allow-lists (see README "Why key conventions are copied, not
+ * imported"). Case-sensitive: unlike the old UUID path, a share token is
+ * base62 (mixed-case letters carry distinct meaning) -- never lowercase it.
+ */
+const SHARE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
 /**
- * Extract a memory id from a `/m/<uuid>` or `/media/<uuid>` request path.
- * Rejects anything that isn't exactly `prefix + a v1-5 UUID` (no trailing
- * slash, no extra segments, no query-string leakage -- the caller already
- * stripped that via `new URL(...).pathname`).
+ * Extract a share token from a `/m/<token>` or `/media/<token>` request
+ * path. Rejects anything that isn't exactly `prefix + one path segment`
+ * matching `SHARE_TOKEN_PATTERN` (no trailing slash, no extra segments, no
+ * query-string leakage -- the caller already stripped that via
+ * `new URL(...).pathname`). Returned verbatim, case preserved.
  */
-export function parseMemoryId(pathname: string, prefix: '/m/' | '/media/'): string | null {
+export function parseShareToken(pathname: string, prefix: '/m/' | '/media/'): string | null {
   if (!pathname.startsWith(prefix)) return null;
   const rest = pathname.slice(prefix.length);
   if (rest.length === 0 || rest.includes('/')) return null;
-  return UUID_PATTERN.test(rest) ? rest.toLowerCase() : null;
+  return SHARE_TOKEN_PATTERN.test(rest) ? rest : null;
+}
+
+/** Row shape from `media_share_tokens` (SELECT memory_id,revoked_at WHERE
+ * token = eq.<token>). `null` (no row at all) means the token was never
+ * minted -- distinct from a row whose `revoked_at` is set (was minted,
+ * since revoked) -- see `classifyShareToken`. */
+export interface ShareTokenRow {
+  memory_id: string;
+  revoked_at: string | null;
+}
+
+/**
+ * Classifies a `media_share_tokens` lookup into exactly the three outcomes
+ * `src/index.ts` needs to pick a response: no row at all (`not_found`,
+ * generic 404 -- indistinguishable from a malformed/mistyped link), a row
+ * whose `revoked_at` is set (`revoked`, the distinct "link no longer
+ * active" page -- the owner deliberately turned this QR page off), or an
+ * active row (`active`, carries the `memory_id` to resolve next exactly
+ * like the pre-Round-19 flow did).
+ */
+export type ShareTokenResolution =
+  | { status: 'not_found' }
+  | { status: 'revoked' }
+  | { status: 'active'; memoryId: string };
+
+export function classifyShareToken(row: ShareTokenRow | null): ShareTokenResolution {
+  if (!row) return { status: 'not_found' };
+  if (row.revoked_at) return { status: 'revoked' };
+  return { status: 'active', memoryId: row.memory_id };
 }
 
 export type ViewerKind = 'image' | 'video' | 'audio';
