@@ -511,3 +511,27 @@ API/dashboard — confirm before committing to one.
 step yet. If V4's physical proof says otherwise, Replicate-hosted
 Real-ESRGAN is the cheapest way to test whether a learned upscaler helps
 before spending any engineering time on a local Real-ESRGAN integration.
+
+## CONFIRMED LIVE (2026-08-29, owner's production API key)
+
+- **SKU (owner-confirmed from dashboard, validated via GET /v4.0/products):**
+  `BOOK-FE-8_3-SQ-LF-G` — "Square Layflat Book, Gloss, 190gsm, Matte
+  Cover, 8.3x8.3" / 21x21cm". Note the `8_3` underscore token — this is
+  why pattern-guessing from the A4 example failed; always copy SKUs from
+  the dashboard verbatim.
+- **Spine widths (POST /v4.0/products/spine, destination ES):**
+  | pages | spine |
+  |---|---|
+  | 108 | 26.0mm |
+  | 110 | 26.0mm |
+  | 120 | 28.0mm |
+  | 122 | **28.0mm** |
+  Both current order candidates (enzo-year-three, mara-year-one) are 122
+  pages -> render covers with `--spine-mm 28`.
+- **Quote (POST /v4.0/quotes, 2 copies, Standard to ES):** items $48.66 +
+  shipping $16.22 = **~$64.88 total (~$32.44/book landed)**.
+
+Remaining before upload: tokens migration + print-resolution re-export +
+final `book:pdf --spine-mm 28` render (in flight), and the color-profile
+support question (RGB vs FOGRA39) if we want certainty before the first
+sample rather than learning from it.
