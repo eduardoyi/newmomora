@@ -19,7 +19,13 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 2.2em;
+  /* Illustration-to-caption gutter. PageFrame's base font-size is 1mm, so
+     em here IS mm: the old 2.2em (2.2mm) read as the caption touching the
+     illustration on paper (owner, print round). 5mm matches
+     PHYSICAL.gutterMm, the design system's standard gutter. The textcol's
+     46% max-width cap leaves ~15mm slack per row, so the shared
+     digestRowMetrics text-width estimate is unaffected. */
+  gap: 5em;
 }
 
 .illustrated-digest__entry--reverse {
