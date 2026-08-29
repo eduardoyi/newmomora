@@ -31,6 +31,7 @@ export function Folio({ pageNumber, isEvenPage, isSpread }: { pageNumber: number
         fontFamily: 'var(--font-sans)',
         fontWeight: 500,
         fontSize: ptCqw(7, isSpread),
+        lineHeight: 1,
         letterSpacing: '0.07em',
         color: colors.ink3,
       }}

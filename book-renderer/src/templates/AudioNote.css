@@ -23,6 +23,7 @@
 .audio-note__date {
   font-family: var(--font-sans);
   font-weight: 600;
+  line-height: 1.2;
   letter-spacing: 0.13em;
   text-transform: uppercase;
 }
@@ -58,5 +59,6 @@
 .audio-note__code {
   font-family: var(--font-sans);
   font-weight: 500;
+  line-height: 1.2;
   letter-spacing: 0.04em;
 }

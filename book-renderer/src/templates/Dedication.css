@@ -30,6 +30,7 @@
 .dedication__signature {
   font-family: var(--font-sans);
   font-weight: 500;
+  line-height: 1.2;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }

@@ -24,6 +24,7 @@
 .quote-collection__date {
   font-family: var(--font-sans);
   font-weight: 700;
+  line-height: 1.2;
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }

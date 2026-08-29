@@ -14,6 +14,7 @@ export function SectionHeader({ kicker, title, special, isSpread }: SectionHeade
               fontFamily: 'var(--font-sans)',
               fontWeight: 700,
               fontSize: ptCqw(6.5, isSpread),
+              lineHeight: 1.2,
               letterSpacing: '0.16em',
               textTransform: 'uppercase',
               color: lavender.deep,

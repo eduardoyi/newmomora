@@ -46,6 +46,7 @@
   position: absolute;
   font-family: var(--font-display);
   font-weight: 500;
+  line-height: 1;
   letter-spacing: 0.02em;
 }
 
@@ -59,6 +60,7 @@
 .cover-wrap__years {
   font-family: var(--font-sans);
   font-weight: 700;
+  line-height: 1.2;
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
@@ -106,6 +108,7 @@
   writing-mode: vertical-rl;
   font-family: var(--font-display);
   font-weight: 500;
+  line-height: 1;
   letter-spacing: 0.06em;
   white-space: nowrap;
 }
@@ -117,6 +120,7 @@
   writing-mode: vertical-rl;
   font-family: var(--font-sans);
   font-weight: 600;
+  line-height: 1.2;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -139,6 +143,7 @@
 .cover-wrap__scope {
   font-family: var(--font-sans);
   font-weight: 500;
+  line-height: 1.2;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }

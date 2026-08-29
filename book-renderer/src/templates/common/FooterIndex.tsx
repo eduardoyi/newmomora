@@ -115,7 +115,7 @@ export function FooterIndex({
             </span>
             {entry.qr && (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3em' }}>
-                <span style={{ fontFamily: 'var(--font-sans)', color: colors.ink3, fontSize: ptCqw(6, isSpread) }}>
+                <span style={{ fontFamily: 'var(--font-sans)', color: colors.ink3, fontSize: ptCqw(6, isSpread), lineHeight: 1 }}>
                   {furniture.scanToWatch}
                 </span>
                 <ScanMark size="inline" isSpread={isSpread} />

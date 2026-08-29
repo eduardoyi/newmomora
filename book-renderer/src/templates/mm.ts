@@ -603,7 +603,7 @@ export const DIGEST_TEXT_FONT_PT = 13;
 const DIGEST_TEXT_LINE_HEIGHT = 1.55;
 /** Matches the entry's date `<span>`'s own font-size (`ptCqw(6.5, true)` in the template). */
 const DIGEST_DATE_FONT_PT = 6.5;
-/** Browser 'normal' line-height approximation for the date span (sets no line-height of its own). */
+/** Matches `.illustrated-digest__date { line-height: 1.2 }`. */
 const DIGEST_DATE_LINE_HEIGHT = 1.2;
 /** Matches `.illustrated-digest__textcol { gap: 0.55em }`. */
 const DIGEST_TEXT_GAP_EM = 0.55;
