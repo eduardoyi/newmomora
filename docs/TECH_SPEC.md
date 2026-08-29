@@ -1457,6 +1457,8 @@ Does **not** invoke `generate-illustration` for `media`.
 
 **New table `memory_milestones`:** `id`, `family_id`, `memory_id`, `family_member_id` (nullable, set null on member delete), `milestone_id` (text, catalog id), `detail`, `out_of_band` (boolean), `status` (`candidate`/`confirmed`/`dismissed`, default `candidate`), `created_at`, `updated_at`. Unique on `(memory_id, milestone_id)`. RLS: family members can `select`; no client insert/update/delete policies — only the service-role client writes. See memory-analysis.md for the resolution rules.
 
+**Table `media_share_tokens`** (migration `20260829120000`, Memory Book V3 phase 2): `token` (text PK — opaque 22-char base62, application-generated), `memory_id` (FK → memories, cascade), `created_at`, `revoked_at` (null = active; partial unique index enforces one active token per memory). Backs the printed books' QR codes: the book-export pipeline (eval-memory-book-assets.ts) mints tokens via the service-role client; the public memory-viewer worker (`workers/memory-viewer`, deployed at `m.usemomora.com`) resolves `GET /m/:token` → memory media, serving revoked tokens a 410 "link no longer active" page. RLS: family members `select` (join through memories); writes service-role only. Revocation = set `revoked_at` — kills a lost/stolen printed book's QR pages without touching the memory.
+
 ---
 
 ### 4.3 `generate-illustration`
