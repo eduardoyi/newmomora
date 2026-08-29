@@ -33,8 +33,19 @@
         padding: 0;
         background: #fff;
       }
-      #root {
-        line-height: 0;
+      /*
+       * NO line-height reset here. The original pipeline set
+       * `#root { line-height: 0 }` (the blunt fix for inline-image baseline
+       * gaps), but the app preview has no such reset, so every text block
+       * lacking its own explicit line-height rendered differently in print
+       * than in the QA'd preview — glyphs collapsed upward onto adjacent
+       * images (owner-found defects: Through-The-Years labels round 21,
+       * PhotoTile numerals/scan text round 23). Images are made block-level
+       * instead, which kills the same whitespace gap without poisoning text
+       * metrics.
+       */
+      #root img {
+        display: block;
       }
     </style>
   </head>
