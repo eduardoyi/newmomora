@@ -181,3 +181,26 @@ describe('resolveViewerMedia', () => {
     expect(resolved?.caption).toBeNull();
   });
 });
+
+import { pickViewerAsset } from '../src/supabase';
+
+describe('pickViewerAsset (owner bug 2026-08-29: a carousel QR must play the VIDEO, not position 0)', () => {
+  const row = (content_type: string, key: string): MemoryMediaAssetRow =>
+    ({ object_key: key, content_type, duration_ms: null, preview_object_key: null }) as MemoryMediaAssetRow;
+
+  it('prefers the first video over an earlier photo in a carousel', () => {
+    expect(pickViewerAsset([row('image/jpeg', 'p0'), row('video/mp4', 'v1'), row('image/jpeg', 'p2')])?.object_key).toBe('v1');
+  });
+
+  it('falls back to audio when no video exists', () => {
+    expect(pickViewerAsset([row('image/jpeg', 'p0'), row('audio/m4a', 'a1')])?.object_key).toBe('a1');
+  });
+
+  it('keeps position-0 behavior for photo-only memories', () => {
+    expect(pickViewerAsset([row('image/jpeg', 'p0'), row('image/jpeg', 'p1')])?.object_key).toBe('p0');
+  });
+
+  it('returns null for an assetless memory', () => {
+    expect(pickViewerAsset([])).toBeNull();
+  });
+});

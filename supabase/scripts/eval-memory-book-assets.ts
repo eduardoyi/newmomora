@@ -342,6 +342,18 @@ export function resolveManifestLanguageDefault(
   outlineLanguage: string | undefined,
 ): ManifestLanguage {
   if (languageExplicit) return cliLanguage;
+  // Owner incident (2026-08-29): a pre-round-18 outline.json carries no
+  // `language` field, and the silent coerce-to-'en' fallback shipped two
+  // Spanish books to the printer with English furniture ("Oct 23",
+  // "OCTOBER-NOVEMBER 2024"). A missing outline language is now a HARD
+  // ERROR when --language wasn't passed -- the caller must state the
+  // language explicitly for old outlines rather than inherit a guess.
+  if (outlineLanguage === undefined || outlineLanguage === '') {
+    throw new Error(
+      'outline.json carries no `language` field (pre-round-18 outline) and no --language flag was passed. ' +
+        'Pass --language <es|en> explicitly -- refusing to default silently (a Spanish book once shipped to print with English furniture this way).',
+    );
+  }
   return coerceManifestLanguage(outlineLanguage);
 }
 

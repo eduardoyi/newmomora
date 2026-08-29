@@ -1134,8 +1134,17 @@ Deno.test('resolveManifestLanguageDefault: when --language was not passed, defau
   assertEquals(resolveManifestLanguageDefault(false, 'en', 'es-MX'), 'es');
 });
 
-Deno.test('resolveManifestLanguageDefault: when --language was not passed and the outline has no language field (old runs), falls back to "en" -- current behavior when absent, unchanged', () => {
-  assertEquals(resolveManifestLanguageDefault(false, 'en', undefined), 'en');
+Deno.test('resolveManifestLanguageDefault: when --language was not passed and the outline has no language field (old runs), THROWS instead of silently defaulting (owner incident 2026-08-29: two Spanish books shipped to print with English furniture via this fallback)', () => {
+  let threw = false;
+  try {
+    resolveManifestLanguageDefault(false, 'en', undefined);
+  } catch (error) {
+    threw = true;
+    if (!(error instanceof Error) || !error.message.includes('--language')) {
+      throw new Error('expected the guard error to instruct passing --language');
+    }
+  }
+  if (!threw) throw new Error('expected resolveManifestLanguageDefault to throw for a language-less outline with no explicit flag');
 });
 
 // --- parseArgs: --exclude-portrait-id (repeatable) --------------------------
