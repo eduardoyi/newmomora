@@ -532,6 +532,8 @@ before spending any engineering time on a local Real-ESRGAN integration.
   shipping $16.22 = **~$64.88 total (~$32.44/book landed)**.
 
 Remaining before upload: tokens migration + print-resolution re-export +
-final `book:pdf --spine-mm 28` render (in flight), and the color-profile
-support question (RGB vs FOGRA39) if we want certainty before the first
-sample rather than learning from it.
+final `book:pdf --spine-mm 28` render (in flight). Color: OWNER DECIDED
+(2026-08-29) — first samples ship in RGB as the pipeline produces them
+(their guide's own "300dpi RGB content" instruction); the physical sample
+is the color-fidelity test. Revisit FOGRA39 conversion only if the
+samples come back visibly off.
