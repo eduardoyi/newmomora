@@ -8,8 +8,6 @@
 }
 
 .ttty__portrait {
-  width: 100%;
-  aspect-ratio: 1;
   overflow: hidden;
 }
 
@@ -20,17 +18,7 @@
   display: block;
 }
 
-.ttty__meta {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.9em;
-  padding-top: 0.9em;
-}
-
 .ttty__source {
-  flex: none;
-  width: 24%;
-  aspect-ratio: 1;
   overflow: hidden;
   background: var(--color-surface);
 }
@@ -42,22 +30,50 @@
   display: block;
 }
 
+/*
+ * Round-21: `.ttty__labels` itself is now `position: absolute`, sized and
+ * placed by `throughTheYearsLayout.ts`'s pure `layoutTtyItem` (see
+ * ThroughTheYears.tsx) — only its OWN two children (age + date) still stack
+ * via ordinary in-flow flex, which is the proven-safe pattern
+ * `illustrated-digest__textcol` already uses for the same shape (a leaf
+ * flex column inside an absolutely-positioned, explicitly-sized box, never
+ * a flex row whose own size drives an ancestor's auto height).
+ */
 .ttty__labels {
   display: flex;
   flex-direction: column;
   gap: 0.3em;
-  padding-top: 0.1em;
 }
 
+/*
+ * Round-21: explicit `line-height` — this is the ACTUAL visible defect in
+ * the owner's broken PDF (age/date text rendering on top of each other,
+ * confirmed against the reference screenshot), separate from the item's
+ * own positioning. Root cause: `print.html` resets `#root { line-height: 0
+ * }` (to kill the default inline-image whitespace gap), inherited by every
+ * descendant that doesn't set its own — neither `.ttty__age` nor
+ * `.ttty__date` did, so BOTH collapsed to a zero-height line box (`normal`
+ * unset in this tree ISN'T the browser's usual ~1.2 default; it's the
+ * reset's literal 0), stacking two lines almost exactly on top of each
+ * other with only their `gap: 0.3em` separating them. This is a plain CSS
+ * inheritance bug, reproducible in a live DOM query alone (confirmed via
+ * `getBoundingClientRect` — no `page.pdf()` capture needed to see it) —
+ * not a print-pagination artifact like the item's own positioning bug.
+ * 1.2 matches `throughTheYearsLayout.ts`'s own `DEFAULT_LINE_HEIGHT`
+ * constant (the height estimate `layoutTtyItem` already assumed for the
+ * labels block), so the geometry model and the real render finally agree.
+ */
 .ttty__age {
   font-family: var(--font-display);
   font-weight: 500;
+  line-height: 1.2;
   color: var(--color-ink);
 }
 
 .ttty__date {
   font-family: var(--font-sans);
   font-weight: 500;
+  line-height: 1.2;
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--color-ink3);

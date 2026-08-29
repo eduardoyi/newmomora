@@ -5,7 +5,7 @@ import { auditBookDocument } from '../audit';
 import { fitBook } from '../fitter';
 import { parseManifest, parseOutline } from '../loader';
 import { makeAsset, makeElement, makeManifest, makeMemory, makeOutline } from './fixtures/build';
-import type { BookDocument, BookOutline, BookPage } from '../types';
+import type { BookDocument, BookOutline, BookPage, ManifestPortrait } from '../types';
 
 /**
  * Owner review round 5, item 1: automated content-integrity audit. These
@@ -563,6 +563,63 @@ describe('auditBookDocument — (j) illustrated-digest geometry (Task 1, round-1
       const violations = auditBookDocument(document, outline, makeManifest(memories));
       expect(violations.filter((v) => v.check === 'illustrated-digest')).toHaveLength(0);
     });
+  });
+});
+
+describe('auditBookDocument — (k) through-the-years geometry (round-21 print-safety fix)', () => {
+  function ttyPortrait(file: string, hasSourceFile: boolean): ManifestPortrait {
+    return { file, date: '2024-06-01', ageLabel: '6 months', sourceFile: hasSourceFile ? `${file}-source.jpg` : undefined };
+  }
+
+  function ttyPage(id: string, portraits: ManifestPortrait[]): BookPage {
+    return emptyPage({
+      id,
+      sourceElementId: 'x',
+      templateId: 'through-the-years',
+      isSpread: true,
+      slots: [{ id: 's1', kind: 'portrait-strip', content: { kind: 'portrait-strip', portraits } }],
+    });
+  }
+
+  it('flags a through-the-years page whose portrait count falls outside the reachable 1-3 table (forced directly — bypasses partitionPortraits\' own 1-3 guarantee, hitting the known-unreachable-in-production fallback rows, which still geometrically overflow the safe box)', () => {
+    const page = ttyPage(
+      'p1',
+      Array.from({ length: 4 }, (_, i) => ttyPortrait(`f${i}`, true)),
+    );
+    const violations = auditBookDocument(docWith([page]), makeOutline([]), makeManifest({}));
+    expect(violations.some((v) => v.check === 'through-the-years' && v.pageId === 'p1')).toBe(true);
+  });
+
+  it('never flags a through-the-years page at any reachable portrait count (1, 2, or 3 — the only sizes partitionPortraits ever produces), with every portrait carrying a source photo', () => {
+    for (const count of [1, 2, 3]) {
+      const page = ttyPage(
+        `p-${count}`,
+        Array.from({ length: count }, (_, i) => ttyPortrait(`f${i}`, true)),
+      );
+      const violations = auditBookDocument(docWith([page]), makeOutline([]), makeManifest({}));
+      expect(violations.filter((v) => v.check === 'through-the-years')).toHaveLength(0);
+    }
+  });
+
+  it('never flags a through-the-years page whose portraits have no source photo (thumb-less labels, falling back to the item\'s own left edge)', () => {
+    const page = ttyPage('p1', [ttyPortrait('f0', false), ttyPortrait('f1', false)]);
+    const violations = auditBookDocument(docWith([page]), makeOutline([]), makeManifest({}));
+    expect(violations.filter((v) => v.check === 'through-the-years')).toHaveLength(0);
+  });
+
+  it('a real fitBook run over a manifest with portraits produces zero through-the-years geometry violations', () => {
+    const manifest = makeManifest(
+      { 'mem-1': makeMemory({ date: '2025-01-01', assets: [makeAsset()] }) },
+      { portraits: [1, 2, 3].map((n) => ttyPortrait(`portrait-${n}`, true)) },
+    );
+    const outline = makeOutline([
+      makeElement({ id: 'tty', kind: 'through-the-years' }),
+      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    expect(document.pages.some((p) => p.templateId === 'through-the-years')).toBe(true);
+    const violations = auditBookDocument(document, outline, manifest);
+    expect(violations.filter((v) => v.check === 'through-the-years')).toHaveLength(0);
   });
 });
 

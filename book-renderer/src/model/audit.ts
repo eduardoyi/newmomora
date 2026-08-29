@@ -7,6 +7,7 @@ import type {
   IllustrationSlotContent,
   TextSlotContent,
   DigestEntryContent,
+  PortraitStripContent,
 } from './types';
 // Round-13: pure-TS `.types.ts` companions, not the `.tsx` files — see the
 // same note in `fitter.ts`. `audit.ts` has no React/DOM dependency either.
@@ -23,7 +24,16 @@ import { tallSoloCanSitBesideHeader,
 import { layoutFlexGrid } from '../templates/layout/flexGridLayout';
 import { digestColumnsForPage, layoutDigestColumn } from '../templates/layout/illustratedDigestLayout';
 import {
+  layoutTtyItem,
+  ttyOuterLayoutFor,
+  ttyItemAbsoluteRect,
+  ttyChildAbsoluteRect,
+} from '../templates/layout/throughTheYearsLayout';
+import {
   SAFE_BOX_MM,
+  SAFE_INSET_MM,
+  SPREAD_WIDTH_MM,
+  SPREAD_HEIGHT_MM,
   SECTION_HEADER_RESERVE_MM,
   FOOTER_RESERVE_MM,
   footerReserveMm,
@@ -36,6 +46,7 @@ import {
   modelSectionHeaderTitle,
   DIGEST_ILLO_WIDTH_MM,
   DIGEST_FOLIO_CLEARANCE_MM,
+  canvasPxToTrimMm,
 } from '../templates/mm';
 import { BLANK_REASONS, PRODIGI_MIN_PAGES, fullBleedCropLoss, FULL_BLEED_HERO_MAX_CROP_LOSS } from './fitter';
 
@@ -64,7 +75,8 @@ export type IntegrityCheck =
   | 'crop-loss'
   | 'photo-count'
   | 'illustrated-stack-overflow'
-  | 'illustrated-digest';
+  | 'illustrated-digest'
+  | 'through-the-years';
 
 export interface IntegrityViolation {
   check: IntegrityCheck;
@@ -85,6 +97,7 @@ export function auditBookDocument(document: BookDocument, outline: BookOutline, 
     ...auditPhotoCount(document),
     ...auditIllustratedStackOverflow(document),
     ...auditIllustratedDigest(document),
+    ...auditThroughTheYears(document),
   ];
 }
 
@@ -709,6 +722,82 @@ function auditIllustratedDigest(document: BookDocument): IntegrityViolation[] {
         }
       }
     }
+  }
+
+  return violations;
+}
+
+// ---------------------------------------------------------------------------
+// (k) Through-the-years geometry (round-21) — the permanent regression
+// backstop for `templates/ThroughTheYears.tsx`'s per-portrait geometry.
+// Diagnosed bug: the portrait's meta block (source thumb + age/date labels)
+// used to be IN-FLOW flex content nested inside an absolutely-positioned
+// item, inside the print path's 426mm cropped-spread tree — Chromium's
+// `page.pdf` print pagination (never the screen render, never a print-media-
+// emulated screenshot) silently redistributed it, pulling labels up onto
+// the portrait. This page printed broken while the OLD audit said 0
+// violations (through-the-years had no geometric coverage at all) — closing
+// that gap is the whole point of this check. Recomputes the SAME rects
+// `ThroughTheYears.tsx` renders with, via the SAME pure
+// `throughTheYearsLayout.ts` functions, so the two can never drift apart.
+// ---------------------------------------------------------------------------
+
+function auditThroughTheYears(document: BookDocument): IntegrityViolation[] {
+  const violations: IntegrityViolation[] = [];
+  const EPSILON_MM = 1e-6;
+  // The spread's own safe box — SAFE_INSET_MM (bleed + margin) in from
+  // every outer edge, on all four sides. Unlike `illustrated-digest`'s
+  // per-page columns, through-the-years portraits are positioned freely
+  // across the whole 426mm spread canvas (crossing the page-1/page-2
+  // gutter by design — see `throughTheYearsLayout.ts`'s outer-position
+  // table), so containment is checked against the spread's own outer safe
+  // box, not a per-page one.
+  const safeXMin = SAFE_INSET_MM;
+  const safeXMax = SPREAD_WIDTH_MM - SAFE_INSET_MM;
+  const safeYMin = SAFE_INSET_MM;
+  const safeYMax = SPREAD_HEIGHT_MM - SAFE_INSET_MM;
+
+  for (const page of document.pages) {
+    if (page.templateId !== 'through-the-years') continue;
+    const slot = page.slots.find((s): s is typeof s & { content: PortraitStripContent } => s.kind === 'portrait-strip');
+    const portraits = slot?.content.portraits ?? [];
+
+    portraits.forEach((p, i) => {
+      const outer = ttyOuterLayoutFor(portraits.length, i);
+      const itemWidthMm = canvasPxToTrimMm(outer.widthPx);
+      const item = layoutTtyItem(itemWidthMm, Boolean(p.sourceFile));
+      const itemAbs = ttyItemAbsoluteRect(outer, item.itemHeightMm);
+
+      const checkContained = (label: string, rect: Rect) => {
+        const overflowsX = rect.xMm < safeXMin - EPSILON_MM || rect.xMm + rect.wMm > safeXMax + EPSILON_MM;
+        const overflowsY = rect.yMm < safeYMin - EPSILON_MM || rect.yMm + rect.hMm > safeYMax + EPSILON_MM;
+        if (overflowsX || overflowsY) {
+          violations.push({
+            check: 'through-the-years',
+            pageId: page.id,
+            message: `Page ${page.id}: through-the-years portrait ${i}'s ${label} box (x ${rect.xMm.toFixed(1)}-${(rect.xMm + rect.wMm).toFixed(
+              1,
+            )}mm, y ${rect.yMm.toFixed(1)}-${(rect.yMm + rect.hMm).toFixed(1)}mm) falls outside the spread's safe box (x ${safeXMin.toFixed(
+              1,
+            )}-${safeXMax.toFixed(1)}mm, y ${safeYMin.toFixed(1)}-${safeYMax.toFixed(1)}mm).`,
+          });
+        }
+      };
+
+      const portraitAbs = ttyChildAbsoluteRect(itemAbs, item.portrait);
+      const labelsAbs = ttyChildAbsoluteRect(itemAbs, item.labels);
+      checkContained('portrait', portraitAbs);
+      checkContained('labels', labelsAbs);
+      if (item.thumb) checkContained('source thumb', ttyChildAbsoluteRect(itemAbs, item.thumb));
+
+      if (rectsIntersect(portraitAbs, labelsAbs)) {
+        violations.push({
+          check: 'through-the-years',
+          pageId: page.id,
+          message: `Page ${page.id}: through-the-years portrait ${i}'s label block overlaps its own portrait box.`,
+        });
+      }
+    });
   }
 
   return violations;
