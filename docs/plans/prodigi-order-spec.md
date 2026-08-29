@@ -537,3 +537,19 @@ final `book:pdf --spine-mm 28` render (in flight). Color: OWNER DECIDED
 (their guide's own "300dpi RGB content" instruction); the physical sample
 is the color-fidelity test. Revisit FOGRA39 conversion only if the
 samples come back visibly off.
+
+## Order edit window (owner-configured 2026-08-29)
+
+The Prodigi dashboard now holds every new order for **2 hours** before
+production ("Order edit window"), during which it can be edited or
+cancelled. Consequences for our pipeline:
+- API order creation outcomes change: a new order sits in a paused stage
+  before `inProduction` — the status poller must treat that stage as
+  NORMAL, not an error, and it is precisely the slot for post-order
+  verification (download what Prodigi received / re-check rasters) before
+  the release.
+- Lesson origin: the first sample order (ord_14448173) raced to
+  production before two defects were caught (English furniture from a
+  silent language fallback — now a hard error; Through-The-Years spread
+  broken by Chromium print pagination — fixed with absolute geometry +
+  audit coverage). The 2h window makes that class of miss recoverable.
