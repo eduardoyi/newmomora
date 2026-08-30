@@ -1,7 +1,21 @@
-import { parseShareToken, classifyShareToken, resolveViewerMedia, type ResolvedMedia } from './resolve';
+import {
+  parseShareToken,
+  classifyShareToken,
+  resolveOpenGraphPoster,
+  resolveViewerMedia,
+  type ResolvedMedia,
+} from './resolve';
 import { parseRangeHeader, formatContentRange } from './range';
 import { fetchShareToken, fetchMemoryHeader, fetchPrimaryMediaAsset } from './supabase';
 import { renderViewerPage, renderNotFoundPage, renderRevokedPage } from './page';
+import { BRAND_POSTER_BYTES, BRAND_POSTER_CONTENT_TYPE } from './brand-poster';
+
+// Open Graph crawlers use these URLs outside the current browser request. Do
+// not derive their origin from `request.url`: an alternate custom domain or a
+// hostile Host header could otherwise poison a shared link's canonical/image
+// metadata. This Worker is intentionally public only at this production
+// custom domain (see wrangler.jsonc).
+const PUBLIC_VIEWER_ORIGIN = 'https://m.usemomora.com';
 
 function htmlResponse(body: string, status: number): Response {
   return new Response(body, {
@@ -31,6 +45,26 @@ function notFoundPage(): Response {
  * id/token they don't. */
 function revokedPage(): Response {
   return htmlResponse(renderRevokedPage(), 410);
+}
+
+function posterHeaders(contentType: string, contentLength: number): Headers {
+  return new Headers({
+    'content-type': contentType,
+    'content-length': String(contentLength),
+    // Re-check the token on every fetch so a revoked printed-book link stops
+    // resolving even after a chat app or browser has requested a preview.
+    'cache-control': 'private, no-store',
+    'x-content-type-options': 'nosniff',
+    // The static fallback is safe to open directly too: it is a bundled JPEG
+    // with no scripts, network requests, or user-supplied data.
+    'content-security-policy': "default-src 'none'; base-uri 'none'",
+  });
+}
+
+function brandedPosterResponse(): Response {
+  return new Response(BRAND_POSTER_BYTES, {
+    headers: posterHeaders(BRAND_POSTER_CONTENT_TYPE, BRAND_POSTER_BYTES.byteLength),
+  });
 }
 
 /**
@@ -80,10 +114,20 @@ function nonMediaResponse(resolution: MediaResolution): Response | null {
 async function handleViewerPage(env: Env, token: string): Promise<Response> {
   const resolution = await resolveMedia(env, token);
   if (resolution.kind !== 'media') return nonMediaResponse(resolution)!;
+  const poster = resolveOpenGraphPoster(resolution.media);
+  const canonicalUrl = new URL(`/m/${token}`, PUBLIC_VIEWER_ORIGIN).toString();
+  const posterUrl = poster ? new URL(`/poster/${token}`, PUBLIC_VIEWER_ORIGIN).toString() : undefined;
   // The rendered page's <img>/<video>/<audio> src points at THIS SAME
   // token's /media/ route -- not the underlying memory id, which never
   // reaches the client.
-  return htmlResponse(renderViewerPage(resolution.media, `/media/${token}`), 200);
+  return htmlResponse(
+    renderViewerPage(resolution.media, `/media/${token}`, {
+      canonicalUrl,
+      posterContentType: poster?.contentType,
+      posterUrl,
+    }),
+    200,
+  );
 }
 
 async function handleMediaBytes(env: Env, request: Request, token: string): Promise<Response> {
@@ -111,7 +155,10 @@ async function handleMediaBytes(env: Env, request: Request, token: string): Prom
   headers.set('content-type', media.contentType);
   headers.set('etag', object.httpEtag);
   headers.set('accept-ranges', 'bytes');
-  headers.set('cache-control', 'private, max-age=3600');
+  // `/media/:token` is also a revocation-sensitive bearer URL. A browser or
+  // intermediary cache must not keep serving bytes after the token is
+  // revoked, even if it fetched them shortly before that change.
+  headers.set('cache-control', 'private, no-store');
 
   if (object.range) {
     const { offset, length } = object.range;
@@ -122,6 +169,38 @@ async function handleMediaBytes(env: Env, request: Request, token: string): Prom
 
   headers.set('content-length', String(object.size));
   return new Response(object.body, { status: 200, headers });
+}
+
+/**
+ * Stream a share-token-authorized Open Graph poster. This must resolve the
+ * share token independently of `/m/:token`: social crawlers fetch metadata
+ * and images separately, and a token can be revoked between those requests.
+ */
+async function handlePosterBytes(env: Env, token: string): Promise<Response> {
+  const resolution = await resolveMedia(env, token);
+  if (resolution.kind !== 'media') return nonMediaResponse(resolution)!;
+
+  const poster = resolveOpenGraphPoster(resolution.media);
+  if (!poster) return notFoundPage();
+  if (poster.kind === 'brand') return brandedPosterResponse();
+
+  try {
+    const object = await env.MEDIA.get(poster.objectKey);
+
+    // A DB preview key can be stale after a failed/deleted upload. Keep the
+    // active link shareable with the neutral JPEG rather than advertising a
+    // broken Open Graph image, and never expose an R2 detail or object key.
+    if (!object || !object.body) return brandedPosterResponse();
+
+    return new Response(object.body, {
+      headers: posterHeaders(poster.contentType, object.size),
+    });
+  } catch {
+    // Do not include the key, memory id, or an R2 error message in logs or a
+    // response. All of those may identify a family's private asset.
+    console.error('memory-viewer: poster read failed');
+    return notFoundPage();
+  }
 }
 
 export default {
@@ -143,6 +222,9 @@ export default {
 
     const mediaToken = parseShareToken(url.pathname, '/media/');
     if (mediaToken) return handleMediaBytes(env, request, mediaToken);
+
+    const posterToken = parseShareToken(url.pathname, '/poster/');
+    if (posterToken) return handlePosterBytes(env, posterToken);
 
     return notFoundPage();
   },

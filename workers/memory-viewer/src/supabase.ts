@@ -59,7 +59,7 @@ export async function fetchShareToken(env: Env, token: string): Promise<ShareTok
 
 export async function fetchMemoryHeader(env: Env, memoryId: string): Promise<MemoryHeaderRow | null> {
   const rows = await supabaseRequest<MemoryHeaderRow[]>(env, 'memories', {
-    select: 'id,memory_type,memory_date,content',
+    select: 'id,memory_type,memory_date,content,emotion',
     id: `eq.${memoryId}`,
     limit: '1',
   });

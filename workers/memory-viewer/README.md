@@ -4,26 +4,28 @@ Cloudflare Worker that serves the QR-code memory viewer printed in Momora
 books (`docs/plans/memory-book.md` §7/§8): `GET /m/:token` renders a
 minimal, mobile-first page that plays the memory's video/audio or shows its
 photo; `GET /media/:token` streams the actual bytes from the private R2
-bucket, with HTTP Range support for video scrubbing.
+bucket, with HTTP Range support for video scrubbing; and `GET /poster/:token`
+serves the token-protected Open Graph image used by chat apps.
 
 URL shape (owner decision, Round-19): `https://m.usemomora.com/m/<token>`,
 where `<token>` is an opaque, revocable `media_share_tokens.token` — never
 the raw memory id. **Public, no PIN** — "people share the book with only
 people they trust," same trust model as before — but now with a
-**revocation lever**: the owner can kill a lost/stolen printed book's QR
-pages (set `revoked_at`) without touching the underlying memory. See
+**revocation lever**: the owner can turn off printed copies that use a token
+(set `revoked_at`) without touching the underlying memory. See
 "Privacy model" below for the full story, and the earlier "raw memoryId"
 design this replaced.
 
-## Status: not deployed
+## Status
 
-Nothing here has been deployed. This README documents the exact commands
-the owner runs to do so. Everything below `## Owner deploy checklist` is
-for the owner to execute — this task was scoped as code + docs only.
+`m.usemomora.com` already has a deployed production Worker. This README
+documents the Worker contract in this repository, including the `/poster/:token`
+route. It is not a deployment record for an individual checkout: verify that a
+new release is live with the post-deploy smoke test below.
 
 ## How it resolves a share token to media
 
-1. `GET /m/:token` and `GET /media/:token` both call `resolveMedia()`,
+1. `GET /m/:token`, `GET /media/:token`, and `GET /poster/:token` all call `resolveMedia()`,
    which does its Supabase REST reads using the service-role key (bypasses
    RLS — there's no end-user JWT here to evaluate `auth.uid()` against; see
    "Privacy model"), in two stages (the second depends on the first, so
@@ -35,8 +37,12 @@ for the owner to execute — this task was scoped as code + docs only.
      page off), or `active` (carries the `memory_id` to resolve next).
    - Only for an `active` token, the same two reads the old memoryId scheme
      always did, now run concurrently against that resolved `memory_id`:
-     - `memories?id=eq.<id>&select=id,memory_type,memory_date,content`
-     - `memory_media?memory_id=eq.<id>&select=object_key,content_type,duration_ms,preview_object_key&order=position.asc&limit=1`
+     - `memories?id=eq.<id>&select=id,memory_type,memory_date,content,emotion`
+     - `memory_media?memory_id=eq.<id>&select=object_key,content_type,duration_ms,preview_object_key&order=position.asc`
+       — `pickViewerAsset()` chooses the first video, otherwise the first
+       audio asset, otherwise the first photo by position. This keeps a QR
+       whose printed copy says “scan to watch” from resolving to an earlier
+       photo in a mixed carousel.
 2. `src/resolve.ts`'s `resolveViewerMedia()` (pure function, unit tested)
    combines the `memories`/`memory_media` rows into a
    `{ kind, objectKey, contentType, ... }` or `null`. It 404s (returns
@@ -59,14 +65,13 @@ A revoked or never-minted token renders a page (`renderRevokedPage()` /
 those two are deliberately DIFFERENT pages (410 vs. 404) despite the shared
 "never explain a memory-level failure" rule below.
 
-**One memory → one media asset, deliberately.** `memory_media` supports up
-to 10 ordered assets per `media` memory (photo/video carousels), but this
-worker only ever serves position 0 — the same asset `memories.media_key`
-already denormalizes as "the" media for that memory. A book's QR page is
-one printed photo/video/audio block per memory; there's no UI for "scan to
-see asset 3 of 4". If that ever needs to change, `fetchPrimaryMediaAsset`
-in `src/supabase.ts` is the one place to touch (drop `limit=1`, add an
-asset index to the URL).
+**One memory → one selected media asset, deliberately.** `memory_media`
+supports up to 10 ordered assets per `media` memory (photo/video carousels),
+but a book's QR page has one representative asset. The current priority is
+the first video, otherwise the first audio, otherwise position 0 (the first
+photo). There is no UI for “scan to see asset 3 of 4.” If that ever needs to
+change, `fetchPrimaryMediaAsset` in `src/supabase.ts` is the one place to
+add an explicit asset index to the URL.
 
 ### Key resolution: why the DB lookup
 
@@ -121,7 +126,7 @@ This worker uses (2):
   (long-press → copy link, or an aggressive CDN/proxy caching it) it works
   until expiry independent of anything else changing. Streaming through
   the Worker means the *only* thing that ever reaches the client is
-  `/media/:memoryId`, which re-checks the DB (and therefore honors a
+  `/media/:token`, which re-checks the DB (and therefore honors a
   future revocation — see "Privacy model") on every request.
 - **A binding already exists for exactly this bucket.** `momora-export-worker`
   binds `MEDIA` → `momora-prod` R2 bucket and streams zip entries straight
@@ -140,8 +145,9 @@ isolates "what to serve" from "how to serve it").
 
 ## Design notes (the page itself)
 
-- **Inline CSS, no build step, no external requests except the media
-  itself.** `src/page.ts` renders complete HTML strings; `src/theme.ts`
+- **Inline CSS, no build step, no external assets.** `src/page.ts` renders
+  complete HTML strings; the browser and social crawler fetch token-protected
+  media/poster bytes from this same Worker. `src/theme.ts`
   copies (not imports — see book-renderer/src/theme.ts's own header
   comment for the same rationale) the Momora palette as constants.
 - **System fonts, not the app's Newsreader/Jakarta webfonts.** This page is
@@ -149,9 +155,10 @@ isolates "what to serve" from "how to serve it").
   often on cellular signal, sometimes a grandparent's older phone. A
   webfont round-trip is a bad trade for a page that's viewed once. See
   `src/theme.ts`'s `fonts` comment.
-- **`Cache-Control: no-store` on every response.** Every response here is
-  either a specific family's photo/video/caption, the generic 404, or the
-  revoked-link 410 — never appropriate to cache at a shared/CDN layer.
+- **Viewer responses do not cache.** HTML uses `no-store`; media and poster
+  bytes use `private, no-store`. These responses are either a specific
+  family's photo/video/caption, the generic 404, or the revoked-link 410 —
+  never appropriate to cache at a shared/CDN layer.
 - **The 404 page never distinguishes *why*.** Malformed token, never-minted
   token, deleted memory, wrong memory type, missing R2 object — all render
   the same `renderNotFoundPage()`. A REVOKED token is the one deliberate
@@ -170,12 +177,15 @@ that can be revoked.
 
 This closes the gap the earlier design flagged as an open question: that
 raw-`memoryId` scheme had **no revocation lever** short of deleting the
-memory itself. Now, setting `media_share_tokens.revoked_at` kills a
-specific printed book's QR pages — e.g. a lost/stolen book — without
-touching the memory, and without affecting any OTHER book's tokens for the
-same memory (the partial-unique-active-token-per-memory constraint means a
-re-export after a revocation mints a fresh token rather than reusing the
-dead one).
+memory itself. Setting `media_share_tokens.revoked_at` prevents fresh
+`/m`, `/media`, and `/poster` reads without touching the memory.
+
+The current schema permits **one active token per memory**, not one token per
+book. The book-export pipeline reuses that active token, so revoking it turns
+off every physical book copy that uses it. A later export after revocation
+mints a fresh token; it does not give independently revocable tokens to
+already printed copies. Per-book revocation needs a future schema and export
+lifecycle change.
 
 `classifyShareToken()` (`src/resolve.ts`) is the one place that decides how
 a token maps to a response: `not_found` (no row — indistinguishable from a
@@ -186,6 +196,27 @@ the "never explain why" posture for `not_found`: revealing "this exact
 token you already possess was once active" tells a holder of a real link
 something true about THAT link, not about any other id/token they haven't
 already been handed.
+
+## Open Graph previews and cache limits
+
+`/m/:token` emits a date-specific title, an Open Graph description based on
+the visible caption when present, and an absolute token-protected
+`/poster/:token` image URL. `/poster/:token` re-checks the token separately
+because social crawlers fetch page metadata and images independently:
+
+- A selected video uses its stored JPEG first-frame poster
+  (`preview_object_key`).
+- A browser-compatible selected photo uses its JPEG preview when available,
+  otherwise its JPEG/PNG/WebP original.
+- Audio, legacy HEIC/HEIF without a preview, and video without a stored
+  poster receive the bundled neutral Momora JPEG. It contains no caption,
+  date, names, or identifiers.
+
+The Worker sends `no-store`, and revocation prevents fresh origin access, but
+it cannot retract a preview that WhatsApp or another social provider already
+cached. Those services can retain the prior title, caption, and poster outside
+Momora's control. Treat a printed QR link as unsuitable where that external
+cache retention is unacceptable.
 
 ## What's stubbed / not handled
 
@@ -204,16 +235,17 @@ already been handed.
   an owner (or a future admin tool/RPC) issuing a direct UPDATE. No
   app-facing "turn off this book's QR codes" button exists yet — a natural
   next step, out of scope for this task.
-- **No rate limiting / bot protection** on `/m/:token` or `/media/:token`. A
-  script could enumerate nothing useful (tokens aren't sequential), but
-  could still hammer a single known token's `/media/` route for R2 egress
-  cost. Not addressed here — Cloudflare's zone-level WAF/rate-limiting
+- **No rate limiting / bot protection** on `/m/:token`, `/media/:token`, or
+  `/poster/:token`. A script could enumerate nothing useful (tokens aren't
+  sequential), but could still hammer a single known token's media/poster
+  routes for R2 egress cost. Not addressed here — Cloudflare's zone-level WAF/rate-limiting
   rules (configured outside this repo, in the dashboard or `wrangler` zone
   config) are the natural place if it becomes a problem.
 - **No analytics/observability beyond Cloudflare's built-in
   `observability.enabled`.** No "was this QR code ever scanned" signal is
   wired up. Worth asking the owner whether that's wanted before V4/V5.
-- **Multi-asset carousels always show asset 0** — see "One memory → one
+- **Multi-asset carousels expose one representative asset** — first video,
+  otherwise first audio, otherwise position 0; see "One memory → one selected
   media asset" above.
 
 ## Local development
@@ -224,7 +256,7 @@ npm install
 cp .dev.vars.example .dev.vars   # fill in a real SUPABASE_SERVICE_ROLE_KEY for local testing against a real project
 npm test           # vitest — routing, share-token classification, media resolution, HTML rendering (no network/Miniflare needed)
 npm run typecheck  # tsc --noEmit
-npx wrangler dev    # runs the worker locally against real Supabase + R2 (needs .dev.vars and network -- and the media_share_tokens migration applied, see "Owner deploy checklist" step 0)
+npx wrangler dev    # runs the worker locally against real Supabase + R2 (needs .dev.vars, network, and a project with media_share_tokens)
 ```
 
 `npm test` needs no Cloudflare account, R2, or live Supabase project —
@@ -243,79 +275,78 @@ repo). No `SUPABASE_ANON_KEY` is needed: unlike
 `cloudflare/momora-export-worker`, there is no end-user bearer token to
 verify — this worker is intentionally unauthenticated.
 
-## Owner deploy checklist
+## Production deploy checklist
 
-Everything below requires Cloudflare (and, for step 0, Supabase) account
-access and is **not run by this task**.
+Use this checklist when releasing a source change. It assumes the existing
+production Worker, custom domain, Supabase project, and `momora-prod` R2
+bucket are in the same Cloudflare account.
 
-0. **Apply the `media_share_tokens` migration first.** This worker's
-   `GET /m/:token` route is useless without the table it reads from:
+1. **Confirm the deploy identity and secret name** from
+   `workers/memory-viewer/`. The secret value must never appear in output.
 
    ```bash
-   npx supabase db push   # applies supabase/migrations/20260829120000_media_share_tokens.sql
+   npx wrangler whoami
+   npx wrangler secret list
    ```
 
-   Do this before the book-export pipeline is next run too — minting
-   (`ensureShareTokens` in `supabase/scripts/eval-memory-book-assets.ts`)
-   fails loudly if the table doesn't exist yet.
+   Confirm that `SUPABASE_SERVICE_ROLE_KEY` is listed. Set it with
+   `wrangler secret put` only if it is genuinely absent; do not rotate or
+   paste a secret as part of a routine code deploy.
 
-1. **Confirm the `momora-prod` R2 bucket is reachable from a new Worker in
-   this account.** It already is (both existing Workers bind it), so this
-   is just confirming the account/zone this Worker deploys into is the
-   same one.
+2. **Confirm bindings and schema.** `wrangler.jsonc` binds `MEDIA` to
+   `momora-prod`; this release needs no new binding or secret. The target
+   Supabase project must already have `media_share_tokens`. Apply its
+   migration only when bringing up a previously unmigrated environment, not
+   as a repeated production-release step.
 
-2. **Set the secret** (from `workers/memory-viewer/`):
+3. **Leave custom-domain DNS to Cloudflare.** The route is configured as
+   `custom_domain: true` for `m.usemomora.com`. Cloudflare manages the
+   custom-domain DNS record and certificate for an active zone. Do **not**
+   manually add a CNAME first: an existing conflicting CNAME can prevent
+   custom-domain provisioning. The established production domain needs no
+   new DNS record for a code-only deploy.
+
+4. **Run the release gates with Node 22 or newer** from the same shell and
+   architecture that will invoke Wrangler:
 
    ```bash
-   npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-   # paste the Momora project's service_role key when prompted
-   ```
-
-3. **Dry-run to confirm the config resolves** (no deploy, no charges):
-
-   ```bash
+   npm test
+   npm run typecheck
    npm run deploy:dry-run
    ```
 
-4. **Deploy:**
+5. **Deploy:**
 
    ```bash
    npx wrangler deploy
    ```
 
-5. **DNS — read before step 4 if you haven't done this yet.** This worker's
-   `wrangler.jsonc` requests a Cloudflare **custom domain** route for
-   `m.usemomora.com` (owner decision, Round-19 — a subdomain of the app's
-   EXISTING `usemomora.com`, matching every other public-facing Momora
-   domain in this repo — see `app.json`'s `applinks:usemomora.com`,
-   `docs/features/family-sharing.md`, etc. This replaced an earlier
-   placeholder `momora.app`, a brand-new unregistered domain that would
-   have needed its own registration + zone setup).
-   - Add an `m` record (CNAME or the Cloudflare-managed custom-domain
-     record Wrangler prompts for) under the `usemomora.com` zone, on the
-     same Cloudflare account this Worker deploys into.
-   - If you deploy without DNS ready, `wrangler deploy` will fail at the
-     route-attachment step (config itself validates fine — verified via
-     `wrangler deploy --dry-run` during this task) or the Worker will
-     deploy to its default `*.workers.dev` URL, whichever Wrangler prefers
-     that day; either way, re-run `wrangler deploy` once DNS is in place.
-
-6. **Staging** (`env.staging` in `wrangler.jsonc`) has placeholder values
-   (`REPLACE_WITH_STAGING_...`) exactly like the sibling workers' staging
-   blocks — fill those in only if a staging Supabase project / R2 bucket
-   exists for this to point at; otherwise the block is inert and can stay
-   as-is.
-
-7. **Smoke test** once deployed, using a real `media_share_tokens.token` for
-   an active token minted against a `media` (video) or `audio` memory in
-   the target Supabase project (mint one by running the book-export
-   pipeline, or read one directly from the table):
+6. **Smoke-test without echoing a real token or page body.** Use an approved
+   active test link, read the token without echo, and print only status and
+   safe response-header fields. Do not use `curl -i`, paste the resulting URL
+   into a ticket, or log HTML because it can contain a family caption.
 
    ```bash
-   curl -i https://m.usemomora.com/m/<a-real-share-token>
-   curl -i https://m.usemomora.com/media/<a-real-share-token>
-   curl -i -H 'Range: bytes=0-999' https://m.usemomora.com/media/<a-real-share-token>   # expect 206
-   curl -i https://m.usemomora.com/m/does-not-exist-at-all-00000000000                  # expect 404
-   # to test the revoked path: UPDATE media_share_tokens SET revoked_at = now() WHERE token = '<token>';
-   curl -i https://m.usemomora.com/m/<the-now-revoked-token>                            # expect 410
+   read -rs memory_viewer_smoke_token
+   viewer_smoke_origin='https://m.usemomora.com'
+   curl -sS -o /dev/null -D - "$viewer_smoke_origin/m/$memory_viewer_smoke_token" | rg -i '^(HTTP/|content-type:|cache-control:)'
+   curl -sS -o /dev/null -D - "$viewer_smoke_origin/poster/$memory_viewer_smoke_token" | rg -i '^(HTTP/|content-type:|cache-control:)'
+   curl -sS -o /dev/null -D - -H 'Range: bytes=0-999' "$viewer_smoke_origin/media/$memory_viewer_smoke_token" | rg -i '^(HTTP/|content-type:|content-range:|cache-control:)'
+   curl -sS -o /dev/null -w 'unknown-token status=%{http_code}\n' "$viewer_smoke_origin/m/not-a-real-share-token-00000000000"
    ```
+
+   Expect 200 HTML with `no-store` for `/m`, 200 `image/jpeg` (or a safe
+   selected-photo type) with `private, no-store` for `/poster`, 206 for the
+   ranged `/media` request, and 404 for the made-up token. Privately inspect
+   the viewer title/card and the WhatsApp self-chat preview; the latter
+   intentionally creates a third-party cached preview.
+
+7. **Test revocation only with a disposable synthetic memory/token.** After
+   revoking that test token through an authorized admin path, `/m`, `/media`,
+   and `/poster` must each return 410. Never revoke a real printed-book token
+   during smoke testing: the current one-active-token-per-memory model turns
+   off every copy that uses it.
+
+8. **Staging** (`env.staging` in `wrangler.jsonc`) has placeholder values
+   (`REPLACE_WITH_STAGING_...`). Fill them only if a staging Supabase project
+   and R2 bucket exist; otherwise the block remains inert.

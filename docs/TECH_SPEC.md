@@ -1457,7 +1457,17 @@ Does **not** invoke `generate-illustration` for `media`.
 
 **New table `memory_milestones`:** `id`, `family_id`, `memory_id`, `family_member_id` (nullable, set null on member delete), `milestone_id` (text, catalog id), `detail`, `out_of_band` (boolean), `status` (`candidate`/`confirmed`/`dismissed`, default `candidate`), `created_at`, `updated_at`. Unique on `(memory_id, milestone_id)`. RLS: family members can `select`; no client insert/update/delete policies — only the service-role client writes. See memory-analysis.md for the resolution rules.
 
-**Table `media_share_tokens`** (migration `20260829120000`, Memory Book V3 phase 2): `token` (text PK — opaque 22-char base62, application-generated), `memory_id` (FK → memories, cascade), `created_at`, `revoked_at` (null = active; partial unique index enforces one active token per memory). Backs the printed books' QR codes: the book-export pipeline (eval-memory-book-assets.ts) mints tokens via the service-role client; the public memory-viewer worker (`workers/memory-viewer`, deployed at `m.usemomora.com`) resolves `GET /m/:token` → memory media, serving revoked tokens a 410 "link no longer active" page. RLS: family members `select` (join through memories); writes service-role only. Revocation = set `revoked_at` — kills a lost/stolen printed book's QR pages without touching the memory.
+**Table `media_share_tokens`** (migration `20260829120000`, Memory Book V3 phase 2): `token` (text PK — opaque 22-char base62, application-generated), `memory_id` (FK → memories, cascade), `created_at`, `revoked_at` (null = active; partial unique index enforces one active token per memory). The book-export pipeline (`eval-memory-book-assets.ts`) mints/reuses active tokens via the service-role client. RLS: family members `select` (join through memories); writes service-role only.
+
+The public `workers/memory-viewer` Worker uses the configured production custom domain `m.usemomora.com`. Its public bearer-token contract is:
+
+- `GET /m/:token` — resolve the selected memory asset and return the mobile QR viewer. The browser title and Open Graph title use the memory date when available; the visible caption is also the bounded Open Graph description when present.
+- `GET /media/:token` — resolve the token again, then stream the selected private R2 object with Range support.
+- `GET /poster/:token` — resolve the token again, then serve the Open Graph image social crawlers fetch separately from the page. A selected video uses its stored JPEG `preview_object_key`; a selected browser-compatible photo uses its JPEG preview when available, otherwise its JPEG/PNG/WebP original; audio, legacy HEIC/HEIF without a preview, and a video without a stored poster use a bundled neutral Momora JPEG with no family data.
+
+The selected asset is the first video, otherwise the first audio, otherwise the first photo by `memory_media.position`. `/m` and all byte routes must re-check the token; revoked tokens return 410 before an R2 read. HTML uses `Cache-Control: no-store`; media and poster bytes use `Cache-Control: private, no-store`. This stops fresh origin access after revocation, but does not retract Open Graph title, caption, or poster data that WhatsApp or another provider previously cached.
+
+The current model is **one active token per memory**, not per book. Exports reuse that active token, so revoking it disables every printed copy using it. A later export can mint a fresh token after revocation, but independently revocable book copies require a future schema/export change.
 
 ---
 

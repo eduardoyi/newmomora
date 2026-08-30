@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyShareToken,
   parseShareToken,
+  resolveOpenGraphPoster,
   resolveViewerMedia,
   type MemoryHeaderRow,
   type MemoryMediaAssetRow,
@@ -19,6 +20,10 @@ describe('parseShareToken', () => {
 
   it('extracts a valid media-path share token', () => {
     expect(parseShareToken(`/media/${VALID_TOKEN}`, '/media/')).toBe(VALID_TOKEN);
+  });
+
+  it('extracts a valid poster-path share token', () => {
+    expect(parseShareToken(`/poster/${VALID_TOKEN}`, '/poster/')).toBe(VALID_TOKEN);
   });
 
   it('preserves case -- unlike the retired UUID path, base62 tokens are case-sensitive', () => {
@@ -86,6 +91,7 @@ const baseMemory: MemoryHeaderRow = {
   memory_type: 'media',
   memory_date: '2026-06-01',
   content: 'First splash in the pool',
+  emotion: 'joy',
 };
 
 const baseAsset: MemoryMediaAssetRow = {
@@ -126,7 +132,9 @@ describe('resolveViewerMedia', () => {
       contentType: 'image/jpeg',
       memoryDate: '2026-06-01',
       caption: 'First splash in the pool',
+      emotion: 'joy',
       durationMs: null,
+      previewObjectKey: null,
     });
   });
 
@@ -163,7 +171,9 @@ describe('resolveViewerMedia', () => {
       contentType: 'video/mp4',
       memoryDate: baseMemory.memory_date,
       caption: baseMemory.content,
+      emotion: baseMemory.emotion,
       durationMs: 12_500,
+      previewObjectKey: null,
     });
   });
 
@@ -179,6 +189,88 @@ describe('resolveViewerMedia', () => {
     expect(resolved?.kind).toBe('audio');
     expect(resolved?.durationMs).toBe(4_200);
     expect(resolved?.caption).toBeNull();
+  });
+});
+
+describe('resolveOpenGraphPoster', () => {
+  it('uses a video asset’s generated JPEG preview rather than the video original', () => {
+    const video = resolveViewerMedia(baseMemory, {
+      object_key: 'user-1/memories/mem-1/media/asset-1.mp4',
+      content_type: 'video/mp4',
+      duration_ms: 12_500,
+      preview_object_key: 'user-1/memories/mem-1/media/asset-1-preview.jpg',
+    });
+
+    expect(video).not.toBeNull();
+    expect(resolveOpenGraphPoster(video!)).toEqual({
+      kind: 'media',
+      objectKey: 'user-1/memories/mem-1/media/asset-1-preview.jpg',
+      contentType: 'image/jpeg',
+    });
+  });
+
+  it('uses an image preview when the viewer already substituted one', () => {
+    const image = resolveViewerMedia(baseMemory, {
+      ...baseAsset,
+      content_type: 'image/heic',
+      preview_object_key: 'user-1/memories/mem-1/media/asset-1-preview.jpg',
+    });
+
+    expect(image).not.toBeNull();
+    expect(resolveOpenGraphPoster(image!)).toEqual({
+      kind: 'media',
+      objectKey: 'user-1/memories/mem-1/media/asset-1-preview.jpg',
+      contentType: 'image/jpeg',
+    });
+  });
+
+  it('uses a browser-compatible image original when no preview exists', () => {
+    const image = resolveViewerMedia(baseMemory, {
+      ...baseAsset,
+      content_type: 'image/png',
+      preview_object_key: null,
+    });
+
+    expect(image).not.toBeNull();
+    expect(resolveOpenGraphPoster(image!)).toEqual({
+      kind: 'media',
+      objectKey: baseAsset.object_key,
+      contentType: 'image/png',
+    });
+  });
+
+  it('uses the neutral JPEG brand card for audio and images social crawlers cannot decode', () => {
+    const audio = resolveViewerMedia(
+      { ...baseMemory, memory_type: 'audio' },
+      {
+        object_key: 'user-1/memories/mem-1/media/asset-1.m4a',
+        content_type: 'audio/mp4',
+        duration_ms: 4_200,
+        preview_object_key: null,
+      },
+    );
+    const heic = resolveViewerMedia(baseMemory, {
+      ...baseAsset,
+      content_type: 'image/heic',
+      preview_object_key: null,
+    });
+
+    expect(audio).not.toBeNull();
+    expect(heic).not.toBeNull();
+    expect(resolveOpenGraphPoster(audio!)).toEqual({ kind: 'brand', contentType: 'image/jpeg' });
+    expect(resolveOpenGraphPoster(heic!)).toEqual({ kind: 'brand', contentType: 'image/jpeg' });
+  });
+
+  it('uses the neutral JPEG brand card for a video without a generated poster', () => {
+    const video = resolveViewerMedia(baseMemory, {
+      object_key: 'user-1/memories/mem-1/media/asset-1.mp4',
+      content_type: 'video/mp4',
+      duration_ms: 12_500,
+      preview_object_key: null,
+    });
+
+    expect(video).not.toBeNull();
+    expect(resolveOpenGraphPoster(video!)).toEqual({ kind: 'brand', contentType: 'image/jpeg' });
   });
 });
 

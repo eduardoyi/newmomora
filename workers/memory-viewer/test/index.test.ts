@@ -97,7 +97,9 @@ describe('memory-viewer routing', () => {
         .fn()
         .mockResolvedValueOnce(activeTokenRow())
         .mockResolvedValueOnce(
-          supabaseOk([{ id: MEMORY_ID, memory_type: 'media', memory_date: '2026-06-01', content: 'Pool day' }]),
+          supabaseOk([
+            { id: MEMORY_ID, memory_type: 'media', memory_date: '2026-06-01', content: 'Pool day', emotion: 'joy' },
+          ]),
         )
         .mockResolvedValueOnce(
           supabaseOk([
@@ -105,19 +107,30 @@ describe('memory-viewer routing', () => {
               object_key: 'user-1/memories/mem-1/media/asset-1.mp4',
               content_type: 'video/mp4',
               duration_ms: 9000,
-              preview_object_key: null,
+              preview_object_key: 'user-1/memories/mem-1/media/asset-1-preview.jpg',
             },
           ]),
         ),
     );
-    const response = await worker.fetch(new Request(`https://m.usemomora.com/m/${VALID_TOKEN}`), makeEnv());
+    const mediaGet = vi.fn();
+    const response = await worker.fetch(
+      new Request(`https://hostile.example.invalid/m/${VALID_TOKEN}`),
+      makeEnv(mediaGet),
+    );
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
     expect(response.headers.get('cache-control')).toBe('no-store');
     const body = await response.text();
     expect(body).toContain(`<video class="media" src="/media/${VALID_TOKEN}"`);
+    expect(body).toContain(`https://m.usemomora.com/m/${VALID_TOKEN}`);
+    expect(body).toContain(`https://m.usemomora.com/poster/${VALID_TOKEN}`);
+    expect(body).not.toContain('hostile.example.invalid');
+    expect(body).toContain('og:image:type" content="image/jpeg"');
     expect(body).not.toContain(MEMORY_ID); // the underlying memory id never reaches the client.
     expect(body).toContain('Pool day');
+    // Rendering metadata must not HEAD/GET R2 just to decide if a preview
+    // object is present; /poster resolves and reads it only when crawled.
+    expect(mediaGet).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
@@ -166,6 +179,7 @@ describe('/media/:token streaming', () => {
     expect(response.headers.get('content-length')).toBe('5000');
     expect(response.headers.get('accept-ranges')).toBe('bytes');
     expect(response.headers.get('content-type')).toBe('video/mp4');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(mediaGet).toHaveBeenCalledWith('user-1/memories/mem-1/media/asset-1.mp4');
     vi.unstubAllGlobals();
   });
@@ -216,6 +230,195 @@ describe('/media/:token streaming', () => {
     const response = await worker.fetch(new Request(`https://m.usemomora.com/media/${VALID_TOKEN}`), makeEnv(mediaGet));
     expect(response.status).toBe(410);
     expect(mediaGet).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('/poster/:token Open Graph images', () => {
+  const VIDEO_KEY = 'user-1/memories/mem-1/media/video-1.mp4';
+  const VIDEO_POSTER_KEY = 'user-1/memories/mem-1/media/video-1-preview.jpg';
+
+  function readableBody(bytes = new Uint8Array([0xff, 0xd8, 0xff, 0x00])): ReadableStream<Uint8Array> {
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+  }
+
+  function stubResolvablePoster(assetRows: unknown[], memory: Record<string, unknown> = {}) {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(activeTokenRow())
+        .mockResolvedValueOnce(
+          supabaseOk([
+            {
+              id: MEMORY_ID,
+              memory_type: 'media',
+              memory_date: '2026-06-01',
+              content: 'A private pool day',
+              emotion: 'joy',
+              ...memory,
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(supabaseOk(assetRows)),
+    );
+  }
+
+  it('re-resolves the active token and streams the selected video’s JPEG preview with private no-store headers', async () => {
+    // A carousel’s first asset can be a photo, but both `/m` and `/poster`
+    // must choose its first VIDEO as the actual viewer asset.
+    stubResolvablePoster([
+      {
+        object_key: 'user-1/memories/mem-1/media/photo-0.jpg',
+        content_type: 'image/jpeg',
+        duration_ms: null,
+        preview_object_key: null,
+      },
+      {
+        object_key: VIDEO_KEY,
+        content_type: 'video/mp4',
+        duration_ms: 9_000,
+        preview_object_key: VIDEO_POSTER_KEY,
+      },
+    ]);
+    const writeHttpMetadata = vi.fn();
+    const mediaGet = vi.fn().mockResolvedValue({
+      body: readableBody(),
+      size: 4,
+      httpEtag: '"poster"',
+      writeHttpMetadata,
+    });
+
+    const response = await worker.fetch(new Request(`https://m.usemomora.com/poster/${VALID_TOKEN}`), makeEnv(mediaGet));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/jpeg');
+    expect(response.headers.get('content-length')).toBe('4');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('accept-ranges')).toBeNull();
+    expect(mediaGet).toHaveBeenCalledWith(VIDEO_POSTER_KEY);
+    // R2 metadata can include original filenames or cache directives. A
+    // public poster response intentionally emits only its minimal headers.
+    expect(writeHttpMetadata).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('streams a browser-compatible image original when it has no generated preview', async () => {
+    const imageKey = 'user-1/memories/mem-1/media/photo-1.png';
+    stubResolvablePoster([
+      {
+        object_key: imageKey,
+        content_type: 'image/png',
+        duration_ms: null,
+        preview_object_key: null,
+      },
+    ]);
+    const mediaGet = vi.fn().mockResolvedValue({
+      body: readableBody(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
+      size: 4,
+      httpEtag: '"photo"',
+      writeHttpMetadata: vi.fn(),
+    });
+
+    const response = await worker.fetch(new Request(`https://m.usemomora.com/poster/${VALID_TOKEN}`), makeEnv(mediaGet));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/png');
+    expect(mediaGet).toHaveBeenCalledWith(imageKey);
+    vi.unstubAllGlobals();
+  });
+
+  it('returns the bundled neutral JPEG for audio without reading R2', async () => {
+    stubResolvablePoster(
+      [
+        {
+          object_key: 'user-1/memories/mem-1/media/audio-1.m4a',
+          content_type: 'audio/mp4',
+          duration_ms: 4_200,
+          preview_object_key: null,
+        },
+      ],
+      { memory_type: 'audio' },
+    );
+    const mediaGet = vi.fn();
+
+    const response = await worker.fetch(new Request(`https://m.usemomora.com/poster/${VALID_TOKEN}`), makeEnv(mediaGet));
+    const bytes = new Uint8Array(await response.arrayBuffer());
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/jpeg');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(bytes.slice(0, 3)).toEqual(new Uint8Array([0xff, 0xd8, 0xff]));
+    expect(bytes.byteLength).toBeGreaterThan(1_000);
+    expect(mediaGet).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back to the bundled neutral JPEG when a selected real poster key is stale in R2', async () => {
+    stubResolvablePoster([
+      {
+        object_key: VIDEO_KEY,
+        content_type: 'video/mp4',
+        duration_ms: 9_000,
+        preview_object_key: VIDEO_POSTER_KEY,
+      },
+    ]);
+    const mediaGet = vi.fn().mockResolvedValue(null);
+
+    const response = await worker.fetch(new Request(`https://m.usemomora.com/poster/${VALID_TOKEN}`), makeEnv(mediaGet));
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const decoded = new TextDecoder().decode(bytes);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/jpeg');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(mediaGet).toHaveBeenCalledWith(VIDEO_POSTER_KEY);
+    expect(decoded).not.toContain(MEMORY_ID);
+    expect(decoded).not.toContain(VIDEO_POSTER_KEY);
+    expect(bytes.slice(0, 3)).toEqual(new Uint8Array([0xff, 0xd8, 0xff]));
+    vi.unstubAllGlobals();
+  });
+
+  it('does not access R2 for an unknown or revoked poster token', async () => {
+    const unknownGet = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(supabaseOk([])));
+    const unknown = await worker.fetch(new Request(`https://m.usemomora.com/poster/${VALID_TOKEN}`), makeEnv(unknownGet));
+    expect(unknown.status).toBe(404);
+    expect(unknownGet).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+
+    const revokedGet = vi.fn();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(revokedTokenRow()));
+    const revoked = await worker.fetch(new Request(`https://m.usemomora.com/poster/${VALID_TOKEN}`), makeEnv(revokedGet));
+    expect(revoked.status).toBe(410);
+    expect(revokedGet).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('maps an R2 poster read failure to the generic 404 without exposing the private key or memory id', async () => {
+    stubResolvablePoster([
+      {
+        object_key: VIDEO_KEY,
+        content_type: 'video/mp4',
+        duration_ms: 9_000,
+        preview_object_key: VIDEO_POSTER_KEY,
+      },
+    ]);
+    const mediaGet = vi.fn().mockRejectedValue(new Error('R2 unavailable'));
+
+    const response = await worker.fetch(new Request(`https://m.usemomora.com/poster/${VALID_TOKEN}`), makeEnv(mediaGet));
+    const body = await response.text();
+
+    expect(response.status).toBe(404);
+    expect(body).not.toContain(MEMORY_ID);
+    expect(body).not.toContain(VIDEO_POSTER_KEY);
     vi.unstubAllGlobals();
   });
 });

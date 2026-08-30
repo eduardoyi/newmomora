@@ -573,39 +573,49 @@ compare-and-set publication; client polls status. No memory content in logs
 
 ## 7. Video & audio in print (QR pages)
 
-Depends on the upcoming video/audio memory feature — design the book pipeline
-against it from day one.
+Video/audio memories and the public QR viewer are shipped. This section
+records their current contract and the constraints for the remaining book
+pipeline work.
 
 - **Page must stand alone without the link:** video → thumbnail(s) + caption
   + date; audio → waveform + short transcribed quote + date. If the QR is
   never scanned, the page still tells the story.
-- **Permanence:** QR encodes a stable short URL on our own domain
-  (`momora.com/b/<token>`) hitting a redirect layer we control forever —
-  never a signed storage URL. Viewer page reuses/extends the existing
-  memory-sharing web viewer.
+- **Permanence:** QR encodes the stable public Worker URL
+  (`https://m.usemomora.com/m/<token>`), never a signed storage URL. The
+  Worker resolves the opaque token and streams private R2 media itself; no
+  bucket URL or redirect credential reaches the scanner.
 - **Privacy (decided 2026-08-17):** public unguessable token, no PIN or
   auth — the unlisted-link trust model. Whoever holds the physical book is
   someone the family chose to share it with; a PIN adds friction (especially
-  for grandparents) without a matching threat. Tokens are per-book-per-memory
-  and revocable server-side if a book is ever lost/stolen, which covers the
-  residual risk without any UX cost.
+  for grandparents) without a matching threat. The shipped schema has one
+  active token per memory, which exports reuse across printed copies. It is
+  revocable server-side without touching the memory, but revoking it disables
+  every copy using that token; independently revocable book copies need a
+  future per-book token model.
+- **Shared-link preview:** the viewer page includes a date-specific title,
+  caption when present, and a token-protected Open Graph poster. Videos use
+  their stored JPEG first-frame poster; unsupported/legacy media uses a
+  neutral Momora JPEG without family data. `no-store` and token rechecks stop
+  fresh origin access after revocation, but cannot retract a WhatsApp or other
+  provider preview that was already cached.
 - **Print quality:** QR at ≥2cm with high error correction; verify
   scannability on the actual gloss-coated layflat stock (glare) in V4.
 - **Honesty about longevity:** the printed page is the artifact; the QR is a
   bonus. Any "media hosted for N years" promise is a marketing/legal
   decision — do not print a promise the company can't keep.
 
-## 8. Data model sketch (proposal — finalize at implementation)
+## 8. Data model sketch (mixed shipped/proposed)
 
 | Table | Role |
 |---|---|
 | `memories.topics text[]` (or `memory_topics` join) | Controlled-vocab tags from Stage A |
 | `memory_books` | One row per book project: family, child, scope, status, page budget, book document (JSONB), frozen-at-order snapshot |
 | `memory_book_orders` | Stripe payment ref, Prodigi order id, state machine, shipping, tracking |
-| `media_share_tokens` | QR token → memory/media ref, book id, revocation |
+| `media_share_tokens` | Current QR token → memory ref and revocation. No `book_id`; partial uniqueness permits one active token per memory. |
 
 RLS: family-membership on book rows; orders readable by purchaser; tokens
-resolved by an Edge Function (no direct table access from the public viewer).
+resolved by the public Cloudflare Worker using its service-role boundary (no
+direct table access from the public viewer).
 Schema/API changes follow the standard rule: migration + regenerated types +
 TECH_SPEC in the same change.
 

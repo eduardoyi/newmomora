@@ -22,13 +22,14 @@
 const SHARE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
 /**
- * Extract a share token from a `/m/<token>` or `/media/<token>` request
+ * Extract a share token from a `/m/<token>`, `/media/<token>`, or
+ * `/poster/<token>` request
  * path. Rejects anything that isn't exactly `prefix + one path segment`
  * matching `SHARE_TOKEN_PATTERN` (no trailing slash, no extra segments, no
  * query-string leakage -- the caller already stripped that via
  * `new URL(...).pathname`). Returned verbatim, case preserved.
  */
-export function parseShareToken(pathname: string, prefix: '/m/' | '/media/'): string | null {
+export function parseShareToken(pathname: string, prefix: '/m/' | '/media/' | '/poster/'): string | null {
   if (!pathname.startsWith(prefix)) return null;
   const rest = pathname.slice(prefix.length);
   if (rest.length === 0 || rest.includes('/')) return null;
@@ -66,7 +67,7 @@ export function classifyShareToken(row: ShareTokenRow | null): ShareTokenResolut
 
 export type ViewerKind = 'image' | 'video' | 'audio';
 
-/** Row shape from `memories` (SELECT id,memory_type,memory_date,content). */
+/** Row shape from `memories` (SELECT id,memory_type,memory_date,content,emotion). */
 export interface MemoryHeaderRow {
   id: string;
   memory_type: string;
@@ -74,6 +75,9 @@ export interface MemoryHeaderRow {
   /** Optional caption for media/audio memories (schema comment on
    * `memories.content`); null/empty for memories captured without one. */
   content: string | null;
+  /** Optional emotion label, used only to match the public viewer's visual
+   * treatment to the in-app memory card. */
+  emotion: string | null;
 }
 
 /** Row shape from `memory_media`, position 0 (the book QR page's "primary"
@@ -96,7 +100,12 @@ export interface ResolvedMedia {
   contentType: string;
   memoryDate: string | null;
   caption: string | null;
+  emotion: string | null;
   durationMs: number | null;
+  /** The persisted JPEG preview/poster key, if capture generated one. The
+   * actual viewer may stream a different key (for example a video original),
+   * so retain this separately for Open Graph poster resolution. */
+  previewObjectKey: string | null;
 }
 
 // Mirrors supabase/functions/_shared/storage-keys.ts's
@@ -111,6 +120,23 @@ const IMAGE_CONTENT_TYPES = new Set([
 ]);
 const VIDEO_CONTENT_TYPES = new Set(['video/mp4', 'video/quicktime']);
 const AUDIO_CONTENT_TYPES = new Set(['audio/mp4', 'audio/m4a', 'audio/x-m4a']);
+
+// These are the image formats the public viewer can safely advertise to
+// social crawlers when no generated JPEG preview exists. HEIC/HEIF remain
+// renderable on some devices, but are deliberately excluded: WhatsApp and
+// other Open Graph consumers cannot be relied on to decode them.
+const OPEN_GRAPH_IMAGE_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+export type ResolvedOpenGraphPoster =
+  | {
+      kind: 'media';
+      objectKey: string;
+      contentType: string;
+    }
+  | {
+      kind: 'brand';
+      contentType: 'image/jpeg';
+    };
 
 /**
  * Resolve a (memories row, first memory_media asset row) pair into what the
@@ -142,7 +168,9 @@ export function resolveViewerMedia(
       contentType: asset.content_type,
       memoryDate: memory.memory_date,
       caption: memory.content,
+      emotion: memory.emotion,
       durationMs: asset.duration_ms,
+      previewObjectKey: asset.preview_object_key,
     };
   }
 
@@ -153,7 +181,9 @@ export function resolveViewerMedia(
       contentType: asset.content_type,
       memoryDate: memory.memory_date,
       caption: memory.content,
+      emotion: memory.emotion,
       durationMs: asset.duration_ms,
+      previewObjectKey: asset.preview_object_key,
     };
   }
 
@@ -173,7 +203,9 @@ export function resolveViewerMedia(
         contentType: 'image/jpeg',
         memoryDate: memory.memory_date,
         caption: memory.content,
+        emotion: memory.emotion,
         durationMs: null,
+        previewObjectKey: asset.preview_object_key,
       };
     }
     return {
@@ -182,8 +214,50 @@ export function resolveViewerMedia(
       contentType: asset.content_type,
       memoryDate: memory.memory_date,
       caption: memory.content,
+      emotion: memory.emotion,
       durationMs: null,
+      previewObjectKey: asset.preview_object_key,
     };
+  }
+
+  return null;
+}
+
+/**
+ * Resolve the image that may be advertised in Open Graph metadata for the
+ * same asset the QR viewer chose. This deliberately does not perform I/O:
+ * page rendering must not add an R2 HEAD just to decide whether to emit an
+ * `og:image`. If a selected real poster object is later absent from R2,
+ * `/poster/:token` serves the neutral brand JPEG instead.
+ *
+ * Video can only use its capture-generated JPEG poster. For image memories,
+ * `resolveViewerMedia` already substituted a JPEG preview when available;
+ * otherwise we only advertise an original that common social crawlers can
+ * decode. Audio, legacy HEIC/HEIF, and assets with no usable real image get a
+ * deterministic Momora brand card. That gives an intentionally shared URL a
+ * useful preview without putting a caption, date, member, or any other PII
+ * into an external preview cache.
+ */
+export function resolveOpenGraphPoster(media: ResolvedMedia): ResolvedOpenGraphPoster | null {
+  if (media.kind === 'video' && media.previewObjectKey) {
+    return {
+      kind: 'media',
+      objectKey: media.previewObjectKey,
+      // `preview_object_key` is the generated JPEG poster/preview contract.
+      contentType: 'image/jpeg',
+    };
+  }
+
+  if (media.kind === 'image' && OPEN_GRAPH_IMAGE_CONTENT_TYPES.has(media.contentType.toLowerCase())) {
+    return {
+      kind: 'media',
+      objectKey: media.objectKey,
+      contentType: media.contentType,
+    };
+  }
+
+  if (media.kind === 'audio' || media.kind === 'video' || media.kind === 'image') {
+    return { kind: 'brand', contentType: 'image/jpeg' };
   }
 
   return null;
