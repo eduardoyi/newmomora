@@ -732,11 +732,75 @@ Function replacing `analyze-emotion` at creation time, archive backfill,
 prompt calibration above; migration + regenerated types + TECH_SPEC +
 feature doc + tests in the same change per repo rules.
 
+
+### V2 results (2026-08-24 → 08-28, `eval-memory-book-outline.ts`)
+
+**V2 PASSED.** Outline generator built and iterated over ~20 review rounds
+against five real books (Enzo years 1–3, Mara years 1–2). Structure that
+survived review: chronological month backbone with editorial overtures
+(through-the-years portrait page, firsts/milestones, quote collections,
+illustrated digests for caption-dense stretches, panorama nominations with
+vision-judged suitability, hero candidates). Approved run per book lives in
+`supabase/scripts/eval-output/memory-book-outline/`; language field added in
+round 18 (older runs carry none — see the assets exporter's hard error).
+
+### V3 results (2026-08-25 → 08-29, book-renderer/)
+
+**V3 PASSED.** Single React renderer (`book-renderer/`) drives preview and
+print from one fitted document (`fitBook`) — the single-renderer rule held.
+Deterministic mm geometry (`templates/mm.ts`; PageFrame base font-size is
+1mm so `em` ≡ mm), pure per-template layout modules shared with a geometric
+audit (`model/audit.ts`, 0 violations across all five books), Puppeteer
+`page.pdf` pipeline (`scripts/render-pdf.mts`), R2-hosted share tokens for
+QR pages (worker `workers/memory-viewer`, m.usemomora.com; carousel QRs
+resolve to the actual video asset server-side). Print-verification lesson,
+learned twice: only rasterized `page.pdf` output proves print correctness —
+DOM inspection and print-media emulation both lie. Chromium print
+pagination collapses in-flow children of auto-height absolute boxes
+(→ explicit heights everywhere), and a print-only `line-height:0` reset
+made screen QA blind to print defects (→ reset removed, every small label
+now pins an explicit line-height).
+
+### V4 status (2026-08-29, in progress — physical proof ordered)
+
+Prodigi confirmed as V4 vendor (Peecho comparison dropped; see §10.2).
+SKU `BOOK-FE-8_3-SQ-LF-G` (21×21cm layflat, gloss 190gsm, matte hard
+cover), spine 28mm at 122pp via their spine API. Canonical file spec in
+`docs/plans/prodigi-order-spec.md` — the authoritative rules came from
+support's print guide after order 1 was rejected: exact trim sizes (210×210
+interior, 448×210 cover, NO bleed — they generate it), separate cover+inner
+files for API orders, their system inserts inside-cover blanks (our
+front-matter-verso blank is dropped at render; counts must be even; folios
+renumbered to physical pages).
+
+Order history: ord_14448173 (rejected for bleed-inclusive files — full
+refund; also carried English furniture from a silent language fallback, now
+a hard error, and a broken TTY page). Two OnHold orders cancelled inside
+the owner's 2h dashboard edit window as print-raster review kept finding
+defects (held orders are invisible to the Orders API — dashboard-only).
+**ord_71474677889453056 released to production 2026-08-29**: Enzo year 3
+(122pp) + Mara year 1 (122pp) to Lisboa, $66.10 — carries all fix rounds.
+Physical pass questions (§9 V4) answered when it arrives; owner tracks
+delivery.
+
+In flight (delegated, review pending): cover-suitability rules — the
+full-bleed cover voice is being removed (owner decision: contained front
+photo + light spine only, as on the two ordered books), outline gains
+vision-judged `coverCandidates` (real photograph of the child, face
+visible; no medical settings; no drawings/documents/screens), and the
+fitter fallback becomes middle-of-year instead of chronologically-first
+(which put a delivery-room photo on a year-one cover). Validation-book
+outlines (Enzo y1/y2, Mara y2) will be re-run with the new rules once the
+implementation passes review (owner approved the OpenAI spend).
+
+Editor-era backlog from owner review of the validation books: image
+reposition/replace controls, face-aware panorama crop guard.
+
 ## 10. Open questions
 
 1. Final price point within $99–149 (decide after V4 sample in hand).
-2. Prodigi vs Peecho (identical product on paper — decide on V4 samples,
-   API ergonomics, landed cost incl. shipping).
+2. ~~Prodigi vs Peecho~~ — RESOLVED 2026-08-29: Prodigi (API ergonomics,
+   spine API, sandbox; V4 order placed with them).
 3. Page budget policy for very large scopes ("Everything" on a 3-year
    archive): more selective vs. offer multiple volumes.
 4. Illustration print strategy: upscale existing outputs vs. re-generate at
