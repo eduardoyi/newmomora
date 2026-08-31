@@ -796,6 +796,55 @@ implementation passes review (owner approved the OpenAI spend).
 Editor-era backlog from owner review of the validation books: image
 reposition/replace controls, face-aware panorama crop guard.
 
+
+### V5 scope (discussed & agreed 2026-08-31)
+
+Sequenced as three independently shippable slices:
+
+- **5a — Durable generation workflow.** `memory_books` schema + status row;
+  outline generation ported from the eval script into the Cloudflare
+  durable-workflow pattern (docs/durable-ai-generation-workflows.md);
+  preview asset prep from app-resolution assets. Preview is CHEAP — no
+  Puppeteer, no print assets. Outline cost is now logged per run (tokens +
+  USD; price table in eval-memory-book-outline.ts).
+- **5b — Web preview + v1 edit surface.** Next.js + Supabase auth; the
+  book-renderer components render the preview (single-renderer rule).
+  v1 edits, decided from validation-book feedback:
+  - Text: dedication, closing-page lines, section titles (eyebrows
+    derived-but-overridable), cover + back-cover text, photo captions as
+    BOOK-LOCAL overrides (fixing a print typo never rewrites the app
+    memory; §2.5 protects against AI edits, not the parent's own).
+  - Images: replace ANY image in the book (picker badges assets already
+    used in the book to signal duplicates), reposition-within-crop
+    (per-slot focal point stored in the book document).
+  - Explicitly v2: deleting images/memories (forces re-layout).
+- **5c — Checkout + fulfillment.**
+  - Stripe Checkout, our own price (decided when the V4 sample arrives)
+    + shipping computed live per address via Prodigi `POST /v4.0/quotes`
+    (passed through or marked up). We are merchant of record; Prodigi
+    bills our card. Launch geography: everywhere the SKU ships
+    (`shipsTo` from the product API). VAT/sales tax via Stripe Tax.
+  - Print render happens POST-PAYMENT on a **Fly.io render worker**
+    (decided 2026-08-31): Dockerized Node + headless Chrome running the
+    render-pdf pipeline, HTTP-TRIGGERED (push, not poll — polling defeats
+    scale-to-zero) by the durable workflow; renders, uploads print PDFs
+    to R2, calls the workflow back, auto-stops. At current volume this
+    costs cents/month; the Dockerfile keeps Hetzner (or any host) as the
+    volume-crossover fallback (~daily rendering is the break-even).
+  - State-machine lessons from V4, baked in: turn OFF the account-wide 2h
+    Prodigi edit window before launch (held orders are INVISIBLE to the
+    Orders API); rejection can arrive via support email rather than API
+    status, so "submitted but not in production within N hours" raises an
+    alert — webhook trust alone is not enough; asset presigned URLs must
+    comfortably outlive Prodigi's download window.
+  - App-store compliance: selling the printed book from the app or web is
+    exempt from IAP on both stores (physical goods — Apple guideline
+    3.1.5(a) requires non-IAP payment; Google Play Billing scopes to
+    digital goods). Keep the flow physical-only; a digital add-on (e.g.
+    paid media-hosting extension) would change this analysis.
+  - Open: whether preview generation is free for all subscribers (as the
+    in-app upsell surface) or gated.
+
 ## 10. Open questions
 
 1. Final price point within $99–149 (decide after V4 sample in hand).
