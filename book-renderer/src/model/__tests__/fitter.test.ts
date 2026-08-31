@@ -1007,6 +1007,60 @@ describe('fitBook — structural pages', () => {
       expect(document.pages[0].params.assetFile).toBe(coverAsset.file);
     });
 
+    it('bug fix (live finding, 2026-08-31): a coverCandidates entry whose EXPORTED (preview) width is under 2000px still passes the gate when its originalWidth (real source pixels) clears it -- asset.width alone is always ~1280px in a preview-mode export, which silently rejected every real coverCandidates nominee before this fix', () => {
+      const heroAsset = makeAsset({ width: 2400 });
+      const previewCoverAsset = makeAsset({ width: 1280, originalWidth: 4064, originalHeight: 3048 });
+      const manifest = makeManifest({
+        'mem-hero': makeMemory({ date: '2024-03-01', assets: [heroAsset] }),
+        'mem-cover': makeMemory({ date: '2024-09-01', assets: [previewCoverAsset] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })], {
+        heroCandidates: ['mem-hero'],
+        coverCandidates: ['mem-cover'],
+      });
+      const { document } = fitBook(outline, manifest);
+      expect(document.pages[0].params.assetFile).toBe(previewCoverAsset.file);
+    });
+
+    it('a coverCandidates entry whose originalWidth is ALSO under 2000px (a genuinely low-resolution source, not just a downscaled preview) is still skipped', () => {
+      const heroAsset = makeAsset({ width: 2400 });
+      const lowResAsset = makeAsset({ width: 1280, originalWidth: 1600 }); // real source is under the floor too
+      const manifest = makeManifest({
+        'mem-hero': makeMemory({ date: '2024-03-01', assets: [heroAsset] }),
+        'mem-cover': makeMemory({ date: '2024-09-01', assets: [lowResAsset] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })], {
+        heroCandidates: ['mem-hero'],
+        coverCandidates: ['mem-cover'],
+      });
+      const { document } = fitBook(outline, manifest);
+      expect(document.pages[0].params.assetFile).toBe(heroAsset.file); // falls through to legacy
+    });
+
+    it('a manifest asset with no originalWidth at all (legacy export, predates the field) falls back to asset.width -- exactly the pre-fix behavior', () => {
+      const legacyPreviewAsset = makeAsset({ width: 2200 }); // no originalWidth key
+      const manifest = makeManifest({
+        'mem-cover': makeMemory({ date: '2024-09-01', assets: [legacyPreviewAsset] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })], { coverCandidates: ['mem-cover'] });
+      const { document } = fitBook(outline, manifest);
+      expect(document.pages[0].params.assetFile).toBe(legacyPreviewAsset.file);
+    });
+
+    it('fallback tier (pickMiddleOfRangeCoverPhoto) also gates and tie-breaks on originalWidth, not the preview width', () => {
+      // Both under the 2000px floor by preview width alone; only the
+      // originalWidth-qualifying one should ever be considered.
+      const tooSmall = makeAsset({ width: 1280, originalWidth: 1800 });
+      const qualifies = makeAsset({ width: 1280, originalWidth: 3000 });
+      const manifest = makeManifest({
+        'mem-small': makeMemory({ date: '2024-07-01', assets: [tooSmall] }),
+        'mem-big': makeMemory({ date: '2024-07-05', assets: [qualifies] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })]);
+      const { document } = fitBook(outline, manifest);
+      expect(document.pages[0].params.assetFile).toBe(qualifies.file);
+    });
+
     it('skips a coverCandidates entry that resolves to a non-photo or an undersized photo, falling through to the next precedence tier', () => {
       const heroAsset = makeAsset({ width: 2400 });
       const smallAsset = makeAsset({ width: 1200 }); // < 2000px — skipped

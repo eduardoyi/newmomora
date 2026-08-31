@@ -1887,8 +1887,28 @@ function chunkMemories(memories: ResolvedMemory[], pairingLevel: PairingLevel = 
 const DEFAULT_SPINE_MM = 9;
 /** `buildCoverPages`'s photo-suitability floor — an asset narrower than this
  * (in px) is never trusted as a cover photo, hero-candidate legacy path
- * excepted (see the precedence comment there). */
+ * excepted (see the precedence comment there). Compared against
+ * `effectiveCoverWidth`, never `asset.width` directly. */
 const COVER_PHOTO_MIN_WIDTH_PX = 2000;
+
+/**
+ * Bug fix (live finding, 2026-08-31): `asset.width` is the EXPORTED
+ * (preview) file's width — preview-mode exports downscale every photo to
+ * ~1280px regardless of the source's real resolution — so gating on it
+ * alone rejected every `coverCandidates` nominee in every preview-mode
+ * manifest, silently falling through to the legacy `heroCandidates` path.
+ * `asset.originalWidth` (export pipeline addition, "owner round-8" —
+ * measured from the ORIGINAL photo bytes for every photo asset,
+ * unconditionally, in both preview and print export modes; see
+ * `eval-memory-book-assets.ts`'s `ManifestAsset.originalWidth` doc comment)
+ * is the real source-pixel width and is what the cover gate must check.
+ * Falls back to `asset.width` when `originalWidth` is absent (a manifest
+ * exported before that field existed) — same behavior as before this fix
+ * for such a manifest.
+ */
+function effectiveCoverWidth(asset: ManifestAsset): number {
+  return asset.originalWidth ?? asset.width;
+}
 
 function formatYearRange(start: string, end: string): string {
   const startYear = new Date(start).getUTCFullYear();
@@ -1913,7 +1933,7 @@ type CoverCandidate = { memoryId: string; memory: ManifestMemory; asset: Manifes
  * (stable, deterministic). Returns undefined when no photo qualifies.
  */
 function pickMiddleOfRangeCoverPhoto(candidates: CoverCandidate[], scope: ManifestScope): CoverCandidate | undefined {
-  const photos = candidates.filter(({ asset }) => asset.kind === 'photo' && asset.width >= COVER_PHOTO_MIN_WIDTH_PX);
+  const photos = candidates.filter(({ asset }) => asset.kind === 'photo' && effectiveCoverWidth(asset) >= COVER_PHOTO_MIN_WIDTH_PX);
   if (photos.length === 0) return undefined;
 
   const startMs = Date.parse(scope.start);
@@ -1929,8 +1949,11 @@ function pickMiddleOfRangeCoverPhoto(candidates: CoverCandidate[], scope: Manife
   for (const candidate of photos.slice(1)) {
     const distance = distanceFromMid(candidate);
     const closer = distance < bestDistance;
-    const tieWider = distance === bestDistance && candidate.asset.width > best.asset.width;
-    const tieSameWidthLowerId = distance === bestDistance && candidate.asset.width === best.asset.width && candidate.memoryId < best.memoryId;
+    const tieWider = distance === bestDistance && effectiveCoverWidth(candidate.asset) > effectiveCoverWidth(best.asset);
+    const tieSameWidthLowerId =
+      distance === bestDistance &&
+      effectiveCoverWidth(candidate.asset) === effectiveCoverWidth(best.asset) &&
+      candidate.memoryId < best.memoryId;
     if (closer || tieWider || tieSameWidthLowerId) {
       best = candidate;
       bestDistance = distance;
@@ -1947,10 +1970,11 @@ function pickMiddleOfRangeCoverPhoto(candidates: CoverCandidate[], scope: Manife
  *
  * Cover-photo selection precedence:
  *   1. The first `outline.coverCandidates` entry that resolves to a
- *      qualifying (>=2000px wide) photo asset — the outline's own
- *      vision-judged nominees (child's face visible, no medical/hospital
- *      setting, no photo-of-a-drawing), best-first. Optional field; skipped
- *      entirely while empty/absent.
+ *      qualifying (>=2000px wide, per `effectiveCoverWidth` — the real
+ *      SOURCE-pixel width, not the ~1280px preview export width) photo
+ *      asset — the outline's own vision-judged nominees (child's face
+ *      visible, no medical/hospital setting, no photo-of-a-drawing),
+ *      best-first. Optional field; skipped entirely while empty/absent.
  *   2. Legacy: the first `outline.heroCandidates` entry that resolves to
  *      ANY photo asset (no width floor) — kept byte-identical to the
  *      pre-existing behavior so already-ordered books (enzo-year-three,
@@ -1965,7 +1989,7 @@ function buildCoverPages(element: OutlineElement, manifest: BookManifest, outlin
 
   const coverCandidateIds = outline.coverCandidates ?? [];
   const fromCoverCandidates = coverCandidateIds
-    .map((id) => candidates.find(({ memoryId, asset }) => memoryId === id && asset.kind === 'photo' && asset.width >= COVER_PHOTO_MIN_WIDTH_PX))
+    .map((id) => candidates.find(({ memoryId, asset }) => memoryId === id && asset.kind === 'photo' && effectiveCoverWidth(asset) >= COVER_PHOTO_MIN_WIDTH_PX))
     .find((c): c is CoverCandidate => c !== undefined);
 
   const candidatePhoto =
