@@ -98,6 +98,15 @@ interface CliOptions {
 // over cost -- so the default model is intentionally not the cheap tagging
 // model. `gpt-5.6-sol` per explicit owner instruction; `--model` overrides.
 const DEFAULT_MODEL = 'gpt-5.6-sol';
+
+/** USD per 1M tokens, for the run's cost line (owner request, 2026-08-31 —
+ * the outline pass was the one unmeasured stage of preview generation).
+ * Source: developers.openai.com/api/docs/pricing, fetched 2026-08-31.
+ * Unknown models print tokens only, never a wrong dollar figure. */
+const PRICE_USD_PER_MTOK: Record<string, { input: number; output: number }> = {
+  'gpt-5.6-sol': { input: 4.0, output: 20.0 },
+  'gpt-4o-mini': { input: 0.15, output: 0.6 },
+};
 /** The layflat print product's hard physical page limit. Owner decision,
  * 2026-08-27 ("Density & quality-first"): `--page-cap` now defaults to
  * this. Round-14: `--page-cap`/`HARD_PAGE_CAP` are no longer BINDING inside
@@ -3679,7 +3688,11 @@ async function main(): Promise<void> {
   );
 
   if (usage) {
-    console.log(`Token usage: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}`);
+    const price = PRICE_USD_PER_MTOK[options.model];
+    const costLine = price
+      ? ` -- est. cost $${((usage.prompt_tokens * price.input + usage.completion_tokens * price.output) / 1_000_000).toFixed(4)} (${options.model} @ $${price.input}/$${price.output} per MTok)`
+      : ` -- no price on file for model ${options.model}; update PRICE_USD_PER_MTOK for a cost line`;
+    console.log(`Token usage: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}${costLine}`);
   }
   if (violations.length > 0) {
     console.log(`Integrity violations from the model's response: ${violations.length} (see outline.md).`);
