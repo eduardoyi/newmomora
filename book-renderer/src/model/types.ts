@@ -227,6 +227,19 @@ export interface BookOutline {
    */
   heroCandidates?: string[];
   /**
+   * Ranked (best-first) cover-photo nominee ids (data contract addition —
+   * owner review 2026-08-31, following two cover failures traced to the
+   * fitter's blind first-photo fallback: a hospital shot and a photo of a
+   * child's drawing). Vision-judged by the outline generator against
+   * criteria the plain `heroCandidates` list doesn't carry — an actual
+   * photograph featuring the child with face visible; not a medical/
+   * hospital setting; not a photo of a drawing/document/screen/artwork.
+   * Optional; the fitter's cover-photo precedence is `coverCandidates` (own
+   * width check) -> legacy `heroCandidates` -> a middle-of-date-range
+   * fallback among qualifying photos (see fitter.ts `buildCoverPages`).
+   */
+  coverCandidates?: string[];
+  /**
    * Best-first panorama nominee ids (data contract addition — item 11 of
    * the visual-review batch). Optional; a nominee is spliced out of its
    * backbone/themed grid into its own full panorama-spread at its

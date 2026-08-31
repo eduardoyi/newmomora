@@ -974,14 +974,14 @@ describe('fitBook — structural pages', () => {
     expect(document.pages[0].params.voice).toBe('minimal');
   });
 
-  it('picks photo voice for a wide (>=1.4:1) spread-safe photo, mixed voice for a narrower one', () => {
+  it('picks mixed voice for any qualifying photo regardless of aspect ratio — the full-bleed "photo" voice was removed (owner review 2026-08-31)', () => {
     const wideManifest = makeManifest({
       'mem-1': makeMemory({ assets: [makeAsset({ width: 2800, height: 2000, aspectRatio: 1.4 })] }),
     });
     const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })]);
     const { document: wideDoc } = fitBook(outline, wideManifest);
     expect(wideDoc.pages[0].templateId).toBe('cover-wrap');
-    expect(wideDoc.pages[0].params.voice).toBe('photo');
+    expect(wideDoc.pages[0].params.voice).toBe('mixed');
     expect(wideDoc.pages[0].params.assetFile).toMatch(/^assets\/asset-\d+\.jpg$/);
 
     const narrowManifest = makeManifest({
@@ -989,6 +989,89 @@ describe('fitBook — structural pages', () => {
     });
     const { document: narrowDoc } = fitBook(outline, narrowManifest);
     expect(narrowDoc.pages[0].params.voice).toBe('mixed');
+  });
+
+  describe('cover-photo selection precedence (owner review 2026-08-31, following two cover failures traced to blind first-photo fallback)', () => {
+    it('prefers outline.coverCandidates (own >=2000px width check) over heroCandidates', () => {
+      const heroAsset = makeAsset({ width: 2400 });
+      const coverAsset = makeAsset({ width: 2200 });
+      const manifest = makeManifest({
+        'mem-hero': makeMemory({ date: '2024-03-01', assets: [heroAsset] }),
+        'mem-cover': makeMemory({ date: '2024-09-01', assets: [coverAsset] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })], {
+        heroCandidates: ['mem-hero'],
+        coverCandidates: ['mem-cover'],
+      });
+      const { document } = fitBook(outline, manifest);
+      expect(document.pages[0].params.assetFile).toBe(coverAsset.file);
+    });
+
+    it('skips a coverCandidates entry that resolves to a non-photo or an undersized photo, falling through to the next precedence tier', () => {
+      const heroAsset = makeAsset({ width: 2400 });
+      const smallAsset = makeAsset({ width: 1200 }); // < 2000px — skipped
+      const posterAsset = makeAsset({ kind: 'video-poster', width: 2400 }); // not a photo — skipped
+      const manifest = makeManifest({
+        'mem-hero': makeMemory({ date: '2024-03-01', assets: [heroAsset] }),
+        'mem-small': makeMemory({ date: '2024-06-01', assets: [smallAsset] }),
+        'mem-poster': makeMemory({ date: '2024-06-15', assets: [posterAsset] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })], {
+        heroCandidates: ['mem-hero'],
+        coverCandidates: ['mem-poster', 'mem-small'],
+      });
+      const { document } = fitBook(outline, manifest);
+      // Both coverCandidates entries were disqualified — legacy heroCandidates path wins.
+      expect(document.pages[0].params.assetFile).toBe(heroAsset.file);
+    });
+
+    it('legacy path (heroCandidates, no width floor) is unchanged when coverCandidates is absent — already-ordered books keep their exact cover', () => {
+      const heroAsset = makeAsset({ width: 1500 }); // below the 2000px cover floor, but heroCandidates has no floor
+      const manifest = makeManifest({
+        'mem-hero': makeMemory({ date: '2024-03-01', assets: [heroAsset] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })], { heroCandidates: ['mem-hero'] });
+      const { document } = fitBook(outline, manifest);
+      expect(document.pages[0].params.assetFile).toBe(heroAsset.file);
+      expect(document.pages[0].params.voice).toBe('mixed');
+    });
+
+    it('fallback (no coverCandidates, no heroCandidates) picks the qualifying photo whose date is closest to the MIDDLE of manifest.scope, never chronological-first', () => {
+      // scope defaults to 2024-01-01..2024-12-31 (fixtures/build.ts) — middle is ~2024-07-02.
+      const firstAsset = makeAsset({ width: 2200 });
+      const middleAsset = makeAsset({ width: 2200 }); // closest to mid-range
+      const lastAsset = makeAsset({ width: 2200 });
+      const manifest = makeManifest({
+        'mem-first': makeMemory({ date: '2024-01-05', assets: [firstAsset] }), // chronologically first — must NOT win
+        'mem-middle': makeMemory({ date: '2024-07-01', assets: [middleAsset] }),
+        'mem-last': makeMemory({ date: '2024-12-20', assets: [lastAsset] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })]);
+      const { document } = fitBook(outline, manifest);
+      expect(document.pages[0].params.assetFile).toBe(middleAsset.file);
+    });
+
+    it('fallback ties on distance-to-middle by widest photo, then by lowest memory id', () => {
+      const bAsset = makeAsset({ width: 2200 }); // same distance-to-mid as mem-a; narrower
+      const aAsset = makeAsset({ width: 3000 }); // widest wins the tie
+      const manifest = makeManifest({
+        'mem-b': makeMemory({ date: '2024-07-02', assets: [bAsset] }),
+        'mem-a': makeMemory({ date: '2024-07-02', assets: [aAsset] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })]);
+      const { document } = fitBook(outline, manifest);
+      expect(document.pages[0].params.assetFile).toBe(aAsset.file);
+    });
+
+    it('fallback never picks a photo under 2000px wide', () => {
+      const manifest = makeManifest({
+        'mem-1': makeMemory({ date: '2024-07-01', assets: [makeAsset({ width: 1999 })] }),
+      });
+      const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })]);
+      const { document } = fitBook(outline, manifest);
+      expect(document.pages[0].params.voice).toBe('minimal');
+      expect(document.pages[0].params.assetFile).toBeNull();
+    });
   });
 
   it('defaults the spine to 9mm and honors an explicit spineMm option', () => {

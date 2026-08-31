@@ -49,6 +49,20 @@ describe('parseOutline', () => {
       parseOutline({ elements: [{ id: 'x', kind: 'backbone' }] }),
     ).toThrow(BookDataError);
   });
+
+  it('parses coverCandidates when present (owner review 2026-08-31, cover-safety fix)', () => {
+    const outline = parseOutline({ elements: [], coverCandidates: ['mem-1', 'mem-2'] });
+    expect(outline.coverCandidates).toEqual(['mem-1', 'mem-2']);
+  });
+
+  it('tolerates a missing coverCandidates -- old outlines predate the field', () => {
+    const outline = parseOutline({ elements: [] });
+    expect(outline.coverCandidates).toBeUndefined();
+  });
+
+  it('rejects a present-but-malformed coverCandidates', () => {
+    expect(() => parseOutline({ elements: [], coverCandidates: 'not-an-array' })).toThrow(BookDataError);
+  });
 });
 
 describe('parseManifest', () => {

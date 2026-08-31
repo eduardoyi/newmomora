@@ -14,6 +14,7 @@ import type {
   LayoutSlot,
   ManifestAsset,
   ManifestMemory,
+  ManifestScope,
   OutlineElement,
   PageCapacityReport,
   PhotoSlotContent,
@@ -1884,8 +1885,10 @@ function chunkMemories(memories: ResolvedMemory[], pairingLevel: PairingLevel = 
 // ---------------------------------------------------------------------------
 
 const DEFAULT_SPINE_MM = 9;
-/** Photo voice requires this aspect or wider; narrower/vertical -> mixed voice (item 13). */
-const COVER_PHOTO_VOICE_MIN_ASPECT = 1.4;
+/** `buildCoverPages`'s photo-suitability floor — an asset narrower than this
+ * (in px) is never trusted as a cover photo, hero-candidate legacy path
+ * excepted (see the precedence comment there). */
+const COVER_PHOTO_MIN_WIDTH_PX = 2000;
 
 function formatYearRange(start: string, end: string): string {
   const startYear = new Date(start).getUTCFullYear();
@@ -1897,25 +1900,80 @@ function formatYearRange(start: string, end: string): string {
       : `${startYear} – ${endYear}`;
 }
 
+type CoverCandidate = { memoryId: string; memory: ManifestMemory; asset: ManifestAsset };
+
 /**
- * The full wraparound cover (item 13, visual-review batch): back + spine +
- * front on one sheet, in one of three voices depending on what photo (if
- * any) qualifies. Prefers an outline heroCandidate for the wrap photo when
- * the data contract has landed it.
+ * Owner review (three validation books, 2026-08-31): the OLD fallback —
+ * "first photo >=2000px wide in manifest order" — is chronological-first,
+ * which twice produced a bad cover (a hospital/medical shot, and a photo
+ * OF a child's drawing rather than the child). Picks, among qualifying
+ * photos, the one whose memory date sits closest to the MIDDLE of the
+ * book's date range (`manifest.scope.start`/`end`) — never
+ * chronological-first. Ties: widest photo wins, then lowest memory id
+ * (stable, deterministic). Returns undefined when no photo qualifies.
+ */
+function pickMiddleOfRangeCoverPhoto(candidates: CoverCandidate[], scope: ManifestScope): CoverCandidate | undefined {
+  const photos = candidates.filter(({ asset }) => asset.kind === 'photo' && asset.width >= COVER_PHOTO_MIN_WIDTH_PX);
+  if (photos.length === 0) return undefined;
+
+  const startMs = Date.parse(scope.start);
+  const endMs = Date.parse(scope.end);
+  const midMs = Number.isNaN(startMs) || Number.isNaN(endMs) ? NaN : (startMs + endMs) / 2;
+  const distanceFromMid = (candidate: CoverCandidate): number => {
+    const dateMs = Date.parse(candidate.memory.date);
+    return Number.isNaN(midMs) || Number.isNaN(dateMs) ? Number.POSITIVE_INFINITY : Math.abs(dateMs - midMs);
+  };
+
+  let best = photos[0];
+  let bestDistance = distanceFromMid(best);
+  for (const candidate of photos.slice(1)) {
+    const distance = distanceFromMid(candidate);
+    const closer = distance < bestDistance;
+    const tieWider = distance === bestDistance && candidate.asset.width > best.asset.width;
+    const tieSameWidthLowerId = distance === bestDistance && candidate.asset.width === best.asset.width && candidate.memoryId < best.memoryId;
+    if (closer || tieWider || tieSameWidthLowerId) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/**
+ * The full wraparound cover (item 13, visual-review batch; voice pared down
+ * per owner review 2026-08-31 after enzo-year-one/enzo-year-two — full-bleed
+ * 'photo' voice is gone, only 'mixed' (contained front photo, light spine,
+ * wordmark/colophon back) and 'minimal' (no photo) remain).
+ *
+ * Cover-photo selection precedence:
+ *   1. The first `outline.coverCandidates` entry that resolves to a
+ *      qualifying (>=2000px wide) photo asset — the outline's own
+ *      vision-judged nominees (child's face visible, no medical/hospital
+ *      setting, no photo-of-a-drawing), best-first. Optional field; skipped
+ *      entirely while empty/absent.
+ *   2. Legacy: the first `outline.heroCandidates` entry that resolves to
+ *      ANY photo asset (no width floor) — kept byte-identical to the
+ *      pre-existing behavior so already-ordered books (enzo-year-three,
+ *      mara-year-one) keep the exact cover they shipped with.
+ *   3. Improved fallback (never chronological-first — see
+ *      `pickMiddleOfRangeCoverPhoto`).
  */
 function buildCoverPages(element: OutlineElement, manifest: BookManifest, outline: BookOutline, options: FitOptions): BookPage[] {
-  const candidates = Object.entries(manifest.memories).flatMap(([memoryId, memory]) =>
+  const candidates: CoverCandidate[] = Object.entries(manifest.memories).flatMap(([memoryId, memory]) =>
     memory.assets.map((asset) => ({ memoryId, memory, asset })),
   );
-  const candidatePhoto =
-    candidates.find(({ memoryId, asset }) => (outline.heroCandidates ?? []).includes(memoryId) && asset.kind === 'photo') ??
-    candidates.find(({ asset }) => asset.kind === 'photo' && asset.width >= 2000);
 
-  const voice: 'photo' | 'minimal' | 'mixed' = !candidatePhoto
-    ? 'minimal'
-    : candidatePhoto.asset.aspectRatio >= COVER_PHOTO_VOICE_MIN_ASPECT
-      ? 'photo'
-      : 'mixed';
+  const coverCandidateIds = outline.coverCandidates ?? [];
+  const fromCoverCandidates = coverCandidateIds
+    .map((id) => candidates.find(({ memoryId, asset }) => memoryId === id && asset.kind === 'photo' && asset.width >= COVER_PHOTO_MIN_WIDTH_PX))
+    .find((c): c is CoverCandidate => c !== undefined);
+
+  const candidatePhoto =
+    fromCoverCandidates ??
+    candidates.find(({ memoryId, asset }) => (outline.heroCandidates ?? []).includes(memoryId) && asset.kind === 'photo') ??
+    pickMiddleOfRangeCoverPhoto(candidates, manifest.scope);
+
+  const voice: 'minimal' | 'mixed' = candidatePhoto ? 'mixed' : 'minimal';
 
   const params: TemplateParams = {
     childName: manifest.child.name,

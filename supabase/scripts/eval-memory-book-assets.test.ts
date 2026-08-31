@@ -101,6 +101,15 @@ Deno.test('mergeCandidateMemoryIds adds candidate-only ids not referenced by any
   assertEquals(mergeCandidateMemoryIds([], ['pano-1'], ['hero-1']), ['pano-1', 'hero-1']);
 });
 
+Deno.test('mergeCandidateMemoryIds unions a fourth coverCandidates array too (owner decision, 2026-08-31, cover-safety fix) -- a cover-only nominee still gets its asset exported', () => {
+  const result = mergeCandidateMemoryIds(['m1', 'm2'], ['m2', 'm3'], ['m4', 'm1'], ['cover-1', 'm3']);
+  assertEquals(result, ['m1', 'm2', 'm3', 'm4', 'cover-1']);
+});
+
+Deno.test('mergeCandidateMemoryIds defaults coverCandidates to [] -- every pre-existing 3-arg call site keeps working unchanged', () => {
+  assertEquals(mergeCandidateMemoryIds(['m1', 'm2'], ['m2', 'm3'], ['m4', 'm1']), ['m1', 'm2', 'm3', 'm4']);
+});
+
 // --- selectMediaAsset (image-kind selection incl. HEIC skip + video poster) -
 
 Deno.test('selectMediaAsset prefers preview_object_key for a photo', () => {
@@ -1258,6 +1267,36 @@ Deno.test('parseOutlineJson throws when heroCandidates contains a non-string id'
     () => parseOutlineJson({ ...VALID_OUTLINE, heroCandidates: ['m7', 42] }),
     Error,
     'heroCandidates[1]',
+  );
+});
+
+// --- parseOutlineJson: coverCandidates (owner decision, 2026-08-31,
+// cover-safety fix -- same tolerant-of-absence shape as panoramaCandidates/
+// heroCandidates) -----------------------------------------------------------
+
+Deno.test('parseOutlineJson defaults coverCandidates to [] when absent (old outlines)', () => {
+  const result = parseOutlineJson(VALID_OUTLINE);
+  assertEquals(result.coverCandidates, []);
+});
+
+Deno.test('parseOutlineJson reads coverCandidates when present', () => {
+  const result = parseOutlineJson({ ...VALID_OUTLINE, coverCandidates: ['m8', 'm9'] });
+  assertEquals(result.coverCandidates, ['m8', 'm9']);
+});
+
+Deno.test('parseOutlineJson throws when coverCandidates is present but not an array', () => {
+  assertThrows(
+    () => parseOutlineJson({ ...VALID_OUTLINE, coverCandidates: 'm8' }),
+    Error,
+    '"coverCandidates" must be an array when present',
+  );
+});
+
+Deno.test('parseOutlineJson throws when coverCandidates contains a non-string id', () => {
+  assertThrows(
+    () => parseOutlineJson({ ...VALID_OUTLINE, coverCandidates: ['m8', 42] }),
+    Error,
+    'coverCandidates[1]',
   );
 });
 

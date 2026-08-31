@@ -42,6 +42,14 @@ export function parseOutline(raw: unknown): BookOutline {
       throw new BookDataError(`outline element ${el.id} missing memoryIds[]`);
     }
   }
+  // `coverCandidates` (data contract addition, owner review 2026-08-31) is
+  // optional and absent on every outline.json produced before this landed —
+  // tolerant of absence, same as `heroCandidates`/`panoramaCandidates`. A
+  // PRESENT-but-malformed value is still rejected loudly, matching this
+  // loader's "fail early on a shape mismatch" posture.
+  if (o.coverCandidates !== undefined && !Array.isArray(o.coverCandidates)) {
+    throw new BookDataError('outline.coverCandidates must be an array when present');
+  }
   return o as BookOutline;
 }
 

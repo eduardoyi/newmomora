@@ -8,13 +8,16 @@ import './WraparoundCover.css';
 
 /**
  * The full wraparound cover (Momora Book Layout System 2a/2b): back + spine
- * + front on one sheet, in three voices. Photo voice: the image wraps
- * front -> spine -> 34mm into the back with a clean cut; the back is
- * otherwise paper-white + wordmark + colophon. Mixed voice (a vertical or
- * <1.4:1 photo): the image stays on the front only, spine and back go
- * paper-white, and the back recovers an illustrated-portrait stamp. Minimal
- * voice (no photo): a single 0.25pt rule crosses the whole wrap at 60mm
- * from the head, interrupted 4mm on each side of the spine text.
+ * + front on one sheet, in two voices. Mixed voice (a photo qualified): the
+ * image sits on the front panel only, spine and back stay paper-white, and
+ * the back recovers an illustrated-portrait stamp. Minimal voice (no
+ * photo): a single 0.25pt rule crosses the whole wrap at 60mm from the
+ * head, interrupted 4mm on each side of the spine text.
+ *
+ * A third voice, 'photo' (full-bleed: the image wrapped front -> spine ->
+ * 34mm into the back), existed through enzo-year-one/enzo-year-two and was
+ * removed after owner review of those two books (2026-08-31) — see git
+ * history for the prior implementation.
  *
  * Spine tiers: >=12mm name+years (descending, name centered at mid-height,
  * years 14mm from the foot); 8-12mm name only; <8mm blank (no legible type
@@ -28,7 +31,7 @@ export function WraparoundCover({ page, bookSlug, showGuides }: TemplateProps) {
     yearRangeLabel: string;
     backCoverLine: string | null;
     spineMm: number;
-    voice: 'photo' | 'minimal' | 'mixed';
+    voice: 'minimal' | 'mixed';
     assetFile: string | null;
     portraitFile: string | null;
   };
@@ -55,23 +58,19 @@ export function WraparoundCover({ page, bookSlug, showGuides }: TemplateProps) {
   const spineLeft = bleed + backMm;
   const spineCenter = spineLeft + spineMm / 2;
   const frontLeft = spineLeft + spineMm;
-  const hasPhotoOnFront = p.voice === 'photo' || p.voice === 'mixed';
-  const photoWrapsSpine = p.voice === 'photo';
+  const hasPhotoOnFront = p.voice === 'mixed';
 
-  const isDark = hasPhotoOnFront; // simplification: photo cover always uses white/scrim-legible text — see WraparoundCover.css note.
-  // Bug fix (owner review round 3 item 17 — "no spine visible"): the spine's
-  // OWN background only ever gets covered by the photo when the voice is
-  // 'photo' (photoWrapsSpine) — 'mixed' voice keeps the photo on the front
-  // panel only, leaving the spine on plain paper-white. Reusing `isDark`
-  // (true for BOTH photo AND mixed) for the spine's text color forced white
-  // text onto a white spine in mixed voice — invisible. The spine's colors
-  // must key off `photoWrapsSpine`, not `isDark`.
-  const spineOnPhoto = photoWrapsSpine;
+  // Mixed voice's photo covers only the front panel — the spine and back
+  // always stay on plain paper-white now that full-bleed 'photo' voice is
+  // gone (owner review round 3 item 17's "white text on a white spine" bug
+  // can no longer occur), so the spine panel always renders and spine text
+  // is always ink-on-paper.
+  const isDark = hasPhotoOnFront;
 
   return (
     <PageFrame isSpread={false} showGuides={showGuides} className="cover-wrap-page" explicitDimsMm={{ widthMm: totalWidthMm, heightMm: totalHeightMm }}>
       <div className="cover-wrap" data-testid="cover-wrap" data-voice={p.voice}>
-        {/* ── Photo (voice: photo wraps front+spine+34mm of back; mixed: front only) ── */}
+        {/* ── Photo: mixed voice only, front panel ── */}
         {hasPhotoOnFront && p.assetFile && (
           <div
             className="cover-wrap__photo"
@@ -79,7 +78,7 @@ export function WraparoundCover({ page, bookSlug, showGuides }: TemplateProps) {
               position: 'absolute',
               top: 0,
               bottom: 0,
-              left: `${xPct(photoWrapsSpine ? spineLeft - 34 : frontLeft)}%`,
+              left: `${xPct(frontLeft)}%`,
               right: 0,
               overflow: 'hidden',
               background: colors.ink,
@@ -139,28 +138,22 @@ export function WraparoundCover({ page, bookSlug, showGuides }: TemplateProps) {
 
         {/* ── Spine panel: a soft tinted band + hairline fold rules so the
             spine reads as its own zone even at a glance/thumbnail scale —
-            only drawn when the photo itself doesn't already cover the
-            spine (photo voice wraps over it; mixed/minimal voices don't). ── */}
-        {!spineOnPhoto && (
-          <div
-            className="cover-wrap__spine-panel"
-            style={{ left: `${xPct(spineLeft)}%`, width: `${wPct(spineMm)}%`, top: 0, bottom: 0 }}
-          />
-        )}
+            always paper-white now that full-bleed 'photo' voice is gone. ── */}
+        <div
+          className="cover-wrap__spine-panel"
+          style={{ left: `${xPct(spineLeft)}%`, width: `${wPct(spineMm)}%`, top: 0, bottom: 0 }}
+        />
 
         {/* ── Spine: descending orientation, tiered by width ── */}
         {spineTier !== 'blank' && (
           <div className="cover-wrap__spine" style={{ left: `${xPct(spineCenter)}%`, top: 0, bottom: 0 }}>
-            <div
-              className="cover-wrap__spine-name"
-              style={{ fontSize: ptCqwFor(10, totalWidthMm), color: spineOnPhoto ? '#fff' : colors.ink }}
-            >
+            <div className="cover-wrap__spine-name" style={{ fontSize: ptCqwFor(10, totalWidthMm), color: colors.ink }}>
               {p.childName}
             </div>
             {spineTier === 'full' && (
               <div
                 className="cover-wrap__spine-years"
-                style={{ bottom: `${yPct(bleed + 14)}%`, fontSize: ptCqwFor(6.5, totalWidthMm), color: spineOnPhoto ? 'rgba(255,255,255,.82)' : colors.ink3 }}
+                style={{ bottom: `${yPct(bleed + 14)}%`, fontSize: ptCqwFor(6.5, totalWidthMm), color: colors.ink3 }}
               >
                 {p.yearRangeLabel}
               </div>

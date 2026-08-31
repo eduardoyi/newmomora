@@ -2559,6 +2559,8 @@ export function buildOutlineSystemPrompt(): string {
     '',
     'HERO CANDIDATES: across the WHOLE book (any eligible memory, not just ones you selected into a spread), pick up to 5 `hero_candidates` -- the strongest single images (not videos) of the year, worth a full-bleed page or the cover. Each memory\'s row shows its first photo\'s orientation (`wide`, `tall`, or `square`, omitted when unknown) -- prefer `wide` or `square` for a full-bleed page; a `tall` photo makes a poor full-page bleed on a square page, but it is not forbidden if it is genuinely the strongest image.',
     '',
+    'COVER CANDIDATES: separately from hero_candidates, pick up to 5 `cover_candidates` -- book-wide candidates for the COVER specifically, ranked BEST-FIRST. The cover has its own, stricter bar than a full-bleed page: it is the first thing anyone sees, so a technically strong image can still be the WRONG cover. Each candidate MUST be an actual photograph that features this child WITH THEIR FACE VISIBLE -- not a video frame, not a screenshot. A candidate MUST NOT be a medical or hospital setting (visible medical equipment, a procedure in progress, an unclothed newborn in a clinical context) -- even a technically sharp, well-composed image is disqualified if the setting reads as medical. A candidate MUST NOT be a photo OF a drawing, document, screen, or other artwork (a photo of a child\'s drawing is not a photo of the child). Beyond those hard rules, prefer warm, well-lit, uncluttered images where the child is the clear, unambiguous subject -- not a crowded group shot, not a dark or blurry one. A memory may be both a hero candidate and a cover candidate. If NO eligible memory clears this bar, return an empty list -- never nominate a disqualified image just to avoid an empty list; the renderer has its own fallback for that case.',
+    '',
     'PANORAMA CANDIDATES: across the WHOLE book, nominate EVERY qualifying memory as a `panorama_candidate` -- there is no cap, so do not ration these. NOMINATE GENEROUSLY: you cannot see pixel dimensions, only orientation, so under-nomination is the real failure mode -- a real incident had the model nominating only 1-2 candidates and losing every panorama to a downstream resolution check. Aim for 5-10 candidates whenever the archive plausibly has that many wide/scenic memories; over-nomination costs nothing (a resolution filter downstream silently drops anything too small to print at 2:1 -- that is its job, not yours), but under-nomination kills a panoramic spread outright. A panorama spans TWO PAGES at roughly 2:1 -- a `tall` or `square` photo can NEVER work here, no matter how scenic; a candidate MUST show `wide` in its metadata row (and the wider the better -- prefer a called-out ratio like "wide 1.7:1" over a plain "wide"). Beyond orientation, qualifying also means scenic: a landscape, a vista, an open space, with no faces near the center of the frame -- judge that part from the memory\'s topics/labels/description context (you are not shown the actual image). Order the list BEST-FIRST (widest and most scenic first) -- the renderer uses roughly 1 spread per ~20 pages, picking down your list in order, so ranking matters more than count. Every book should open up into at least one panoramic breath WHEN a genuinely wide, scenic memory exists -- but if none of the `wide` memories are actually scenic (or no memory is `wide` at all), returning an EMPTY list is the correct, expected answer; never nominate a tall or square photo just to avoid an empty list. A memory may be both a hero candidate and a panorama candidate. These are human-reviewed downstream, so nominate confidently and completely rather than leaving qualifying ones out of caution.',
     '',
     'DEDICATION AND BACK COVER LINE: two more pieces of connective text, same class as the kicker/editorial note (journal language, editable downstream, never parent text).',
@@ -2584,6 +2586,7 @@ export function buildOutlineSystemPrompt(): string {
     '    { "segment_id": "<a backbone segment id>", "memory_ids": ["<ids in that segment worth a full page>"], "rationale": { "<memory_id>": "<internal, evidence-based, <=12 words>" } }',
     '  ],',
     '  "hero_candidates": ["<up to 5 memory ids -- see HERO CANDIDATES above>"],',
+    '  "cover_candidates": ["<up to 5 memory ids, best-first -- see COVER CANDIDATES above>"],',
     '  "panorama_candidates": ["<ALL qualifying memory ids, best-first, no cap -- see PANORAMA CANDIDATES above -- at least 1 whenever plausible>"],',
     '  "segment_titles": { "<flagged segment id>": "<special birth/birthday title in journal language -- see SPECIAL BACKBONE SEGMENT TITLES above>" },',
     '  "firsts_title": "<only if a Firsts spread is listed below -- its draft title, journal-language \'big and small victories this year\' framing>",',
@@ -2878,6 +2881,18 @@ export interface ParsedOutlineResponse {
    * year. Not scoped to any spread/segment; validated only for existence
    * in scope (see `parseOutlineResponse`). */
   heroCandidates: string[];
+  /** Owner decision, 2026-08-31 (cover-safety fix, following two cover
+   * failures traced to the renderer's blind first-photo fallback: a
+   * hospital/medical shot, and a photo OF a child's drawing rather than the
+   * child): up to `MAX_COVER_CANDIDATES` book-wide candidates for the
+   * COVER specifically, ranked best-first, vision-judged against criteria
+   * `hero_candidates` doesn't carry -- must actually show the child's face,
+   * must not be a medical/hospital setting, must not be a photo of a
+   * drawing/document/screen/artwork. May overlap `heroCandidates` (a memory
+   * can be both). Validated only for existence in scope, same as
+   * `hero_candidates` -- the renderer's own asset-kind/width check happens
+   * downstream (see book-renderer/src/model/fitter.ts `buildCoverPages`). */
+  coverCandidates: string[];
   /** Owner decision, 2026-08-27 ("Density & quality-first"), amended
    * 2026-08-27: EVERY qualifying book-wide candidate for a full
    * double-page panorama spread -- wide, scenic, no faces near center --
@@ -3169,6 +3184,18 @@ export function parseOutlineResponse(
     violations,
   );
 
+  // Owner decision, 2026-08-31 (cover-safety fix): same shape as
+  // hero_candidates -- existence-only validation, the renderer's own
+  // asset-kind/width check happens downstream. See the field's own doc
+  // comment on `ParsedOutlineResponse.coverCandidates`.
+  const coverCandidates = parseCappedIdList(
+    obj.cover_candidates,
+    validMemoryIds,
+    MAX_COVER_CANDIDATES,
+    { unknown: 'unknown_cover_candidate', tooMany: 'too_many_cover_candidates' },
+    violations,
+  );
+
   // Owner amendment, 2026-08-27: panorama nomination is UNCAPPED (`cap:
   // null`) -- the renderer paces itself off the best-first ordering, so
   // nomination should never be the bottleneck. Order is preserved exactly
@@ -3193,6 +3220,7 @@ export function parseOutlineResponse(
       firstsTitle,
       segmentTitles,
       heroCandidates,
+      coverCandidates,
       panoramaCandidates,
       dedication,
       backCoverLine,
@@ -3204,6 +3232,7 @@ export function parseOutlineResponse(
 }
 
 const MAX_HERO_CANDIDATES = 5;
+const MAX_COVER_CANDIDATES = 5;
 
 /**
  * Shared parsing for the book-wide memory-id lists (`hero_candidates`,
@@ -4051,6 +4080,7 @@ async function main(): Promise<void> {
     totalImageCount,
     pageCap: options.pageCap,
     heroCandidates: response.heroCandidates,
+    coverCandidates: response.coverCandidates,
     panoramaCandidates: response.panoramaCandidates,
     guaranteedPanoramaIds,
     dedication: response.dedication,
@@ -4110,6 +4140,11 @@ interface RenderContext {
   /** Design handoff decision (2026-08-27): up to 5 book-wide candidates for
    * a full-bleed page or the cover. */
   heroCandidates: string[];
+  /** Owner decision, 2026-08-31 (cover-safety fix): up to `MAX_COVER_
+   * CANDIDATES` book-wide candidates for the COVER specifically, ranked
+   * best-first, vision-judged against stricter criteria than
+   * `heroCandidates` -- see `ParsedOutlineResponse.coverCandidates`. */
+  coverCandidates: string[];
   /** Uncapped, best-first (owner amendment, 2026-08-27): every qualifying
    * book-wide candidate for a full double-page panorama spread. */
   panoramaCandidates: string[];
@@ -4262,6 +4297,18 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
   }
   md.push('');
 
+  md.push('## Cover candidates (cover specifically, best-first, stricter than hero candidates)');
+  md.push('');
+  if (ctx.coverCandidates.length === 0) {
+    md.push('_(none -- the renderer falls back to its own selection; see book-renderer/src/model/fitter.ts buildCoverPages)_');
+  } else {
+    for (const id of ctx.coverCandidates) {
+      const feature = ctx.features.get(id);
+      if (feature) md.push(`- ${memoryLine(feature)}`);
+    }
+  }
+  md.push('');
+
   md.push('## Panorama candidates (full double-page spread consideration)');
   md.push('');
   if (ctx.panoramaCandidates.length === 0) {
@@ -4332,6 +4379,7 @@ async function renderOutlineOutputs(outputDir: URL, ctx: RenderContext): Promise
     },
     elements: ctx.readingOrder,
     heroCandidates: ctx.heroCandidates,
+    coverCandidates: ctx.coverCandidates,
     panoramaCandidates: ctx.panoramaCandidates,
     // Owner round-3 decision, 2026-08-27: "1 + 1 per ~20 pages" of
     // `panoramaCandidates` (best-first prefix) that were GUARANTEED a

@@ -130,12 +130,16 @@
  *     unchanged.
  *
  * Candidate-id integration gap -- outline.json's top-level
- * `panoramaCandidates`/`heroCandidates` id arrays (candidates that didn't
- * make the backbone cut, so they may not appear in any element's
- * `memoryIds`) are unioned into the id-collection step via
+ * `panoramaCandidates`/`heroCandidates`/`coverCandidates` id arrays
+ * (candidates that didn't make the backbone cut, so they may not appear in
+ * any element's `memoryIds`) are unioned into the id-collection step via
  * `mergeCandidateMemoryIds` -- tolerant of absence for old outlines
- * (`parseOutlineJson` defaults both to `[]`). Without this, those memories
- * got neither DB data nor exported assets at all.
+ * (`parseOutlineJson` defaults all three to `[]`). Without this, those
+ * memories got neither DB data nor exported assets at all. `coverCandidates`
+ * (owner decision, 2026-08-31, cover-safety fix) joined the other two here
+ * for the exact same reason -- a cover-only nominee that never lands in a
+ * spread still needs its asset exported, or the renderer's own cover
+ * precedence silently finds nothing to resolve it to and falls through.
  *
  * Owner round-8 -- original dimensions for every photo -- EVERY photo asset
  * in the export (not just a `panoramaCandidates`/`heroCandidates` memory)
@@ -460,11 +464,14 @@ export interface ParsedOutline {
   scope: OutlineScope;
   window: OutlineWindow;
   elements: OutlineElementLike[];
-  /** Top-level candidate id arrays (panorama/hero treatment) -- may not
-   * have made the backbone cut, so they don't necessarily appear in any
+  /** Top-level candidate id arrays (panorama/hero/cover treatment) -- may
+   * not have made the backbone cut, so they don't necessarily appear in any
    * element's `memoryIds`. Absent on older outline runs -> `[]`. */
   panoramaCandidates: string[];
   heroCandidates: string[];
+  /** Owner decision, 2026-08-31 (cover-safety fix). Absent on outline runs
+   * that predate it -> `[]`, same tolerance as the other two. */
+  coverCandidates: string[];
   /** Round-18: the outline's own resolved BCP-47 journal language (see
    * `eval-memory-book-outline.ts`'s `ParsedOutlineResponse.language`).
    * `undefined` on outline runs that predate this field -- the CLI default
@@ -553,6 +560,7 @@ export function parseOutlineJson(raw: unknown): ParsedOutline {
 
   const panoramaCandidates = optionalStringArray(o.panoramaCandidates, 'panoramaCandidates');
   const heroCandidates = optionalStringArray(o.heroCandidates, 'heroCandidates');
+  const coverCandidates = optionalStringArray(o.coverCandidates, 'coverCandidates');
   // Round-18: optional, present on every outline run from that point on --
   // same "absent on older runs" tolerance as panoramaCandidates/heroCandidates
   // above, but a STRING field rather than an array, so it gets its own
@@ -562,7 +570,7 @@ export function parseOutlineJson(raw: unknown): ParsedOutline {
   }
   const language = typeof o.language === 'string' ? o.language : undefined;
 
-  return { runId, child, scope, window, elements, panoramaCandidates, heroCandidates, language };
+  return { runId, child, scope, window, elements, panoramaCandidates, heroCandidates, coverCandidates, language };
 }
 
 /** Union of every element's `memoryIds`, order-preserving + deduped -- the
@@ -587,21 +595,24 @@ export function collectMemoryIdsFromElements(elements: OutlineElementLike[]): st
 
 /**
  * Unions the backbone-derived memory ids with outline.json's top-level
- * `panoramaCandidates`/`heroCandidates` arrays. Candidates that didn't make
- * the backbone cut exist ONLY in those two arrays -- without this, they'd
- * get neither DB data nor exported assets at all. Order-preserving +
- * deduped, same convention as `collectMemoryIdsFromElements`. Tolerates
- * old outlines with no candidate arrays: `parseOutlineJson` already
- * defaults both to `[]`, so this is a no-op union in that case.
+ * `panoramaCandidates`/`heroCandidates`/`coverCandidates` arrays. Candidates
+ * that didn't make the backbone cut exist ONLY in those arrays -- without
+ * this, they'd get neither DB data nor exported assets at all.
+ * Order-preserving + deduped, same convention as
+ * `collectMemoryIdsFromElements`. Tolerates old outlines with no candidate
+ * arrays: `parseOutlineJson` already defaults all three to `[]`, so this is
+ * a no-op union in that case. `coverCandidates` defaults to `[]` so every
+ * pre-existing 3-arg call site keeps compiling unchanged.
  */
 export function mergeCandidateMemoryIds(
   elementMemoryIds: string[],
   panoramaCandidates: string[],
   heroCandidates: string[],
+  coverCandidates: string[] = [],
 ): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const id of [...elementMemoryIds, ...panoramaCandidates, ...heroCandidates]) {
+  for (const id of [...elementMemoryIds, ...panoramaCandidates, ...heroCandidates, ...coverCandidates]) {
     if (!seen.has(id)) {
       seen.add(id);
       out.push(id);
@@ -2000,6 +2011,7 @@ async function main(): Promise<void> {
     collectMemoryIdsFromElements(outline.elements),
     outline.panoramaCandidates,
     outline.heroCandidates,
+    outline.coverCandidates,
   );
 
   let supabase = await createAuthedClient();

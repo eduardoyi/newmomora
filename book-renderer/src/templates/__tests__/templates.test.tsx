@@ -292,9 +292,9 @@ describe('template snapshots', () => {
     expect(html).toContain('She said her first word today: dada!');
   });
 
-  it('WraparoundCover: mixed-voice spine text is dark ink, not white — the spine sits on paper-white paper, not the photo (item 17 bug fix)', () => {
+  it('WraparoundCover: mixed-voice spine text is dark ink, not white — the spine sits on paper-white paper, not the photo (item 17 bug fix; full-bleed "photo" voice removed 2026-08-31, so this is now the only photo-bearing voice)', () => {
     const manifest = makeManifest({
-      'mem-1': makeMemory({ assets: [makeAsset({ kind: 'photo', width: 2400, aspectRatio: 0.9 })] }), // < 1.4 -> mixed voice
+      'mem-1': makeMemory({ assets: [makeAsset({ kind: 'photo', width: 2400, aspectRatio: 0.9 })] }),
     });
     const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })], { heroCandidates: ['mem-1'] });
     const { page, html } = renderPage(manifest, outline);
@@ -305,15 +305,16 @@ describe('template snapshots', () => {
     expect(spineNameMarkup).not.toContain('#fff');
   });
 
-  it('WraparoundCover: photo-voice spine text stays white — the photo genuinely wraps over the spine there', () => {
+  it('WraparoundCover: a wide (>=1.4:1) photo also gets mixed voice, not a full-bleed wrap — the "photo" voice was removed after owner review (enzo-year-one/enzo-year-two)', () => {
     const manifest = makeManifest({
-      'mem-1': makeMemory({ assets: [makeAsset({ kind: 'photo', width: 2400, aspectRatio: 1.8 })] }), // >= 1.4 -> photo voice
+      'mem-1': makeMemory({ assets: [makeAsset({ kind: 'photo', width: 2400, aspectRatio: 1.8 })] }),
     });
     const outline = makeOutline([makeElement({ id: 'cover', kind: 'cover' })], { heroCandidates: ['mem-1'] });
     const { page, html } = renderPage(manifest, outline);
-    expect(page.params.voice).toBe('photo');
+    expect(page.params.voice).toBe('mixed');
     const spineNameMarkup = html.slice(html.indexOf('cover-wrap__spine-name'), html.indexOf('cover-wrap__spine-name') + 200);
-    expect(spineNameMarkup).toContain('#fff');
+    expect(spineNameMarkup).toContain('#2C2418'); // colors.ink — spine is always paper-white now, never photo-wrapped
+    expect(spineNameMarkup).not.toContain('#fff');
   });
 
   it('Folio sits 10mm inside the trim, matching SafeArea\'s own inset — not at the bleed edge (item 10 bug fix)', () => {

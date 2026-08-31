@@ -1956,6 +1956,30 @@ Deno.test('buildOutlineSystemPrompt: hero candidates are orientation-aware -- wi
   assertEquals(prompt.includes('not forbidden'), true);
 });
 
+// Cover-safety fix (owner decision, 2026-08-31), following two cover
+// failures traced to the renderer's blind first-photo fallback.
+
+Deno.test('buildOutlineSystemPrompt: asks for up to 5 cover_candidates, separate from hero_candidates', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('COVER CANDIDATES'), true);
+  assertEquals(prompt.includes('cover_candidates'), true);
+  assertEquals(prompt.includes('up to 5'), true);
+  assertEquals(prompt.includes('BEST-FIRST'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: cover candidates require a visible child face and forbid medical/hospital settings and photos of drawings', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('WITH THEIR FACE VISIBLE'), true);
+  assertEquals(prompt.includes('MUST NOT be a medical or hospital setting'), true);
+  assertEquals(prompt.includes('unclothed newborn'), true);
+  assertEquals(prompt.includes('MUST NOT be a photo OF a drawing'), true);
+});
+
+Deno.test('buildOutlineSystemPrompt: cover_candidates JSON schema entry appears, best-first', () => {
+  const prompt = buildOutlineSystemPrompt();
+  assertEquals(prompt.includes('"cover_candidates":'), true);
+});
+
 Deno.test('buildOutlineSystemPrompt: panorama nomination is uncapped and best-first, never "up to 3"', () => {
   const prompt = buildOutlineSystemPrompt();
   assertEquals(prompt.includes('PANORAMA CANDIDATES'), true);
@@ -2590,6 +2614,60 @@ Deno.test('parseOutlineResponse: missing hero_candidates is an empty array, no v
   assertEquals(violations, []);
 });
 
+// --- cover_candidates (owner decision, 2026-08-31, cover-safety fix -- same
+// shape as hero_candidates: existence-only validation, capped at 5) --------
+
+Deno.test('parseOutlineResponse: cover_candidates validates existence and caps at 5', () => {
+  const validIds = new Set(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
+  const { response, violations } = parseOutlineResponse(
+    { cover_candidates: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'ghost'] },
+    new Set(),
+    new Set(),
+    validIds,
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(response.coverCandidates, ['m1', 'm2', 'm3', 'm4', 'm5']);
+  assertEquals(violations.some((v) => v.kind === 'unknown_cover_candidate'), true);
+  assertEquals(violations.some((v) => v.kind === 'too_many_cover_candidates'), true);
+});
+
+Deno.test('parseOutlineResponse: cover_candidates deduplicates', () => {
+  const { response, violations } = parseOutlineResponse(
+    { cover_candidates: ['m1', 'm1'] },
+    new Set(),
+    new Set(),
+    new Set(['m1']),
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(response.coverCandidates, ['m1']);
+  assertEquals(violations.some((v) => v.kind === 'duplicate_memory_id'), true);
+});
+
+Deno.test('parseOutlineResponse: missing cover_candidates is an empty array, no violation', () => {
+  const { response, violations } = parseOutlineResponse({}, new Set(), new Set(), new Set(), new Map(), new Map(), new Map());
+  assertEquals(response.coverCandidates, []);
+  assertEquals(violations, []);
+});
+
+Deno.test('parseOutlineResponse: hero_candidates and cover_candidates are independent -- a memory may appear in both, or in only one', () => {
+  const validIds = new Set(['m1', 'm2']);
+  const { response } = parseOutlineResponse(
+    { hero_candidates: ['m1', 'm2'], cover_candidates: ['m2'] },
+    new Set(),
+    new Set(),
+    validIds,
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  assertEquals(response.heroCandidates, ['m1', 'm2']);
+  assertEquals(response.coverCandidates, ['m2']);
+});
+
 // --- panorama_candidates (owner decision 2026-08-27, amended twice same
 // day: uncapped + best-first, then root-cause-fixed to require `wide`
 // orientation specifically -- a tall/square photo can never span a 2:1
@@ -2891,6 +2969,7 @@ Deno.test('parseOutlineResponse: empty/malformed raw input produces an empty-but
   assertEquals(response.backboneHighlights, []);
   assertEquals(response.firstsTitle, null);
   assertEquals(response.heroCandidates, []);
+  assertEquals(response.coverCandidates, []);
   assertEquals(response.internalEditorialNote, '');
   assertEquals(violations, []);
 });
