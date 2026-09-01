@@ -623,6 +623,69 @@ history (memories: last 90 days; comments/likes: all; memberships: every
 row but the founder's; invites: those currently `redeemed`) and applies the
 retention prune (§5.4-equivalent, see below) once immediately after.
 
+### 2.1d Memory Book generation (V5a)
+
+`docs/plans/memory-book.md` §"V5 scope" 5a + §8 data-model sketch. One row
+per book project (see [docs/features/memory-book-generation.md](./features/memory-book-generation.md)
+for the full contract and how the worker extends it). The app inserts a
+`queued` row from the in-app scope picker; a service-role worker (a
+separate change, not yet built) owns every status transition from there —
+mirrors the illustration workflow's client-writes-nothing invariant
+(`docs/durable-ai-generation-workflows.md` "Core invariants" #2). Unlike
+the illustration pipeline there is no separate private job table for V5a:
+`book_document` stays null until `ready`, so the single row never exposes
+in-progress content beyond the family boundary it already has.
+
+```sql
+create table public.memory_books (
+  id                        uuid primary key default gen_random_uuid(),
+  family_id                 uuid not null references public.families on delete cascade,
+  child_id                  uuid references public.family_members on delete cascade, -- required only for scope_kind = 'age_year'
+  requested_by              uuid references auth.users on delete set null,
+
+  scope_kind                text not null check (scope_kind in (
+                               'age_year', 'calendar_year', 'everything', 'custom_range')),
+  scope_start_date          date, -- frozen by the app at insert time; null only for 'everything'
+  scope_end_date             date,
+  scope_label                text not null,
+
+  status                    text not null default 'queued'
+                               check (status in ('queued', 'generating', 'ready', 'failed')),
+  failure_reason             text,
+  workflow_instance_id       text unique,  -- Cloudflare Workflow instance id; set by the dispatcher only
+  generation_attempt_id      uuid,          -- compare-and-set token for the current attempt
+  generation_started_at      timestamptz,   -- dedicated recovery clock, not created_at/updated_at
+  generation_completed_at    timestamptz,
+
+  page_budget                smallint not null check (page_budget between 18 and 122),
+  book_document               jsonb,  -- null until status = 'ready'; single-renderer book JSON (plan §3/§9)
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+```
+
+Key constraints: `book_document` required once `ready`, `failure_reason`
+required once `failed`, `age_year` requires `child_id`, every scope but
+`everything` requires both dates resolved and ordered, and a partial
+unique index (`memory_books_one_active_per_scope`) blocks two
+simultaneously `queued`/`generating` rows for the identical
+`(family_id, child_id, scope_kind, scope_start_date, scope_end_date)` —
+completed books for the same or overlapping scope are unrestricted (plan
+§4: "scopes may overlap").
+
+RLS: `select` = `is_family_member(family_id)`; `insert` = owner/manager
+(`has_family_role(family_id, ['owner','manager'])`) plus `requested_by =
+auth.uid()`, a same-family check on `child_id` (the "Memory tags: insert"
+cross-family-tag lesson applied here), and a with-check pinning the row to
+the exact just-queued shape (`status = 'queued'`, every generation-identity
+column and `book_document` null). **No update or delete policy exists for
+`authenticated` at all**, and the table grants `authenticated` only
+`select, insert` — mirrors `memory_illustration_jobs`' "job is
+service-only" contract: every status transition and the eventual
+`book_document` write happens through a service-role RPC the worker change
+owns, not through RLS-permitted client writes.
+
 ### 2.2 Indexes
 
 ```sql

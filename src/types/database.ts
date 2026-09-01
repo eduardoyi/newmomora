@@ -2470,6 +2470,84 @@ export type Database = {
           },
         ]
       }
+      memory_books: {
+        Row: {
+          book_document: Json | null
+          child_id: string | null
+          created_at: string
+          failure_reason: string | null
+          family_id: string
+          generation_attempt_id: string | null
+          generation_completed_at: string | null
+          generation_started_at: string | null
+          id: string
+          page_budget: number
+          requested_by: string | null
+          scope_end_date: string | null
+          scope_kind: string
+          scope_label: string
+          scope_start_date: string | null
+          status: string
+          updated_at: string
+          workflow_instance_id: string | null
+        }
+        Insert: {
+          book_document?: Json | null
+          child_id?: string | null
+          created_at?: string
+          failure_reason?: string | null
+          family_id: string
+          generation_attempt_id?: string | null
+          generation_completed_at?: string | null
+          generation_started_at?: string | null
+          id?: string
+          page_budget: number
+          requested_by?: string | null
+          scope_end_date?: string | null
+          scope_kind: string
+          scope_label: string
+          scope_start_date?: string | null
+          status?: string
+          updated_at?: string
+          workflow_instance_id?: string | null
+        }
+        Update: {
+          book_document?: Json | null
+          child_id?: string | null
+          created_at?: string
+          failure_reason?: string | null
+          family_id?: string
+          generation_attempt_id?: string | null
+          generation_completed_at?: string | null
+          generation_started_at?: string | null
+          id?: string
+          page_budget?: number
+          requested_by?: string | null
+          scope_end_date?: string | null
+          scope_kind?: string
+          scope_label?: string
+          scope_start_date?: string | null
+          status?: string
+          updated_at?: string
+          workflow_instance_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "memory_books_child_id_fkey"
+            columns: ["child_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "memory_books_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       memory_comments: {
         Row: {
           content: string

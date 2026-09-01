@@ -52,6 +52,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Usage limits & AI cost observability | [usage-limits.md](./usage-limits.md) | planned |
 | Offline awareness | [offline.md](./offline.md) | done |
 | Looking Back | [looking-back.md](./looking-back.md) | in-progress |
+| Memory Book generation | [memory-book-generation.md](./memory-book-generation.md) | in-progress |
 
 ## Template
 
