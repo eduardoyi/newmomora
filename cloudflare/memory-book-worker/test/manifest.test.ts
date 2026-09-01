@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildManifestAsset } from '../../../supabase/functions/_shared/memory-book-manifest.ts';
 import { buildAssetsForMemory, buildBookManifest, selectMediaAsset } from '../src/manifest';
 import type { DbMediaRow, GenerationContextResponse } from '../src/types';
 
@@ -30,8 +31,59 @@ describe('buildAssetsForMemory', () => {
     expect(assets.map((a) => a.file)).toEqual(['a-preview.jpg', 'b-preview.jpg']);
     expect(assets[0].aspectRatio).toBe(0.5);
     expect(assets[1].aspectRatio).toBe(2);
-    // No downloaded bytes in V5a -- originalWidth/Height are never set.
+    // No dimensions map passed -- originalWidth/Height stay unset, same as
+    // a real eval-CLI measurement failure (never fabricated).
     expect(assets[0].originalWidth).toBeUndefined();
+  });
+
+  it('sets originalWidth/originalHeight from the dimensions map, keyed by memory_media.id', () => {
+    const media: DbMediaRow[] = [
+      { id: 'media-1', memory_id: 'm', object_key: 'a.jpg', preview_object_key: 'a-preview.jpg', content_type: 'image/jpeg', position: 0, duration_ms: null, aspect_ratio: 1.33 },
+    ];
+    const assets = buildAssetsForMemory(media, { 'media-1': { width: 4032, height: 3024 } });
+    expect(assets[0].originalWidth).toBe(4032);
+    expect(assets[0].originalHeight).toBe(3024);
+  });
+
+  it('never sets originalWidth/originalHeight on a video-poster asset, even if the map has an entry for its id', () => {
+    // Defensive: a real caller (dimensions.ts's own content-type filter,
+    // plus workflow.ts only building jobs for selectMediaAsset(...).kind
+    // === 'photo') should never produce this, but buildAssetsForMemory
+    // itself must not trust the map blindly -- a video-poster's
+    // `object_key` is the ORIGINAL VIDEO file, never a measurable image.
+    const media: DbMediaRow[] = [
+      { id: 'media-1', memory_id: 'm', object_key: 'raw.mp4', preview_object_key: 'poster.webp', content_type: 'video/mp4', position: 0, duration_ms: 4000, aspect_ratio: 1.78 },
+    ];
+    const assets = buildAssetsForMemory(media, { 'media-1': { width: 1920, height: 1080 } });
+    expect(assets[0].kind).toBe('video-poster');
+    expect(assets[0].originalWidth).toBeUndefined();
+    expect(assets[0].originalHeight).toBeUndefined();
+  });
+
+  it('manifest parity: a measured photo asset matches buildManifestAsset\'s own preview-mode shape exactly', () => {
+    // Locks in that this worker's manifest asset entries are semantically
+    // identical to a PREVIEW-mode eval export on the originalWidth/
+    // originalHeight field -- not a re-derived or approximated value, the
+    // SAME buildManifestAsset call the eval CLI itself makes, with the SAME
+    // params (see eval-memory-book-assets.ts's own buildManifestAsset call
+    // in its media-job loop).
+    const row: DbMediaRow = { id: 'media-1', memory_id: 'm', object_key: 'a.jpg', preview_object_key: 'a-preview.jpg', content_type: 'image/jpeg', position: 0, duration_ms: null, aspect_ratio: 1.33 };
+    const measured = { width: 4032, height: 3024 };
+
+    const [fromWorker] = buildAssetsForMemory([row], { 'media-1': measured });
+    const expected = buildManifestAsset({
+      file: 'a-preview.jpg',
+      width: 1280,
+      height: Math.round(1280 / 1.33),
+      kind: 'photo',
+      durationMs: null,
+      dbAspectRatio: 1.33,
+      originalDimensions: measured,
+    });
+
+    expect(fromWorker).toEqual(expected);
+    expect(fromWorker.originalWidth).toBe(4032);
+    expect(fromWorker.originalHeight).toBe(3024);
   });
 });
 
@@ -117,6 +169,35 @@ describe('buildBookManifest', () => {
     // photo-only memory is never QR-eligible, even if a token happens to be
     // in the map -- memoryNeedsShareToken gates it.
     expect(manifest.memories['photo-1'].shareToken).toBeNull();
+  });
+
+  it('assigns a share token to a media memory carrying a video-poster asset (share-token audit)', () => {
+    // Closes the audit gap: a "keep the sound"/video memory (memory_type
+    // 'media' with a video-poster asset -- the canary's 29 video-poster
+    // assets) must get its QR scan-mark token wired all the way through,
+    // same as an audio memory. workflow.ts's own shareTokenCandidateIds
+    // filter (memory_type === 'media') is what actually requests this
+    // token from the bridge; this test locks in the manifest-assembly half
+    // of that path -- memoryNeedsShareToken correctly reads it back off the
+    // assets buildAssetsForMemory produced, not off a separate content-type
+    // check that could drift out of sync.
+    const context = baseContext({
+      memories: [
+        { id: 'media-1', content: null, memory_date: '2025-01-01', memory_type: 'media', emotion: null, topics: [], topic_details: {}, illustration_key: null },
+      ],
+      media: [
+        { id: 'mm-1', memory_id: 'media-1', object_key: 'clip.mp4', preview_object_key: 'poster.webp', content_type: 'video/mp4', position: 0, duration_ms: 8000, aspect_ratio: 1.78 },
+      ],
+    });
+    const manifest = buildBookManifest({
+      context,
+      memoryIds: ['media-1'],
+      outlineRunId: 'run-1',
+      language: 'en',
+      shareTokensByMemoryId: new Map([['media-1', 'tok-video']]),
+    });
+    expect(manifest.memories['media-1'].assets).toEqual([expect.objectContaining({ kind: 'video-poster' })]);
+    expect(manifest.memories['media-1'].shareToken).toBe('tok-video');
   });
 
   it('falls back to the family as the "child" when the book has no child_id', () => {

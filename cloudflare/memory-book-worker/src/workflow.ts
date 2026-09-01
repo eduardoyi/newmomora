@@ -10,7 +10,8 @@ import {
 } from '../../../supabase/functions/_shared/memory-book-manifest.ts';
 import { BridgeError, ensureShareTokens, failBook, loadGenerationContext, publishBook, reconcileBook } from './bridge';
 import { verifyCoverCandidates } from './cover-verify';
-import { buildBookManifest } from './manifest';
+import { measureOriginalDimensionsForJobs, type DimensionMeasurementJob } from './dimensions';
+import { buildBookManifest, selectMediaAsset } from './manifest';
 import { runOutlineStage } from './outline';
 import type { Env, GenerationContextResponse, WorkflowDispatchPayload } from './types';
 
@@ -27,6 +28,7 @@ type FailureCode =
   | 'CONTEXT_LOAD_FAILED'
   | 'NO_ELIGIBLE_MEMORIES'
   | 'OUTLINE_GENERATION_FAILED'
+  | 'DIMENSION_MEASUREMENT_FAILED'
   | 'MANIFEST_BUILD_FAILED'
   | 'UNKNOWN_ERROR';
 
@@ -34,6 +36,7 @@ function errorCode(error: unknown): FailureCode {
   if (error instanceof NoEligibleMemoriesError) return 'NO_ELIGIBLE_MEMORIES';
   if (error instanceof ContextLoadError || error instanceof NonRetryableError) return 'CONTEXT_LOAD_FAILED';
   if (error instanceof OutlineStageError) return 'OUTLINE_GENERATION_FAILED';
+  if (error instanceof DimensionMeasurementError) return 'DIMENSION_MEASUREMENT_FAILED';
   if (error instanceof ManifestStageError) return 'MANIFEST_BUILD_FAILED';
   return 'UNKNOWN_ERROR';
 }
@@ -41,6 +44,12 @@ function errorCode(error: unknown): FailureCode {
 class ContextLoadError extends Error {}
 class NoEligibleMemoriesError extends Error {}
 class OutlineStageError extends Error {}
+/** `measureOriginalDimensionsForJobs` itself fails open per-asset (never
+ * throws for an individual unreadable photo -- see dimensions.ts), so
+ * reaching this class at all means something broke at the step level
+ * (e.g. the R2 binding itself), not an ordinary "some photo couldn't be
+ * measured" outcome -- those are silent, expected omissions, not failures. */
+class DimensionMeasurementError extends Error {}
 /** Covers both manifest assembly AND the publish call itself -- they share
  * one step (see the "build manifest and publish" step.do below), so a
  * failure anywhere in it is ambiguous about whether publish was ever
@@ -121,7 +130,46 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
         },
       );
 
-      // ── step 4: mint share tokens, assemble the manifest + outline.json-
+      // Pure computation (no I/O) -- pulled out of the manifest-build step
+      // below so BOTH it and the dimension-measurement step (which needs
+      // to know which memories' media are actually worth measuring) can
+      // see it without computing it twice.
+      const referencedMemoryIds = mergeCandidateMemoryIds(
+        collectMemoryIdsFromElements(outline.elements),
+        outline.parsed.panoramaCandidates,
+        outline.parsed.heroCandidates,
+        coverVerify.coverCandidates,
+      );
+
+      // ── step 4: measure original (not preview) pixel dimensions for
+      // every photo asset the manifest will reference -- book-renderer's
+      // fitter (cover/panorama/full-bleed gates) reads `originalWidth`/
+      // `originalHeight`, which only a real image-header read can produce
+      // (the exported `width`/`height` stay a preview-capped placeholder,
+      // see manifest.ts's header comment). Fails open per-asset (never
+      // throws) -- see dimensions.ts -- so this step's own retries are only
+      // for an infra-level failure of the step itself, not a hedge against
+      // any individual unreadable photo. ───────────────────────────────────
+      const originalDimensionsByMediaId = await step.do(
+        'measure original photo dimensions',
+        { retries: { limit: 2, delay: '3 seconds', backoff: 'exponential' }, timeout: '90 seconds' },
+        async () => {
+          try {
+            const referenced = new Set(referencedMemoryIds);
+            const jobs: DimensionMeasurementJob[] = [];
+            for (const row of context.media) {
+              if (!referenced.has(row.memory_id)) continue;
+              if (selectMediaAsset(row)?.kind !== 'photo') continue;
+              jobs.push({ id: row.id, objectKey: row.object_key, contentType: row.content_type });
+            }
+            return await measureOriginalDimensionsForJobs(this.env.MEMORY_BOOK_PREVIEWS, jobs);
+          } catch (error) {
+            throw new DimensionMeasurementError(errorMessageOnly(error));
+          }
+        },
+      );
+
+      // ── step 5: mint share tokens, assemble the manifest + outline.json-
       // shaped document, publish via CAS. All in one step so the (possibly
       // sizeable) book_document is only ever built once, and this step's
       // OWN durable return value stays small ({published, bookId}) even
@@ -132,13 +180,6 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
         { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds' },
         async () => {
           try {
-            const referencedMemoryIds = mergeCandidateMemoryIds(
-              collectMemoryIdsFromElements(outline.elements),
-              outline.parsed.panoramaCandidates,
-              outline.parsed.heroCandidates,
-              coverVerify.coverCandidates,
-            );
-
             const shareTokenCandidateIds = referencedMemoryIds.filter((id) => {
               const memory = context.memories.find((m) => m.id === id);
               if (!memory) return false;
@@ -163,6 +204,7 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
               outlineRunId: attemptId,
               language: manifestLanguage,
               shareTokensByMemoryId,
+              originalDimensionsByMediaId,
             });
 
             const violations: OutlineIntegrityViolation[] = [...outline.violations, ...coverVerify.violations];

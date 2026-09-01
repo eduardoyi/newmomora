@@ -86,13 +86,35 @@ function coverVerifyChatResponse() {
   };
 }
 
-function createBucket() {
+/** Minimal, real, parseable JPEG (SOI + tiny APP0 + SOF0 carrying width/
+ * height) -- same construction `dimensions.test.ts` verifies against the
+ * real `image-size` package; duplicated here (not imported from another
+ * test file, per this suite's own convention of self-contained fixtures)
+ * so this integration test can prove the dimension-measurement step's R2
+ * reads actually flow into the published manifest, not just that the step
+ * runs. */
+function buildJpegBytes(width: number, height: number): Uint8Array {
+  return new Uint8Array([
+    0xff, 0xd8, // SOI
+    0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, // APP0
+    0xff, 0xc0, 0x00, 0x0b, 0x08, // SOF0, length 11, precision 8
+    (height >> 8) & 0xff, height & 0xff,
+    (width >> 8) & 0xff, width & 0xff,
+    0x01, 0x01, 0x11, 0x00,
+  ]);
+}
+
+function createBucket(bytesByKey: Record<string, Uint8Array> = {}) {
   return {
-    get: vi.fn(async () => ({ arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer })),
+    get: vi.fn(async (key: string) => {
+      const bytes = bytesByKey[key];
+      if (bytes) return { arrayBuffer: async () => bytes.buffer };
+      return { arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer };
+    }),
   };
 }
 
-function createEnv(overrides: { bridgeResponses?: Record<string, unknown> } = {}) {
+function createEnv(overrides: { bridgeResponses?: Record<string, unknown>; bucketBytesByKey?: Record<string, Uint8Array> } = {}) {
   const bridgeCalls: Array<{ operation: string; body: Record<string, unknown> }> = [];
   const bridgeResponses = overrides.bridgeResponses ?? {};
 
@@ -127,16 +149,17 @@ function createEnv(overrides: { bridgeResponses?: Record<string, unknown> } = {}
     }
   });
 
+  const bucket = createBucket(overrides.bucketBytesByKey);
   const env = {
     ENVIRONMENT: 'test',
     SUPABASE_BRIDGE_URL: 'https://bridge.test/workflow-memory-book-bridge',
     DISPATCH_SIGNING_SECRET: 'dispatch-secret',
     SUPABASE_BRIDGE_HMAC_SECRET: 'bridge-secret',
     OPENAI_API_KEY: 'test-key',
-    MEMORY_BOOK_PREVIEWS: createBucket(),
+    MEMORY_BOOK_PREVIEWS: bucket,
   } as unknown as Env;
 
-  return { env, fetchMock, bridgeCalls };
+  return { env, fetchMock, bridgeCalls, bucket };
 }
 
 function workflowWithEnv(env: Env): MemoryBookWorkflow {
@@ -234,5 +257,89 @@ describe('MemoryBookWorkflow', () => {
       fakeStep(),
     );
     expect(result).toEqual({ bookId: BOOK_ID, status: 'superseded' });
+  });
+
+  it('measures original photo dimensions from R2 (the ORIGINAL object_key, not preview) and writes them into the published manifest', async () => {
+    // MEMORY_2's media row: object_key 'raw.jpg' (original) vs
+    // preview_object_key 'preview.jpg' (the exported/referenced file) --
+    // serving real JPEG bytes ONLY under the original key proves the
+    // dimension step reads the right object, not accidentally the preview.
+    const { env, fetchMock, bridgeCalls, bucket } = createEnv({
+      bucketBytesByKey: { 'raw.jpg': buildJpegBytes(4032, 3024) },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await workflowWithEnv(env).run(
+      { payload: { bookId: BOOK_ID, attemptId: ATTEMPT_ID } } as WorkflowEvent<WorkflowDispatchPayload>,
+      fakeStep(),
+    );
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'ready' });
+
+    const publishCall = bridgeCalls.find((c) => c.operation === 'publish');
+    const document = publishCall!.body.bookDocument as { manifest: { memories: Record<string, { assets: Array<Record<string, unknown>> }> } };
+    const asset = document.manifest.memories[MEMORY_2].assets[0];
+    expect(asset.file).toBe('preview.jpg'); // still the preview file, per V5a's own no-re-download rule.
+    expect(asset.originalWidth).toBe(4032); // ...but originalWidth/Height now come from the real original.
+    expect(asset.originalHeight).toBe(3024);
+
+    // Confirm it was actually read off the ORIGINAL key.
+    expect(bucket.get.mock.calls.some((call: unknown[]) => call[0] === 'raw.jpg')).toBe(true);
+  });
+
+  it('share-token audit: a "media" memory carrying a video-poster asset is requested from ensure_share_tokens and reaches the published manifest', async () => {
+    const MEMORY_VIDEO = '50abcc52-5c0d-4b7b-86d4-1b3a0a661203';
+    const contextWithVideo: GenerationContextResponse = {
+      ...baseContext(),
+      memories: [
+        ...baseContext().memories,
+        { id: MEMORY_VIDEO, content: null, memory_date: '2025-03-10', memory_type: 'media', emotion: null, topics: [], topic_details: {}, illustration_key: null },
+      ],
+      media: [
+        ...baseContext().media,
+        { id: 'media-video', memory_id: MEMORY_VIDEO, object_key: 'clip.mp4', preview_object_key: 'poster.webp', content_type: 'video/mp4', position: 0, duration_ms: 6000, aspect_ratio: 1.78 },
+      ],
+    };
+
+    const { env, fetchMock, bridgeCalls } = createEnv({
+      bridgeResponses: { ensure_share_tokens: { tokensByMemoryId: { [MEMORY_VIDEO]: 'tok-video-canary' } } },
+    });
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      if (url.includes('api.openai.com')) {
+        const messages = body.messages as Array<{ content: unknown }>;
+        const isVision = Array.isArray(messages?.[1]?.content);
+        if (isVision) return new Response(JSON.stringify(coverVerifyChatResponse()), { status: 200 });
+        const base = outlineChatResponse();
+        base.choices[0].message.content = JSON.stringify({
+          ...JSON.parse(base.choices[0].message.content),
+          panorama_candidates: [MEMORY_VIDEO], // makes it "referenced" without needing a full backbone placement.
+        });
+        return new Response(JSON.stringify(base), { status: 200 });
+      }
+      bridgeCalls.push({ operation: body.operation, body });
+      if (body.operation === 'load_generation_context') return new Response(JSON.stringify(contextWithVideo), { status: 200 });
+      if (body.operation === 'ensure_share_tokens') return new Response(JSON.stringify({ tokensByMemoryId: { [MEMORY_VIDEO]: 'tok-video-canary' } }), { status: 200 });
+      if (body.operation === 'publish') return new Response(JSON.stringify({ published: true }), { status: 200 });
+      if (body.operation === 'fail') return new Response(JSON.stringify({ failed: true }), { status: 200 });
+      return new Response(JSON.stringify({ error: 'unknown op' }), { status: 400 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await workflowWithEnv(env).run(
+      { payload: { bookId: BOOK_ID, attemptId: ATTEMPT_ID } } as WorkflowEvent<WorkflowDispatchPayload>,
+      fakeStep(),
+    );
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'ready' });
+
+    const tokenCall = bridgeCalls.find((c) => c.operation === 'ensure_share_tokens');
+    expect(tokenCall).toBeDefined();
+    expect(tokenCall!.body.memoryIds as string[]).toContain(MEMORY_VIDEO);
+
+    const publishCall = bridgeCalls.find((c) => c.operation === 'publish');
+    const document = publishCall!.body.bookDocument as { manifest: { memories: Record<string, { shareToken: string | null; assets: Array<{ kind: string }> }> } };
+    const memory = document.manifest.memories[MEMORY_VIDEO];
+    expect(memory.assets).toEqual([expect.objectContaining({ kind: 'video-poster' })]);
+    expect(memory.shareToken).toBe('tok-video-canary');
   });
 });

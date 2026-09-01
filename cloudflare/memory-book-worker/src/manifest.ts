@@ -1,20 +1,29 @@
 /**
  * Per-memory BookManifest assembly, ported (DB-loading logic only, no R2
- * downloads) from supabase/scripts/eval-memory-book-assets.ts. V5a asset
- * entries reference EXISTING app R2 preview objects directly -- no
- * downloads, no resizing (task brief) -- so unlike the eval CLI's export
- * pipeline, this never fetches image bytes and therefore never learns a
- * PREVIEW asset's real pixel width/height (imageSize() there runs on
- * downloaded bytes) or an ORIGINAL's dimensions (`originalWidth`/
- * `originalHeight`, `shouldMeasureOriginalDimensions`'s gate). Both are
- * DELIBERATELY omitted here (documented V5a deviation): `width`/`height`
- * are a nominal placeholder derived from the real `aspect_ratio` DB column
- * (which IS honored, via `dbAspectRatio` -- `buildManifestAsset` prefers it
- * over the width/height ratio for the manifest's own `aspectRatio` field),
- * and `originalWidth`/`originalHeight` are left unset, which
- * book-renderer's fitter already treats as "never measured" -- these
- * photos simply won't qualify for a panorama/full-bleed placement until a
- * later slice adds real dimension measurement.
+ * downloads for the exported FILE itself) from
+ * supabase/scripts/eval-memory-book-assets.ts. V5a asset entries reference
+ * EXISTING app R2 preview objects directly -- no re-download, no resizing
+ * (task brief) -- so `width`/`height` stay a nominal placeholder derived
+ * from the real `aspect_ratio` DB column (which IS honored, via
+ * `dbAspectRatio` -- `buildManifestAsset` prefers it over the width/height
+ * ratio for the manifest's own `aspectRatio` field): the exported preview
+ * file's real pixel size was never the point, only its aspect ratio was.
+ *
+ * `originalWidth`/`originalHeight` are a different story (2026-09 fix):
+ * `shouldMeasureOriginalDimensions` says the eval CLI measures these for
+ * EVERY photo asset, unconditionally, from the ORIGINAL (not preview)
+ * bytes -- book-renderer's fitter (cover-selection, panorama, full-bleed
+ * gates) was tuned against exactly that signal, and a manifest missing it
+ * silently loses all three. This module now receives an
+ * `originalDimensionsByMediaId` map (measured by `../src/dimensions.ts` via
+ * bounded, ranged R2 reads -- see that file's header for why ranged reads
+ * replace the eval CLI's full-object download) and forwards a
+ * `memory_media.id` lookup into `buildManifestAsset`'s `originalDimensions`
+ * param for every `kind: 'photo'` asset, so a worker-generated manifest is
+ * semantically identical to a PREVIEW-mode eval export on this field too.
+ * Absent from the map (measurement failed, or the caller didn't attempt
+ * it) -> `originalWidth`/`originalHeight` stay unset, exactly like a real
+ * eval-CLI download failure -- never fabricated.
  */
 import {
   buildManifest,
@@ -76,7 +85,10 @@ function placeholderDimensions(aspectRatio: number | null): { width: number; hei
     : { width: Math.round(PLACEHOLDER_LONG_EDGE * ratio), height: PLACEHOLDER_LONG_EDGE };
 }
 
-export function buildAssetsForMemory(media: DbMediaRow[]): ManifestAsset[] {
+export function buildAssetsForMemory(
+  media: DbMediaRow[],
+  originalDimensionsByMediaId: Record<string, { width: number; height: number }> = {},
+): ManifestAsset[] {
   const sorted = [...media].sort((a, b) => a.position - b.position);
   const assets: ManifestAsset[] = [];
   for (const row of sorted) {
@@ -91,6 +103,12 @@ export function buildAssetsForMemory(media: DbMediaRow[]): ManifestAsset[] {
         kind: selected.kind,
         durationMs: row.duration_ms,
         dbAspectRatio: row.aspect_ratio,
+        // Only a 'photo' asset is ever measured (shouldMeasureOriginalDimensions
+        // -- a 'video-poster' job's objectKey is the ORIGINAL VIDEO, dimensions.ts
+        // never even attempts it), but gating on `selected.kind` here too (not
+        // just relying on the map being empty for video jobs) keeps this
+        // function correct even if a caller passes a map keyed more loosely.
+        originalDimensions: selected.kind === 'photo' ? originalDimensionsByMediaId[row.id] ?? null : null,
       }),
     );
   }
@@ -107,6 +125,12 @@ export interface BuildManifestInput {
   outlineRunId: string;
   language: 'es' | 'en';
   shareTokensByMemoryId: Map<string, string>;
+  /** `memory_media.id` -> measured original pixel dimensions (see this
+   * file's header + `../src/dimensions.ts`). Defaults to `{}` -- every
+   * pre-existing call site (incl. this file's own tests) keeps compiling
+   * and behaving exactly as before this field existed: every asset's
+   * `originalWidth`/`originalHeight` stay unset. */
+  originalDimensionsByMediaId?: Record<string, { width: number; height: number }>;
 }
 
 export function buildBookManifest(input: BuildManifestInput): BookManifest {
@@ -137,7 +161,7 @@ export function buildBookManifest(input: BuildManifestInput): BookManifest {
     const memory = memoriesById.get(memoryId);
     if (!memory) continue;
 
-    const assets = buildAssetsForMemory(mediaByMemory.get(memoryId) ?? []);
+    const assets = buildAssetsForMemory(mediaByMemory.get(memoryId) ?? [], input.originalDimensionsByMediaId ?? {});
 
     const milestones: ManifestMilestone[] = (milestonesByMemory.get(memoryId) ?? []).map((row) =>
       buildManifestMilestone(row.milestone_id, row.detail),

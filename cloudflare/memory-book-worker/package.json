@@ -15,6 +15,9 @@
     "check:startup": "wrangler check startup",
     "deploy:dry-run": "wrangler deploy --dry-run --env=\"\""
   },
+  "dependencies": {
+    "image-size": "1.2.1"
+  },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.7",
     "typescript": "^5.9.3",
