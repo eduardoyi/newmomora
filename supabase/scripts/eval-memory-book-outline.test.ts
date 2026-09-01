@@ -3,7 +3,11 @@ import { assertEquals } from 'jsr:@std/assert@1';
 import {
   addDays,
   ageYearLabel,
+  applyCoverVerifyVerdicts,
   buildBackboneSegments,
+  buildCoverVerifyRequestBody,
+  buildCoverVerifySystemPrompt,
+  buildCoverVerifyUserText,
   buildOutlineRequestBody,
   buildOutlineSystemPrompt,
   buildOutlineUserPrompt,
@@ -42,6 +46,7 @@ import {
   CLI_USAGE,
   paceThemedSpreads,
   parseArgs,
+  parseCoverVerifyResponse,
   parseOutlineResponse,
   peoplePairCandidatesToUnified,
   planNonBackboneBudget,
@@ -55,6 +60,7 @@ import {
   selectPeoplePairCandidates,
   selectThemedCandidates,
   selectTopicCandidatesWithSparseFallback,
+  sumOpenAiUsage,
   suppressSurvivingBirthdaySpecialTitles,
   topicCandidatesToUnified,
   verifyQuoteTitles,
@@ -66,9 +72,11 @@ import {
   estimatePagesViaFitter,
   type BackboneMemoryInput,
   type ChildCandidate,
+  type CoverVerifyVerdict,
   type FamilyMemberForTagging,
   type MediaRow,
   type MemoryFeature,
+  type OpenAiUsage,
   type OracleElementInput,
   type ReadingOrderThemedSpreadInput,
   type PacingCandidate,
@@ -2972,6 +2980,209 @@ Deno.test('parseOutlineResponse: empty/malformed raw input produces an empty-but
   assertEquals(response.coverCandidates, []);
   assertEquals(response.internalEditorialNote, '');
   assertEquals(violations, []);
+});
+
+// --- Cover-candidate verification pass (owner decision, 2026-09-01: a
+// dedicated vision judge for the disqualification checklist, since
+// `coverCandidates` above is nominated BLIND by the text-only outline call
+// -- see the section comment above `verifyCoverCandidates` in the source) --
+
+Deno.test('buildCoverVerifySystemPrompt: contains all four disqualification rules', () => {
+  const prompt = buildCoverVerifySystemPrompt();
+  // (a) face-visible real photograph
+  assertEquals(prompt.includes('FACE VISIBLE'), true);
+  // (b) medical/hospital setting
+  assertEquals(prompt.toLowerCase().includes('medical or hospital setting') || prompt.toUpperCase().includes('MEDICAL OR HOSPITAL SETTING'), true);
+  // (c) photo of drawing/document/screen/artwork, including framed artwork
+  assertEquals(prompt.includes('DRAWING, DOCUMENT, SCREEN'), true);
+  assertEquals(prompt.includes('framed or printed artwork'), true);
+  // (d) collage/diptych/multi-panel/side-by-side, any visible seam
+  assertEquals(prompt.includes('COLLAGE, DIPTYCH, MULTI-PANEL'), true);
+  assertEquals(prompt.includes('visible seam'), true);
+});
+
+Deno.test('buildCoverVerifySystemPrompt: instructs disqualify-when-uncertain', () => {
+  const prompt = buildCoverVerifySystemPrompt();
+  assertEquals(prompt.includes('DISQUALIFY'), true);
+  assertEquals(prompt.toLowerCase().includes('uncertain'), true);
+});
+
+Deno.test('buildCoverVerifyUserText: labels candidates by index, never mentions memory ids', () => {
+  const text = buildCoverVerifyUserText(3);
+  assertEquals(text.includes('0'), true);
+  assertEquals(text.includes('index'), true);
+});
+
+Deno.test('buildCoverVerifyRequestBody: attaches one image per candidate, labeled by index -- never by memory id', () => {
+  const body = buildCoverVerifyRequestBody(
+    'system',
+    'user text',
+    [
+      { index: 0, base64: 'AAAA', contentType: 'image/jpeg' },
+      { index: 1, base64: 'BBBB', contentType: 'image/png' },
+    ],
+    'gpt-5.6-sol',
+  ) as { messages: Array<{ role: string; content: unknown }> };
+
+  const userMessage = body.messages.find((m) => m.role === 'user')!;
+  const content = userMessage.content as Array<Record<string, unknown>>;
+
+  // Only the leading text part plus one text label + one image_url per
+  // candidate -- 1 + 2*2 = 5 parts for 2 images.
+  assertEquals(content.length, 5);
+
+  const imageParts = content.filter((part) => part.type === 'image_url');
+  assertEquals(imageParts.length, 2);
+  assertEquals((imageParts[0].image_url as { url: string }).url, 'data:image/jpeg;base64,AAAA');
+  assertEquals((imageParts[1].image_url as { url: string }).url, 'data:image/png;base64,BBBB');
+
+  const wholeBodyText = JSON.stringify(body);
+  // Real memory ids (uuid-shaped) must never leak into the request -- the
+  // model only ever sees "Index 0"/"Index 1" labels.
+  assertEquals(wholeBodyText.includes('Index 0'), true);
+  assertEquals(wholeBodyText.includes('Index 1'), true);
+});
+
+Deno.test('buildCoverVerifyRequestBody: keeps model and json_object response_format, same convention as buildOutlineRequestBody', () => {
+  const body = buildCoverVerifyRequestBody('sys', 'user', [], 'gpt-5.6-sol') as {
+    model: string;
+    response_format: { type: string };
+  };
+  assertEquals(body.model, 'gpt-5.6-sol');
+  assertEquals(body.response_format, { type: 'json_object' });
+});
+
+Deno.test('parseCoverVerifyResponse: a valid, fully-covered verdict list parses in index order', () => {
+  const verdicts = parseCoverVerifyResponse(
+    {
+      verdicts: [
+        { index: 1, disqualified: true, reason_code: 'collage_or_multi_panel', reason_detail: 'visible seam down the middle' },
+        { index: 0, disqualified: false, reason_code: 'ok', reason_detail: 'clear single-frame photo' },
+      ],
+    },
+    2,
+  );
+  assertEquals(verdicts, [
+    { index: 0, disqualified: false, reasonCode: 'ok', reasonDetail: 'clear single-frame photo' },
+    { index: 1, disqualified: true, reasonCode: 'collage_or_multi_panel', reasonDetail: 'visible seam down the middle' },
+  ]);
+});
+
+Deno.test('parseCoverVerifyResponse: null on a non-object payload', () => {
+  assertEquals(parseCoverVerifyResponse(null, 1), null);
+  assertEquals(parseCoverVerifyResponse('not json', 1), null);
+  assertEquals(parseCoverVerifyResponse(42, 1), null);
+});
+
+Deno.test('parseCoverVerifyResponse: null when verdicts is missing or the wrong length', () => {
+  assertEquals(parseCoverVerifyResponse({}, 2), null);
+  assertEquals(
+    parseCoverVerifyResponse({ verdicts: [{ index: 0, disqualified: false, reason_code: 'ok', reason_detail: 'x' }] }, 2),
+    null,
+  );
+});
+
+Deno.test('parseCoverVerifyResponse: null on a duplicate or out-of-range index', () => {
+  const duplicate = { verdicts: [
+    { index: 0, disqualified: false, reason_code: 'ok', reason_detail: 'x' },
+    { index: 0, disqualified: true, reason_code: 'medical_setting', reason_detail: 'y' },
+  ] };
+  assertEquals(parseCoverVerifyResponse(duplicate, 2), null);
+
+  const outOfRange = { verdicts: [
+    { index: 0, disqualified: false, reason_code: 'ok', reason_detail: 'x' },
+    { index: 5, disqualified: false, reason_code: 'ok', reason_detail: 'y' },
+  ] };
+  assertEquals(parseCoverVerifyResponse(outOfRange, 2), null);
+});
+
+Deno.test('parseCoverVerifyResponse: null on a non-boolean disqualified or an unrecognized reason_code', () => {
+  assertEquals(
+    parseCoverVerifyResponse({ verdicts: [{ index: 0, disqualified: 'yes', reason_code: 'ok', reason_detail: 'x' }] }, 1),
+    null,
+  );
+  assertEquals(
+    parseCoverVerifyResponse({ verdicts: [{ index: 0, disqualified: true, reason_code: 'looks_bad', reason_detail: 'x' }] }, 1),
+    null,
+  );
+});
+
+Deno.test('parseCoverVerifyResponse: reason_detail is trimmed and length-capped', () => {
+  const verdicts = parseCoverVerifyResponse(
+    { verdicts: [{ index: 0, disqualified: false, reason_code: 'ok', reason_detail: `  ${'x'.repeat(300)}  ` }] },
+    1,
+  );
+  assertEquals(verdicts![0].reasonDetail.length, 200);
+  assertEquals(verdicts![0].reasonDetail.startsWith('x'), true);
+});
+
+Deno.test('applyCoverVerifyVerdicts: valid verdicts drop the right ids, best-first order preserved among survivors', () => {
+  const candidateIds = ['m1', 'm2', 'm3'];
+  const indexToId = new Map([[0, 'm1'], [1, 'm2'], [2, 'm3']]);
+  const verdicts: CoverVerifyVerdict[] = [
+    { index: 0, disqualified: false, reasonCode: 'ok', reasonDetail: 'fine' },
+    { index: 1, disqualified: true, reasonCode: 'photo_of_artwork_or_document', reasonDetail: 'framed painting on a table' },
+    { index: 2, disqualified: false, reasonCode: 'ok', reasonDetail: 'fine' },
+  ];
+  const result = applyCoverVerifyVerdicts(candidateIds, indexToId, verdicts);
+  assertEquals(result.coverCandidates, ['m1', 'm3']);
+  assertEquals(result.violations, [
+    { kind: 'cover_candidate_disqualified', detail: 'm2 (photo_of_artwork_or_document: framed painting on a table)' },
+  ]);
+});
+
+Deno.test('applyCoverVerifyVerdicts: an unparseable response (null verdicts) fails open -- keeps every candidate, records one cover_verify_unparseable violation', () => {
+  const candidateIds = ['m1', 'm2'];
+  const result = applyCoverVerifyVerdicts(candidateIds, new Map([[0, 'm1'], [1, 'm2']]), null);
+  assertEquals(result.coverCandidates, ['m1', 'm2']);
+  assertEquals(result.violations.length, 1);
+  assertEquals(result.violations[0].kind, 'cover_verify_unparseable');
+});
+
+Deno.test('applyCoverVerifyVerdicts: every candidate disqualified yields an empty list, one violation each', () => {
+  const candidateIds = ['m1', 'm2'];
+  const indexToId = new Map([[0, 'm1'], [1, 'm2']]);
+  const verdicts: CoverVerifyVerdict[] = [
+    { index: 0, disqualified: true, reasonCode: 'collage_or_multi_panel', reasonDetail: 'two panels, visible seam' },
+    { index: 1, disqualified: true, reasonCode: 'medical_setting', reasonDetail: 'hospital bassinet visible' },
+  ];
+  const result = applyCoverVerifyVerdicts(candidateIds, indexToId, verdicts);
+  assertEquals(result.coverCandidates, []);
+  assertEquals(result.violations.length, 2);
+  assertEquals(result.violations.every((v) => v.kind === 'cover_candidate_disqualified'), true);
+});
+
+Deno.test('applyCoverVerifyVerdicts: a candidate never sent to the judge (no index mapping) is unaffected by verdicts on other indices', () => {
+  // Models the real "no fetchable thumbnail" case in verifyCoverCandidates:
+  // candidateIds has 3 entries but only 2 were judged (index 0 -> m1, index
+  // 1 -> m3); m2 has no entry in indexToId and must survive untouched.
+  const candidateIds = ['m1', 'm2', 'm3'];
+  const indexToId = new Map([[0, 'm1'], [1, 'm3']]);
+  const verdicts: CoverVerifyVerdict[] = [
+    { index: 0, disqualified: false, reasonCode: 'ok', reasonDetail: 'fine' },
+    { index: 1, disqualified: true, reasonCode: 'not_child_photo', reasonDetail: 'face turned away' },
+  ];
+  const result = applyCoverVerifyVerdicts(candidateIds, indexToId, verdicts);
+  assertEquals(result.coverCandidates, ['m1', 'm2']);
+});
+
+// --- sumOpenAiUsage (owner request, 2026-09-01: the cost line covers both
+// the outline call and the cover-verify call) -----------------------------
+
+Deno.test('sumOpenAiUsage: adds prompt/completion tokens when both usages are present', () => {
+  const a: OpenAiUsage = { prompt_tokens: 100, completion_tokens: 20 };
+  const b: OpenAiUsage = { prompt_tokens: 50, completion_tokens: 10 };
+  assertEquals(sumOpenAiUsage(a, b), { prompt_tokens: 150, completion_tokens: 30 });
+});
+
+Deno.test('sumOpenAiUsage: either side null falls back to the other, unchanged', () => {
+  const a: OpenAiUsage = { prompt_tokens: 100, completion_tokens: 20 };
+  assertEquals(sumOpenAiUsage(a, null), a);
+  assertEquals(sumOpenAiUsage(null, a), a);
+});
+
+Deno.test('sumOpenAiUsage: both null is null', () => {
+  assertEquals(sumOpenAiUsage(null, null), null);
 });
 
 // --- Fitter-as-oracle (round-13): synthetic manifest/outline builders ----

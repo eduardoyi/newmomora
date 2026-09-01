@@ -51,7 +51,7 @@
  */
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { describeAgeAtDate, getAgeInYearsAtDate } from '../functions/_shared/age.ts';
-import { getObjectBytes } from '../functions/_shared/r2.ts';
+import { getObjectBytes, getObjectBytesBatch, type ObjectBytesBatchEntry } from '../functions/_shared/r2.ts';
 import { addYears, classifyChildOrAdult, toJulianDayNumber } from '../functions/_shared/date-context.ts';
 import { DATE_GATED_TOPIC_IDS, TOPICS } from '../functions/_shared/memory-topics.ts';
 import { getMilestoneById } from '../functions/_shared/memory-milestones.ts';
@@ -2748,7 +2748,7 @@ export function buildOutlineUserPrompt(
 
 // ── AI call ───────────────────────────────────────────────────────────────
 
-interface OpenAiUsage {
+export interface OpenAiUsage {
   prompt_tokens: number;
   completion_tokens: number;
 }
@@ -3351,6 +3351,373 @@ function previewJson(value: unknown): string {
   }
 }
 
+// ── Cover-candidate verification pass (owner decision, 2026-09-01: a
+// dedicated vision judge to catch what the embedded COVER CANDIDATES prompt
+// rules alone did not). `parseOutlineResponse`'s `coverCandidates` above are
+// nominated by the SAME text-only call that curates the rest of the outline
+// (see `buildOutlineRequestBody` -- no images are ever attached there), so
+// the model is judging the disqualification checklist BLIND, from topics/
+// labels/description text alone. Live finding across two real books: that
+// text-only judgment violated its own stated rules both times -- a photo OF
+// a framed painting ranked #1 for one book (an unmissable gilded frame in
+// the thumb), a two-panel collage with a visible seam ranked #1 for
+// another. "Adorable baby" bias beat the embedded rules; the prompt wording
+// was already at its ceiling. The fix is generate-then-verify: ONE
+// additional vision call, after the main call, whose ONLY job is that same
+// checklist, asked narrowly, against the REAL thumbnails, with nothing else
+// competing for the model's attention -- see `verifyCoverCandidates`, the
+// entry point called from `main()` right after `coverCandidates` is parsed
+// and found non-empty. ─────────────────────────────────────────────────────
+
+/** Fixed enum for `reason_code` -- the model must pick one of these, never
+ * invent a new one (see `parseCoverVerifyResponse`). `'ok'` is reserved for
+ * a non-disqualified verdict. */
+export type CoverVerifyReasonCode =
+  | 'ok'
+  | 'not_child_photo'
+  | 'medical_setting'
+  | 'photo_of_artwork_or_document'
+  | 'collage_or_multi_panel';
+
+const COVER_VERIFY_REASON_CODES: ReadonlySet<string> = new Set<CoverVerifyReasonCode>([
+  'ok',
+  'not_child_photo',
+  'medical_setting',
+  'photo_of_artwork_or_document',
+  'collage_or_multi_panel',
+]);
+
+export interface CoverVerifyVerdict {
+  /** Position in the image list SENT to the model -- never a memory id; the
+   * system prompt labels candidates by index only, and the index -> id
+   * mapping lives in code (`verifyCoverCandidates`'s `indexToId`), never
+   * handed to the model as an unearned shortcut. */
+  index: number;
+  disqualified: boolean;
+  reasonCode: CoverVerifyReasonCode;
+  /** Short free-text detail alongside the enum -- a plain description of
+   * what the judge saw, never trusted alone (the enum is what code branches
+   * on), and defensively length-capped. */
+  reasonDetail: string;
+}
+
+/**
+ * System prompt for the verify call -- ONLY the disqualification checklist,
+ * verbatim in spirit from the COVER CANDIDATES rules in
+ * `buildOutlineSystemPrompt` above, deliberately re-asked as its OWN
+ * narrower prompt (see the section comment above for why) rather than
+ * reusing the outline prompt verbatim.
+ */
+export function buildCoverVerifySystemPrompt(): string {
+  return [
+    "You are a strict safety judge for the COVER of a premium printed baby/family memory book -- the first thing anyone sees, with its own stricter bar than an ordinary page. You are shown a numbered list of candidate cover photos, labeled by INDEX ONLY. For EACH index, decide whether it is DISQUALIFIED, using ONLY these rules:",
+    '',
+    '(a) NOT an actual photograph that features the child WITH THEIR FACE VISIBLE -- not a video frame, not a screenshot, not one where the face is hidden, turned away, or out of frame.',
+    '(b) A MEDICAL OR HOSPITAL SETTING -- visible medical equipment, a procedure in progress, or an unclothed newborn in a clinical context -- even if the image is technically sharp and well-composed.',
+    '(c) A PHOTO OF A DRAWING, DOCUMENT, SCREEN, OR OTHER ARTWORK -- including a photo where the child appears only INSIDE framed or printed artwork (a photo of a framed painting or printed portrait OF the child is a photo of an object, not of the child).',
+    '(d) A COLLAGE, DIPTYCH, MULTI-PANEL, OR SIDE-BY-SIDE COMPOSITE -- any visible seam or panel boundary disqualifies the image no matter how good each panel is.',
+    '',
+    "When uncertain whether a rule applies, DISQUALIFY -- the fallback path is safe (the renderer has its own fallback cover selection), so a false disqualification costs nothing, while a false pass could print an unacceptable cover.",
+    '',
+    'Return STRICT JSON: {"verdicts": [{"index": <int>, "disqualified": <bool>, "reason_code": "<ok|not_child_photo|medical_setting|photo_of_artwork_or_document|collage_or_multi_panel>", "reason_detail": "<one short phrase, <=15 words, plain description of what you saw>"}, ...]} -- exactly one entry per index shown to you. Use "ok" only when disqualified is false. Never use a reason_code outside that fixed list.',
+  ].join('\n');
+}
+
+export function buildCoverVerifyUserText(candidateCount: number): string {
+  return `${candidateCount} numbered candidate cover photo(s) follow, index 0 through ${candidateCount - 1}, in that order. Judge each against the checklist in the system prompt and return your verdicts JSON -- one entry per index.`;
+}
+
+export interface CoverVerifyImageInput {
+  index: number;
+  base64: string;
+  contentType: 'image/jpeg' | 'image/png' | 'image/webp';
+}
+
+/**
+ * Request body for the verify call, as a plain object (exported for direct
+ * unit testing, same convention as `buildOutlineRequestBody`). Candidates
+ * are labeled by INDEX in the accompanying text/image sequence, never by
+ * memory id -- see `CoverVerifyVerdict.index`'s doc comment.
+ */
+export function buildCoverVerifyRequestBody(
+  systemPrompt: string,
+  userText: string,
+  images: CoverVerifyImageInput[],
+  model: string,
+): Record<string, unknown> {
+  const userContent: Array<Record<string, unknown>> = [{ type: 'text', text: userText }];
+  for (const image of images) {
+    userContent.push({ type: 'text', text: `Index ${image.index}:` });
+    userContent.push({
+      type: 'image_url',
+      image_url: { url: `data:${image.contentType};base64,${image.base64}`, detail: 'high' },
+    });
+  }
+  return {
+    model,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent },
+    ],
+  };
+}
+
+async function callOpenAiCoverVerify(
+  systemPrompt: string,
+  userText: string,
+  images: CoverVerifyImageInput[],
+  model: string,
+  apiKey: string,
+): Promise<OpenAiChatResult> {
+  const body = JSON.stringify(buildCoverVerifyRequestBody(systemPrompt, userText, images, model));
+
+  const attempt = () =>
+    fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body,
+    });
+
+  let response = await attempt();
+  if (!response.ok && (response.status === 429 || response.status >= 500)) {
+    await delay(RETRY_BACKOFF_MS);
+    response = await attempt();
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    throw new Error(`OpenAI chat failed (${response.status}): ${errorText.slice(0, 300)}`);
+  }
+
+  const payload = await response.json();
+  const content = payload.choices?.[0]?.message?.content;
+  if (!content || typeof content !== 'string') {
+    throw new Error('OpenAI chat returned empty content');
+  }
+
+  const usage = payload.usage
+    ? { prompt_tokens: payload.usage.prompt_tokens ?? 0, completion_tokens: payload.usage.completion_tokens ?? 0 }
+    : null;
+
+  return { content, usage };
+}
+
+/**
+ * Defensive parse of the verify call's raw JSON (never trust the model,
+ * same posture as `parseOutlineResponse`) -- but WHOLE-RESPONSE fail-open,
+ * not per-field: any structural problem (not an object, `verdicts` missing
+ * or the wrong length, a duplicate or out-of-range `index`, a non-boolean
+ * `disqualified`, an unrecognized `reason_code`, a non-string
+ * `reason_detail`) discards the ENTIRE response rather than trusting a
+ * partially-sane parse. The caller's contract for `null` is "keep ALL
+ * candidates" -- partial trust here would risk dropping a real candidate on
+ * the strength of a verdict that was itself malformed.
+ */
+export function parseCoverVerifyResponse(raw: unknown, candidateCount: number): CoverVerifyVerdict[] | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const rawList = (raw as Record<string, unknown>).verdicts;
+  if (!Array.isArray(rawList) || rawList.length !== candidateCount) return null;
+
+  const byIndex = new Map<number, CoverVerifyVerdict>();
+  for (const item of rawList) {
+    if (!item || typeof item !== 'object') return null;
+    const entry = item as Record<string, unknown>;
+    const index = entry.index;
+    const disqualified = entry.disqualified;
+    const reasonCode = entry.reason_code;
+    const reasonDetail = entry.reason_detail;
+
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= candidateCount) return null;
+    if (byIndex.has(index)) return null;
+    if (typeof disqualified !== 'boolean') return null;
+    if (typeof reasonCode !== 'string' || !COVER_VERIFY_REASON_CODES.has(reasonCode)) return null;
+    if (typeof reasonDetail !== 'string') return null;
+
+    byIndex.set(index, {
+      index,
+      disqualified,
+      reasonCode: reasonCode as CoverVerifyReasonCode,
+      reasonDetail: reasonDetail.trim().slice(0, 200),
+    });
+  }
+  if (byIndex.size !== candidateCount) return null;
+  return [...byIndex.values()].sort((a, b) => a.index - b.index);
+}
+
+/**
+ * Pure "apply the verdicts" step, factored out of `verifyCoverCandidates`
+ * so both its own callers AND unit tests can exercise this decision in
+ * isolation, without any network/R2 plumbing:
+ * - `verdicts === null` (the verify call failed, or its response was
+ *   unparseable) FAILS OPEN -- every original candidate is kept, in its
+ *   original order, and a single `cover_verify_unparseable` violation is
+ *   recorded.
+ * - Otherwise, every disqualified verdict's candidate is dropped (best-
+ *   first order preserved among the survivors) and recorded as its own
+ *   `cover_candidate_disqualified` violation with the id + reason. When
+ *   every candidate is disqualified, the result is `[]` -- by design, the
+ *   renderer's own legacy/fallback cover selection handles that case (see
+ *   the COVER CANDIDATES prompt rule: "never nominate a disqualified image
+ *   just to avoid an empty list").
+ */
+export function applyCoverVerifyVerdicts(
+  candidateIds: string[],
+  indexToId: Map<number, string>,
+  verdicts: CoverVerifyVerdict[] | null,
+): { coverCandidates: string[]; violations: OutlineIntegrityViolation[] } {
+  const violations: OutlineIntegrityViolation[] = [];
+  if (!verdicts) {
+    violations.push({
+      kind: 'cover_verify_unparseable',
+      detail: `verify response did not parse for ${indexToId.size} judged candidate(s) of ${candidateIds.length} nominated; kept all`,
+    });
+    return { coverCandidates: candidateIds, violations };
+  }
+
+  const disqualifiedIds = new Set<string>();
+  for (const verdict of verdicts) {
+    if (!verdict.disqualified) continue;
+    const id = indexToId.get(verdict.index);
+    if (!id) continue; // defensive -- parseCoverVerifyResponse already bounds index to [0, indexToId.size), so unreachable in practice.
+    disqualifiedIds.add(id);
+    violations.push({
+      kind: 'cover_candidate_disqualified',
+      detail: `${id} (${verdict.reasonCode}: ${verdict.reasonDetail})`,
+    });
+  }
+
+  return { coverCandidates: candidateIds.filter((id) => !disqualifiedIds.has(id)), violations };
+}
+
+async function bytesToBase64(bytes: Uint8Array): Promise<string> {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function contentTypeFromObjectKey(objectKey: string): 'image/jpeg' | 'image/png' | 'image/webp' {
+  if (objectKey.endsWith('.png')) return 'image/png';
+  if (objectKey.endsWith('.webp')) return 'image/webp';
+  return 'image/jpeg';
+}
+
+export interface CoverVerifyResult {
+  /** `coverCandidates` after dropping any disqualified id, best-first order
+   * preserved. */
+  coverCandidates: string[];
+  violations: OutlineIntegrityViolation[];
+  usage: OpenAiUsage | null;
+}
+
+/**
+ * Runs the cover-candidate verify pass (see the section comment above):
+ * fetches each candidate's real preview thumbnail, sends them to a
+ * dedicated vision judge against ONLY the disqualification checklist, and
+ * drops whichever the judge disqualifies -- preserving the model's original
+ * best-first order. Every failure mode this function can hit -- a candidate
+ * with no fetchable thumbnail, a network/HTTP failure, an unparseable
+ * response -- FAILS OPEN (keeps every candidate it could not judge) rather
+ * than dropping anything on uncertainty: the renderer's own fallback cover
+ * selection is the safe path, so a failed verify pass should never turn
+ * into a hard stop for the whole outline run.
+ */
+export async function verifyCoverCandidates(
+  candidateIds: string[],
+  features: Map<string, MemoryFeature>,
+  model: string,
+  apiKey: string,
+  thumbsDir: URL,
+): Promise<CoverVerifyResult> {
+  const violations: OutlineIntegrityViolation[] = [];
+  if (candidateIds.length === 0) {
+    return { coverCandidates: candidateIds, violations, usage: null };
+  }
+
+  const previewKeyById = new Map<string, string>();
+  for (const id of candidateIds) {
+    const previewKey = features.get(id)?.previewKey;
+    if (previewKey) previewKeyById.set(id, previewKey);
+  }
+
+  const uniqueKeys = [...new Set(previewKeyById.values())];
+  const bytesByKey: Map<string, ObjectBytesBatchEntry> =
+    uniqueKeys.length > 0 ? await getObjectBytesBatch(uniqueKeys) : new Map();
+
+  await Deno.mkdir(thumbsDir, { recursive: true });
+
+  const images: CoverVerifyImageInput[] = [];
+  const indexToId = new Map<number, string>();
+  for (const id of candidateIds) {
+    const previewKey = previewKeyById.get(id);
+    const entry = previewKey ? bytesByKey.get(previewKey) : undefined;
+    if (!previewKey || !entry || !entry.ok || !entry.bytes) {
+      violations.push({ kind: 'cover_verify_thumb_unavailable', detail: id });
+      continue;
+    }
+    const contentType = contentTypeFromObjectKey(previewKey);
+    const ext = contentType === 'image/png' ? 'png' : contentType === 'image/webp' ? 'webp' : 'jpg';
+    try {
+      await Deno.writeFile(new URL(`${id}.${ext}`, thumbsDir), entry.bytes);
+    } catch {
+      // Best-effort review artifact only -- never blocks the judgment call.
+    }
+    const index = images.length;
+    indexToId.set(index, id);
+    images.push({ index, base64: await bytesToBase64(entry.bytes), contentType });
+  }
+
+  if (images.length === 0) {
+    violations.push({
+      kind: 'cover_verify_unparseable',
+      detail: `0 of ${candidateIds.length} candidate(s) had a fetchable thumbnail; kept all`,
+    });
+    return { coverCandidates: candidateIds, violations, usage: null };
+  }
+
+  const systemPrompt = buildCoverVerifySystemPrompt();
+  const userText = buildCoverVerifyUserText(images.length);
+
+  let content: string;
+  let usage: OpenAiUsage | null;
+  try {
+    ({ content, usage } = await callOpenAiCoverVerify(systemPrompt, userText, images, model, apiKey));
+  } catch (error) {
+    violations.push({
+      kind: 'cover_verify_unparseable',
+      detail: `verify call failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return { coverCandidates: candidateIds, violations, usage: null };
+  }
+
+  let rawParsed: unknown;
+  try {
+    rawParsed = JSON.parse(content);
+  } catch {
+    const applied = applyCoverVerifyVerdicts(candidateIds, indexToId, null);
+    violations.push(...applied.violations);
+    return { coverCandidates: applied.coverCandidates, violations, usage };
+  }
+
+  const verdicts = parseCoverVerifyResponse(rawParsed, images.length);
+  const applied = applyCoverVerifyVerdicts(candidateIds, indexToId, verdicts);
+  violations.push(...applied.violations);
+  return { coverCandidates: applied.coverCandidates, violations, usage };
+}
+
+/** Sums two OpenAI usage reports (owner request, 2026-08-31/09-01: the
+ * run's cost line covers every call the run makes, not just the first --
+ * see the `usage` combination in `main()`). Either side may be `null`
+ * (a call that was never made, or fetched no usage back). */
+export function sumOpenAiUsage(a: OpenAiUsage | null, b: OpenAiUsage | null): OpenAiUsage | null {
+  if (!a) return b;
+  if (!b) return a;
+  return { prompt_tokens: a.prompt_tokens + b.prompt_tokens, completion_tokens: a.completion_tokens + b.completion_tokens };
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -3644,7 +4011,7 @@ async function main(): Promise<void> {
     features,
   );
 
-  const { content, usage } = await callOpenAiOutline(systemPrompt, userPrompt, options.model, apiKey!);
+  const { content, usage: outlineUsage } = await callOpenAiOutline(systemPrompt, userPrompt, options.model, apiKey!);
   const rawParsed = JSON.parse(content);
   const validMemoryIds = new Set(features.keys());
   // owner root-cause fix, 2026-08-27: panorama candidates must be `wide` --
@@ -3687,12 +4054,37 @@ async function main(): Promise<void> {
     ),
   );
 
+  // ── Cover-candidate verification pass (owner decision, 2026-09-01) ─────
+  // `response.coverCandidates` above was nominated BLIND by the same
+  // text-only call -- this is the first point in the pipeline that shows a
+  // dedicated judge the real thumbnails against ONLY the disqualification
+  // checklist. See `verifyCoverCandidates`'s doc comment for the two real
+  // books whose text-only nominations violated their own stated rules.
+  let coverVerifyUsage: OpenAiUsage | null = null;
+  if (response.coverCandidates.length > 0) {
+    const nominatedCount = response.coverCandidates.length;
+    const verifyResult = await verifyCoverCandidates(
+      response.coverCandidates,
+      features,
+      options.model,
+      apiKey!,
+      new URL('thumbs/', outputDir),
+    );
+    response.coverCandidates = verifyResult.coverCandidates;
+    violations.push(...verifyResult.violations);
+    coverVerifyUsage = verifyResult.usage;
+    console.log(
+      `Cover verify: ${nominatedCount} nominated candidate(s) judged; ${response.coverCandidates.length} survive (dropped ${nominatedCount - response.coverCandidates.length} -- see outline.md's Integrity notes for ids + reasons).`,
+    );
+  }
+
+  const usage = sumOpenAiUsage(outlineUsage, coverVerifyUsage);
   if (usage) {
     const price = PRICE_USD_PER_MTOK[options.model];
     const costLine = price
       ? ` -- est. cost $${((usage.prompt_tokens * price.input + usage.completion_tokens * price.output) / 1_000_000).toFixed(4)} (${options.model} @ $${price.input}/$${price.output} per MTok)`
       : ` -- no price on file for model ${options.model}; update PRICE_USD_PER_MTOK for a cost line`;
-    console.log(`Token usage: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}${costLine}`);
+    console.log(`Token usage: prompt=${usage.prompt_tokens}, completion=${usage.completion_tokens}${costLine} (outline + cover-verify combined)`);
   }
   if (violations.length > 0) {
     console.log(`Integrity violations from the model's response: ${violations.length} (see outline.md).`);
