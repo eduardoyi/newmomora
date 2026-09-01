@@ -433,6 +433,12 @@ verify_jwt = false
 [functions.workflow-gallery-import-bridge]
 verify_jwt = false
 
+# The memory-book bridge has the same raw-body HMAC boundary as the other
+# workflow bridges (V5a canary finding: without this the gateway rejects the
+# worker before the bridge's own fail-closed HMAC check ever runs).
+[functions.workflow-memory-book-bridge]
+verify_jwt = false
+
 [functions.cleanup-gallery-imports]
 verify_jwt = false
 
