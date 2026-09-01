@@ -842,8 +842,12 @@ Sequenced as three independently shippable slices:
     3.1.5(a) requires non-IAP payment; Google Play Billing scopes to
     digital goods). Keep the flow physical-only; a digital add-on (e.g.
     paid media-hosting extension) would change this analysis.
-  - Open: whether preview generation is free for all subscribers (as the
-    in-app upsell surface) or gated.
+  - Preview is FREE for subscribers (decided 2026-08-31): marginal cost is
+    ~$0.25/book (the outline LLM call — measured across five real runs at
+    $0.17–$0.33; tagging is sunk at memory creation, layout is
+    deterministic code, R2 egress is $0, and editor edits never re-run
+    curation so editing costs $0.00). Guard: cap full REGENERATIONS —
+    re-outline only when the scope's memories changed.
 
 ## 10. Open questions
 
