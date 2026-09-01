@@ -1,0 +1,57 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "momora-memory-book-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-memory-book-bridge"
+  },
+  "secrets": {
+    "required": [
+      "DISPATCH_SIGNING_SECRET",
+      "SUPABASE_BRIDGE_HMAC_SECRET",
+      "OPENAI_API_KEY"
+    ]
+  },
+  "r2_buckets": [
+    // Same physical bucket as every other Worker in this repo (see
+    // supabase/AGENTS.md "R2 storage" -- one private momora-prod bucket,
+    // object keys distinguish content, not bucket names). This binding is
+    // read-only in practice: the Workflow only HEADs/GETs EXISTING
+    // memory_media.preview_object_key objects for the cover-verify vision
+    // pass -- V5a never downloads for the manifest itself (asset entries
+    // just reference the existing key as a string) and never writes/PUTs
+    // to R2 at all.
+    { "binding": "MEMORY_BOOK_PREVIEWS", "bucket_name": "momora-prod" }
+  ],
+  "workflows": [
+    { "binding": "MEMORY_BOOK_WORKFLOW", "name": "momora-memory-book", "class_name": "MemoryBookWorkflow" }
+  ],
+  "env": {
+    "staging": {
+      "name": "momora-memory-book-worker-staging",
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/workflow-memory-book-bridge"
+      },
+      "secrets": {
+        "required": [
+          "DISPATCH_SIGNING_SECRET",
+          "SUPABASE_BRIDGE_HMAC_SECRET",
+          "OPENAI_API_KEY"
+        ]
+      },
+      "r2_buckets": [
+        { "binding": "MEMORY_BOOK_PREVIEWS", "bucket_name": "REPLACE_WITH_STAGING_MEMORY_ILLUSTRATIONS_BUCKET" }
+      ],
+      "workflows": [
+        { "binding": "MEMORY_BOOK_WORKFLOW", "name": "momora-memory-book-staging", "class_name": "MemoryBookWorkflow" }
+      ]
+    }
+  }
+}

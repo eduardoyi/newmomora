@@ -2514,6 +2514,97 @@ definite failure calls `fail_gallery_cluster` for that cluster and continues
 with the rest of the chunk; only a whole-chunk-level input failure calls
 `fail_gallery_chunk`.
 
+### 4.22 Memory Book generation (V5a "part C")
+
+Durable generation pipeline for `memory_books` (§2.1d), following the same
+Supabase-authorizes/Cloudflare-executes/publication-is-a-CAS shape as
+`generate-illustration`/`workflow-illustration-bridge` (see
+[docs/durable-ai-generation-workflows.md](./durable-ai-generation-workflows.md)).
+See [docs/features/memory-book-generation.md](./features/memory-book-generation.md)
+for the full contract and rationale.
+
+**`generate-memory-book`** — dispatcher, `verify_jwt = true`.
+
+*Request:* `{ memoryBookId: uuid }`. *Authorization:* caller must be
+owner/manager of the row's family (same role bar as the table's own insert
+policy). *Logic:* loads the row via the service-role client (RLS is
+irrelevant here — authorization is re-checked in code, mirroring
+`generate-portrait-illustration`'s pattern); `ready` short-circuits to `200`;
+a `generating` row with a fresh lease (`generation_started_at` within
+`MEMORY_BOOK_LEASE_MS` + `MEMORY_BOOK_RECOVERY_GRACE_MS`, currently a
+provisional 8:00 + 0:30 — not yet measured against a real production run,
+see that constant's own doc comment) re-dispatches the SAME
+`workflow_instance_id` idempotently; `queued`/`failed`/a stale `generating`
+row claims a freshly minted UUID as both `workflow_instance_id` and
+`generation_attempt_id` via a single service-role
+`UPDATE memory_books SET status = 'generating', ... WHERE id = $1 AND status
+= $2` (a stale-`generating` reclaim additionally pins
+`generation_started_at` in the `WHERE` to prevent two concurrent
+stale-recovery claims), then HMAC-dispatches `{ bookId, attemptId }` to the
+Worker's `/dispatch`. *Response:* `{ success: true, status: 'ready' }` or
+`{ success: true, status: 'generating', queued: true, attemptId }`.
+*Deviation from the illustration/portrait precedent:* no
+`claim_memory_illustration_workflow_generation`-style RPC — this task's
+scope excluded schema changes, so the CAS is a plain service-role `UPDATE
+... WHERE`, which Postgres already evaluates atomically against the
+row's live state at write time (not the value the dispatcher read earlier),
+making it a complete compare-and-set with no stored procedure required.
+
+**`workflow-memory-book-bridge`** — signed bridge, `verify_jwt = false`,
+Worker-only. Verifies a timestamped raw-body HMAC (`x-workflow-timestamp` /
+`-nonce` / `-signature`, 5-minute window) before parsing, then dispatches
+`load_generation_context`, `ensure_share_tokens`, `publish`, `fail`, and
+`reconcile`. *Deviation:* no nonce-replay ledger table (again, no schema
+changes in scope) — every mutating operation is already a compare-and-set
+(`publish`/`fail` key on `generation_attempt_id` + `status = 'generating'`)
+or naturally idempotent (`ensure_share_tokens`' select-then-insert-if-absent
+against `media_share_tokens`), so a replay inside the timestamp window can
+only repeat a no-op. `load_generation_context` re-verifies the book is still
+`generating` with a matching `generation_attempt_id` before returning
+anything (cheap bail-out for a superseded attempt, before any OpenAI call),
+resolves the scope window (frozen `scope_start_date`/`scope_end_date` for
+every kind but `everything`, which resolves to the family's actual
+min/max `memory_date` instead), and returns every raw row the Workflow
+needs (memories, media, tags, milestones, engagement counts, family
+members, portrait versions, plus a sparse-window language-evidence caption
+sample).
+
+**`cloudflare/memory-book-worker`** — same repo pattern as
+`memory-illustration-worker` (own `wrangler.jsonc`/`package.json`, Node 22,
+`@cloudflare/vitest-pool-workers`), a single `MemoryBookWorkflow`. Event
+payload is `{ bookId, attemptId }` only (no memory/child content). Steps:
+(1) load generation context via the bridge; (2) curate the outline —
+eligibility, per-memory `MemoryFeature`s, topic/people-pair/emotion
+candidate generation, chronological backbone segmentation with birth/
+birthday special-title flagging, the shared outline LLM call
+(`gpt-5.6-sol`) and parser, single-placement + undersized-spread dissolve,
+and the final reading order — all ported from
+`supabase/scripts/eval-memory-book-outline.ts`'s pure functions (same
+thresholds/tie-breaks; the CLI itself is untouched); (3) cover-candidate
+vision verification via the shared judge, reading thumbnails directly off
+the `MEMORY_BOOK_PREVIEWS` R2 binding (same physical `momora-prod` bucket);
+(4) mint share tokens for QR-needing memories, assemble
+`book_document = { outline, manifest }` (an outline.json-shaped document
+per the eval CLI's own contract, plus a `BookManifest` built via the shared
+`_shared/memory-book-manifest.ts` builders whose asset entries reference
+EXISTING `memory_media.preview_object_key`/`object_key` values — no
+downloads, no resizing, and therefore no measured pixel `width`/`height`/
+`originalWidth`/`originalHeight`; see `manifest.ts`'s header comment), and
+publish via the bridge's CAS. A lost/ambiguous publish reconciles rather
+than re-running the outline. Failure records a closed `failure_reason` code
+(`CONTEXT_LOAD_FAILED`, `NO_ELIGIBLE_MEMORIES`, `OUTLINE_GENERATION_FAILED`,
+`MANIFEST_BUILD_FAILED`, `UNKNOWN_ERROR`) — never the raw error message.
+*Documented V5a simplification:* the eval CLI's own page-budget-aware
+themed-spread admission pass (`admitThemedSpreads`, driven by a
+`book-renderer` `fitBook` page-count oracle) and seasonal re-pacing pass are
+NOT ported — that file's own round-14 decision record states "fitting
+[selections] to a physical page count is the renderer's job alone, at
+render time," which is exactly what `book-renderer`'s fitter already does
+downstream (out of scope here: no web preview/print rendering). Every
+themed spread surviving the minimum-size (3) dissolve is admitted, anchored
+at the AI's own `insert_after_segment_index`, with only the (cheap,
+already-ported) adjacency-spacing pass applied.
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)

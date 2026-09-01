@@ -1,8 +1,9 @@
 # Feature: Memory Book generation (V5a)
 
-**Status:** `in-progress` — schema + RLS contract shipped (this doc); durable
-Cloudflare Workflow, web preview, and checkout are separate, not-yet-built
-slices (5b/5c).
+**Status:** `in-progress` — schema + RLS contract (part A/B) and the durable
+generation pipeline (part C: dispatcher + Workflow, this doc's API section)
+are shipped; the in-app scope picker, web preview, and checkout are separate,
+not-yet-built slices (5b UI / 5c).
 **Last updated:** 2026-09-01
 **PRD reference:** none yet (Memory Book is a new premium product, not in the
 original PRD) — canonical product doc is
@@ -12,12 +13,17 @@ original PRD) — canonical product doc is
 ## Overview
 
 A Memory Book is a parent-initiated request to turn a chosen time period of a
-family's memories into a premium AI-curated, AI-laid-out hardcover book. This
-slice (V5a) ships only the durable **schema and status contract**: the
+family's memories into a premium AI-curated, AI-laid-out hardcover book. V5a
+ships in parts: part A/B is the durable **schema and status contract** — the
 `memory_books` table, its status machine, and the RLS boundary that lets the
 app insert a request while keeping every generation transition service-role
-only. It intentionally does **not** ship the worker that actually curates and
-lays out a book, the web preview, or checkout — those are 5b/5c, tracked
+only. Part C (this doc's [API section](#api--edge-functions)) is the durable
+**generation pipeline** itself: a Supabase dispatcher, a Cloudflare Workflow
+that curates the outline and assembles `book_document`, and a signed bridge
+between them — following
+[docs/durable-ai-generation-workflows.md](../durable-ai-generation-workflows.md)'s
+established pattern. It intentionally does **not** ship the in-app scope
+picker UI, the web preview, or checkout — those are 5b (UI)/5c, tracked
 separately in the plan.
 
 Generation reuses the pattern documented in
@@ -29,23 +35,33 @@ status — it never writes it.
 
 ## User-facing behavior
 
-Not yet built (5b). This slice has no UI. The eventual flow (per the plan):
-the app's in-app scope picker (who/when) creates the `memory_books` row and
-hands the family off to `book.usemomora.com/b/<id>` via a one-time signed
-link; the web app polls `status` and renders the preview once `ready`.
+The in-app scope picker UI is not yet built (5b). This slice has no UI, but
+the pipeline it triggers is real and running end to end: given a `queued`
+row, `generate-memory-book` dispatches a Cloudflare Workflow that curates and
+publishes a complete `book_document`. The eventual flow (per the plan): the
+app's in-app scope picker (who/when) creates the `memory_books` row, calls
+`generate-memory-book`, and hands the family off to
+`book.usemomora.com/b/<id>` via a one-time signed link; the web app polls
+`status` and renders the preview once `ready`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  A[App scope picker] -->|insert queued row| M[(memory_books)]
-  W["Cloudflare Workflow (5b, not yet built)"] -->|dispatch, claims workflow_instance_id| M
-  W -->|curate + layout| M
-  M -->|status poll| B[book.usemomora.com preview]
+  A[App scope picker -- 5b, not yet built] -->|insert queued row| M[(memory_books)]
+  A -->|POST memoryBookId| D[generate-memory-book]
+  D -->|CAS to generating, HMAC dispatch| M
+  D -->|"{ bookId, attemptId }"| W[Cloudflare MemoryBookWorkflow]
+  W -->|signed HMAC ops| BR[workflow-memory-book-bridge]
+  BR --> M
+  W -->|outline + cover-verify calls| AI[OpenAI]
+  W -->|read existing preview thumbnails| R2[(R2: momora-prod)]
+  M -->|status poll -- 5b, not yet built| B[book.usemomora.com preview]
 ```
 
-Only the left-hand edge (`App scope picker → memory_books`) exists today.
-The worker, its dispatcher/bridge, and the web preview are 5b.
+The scope-picker UI and the web preview are still 5b. Everything else in the
+diagram — the dispatcher, the Workflow, the bridge, and their CAS discipline
+on `memory_books` — is shipped (part C).
 
 ## Data model
 
@@ -65,18 +81,23 @@ queued → generating → ready
 | Status | Meaning | Who sets it |
 |---|---|---|
 | `queued` | App has requested a book; no generation attempt exists yet. | App (insert only — this is the only status a client insert may claim). |
-| `generating` | A Workflow instance is running. `workflow_instance_id`, `generation_attempt_id`, `generation_started_at` are set. | Service-role dispatcher (5b). |
-| `ready` | `book_document` is populated; `generation_completed_at` set. | Service-role publish RPC (5b), via compare-and-set on `generation_attempt_id` — mirrors the illustration workflow's "publication is a database compare-and-set" invariant so a stale/superseded attempt can never publish over a newer one. |
-| `failed` | `failure_reason` populated. | Service-role fail RPC (5b). |
+| `generating` | A Workflow instance is running. `workflow_instance_id`, `generation_attempt_id`, `generation_started_at` are set. | `generate-memory-book`'s service-role CAS (`UPDATE ... WHERE id = $1 AND status = $2`, no RPC — see [API & Edge Functions](#api--edge-functions) for why). |
+| `ready` | `book_document` is populated; `generation_completed_at` set. | `workflow-memory-book-bridge`'s `publish` operation, via a service-role compare-and-set on `generation_attempt_id` + `status = 'generating'` — mirrors the illustration workflow's "publication is a database compare-and-set" invariant so a stale/superseded attempt can never publish over a newer one. |
+| `failed` | `failure_reason` populated. | `workflow-memory-book-bridge`'s `fail` operation, same CAS discipline. |
 
 `generation_started_at` is a **dedicated recovery clock**, not
-`created_at`/`updated_at` — an unrelated future write (e.g. a book-title
-edit in 5b) must not extend or shorten a generation lease, exactly as
+`created_at`/`updated_at` — an unrelated future write (e.g. a future
+book-title edit) must not extend or shorten a generation lease, exactly as
 `memories.illustration_generation_started_at` does today. The playbook's
-recovery-threshold table does not transfer as-is: 5b must measure this
-pipeline's own provider/publication budget before picking a lease value
-(the playbook explicitly warns against copying the illustration lease
-"without measuring that pipeline").
+recovery-threshold table does not transfer as-is: this pipeline currently
+uses a provisional 8:00 lease + 0:30 recovery grace
+(`MEMORY_BOOK_LEASE_MS`/`MEMORY_BOOK_RECOVERY_GRACE_MS` in
+`generate-memory-book/index.ts`) — shorter than the illustration pipeline's
+5:30 since there is no image generation here, but NOT YET measured against
+a real production run (no E2E run has completed in this environment; see
+this change's implementation report). Revisit once one has — the playbook
+explicitly warns against copying another pipeline's lease "without
+measuring that pipeline."
 
 ### Scope
 
@@ -108,7 +129,12 @@ can't silently change what an in-flight book covers.
   non-bypassing role, and the missing table-level grant blocks it a second,
   independent way even if a future migration accidentally added a
   permissive policy. Every status transition and the `book_document` write
-  must go through a service-role RPC that 5b owns.
+  goes through the service-role dispatcher/bridge (part C) — as plain
+  service-role `UPDATE ... WHERE id = $1 AND status = $2`/`... AND
+  generation_attempt_id = $2` statements, not a Postgres RPC function (a
+  deliberate scope decision for this table specifically — see the [API &
+  Edge Functions](#api--edge-functions) section's deviation note; service
+  role bypasses RLS entirely regardless).
 
 ### Constraints worth knowing when extending this table
 
@@ -129,29 +155,42 @@ can't silently change what an in-flight book covers.
   any number of books over time; scopes may overlap" (§4).
 - **Deliberately no constraint ties `status` to the nullability of
   `workflow_instance_id`/`generation_attempt_id`/`generation_started_at`**
-  beyond what's listed above. 5b owns retry semantics (e.g. whether a
-  retry after `failed` reuses or replaces the last known
-  `workflow_instance_id` for idempotent-dispatch detection) and should not
-  be constrained by a guess made in this schema-only slice.
+  beyond what's listed above. Part C's retry semantics: a retry after
+  `failed` (or a stale `generating` reclaim) always mints a FRESH UUID for
+  both `workflow_instance_id` and `generation_attempt_id` — it never reuses
+  the previous attempt's value (Cloudflare Workflow instance ids are
+  effectively one-shot: a terminal instance can't be meaningfully
+  restarted under its old id). Only a still-fresh `generating` row's
+  redispatch reuses the existing `workflow_instance_id`, and that's a
+  true idempotent retry of the SAME in-flight attempt, not a new one.
 
 ## API & Edge Functions
 
-None yet. 5b adds the dispatcher (creates the Workflow, claims
-`workflow_instance_id`/`generation_attempt_id`), the Workflow itself, and a
-signed bridge + publish/fail RPCs (see
-[docs/durable-ai-generation-workflows.md](../durable-ai-generation-workflows.md)
-for the reference shape to follow — HMAC bridge, event contains only the row
-id, image/content bytes never cross a Workflow step boundary, etc.). Update
-this section and TECH_SPEC §4 in the same change that ships them.
+Shipped (part C):
+
+| Function | Role |
+|---|---|
+| `generate-memory-book` | Dispatcher, `verify_jwt = true`. JWT + owner/manager role check, `ready`/fresh-`generating` short-circuits, service-role CAS claim to `generating` with a fresh attempt UUID, HMAC dispatch of `{ bookId, attemptId }` to the Worker's `/dispatch`. |
+| `workflow-memory-book-bridge` | Signed HMAC bridge, `verify_jwt = false`, Worker-only. Operations: `load_generation_context`, `ensure_share_tokens`, `publish`, `fail`, `reconcile`. |
+| `cloudflare/memory-book-worker` (`MemoryBookWorkflow`) | Own Wrangler deployment (own `wrangler.jsonc`/`package.json`, Node 22), sibling to `memory-illustration-worker`. Curates the outline (ported from `supabase/scripts/eval-memory-book-outline.ts`'s pure functions + the shared `_shared/memory-book-outline.ts` builders/parser), runs the shared cover-verify vision pass against R2 preview thumbnails, assembles `book_document` via `_shared/memory-book-manifest.ts`'s builders, and publishes through the bridge's CAS. |
+
+Full request/response contracts, the Workflow's step sequence, and two
+deliberate documented deviations from the illustration/portrait bridge
+precedent (no publish/fail RPC, no nonce-replay ledger table — both because
+this task's scope excluded schema changes) are in
+[TECH_SPEC §4.22](../TECH_SPEC.md#422-memory-book-generation-v5a-part-c).
+See [docs/durable-ai-generation-workflows.md](../durable-ai-generation-workflows.md)
+for the general pattern this follows.
 
 ## Client integration
 
-Not yet built. 5b adds the in-app scope picker (reads
-`family_members.date_of_birth` to resolve `age_year` windows, computes
-`page_budget` from a printable-memory count in the chosen scope, inserts the
-`memory_books` row) and the `book.usemomora.com` Next.js package that polls
-`status` and renders `book_document` through the shared `book-renderer`
-components (single-renderer rule — plan §3).
+The in-app scope picker is not yet built (5b UI). It will: read
+`family_members.date_of_birth` to resolve `age_year` windows, compute
+`page_budget` from a printable-memory count in the chosen scope, insert the
+`memory_books` row, then call `generate-memory-book({ memoryBookId })` and
+poll `status`. The `book.usemomora.com` Next.js package (also 5b) will poll
+`status` and render `book_document` through the shared `book-renderer`
+components (single-renderer rule — plan §3) once `ready`.
 
 ### How to invoke from another feature
 
@@ -164,8 +203,10 @@ components (single-renderer rule — plan §3).
    `page_budget` (18–122). Leave `status` at its `queued` default and every
    generation-identity/`book_document` field unset — the RLS with-check
    rejects anything else.
-3. Poll `status` (and, once 5b ships, hand off to the worker's own
-   recovery/retry entry points — do not write `status` from the client).
+3. Call `generate-memory-book({ memoryBookId })` to dispatch generation, then
+   poll `status` (once 5b's UI ships, hand off to its own recovery/retry
+   entry points — do not write `status` from the client; a retry after
+   `failed` is just calling `generate-memory-book` again with the same id).
 
 ## Extension guide
 
@@ -201,12 +242,29 @@ components (single-renderer rule — plan §3).
 
 **Common extension patterns**
 
-- Worker/dispatcher (5b) → new migration for the publish/fail RPCs +
-  bridge nonce table, following
-  `20260721120000_memory_illustration_workflow_jobs.sql`'s shape; update
-  TECH_SPEC §4 and this doc's API section.
-- Web preview (5b) → new `book.usemomora.com` package; update this doc's
-  Client integration section.
+- If a future change gets to own a schema migration too, close the two
+  part-C deviations properly: add `publish_memory_book_workflow`-style
+  RPCs (mirroring `20260721120000_memory_illustration_workflow_jobs.sql`'s
+  shape) and a `memory_book_workflow_bridge_nonces` replay-ledger table
+  (mirroring the illustration bridge's). Neither is a correctness bug today
+  (see TECH_SPEC §4.22's deviation notes for why the plain CAS + timestamp
+  window are already sound), just a defense-in-depth gap this task's scope
+  didn't include.
+- A real page-count-aware themed-spread admission pass (matching the eval
+  CLI's `admitThemedSpreads` + `book-renderer` `fitBook` oracle, currently
+  skipped in the Workflow's `reading-order.ts` port — see that file's
+  header comment) is a reasonable follow-up once `book-renderer`'s fitter
+  is wired into a render-time consumer of `book_document`.
+- Real asset dimensions (`ManifestAsset.width`/`height`/`originalWidth`/
+  `originalHeight`) — the Workflow currently never downloads bytes (task
+  brief: "no downloads, no resizing"), so these are a nominal
+  aspect-ratio-consistent placeholder and an intentionally-absent pair
+  respectively (see `cloudflare/memory-book-worker/src/manifest.ts`'s
+  header comment). A future change that adds a bounded R2 HEAD/dimension
+  probe should update that comment and this bullet together.
+- Web preview (5b) → new `book.usemomora.com` package that reads
+  `book_document = { outline, manifest }` and runs `book-renderer`'s
+  `fitBook`; update this doc's Client integration section.
 - Checkout (5c) → a separate `memory_book_orders` table (plan §8) — not
   part of `memory_books`; give it its own feature doc section or file.
 
@@ -230,36 +288,73 @@ components (single-renderer rule — plan §3).
 ## Dependencies
 
 - Depends on: `families`, `family_members`, `is_family_member`/
-  `has_family_role` (family-sharing), `memories` (the eventual curation
-  input, not referenced by a FK from this table).
-- Used by: nothing yet — 5b (worker + web preview) and 5c (checkout +
-  fulfillment) are the planned consumers.
+  `has_family_role` (family-sharing), `memories`/`memory_media`/
+  `memory_family_members`/`memory_milestones`/`memory_likes`/
+  `memory_comments`/`family_member_portrait_versions` (the curation input,
+  read by `workflow-memory-book-bridge`, not referenced by a FK from
+  `memory_books` itself), `media_share_tokens` (QR tokens minted for
+  video/audio memories in the published document), `_shared/memory-book-
+  outline.ts` and `_shared/memory-book-manifest.ts` (shared with
+  `supabase/scripts/eval-memory-book-outline.ts`/`eval-memory-book-assets.ts`
+  — see TECH_SPEC §4.22 for exactly what's ported vs. shared vs. simplified),
+  OpenAI (`gpt-5.6-sol`, outline + cover-verify calls), and the
+  `MEMORY_BOOK_PREVIEWS` R2 binding (reads EXISTING
+  `memory_media.preview_object_key`/`object_key` objects for cover-verify
+  thumbnails — never writes to R2).
+- Used by: nothing yet — 5b (scope-picker UI + web preview) and 5c
+  (checkout + fulfillment) are the planned consumers of a `ready` book.
 
 ## Testing
 
-### Migration verification (this slice)
+### Migration verification (schema/RLS, part A/B)
 
-No pgTAP suite yet for this table specifically (worker/RPCs are 5b's
-scope, and pgTAP tests naturally land alongside them — see
-`supabase/tests/memory_illustration_workflow.sql` for the shape to follow).
-This slice was verified manually against a local Postgres with the full
-migration history applied (`supabase db reset --local`): insert as a
-family owner succeeds only with the exact queued shape; a cross-family
-`child_id` is rejected; an insert pre-claiming `status = 'ready'` with a
-`book_document` is rejected; a client `update` of `status` is rejected at
-the grant level (`permission denied for table memory_books`, not just
-RLS); and a second family cannot see or insert against the first family's
-rows.
+No pgTAP suite yet for this table specifically. It was verified manually
+against a local Postgres with the full migration history applied
+(`supabase db reset --local`): insert as a family owner succeeds only with
+the exact queued shape; a cross-family `child_id` is rejected; an insert
+pre-claiming `status = 'ready'` with a `book_document` is rejected; a
+client `update` of `status` is rejected at the grant level (`permission
+denied for table memory_books`, not just RLS); and a second family cannot
+see or insert against the first family's rows.
+
+### Generation pipeline tests (part C)
+
+- `supabase/functions/generate-memory-book/index.test.ts` — Deno,
+  dependency-injected (auth/role/service-client/fetch/clock): auth
+  rejection, role rejection, 404, `ready` short-circuit, fresh-`generating`
+  idempotent redispatch, stale-`generating` reclaim with a fresh attempt
+  id, `queued`/`failed` claim + dispatch, 409-duplicate-instance treated as
+  success, dispatch-failure rollback to `failed`, missing Worker config.
+- `supabase/functions/workflow-memory-book-bridge/index.test.ts` — Deno,
+  HMAC binding/tamper, unsigned/unknown-operation/malformed-id rejection,
+  `publish`/`fail` CAS match and no-match, `reconcile`'s four outcomes,
+  `ensure_share_tokens` reuse-vs-mint, `load_generation_context`'s
+  superseded/404/happy-path (including the `everything`-scope window
+  resolution and the `scope_end_date` inclusive→exclusive conversion).
+- `cloudflare/memory-book-worker/test/*.test.ts` — Vitest
+  (`@cloudflare/vitest-pool-workers`): `crypto`, `eligibility`,
+  `candidates`, `backbone`, `reading-order` (unit tests of the ported pure
+  functions, mirroring the eval CLI's own thresholds/tie-breaks),
+  `manifest` (asset selection, share-token gating, the family-name
+  fallback for a childless book), `index` (dispatch HMAC auth, duplicate
+  handling, malformed-body rejection), `workflow.integration` (a full
+  `MemoryBookWorkflow.run()` against faked bridge/OpenAI/R2 responses,
+  reaching `ready` with a `book_document` whose `outline`/`manifest` shape
+  is asserted, plus the `NO_ELIGIBLE_MEMORIES`/context-load-failure/
+  lost-CAS failure paths).
 
 ### Run this feature's tests
 
 ```bash
-npm run db:reset   # applies this migration against local Postgres
+npm run db:reset   # applies migrations (incl. this one) against local Postgres
 npm test           # src/types/database.ts is exercised transitively across the suite
+npm run test:edge   # generate-memory-book + workflow-memory-book-bridge (Deno)
+cd cloudflare/memory-book-worker && npm test   # Workflow/dispatch (Vitest, Node 22)
 ```
 
 ## Changelog
 
 | Date | Change |
 |------|--------|
-| 2026-09-01 | V5a: `memory_books` schema + RLS/status contract shipped (this doc). No worker, UI, or checkout yet. |
+| 2026-09-01 | V5a part C: durable generation pipeline shipped — `generate-memory-book` dispatcher, `workflow-memory-book-bridge`, and `cloudflare/memory-book-worker`'s `MemoryBookWorkflow` (curates the outline from ported eval-CLI logic + shared builders, verifies cover candidates, assembles `book_document`, publishes via CAS). No schema migration in this change (two deviations documented in TECH_SPEC §4.22: plain-CAS instead of a publish/fail RPC, no nonce-replay ledger). Scope-picker UI and web preview remain 5b; checkout remains 5c. |
+| 2026-09-01 | V5a part A/B: `memory_books` schema + RLS/status contract shipped. No worker, UI, or checkout yet. |
