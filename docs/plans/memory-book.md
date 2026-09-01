@@ -809,6 +809,14 @@ Sequenced as three independently shippable slices:
   USD; price table in eval-memory-book-outline.ts).
 - **5b — Web preview + v1 edit surface.** Next.js + Supabase auth; the
   book-renderer components render the preview (single-renderer rule).
+  Decided 2026-09-01: lives at **book.usemomora.com** — a package in the
+  main Momora repo sharing book-renderer (never in the marketing repo),
+  own deploy, auth cookies scoped to the subdomain. The journey STARTS IN
+  THE APP: the app creates the memory_books row (scope picker in-app,
+  where family/children/subscription state already live) and hands off
+  `book.usemomora.com/b/<id>`; web does preview -> edit -> checkout. 5b
+  seam to design: login-free handoff via one-time signed link from the
+  app session.
   v1 edits, decided from validation-book feedback:
   - Text: dedication, closing-page lines, section titles (eyebrows
     derived-but-overridable), cover + back-cover text, photo captions as
