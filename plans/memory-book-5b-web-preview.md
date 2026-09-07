@@ -216,4 +216,12 @@ Print (5c) later consumes the same overrides.
   consumes).
 - Deleting images/memories, custom-range scopes, illustration
   replacement/regeneration, per-field edit merge (v2).
+- Editor v2 backlog (owner review 2026-09-07/08): video-for-video
+  replacement (requires share-token retargeting to the new memory);
+  poster-frame picker for video pages; multi-level undo history.
+- Blurry video posters (owner-found in live book): the sharpest-of-N
+  poster selection exists only in the eval exporter (ffmpeg) — the
+  production worker uses the app's stored first frame. Fix belongs in
+  the 5c render worker (container, has ffmpeg: re-extract at print
+  time) and/or app-side upload-time selection; not a web-app concern.
 - Deploys/DNS execution (owner-gated; plan ends with artifacts ready).
