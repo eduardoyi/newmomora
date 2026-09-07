@@ -4,8 +4,27 @@
     {
       "name": "book-preview",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "book-renderer", "run", "dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "book-renderer",
+        "run",
+        "dev"
+      ],
       "port": 5173
+    },
+    {
+      "name": "book-web",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "vite",
+        "dev",
+        "--config",
+        "vite.web.config.ts",
+        "--port",
+        "5199"
+      ],
+      "cwd": "book-renderer",
+      "port": 5199
     }
   ]
 }

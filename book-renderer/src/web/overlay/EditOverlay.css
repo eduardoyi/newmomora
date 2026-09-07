@@ -1,0 +1,172 @@
+/* Geometry overlay (polish-round item 3) — an absolutely-positioned sibling
+   layer over the rendered spread. `.edit-overlay` itself never intercepts
+   clicks (pointer-events: none) so only its explicit region hotspots are
+   interactive; every hotspot's left/top/width/height come from
+   `useOverlayGeometry`'s real measured rects (inline styles, not CSS). */
+
+.edit-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.edit-overlay__photo {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.edit-overlay__photo:hover,
+.edit-overlay__photo--active {
+  background: rgba(142, 127, 184, 0.14);
+  box-shadow: inset 0 0 0 2px var(--lavender-deep);
+}
+
+.edit-overlay__photo-actions {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.edit-overlay__photo:hover .edit-overlay__photo-actions,
+.edit-overlay__photo--active .edit-overlay__photo-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.edit-overlay__photo-button {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+  color: var(--color-primaryDark);
+  box-shadow: 0 1px 3px rgba(44, 36, 24, 0.18), 0 4px 12px rgba(44, 36, 24, 0.14);
+  white-space: nowrap;
+}
+
+.edit-overlay__photo-button:hover {
+  background: var(--color-primaryTint);
+}
+
+.edit-overlay__text {
+  all: unset;
+  position: absolute;
+  pointer-events: auto;
+  cursor: text;
+  border-radius: 4px;
+  box-sizing: border-box;
+  /* A little breathing room around the exact measured text box so it's
+     comfortably clickable without visually looking oversized. */
+  padding: 2px;
+  margin: -2px;
+}
+
+.edit-overlay__text:hover {
+  background: rgba(142, 127, 184, 0.1);
+  box-shadow: inset 0 0 0 1.5px var(--lavender-deep);
+}
+
+.edit-overlay__text--approx {
+  box-shadow: inset 0 0 0 1.5px dashed transparent;
+}
+
+.edit-overlay__text--approx:hover {
+  box-shadow: inset 0 0 0 1.5px var(--lavender-soft);
+}
+
+/* Text popover (TextEditPopover.tsx) */
+
+.text-popover__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.text-popover {
+  position: absolute;
+  z-index: 21;
+  width: min(320px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--color-white);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 2px 6px rgba(44, 36, 24, 0.16), 0 12px 32px rgba(44, 36, 24, 0.18);
+}
+
+.text-popover__label {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-ink2);
+}
+
+.text-popover__approx-hint {
+  font-weight: 400;
+  color: var(--color-ink3);
+}
+
+.text-popover__input {
+  font-family: var(--font-sans);
+  font-size: 15px; /* keeps mobile Safari from zooming in on focus */
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  resize: vertical;
+}
+
+.text-popover__input:focus {
+  outline: none;
+  border-color: var(--lavender-deep);
+}
+
+.text-popover__error {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-primaryDark);
+}
+
+.text-popover__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.text-popover__button {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-white);
+}
+
+.text-popover__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.text-popover__button--ghost {
+  background: var(--color-surface);
+  color: var(--color-ink2);
+}

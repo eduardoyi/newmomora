@@ -6,6 +6,7 @@ import { saveEdit } from './editsApi';
 import { getMediaUrls } from '../media/coalescer';
 import { PickerSheet } from './PickerSheet';
 import { FocalPointModal } from './FocalPointModal';
+import type { InBookAssets } from '../media/inBookAssets';
 import './EditPanel.css';
 
 /** Approximate front-cover-panel aspect for the focal-point crop preview —
@@ -21,12 +22,15 @@ export function EditPanel({
   pages,
   edits,
   skipped,
+  inBookAssets,
   onEditsSaved,
 }: {
   bookId: string;
   pages: BookPage[];
   edits: MemoryBookEditsShape;
   skipped: SkippedEdit[];
+  /** Item 5's honest, client-computed in-book sets — threaded down to `PickerSheet`. */
+  inBookAssets: InBookAssets;
   onEditsSaved: (edits: MemoryBookEditsShape) => void;
 }) {
   const textFields = computeTextFields(pages);
@@ -78,6 +82,7 @@ export function EditPanel({
           slotKey={pickerSlot.key}
           isCover={pickerSlot.isCover}
           targetAspect={findTargetAspect(pages, pickerSlot)}
+          inBookAssets={inBookAssets}
           onClose={() => setPickerSlot(null)}
           onSaved={onEditsSaved}
         />

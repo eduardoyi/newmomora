@@ -29,6 +29,22 @@ function applyVariant(page: BookPage, variantIndex: number): BookPage {
  */
 export interface DisplayUnit {
   rawIndices: number[];
+  /**
+   * Polish-round item 2: true when this unit's single real page (always
+   * `rawIndices.length === 1` when this is set) is a LEFT/even page with
+   * nothing after it in the fitted document — the book's own final content
+   * page, always left-handed by construction (see this function's own
+   * closing-argument below), facing nothing but the printer's own
+   * auto-inserted inside-back-cover blank. That blank is never part of the
+   * fitted `BookDocument` (it isn't a real page — nothing is printed on
+   * it), so it can't be represented as a `rawIndices` entry; callers that
+   * render this unit must append a SYNTHETIC, print-invisible blank page of
+   * their own construction (`buildSyntheticClosingPartner`) to the page
+   * array they hand to `SpreadPager`, purely so the facing pair displays
+   * correctly — exactly mirroring the real, printed front-matter blank +
+   * dedication pair this same fix also repairs.
+   */
+  syntheticRightBlank?: boolean;
 }
 
 /**
@@ -41,7 +57,30 @@ export interface DisplayUnit {
  * preview even though the true book would show them beside a neighbor.
  * Pairing now checks each page's OWN `isEvenPage` (computed authoritatively
  * by the fitter's `numberPages`) instead of just trusting array position.
+ *
+ * Polish-round item 2 amendment: the ordinary `isEvenPage`-parity check
+ * above can never fire for the front-matter blank + dedication pair — both
+ * are OUTSIDE `numberPages`'s counted sequence (the cover and the
+ * never-printed `front-matter-verso` blank both get `isEvenPage: null`; see
+ * `fitter.ts`'s own `numberPages` comment: "The cover and the never-printed
+ * front-matter-verso blank carry no number") — even though the blank is
+ * deliberately, physically the LEFT page facing the dedication's RIGHT page
+ * (`fitter.ts`'s `buildDedicationPages`: "a deliberately blank even page...
+ * then the dedication text on the facing odd page"). `pagesFormFacingPair`
+ * below special-cases this one known pair by template identity instead,
+ * since `buildDedicationPages` always emits them as a fixed
+ * `[blank, dedication]` tuple — a template-id match is exact and safe here,
+ * not a heuristic.
  */
+function pagesFormFacingPair(page: BookPage, next: BookPage | undefined): boolean {
+  if (!next || next.isSpread || next.templateId === 'cover-wrap') return false;
+  if (page.isEvenPage === true && next.isEvenPage === false) return true;
+  if (page.templateId === 'blank' && page.blankReason === 'front-matter-verso' && next.templateId === 'dedication') {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Exported (round-5b addition) so the web app's `BookViewScreen` can reuse
  * the EXACT same facing-pair pagination the local preview uses — the
@@ -60,13 +99,7 @@ export function computeUnits(pages: BookPage[]): DisplayUnit[] {
       i += 1;
       continue;
     }
-    if (
-      next &&
-      !next.isSpread &&
-      next.templateId !== 'cover-wrap' &&
-      page.isEvenPage === true &&
-      next.isEvenPage === false
-    ) {
+    if (pagesFormFacingPair(page, next)) {
       units.push({ rawIndices: [i, i + 1] });
       i += 2;
     } else {
@@ -74,7 +107,54 @@ export function computeUnits(pages: BookPage[]): DisplayUnit[] {
       i += 1;
     }
   }
+
+  // Polish-round item 2, second half: whatever page the fitter emitted LAST
+  // is always left/even by construction — `fitter.ts` appends the closing
+  // page(s) last of all, and either (a) the natural interior count came out
+  // even, so `closing` itself is the final page at an even position, or (b)
+  // it came out odd, so the fitter's own `parity:closing-total` blank was
+  // appended right after `closing` to fix Prodigi's even-interior-page
+  // requirement, landing THAT blank at the new (even) final position
+  // instead. Either way the true LAST page of the document is left-handed
+  // and alone, facing only the printer's own auto-inserted final blank —
+  // give it a synthetic display-only partner, the mirror image of the
+  // front-matter fix above.
+  const lastUnit = units[units.length - 1];
+  if (lastUnit && lastUnit.rawIndices.length === 1) {
+    const lastPage = pages[lastUnit.rawIndices[0]];
+    if (lastPage && !lastPage.isSpread && lastPage.templateId !== 'cover-wrap' && lastPage.isEvenPage === true) {
+      lastUnit.syntheticRightBlank = true;
+    }
+  }
+
   return units;
+}
+
+let syntheticBlankCounter = 0;
+
+/**
+ * Builds the print-invisible, display-only blank page a `syntheticRightBlank`
+ * unit's caller must append to the page array it hands to `SpreadPager` (see
+ * `DisplayUnit.syntheticRightBlank`'s own doc comment) — never part of the
+ * real `BookDocument`, never sent to `save_edit`, never rendered by the
+ * print pipeline (which never calls this function at all). `id` is
+ * counter-suffixed so remounting/re-deriving the document (e.g. after an
+ * edit) never risks a React key collision with a real page id.
+ */
+export function buildSyntheticClosingPartner(afterPage: BookPage): BookPage {
+  syntheticBlankCounter += 1;
+  return {
+    id: `${afterPage.id}::synthetic-blank-${syntheticBlankCounter}`,
+    sourceElementId: afterPage.sourceElementId,
+    templateId: 'blank',
+    params: {},
+    slots: [],
+    variants: [],
+    isSpread: false,
+    blankReason: 'synthetic-display-only',
+    isEvenPage: false,
+    pageNumbers: null,
+  };
 }
 
 export function App() {
@@ -118,7 +198,17 @@ export function App() {
   }, [units]);
 
   const currentUnit = units[unitIndex] ?? null;
-  const rawPages = useMemo(() => (currentUnit ? currentUnit.rawIndices.map((i) => pages[i]) : []), [currentUnit, pages]);
+  const rawPages = useMemo(() => {
+    if (!currentUnit) return [];
+    const real = currentUnit.rawIndices.map((i) => pages[i]);
+    // Item 2: the final closing/parity-blank page's synthetic display-only
+    // right-hand partner (see `computeUnits`'s own doc comment) — built
+    // fresh per render, never persisted, never sent anywhere.
+    if (currentUnit.syntheticRightBlank && real[0]) {
+      return [real[0], buildSyntheticClosingPartner(real[0])];
+    }
+    return real;
+  }, [currentUnit, pages]);
   const displayPages = useMemo(
     () =>
       rawPages.map((p) => {

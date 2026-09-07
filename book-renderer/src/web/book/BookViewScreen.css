@@ -92,6 +92,37 @@
   flex-direction: column;
 }
 
+/* Item 1 (polish round): the wrapper `useFitToViewportWidth` measures and
+   sizes, and `EditOverlay` positions its regions relative to (see
+   `BookViewScreen.tsx`'s own comment on `stageRef`). `position: relative`
+   is load-bearing for the overlay's `position: absolute; inset: 0`
+   coordinate math — never remove it. On a desktop-width viewport the hook
+   sets an inline `max-width` in px (derived from ~90% of this element's
+   own height) on top of this CSS; below the hook's breakpoint it sets
+   none, so the plain `width: 100%` here is what actually governs —
+   fit-to-width, unchanged from before item 1. */
+.book-view__stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* `SpreadPager.css`'s own `.spread-pager__stage` carries a hardcoded
+   `max-width: 640px` (a LOCAL-PREVIEW-app affordance, since that app never
+   tries to fill a real viewport height) — never edited here (that file is
+   shared with the local preview app; this override lives entirely in the
+   web app's own CSS and touches nothing inside `src/preview/` or
+   `src/templates/`). `.book-view__stage`'s own inline `max-width` (set by
+   `useFitToViewportWidth`, or omitted below the desktop breakpoint) is the
+   REAL constraint on this screen; the inner cap only fights it. */
+.book-view__stage .spread-pager__stage {
+  max-width: none;
+}
+
 .book-view__sidebar {
   width: 100%;
   padding: 16px;
