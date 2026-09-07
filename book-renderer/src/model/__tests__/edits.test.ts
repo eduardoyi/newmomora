@@ -157,6 +157,25 @@ describe('applyPreFit — image replace substitution', () => {
     expect(skipped).toEqual([{ kind: 'image', key: 'not-a-real-key', reason: expect.any(String) }]);
   });
 
+  it('video slots are locked — an imageReplace targeting a video-poster asset orphans instead of substituting (owner-approved follow-up round, item 4)', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ assets: [makeAsset({ file: 'assets/video-poster.jpg', kind: 'video-poster' })] }),
+    });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const edits: MemoryBookEditsShape = { images: { [slotKey('mem-1', 'assets/video-poster.jpg')]: replacement } };
+
+    const { manifest: next, skipped } = applyPreFit(outline, manifest, edits);
+
+    expect(skipped).toEqual([{ kind: 'image', key: 'mem-1:assets/video-poster.jpg', reason: expect.any(String) }]);
+    // Untouched: still the original video-poster asset, never substituted —
+    // this is the "self-heal" case for a stale edit saved before the v1 UI
+    // restriction existed (or one crafted directly against the Edge
+    // Function): `substituteAsset` never runs, so the asset stays byte-for-
+    // byte its pristine self, `kind` included.
+    expect(next.memories['mem-1'].assets[0]).toEqual(manifest.memories['mem-1'].assets[0]);
+    expect(next.memories['mem-1'].assets[0].kind).toBe('video-poster');
+  });
+
   it('is idempotent — applying the SAME edits to the SAME pristine (unedited) outline/manifest twice yields byte-identical results', () => {
     // The real call pattern (every render starts from the freshly exported
     // outline/manifest + the saved edits row, never from a previously
@@ -417,6 +436,16 @@ describe('applyPostFit — furniture:<key> text edits', () => {
     expect(skipped).toEqual([]);
   });
 
+  it('furniture:closingTitle overrides the closing headline, independently of the closingLine (count) field (owner-approved follow-up round, item 5)', () => {
+    const doc = docWith([
+      emptyPage({ id: 'closing', sourceElementId: 'closing', templateId: 'closing', params: { closingLine: 'Untouched count line.' } }),
+    ]);
+    const { document, skipped } = applyPostFit(doc, { text: { 'furniture:closingTitle': textEdit('Hasta pronto.') } });
+    expect(document.pages[0].params.closingTitle).toBe('Hasta pronto.');
+    expect(document.pages[0].params.closingLine).toBe('Untouched count line.');
+    expect(skipped).toEqual([]);
+  });
+
   it('reports an orphan for a furniture target outside the allowlist (never reaches applyFurnitureTextEdit)', () => {
     const doc = docWith([emptyPage({ id: 'cover', sourceElementId: 'cover', templateId: 'cover-wrap' })]);
     const { skipped } = applyPostFit(doc, { text: { 'furniture:notAllowlisted': textEdit('x') } });
@@ -519,6 +548,7 @@ describe('applyPostFit — text edits never change the page count (real fixture)
         'furniture:dedicationSignoff': textEdit('A new signoff.'),
         'furniture:ttyKicker': textEdit('A new kicker.'),
         'furniture:ttyTitle': textEdit('A new title\non two lines'),
+        'furniture:closingTitle': textEdit('A new closing title.'),
       },
     };
 

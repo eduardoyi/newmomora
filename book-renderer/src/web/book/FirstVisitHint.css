@@ -1,0 +1,30 @@
+/* Owner-approved round-3 polish, item 6: a small dismissible bar explaining
+   the always-on inline-editing affordances the first time an editor opens
+   the book view. Sits inline, above the pager stage — never overlaps it,
+   unlike the fixed-position toasts. */
+
+.first-visit-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--lavender-pale);
+  color: var(--color-ink2);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  text-align: center;
+}
+
+.first-visit-hint__message {
+  flex: 1;
+  min-width: 0;
+}
+
+.first-visit-hint__close {
+  all: unset;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--color-ink3);
+  flex-shrink: 0;
+}

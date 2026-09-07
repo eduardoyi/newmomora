@@ -175,9 +175,19 @@ describe('resolveTextAnchor', () => {
       expect(resolveTextAnchor(ttyPage, 'furniture:ttyTitle')).toEqual({ strategy: 'tty-title' });
     });
 
+    it('resolves furniture:closingTitle on a closing page', () => {
+      const closingPage = page({ templateId: 'closing' });
+      expect(resolveTextAnchor(closingPage, 'furniture:closingTitle')).toEqual({
+        strategy: 'selector',
+        selector: '.closing__headline',
+        approximate: false,
+      });
+    });
+
     it('returns null for a furniture target on the wrong page shape', () => {
       expect(resolveTextAnchor(page({ templateId: 'flex-grid' }), 'furniture:coverName')).toBeNull();
       expect(resolveTextAnchor(page({ templateId: 'cover-wrap' }), 'furniture:ttyKicker')).toBeNull();
+      expect(resolveTextAnchor(page({ templateId: 'cover-wrap' }), 'furniture:closingTitle')).toBeNull();
     });
 
     it('returns null for a furniture key outside the allowlist', () => {

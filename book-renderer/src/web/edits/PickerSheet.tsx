@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { fetchPickerPool, saveEdit, type PickerPoolItem } from './editsApi';
+import { fetchPickerPool, saveEdit, type PickerPoolItem, type UndoAction } from './editsApi';
 import { getMediaUrls } from '../media/coalescer';
 import { aspectMismatchHint } from './aspectHint';
 import { isAssetInBook, type InBookAssets } from '../media/inBookAssets';
-import type { MemoryBookEditsShape } from '../../model/edits';
+import type { ImageEditRecord, MemoryBookEditsShape } from '../../model/edits';
 import './PickerSheet.css';
 
 type FilterMode = 'not-in-book' | 'all';
@@ -14,6 +14,7 @@ export function PickerSheet({
   isCover,
   targetAspect,
   inBookAssets,
+  currentEdit,
   onClose,
   onSaved,
 }: {
@@ -30,8 +31,13 @@ export function PickerSheet({
    * flag — the ONLY place that flag is still consulted.
    */
   inBookAssets?: InBookAssets;
+  /** Owner-approved round-3 polish, item 3: the saved `edits.images[slotKey]`
+   * record, if any — `null` means this slot is still showing the book's own
+   * original photo, nothing to reset. Also the "previous value" a save's
+   * reported `UndoAction` restores. */
+  currentEdit: ImageEditRecord | null;
   onClose: () => void;
-  onSaved: (edits: MemoryBookEditsShape) => void;
+  onSaved: (edits: MemoryBookEditsShape, undo: UndoAction) => void;
 }) {
   const [items, setItems] = useState<PickerPoolItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -40,6 +46,8 @@ export function PickerSheet({
   const [error, setError] = useState<string | null>(null);
   const [thumbUrls, setThumbUrls] = useState<Map<string, string>>(new Map());
   const [savingMediaId, setSavingMediaId] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   // Item 4: a mismatched photo is confirmed via a short "use anyway?" step
   // rather than a permanent sentence under every thumbnail.
   const [confirmItem, setConfirmItem] = useState<PickerPoolItem | null>(null);
@@ -82,7 +90,24 @@ export function PickerSheet({
       setError(result.error);
       return;
     }
-    onSaved(result.edits);
+    onSaved(result.edits, { category: 'images', key: slotKey, previous: currentEdit });
+    onClose();
+  }
+
+  /** Item 3: "Reset to original photo" — removes the saved `imageReplace`/
+   * `coverPhoto` edit for this slot, restoring the book's own original
+   * photo on next render. */
+  async function handleReset() {
+    if (savingMediaId || resetting || !currentEdit) return;
+    setResetting(true);
+    setResetError(null);
+    const result = await saveEdit(bookId, { kind: 'delete', category: 'images', key: slotKey });
+    setResetting(false);
+    if (result.error) {
+      setResetError(result.error);
+      return;
+    }
+    onSaved(result.edits, { category: 'images', key: slotKey, previous: currentEdit });
     onClose();
   }
 
@@ -121,6 +146,15 @@ export function PickerSheet({
             ×
           </button>
         </header>
+
+        {currentEdit && (
+          <div className="picker-sheet__reset-row">
+            <button type="button" className="picker-sheet__reset" disabled={resetting} onClick={() => void handleReset()}>
+              {resetting ? 'Resetting…' : 'Reset to original photo'}
+            </button>
+            {resetError && <p className="picker-sheet__error">{resetError}</p>}
+          </div>
+        )}
 
         <div className="picker-sheet__filter" role="tablist" aria-label="Filter photos">
           <button

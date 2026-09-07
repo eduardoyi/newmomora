@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getMediaUrls } from '../media/coalescer';
-import { saveEdit } from './editsApi';
+import { saveEdit, type UndoAction } from './editsApi';
 import type { MemoryBookEditsShape } from '../../model/edits';
 import './FocalPointModal.css';
 
@@ -31,13 +31,18 @@ export function FocalPointModal({
   slotKey: string;
   assetFile: string;
   targetAspect: number;
+  /** Also doubles as this slot's `previous` value for the toast's one-shot
+   * Undo (owner-approved round-3 polish, item 3) — the caller
+   * (`EditOverlay.tsx`) derives this from `edits.focalPoints[slotKey]`, the
+   * exact record a save/reset here overwrites. */
   initial: { x: number; y: number } | null;
   onClose: () => void;
-  onSaved: (edits: MemoryBookEditsShape) => void;
+  onSaved: (edits: MemoryBookEditsShape, undo: UndoAction) => void;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [point, setPoint] = useState(initial ?? { x: 0.5, y: 0.5 });
   const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
@@ -74,6 +79,12 @@ export function FocalPointModal({
     draggingRef.current = false;
   }
 
+  // `initial` is `{x,y}|null` (this modal's own render-preview state
+  // doesn't need the `slot` field), but `UndoAction.focalPoints.previous`
+  // is a full `FocalPointEditRecord` (mirroring the server's stored shape,
+  // `slot` included) — this re-wraps it, never re-deriving `x`/`y`.
+  const previousFocalPoint = initial ? { slot: slotKey, x: initial.x, y: initial.y } : null;
+
   async function handleSave() {
     setSaving(true);
     setError(null);
@@ -83,7 +94,24 @@ export function FocalPointModal({
       setError(result.error);
       return;
     }
-    onSaved(result.edits);
+    onSaved(result.edits, { category: 'focalPoints', key: slotKey, previous: previousFocalPoint });
+    onClose();
+  }
+
+  /** Item 3: "Reset to original position" — removes the saved focal-point
+   * override for this slot, restoring the default (0.5, 0.5) browser-native
+   * center on next render. Only offered when a saved override exists. */
+  async function handleReset() {
+    if (saving || resetting || !initial) return;
+    setResetting(true);
+    setError(null);
+    const result = await saveEdit(bookId, { kind: 'delete', category: 'focalPoints', key: slotKey });
+    setResetting(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    onSaved(result.edits, { category: 'focalPoints', key: slotKey, previous: previousFocalPoint });
     onClose();
   }
 
@@ -124,10 +152,20 @@ export function FocalPointModal({
         {error && <p className="focal-modal__error">{error}</p>}
 
         <div className="focal-modal__actions">
+          {initial && (
+            <button
+              type="button"
+              className="focal-modal__button focal-modal__button--ghost focal-modal__button--reset"
+              disabled={saving || resetting}
+              onClick={() => void handleReset()}
+            >
+              {resetting ? 'Resetting…' : 'Reset to original position'}
+            </button>
+          )}
           <button type="button" className="focal-modal__button focal-modal__button--ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="focal-modal__button" disabled={saving} onClick={() => void handleSave()}>
+          <button type="button" className="focal-modal__button" disabled={saving || resetting} onClick={() => void handleSave()}>
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { computeTextFields } from '../editableFields';
+import { computeTextFields, computeEditablePhotoSlots } from '../editableFields';
+import { COVER_SLOT_KEY, slotKey } from '../../../model/edits';
 import { makeManifest } from '../../../model/__tests__/fixtures/build';
-import type { BookPage } from '../../../model/types';
+import type { BookPage, PhotoSlotContent } from '../../../model/types';
 
 function page(overrides: Partial<BookPage>): BookPage {
   return {
@@ -79,5 +80,91 @@ describe('computeTextFields — furniture:<key> fields', () => {
     const manifest = makeManifest({});
     const fields = computeTextFields([page({ templateId: 'anchor-media' })], manifest);
     expect(fields.filter((f) => f.target.startsWith('furniture:'))).toEqual([]);
+  });
+
+  it('defaults furniture:closingTitle to the language-appropriate furniture headline when unset, and prefers a saved override (owner-approved follow-up round, item 5)', () => {
+    const enManifest = makeManifest({}, { language: 'en' });
+    const esManifest = makeManifest({}, { language: 'es' });
+    const closing = page({ templateId: 'closing', params: {} });
+
+    const enFields = computeTextFields([closing], enManifest);
+    expect(enFields.find((f) => f.target === 'furniture:closingTitle')?.value).toBe('See you next year.');
+
+    const esFields = computeTextFields([closing], esManifest);
+    expect(esFields.find((f) => f.target === 'furniture:closingTitle')?.value).toBe('Hasta el año que viene.');
+
+    const overridden = page({ templateId: 'closing', params: { closingTitle: 'Until next time.' } });
+    const overriddenFields = computeTextFields([overridden], enManifest);
+    expect(overriddenFields.find((f) => f.target === 'furniture:closingTitle')?.value).toBe('Until next time.');
+  });
+});
+
+function photoSlot(overrides: Partial<PhotoSlotContent> & Pick<PhotoSlotContent, 'memoryId' | 'assetFile'>): {
+  id: string;
+  kind: 'photo';
+  content: PhotoSlotContent;
+} {
+  return {
+    id: overrides.memoryId,
+    kind: 'photo',
+    content: {
+      kind: 'photo',
+      assetWidth: 100,
+      assetHeight: 100,
+      assetAspectRatio: 1,
+      date: '2024-01-01',
+      caption: null,
+      hero: false,
+      qr: false,
+      shareToken: null,
+      taggedMembers: [],
+      milestones: [],
+      targetAspect: 1,
+      looseFit: false,
+      index: null,
+      cropBand: null,
+      focalPoint: null,
+      ...overrides,
+    },
+  };
+}
+
+describe('computeEditablePhotoSlots — isVideoPoster (owner-approved follow-up round, item 4)', () => {
+  it('marks an ordinary photo slot isVideoPoster: false', () => {
+    const p = page({
+      templateId: 'anchor-media',
+      slots: [photoSlot({ memoryId: 'mem-1', assetFile: 'assets/a.jpg', qr: false })],
+    });
+    const slots = computeEditablePhotoSlots([p], {});
+    expect(slots).toHaveLength(1);
+    expect(slots[0].isVideoPoster).toBe(false);
+  });
+
+  it('marks a video-poster-backed slot (content.qr === true) isVideoPoster: true', () => {
+    const p = page({
+      templateId: 'anchor-media',
+      slots: [photoSlot({ memoryId: 'mem-1', assetFile: 'assets/video-poster.jpg', qr: true })],
+    });
+    const slots = computeEditablePhotoSlots([p], {});
+    expect(slots).toHaveLength(1);
+    expect(slots[0].isVideoPoster).toBe(true);
+  });
+
+  it('the cover slot is never isVideoPoster (buildCoverPages only ever nominates a photo)', () => {
+    const p = page({ templateId: 'cover-wrap', params: { assetFile: 'assets/cover.jpg' } });
+    const slots = computeEditablePhotoSlots([p], {});
+    expect(slots).toEqual([{ key: COVER_SLOT_KEY, memoryId: null, assetFile: 'assets/cover.jpg', isCover: true, isVideoPoster: false }]);
+  });
+
+  it('de-duplicates by key, keeping the first-seen slot (including its isVideoPoster flag)', () => {
+    const p = page({
+      templateId: 'anchor-media',
+      slots: [
+        photoSlot({ memoryId: 'mem-1', assetFile: 'assets/a.jpg', qr: true }),
+        photoSlot({ memoryId: 'mem-1', assetFile: 'assets/a.jpg', qr: true }),
+      ],
+    });
+    const slots = computeEditablePhotoSlots([p], {});
+    expect(slots).toEqual([{ key: slotKey('mem-1', 'assets/a.jpg'), memoryId: 'mem-1', assetFile: 'assets/a.jpg', isCover: false, isVideoPoster: true }]);
   });
 });

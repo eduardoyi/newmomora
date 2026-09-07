@@ -7,9 +7,11 @@ import { computeUnits, buildSyntheticClosingPartner } from '../../preview/App';
 import { SpreadPager } from '../../preview/SpreadPager';
 import { StatusChip } from '../books/StatusChip';
 import { SkippedEditsToast } from '../edits/SkippedEditsToast';
+import { EditSavedToast } from '../edits/EditSavedToast';
 import { EditOverlay } from '../overlay/EditOverlay';
 import { computeUnitAspect } from './unitAspect';
 import { useFitToViewportWidth } from './useFitToViewport';
+import { FirstVisitHint } from './FirstVisitHint';
 import './BookViewScreen.css';
 
 const EMPTY_IN_BOOK: InBookAssets = { assetFiles: new Set(), mediaIds: new Set() };
@@ -25,7 +27,7 @@ const EMPTY_IN_BOOK: InBookAssets = { assetFiles: new Set(), mediaIds: new Set()
  * mounted rather than toggled.
  */
 export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () => void }) {
-  const { loading, error, data, applyEditsPatch } = useEditableBook(bookId);
+  const { loading, error, data, handleEditsSaved, pendingUndo, undoing, handleUndo, dismissUndo } = useEditableBook(bookId);
   const [unitIndex, setUnitIndex] = useState(0);
   // Item 1: the stage wrapper both the viewport-fit hook measures/sizes AND
   // the item-3 overlay positions its regions relative to (its bounding box
@@ -139,6 +141,8 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
         </span>
       </header>
 
+      {data.canEdit && <FirstVisitHint />}
+
       <div className="book-view__body" onErrorCapture={onImageErrorCapture}>
         <div className="book-view__main">
           {currentUnit && (
@@ -152,6 +156,11 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
                 pageLabel={pageLabel}
                 onPrev={() => setUnitIndex((i) => Math.max(i - 1, 0))}
                 onNext={() => setUnitIndex((i) => Math.min(i + 1, unitCount - 1))}
+                // Item 2: the web app shows only the page-number label — no
+                // template ids / outline element ids (that debug info stays
+                // in the local preview app, whose own call site never
+                // passes this prop, so it defaults to `true` unchanged).
+                debugCaption={false}
               />
               {data.canEdit && (
                 <EditOverlay
@@ -161,7 +170,7 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
                   manifest={data.editedManifest}
                   edits={data.edits}
                   inBookAssets={inBookAssets}
-                  onEditsSaved={applyEditsPatch}
+                  onEditsSaved={handleEditsSaved}
                 />
               )}
             </div>
@@ -170,6 +179,7 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
       </div>
 
       {data.canEdit && <SkippedEditsToast skipped={data.skipped} />}
+      {data.canEdit && <EditSavedToast pending={pendingUndo} undoing={undoing} onUndo={() => void handleUndo()} onDismiss={dismissUndo} />}
     </div>
   );
 }

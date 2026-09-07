@@ -121,6 +121,7 @@ export const FURNITURE_KEYS = [
   'dedicationSignoff',
   'ttyKicker',
   'ttyTitle',
+  'closingTitle',
 ] as const;
 export type FurnitureKey = (typeof FURNITURE_KEYS)[number];
 const FURNITURE_KEY_SET: ReadonlySet<string> = new Set(FURNITURE_KEYS);
@@ -237,6 +238,21 @@ export function applyPreFit(outline: BookOutline, manifest: BookManifest, edits:
     const asset = memory.assets.find((a) => a.file === parsed.assetFile);
     if (!asset) {
       skipped.push({ kind: 'image', key, reason: 'asset no longer on that memory (orphaned after regeneration)' });
+      continue;
+    }
+    // Video slots are locked in v1 (owner-approved follow-up round, item 4):
+    // no PhotoSlotContent template ever offers a Replace affordance on a
+    // video-poster slot (see `editableFields.ts`'s `EditablePhotoSlot.
+    // isVideoPoster`, driven by the same `content.qr` signal `fitter.ts`'s
+    // `isVideoAsset` sets). This is the matching apply-time enforcement: an
+    // `imageReplace` edit saved BEFORE that UI restriction existed (or one
+    // crafted directly against the Edge Function) is treated as an orphan
+    // rather than silently substituted — self-healing any such stale
+    // "chimera" edit on next render instead of leaving a photo file
+    // substituted under a still-`video-poster`-kinded asset entry
+    // (`substituteAsset` deliberately never touches `asset.kind`).
+    if (asset.kind === 'video-poster') {
+      skipped.push({ kind: 'image', key, reason: 'target slot is a video, not an editable photo' });
       continue;
     }
     substituteAsset(asset, value);
@@ -443,6 +459,15 @@ function applyFurnitureTextEdit(document: BookDocument, key: FurnitureKey, value
     case 'ttyTitle':
       return setOnPages(document, (p) => p.templateId === 'through-the-years', (params) => {
         params.ttyTitle = value;
+      });
+    case 'closingTitle':
+      // Overrides Closing.tsx's fixed script headline ("Hasta el año que
+      // viene." / "See you next year.") — same optional-param-with-
+      // furniture-default pattern that template already has for
+      // `closingLine` (the count line below it), see that component's own
+      // doc comment.
+      return setOnPages(document, (p) => p.templateId === 'closing', (params) => {
+        params.closingTitle = value;
       });
   }
 }

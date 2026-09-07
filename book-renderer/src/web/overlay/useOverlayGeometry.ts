@@ -32,6 +32,8 @@ export interface PositionedPhotoRegion {
   memoryId: string | null;
   assetFile: string;
   isCover: boolean;
+  /** See `editableFields.ts`'s `EditablePhotoSlot.isVideoPoster` doc comment — a locked-in-v1 video slot. */
+  isVideoPoster: boolean;
   rect: DOMRectLike;
 }
 
@@ -170,6 +172,7 @@ function toPhotoRegion(slot: EditablePhotoSlot, node: HTMLElement, containerRect
     memoryId: slot.memoryId,
     assetFile: slot.assetFile,
     isCover: slot.isCover,
+    isVideoPoster: slot.isVideoPoster,
     rect: relativeRect(node.getBoundingClientRect(), containerRect),
   };
 }

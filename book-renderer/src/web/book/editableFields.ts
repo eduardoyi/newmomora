@@ -101,6 +101,12 @@ export function computeTextFields(pages: BookPage[], manifest: BookManifest): Te
         multiline: false,
         placeholder: 'Leave blank to use the default line',
       });
+      fields.set('furniture:closingTitle', {
+        target: 'furniture:closingTitle',
+        label: 'Closing title',
+        value: typeof page.params.closingTitle === 'string' ? page.params.closingTitle : furniture.closing.headline,
+        multiline: false,
+      });
     }
 
     const elementId = page.sourceElementId;
@@ -158,6 +164,20 @@ export interface EditablePhotoSlot {
    * thumbnail through the same key the templates use. */
   assetFile: string;
   isCover: boolean;
+  /**
+   * Video slots are locked in v1 (owner-approved follow-up round, item 4):
+   * a photo slot backed by a video-poster asset never offers a Replace
+   * affordance (Reposition/focal-point still can, gated separately by the
+   * crop-delta threshold — see `overlay/repositionGate.ts`). Reuses
+   * `PhotoSlotContent.qr` as the signal rather than re-deriving it from the
+   * manifest: `fitter.ts` sets `qr: isVideoAsset(asset)` at every one of its
+   * three photo-slot-building call sites, so `content.qr === true` is
+   * already an exact, zero-extra-lookup proxy for "this slot's asset is
+   * `kind: 'video-poster'`" (a photo slot has no other reason to carry a
+   * scan mark). Always `false` for the cover slot — `buildCoverPages` only
+   * ever nominates a `kind === 'photo'` candidate.
+   */
+  isVideoPoster: boolean;
 }
 
 /** Every v1-editable photo slot (plan Design Decision 6 eligibility:
@@ -172,7 +192,7 @@ export function computeEditablePhotoSlots(pages: BookPage[], edits: MemoryBookEd
     if (page.templateId === 'cover-wrap') {
       const assetFile = typeof page.params.assetFile === 'string' ? page.params.assetFile : null;
       if (assetFile) {
-        slots.set(COVER_SLOT_KEY, { key: COVER_SLOT_KEY, memoryId: null, assetFile, isCover: true });
+        slots.set(COVER_SLOT_KEY, { key: COVER_SLOT_KEY, memoryId: null, assetFile, isCover: true, isVideoPoster: false });
       }
     }
     for (const slot of page.slots) {
@@ -180,7 +200,13 @@ export function computeEditablePhotoSlots(pages: BookPage[], edits: MemoryBookEd
       const content = slot.content as PhotoSlotContent;
       const key = resolveEditableSlotKey(content, edits);
       if (!slots.has(key)) {
-        slots.set(key, { key, memoryId: content.memoryId, assetFile: content.assetFile, isCover: false });
+        slots.set(key, {
+          key,
+          memoryId: content.memoryId,
+          assetFile: content.assetFile,
+          isCover: false,
+          isVideoPoster: content.qr,
+        });
       }
     }
   }

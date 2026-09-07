@@ -4,6 +4,7 @@ import type { MemoryBookRow, MemoryBookEditsRow } from '../types';
 import { parseManifest, parseOutline } from '../../model/loader';
 import { fitBook } from '../../model/fitter';
 import { applyPostFit, applyPreFit } from '../../model/edits';
+import { saveEdit, undoSaveInput, type UndoAction } from '../edits/editsApi';
 import { normalizeEditsShapeForClient } from './normalizeEdits';
 import type { BookDocument, BookManifest } from '../../model/types';
 import type { MemoryBookEditsShape, SkippedEdit } from '../../model/edits';
@@ -46,6 +47,7 @@ export function useEditableBook(bookId: string | null) {
     }
     setState((s) => ({ ...s, loading: true, error: null }));
     setEditsOverride(null);
+    setPendingUndo(null);
 
     // DEV-ONLY fixture mode (owner-approved follow-up round) — bypasses
     // every Supabase read below entirely when `?fixture=<slug>` names THIS
@@ -161,7 +163,34 @@ export function useEditableBook(bookId: string | null) {
     setEditsOverride(nextEdits);
   }, []);
 
-  return { ...state, data, reload: load, applyEditsPatch };
+  // Owner-approved round-3 polish, item 3b: one-shot toast-undo bookkeeping.
+  // `pendingUndo` is the SINGLE most recent `UndoAction` any edit surface
+  // reported alongside its save — a fresh save always REPLACES it (no
+  // multi-level history), and a successful/attempted undo always clears it
+  // (one-shot: undoing never itself becomes undoable).
+  const [pendingUndo, setPendingUndo] = useState<UndoAction | null>(null);
+  const [undoing, setUndoing] = useState(false);
+
+  const handleEditsSaved = useCallback(
+    (nextEdits: MemoryBookEditsShape, undo: UndoAction) => {
+      applyEditsPatch(nextEdits);
+      setPendingUndo(undo);
+    },
+    [applyEditsPatch],
+  );
+
+  const handleUndo = useCallback(async () => {
+    if (!bookId || !pendingUndo || undoing) return;
+    setUndoing(true);
+    const result = await saveEdit(bookId, undoSaveInput(pendingUndo));
+    setUndoing(false);
+    setPendingUndo(null);
+    if (!result.error) applyEditsPatch(result.edits);
+  }, [bookId, pendingUndo, undoing, applyEditsPatch]);
+
+  const dismissUndo = useCallback(() => setPendingUndo(null), []);
+
+  return { ...state, data, reload: load, applyEditsPatch, handleEditsSaved, pendingUndo, undoing, handleUndo, dismissUndo };
 }
 
 function buildDocument(outline: ReturnType<typeof parseOutline>, manifest: ReturnType<typeof parseManifest>, edits: MemoryBookEditsShape) {

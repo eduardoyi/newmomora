@@ -1,10 +1,12 @@
 import { useState, type RefObject } from 'react';
 import type { BookManifest, BookPage, PhotoSlotContent } from '../../model/types';
 import type { MemoryBookEditsShape } from '../../model/edits';
+import type { UndoAction } from '../edits/editsApi';
 import { PickerSheet } from '../edits/PickerSheet';
 import { FocalPointModal } from '../edits/FocalPointModal';
 import { useOverlayGeometry, type PositionedPhotoRegion } from './useOverlayGeometry';
 import { TextEditPopover } from './TextEditPopover';
+import { needsReposition } from './repositionGate';
 import type { InBookAssets } from '../media/inBookAssets';
 import './EditOverlay.css';
 
@@ -45,7 +47,7 @@ export function EditOverlay({
   manifest: BookManifest;
   edits: MemoryBookEditsShape;
   inBookAssets: InBookAssets;
-  onEditsSaved: (edits: MemoryBookEditsShape) => void;
+  onEditsSaved: (edits: MemoryBookEditsShape, undo: UndoAction) => void;
 }) {
   const { photoRegions, textRegions } = useOverlayGeometry(containerRef, pages, edits, manifest);
   const [activePhotoKey, setActivePhotoKey] = useState<string | null>(null);
@@ -81,39 +83,88 @@ export function EditOverlay({
     return null;
   }
 
+  /**
+   * Reposition gating (polish-round item 1): the photo's own native aspect
+   * ratio, alongside `targetAspectFor`'s crop-box aspect, feeds
+   * `needsReposition` (`repositionGate.ts`) to decide whether the
+   * Reposition button is worth offering. For an ordinary slot this is
+   * `PhotoSlotContent.assetAspectRatio`, already on the fitted document —
+   * no extra lookup. The cover slot carries no `PhotoSlotContent` (its
+   * photo lives in `cover-wrap`'s own `params.assetFile`), so this falls
+   * back to a manifest-wide lookup by file name, same "photo aspect data
+   * that exists" spirit as `COVER_APPROX_ASPECT`'s own documented
+   * approximation for the cover's SLOT aspect below.
+   */
+  function nativeAspectFor(region: PositionedPhotoRegion): number | null {
+    if (!region.isCover) {
+      for (const page of pages) {
+        for (const slot of page.slots) {
+          if (slot.content.kind !== 'photo') continue;
+          const content = slot.content as PhotoSlotContent;
+          if (content.memoryId === region.memoryId && content.assetFile === region.assetFile) return content.assetAspectRatio;
+        }
+      }
+      return null;
+    }
+    for (const memory of Object.values(manifest.memories)) {
+      const asset = memory.assets.find((a) => a.file === region.assetFile);
+      if (asset) return asset.aspectRatio;
+    }
+    return null;
+  }
+
+  function showRepositionFor(region: PositionedPhotoRegion): boolean {
+    const slotAspect = targetAspectFor(region) ?? (region.isCover ? COVER_APPROX_ASPECT : null);
+    return needsReposition(nativeAspectFor(region), slotAspect);
+  }
+
   return (
     <div className="edit-overlay" aria-hidden={photoRegions.length === 0 && textRegions.length === 0}>
-      {photoRegions.map((region) => (
-        <div
-          key={region.key}
-          className={`edit-overlay__photo${activePhotoKey === region.key ? ' edit-overlay__photo--active' : ''}`}
-          style={{ left: region.rect.left, top: region.rect.top, width: region.rect.width, height: region.rect.height }}
-          onClick={() => setActivePhotoKey((k) => (k === region.key ? null : region.key))}
-        >
-          <div className="edit-overlay__photo-actions">
-            <button
-              type="button"
-              className="edit-overlay__photo-button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setPickerRegion(region);
-              }}
-            >
-              Replace
-            </button>
-            <button
-              type="button"
-              className="edit-overlay__photo-button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setFocalRegion(region);
-              }}
-            >
-              Reposition
-            </button>
+      {photoRegions.map((region) => {
+        // Item 4: video slots are locked in v1 — no Replace affordance on a
+        // slot backed by a video-poster asset (Reposition is unaffected,
+        // still gated independently by item 1's crop-delta threshold below).
+        const showReplace = !region.isVideoPoster;
+        // Item 1: hide Reposition once the photo is effectively uncropped
+        // at this slot's own aspect — nothing meaningful left to adjust.
+        const showReposition = showRepositionFor(region);
+        if (!showReplace && !showReposition) return null; // nothing left to offer — no empty hover affordance.
+        return (
+          <div
+            key={region.key}
+            className={`edit-overlay__photo${activePhotoKey === region.key ? ' edit-overlay__photo--active' : ''}`}
+            style={{ left: region.rect.left, top: region.rect.top, width: region.rect.width, height: region.rect.height }}
+            onClick={() => setActivePhotoKey((k) => (k === region.key ? null : region.key))}
+          >
+            <div className="edit-overlay__photo-actions">
+              {showReplace && (
+                <button
+                  type="button"
+                  className="edit-overlay__photo-button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPickerRegion(region);
+                  }}
+                >
+                  Replace
+                </button>
+              )}
+              {showReposition && (
+                <button
+                  type="button"
+                  className="edit-overlay__photo-button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setFocalRegion(region);
+                  }}
+                >
+                  Reposition
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       {textRegions.map((region) => (
         <button
@@ -133,6 +184,7 @@ export function EditOverlay({
           isCover={pickerRegion.isCover}
           targetAspect={targetAspectFor(pickerRegion)}
           inBookAssets={inBookAssets}
+          currentEdit={edits.images?.[pickerRegion.key] ?? null}
           onClose={() => setPickerRegion(null)}
           onSaved={onEditsSaved}
         />
@@ -151,7 +203,13 @@ export function EditOverlay({
       )}
 
       {textRegion && (
-        <TextEditPopover bookId={bookId} region={textRegion} onClose={() => setActiveTextTarget(null)} onSaved={onEditsSaved} />
+        <TextEditPopover
+          bookId={bookId}
+          region={textRegion}
+          currentEdit={edits.text?.[textRegion.target] ?? null}
+          onClose={() => setActiveTextTarget(null)}
+          onSaved={onEditsSaved}
+        />
       )}
     </div>
   );

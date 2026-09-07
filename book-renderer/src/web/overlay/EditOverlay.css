@@ -155,8 +155,15 @@
 
 .text-popover__actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* "Reset to original" (item 3) — pinned to the opposite side from
+   Cancel/Save so it reads as a distinct, less-primary action. */
+.text-popover__button--reset {
+  margin-right: auto;
 }
 
 .text-popover__button {

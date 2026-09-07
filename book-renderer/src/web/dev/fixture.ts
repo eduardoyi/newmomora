@@ -150,6 +150,14 @@ export async function fixtureSaveEdit(slug: string, edit: SaveEditInput): Promis
       next.focalPoints![edit.slot] = { slot: edit.slot, x: edit.x, y: edit.y };
       break;
     }
+    case 'delete': {
+      // Mirrors the Edge Function's `delete` kind (owner-approved follow-up
+      // round, item 3a "Reset to original") — removing a key that was never
+      // set is a no-op, same idempotent posture as the real server.
+      const category = next[edit.category];
+      if (category) delete category[edit.key];
+      break;
+    }
     default:
       return { edits: current, error: 'Unknown edit kind' };
   }

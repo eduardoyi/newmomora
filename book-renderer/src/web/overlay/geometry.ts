@@ -153,6 +153,9 @@ function resolveFurnitureTextAnchor(page: BookPage, key: string): TextAnchorPlan
   if (key === 'ttyTitle' && page.templateId === 'through-the-years') {
     return { strategy: 'tty-title' };
   }
+  if (key === 'closingTitle' && page.templateId === 'closing') {
+    return { strategy: 'selector', selector: '.closing__headline', approximate: false };
+  }
   return null;
 }
 

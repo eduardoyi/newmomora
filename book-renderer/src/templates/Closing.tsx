@@ -30,15 +30,26 @@ import './Closing.css';
  * save/reload with no visible effect. `closingLine`, when present and
  * non-empty, REPLACES the furniture-computed memory-count line below the
  * fixed headline (the only other line on this page) rather than adding a
- * third line — the headline itself is furniture (locale-fixed), not an
- * editable v1 target (plan Design Decision 6's five text targets don't
+ * third line — the headline itself was furniture (locale-fixed), not an
+ * editable v1 target (plan Design Decision 6's five text targets didn't
  * include it). Absent (the ordinary case) is byte-identical to before this
  * fix: same `memoryCount > 0` gate, same computed line.
+ *
+ * `furniture:closingTitle` (owner-approved follow-up round, item 5) gives
+ * the headline itself the SAME optional-param-with-furniture-default
+ * pattern `closingLine` already has: when `params.closingTitle` is present
+ * and non-empty it replaces the fixed script headline ("Hasta el año que
+ * viene." / "See you next year."); absent is byte-identical to before.
  */
 export function Closing({ page, manifest, showGuides }: TemplateProps) {
   const memoryCount = Number(page.params.memoryCount ?? 0);
   const furniture = getFurniture(getLanguage(manifest));
   const yearOrdinal = extractYearOrdinal(manifest.scope);
+  const closingTitleOverride =
+    typeof page.params.closingTitle === 'string' && page.params.closingTitle.length > 0
+      ? page.params.closingTitle
+      : null;
+  const closingTitle = closingTitleOverride ?? furniture.closing.headline;
   const closingLineOverride =
     typeof page.params.closingLine === 'string' && page.params.closingLine.length > 0
       ? page.params.closingLine
@@ -51,7 +62,7 @@ export function Closing({ page, manifest, showGuides }: TemplateProps) {
     <PageFrame isSpread={false} showGuides={showGuides} className="closing-page">
       <div className="closing" data-testid="closing">
         <div className="closing__headline" style={{ fontSize: ptCqw(canvasPxToPt(56), false), color: colors.ink }}>
-          {furniture.closing.headline}
+          {closingTitle}
         </div>
         {closingLine && (
           <p className="closing__count" style={{ fontSize: ptCqw(canvasPxToPt(10.5), false), color: colors.ink3 }}>

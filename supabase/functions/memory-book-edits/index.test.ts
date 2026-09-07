@@ -853,3 +853,83 @@ Deno.test('save_edit: rejects a furniture target outside the allowlist', async (
   );
   assertEquals(response.status, 400);
 });
+
+Deno.test('save_edit: saves a valid furniture:closingTitle text edit and returns the merged edits', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'text', target: 'furniture:closingTitle', value: 'See you soon.' } }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook(), editsRow: null }) }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.edits.text['furniture:closingTitle'], { target: 'furniture:closingTitle', value: 'See you soon.' });
+});
+
+// ── save_edit: delete (owner-approved follow-up round, "Reset to original") ─
+
+Deno.test('save_edit: delete removes a text key from the row and keeps the rest untouched', async () => {
+  let upserted: Record<string, unknown> | undefined;
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'delete', category: 'text', key: 'dedication' } }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook(),
+        editsRow: {
+          edits: {
+            text: { dedication: { target: 'dedication', value: 'Old.' }, closing: { target: 'closing', value: 'Kept.' } },
+            images: {},
+            focalPoints: {},
+          },
+        },
+        onUpsert: (payload) => {
+          upserted = payload;
+        },
+      }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.edits.text.dedication, undefined);
+  assertEquals(body.edits.text.closing, { target: 'closing', value: 'Kept.' });
+  assertEquals((upserted?.edits as Record<string, unknown>).text, { closing: { target: 'closing', value: 'Kept.' } });
+});
+
+Deno.test('save_edit: delete on a key that was never saved is a no-op, not an error', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'delete', category: 'images', key: 'never-saved' } }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook(), editsRow: null }) }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.edits.images, {});
+});
+
+Deno.test('save_edit: delete rejects an unknown category', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'delete', category: 'notACategory', key: 'x' } }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook() }) }),
+  );
+  assertEquals(response.status, 400);
+});
+
+Deno.test('save_edit: delete rejects a malformed key', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'delete', category: 'text', key: '' } }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook() }) }),
+  );
+  assertEquals(response.status, 400);
+});
+
+Deno.test('save_edit: delete can remove a focalPoints entry, restoring the default center on next render', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'delete', category: 'focalPoints', key: `${MEMORY_ID}:${MEDIA_ID}` } }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook(),
+        editsRow: { edits: { text: {}, images: {}, focalPoints: { [`${MEMORY_ID}:${MEDIA_ID}`]: { slot: `${MEMORY_ID}:${MEDIA_ID}`, x: 0.2, y: 0.8 } } } },
+      }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.edits.focalPoints, {});
+});

@@ -416,6 +416,30 @@ describe('template snapshots', () => {
     expect((overriddenHtml.match(/closing__count/g) ?? []).length).toBe(1);
   });
 
+  it('Closing renders the furniture headline by default, and a saved furniture:closingTitle edit override in its place (owner-approved follow-up round, item 5)', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'en' });
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] }),
+      makeElement({ id: 'closing', kind: 'closing' }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const closingPage = document.pages.find((p) => p.templateId === 'closing')!;
+    expect(closingPage).toBeTruthy();
+
+    const defaultHtml = renderToStaticMarkup(
+      <TemplateRenderer page={closingPage} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+    expect(defaultHtml).toContain('See you next year.');
+
+    const overriddenPage = { ...closingPage, params: { ...closingPage.params, closingTitle: 'Until next time, little one.' } };
+    const overriddenHtml = renderToStaticMarkup(
+      <TemplateRenderer page={overriddenPage} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+    expect(overriddenHtml).toContain('Until next time, little one.');
+    expect(overriddenHtml).not.toContain('See you next year.');
+    expect((overriddenHtml.match(/closing__headline/g) ?? []).length).toBe(1);
+  });
+
   it('QuoteCollection renders every entry with its date kicker (text-only — owner review round 4 item 5: illustrated entries never enter a collection)', () => {
     const manifest = makeManifest({
       'mem-1': makeMemory({ date: '2025-03-01', text: 'First short quote.', assets: [] }),

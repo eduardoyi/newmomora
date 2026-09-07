@@ -1,0 +1,51 @@
+/* Owner-approved round-3 polish, item 3b: a small "Saved · Undo" toast,
+   same visual language as `SkippedEditsToast.css` but anchored opposite
+   (bottom-right) so the two can never overlap when both happen to be
+   showing at once (a save that also produces a fresh orphan is rare but
+   possible — e.g. reset a caption whose memory then vanishes on the next
+   fit). */
+
+.edit-saved-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 10px 12px;
+  background: var(--color-white);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 2px 6px rgba(44, 36, 24, 0.16), 0 12px 32px rgba(44, 36, 24, 0.18);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-ink2);
+}
+
+.edit-saved-toast__message {
+  flex: 1;
+  min-width: 0;
+}
+
+.edit-saved-toast__undo {
+  all: unset;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--color-primaryDark);
+}
+
+.edit-saved-toast__undo:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.edit-saved-toast__close {
+  all: unset;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--color-ink3);
+  flex-shrink: 0;
+}

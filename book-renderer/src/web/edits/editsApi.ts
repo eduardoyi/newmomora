@@ -1,5 +1,5 @@
 import { supabase } from '../supabaseClient';
-import type { MemoryBookEditsShape } from '../../model/edits';
+import { COVER_SLOT_KEY, type FocalPointEditRecord, type ImageEditRecord, type MemoryBookEditsShape, type TextEditRecord } from '../../model/edits';
 import { getFixtureSlug, fixtureFetchPickerPool, fixtureSaveEdit } from '../dev/fixture';
 
 /**
@@ -13,7 +13,44 @@ export type SaveEditInput =
   | { kind: 'text'; target: string; value: string }
   | { kind: 'imageReplace'; slot: string; mediaId: string }
   | { kind: 'coverPhoto'; mediaId: string }
-  | { kind: 'focalPoint'; slot: string; x: number; y: number };
+  | { kind: 'focalPoint'; slot: string; x: number; y: number }
+  /** "Reset to original" (owner-approved follow-up round, item 3a) — removes
+   * one key from one category of the saved `edits`. Mirrors
+   * `memory-book-edits/index.ts`'s identically-shaped `delete` variant. */
+  | { kind: 'delete'; category: 'text' | 'images' | 'focalPoints'; key: string };
+
+/**
+ * One-shot toast-undo bookkeeping (owner-approved follow-up round, item 3b):
+ * every edit-surface component (`TextEditPopover`, `PickerSheet`,
+ * `FocalPointModal`) reports the record that occupied this exact
+ * category/key BEFORE the save/reset it just made — `null` when there was
+ * none (the ordinary "first edit on this field" case). `undoSaveInput`
+ * below turns that back into a `SaveEditInput` an "Undo" button can replay:
+ * restore the prior record if there was one, else delete the key again (a
+ * reset can itself be undone this way). No multi-level history — the caller
+ * (`BookViewScreen`) keeps at most ONE pending `UndoAction` at a time,
+ * always overwritten by the next save.
+ */
+export type UndoAction =
+  | { category: 'text'; key: string; previous: TextEditRecord | null }
+  | { category: 'images'; key: string; previous: ImageEditRecord | null }
+  | { category: 'focalPoints'; key: string; previous: FocalPointEditRecord | null };
+
+export function undoSaveInput(action: UndoAction): SaveEditInput {
+  if (!action.previous) {
+    return { kind: 'delete', category: action.category, key: action.key };
+  }
+  switch (action.category) {
+    case 'text':
+      return { kind: 'text', target: action.key, value: action.previous.value };
+    case 'images':
+      return action.key === COVER_SLOT_KEY
+        ? { kind: 'coverPhoto', mediaId: action.previous.mediaId }
+        : { kind: 'imageReplace', slot: action.key, mediaId: action.previous.mediaId };
+    case 'focalPoints':
+      return { kind: 'focalPoint', slot: action.key, x: action.previous.x, y: action.previous.y };
+  }
+}
 
 export interface SaveEditResult {
   edits: MemoryBookEditsShape;

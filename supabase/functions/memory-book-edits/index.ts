@@ -119,7 +119,17 @@ export type SaveEditInput =
   | { kind: 'text'; target: unknown; value: unknown }
   | { kind: 'imageReplace'; slot: unknown; mediaId: unknown }
   | { kind: 'coverPhoto'; mediaId: unknown }
-  | { kind: 'focalPoint'; slot: unknown; x: unknown; y: unknown };
+  | { kind: 'focalPoint'; slot: unknown; x: unknown; y: unknown }
+  /**
+   * "Reset to original" (owner-approved follow-up round, item 3) -- removes
+   * ONE key from ONE category of the book's saved `edits`, restoring
+   * whatever the fitter would otherwise compute for it (furniture default,
+   * original photo, centered focal point, ...). Added because `save_edit`
+   * previously had no removal path -- only ever merge-writes a key in. A
+   * `key` that doesn't exist in `category` is a no-op (idempotent), not an
+   * error -- same "orphan cleanly" posture the rest of this module takes.
+   */
+  | { kind: 'delete'; category: unknown; key: unknown };
 
 export interface MemoryBookEditsRequestBody {
   op: 'save_edit' | 'picker_pool';
@@ -312,6 +322,7 @@ export const FURNITURE_KEYS = [
   'dedicationSignoff',
   'ttyKicker',
   'ttyTitle',
+  'closingTitle',
 ] as const;
 export type FurnitureKey = (typeof FURNITURE_KEYS)[number];
 
@@ -365,6 +376,25 @@ function isValidSlot(value: unknown): value is string {
     value.length <= SLOT_MAX_LENGTH &&
     !CONTROL_CHAR_PATTERN.test(value)
   );
+}
+
+const DELETE_CATEGORIES = new Set<keyof MemoryBookEditsShape>(['text', 'images', 'focalPoints']);
+
+/** Validates a `delete` edit's `category`/`key` pair -- `key` reuses
+ * `isValidSlot`'s generic bounded-length/no-control-chars guard rather than
+ * `TEXT_TARGET_PATTERN` even for `category: 'text'`, because deleting is
+ * inherently idempotent (a key that never matches an existing entry is just
+ * a no-op) and doesn't need the same format strictness a WRITE does. */
+function validateDeleteEdit(
+  edit: Record<string, unknown>,
+): { category: keyof MemoryBookEditsShape; key: string } | { error: string } {
+  if (typeof edit.category !== 'string' || !DELETE_CATEGORIES.has(edit.category as keyof MemoryBookEditsShape)) {
+    return { error: 'Invalid delete category' };
+  }
+  if (!isValidSlot(edit.key)) {
+    return { error: 'Invalid delete key' };
+  }
+  return { category: edit.category as keyof MemoryBookEditsShape, key: edit.key };
 }
 
 function validateFocalPointEdit(
@@ -493,7 +523,9 @@ async function handleSaveEdit(
 
   let category: keyof MemoryBookEditsShape;
   let key: string;
-  let record: TextEditRecord | ImageEditRecord | FocalPointEditRecord;
+  // `null` is the `delete` case's marker -- "remove this key" rather than
+  // "write this record" (see `SaveEditInput`'s `delete` variant doc comment).
+  let record: TextEditRecord | ImageEditRecord | FocalPointEditRecord | null;
 
   switch (editInput.kind) {
     case 'text': {
@@ -547,6 +579,14 @@ async function handleSaveEdit(
       record = validated.record;
       break;
     }
+    case 'delete': {
+      const validated = validateDeleteEdit(editInput);
+      if ('error' in validated) return errorResponse(validated.error, 400, 'validation_error');
+      category = validated.category;
+      key = validated.key;
+      record = null;
+      break;
+    }
     default:
       return errorResponse('Unknown edit kind', 400, 'validation_error');
   }
@@ -566,10 +606,13 @@ async function handleSaveEdit(
   }
 
   const currentEdits = normalizeEdits(existingRow?.edits);
-  const nextEdits: MemoryBookEditsShape = {
-    ...currentEdits,
-    [category]: { ...currentEdits[category], [key]: record },
-  };
+  const nextCategory = { ...currentEdits[category] };
+  if (record === null) {
+    delete nextCategory[key];
+  } else {
+    nextCategory[key] = record;
+  }
+  const nextEdits: MemoryBookEditsShape = { ...currentEdits, [category]: nextCategory };
 
   const { error: upsertError } = await supabase.from('memory_book_edits').upsert(
     {

@@ -68,6 +68,29 @@
   padding: 4px 8px;
 }
 
+/* Item 3: "Reset to original photo" — only rendered when this slot has a
+   saved imageReplace/coverPhoto override to remove. */
+.picker-sheet__reset-row {
+  padding: 12px 20px 0;
+}
+
+.picker-sheet__reset {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-ink2);
+}
+
+.picker-sheet__reset:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .picker-sheet__filter {
   display: flex;
   gap: 6px;

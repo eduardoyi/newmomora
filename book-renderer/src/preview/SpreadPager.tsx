@@ -18,6 +18,7 @@ export function SpreadPager({
   pageLabel,
   onPrev,
   onNext,
+  debugCaption = true,
 }: {
   pages: BookPage[];
   manifest: BookManifest;
@@ -27,6 +28,18 @@ export function SpreadPager({
   pageLabel: string;
   onPrev: () => void;
   onNext: () => void;
+  /**
+   * Owner-approved round-3 polish, item 2: the local preview app's own
+   * debug caption ("Page X / Y · anchor-media + spread-title ·
+   * backbone:2023-06") leaks internal template ids and outline element ids
+   * — fine for the local dev preview this component was built for, never
+   * meant for a family-facing viewer. Gated by APP (this prop), not by
+   * deleting the debug info: defaults to `true` so `src/preview/App.tsx`
+   * (the only OTHER caller) is byte-identical to before this change; the
+   * web app (`BookViewScreen.tsx`) is the one caller that passes `false`,
+   * showing only `pageLabel`.
+   */
+  debugCaption?: boolean;
 }) {
   const isFacingPair = pages.length === 2;
   return (
@@ -54,7 +67,13 @@ export function SpreadPager({
           )}
         </div>
         <div className="spread-pager__caption">
-          {pageLabel} · {pages.map((p) => p.templateId).join(' + ')} · {pages[0].sourceElementId}
+          {debugCaption ? (
+            <>
+              {pageLabel} · {pages.map((p) => p.templateId).join(' + ')} · {pages[0].sourceElementId}
+            </>
+          ) : (
+            pageLabel
+          )}
         </div>
       </div>
       <button

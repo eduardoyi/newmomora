@@ -104,8 +104,15 @@
 
 .focal-modal__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   justify-content: flex-end;
+}
+
+/* "Reset to original position" (item 3) — pinned to the opposite side from
+   Cancel/Save so it reads as a distinct, less-primary action. */
+.focal-modal__button--reset {
+  margin-right: auto;
 }
 
 .focal-modal__button {
