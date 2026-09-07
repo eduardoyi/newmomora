@@ -4,9 +4,11 @@ import { StatusChip } from './StatusChip';
 import { pickListThumbnailKey } from './thumbnail';
 import { getMediaUrls } from '../media/coalescer';
 import { signOut } from '../auth/useAuthSession';
+import { useDocumentTitle } from '../useDocumentTitle';
 import './BookListScreen.css';
 
 export function BookListScreen({ onOpenBook }: { onOpenBook: (bookId: string) => void }) {
+  useDocumentTitle('Your books · Momora');
   const { books, error, loading } = useFamilyBooks();
   const [thumbUrls, setThumbUrls] = useState<Map<string, string>>(new Map());
 

@@ -1,5 +1,5 @@
 import { supabase } from '../supabaseClient';
-import { COVER_SLOT_KEY, type FocalPointEditRecord, type ImageEditRecord, type MemoryBookEditsShape, type TextEditRecord } from '../../model/edits';
+import { COVER_SLOT_KEY, type FocalPointEditRecord, type ImageEditRecord, type MemoryBookEditsShape, type SkippedEdit, type TextEditRecord } from '../../model/edits';
 import { getFixtureSlug, fixtureFetchPickerPool, fixtureSaveEdit } from '../dev/fixture';
 
 /**
@@ -50,6 +50,23 @@ export function undoSaveInput(action: UndoAction): SaveEditInput {
     case 'focalPoints':
       return { kind: 'focalPoint', slot: action.key, x: action.previous.x, y: action.previous.y };
   }
+}
+
+/**
+ * `SkippedEditsToast`'s "Remove" action (owner-approved follow-up round,
+ * item 1): turns one orphaned `SkippedEdit` (from `edits.ts`'s
+ * `applyPreFit`/`applyPostFit` — a saved edit whose stable key no longer
+ * resolves) into the `delete` input that permanently drops it from the row.
+ * `SkippedEdit.kind` and `SaveEditInput`'s `delete.category` use different
+ * vocab for the same three buckets ('image' vs 'images', 'focalPoint' vs
+ * 'focalPoints') because `SkippedEdit` names the KIND of edit while
+ * `MemoryBookEditsShape`'s categories name the jsonb column's own map keys
+ * (`text`/`images`/`focalPoints`) — this is the one place that translation
+ * needs to happen.
+ */
+export function skippedDeleteInput(skipped: SkippedEdit): SaveEditInput {
+  const category = skipped.kind === 'text' ? 'text' : skipped.kind === 'image' ? 'images' : 'focalPoints';
+  return { kind: 'delete', category, key: skipped.key };
 }
 
 export interface SaveEditResult {

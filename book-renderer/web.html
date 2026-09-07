@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Momora — Book</title>
+    <!--
+      Same asset as usemomora.com's own favicon (`src/web/momora-favicon.png`)
+      — referenced through Vite's asset pipeline (an absolute `/src/web/...`
+      href, resolved against this config's `root`, same convention as the
+      `<script>` tag below) so it gets a content hash and ships from
+      `dist-web/assets/` on a real build, never a path outside the bundle.
+    -->
+    <link rel="icon" type="image/png" href="/src/web/momora-favicon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!--

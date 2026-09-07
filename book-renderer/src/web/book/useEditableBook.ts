@@ -8,7 +8,7 @@ import { saveEdit, undoSaveInput, type UndoAction } from '../edits/editsApi';
 import { normalizeEditsShapeForClient } from './normalizeEdits';
 import type { BookDocument, BookManifest } from '../../model/types';
 import type { MemoryBookEditsShape, SkippedEdit } from '../../model/edits';
-import { getFixtureSlug, loadFixtureBook, registerFixturePool } from '../dev/fixture';
+import { getFixtureSlug, fixtureCurrentEdits, loadFixtureBook, registerFixturePool } from '../dev/fixture';
 
 export interface EditableBook {
   book: MemoryBookRow;
@@ -62,7 +62,11 @@ export function useEditableBook(bookId: string | null) {
         try {
           const { book, manifest, outline } = await loadFixtureBook(fixtureSlug);
           registerFixturePool(fixtureSlug, manifest);
-          const built = buildDocument(outline, manifest, {});
+          // Re-loading picks up whatever this fixture book's edits already
+          // are (`fixtureCurrentEdits`, sessionStorage-backed) rather than
+          // always starting from `{}` — matching the real path, which
+          // re-fetches `memory_book_edits` fresh on every load.
+          const built = buildDocument(outline, manifest, fixtureCurrentEdits(fixtureSlug));
           setState({ loading: false, error: null, data: { book, canEdit: true, ...built } });
         } catch (e) {
           setState({ loading: false, error: e instanceof Error ? e.message : 'Failed to load fixture book', data: null });

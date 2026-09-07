@@ -1,7 +1,11 @@
 /* Always-on inline editing (owner-approved follow-up round): replaces the
    removed `EditPanel` sidebar's own `.edit-panel__skipped` banner — same
    copy/visual language, now a small dismissible toast anchored to the
-   viewport instead of a panel that no longer exists. */
+   viewport instead of a panel that no longer exists.
+
+   Owner follow-up round item 1: `__remove` mirrors `EditSavedToast.css`'s
+   own `__undo` button (same all:unset + primary-color text-button look), so
+   the two toasts' action buttons read as one consistent language. */
 
 .skipped-edits-toast {
   position: fixed;
@@ -20,6 +24,31 @@
   font-family: var(--font-sans);
   font-size: 12px;
   color: var(--color-ink2);
+}
+
+.skipped-edits-toast__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.skipped-edits-toast__error {
+  color: var(--color-error);
+}
+
+.skipped-edits-toast__remove {
+  all: unset;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--color-primaryDark);
+}
+
+.skipped-edits-toast__remove:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .skipped-edits-toast__close {

@@ -12,6 +12,7 @@ import { EditOverlay } from '../overlay/EditOverlay';
 import { computeUnitAspect } from './unitAspect';
 import { useFitToViewportWidth } from './useFitToViewport';
 import { FirstVisitHint } from './FirstVisitHint';
+import { useDocumentTitle } from '../useDocumentTitle';
 import './BookViewScreen.css';
 
 const EMPTY_IN_BOOK: InBookAssets = { assetFiles: new Set(), mediaIds: new Set() };
@@ -27,8 +28,20 @@ const EMPTY_IN_BOOK: InBookAssets = { assetFiles: new Set(), mediaIds: new Set()
  * mounted rather than toggled.
  */
 export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () => void }) {
-  const { loading, error, data, handleEditsSaved, pendingUndo, undoing, handleUndo, dismissUndo } = useEditableBook(bookId);
+  const { loading, error, data, applyEditsPatch, handleEditsSaved, pendingUndo, undoing, handleUndo, dismissUndo } =
+    useEditableBook(bookId);
   const [unitIndex, setUnitIndex] = useState(0);
+
+  // Item 3: "<child> — <scope label> · Momora" once the book has loaded —
+  // same naming BookListScreen's own row label uses (`book.child.name` /
+  // `book.scope_label`) — so the tab title and the list row a visitor came
+  // from always agree. `null` (a no-op for the hook) until `data.book`
+  // exists, so a loading/error state never flashes a placeholder title.
+  useDocumentTitle(
+    data?.book
+      ? `${data.book.child?.name ? `${data.book.child.name} — ${data.book.scope_label}` : data.book.scope_label} · Momora`
+      : null,
+  );
   // Item 1: the stage wrapper both the viewport-fit hook measures/sizes AND
   // the item-3 overlay positions its regions relative to (its bounding box
   // is the coordinate origin `useOverlayGeometry`'s rects are measured
@@ -178,7 +191,7 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
         </div>
       </div>
 
-      {data.canEdit && <SkippedEditsToast skipped={data.skipped} />}
+      {data.canEdit && <SkippedEditsToast bookId={bookId} skipped={data.skipped} onRemoved={applyEditsPatch} />}
       {data.canEdit && <EditSavedToast pending={pendingUndo} undoing={undoing} onUndo={() => void handleUndo()} onDismiss={dismissUndo} />}
     </div>
   );

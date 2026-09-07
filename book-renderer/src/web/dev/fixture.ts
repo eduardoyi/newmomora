@@ -88,14 +88,53 @@ export async function loadFixtureBook(slug: string): Promise<FixtureBook> {
 }
 
 // ---------------------------------------------------------------------------
-// In-memory edits store — one per fixture slug, reset on full page reload
-// (there is no persistence layer in fixture mode; that's the point).
+// Edits store — one per fixture slug. Backed by `sessionStorage` (owner-
+// approved follow-up round, item 1: "toast Remove flow incl. reload
+// persistence" needs a real reload to mean something) rather than a bare
+// module-level `Map`: a `Map` alone is wiped by ANY full page reload (a new
+// JS realm starts from scratch), which made "does the orphan actually stay
+// gone after a reload" impossible to verify against fixture mode at all —
+// every reload looked "fixed" whether or not the delete really worked.
+// `sessionStorage` survives a same-tab reload but still clears itself when
+// the tab/window closes, so this is still throwaway, dev-only data with no
+// real persistence layer behind it — just enough to make a reload a
+// meaningful test within one diagnosis session.
 // ---------------------------------------------------------------------------
 
-const editsStore = new Map<string, MemoryBookEditsShape>();
+const EDITS_STORAGE_PREFIX = 'momora-fixture-edits:';
+const editsCache = new Map<string, MemoryBookEditsShape>();
 
 function currentEdits(slug: string): MemoryBookEditsShape {
-  return editsStore.get(slug) ?? {};
+  const cached = editsCache.get(slug);
+  if (cached) return cached;
+  if (typeof window === 'undefined' || !window.sessionStorage) return {};
+  try {
+    const raw = window.sessionStorage.getItem(EDITS_STORAGE_PREFIX + slug);
+    const parsed = raw ? (JSON.parse(raw) as MemoryBookEditsShape) : {};
+    editsCache.set(slug, parsed);
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function persistEdits(slug: string, edits: MemoryBookEditsShape): void {
+  editsCache.set(slug, edits);
+  if (typeof window === 'undefined' || !window.sessionStorage) return;
+  try {
+    window.sessionStorage.setItem(EDITS_STORAGE_PREFIX + slug, JSON.stringify(edits));
+  } catch {
+    // Best-effort only — dev diagnosis tooling, never a real data path.
+  }
+}
+
+/** Read-only accessor for `useEditableBook.ts`'s fixture `load()` branch —
+ * so re-loading a fixture book (a remount, or a real reload within the same
+ * tab/session) picks up whatever this book's edits already are, exactly like
+ * the real path re-fetching `memory_book_edits` would, instead of always
+ * starting over from an empty `{}`. */
+export function fixtureCurrentEdits(slug: string): MemoryBookEditsShape {
+  return currentEdits(slug);
 }
 
 const TEXT_TARGET_PATTERN =
@@ -162,7 +201,7 @@ export async function fixtureSaveEdit(slug: string, edit: SaveEditInput): Promis
       return { edits: current, error: 'Unknown edit kind' };
   }
 
-  editsStore.set(slug, next);
+  persistEdits(slug, next);
   return { edits: next, error: null };
 }
 
