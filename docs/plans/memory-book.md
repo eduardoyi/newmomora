@@ -826,6 +826,27 @@ Sequenced as three independently shippable slices:
     used in the book to signal duplicates), reposition-within-crop
     (per-slot focal point stored in the book document).
   - Explicitly v2: deleting images/memories (forces re-layout).
+- **5a.5 — In-app scope picker** (build AFTER 5b — its terminal action links
+  to the web preview, and the signed-link handoff seam is designed on the
+  web side; dogfooding meanwhile uses the canary script). Design decided
+  2026-09-07:
+  - Entry point: one persistent "Memory Books" row where the child already
+    lives in the app (child profile / family area, near the portrait
+    timeline). No settings burial, no feed transience. The moment-driven
+    birthday prompt ("Enzo just turned three — make his Year Three book")
+    is the v2 conversion lever, deliberately deferred.
+  - Scope options: age-years since birth + calendar years + Everything.
+    Custom-range deferred to v2 (schema ready; only option needing a
+    date-range picker; gift use-case rarer). Labels follow cover furniture
+    conventions ("Year One · Oct 2022 – Oct 2023").
+  - Thin periods: SHOW all scopes, disable thin ones with the reason
+    ("12 memories in this period — books need about 30") — the threshold
+    becomes a journaling motivation loop, never a hidden option or dead
+    end. One cheap count query at picker-open.
+  - The picker doubles as status surface: an existing book for a scope
+    shows its state instead of re-offering generation (server-enforced by
+    the one-active-per-scope index): generating → progress (~3 min
+    expectation), ready → "View your book", failed → retry.
 - **5c — Checkout + fulfillment.**
   - Stripe Checkout, our own price (decided when the V4 sample arrives)
     + shipping computed live per address via Prodigi `POST /v4.0/quotes`
