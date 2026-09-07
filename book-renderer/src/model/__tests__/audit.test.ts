@@ -243,6 +243,7 @@ describe('auditBookDocument — (c) geometric overlap', () => {
             looseFit: false,
             index: 1,
             cropBand: null,
+            focalPoint: null,
           },
         },
         {
@@ -266,6 +267,7 @@ describe('auditBookDocument — (c) geometric overlap', () => {
             looseFit: false,
             index: 2,
             cropBand: null,
+            focalPoint: null,
           },
         },
       ],
@@ -330,6 +332,7 @@ describe('auditBookDocument — (h) photo count (owner review round 8, item 5b "
         looseFit: false,
         index: 1,
         cropBand: null,
+        focalPoint: null,
       },
     };
   }

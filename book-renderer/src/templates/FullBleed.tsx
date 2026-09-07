@@ -2,6 +2,7 @@ import type { TemplateProps } from './types';
 import { PageFrame } from './PageFrame';
 import { assetUrl } from '../model/loader';
 import type { PhotoSlotContent } from '../model/types';
+import { objectPositionFor } from './common/focalPoint';
 import './FullBleed.css';
 
 /**
@@ -21,7 +22,12 @@ export function FullBleed({ page, bookSlug, showGuides }: TemplateProps) {
           letterboxing is a multi-photo-composition concept only; a
           full-bleed page has no lavender to fall back to, so it always
           crops (never contains), regardless of `looseFit`. */}
-      <img src={assetUrl(bookSlug, content.assetFile)} alt="" className="full-bleed__img" style={{ objectFit: 'cover' }} />
+      <img
+        src={assetUrl(bookSlug, content.assetFile)}
+        alt=""
+        className="full-bleed__img"
+        style={{ objectFit: 'cover', objectPosition: objectPositionFor(content.focalPoint) }}
+      />
     </PageFrame>
   );
 }

@@ -686,6 +686,43 @@ service-only" contract: every status transition and the eventual
 `book_document` write happens through a service-role RPC the worker change
 owns, not through RLS-permitted client writes.
 
+### 2.1e Memory Book v1 edit surface (V5b)
+
+`plans/memory-book-5b-web-preview.md` Design Decision 4. One row per book
+holding every parent-made edit (text overrides, image replace/reposition —
+see [docs/features/memory-book-generation.md](./features/memory-book-generation.md#edit-surface-v1)
+for the full edit-shape/keying contract) as a single `jsonb` blob.
+
+```sql
+create table public.memory_book_edits (
+  book_id     uuid primary key references public.memory_books on delete cascade,
+  family_id   uuid not null references public.families on delete cascade, -- denormalized for RLS select
+  edits       jsonb not null default '{}'::jsonb,
+  updated_by  uuid references auth.users on delete set null,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+```
+
+**Trust boundary (the reason this table exists as its own migration rather
+than a column on `memory_books`):** clients never write `edits` directly.
+The `memory-book-edits` Edge Function (§4.23, service-role) is the only
+writer — it resolves `mediaId` family-ownership and measures original-photo
+dimensions server-side before merging an edit in, so 5c's service-role
+print path can trust every key/dimension already stored here without
+re-validating it (round-3 plan hardening resolved this exact
+client-fabricated-data risk by removing client write access entirely).
+
+RLS mirrors `memory_books`' service-only shape (§2.1d): `select` =
+`is_family_member(family_id)`; **no insert/update/delete policy at all**,
+and the table grants `authenticated` only `select` (matching
+`media_share_tokens`' precedent for a service-role-only-write table,
+`20260829120000_media_share_tokens.sql`). Concurrency is single-row
+last-write-wins for v1
+(`save_edit` always reads-merges-writes the whole `edits` object) — stated,
+not solved; per-field merge is a v2 follow-up.
+
 ### 2.2 Indexes
 
 ```sql
@@ -2604,6 +2641,80 @@ downstream (out of scope here: no web preview/print rendering). Every
 themed spread surviving the minimum-size (3) dissolve is admitted, anchored
 at the AI's own `insert_after_segment_index`, with only the (cheap,
 already-ported) adjacency-spacing pass applied.
+
+### 4.23 `memory-book-edits` (V5b v1 edit surface)
+
+`plans/memory-book-5b-web-preview.md` Design Decision 5. `verify_jwt = true`.
+The only writer of `memory_book_edits` (§2.1e) — see
+[docs/features/memory-book-generation.md](./features/memory-book-generation.md#edit-surface-v1)
+for the full contract and rationale.
+
+**Authorization (both ops):** `getAuthenticatedNonAnonymousUser`, then the
+caller must be owner/manager (`getCallerFamilyRole` + `isManagerRole`) of the
+`memory_books` row's family, and that row must be `status = 'ready'` — there
+is no `book_document` to edit against otherwise. `404 BOOK_NOT_FOUND` /
+`403 forbidden` / `409 BOOK_NOT_READY` cover those three checks, all before
+either op runs its own logic.
+
+**`save_edit`** — `{ op: 'save_edit', bookId, edit }`, where `edit` is one of:
+
+| `kind` | Fields | Stored under |
+|---|---|---|
+| `text` | `target`, `value` | `edits.text[target]` |
+| `imageReplace` | `slot`, `mediaId` | `edits.images[slot]` |
+| `coverPhoto` | `mediaId` | `edits.images.cover` |
+| `focalPoint` | `slot`, `x`, `y` (0–1) | `edits.focalPoints[slot]` |
+
+`target` must match one of Decision 6's five text-target shapes (`dedication`
+/ `closing` / `backCover` / `sectionTitle:<id>` / `eyebrow:<id>` /
+`caption:<memoryId>`); `value` is capped at 1000 chars, no raw control
+characters. For `imageReplace`/`coverPhoto`, `mediaId` is the ONLY input the
+function trusts from the client's own claims — it re-resolves the
+`memory_media` row's owning memory's `family_id` server-side (never the
+caller's claimed family) and rejects a cross-family or unknown id with
+`404 MEDIA_NOT_FOUND`, and a non-photo `content_type` with
+`400 MEDIA_NOT_PHOTO`. The stored `ImageEditRecord` — `{ slot, mediaId, file,
+originalFile, aspectRatio, originalWidth?, originalHeight? }` — is entirely
+server-resolved: `file` = `preview_object_key ?? object_key`, `originalFile`
+= `object_key`, `aspectRatio` = the DB column when present else a
+dimension-derived ratio else `1`, and `originalWidth`/`originalHeight` come
+from `measureOriginalDimensions` (below) — **absent, never fabricated**, when
+measurement fails for any reason. Every write is a read-merge-write upsert
+against the single `book_id`-keyed row (single-row last-write-wins, Decision
+4) and returns `{ success: true, edits }` (the full merged object).
+
+**Original-dimension measurement** (`measureOriginalDimensions`): the Edge
+Function equivalent of `cloudflare/memory-book-worker/src/dimensions.ts`'s
+same-named export — Edge Functions have no R2 binding, so this presigns a
+short-lived (300s) GET URL via `_shared/r2.ts#createPresignedGetUrls` and
+reads it with an HTTP `Range` header instead of the worker's R2-binding
+ranged `.get()`. Same two-pass bounded probe (256KB, then a 4MB fallback
+only when the first read came back full-length-but-unparseable), same
+`npm:image-size` parse, same absent-never-fabricated contract on any
+failure (missing object, network error, unparseable header even after the
+fallback).
+
+**`picker_pool`** — `{ op: 'picker_pool', bookId, cursor?, limit? }` (limit
+capped at 50). Returns `{ items, nextCursor }`, one item per in-scope photo
+(`memory_media.content_type like 'image/%'`) — `memoryId`, `mediaId`,
+`previewKey`, `date`, `aspectRatio`, `alreadyInBook`. Scope window resolution
+mirrors `workflow-memory-book-bridge`'s `load_generation_context` exactly
+(frozen `scope_start_date`/`scope_end_date`, or the family's live min/max
+`memory_date` for `everything`). `alreadyInBook` is true when the media's
+key already appears among the book's published `manifest.memories[*]
+.assets[*].file` values OR its `mediaId` already has a saved
+`imageReplace`/`coverPhoto` edit. *Deviation from a true keyset cursor:*
+pagination is implemented as an **opaque offset cursor** (base64 of an
+integer), not a compound `(memory_date, id)` keyset comparison — supabase-js's
+embedded-resource filter builder can't express a keyset predicate across a
+joined table's column and this table's own `id` without a raw SQL view/RPC,
+which was out of this change's scope. This trades the well-known offset-page
+consistency caveat (a page boundary can shift if memories are added/removed
+between calls) for simplicity; it does not weaken the actual risk Decision 5
+calls out (`everything`-scope boundedness), which the `limit`/`range` cap
+still fully enforces regardless of cursor style. Keys only — the client
+presigns any thumbnails it renders through the existing `get-media-url`
+coalescer (§4.0b); this function never returns a URL.
 
 ## 5. Client API Flow
 

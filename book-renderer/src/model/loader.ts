@@ -80,6 +80,38 @@ export function resolveElementMemories(
  * manifest contract. Do NOT prepend `assets/` here — that would double it up
  * into `/slug/assets/assets/photo.jpg` and 404.
  */
-export function assetUrl(bookSlug: string, file: string): string {
+function staticAssetUrl(bookSlug: string, file: string): string {
   return `/${bookSlug}/${file}`;
+}
+
+export type AssetUrlProvider = (bookSlug: string, file: string) => string;
+
+let assetUrlProvider: AssetUrlProvider = staticAssetUrl;
+
+/**
+ * Design Decision 8 (memory-book-5b plan, "Pluggable asset resolution"):
+ * swaps how every template resolves a manifest `file` value into an
+ * `<img src>`. Default (never called, or called with `null`) is
+ * `staticAssetUrl` above — untouched, so the print entry (`print.html`) and
+ * the local preview entry (`index.html`) never call this and keep their
+ * byte-identical static asset URLs; the template snapshot suite is
+ * unaffected by this module existing.
+ *
+ * Deliberately module-level state, not a prop threaded through every
+ * template (`TemplateProps` stays `{ page, manifest, bookSlug, showGuides
+ * }`) — per the plan's own documented constraint, the ONLY caller expected
+ * to use this (the future web app, `src/web/`) renders exactly one book's
+ * templates on screen at a time; the book LIST there is plain thumbnails
+ * resolved through its own media coalescer, never these photo templates.
+ * A caller that swaps between books MUST swap the provider first and guard
+ * whatever async work it resolves through it against a stale book id
+ * itself — this module has no way to do that guarding; it only ever calls
+ * whichever provider is currently set, synchronously, at render time.
+ */
+export function setAssetUrlProvider(provider: AssetUrlProvider | null): void {
+  assetUrlProvider = provider ?? staticAssetUrl;
+}
+
+export function assetUrl(bookSlug: string, file: string): string {
+  return assetUrlProvider(bookSlug, file);
 }

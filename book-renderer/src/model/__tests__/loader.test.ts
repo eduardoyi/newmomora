@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import redactedOutlineJson from './fixtures/redacted-outline.json';
-import { parseOutline, parseManifest, resolveElementMemories, BookDataError, assetUrl } from '../loader';
+import { parseOutline, parseManifest, resolveElementMemories, BookDataError, assetUrl, setAssetUrlProvider } from '../loader';
 import { makeManifest, makeMemory } from './fixtures/build';
 
 describe('parseOutline', () => {
@@ -111,5 +111,29 @@ describe('assetUrl', () => {
     // If a caller ever passes a bare filename (no prefix), assetUrl must not
     // silently "fix" it — that would mask a real contract violation upstream.
     expect(assetUrl('sample', 'photo.jpg')).toBe('/sample/photo.jpg');
+  });
+});
+
+describe('assetUrl provider (Design Decision 8, memory-book-5b plan)', () => {
+  afterEach(() => {
+    // Module-level state — always leave it at the default for every other
+    // test in this process (print/preview entries never call the setter,
+    // so leaking a custom provider would be a silent cross-test bug).
+    setAssetUrlProvider(null);
+  });
+
+  it('defaults to the static behavior when no provider has been set', () => {
+    expect(assetUrl('sample', 'assets/photo.jpg')).toBe('/sample/assets/photo.jpg');
+  });
+
+  it('routes through a custom provider once one is set', () => {
+    setAssetUrlProvider((bookSlug, file) => `https://cdn.example.com/${bookSlug}/${file}?sig=abc`);
+    expect(assetUrl('sample', 'assets/photo.jpg')).toBe('https://cdn.example.com/sample/assets/photo.jpg?sig=abc');
+  });
+
+  it('restores the static default when the provider is cleared with null', () => {
+    setAssetUrlProvider((bookSlug, file) => `custom/${bookSlug}/${file}`);
+    setAssetUrlProvider(null);
+    expect(assetUrl('sample', 'assets/photo.jpg')).toBe('/sample/assets/photo.jpg');
   });
 });

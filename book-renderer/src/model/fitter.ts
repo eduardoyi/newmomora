@@ -1053,6 +1053,10 @@ function buildPhotoSlot(
     looseFit,
     index: opts.index,
     cropBand: opts.cropBand ?? null,
+    // Never set by the fitter itself — see `PhotoSlotContent.focalPoint`'s
+    // own doc comment; only `model/edits.ts`'s `applyPostFit` sets a real
+    // value, from a saved edit, after this document is built.
+    focalPoint: null,
   };
   return { id: nextSlotId('photo'), kind: 'photo', content };
 }
@@ -2007,6 +2011,11 @@ function buildCoverPages(element: OutlineElement, manifest: BookManifest, outlin
     voice,
     assetFile: candidatePhoto?.asset.file ?? null,
     portraitFile: voice === 'mixed' ? (manifest.portraits[manifest.portraits.length - 1]?.file ?? null) : null,
+    // Reposition-in-crop for the cover photo (Design Decision 9's "+ the
+    // cover photo via its params path") — same never-set-by-the-fitter
+    // convention as `PhotoSlotContent.focalPoint`; only `model/edits.ts`
+    // sets a real value, post-fit, from a saved edit.
+    assetFocalPoint: null,
   };
 
   return [emptyPage({ id: element.id, sourceElementId: element.id, templateId: 'cover-wrap', params })];

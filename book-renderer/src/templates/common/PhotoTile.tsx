@@ -4,6 +4,7 @@ import { ptCqw } from '../mm';
 import { colors } from '../../theme';
 import { getFurniture, type Language } from '../furniture';
 import { ScanMark } from './ScanMark';
+import { objectPositionFor } from './focalPoint';
 import './PhotoTile.css';
 
 /**
@@ -60,7 +61,7 @@ export function PhotoTile({
           src={assetUrl(bookSlug, content.assetFile)}
           alt=""
           className="photo-tile__img"
-          style={{ objectFit: content.looseFit ? 'contain' : 'cover' }}
+          style={{ objectFit: content.looseFit ? 'contain' : 'cover', objectPosition: objectPositionFor(content.focalPoint) }}
         />
       </div>
       {(content.index != null || content.qr) && (

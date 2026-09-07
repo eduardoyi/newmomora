@@ -9,7 +9,11 @@
  * The fitter (`fitBook`) turns those into a `BookDocument`: pages with a
  * template id + params + slots bound to content refs. This is the ONE
  * artifact the preview and (later) print renderer both consume — layout is
- * computed once, deterministically, never in the browser.
+ * computed once, deterministically. In practice that computation runs in
+ * the browser for both the preview and print entries (`fitBook` is pure TS
+ * with no DOM dependency, so it runs identically wherever it's called —
+ * see fitter.ts's own header comment); 5b's web app fits in the browser
+ * too, applying edits (`model/edits.ts`) around the same `fitBook` call.
  */
 
 // ---------------------------------------------------------------------------
@@ -351,6 +355,20 @@ export interface PhotoSlotContent {
    * control can be wired in later without a data-shape change.
    */
   cropBand: 'center' | null;
+  /**
+   * Reposition-in-crop override (Design Decision 9, memory-book-5b plan):
+   * where within the crop box the "kept" band of the image should sit,
+   * 0-1 on each axis (0,0 = top-left, 1,1 = bottom-right; 0.5,0.5 = the
+   * default browser-native center). The fitter itself never sets this — it
+   * is always `null` coming out of `fitBook`, exactly like `cropBand` was
+   * before item 11 wired that one in. Only `model/edits.ts`'s
+   * `applyPostFit` ever sets a real value, from a saved `focalPoint` edit
+   * (never fabricated; absent = untouched default centering). Wired into
+   * `objectPosition` by PhotoTile/FullBleed/PanoramaSpread only — the other
+   * photo-ish templates render illustrations/portraits through different
+   * slot-content types, out of scope (round-2 review of Decision 9).
+   */
+  focalPoint: { x: number; y: number } | null;
 }
 
 export interface TextSlotContent {

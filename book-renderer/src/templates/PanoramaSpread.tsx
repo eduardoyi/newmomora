@@ -2,6 +2,7 @@ import type { TemplateProps } from './types';
 import { PageFrame } from './PageFrame';
 import { assetUrl } from '../model/loader';
 import type { PhotoSlotContent } from '../model/types';
+import { objectPositionFor } from './common/focalPoint';
 import './PanoramaSpread.css';
 
 const CROP_BAND_POSITION: Record<NonNullable<PhotoSlotContent['cropBand']>, string> = {
@@ -24,6 +25,10 @@ export function PanoramaSpread({ page, bookSlug, showGuides }: TemplateProps) {
   if (!photoSlot) return <PageFrame isSpread showGuides={showGuides} />;
   const content = photoSlot.content;
   const verticalAnchor = content.cropBand ? CROP_BAND_POSITION[content.cropBand] : 'center';
+  // A real focal-point edit (Design Decision 9) takes over the crop
+  // position entirely; absent one, the pre-existing `cropBand` anchor
+  // (always 'center' today) still drives it — byte-identical to before.
+  const objectPosition = objectPositionFor(content.focalPoint) ?? `center ${verticalAnchor}`;
 
   return (
     <PageFrame isSpread showGuides={showGuides} className="panorama-page">
@@ -31,7 +36,7 @@ export function PanoramaSpread({ page, bookSlug, showGuides }: TemplateProps) {
         src={assetUrl(bookSlug, content.assetFile)}
         alt=""
         className="panorama__img"
-        style={{ objectFit: 'cover', objectPosition: `center ${verticalAnchor}` }}
+        style={{ objectFit: 'cover', objectPosition }}
       />
     </PageFrame>
   );

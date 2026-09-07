@@ -1,10 +1,15 @@
 # Feature: Memory Book generation (V5a)
 
 **Status:** `in-progress` — schema + RLS contract (part A/B) and the durable
-generation pipeline (part C: dispatcher + Workflow, this doc's API section)
-are shipped; the in-app scope picker, web preview, and checkout are separate,
-not-yet-built slices (5b UI / 5c).
-**Last updated:** 2026-09-01
+generation pipeline (part C: dispatcher + Workflow) are shipped. 5b's v1
+edit-surface **schema + Edge Function** (`memory_book_edits`,
+`memory-book-edits`, [below](#edit-surface-v1)) are also shipped (plan
+steps 1-2). The rest of 5b (steps 3-9: `applyBookEdits`, focal-point
+wiring, the web preview app, hosting, checkout) is tracked in
+[plans/memory-book-5b-web-preview.md](../../plans/memory-book-5b-web-preview.md)
+— this doc does not assert their completion status; check that plan and the
+relevant source directly.
+**Last updated:** 2026-09-07
 **PRD reference:** none yet (Memory Book is a new premium product, not in the
 original PRD) — canonical product doc is
 [docs/plans/memory-book.md](../plans/memory-book.md), specifically
@@ -68,8 +73,11 @@ on `memory_books` — is shipped (part C).
 | Table | Role |
 |---|---|
 | `memory_books` | One row per book project: family/child scope, frozen time-period window, GENERATION status machine, page budget, and the final `book_document` JSON once ready. |
+| `memory_book_edits` | One row per book: every parent-made v1 edit (text overrides, image replace/reposition) as a single `jsonb` blob. Client SELECT-only; every write goes through `memory-book-edits` (service-role) — see [Edit surface (v1)](#edit-surface-v1). |
 
-Full column list and constraints: [TECH_SPEC §2.1d](../TECH_SPEC.md#21d-memory-book-generation-v5a).
+Full column list and constraints: [TECH_SPEC §2.1d](../TECH_SPEC.md#21d-memory-book-generation-v5a)
+(`memory_books`) and [TECH_SPEC §2.1e](../TECH_SPEC.md#21e-memory-book-v1-edit-surface-v5b)
+(`memory_book_edits`).
 
 ### Status machine
 
@@ -173,6 +181,7 @@ Shipped (part C):
 | `generate-memory-book` | Dispatcher, `verify_jwt = true`. JWT + owner/manager role check, `ready`/fresh-`generating` short-circuits, service-role CAS claim to `generating` with a fresh attempt UUID, HMAC dispatch of `{ bookId, attemptId }` to the Worker's `/dispatch`. |
 | `workflow-memory-book-bridge` | Signed HMAC bridge, `verify_jwt = false`, Worker-only. Operations: `load_generation_context`, `ensure_share_tokens`, `publish`, `fail`, `reconcile`. |
 | `cloudflare/memory-book-worker` (`MemoryBookWorkflow`) | Own Wrangler deployment (own `wrangler.jsonc`/`package.json`, Node 22), sibling to `memory-illustration-worker`. Curates the outline (ported from `supabase/scripts/eval-memory-book-outline.ts`'s pure functions + the shared `_shared/memory-book-outline.ts` builders/parser), runs the shared cover-verify vision pass against R2 preview thumbnails, assembles `book_document` via `_shared/memory-book-manifest.ts`'s builders, and publishes through the bridge's CAS. |
+| `memory-book-edits` | V5b v1 edit surface, `verify_jwt = true`. Ops `save_edit`/`picker_pool` — see [Edit surface (v1)](#edit-surface-v1). |
 
 Full request/response contracts, the Workflow's step sequence, and two
 deliberate documented deviations from the illustration/portrait bridge
@@ -181,6 +190,134 @@ this task's scope excluded schema changes) are in
 [TECH_SPEC §4.22](../TECH_SPEC.md#422-memory-book-generation-v5a-part-c).
 See [docs/durable-ai-generation-workflows.md](../durable-ai-generation-workflows.md)
 for the general pattern this follows.
+
+## Edit surface (v1)
+
+This section covers `plans/memory-book-5b-web-preview.md` steps 1-2: the
+`memory_book_edits` schema and the `memory-book-edits` Edge Function that is
+its only writer. `applyBookEdits` (the pure pre-fit/post-fit consumer —
+step 4), focal-point template wiring (step 5), and the web UI that actually
+calls this function (step 6) are separate steps of the same plan — check
+`book-renderer/src/model/edits.ts` and the plan file itself for their
+current state rather than assuming this doc tracks them.
+
+### Trust boundary
+
+A parent's book edits (dedication/closing/section-title/caption text,
+photo replace, cover photo, focal point) are the one piece of book content a
+client writes AFTER generation. Design Decision 4/5 resolve the obvious risk
+(a client claiming a `mediaId` it doesn't own, or dimensions it made up) by
+**never letting the client write `memory_book_edits` directly at all**:
+
+- RLS on `memory_book_edits` is `select`-only for `authenticated` — no
+  insert/update/delete policy exists, and the table grant doesn't include
+  them either (same "job is service-only" shape as `memory_books` itself,
+  [TECH_SPEC §2.1e](../TECH_SPEC.md#21e-memory-book-v1-edit-surface-v5b)).
+- The `memory-book-edits` Edge Function (service-role) is the **only**
+  writer. For an image edit it re-resolves `mediaId` → owning
+  `memory_media` row → owning memory's `family_id` **server-side**, and
+  measures the ORIGINAL photo's real pixel dimensions itself (see below) —
+  never trusting anything the client sends beyond which media it picked.
+
+The payoff: 5c's future service-role print path can read
+`memory_book_edits.edits` and trust every key/dimension in it without
+re-validating anything, because a client literally cannot have written a
+fabricated value into that column.
+
+### Edit shapes and keying
+
+`edits` is a `jsonb` object with three namespaced categories — `text`,
+`images`, `focalPoints` — keyed by a **stable, non-positional** target
+(never an array index, so an edit can't silently mis-target a slot after a
+regeneration):
+
+| Category | Key | Stored record |
+|---|---|---|
+| `text` | `target` — `dedication` \| `closing` \| `backCover` \| `sectionTitle:<elementId>` \| `eyebrow:<elementId>` \| `caption:<memoryId>` | `{ target, value }` |
+| `images` | `<memoryId>:<mediaId-or-assetFileKey>`, or the literal `cover` for the cover photo | `{ slot, mediaId, file, originalFile, aspectRatio, originalWidth?, originalHeight? }` |
+| `focalPoints` | `<memoryId>:<mediaFileKey>` (often the same key as an `images` entry — a focal point can be set on a photo whether or not that slot also has a replacement) | `{ slot, x, y }` (0–1) |
+
+**Eligibility (v1):** only photo slots rendered via `PhotoSlotContent`
+(PhotoTile pages, FullBleed, PanoramaSpread) and the cover photo are
+editable. AI illustrations and illustrated portraits are not — the Edge
+Function enforces this server-side too (`content_type` must start
+`image/`; a non-photo `mediaId` is rejected with `400 MEDIA_NOT_PHOTO`).
+
+### `save_edit`
+
+`POST memory-book-edits { op: 'save_edit', bookId, edit }`. Auth: caller
+must be owner/manager of the book's family, and the book must be `status =
+'ready'`. Flow:
+
+1. Validate `edit`'s shape for its `kind` (`text` / `imageReplace` /
+   `coverPhoto` / `focalPoint`) — format only; a text target's embedded
+   `memoryId`/element id is never checked against the DB (an
+   orphaned/wrong-family key is inert — Decision 6's own "orphans cleanly"
+   contract — since it can only ever be consumed by the render-time
+   consumer's own manifest/outline lookups).
+2. For an image edit, resolve `mediaId` → `memory_media` → owning memory's
+   `family_id`, reject if it doesn't match the book's family (`404
+   MEDIA_NOT_FOUND` — same response whether the id is unknown or belongs to
+   another family, so there's no oracle for "does this id exist elsewhere",
+   mirroring `get-media-url`'s per-key omission rationale). Resolve `file`
+   (`preview_object_key ?? object_key`) and `originalFile` (`object_key`),
+   and measure the original's real pixel dimensions (next section).
+3. Read-merge-write: load the book's single `memory_book_edits` row (or
+   treat a missing one as `{}`), merge the new record into its category/key,
+   `upsert` the whole row (`onConflict: 'book_id'`). This is single-row
+   **last-write-wins** for v1 — no per-field CAS, no optimistic-concurrency
+   check. Stated, not solved; per-field merge is a v2 follow-up (plan Risks).
+4. Return `{ success: true, edits }` — the full merged object, so the
+   client doesn't need a second round trip to render its own change.
+
+### Original-dimension measurement
+
+Photo full-bleed/panorama trust gates need the ORIGINAL photo's real pixel
+dimensions (not the ~1280px preview's), exactly like the generation
+Workflow's own manifest-asset measurement
+(`cloudflare/memory-book-worker/src/dimensions.ts`). Edge Functions have no
+R2 binding, so `memory-book-edits`' `measureOriginalDimensions` gets there a
+different way: a short-lived (300s) presigned GET URL
+(`_shared/r2.ts#createPresignedGetUrls`) read with an HTTP `Range` header,
+instead of the worker's R2-binding ranged `.get()`. The semantics are
+otherwise identical: a 256KB first-pass probe, a 4MB fallback only when the
+first read came back full-length-but-still-unparseable (meaning the object
+is larger and the header just didn't fit — never a re-read of the same
+bytes), `npm:image-size` for the actual parse, and **absent, never
+fabricated** dimensions on any failure (missing object, network error,
+corrupt/unsupported header even after the fallback) — the caller omits the
+field rather than guessing.
+
+### `picker_pool`
+
+`POST memory-book-edits { op: 'picker_pool', bookId, cursor?, limit? }`
+(limit capped at 50). Returns a keys-only page of the book's in-scope
+photos for the image-replace picker sheet — `memoryId`, `mediaId`,
+`previewKey`, `date`, `aspectRatio`, `alreadyInBook` — never a URL; the
+client presigns whichever thumbnails it actually renders through the
+existing `get-media-url` coalescer (same pattern the app's own media
+loading already uses). The scope window is resolved exactly like
+`workflow-memory-book-bridge`'s `load_generation_context` (frozen dates, or
+the family's live min/max `memory_date` for an `everything`-scope book) —
+pagination is what keeps an `everything`-scope family's pool bounded per
+request, not a soft nicety. Pagination is an **opaque offset cursor**, not a
+true `(memory_date, id)` keyset — see
+[TECH_SPEC §4.23](../TECH_SPEC.md#423-memory-book-edits-v5b-v1-edit-surface)
+for why, and its accepted trade-off.
+
+### How 5c will consume edits
+
+5c's print path is out of scope here, but the contract it will consume is
+already fixed by this change: `applyBookEdits` (plan step 4) is specified to
+be a **pure, runtime-agnostic** function —
+`applyPreFit(outline, manifest, edits)` and `applyPostFit(document, edits)`
+— because every piece of I/O (mediaId resolution, dimension measurement) is
+already done at `save_edit` time. Per Decision 7: TEXT edits apply
+POST-fit (to already-fitted slots/params, so a caption typo fix can never
+re-paginate the book) and IMAGE edits apply PRE-fit (manifest/outline
+substitution, so a too-small replacement photo's reflow is real and
+visible, never silently hidden) — 5c reuses the identical `edits` row and
+the identical `applyBookEdits` split the web preview uses, by construction.
 
 ## Client integration
 
@@ -215,12 +352,16 @@ components (single-renderer rule — plan §3) once `ready`.
 - Add columns for 5b needs (e.g. a `language` field, cover selection) via a
   new migration; keep the "app inserts queued, service owns transitions"
   boundary intact.
-- Add narrowly-scoped client `update` policies for genuinely
-  parent-editable fields *after* generation (5b's v1 edit surface:
-  dedication, closing-page lines, section titles, photo-caption overrides,
-  image replace/reposition — plan §"V5 scope" 5b) — scope each policy to
-  its specific column set and to `ready` books only; never open a general
-  `update` policy on this table.
+- ~~Add narrowly-scoped client `update` policies for genuinely
+  parent-editable fields~~ **Superseded (2026-09-07):** the shipped v1 edit
+  surface does NOT add a client `update` policy anywhere, on this table or
+  `memory_book_edits`. Round-3 plan hardening
+  (`plans/memory-book-5b-web-preview.md` Design Decision 4) found that even
+  a narrowly-scoped column-level policy would let a client claim a
+  `mediaId`/dimensions it doesn't own — so every edit write goes through
+  the `memory-book-edits` Edge Function (service-role) instead, and
+  `memory_book_edits` itself is select-only for `authenticated`, same shape
+  as this table. See [Edit surface (v1)](#edit-surface-v1).
 - Add a private job table alongside `memory_books` if 5b's retry/replay
   needs turn out to require the same paid-attempt-reservation machinery the
   illustration workflow has (per-attempt counters, upload leases). This
@@ -284,6 +425,15 @@ components (single-renderer rule — plan §3) once `ready`.
 - This table has **no** `memory_book_orders`-style purchase/fulfillment
   state. Do not conflate "book is ready to preview" with "book has been
   paid for and printed" — those are 5c concerns on a different table.
+- `memory_book_edits` only accepts writes against a `ready` book — there is
+  no `book_document`/manifest for `save_edit`'s image-replace path or
+  `picker_pool`'s `alreadyInBook` hint to work against otherwise
+  (`409 BOOK_NOT_READY`).
+- `memory-book-edits`' dimension-measurement probe never fetches more than
+  4MB of any original photo, and never logs memory content — only ids,
+  keys, and the caller-controlled edit VALUE is deliberately never logged
+  either (it's the one field a caller fully controls; treat it like memory
+  text for logging purposes even though it isn't stored in `memories`).
 
 ## Dependencies
 
@@ -300,9 +450,16 @@ components (single-renderer rule — plan §3) once `ready`.
   OpenAI (`gpt-5.6-sol`, outline + cover-verify calls), and the
   `MEMORY_BOOK_PREVIEWS` R2 binding (reads EXISTING
   `memory_media.preview_object_key`/`object_key` objects for cover-verify
-  thumbnails — never writes to R2).
-- Used by: nothing yet — 5b (scope-picker UI + web preview) and 5c
-  (checkout + fulfillment) are the planned consumers of a `ready` book.
+  thumbnails — never writes to R2). `memory-book-edits` additionally
+  depends on `memory_media` (mediaId resolution) and `_shared/r2.ts`'s
+  `createPresignedGetUrls` (dimension-measurement ranged reads) — see [Edit
+  surface (v1)](#edit-surface-v1).
+- Used by: `applyBookEdits` (plan step 4) is the consumer of
+  `memory_book_edits.edits` at both preview render time and 5c print time —
+  the edit shapes and the trust boundary above are the contract it's built
+  against (check `book-renderer/src/model/edits.ts` for its current state).
+  The scope-picker UI, the web preview app itself, and checkout (5b steps
+  3-9 / 5c) are the other consumers of a `ready` book tracked by the plan.
 
 ## Testing
 
@@ -316,6 +473,46 @@ pre-claiming `status = 'ready'` with a `book_document` is rejected; a
 client `update` of `status` is rejected at the grant level (`permission
 denied for table memory_books`, not just RLS); and a second family cannot
 see or insert against the first family's rows.
+
+### `memory_book_edits` migration verification (V5b step 1)
+
+Also verified manually against a local Postgres with the full migration
+history applied (`supabase db reset --local`, ports temporarily shifted in
+`supabase/config.toml` to avoid a locally-running unrelated project on the
+default ports, then reverted — same workaround `memory_books`' own author
+used): as the owning family's owner, `select` on the family's own row
+returns it; as a second family's owner, the SAME row is invisible (`select`
+returns zero rows, not an error — RLS, not a 403); as the owning family's
+owner, `update`/`insert`/`delete` are all rejected at the **grant level**
+(`permission denied for table memory_book_edits`, not just RLS — confirmed
+distinctly for each of the three statements); and `anon` is rejected at the
+grant level too. `src/types/database.ts` was regenerated in the same change
+(`supabase gen types typescript --local`) and diffs cleanly (only the new
+table's types added).
+
+### `memory-book-edits` Edge Function tests (V5b step 2)
+
+- `supabase/functions/memory-book-edits/index.test.ts` — Deno,
+  dependency-injected (auth/role/service-client/presign/fetch), 43 tests:
+  auth rejection incl. the WP-SEC anonymous-chokepoint wiring check, method/
+  body/op/bookId validation, 404/403/409 (unknown book / wrong role /
+  not-ready book), every text-target/value validation branch, **cross-family
+  mediaId rejection** (the media resolves to a different family than the
+  book's — the core trust-boundary test), unknown-mediaId and non-photo
+  rejection, the reserved `cover` slot, focal-point range validation,
+  successful `imageReplace`/`coverPhoto` saves incl. `file`/`originalFile`/
+  `aspectRatio` resolution, **dimension-measurement fallback** (a
+  full-length-but-unparseable 256KB probe correctly triggers the 4MB
+  fallback read), and **absent-never-fabricated** dimension behavior (a
+  missing original or a failed presign still saves the edit, just without
+  `originalWidth`/`originalHeight`); `picker_pool` **pagination** (cursor
+  round-tripping, the 50-item page cap, `nextCursor` present only on a full
+  page, malformed-cursor rejection) and the `alreadyInBook` flag (both via a
+  manifest-asset-file match and via an existing saved image edit); plus
+  direct unit coverage of the exported helpers (`normalizeEdits`,
+  `collectManifestAssetFiles`, `resolveScopeWindow` incl. its
+  `everything`-scope live-window resolution, `measureOriginalDimensions`
+  against real, hand-built PNG fixture bytes).
 
 ### Generation pipeline tests (part C)
 
@@ -348,7 +545,7 @@ see or insert against the first family's rows.
 ```bash
 npm run db:reset   # applies migrations (incl. this one) against local Postgres
 npm test           # src/types/database.ts is exercised transitively across the suite
-npm run test:edge   # generate-memory-book + workflow-memory-book-bridge (Deno)
+npm run test:edge   # generate-memory-book + workflow-memory-book-bridge + memory-book-edits (Deno)
 cd cloudflare/memory-book-worker && npm test   # Workflow/dispatch (Vitest, Node 22)
 ```
 
@@ -356,5 +553,6 @@ cd cloudflare/memory-book-worker && npm test   # Workflow/dispatch (Vitest, Node
 
 | Date | Change |
 |------|--------|
+| 2026-09-07 | V5b steps 1-2: v1 edit-surface schema + Edge Function shipped — `memory_book_edits` migration (client select-only; every write service-role, verified via psql) and `memory-book-edits` (`save_edit` + `picker_pool`, server-side `mediaId` resolution and original-photo dimension measurement via presigned-GET + HTTP Range). `applyBookEdits`, focal-point wiring, and the web app itself remain not-yet-built (plan steps 3-9). Corrected this doc's earlier "add narrowly-scoped client update policies" extension-guide bullet, which the round-3-hardened plan superseded with the service-role-only design actually shipped. |
 | 2026-09-01 | V5a part C: durable generation pipeline shipped — `generate-memory-book` dispatcher, `workflow-memory-book-bridge`, and `cloudflare/memory-book-worker`'s `MemoryBookWorkflow` (curates the outline from ported eval-CLI logic + shared builders, verifies cover candidates, assembles `book_document`, publishes via CAS). No schema migration in this change (two deviations documented in TECH_SPEC §4.22: plain-CAS instead of a publish/fail RPC, no nonce-replay ledger). Scope-picker UI and web preview remain 5b; checkout remains 5c. |
 | 2026-09-01 | V5a part A/B: `memory_books` schema + RLS/status contract shipped. No worker, UI, or checkout yet. |

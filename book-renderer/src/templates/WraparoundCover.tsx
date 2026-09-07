@@ -4,6 +4,7 @@ import { assetUrl } from '../model/loader';
 import { PHYSICAL } from '../model/types';
 import { ptCqwFor, canvasPxToPt } from './mm';
 import { colors, lavender } from '../theme';
+import { objectPositionFor } from './common/focalPoint';
 import './WraparoundCover.css';
 
 /**
@@ -34,6 +35,8 @@ export function WraparoundCover({ page, bookSlug, showGuides }: TemplateProps) {
     voice: 'minimal' | 'mixed';
     assetFile: string | null;
     portraitFile: string | null;
+    /** Design Decision 9: reposition-in-crop override for the cover photo, saved via its own `'cover'`-keyed edit — see `PhotoSlotContent.focalPoint`'s doc comment for the shared convention. Absent on every book without such an edit. */
+    assetFocalPoint?: { x: number; y: number } | null;
   };
   const spineMm = p.spineMm;
   const spineTier = spineMm >= 12 ? 'full' : spineMm >= 8 ? 'name-only' : 'blank';
@@ -84,7 +87,12 @@ export function WraparoundCover({ page, bookSlug, showGuides }: TemplateProps) {
               background: colors.ink,
             }}
           >
-            <img src={assetUrl(bookSlug, p.assetFile)} alt="" className="cover-wrap__photo-img" />
+            <img
+              src={assetUrl(bookSlug, p.assetFile)}
+              alt=""
+              className="cover-wrap__photo-img"
+              style={{ objectPosition: objectPositionFor(p.assetFocalPoint) }}
+            />
             <div className="cover-wrap__scrim" />
           </div>
         )}
