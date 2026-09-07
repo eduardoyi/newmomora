@@ -1,0 +1,50 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "momora-memory-book-web",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-07",
+  "observability": {
+    "enabled": true
+  },
+  // Static-assets Worker (memory-book-5b plan Step 7) serving
+  // book-renderer's DEDICATED web build (`npm run build:web` in
+  // book-renderer/, output `dist-web/` — NEVER `dist/`, which is the
+  // preview/print build and, when built locally with a populated
+  // `book-data/`, contains 1.9GB of real family-book PII; see that
+  // package's `vite.web.config.ts` and `scripts/check-web-bundle.mjs` for
+  // the build-time guarantee this Worker's directory choice depends on).
+  // `src/index.ts` implements SPA fallback itself (falls back to
+  // `web.html`, not Cloudflare's own `index.html`-only convention,
+  // because this app's single entry is named `web.html` — see that
+  // file's header comment) rather than relying on
+  // `not_found_handling: "single-page-application"`.
+  "assets": {
+    "directory": "../../book-renderer/dist-web",
+    "binding": "ASSETS"
+  },
+  // Public config only reaches book-renderer's bundle at BUILD time
+  // (`VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`, baked in by
+  // `npm run build:web` — see that package's `src/web/supabaseClient.ts`).
+  // This Worker itself has no secrets and no bindings beyond ASSETS: it
+  // never talks to Supabase or R2 directly, it only serves the already-
+  // built static bundle.
+  "routes": [
+    {
+      "pattern": "book.usemomora.com",
+      "custom_domain": true
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "momora-memory-book-web-staging",
+      "assets": {
+        "directory": "../../book-renderer/dist-web",
+        "binding": "ASSETS"
+      }
+      // No staging custom-domain route by default — deploy with
+      // `wrangler deploy --env staging` and use the resulting
+      // workers.dev URL, or add a route here when a staging subdomain
+      // exists.
+    }
+  }
+}

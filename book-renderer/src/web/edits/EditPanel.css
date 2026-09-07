@@ -1,0 +1,152 @@
+.edit-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.edit-panel__skipped {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-ink3);
+}
+
+.edit-panel__skipped button {
+  all: unset;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--color-ink3);
+}
+
+.edit-panel__empty {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-ink3);
+  margin: 0;
+}
+
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edit-field__label {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-ink2);
+}
+
+.edit-field__input {
+  font-family: var(--font-sans);
+  font-size: 15px; /* >=16px would be ideal for iOS zoom guard; kept legible while fitting the panel width */
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  resize: vertical;
+}
+
+.edit-field__input:focus {
+  outline: none;
+  border-color: var(--lavender-deep);
+}
+
+.edit-field__status {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-ink3);
+}
+
+.edit-field__error {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-primaryDark);
+}
+
+.edit-panel__section-title {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-ink3);
+  margin: 0 0 10px;
+}
+
+.edit-panel__photos {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.photo-slot-editor {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.photo-slot-editor__thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--lavender-pale);
+  flex-shrink: 0;
+}
+
+.photo-slot-editor__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.photo-slot-editor__thumb-placeholder {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--lavender-pale), var(--lavender-soft));
+}
+
+.photo-slot-editor__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.photo-slot-editor__label {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-ink2);
+}
+
+.photo-slot-editor__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.photo-slot-editor__actions button {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primaryDark);
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primaryTint);
+}

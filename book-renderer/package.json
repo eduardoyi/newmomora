@@ -10,9 +10,13 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "book:pdf": "vite-node scripts/render-pdf.mts"
+    "book:pdf": "vite-node scripts/render-pdf.mts",
+    "dev:web": "vite --config vite.web.config.ts",
+    "build:web": "tsc --noEmit && vite build --config vite.web.config.ts && npm run check:web-bundle",
+    "check:web-bundle": "node scripts/check-web-bundle.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.107.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

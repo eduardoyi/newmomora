@@ -807,16 +807,34 @@ Sequenced as three independently shippable slices:
   preview asset prep from app-resolution assets. Preview is CHEAP — no
   Puppeteer, no print assets. Outline cost is now logged per run (tokens +
   USD; price table in eval-memory-book-outline.ts).
-- **5b — Web preview + v1 edit surface.** Next.js + Supabase auth; the
+- **5b — Web preview + v1 edit surface.** Supabase auth (email OTP); the
   book-renderer components render the preview (single-renderer rule).
   Decided 2026-09-01: lives at **book.usemomora.com** — a package in the
   main Momora repo sharing book-renderer (never in the marketing repo),
-  own deploy, auth cookies scoped to the subdomain. The journey STARTS IN
-  THE APP: the app creates the memory_books row (scope picker in-app,
-  where family/children/subscription state already live) and hands off
-  `book.usemomora.com/b/<id>`; web does preview -> edit -> checkout. 5b
-  seam to design: login-free handoff via one-time signed link from the
-  app session.
+  own deploy. **Superseded 2026-09-07 (hardened plan
+  `plans/memory-book-5b-web-preview.md`, Design Decision 1): NOT Next.js**
+  — a THIRD Vite entry inside `book-renderer` itself (`web.html` +
+  `src/web/`, alongside the existing `index.html` preview and `print.html`
+  print entries), not a separate framework/package. Rationale: no SSR
+  need, one build toolchain, the renderer shared by construction (import,
+  not a cross-package dependency). Session storage: plain supabase-js
+  `localStorage` persistence, NOT httpOnly cookies — acceptable for a
+  first-party surface with no third-party scripts; revisit before 5c's
+  payment pages. Ships as its own dedicated Vite build
+  (`vite.web.config.ts`, `publicDir: false`, single `web.html` input,
+  `dist-web/` output) specifically so the default config's `book-data`
+  publicDir (1.9GB of real family-book PII on a machine with the export
+  fixtures present) and the `index.html`/`print.html` entries can never
+  reach the public bundle — enforced by a build-time check
+  (`book-renderer/scripts/check-web-bundle.mjs`), not just the config's
+  intent. Hosted by a static-assets Cloudflare Worker
+  (`cloudflare/memory-book-web/`, SPA fallback to `web.html`) at the same
+  domain. The journey STARTS IN THE APP: the app creates the memory_books
+  row (scope picker in-app, where family/children/subscription state
+  already live) and hands off `book.usemomora.com/b/<id>`; web does
+  preview -> edit -> checkout. 5b seam to design: login-free handoff via
+  one-time signed link from the app session (not yet built — see the
+  plan's "Out of scope").
   v1 edits, decided from validation-book feedback:
   - Text: dedication, closing-page lines, section titles (eyebrows
     derived-but-overridable), cover + back-cover text, photo captions as

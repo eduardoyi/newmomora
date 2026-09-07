@@ -387,6 +387,35 @@ describe('template snapshots', () => {
     expect(html).not.toContain('she rode the bike today');
   });
 
+  it('Closing renders the furniture memory-count line by default, and a saved closing-line edit override in its place (wave-1/5b wiring gap fix)', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ assets: [makeAsset()] }),
+    });
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] }),
+      makeElement({ id: 'closing', kind: 'closing' }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const closingPage = document.pages.find((p) => p.templateId === 'closing')!;
+    expect(closingPage).toBeTruthy();
+
+    // Absent override: byte-identical to the pre-fix furniture line.
+    const defaultHtml = renderToStaticMarkup(
+      <TemplateRenderer page={closingPage} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+    expect(defaultHtml).toContain('closing__count');
+    const memoryCount = Number(closingPage.params.memoryCount ?? 0);
+    expect(memoryCount).toBeGreaterThan(0);
+
+    // Overridden: the saved edit's text replaces the computed line, not adds a third one.
+    const overriddenPage = { ...closingPage, params: { ...closingPage.params, closingLine: 'Thanks for a wonderful year, little one.' } };
+    const overriddenHtml = renderToStaticMarkup(
+      <TemplateRenderer page={overriddenPage} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+    expect(overriddenHtml).toContain('Thanks for a wonderful year, little one.');
+    expect((overriddenHtml.match(/closing__count/g) ?? []).length).toBe(1);
+  });
+
   it('QuoteCollection renders every entry with its date kicker (text-only — owner review round 4 item 5: illustrated entries never enter a collection)', () => {
     const manifest = makeManifest({
       'mem-1': makeMemory({ date: '2025-03-01', text: 'First short quote.', assets: [] }),

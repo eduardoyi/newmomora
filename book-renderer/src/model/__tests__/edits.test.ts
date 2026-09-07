@@ -284,7 +284,7 @@ describe('applyPostFit — text edits', () => {
     expect(document.pages[0].params.backCoverLine).toBe('Edited back cover.');
   });
 
-  it('overrides the closing line (forward-compatible plumbing — Closing.tsx does not render it yet)', () => {
+  it('overrides the closing line (Closing.tsx renders params.closingLine — see its own doc comment)', () => {
     const doc = docWith([emptyPage({ id: 'closing', sourceElementId: 'closing', templateId: 'closing', params: {} })]);
     const { document } = applyPostFit(doc, { text: { closing: textEdit('Edited closing line.') } });
     expect(document.pages[0].params.closingLine).toBe('Edited closing line.');

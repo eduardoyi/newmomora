@@ -1,0 +1,127 @@
+.focal-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(44, 36, 24, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 100;
+}
+
+.focal-modal {
+  width: 100%;
+  max-width: 420px;
+  max-height: 90dvh;
+  overflow-y: auto;
+  background: var(--color-white);
+  border-radius: var(--radius-xl);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.focal-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.focal-modal__title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+.focal-modal__close {
+  all: unset;
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--color-ink2);
+}
+
+.focal-modal__hint {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-ink2);
+  margin: 0;
+}
+
+.focal-modal__box {
+  position: relative;
+  width: 100%;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--lavender-pale);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.focal-modal__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none;
+}
+
+.focal-modal__placeholder {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--lavender-pale), var(--lavender-soft));
+}
+
+.focal-modal__reticle {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin-left: -11px;
+  margin-top: -11px;
+  border-radius: 50%;
+  border: 2px solid var(--color-white);
+  box-shadow: 0 0 0 1px rgba(44, 36, 24, 0.5), 0 2px 6px rgba(44, 36, 24, 0.35);
+  pointer-events: none;
+}
+
+.focal-modal__error {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-primaryDark);
+  background: var(--color-primaryTint);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: 0;
+}
+
+.focal-modal__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.focal-modal__button {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--color-primary);
+  color: var(--color-white);
+  cursor: pointer;
+}
+
+.focal-modal__button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.focal-modal__button--ghost {
+  background: transparent;
+  color: var(--color-ink2);
+  border: 1px solid var(--color-border);
+}

@@ -27,7 +27,7 @@ function applyVariant(page: BookPage, variantIndex: number): BookPage {
  * a genuine cross-gutter spread template alone (through-the-years,
  * panorama-spread), or an ordinary left+right pair of single pages.
  */
-interface DisplayUnit {
+export interface DisplayUnit {
   rawIndices: number[];
 }
 
@@ -42,7 +42,14 @@ interface DisplayUnit {
  * Pairing now checks each page's OWN `isEvenPage` (computed authoritatively
  * by the fitter's `numberPages`) instead of just trusting array position.
  */
-function computeUnits(pages: BookPage[]): DisplayUnit[] {
+/**
+ * Exported (round-5b addition) so the web app's `BookViewScreen` can reuse
+ * the EXACT same facing-pair pagination the local preview uses — the
+ * single-renderer rule (plan §3) means the web preview must page through a
+ * book identically to this app, not re-derive its own (potentially
+ * drifted) copy of this bug-fixed logic.
+ */
+export function computeUnits(pages: BookPage[]): DisplayUnit[] {
   const units: DisplayUnit[] = [];
   let i = 0;
   while (i < pages.length) {
