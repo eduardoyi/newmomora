@@ -1,11 +1,11 @@
-# Memory Book 5b — Web preview + v1 edit surface (book.usemomora.com)
+# Memory Book 5b — Web preview + v1 edit surface (shop.usemomora.com)
 
 Hardened 2026-09-07: 3 adversarial review rounds (Sonnet ×2, Fable ×1);
 all substantive findings incorporated.
 
 ## Goal
 
-A parent can open book.usemomora.com, sign in with their Momora account,
+A parent can open shop.usemomora.com, sign in with their Momora account,
 see their family's generated books, page through a book rendered by the
 real renderer, and make the v1 edits (text overrides, image replace,
 reposition-in-crop) — with edits persisted and applied on every render.
@@ -178,7 +178,7 @@ Print (5c) later consumes the same overrides.
    (`publicDir: false`, single input, `dist-web/`) + verification that
    the bundle contains no book-data and no other entries;
    `cloudflare/memory-book-web/` static-assets Worker (SPA fallback)
-   with route book.usemomora.com; only public config (Supabase URL +
+   with route shop.usemomora.com; only public config (Supabase URL +
    anon key) in the bundle. DNS + deploy owner-gated.
 8. **Plan-doc sync**: update docs/plans/memory-book.md §V5 5b bullet
    (Vite entry decision + session note) in the same change.

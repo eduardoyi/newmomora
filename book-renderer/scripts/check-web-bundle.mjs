@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// PII bundle guard for the `book.usemomora.com` web app (memory-book-5b
+// PII bundle guard for the `shop.usemomora.com` web app (memory-book-5b
 // plan, Step 7). `vite.web.config.ts` is SUPPOSED to make it impossible for
 // `dist-web/` to contain book-data (1.9GB of real exported family books —
 // child PII) or the preview/print entries — but "the config says so" is not
 // something this task treats as sufficient proof for a build output that,
-// if wrong, ships child PII to a public URL (`book.usemomora.com`). This
+// if wrong, ships child PII to a public URL (`shop.usemomora.com`). This
 // script inspects the REAL build output on disk, every time `build:web`
 // runs (see package.json — it is not optional/CI-only).
 //

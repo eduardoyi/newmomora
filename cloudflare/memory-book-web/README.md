@@ -1,6 +1,6 @@
 # momora-memory-book-web
 
-Static-assets Cloudflare Worker that hosts the `book.usemomora.com` web app
+Static-assets Cloudflare Worker that hosts the `shop.usemomora.com` web app
 (memory-book-5b plan, Step 7 — see
 [plans/memory-book-5b-web-preview.md](../../plans/memory-book-5b-web-preview.md)
 and [docs/features/memory-book-generation.md](../../docs/features/memory-book-generation.md)).
@@ -71,7 +71,7 @@ npx wrangler dev
    npm run deploy:dry-run
    ```
 3. **Leave custom-domain DNS to Cloudflare.** The route is configured as
-   `custom_domain: true` for `book.usemomora.com` (`wrangler.jsonc`), same
+   `custom_domain: true` for `shop.usemomora.com` (`wrangler.jsonc`), same
    pattern as `workers/memory-viewer`'s `m.usemomora.com`. Do not manually
    add a CNAME first — an existing conflicting CNAME can block custom-domain
    provisioning.

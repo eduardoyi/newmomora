@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 /**
- * Dedicated Vite config for the `book.usemomora.com` web app (memory-book-5b
+ * Dedicated Vite config for the `shop.usemomora.com` web app (memory-book-5b
  * plan, Design Decision 2 / Step 7) — PII-safe BY CONSTRUCTION, not by
  * convention. The default `vite.config.ts` sets `publicDir: 'book-data'`
  * (1.9GB of real exported family books — child PII — copied verbatim into

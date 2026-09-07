@@ -8,7 +8,7 @@ function makeEnv(fetchImpl: (request: Request) => Response | Promise<Response>):
 describe('memory-book-web static-assets Worker', () => {
   it('returns the asset store response as-is on a hit', async () => {
     const env = makeEnv(() => new Response('css body', { status: 200, headers: { 'content-type': 'text/css' } }));
-    const response = await worker.fetch(new Request('https://book.usemomora.com/assets/web-abc123.css'), env);
+    const response = await worker.fetch(new Request('https://shop.usemomora.com/assets/web-abc123.css'), env);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('css body');
   });
@@ -22,7 +22,7 @@ describe('memory-book-web static-assets Worker', () => {
       return new Response('not found', { status: 404 });
     });
     const env = makeEnv(fetchImpl);
-    const response = await worker.fetch(new Request('https://book.usemomora.com/b/687bb3d1-0000-0000-0000-000000000000'), env);
+    const response = await worker.fetch(new Request('https://shop.usemomora.com/b/687bb3d1-0000-0000-0000-000000000000'), env);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('<html>app shell</html>');
     // Two ASSETS.fetch calls: the original miss, then the /web.html fallback.
@@ -38,7 +38,7 @@ describe('memory-book-web static-assets Worker', () => {
       return new Response('not found', { status: 404 });
     });
     const env = makeEnv(fetchImpl);
-    const response = await worker.fetch(new Request('https://book.usemomora.com/'), env);
+    const response = await worker.fetch(new Request('https://shop.usemomora.com/'), env);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('<html>app shell</html>');
   });
@@ -52,15 +52,15 @@ describe('memory-book-web static-assets Worker', () => {
       return new Response('miss', { status: 404 });
     });
     const env = makeEnv(fetchImpl);
-    await worker.fetch(new Request('https://book.usemomora.com/b/xyz', { headers: { 'x-test': '1' } }), env);
-    expect(seenRequests[1].url).toBe('https://book.usemomora.com/web.html');
+    await worker.fetch(new Request('https://shop.usemomora.com/b/xyz', { headers: { 'x-test': '1' } }), env);
+    expect(seenRequests[1].url).toBe('https://shop.usemomora.com/web.html');
     expect(seenRequests[1].headers.get('x-test')).toBe('1');
   });
 
   it('does not fall back on a non-404 error response (e.g. a 500 from the asset store)', async () => {
     const fetchImpl = vi.fn(() => new Response('server error', { status: 500 }));
     const env = makeEnv(fetchImpl);
-    const response = await worker.fetch(new Request('https://book.usemomora.com/assets/broken.js'), env);
+    const response = await worker.fetch(new Request('https://shop.usemomora.com/assets/broken.js'), env);
     expect(response.status).toBe(500);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });

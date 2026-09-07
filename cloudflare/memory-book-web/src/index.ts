@@ -3,7 +3,7 @@ export interface Env {
 }
 
 /**
- * Static-assets Worker for `book.usemomora.com` (memory-book-5b plan Step
+ * Static-assets Worker for `shop.usemomora.com` (memory-book-5b plan Step
  * 7). Serves `book-renderer`'s dedicated `dist-web/` build (see
  * `wrangler.jsonc`'s header comment for the PII-safety chain this depends
  * on) with SPA fallback: any request the asset store can't resolve

@@ -52,7 +52,7 @@ row, `generate-memory-book` dispatches a Cloudflare Workflow that curates and
 publishes a complete `book_document`. The eventual flow (per the plan): the
 app's in-app scope picker (who/when) creates the `memory_books` row, calls
 `generate-memory-book`, and hands the family off to
-`book.usemomora.com/b/<id>` via a one-time signed link; the web app polls
+`shop.usemomora.com/b/<id>` via a one-time signed link; the web app polls
 `status` and renders the preview once `ready`.
 
 ## Architecture
@@ -67,7 +67,7 @@ flowchart LR
   BR --> M
   W -->|outline + cover-verify calls| AI[OpenAI]
   W -->|read existing preview thumbnails| R2[(R2: momora-prod)]
-  M -->|status poll -- 5b, not yet built| B[book.usemomora.com preview]
+  M -->|status poll -- 5b, not yet built| B[shop.usemomora.com preview]
 ```
 
 The scope-picker UI and the web preview are still 5b. Everything else in the
@@ -333,7 +333,7 @@ The in-app scope picker is not yet built (5b UI). It will: read
 `family_members.date_of_birth` to resolve `age_year` windows, compute
 `page_budget` from a printable-memory count in the chosen scope, insert the
 `memory_books` row, then call `generate-memory-book({ memoryBookId })` and
-poll `status`. `book.usemomora.com` (also 5b — a third Vite entry inside
+poll `status`. `shop.usemomora.com` (also 5b — a third Vite entry inside
 `book-renderer` itself, `src/web/`, NOT a separate Next.js package; see
 `plans/memory-book-5b-web-preview.md` Design Decision 1 and
 `docs/plans/memory-book.md` §V5's 5b bullet) polls `status` and renders
@@ -414,7 +414,7 @@ poll `status`. `book.usemomora.com` (also 5b — a third Vite entry inside
   respectively (see `cloudflare/memory-book-worker/src/manifest.ts`'s
   header comment). A future change that adds a bounded R2 HEAD/dimension
   probe should update that comment and this bullet together.
-- ~~Web preview (5b) → new `book.usemomora.com` package that reads
+- ~~Web preview (5b) → new `shop.usemomora.com` package that reads
   `book_document = { outline, manifest }` and runs `book-renderer`'s
   `fitBook`~~ **Shipped 2026-09-07**: `book-renderer/src/web/` (a third
   Vite entry, `web.html` — NOT a separate Next.js package, see this doc's
@@ -597,7 +597,7 @@ cd cloudflare/memory-book-web && npm test && npm run typecheck && npm run deploy
 
 | Date | Change |
 |------|--------|
-| 2026-09-07 | V5b steps 6-8 (+ one wave-1 wiring gap): the web app shipped — `book-renderer/src/web/` (a third Vite entry, `web.html`: email-OTP auth, family book list with status chips + polling + plain coalescer thumbnails, book view running `book_document -> applyPreFit -> fitBook -> applyPostFit -> SpreadPager`, an edit panel for all v1 text targets + image replace via a paginated picker sheet + focal-point reposition via a dedicated crop modal, skipped-orphan surfacing). Dedicated PII-safe build (`vite.web.config.ts`, `publicDir: false`, single `web.html` input, `dist-web/` output) with a real bundle check (`scripts/check-web-bundle.mjs`, wired into `build:web`) verified against an actual build (confirmed it FAILS on an injected `book-data`/`index.html` violation, not just passes on the real one). Hosting: `cloudflare/memory-book-web/`, a static-assets Worker with explicit SPA fallback to `web.html` (deliberately not Cloudflare's `index.html`-only convention), route `book.usemomora.com` — `wrangler deploy --dry-run` and `wrangler check startup` both verified; not deployed (owner-gated). Wave-1 wiring gap fixed: `Closing.tsx` now reads `params.closingLine` (written by `applyPostFit` since step 4 but previously unread — a saved closing-line edit silently had no effect until this change). `docs/plans/memory-book.md` §V5's 5b bullet updated (Vite-entry decision, not Next.js; localStorage session note) — this doc's own stale "Next.js package" mention corrected too. Steps 3-5 (`applyBookEdits`, pluggable asset resolution, focal-point template wiring) were already shipped as part of wave 1 (commit `3acd5a9`) even though the entry below didn't call them out individually. |
+| 2026-09-07 | V5b steps 6-8 (+ one wave-1 wiring gap): the web app shipped — `book-renderer/src/web/` (a third Vite entry, `web.html`: email-OTP auth, family book list with status chips + polling + plain coalescer thumbnails, book view running `book_document -> applyPreFit -> fitBook -> applyPostFit -> SpreadPager`, an edit panel for all v1 text targets + image replace via a paginated picker sheet + focal-point reposition via a dedicated crop modal, skipped-orphan surfacing). Dedicated PII-safe build (`vite.web.config.ts`, `publicDir: false`, single `web.html` input, `dist-web/` output) with a real bundle check (`scripts/check-web-bundle.mjs`, wired into `build:web`) verified against an actual build (confirmed it FAILS on an injected `book-data`/`index.html` violation, not just passes on the real one). Hosting: `cloudflare/memory-book-web/`, a static-assets Worker with explicit SPA fallback to `web.html` (deliberately not Cloudflare's `index.html`-only convention), route `shop.usemomora.com` — `wrangler deploy --dry-run` and `wrangler check startup` both verified; not deployed (owner-gated). Wave-1 wiring gap fixed: `Closing.tsx` now reads `params.closingLine` (written by `applyPostFit` since step 4 but previously unread — a saved closing-line edit silently had no effect until this change). `docs/plans/memory-book.md` §V5's 5b bullet updated (Vite-entry decision, not Next.js; localStorage session note) — this doc's own stale "Next.js package" mention corrected too. Steps 3-5 (`applyBookEdits`, pluggable asset resolution, focal-point template wiring) were already shipped as part of wave 1 (commit `3acd5a9`) even though the entry below didn't call them out individually. |
 | 2026-09-07 | V5b steps 1-2: v1 edit-surface schema + Edge Function shipped — `memory_book_edits` migration (client select-only; every write service-role, verified via psql) and `memory-book-edits` (`save_edit` + `picker_pool`, server-side `mediaId` resolution and original-photo dimension measurement via presigned-GET + HTTP Range). `applyBookEdits`, focal-point wiring, and the web app itself remain not-yet-built (plan steps 3-9). Corrected this doc's earlier "add narrowly-scoped client update policies" extension-guide bullet, which the round-3-hardened plan superseded with the service-role-only design actually shipped. |
 | 2026-09-01 | V5a part C: durable generation pipeline shipped — `generate-memory-book` dispatcher, `workflow-memory-book-bridge`, and `cloudflare/memory-book-worker`'s `MemoryBookWorkflow` (curates the outline from ported eval-CLI logic + shared builders, verifies cover candidates, assembles `book_document`, publishes via CAS). No schema migration in this change (two deviations documented in TECH_SPEC §4.22: plain-CAS instead of a publish/fail RPC, no nonce-replay ledger). Scope-picker UI and web preview remain 5b; checkout remains 5c. |
 | 2026-09-01 | V5a part A/B: `memory_books` schema + RLS/status contract shipped. No worker, UI, or checkout yet. |

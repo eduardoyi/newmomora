@@ -30,7 +30,7 @@
   // built static bundle.
   "routes": [
     {
-      "pattern": "book.usemomora.com",
+      "pattern": "shop.usemomora.com",
       "custom_domain": true
     }
   ],

@@ -809,7 +809,10 @@ Sequenced as three independently shippable slices:
   USD; price table in eval-memory-book-outline.ts).
 - **5b — Web preview + v1 edit surface.** Supabase auth (email OTP); the
   book-renderer components render the preview (single-renderer rule).
-  Decided 2026-09-01: lives at **book.usemomora.com** — a package in the
+  Decided 2026-09-01: lives at **shop.usemomora.com**
+  (renamed from book. 2026-09-08, owner decision: shop. is the umbrella
+  for future physical products — postcards/mugs/etc — with books the
+  first; "print." was considered and rejected as producer-language) — a package in the
   main Momora repo sharing book-renderer (never in the marketing repo),
   own deploy. **Superseded 2026-09-07 (hardened plan
   `plans/memory-book-5b-web-preview.md`, Design Decision 1): NOT Next.js**
@@ -831,7 +834,7 @@ Sequenced as three independently shippable slices:
   (`cloudflare/memory-book-web/`, SPA fallback to `web.html`) at the same
   domain. The journey STARTS IN THE APP: the app creates the memory_books
   row (scope picker in-app, where family/children/subscription state
-  already live) and hands off `book.usemomora.com/b/<id>`; web does
+  already live) and hands off `shop.usemomora.com/b/<id>`; web does
   preview -> edit -> checkout. 5b seam to design: login-free handoff via
   one-time signed link from the app session (not yet built — see the
   plan's "Out of scope").
@@ -928,7 +931,7 @@ Sequenced as three independently shippable slices:
   layout/rendering path for print vs preview.
 - Parent memory text is never AI-modified (§2.5). Do not "improve" it.
 - No memory content in logs anywhere in this pipeline (child/family PII).
-- `book-renderer/src/web/` (the 5b/5c web editor, `book.usemomora.com`) is
+- `book-renderer/src/web/` (the 5b/5c web editor, `shop.usemomora.com`) is
   the REAL implementation of Stage F above — that section's "Next.js/web
   flow on the marketing site" is stale planning prose, not the shipped
   shape. Editing is always-on inline (no edit-mode toggle, no sidebar
