@@ -7,6 +7,7 @@ import { applyPostFit, applyPreFit } from '../../model/edits';
 import { normalizeEditsShapeForClient } from './normalizeEdits';
 import type { BookDocument, BookManifest } from '../../model/types';
 import type { MemoryBookEditsShape, SkippedEdit } from '../../model/edits';
+import { getFixtureSlug, loadFixtureBook, registerFixturePool } from '../dev/fixture';
 
 export interface EditableBook {
   book: MemoryBookRow;
@@ -45,6 +46,28 @@ export function useEditableBook(bookId: string | null) {
     }
     setState((s) => ({ ...s, loading: true, error: null }));
     setEditsOverride(null);
+
+    // DEV-ONLY fixture mode (owner-approved follow-up round) — bypasses
+    // every Supabase read below entirely when `?fixture=<slug>` names THIS
+    // bookId (see `App.tsx`: fixture mode always passes the slug itself as
+    // `bookId`). `getFixtureSlug()` — and this whole block — is dead code
+    // in a production build (`import.meta.env.DEV` is statically `false`
+    // there; see `dev/fixture.ts`'s header comment for the tree-shaking
+    // contract `check-web-bundle.mjs` verifies).
+    if (import.meta.env.DEV) {
+      const fixtureSlug = getFixtureSlug();
+      if (fixtureSlug && fixtureSlug === bookId) {
+        try {
+          const { book, manifest, outline } = await loadFixtureBook(fixtureSlug);
+          registerFixturePool(fixtureSlug, manifest);
+          const built = buildDocument(outline, manifest, {});
+          setState({ loading: false, error: null, data: { book, canEdit: true, ...built } });
+        } catch (e) {
+          setState({ loading: false, error: e instanceof Error ? e.message : 'Failed to load fixture book', data: null });
+        }
+        return;
+      }
+    }
 
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id ?? null;

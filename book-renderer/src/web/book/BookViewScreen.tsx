@@ -6,7 +6,7 @@ import { collectInBookAssets, type InBookAssets } from '../media/inBookAssets';
 import { computeUnits, buildSyntheticClosingPartner } from '../../preview/App';
 import { SpreadPager } from '../../preview/SpreadPager';
 import { StatusChip } from '../books/StatusChip';
-import { EditPanel } from '../edits/EditPanel';
+import { SkippedEditsToast } from '../edits/SkippedEditsToast';
 import { EditOverlay } from '../overlay/EditOverlay';
 import { computeUnitAspect } from './unitAspect';
 import { useFitToViewportWidth } from './useFitToViewport';
@@ -14,10 +14,19 @@ import './BookViewScreen.css';
 
 const EMPTY_IN_BOOK: InBookAssets = { assetFiles: new Set(), mediaIds: new Set() };
 
+/**
+ * Always-on inline editing (owner-approved follow-up round, feature 3): the
+ * old `editMode` toggle + `EditPanel` sidebar are gone. `EditOverlay` now
+ * mounts unconditionally whenever `data.canEdit` — its own hitboxes render
+ * NOTHING visible until hover (desktop, via `:hover` in `EditOverlay.css`)
+ * or tap (touch — a tap fires `click` directly with no hover state, opening
+ * the picker/popover immediately; see that file's per-region CSS), so nothing
+ * about a read-only viewer's rendered page changes by this being always
+ * mounted rather than toggled.
+ */
 export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () => void }) {
   const { loading, error, data, applyEditsPatch } = useEditableBook(bookId);
   const [unitIndex, setUnitIndex] = useState(0);
-  const [editMode, setEditMode] = useState(false);
   // Item 1: the stage wrapper both the viewport-fit hook measures/sizes AND
   // the item-3 overlay positions its regions relative to (its bounding box
   // is the coordinate origin `useOverlayGeometry`'s rects are measured
@@ -50,13 +59,20 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (editMode) return; // Don't hijack arrow keys while typing in an edit field.
+      // Editing is always-on now (no more `editMode` toggle to gate this
+      // on) — guard directly against the actual focused element instead, so
+      // arrow keys still type normally inside the text popover's
+      // input/textarea (`TextEditPopover.tsx`) without hijacking the page
+      // for navigation, while every other arrow-key press still pages.
+      const active = document.activeElement;
+      const isTyping = active instanceof HTMLElement && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+      if (isTyping) return;
       if (e.key === 'ArrowRight') setUnitIndex((i) => Math.min(i + 1, unitCount - 1));
       if (e.key === 'ArrowLeft') setUnitIndex((i) => Math.max(i - 1, 0));
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [unitCount, editMode]);
+  }, [unitCount]);
 
   const assetKeys = useMemo(
     () => (data ? collectManifestAssetKeys(data.editedManifest) : []),
@@ -121,15 +137,6 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
         <span className="book-view__title">
           {data.book.child?.name ? `${data.book.child.name} — ${data.book.scope_label}` : data.book.scope_label}
         </span>
-        {data.canEdit && (
-          <button
-            type="button"
-            className={`book-view__edit-toggle${editMode ? ' book-view__edit-toggle--active' : ''}`}
-            onClick={() => setEditMode((v) => !v)}
-          >
-            {editMode ? 'Done editing' : 'Edit'}
-          </button>
-        )}
       </header>
 
       <div className="book-view__body" onErrorCapture={onImageErrorCapture}>
@@ -146,11 +153,12 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
                 onPrev={() => setUnitIndex((i) => Math.max(i - 1, 0))}
                 onNext={() => setUnitIndex((i) => Math.min(i + 1, unitCount - 1))}
               />
-              {editMode && data.canEdit && (
+              {data.canEdit && (
                 <EditOverlay
                   bookId={bookId}
                   containerRef={stageRef}
                   pages={rawPages}
+                  manifest={data.editedManifest}
                   edits={data.edits}
                   inBookAssets={inBookAssets}
                   onEditsSaved={applyEditsPatch}
@@ -159,20 +167,9 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
             </div>
           )}
         </div>
-
-        {editMode && data.canEdit && (
-          <aside className="book-view__sidebar">
-            <EditPanel
-              bookId={bookId}
-              pages={rawPages}
-              edits={data.edits}
-              skipped={data.skipped}
-              inBookAssets={inBookAssets}
-              onEditsSaved={applyEditsPatch}
-            />
-          </aside>
-        )}
       </div>
+
+      {data.canEdit && <SkippedEditsToast skipped={data.skipped} />}
     </div>
   );
 }

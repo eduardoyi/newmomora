@@ -367,6 +367,80 @@ describe('applyPostFit — text edits', () => {
 });
 
 // ---------------------------------------------------------------------------
+// applyPostFit — furniture:<key> text edits
+// ---------------------------------------------------------------------------
+
+describe('applyPostFit — furniture:<key> text edits', () => {
+  it('furniture:coverName overrides childName on the cover-wrap page (drives both spine and front title — same param, see WraparoundCover.tsx)', () => {
+    const doc = docWith([
+      emptyPage({ id: 'cover', sourceElementId: 'cover', templateId: 'cover-wrap', params: { childName: 'Original' } }),
+    ]);
+    const { document, skipped } = applyPostFit(doc, { text: { 'furniture:coverName': textEdit('Mia') } });
+    expect(document.pages[0].params.childName).toBe('Mia');
+    expect(skipped).toEqual([]);
+  });
+
+  it('furniture:coverTagline overrides the SAME backCoverLine field the legacy flat backCover target writes', () => {
+    const doc = docWith([
+      emptyPage({ id: 'cover', sourceElementId: 'cover', templateId: 'cover-wrap', params: { backCoverLine: 'Original.' } }),
+    ]);
+    const { document } = applyPostFit(doc, { text: { 'furniture:coverTagline': textEdit('New tagline.') } });
+    expect(document.pages[0].params.backCoverLine).toBe('New tagline.');
+  });
+
+  it('furniture:dedicationSalutation and furniture:dedicationSignoff set params.greeting/params.signature independently of params.body', () => {
+    const doc = docWith([
+      emptyPage({ id: 'ded', sourceElementId: 'ded', templateId: 'dedication', params: { body: 'Untouched body.' } }),
+    ]);
+    const { document, skipped } = applyPostFit(doc, {
+      text: {
+        'furniture:dedicationSalutation': textEdit('Dear Mia,'),
+        'furniture:dedicationSignoff': textEdit('With all our love'),
+      },
+    });
+    expect(document.pages[0].params.greeting).toBe('Dear Mia,');
+    expect(document.pages[0].params.signature).toBe('With all our love');
+    expect(document.pages[0].params.body).toBe('Untouched body.');
+    expect(skipped).toEqual([]);
+  });
+
+  it('furniture:ttyKicker and furniture:ttyTitle set params.ttyKicker/params.ttyTitle on the through-the-years page', () => {
+    const doc = docWith([emptyPage({ id: 'tty', sourceElementId: 'tty', templateId: 'through-the-years', params: {} })]);
+    const { document, skipped } = applyPostFit(doc, {
+      text: {
+        'furniture:ttyKicker': textEdit('a year in pictures'),
+        'furniture:ttyTitle': textEdit('How you grew\nin one year'),
+      },
+    });
+    expect(document.pages[0].params.ttyKicker).toBe('a year in pictures');
+    expect(document.pages[0].params.ttyTitle).toBe('How you grew\nin one year');
+    expect(skipped).toEqual([]);
+  });
+
+  it('reports an orphan for a furniture target outside the allowlist (never reaches applyFurnitureTextEdit)', () => {
+    const doc = docWith([emptyPage({ id: 'cover', sourceElementId: 'cover', templateId: 'cover-wrap' })]);
+    const { skipped } = applyPostFit(doc, { text: { 'furniture:notAllowlisted': textEdit('x') } });
+    expect(skipped).toEqual([{ kind: 'text', key: 'furniture:notAllowlisted', reason: expect.any(String) }]);
+  });
+
+  it('reports an orphan when a furniture target names a page shape that is not in the document', () => {
+    const doc = docWith([emptyPage({ id: 'p1', sourceElementId: 'x', templateId: 'anchor-media' })]);
+    const { skipped } = applyPostFit(doc, { text: { 'furniture:ttyKicker': textEdit('x') } });
+    expect(skipped).toEqual([{ kind: 'text', key: 'furniture:ttyKicker', reason: expect.any(String) }]);
+  });
+
+  it('year range stays derived/non-editable — no furniture key ever touches params.yearRangeLabel', () => {
+    const doc = docWith([
+      emptyPage({ id: 'cover', sourceElementId: 'cover', templateId: 'cover-wrap', params: { yearRangeLabel: 'Year One' } }),
+    ]);
+    const { document } = applyPostFit(doc, {
+      text: { 'furniture:coverName': textEdit('Mia'), 'furniture:coverTagline': textEdit('Tagline.') },
+    });
+    expect(document.pages[0].params.yearRangeLabel).toBe('Year One');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // applyPostFit — focal point edits
 // ---------------------------------------------------------------------------
 
@@ -439,6 +513,12 @@ describe('applyPostFit — text edits never change the page count (real fixture)
         [`sectionTitle:${themedElementId}`]: textEdit('A new section title.'),
         [`eyebrow:${themedElementId}`]: textEdit('A new eyebrow.'),
         [`caption:${firstPhotoMemoryId}`]: textEdit('A new caption.'),
+        'furniture:coverName': textEdit('A new cover name.'),
+        'furniture:coverTagline': textEdit('A new cover tagline.'),
+        'furniture:dedicationSalutation': textEdit('A new salutation.'),
+        'furniture:dedicationSignoff': textEdit('A new signoff.'),
+        'furniture:ttyKicker': textEdit('A new kicker.'),
+        'furniture:ttyTitle': textEdit('A new title\non two lines'),
       },
     };
 

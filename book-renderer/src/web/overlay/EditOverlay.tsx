@@ -1,18 +1,19 @@
 import { useState, type RefObject } from 'react';
-import type { BookPage, PhotoSlotContent } from '../../model/types';
+import type { BookManifest, BookPage, PhotoSlotContent } from '../../model/types';
 import type { MemoryBookEditsShape } from '../../model/edits';
 import { PickerSheet } from '../edits/PickerSheet';
 import { FocalPointModal } from '../edits/FocalPointModal';
-import { useOverlayGeometry, type PositionedPhotoRegion, type PositionedTextRegion } from './useOverlayGeometry';
+import { useOverlayGeometry, type PositionedPhotoRegion } from './useOverlayGeometry';
 import { TextEditPopover } from './TextEditPopover';
 import type { InBookAssets } from '../media/inBookAssets';
 import './EditOverlay.css';
 
 /** Approximate front-cover-panel aspect for the focal-point crop preview —
- * mirrors `EditPanel.tsx`'s own `COVER_APPROX_ASPECT` (same documented
- * approximation: `WraparoundCover` derives its front-panel geometry
- * internally from `PHYSICAL.pageSizeMm` rather than exposing it in
- * `params`). */
+ * `WraparoundCover` derives its front-panel geometry internally from
+ * `PHYSICAL.pageSizeMm` rather than exposing it in `params`, so this is a
+ * stated approximation, not the exact render (same caveat
+ * `FocalPointModal.tsx`'s own header comment makes about the crop preview
+ * generally). */
 const COVER_APPROX_ASPECT = 1;
 
 /**
@@ -33,6 +34,7 @@ export function EditOverlay({
   bookId,
   containerRef,
   pages,
+  manifest,
   edits,
   inBookAssets,
   onEditsSaved,
@@ -40,15 +42,32 @@ export function EditOverlay({
   bookId: string;
   containerRef: RefObject<HTMLElement | null>;
   pages: BookPage[];
+  manifest: BookManifest;
   edits: MemoryBookEditsShape;
   inBookAssets: InBookAssets;
   onEditsSaved: (edits: MemoryBookEditsShape) => void;
 }) {
-  const { photoRegions, textRegions } = useOverlayGeometry(containerRef, pages, edits);
+  const { photoRegions, textRegions } = useOverlayGeometry(containerRef, pages, edits, manifest);
   const [activePhotoKey, setActivePhotoKey] = useState<string | null>(null);
   const [pickerRegion, setPickerRegion] = useState<PositionedPhotoRegion | null>(null);
   const [focalRegion, setFocalRegion] = useState<PositionedPhotoRegion | null>(null);
-  const [textRegion, setTextRegion] = useState<PositionedTextRegion | null>(null);
+  // Bug fix (owner-reported, "diagnose live" round): tracks only the WHICH
+  // (a stable `target` string), never the captured `PositionedTextRegion`
+  // object itself. `useOverlayGeometry` recomputes `textRegions` live off a
+  // `ResizeObserver`/`MutationObserver` (window resize, an image finishing
+  // load, the popover's OWN mount, ...), but this piece of state used to
+  // hold a POSITION SNAPSHOT taken at click time that never got refreshed —
+  // reproduced live: open a text popover, then resize the window (which the
+  // new fit-to-viewport hook, `useFitToViewportWidth`, reacts to by
+  // resizing `.book-view__stage`, reflowing every page-frame under it) —
+  // the underlying text visibly moves to its new position while the
+  // popover stayed frozen at the old one, "floating detached" below/beside
+  // where the text actually ended up. Deriving the region fresh from the
+  // live `textRegions` array below (same pattern the photo regions already
+  // use, which render straight off live data with no separate snapshot)
+  // keeps the popover glued to its text through every relayout while open.
+  const [activeTextTarget, setActiveTextTarget] = useState<string | null>(null);
+  const textRegion = activeTextTarget ? (textRegions.find((r) => r.target === activeTextTarget) ?? null) : null;
 
   function targetAspectFor(region: PositionedPhotoRegion): number | null {
     if (region.isCover) return null;
@@ -102,7 +121,7 @@ export function EditOverlay({
           type="button"
           className={`edit-overlay__text${region.approximate ? ' edit-overlay__text--approx' : ''}`}
           style={{ left: region.rect.left, top: region.rect.top, width: region.rect.width, height: region.rect.height }}
-          onClick={() => setTextRegion(region)}
+          onClick={() => setActiveTextTarget(region.target)}
           aria-label={`Edit ${region.label}`}
         />
       ))}
@@ -132,7 +151,7 @@ export function EditOverlay({
       )}
 
       {textRegion && (
-        <TextEditPopover bookId={bookId} region={textRegion} onClose={() => setTextRegion(null)} onSaved={onEditsSaved} />
+        <TextEditPopover bookId={bookId} region={textRegion} onClose={() => setActiveTextTarget(null)} onSaved={onEditsSaved} />
       )}
     </div>
   );

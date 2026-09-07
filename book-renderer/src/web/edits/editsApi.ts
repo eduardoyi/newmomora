@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient';
 import type { MemoryBookEditsShape } from '../../model/edits';
+import { getFixtureSlug, fixtureFetchPickerPool, fixtureSaveEdit } from '../dev/fixture';
 
 /**
  * Thin client for the `memory-book-edits` Edge Function (plan Step 2,
@@ -20,6 +21,12 @@ export interface SaveEditResult {
 }
 
 export async function saveEdit(bookId: string, edit: SaveEditInput): Promise<SaveEditResult> {
+  // DEV-ONLY fixture mode (owner-approved follow-up round) — see
+  // `dev/fixture.ts`'s header comment for the tree-shaking contract.
+  if (import.meta.env.DEV) {
+    const fixtureSlug = getFixtureSlug();
+    if (fixtureSlug && fixtureSlug === bookId) return fixtureSaveEdit(fixtureSlug, edit);
+  }
   const { data, error } = await supabase.functions.invoke<{ success: true; edits: MemoryBookEditsShape }>(
     'memory-book-edits',
     { body: { op: 'save_edit', bookId, edit } },
@@ -49,6 +56,10 @@ export async function fetchPickerPool(
   bookId: string,
   cursor: string | null,
 ): Promise<PickerPoolPage> {
+  if (import.meta.env.DEV) {
+    const fixtureSlug = getFixtureSlug();
+    if (fixtureSlug && fixtureSlug === bookId) return fixtureFetchPickerPool(fixtureSlug, cursor);
+  }
   const { data, error } = await supabase.functions.invoke<{ items: PickerPoolItem[]; nextCursor: string | null }>(
     'memory-book-edits',
     { body: { op: 'picker_pool', bookId, cursor } },

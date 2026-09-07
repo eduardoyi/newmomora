@@ -6,11 +6,10 @@ import './EditOverlay.css';
 
 /**
  * Floating popover editor for one text region, anchored just below its
- * on-page rect (polish-round item 3). Self-contained — same `saveEdit`
- * flow `EditPanel.tsx`'s `TextFieldEditor` already uses, kept as a
- * separate small component here rather than shared, since the two have
- * different trigger/positioning models (blur-to-commit in a static sidebar
- * list vs. an anchored popover with explicit Save/Cancel).
+ * on-page rect (polish-round item 3). Self-contained — the only editor for
+ * a text target now that always-on inline editing (owner-approved
+ * follow-up round) removed the `EditPanel` sidebar's own blur-to-commit
+ * `TextFieldEditor`; this popover's explicit Save/Cancel is the sole flow.
  */
 export function TextEditPopover({
   bookId,

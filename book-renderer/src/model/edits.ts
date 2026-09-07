@@ -89,17 +89,43 @@ function parseSlotKey(key: string): { memoryId: string; assetFile: string } | nu
 
 /**
  * Text targets are one of: `'dedication' | 'closing' | 'backCover' |
- * 'sectionTitle:<elementId>' | 'eyebrow:<elementId>' | 'caption:<memoryId>'`
- * — kept as a plain `string` (not a union) so an orphaned/unrecognized
- * target from an older schema version degrades to `skipped` rather than a
- * type error blocking every other edit in the same row. `target` duplicates
- * the map key it's stored under (see `MemoryBookEditsShape`) — this module
- * reads the map key as authoritative and ignores this field, exactly like
- * the Edge Function does when it writes it.
+ * 'sectionTitle:<elementId>' | 'eyebrow:<elementId>' | 'caption:<memoryId>' |
+ * 'furniture:<key>'` (`<key>` restricted to `FURNITURE_KEYS` below) — kept
+ * as a plain `string` (not a union) so an orphaned/unrecognized target from
+ * an older schema version degrades to `skipped` rather than a type error
+ * blocking every other edit in the same row. `target` duplicates the map
+ * key it's stored under (see `MemoryBookEditsShape`) — this module reads
+ * the map key as authoritative and ignores this field, exactly like the
+ * Edge Function does when it writes it.
  */
 export interface TextEditRecord {
   target: string;
   value: string;
+}
+
+/**
+ * `furniture:<key>` namespace (owner-approved follow-up round) — a FIXED
+ * allowlist, not free-form: every book "furniture" field (chrome copy the
+ * templates own — see `templates/furniture.ts`'s header comment) that's
+ * editable in v1, one entry per field. Mirrors the identically-named
+ * constant in `supabase/functions/memory-book-edits/index.ts` (same
+ * decoupled-mirror contract as `MemoryBookEditsShape` — see this module's
+ * header comment); if this list ever changes, that one must change with it
+ * by hand. `applyFurnitureTextEdit` below is the only place that dispatches
+ * on these keys against a document's pages.
+ */
+export const FURNITURE_KEYS = [
+  'coverName',
+  'coverTagline',
+  'dedicationSalutation',
+  'dedicationSignoff',
+  'ttyKicker',
+  'ttyTitle',
+] as const;
+export type FurnitureKey = (typeof FURNITURE_KEYS)[number];
+const FURNITURE_KEY_SET: ReadonlySet<string> = new Set(FURNITURE_KEYS);
+export function isFurnitureKey(value: string): value is FurnitureKey {
+  return FURNITURE_KEY_SET.has(value);
 }
 
 /**
@@ -326,6 +352,7 @@ export function applyPostFit(document: BookDocument, edits: MemoryBookEditsShape
 const SECTION_TITLE_PREFIX = 'sectionTitle:';
 const EYEBROW_PREFIX = 'eyebrow:';
 const CAPTION_PREFIX = 'caption:';
+const FURNITURE_PREFIX = 'furniture:';
 
 function applyTextEdit(document: BookDocument, target: string, value: string): boolean {
   switch (target) {
@@ -359,7 +386,65 @@ function applyTextEdit(document: BookDocument, target: string, value: string): b
   if (target.startsWith(CAPTION_PREFIX)) {
     return applyCaptionEdit(document, target.slice(CAPTION_PREFIX.length), value);
   }
+  if (target.startsWith(FURNITURE_PREFIX)) {
+    const key = target.slice(FURNITURE_PREFIX.length);
+    return isFurnitureKey(key) ? applyFurnitureTextEdit(document, key, value) : false;
+  }
   return false;
+}
+
+/**
+ * `furniture:<key>` dispatch (owner-approved follow-up round, Design
+ * Decision "furniture namespace"). Year range (`yearRangeLabel`) stays
+ * derived/non-editable by owner decision — deliberately no key for it here.
+ *
+ *   - `coverName` overrides the child-name display on BOTH the front-cover
+ *     title AND the spine — `WraparoundCover.tsx` already reads a single
+ *     `params.childName` for both (see its own JSX: `.cover-wrap__name` and
+ *     `.cover-wrap__spine-name` both render `{p.childName}`), so setting it
+ *     once here updates both by construction, with no separate spine field
+ *     needed.
+ *   - `coverTagline` is the back-cover tagline — the SAME
+ *     `params.backCoverLine` field the legacy flat `'backCover'` target
+ *     already writes (kept working unchanged, additive not replaced); this
+ *     just gives it a furniture-namespaced alias for the overlay's cover
+ *     region grouping.
+ *   - `dedicationSalutation`/`dedicationSignoff` override the dedication
+ *     page's greeting line and signature line — both fixed furniture copy
+ *     today (`furniture.dedication.greeting(childName)` /
+ *     `.signature`), never previously present in `params` at all.
+ *     `Dedication.tsx` falls back to the furniture default when absent.
+ *   - `ttyKicker`/`ttyTitle` override the through-the-years page's kicker
+ *     and (up to two-line, `\n`-joined) title — same "previously fixed
+ *     furniture copy, now an optional params override" shape.
+ */
+function applyFurnitureTextEdit(document: BookDocument, key: FurnitureKey, value: string): boolean {
+  switch (key) {
+    case 'coverName':
+      return setOnPages(document, (p) => p.templateId === 'cover-wrap', (params) => {
+        params.childName = value;
+      });
+    case 'coverTagline':
+      return setOnPages(document, (p) => p.templateId === 'cover-wrap', (params) => {
+        params.backCoverLine = value;
+      });
+    case 'dedicationSalutation':
+      return setOnPages(document, (p) => p.templateId === 'dedication', (params) => {
+        params.greeting = value;
+      });
+    case 'dedicationSignoff':
+      return setOnPages(document, (p) => p.templateId === 'dedication', (params) => {
+        params.signature = value;
+      });
+    case 'ttyKicker':
+      return setOnPages(document, (p) => p.templateId === 'through-the-years', (params) => {
+        params.ttyKicker = value;
+      });
+    case 'ttyTitle':
+      return setOnPages(document, (p) => p.templateId === 'through-the-years', (params) => {
+        params.ttyTitle = value;
+      });
+  }
 }
 
 function setOnPages(

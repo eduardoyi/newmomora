@@ -26,12 +26,26 @@
 //   4. `web.html` (or its hashed/renamed build output, at least one *.html)
 //      DOES exist — a bundle check that would also pass on an EMPTY or
 //      totally-broken build is not actually verifying anything.
+//   5. No `.js`/`.mjs` chunk contains the substring "fixture" (case-
+//      insensitive) — the DEV-ONLY `?fixture=<slug>` diagnostic mode
+//      (`src/web/dev/fixture.ts`) is gated behind `import.meta.env.DEV` at
+//      every call site specifically so a production build's dead-code
+//      elimination removes it entirely (see that file's own header comment
+//      for the mechanism) — this check proves that actually happened for
+//      THIS build's real output, rather than trusting the gating alone.
+//      Minifiers rename identifiers but never rewrite string-literal
+//      VALUES, so a leftover reference (the `'fixture'` query-param name,
+//      or any of that module's own function names surviving unminified in
+//      a dev-mode/sourcemap build) is a reliable signal the elimination
+//      didn't happen, even though none of this is itself book-content PII
+//      — it would mean the fixture code path (and the `book-data/`-shaped
+//      fetches it makes) is reachable from a production bundle at all.
 //
 // Exit code 0 = pass (safe to deploy the directory's contents). Any failure
 // prints every violation found (not just the first) and exits 1 — a CI
 // pipeline or the coordinator's own dry-run should treat non-zero as a hard
 // stop, never a warning.
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,6 +54,8 @@ const DIST_WEB = join(__dirname, '..', 'dist-web');
 
 const FORBIDDEN_TOP_LEVEL = ['index.html', 'print.html', 'book-data'];
 const FORBIDDEN_FILENAMES = new Set(['manifest.json', 'book.outline.json']);
+const JS_FILE_PATTERN = /\.m?js$/;
+const FIXTURE_REFERENCE_PATTERN = /fixture/i;
 
 function walk(dir, out = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -82,6 +98,17 @@ function main() {
   const hasHtml = allFiles.some((f) => f.endsWith('.html'));
   if (!hasHtml) {
     violations.push('no .html entry found at all — build likely produced an empty/broken bundle (this check would trivially "pass" on nothing)');
+  }
+
+  for (const file of allFiles) {
+    if (!JS_FILE_PATTERN.test(file)) continue;
+    const content = readFileSync(file, 'utf8');
+    if (FIXTURE_REFERENCE_PATTERN.test(content)) {
+      violations.push(
+        `dev-only fixture mode leaked into the production bundle: ${relative(DIST_WEB, file)} contains "fixture" — ` +
+          'src/web/dev/fixture.ts (or a reference to it) was not tree-shaken out; see that file\'s header comment',
+      );
+    }
   }
 
   if (violations.length > 0) {

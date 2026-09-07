@@ -7,6 +7,11 @@
   justify-content: center;
   padding: 16px;
   z-index: 100;
+  /* Same `.edit-overlay` pointer-events inheritance fix as
+     `PickerSheet.css`'s `.picker-sheet__backdrop` — see that rule's
+     comment. Without this, the reposition modal opened from the overlay
+     would render but not respond to drag/click. */
+  pointer-events: auto;
 }
 
 .focal-modal {

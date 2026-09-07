@@ -93,11 +93,21 @@
   position: fixed;
   inset: 0;
   z-index: 20;
+  /* `.edit-overlay` (this popover's positioned ancestor) is
+     `pointer-events: none` by design — only its explicit region hotspots
+     opt back in (see that rule's own header comment). Without an explicit
+     override here, `pointer-events: none` INHERITS onto this backdrop and
+     everything inside `.text-popover` below (bug: the popover renders but
+     nothing in it — Cancel/Save, the input — is clickable, and clicks fall
+     through to whatever sits underneath, leaving no visible way to close
+     it short of a page refresh). */
+  pointer-events: auto;
 }
 
 .text-popover {
   position: absolute;
   z-index: 21;
+  pointer-events: auto;
   width: min(320px, calc(100vw - 32px));
   display: flex;
   flex-direction: column;

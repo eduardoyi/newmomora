@@ -928,3 +928,19 @@ Sequenced as three independently shippable slices:
   layout/rendering path for print vs preview.
 - Parent memory text is never AI-modified (§2.5). Do not "improve" it.
 - No memory content in logs anywhere in this pipeline (child/family PII).
+- `book-renderer/src/web/` (the 5b/5c web editor, `book.usemomora.com`) is
+  the REAL implementation of Stage F above — that section's "Next.js/web
+  flow on the marketing site" is stale planning prose, not the shipped
+  shape. Editing is always-on inline (no edit-mode toggle, no sidebar
+  panel — `EditOverlay.tsx`'s hover(desktop)/tap(touch) hitboxes are the
+  only editor surface); text edits include a `furniture:<key>` namespace
+  (`coverName`, `coverTagline`, `dedicationSalutation`,
+  `dedicationSignoff`, `ttyKicker`, `ttyTitle` — a fixed allowlist in both
+  `model/edits.ts` and `supabase/functions/memory-book-edits/index.ts`,
+  never free-form) for book chrome copy the templates previously hard-coded
+  (`templates/furniture.ts`). A DEV-ONLY `?fixture=<slug>` mode
+  (`src/web/dev/fixture.ts`, gated behind `import.meta.env.DEV` and
+  tree-shaken out of `dist-web/` — see `scripts/check-web-bundle.mjs`)
+  loads a real exported book from `book-data/` for live UI diagnosis
+  without Supabase auth; run `npx vite dev --config vite.web.config.ts
+  --port 5199` and open `/web.html?fixture=<slug>`.

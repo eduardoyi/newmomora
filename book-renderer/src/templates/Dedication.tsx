@@ -19,13 +19,20 @@ export function Dedication({ page, manifest, showGuides }: TemplateProps) {
   // greeting-only placeholder (fitter.ts wires it into `params.body`).
   // Never fabricated here when the outline doesn't have it yet.
   const body = page.params.body as string | undefined;
+  // `furniture:dedicationSalutation`/`furniture:dedicationSignoff` edits
+  // (owner-approved follow-up round) — both are otherwise-fixed furniture
+  // copy (`getFurniture`'s `dedication.greeting`/`.signature`); an optional
+  // params override, same "fall back to the furniture default when absent"
+  // shape as every other furniture-namespaced field.
+  const greeting = typeof page.params.greeting === 'string' ? page.params.greeting : furniture.dedication.greeting(childName);
+  const signature = typeof page.params.signature === 'string' ? page.params.signature : furniture.dedication.signature;
   const pageNumber = page.pageNumbers?.[0];
 
   return (
     <PageFrame isSpread={false} showGuides={showGuides} className="dedication-page">
       <div className="dedication" style={{ left: `${xPct(60, false)}%`, top: `${yPct(240)}%`, width: `${wPct(520, false)}%` }}>
         <div className="dedication__greeting" style={{ fontSize: ptCqw(canvasPxToPt(46), false), color: colors.ink }}>
-          {furniture.dedication.greeting(childName)}
+          {greeting}
         </div>
         {body && (
           <p className="dedication__body" style={{ fontSize: ptCqw(canvasPxToPt(19), false), color: colors.ink }}>
@@ -34,7 +41,7 @@ export function Dedication({ page, manifest, showGuides }: TemplateProps) {
         )}
         <div className="dedication__rule" style={{ background: lavender.mid }} />
         <div className="dedication__signature" style={{ fontSize: ptCqw(canvasPxToPt(10.5), false), color: colors.ink3 }}>
-          {furniture.dedication.signature}
+          {signature}
         </div>
       </div>
       {pageNumber != null && <Folio pageNumber={pageNumber} isEvenPage={false} isSpread={false} />}

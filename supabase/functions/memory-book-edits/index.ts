@@ -293,11 +293,39 @@ export async function measureOriginalDimensions(
 // anything the way an image mediaId does (see resolveImageEditRecord's own
 // comment for why THAT lookup is a real trust boundary and this one
 // isn't).
-export const TEXT_TARGET_PATTERN =
-  /^(dedication|closing|backCover|sectionTitle:[^\x00-\x1f]{1,128}|eyebrow:[^\x00-\x1f]{1,128}|caption:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
+//
+// `furniture:<key>` (owner-approved follow-up round) is a SIXTH family,
+// deliberately NOT a free-form suffix like `sectionTitle`/`eyebrow` above --
+// every furniture field is a fixed, known set (book chrome copy the
+// templates themselves own -- see `book-renderer/src/templates/furniture.ts`),
+// never an outline- or DB-sourced id, so it is validated against the
+// `FURNITURE_KEYS` allowlist below, not a format-only regex. Mirrors
+// `book-renderer/src/model/edits.ts`'s identically-named constant (same
+// decoupled-mirror contract that module's header comment documents for the
+// whole edits shape); if this list ever changes, that one must change with
+// it by hand. Year range (`yearRangeLabel`) stays derived/non-editable by
+// owner decision -- deliberately no key for it.
+export const FURNITURE_KEYS = [
+  'coverName',
+  'coverTagline',
+  'dedicationSalutation',
+  'dedicationSignoff',
+  'ttyKicker',
+  'ttyTitle',
+] as const;
+export type FurnitureKey = (typeof FURNITURE_KEYS)[number];
+
+export const TEXT_TARGET_PATTERN = new RegExp(
+  `^(dedication|closing|backCover|sectionTitle:[^\\x00-\\x1f]{1,128}|eyebrow:[^\\x00-\\x1f]{1,128}|caption:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|furniture:(${FURNITURE_KEYS.join('|')}))$`,
+  'i',
+);
 // ^ element-id suffixes MUST allow colons: real outline element ids are
 // colon-namespaced ("backbone:2022-10", "topic:extended-family",
 // "people:<uuid>") — caught in wave-1 cross-review before this ever ran.
+// The `furniture:(...)` alternative is built FROM `FURNITURE_KEYS` (not a
+// hand-duplicated wildcard) so the allowlist has exactly one source of
+// truth in this file -- a key added to one and not the other cannot silently
+// diverge.
 const TEXT_VALUE_MAX_LENGTH = 1000;
 // Disallow raw control characters other than newline/tab -- same spirit as
 // the gallery-import caption constraint's `!~ '[[:cntrl:]]'`

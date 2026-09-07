@@ -138,6 +138,52 @@ describe('resolveTextAnchor', () => {
   it('returns null for an unrecognized target', () => {
     expect(resolveTextAnchor(page({}), 'somethingUnknown')).toBeNull();
   });
+
+  describe('furniture:<key> targets', () => {
+    it('resolves furniture:coverName and furniture:coverTagline on a cover-wrap page', () => {
+      const coverPage = page({ templateId: 'cover-wrap' });
+      expect(resolveTextAnchor(coverPage, 'furniture:coverName')).toEqual({
+        strategy: 'selector',
+        selector: '.cover-wrap__name',
+        approximate: false,
+      });
+      expect(resolveTextAnchor(coverPage, 'furniture:coverTagline')).toEqual({
+        strategy: 'selector',
+        selector: '.cover-wrap__colophon-line',
+        fallbackSelector: '.cover-wrap__colophon',
+        approximate: true,
+      });
+    });
+
+    it('resolves furniture:dedicationSalutation and furniture:dedicationSignoff on a dedication page', () => {
+      const dedicationPage = page({ templateId: 'dedication' });
+      expect(resolveTextAnchor(dedicationPage, 'furniture:dedicationSalutation')).toEqual({
+        strategy: 'selector',
+        selector: '.dedication__greeting',
+        approximate: false,
+      });
+      expect(resolveTextAnchor(dedicationPage, 'furniture:dedicationSignoff')).toEqual({
+        strategy: 'selector',
+        selector: '.dedication__signature',
+        approximate: false,
+      });
+    });
+
+    it('resolves furniture:ttyKicker and furniture:ttyTitle structurally on a through-the-years page', () => {
+      const ttyPage = page({ templateId: 'through-the-years' });
+      expect(resolveTextAnchor(ttyPage, 'furniture:ttyKicker')).toEqual({ strategy: 'tty-kicker' });
+      expect(resolveTextAnchor(ttyPage, 'furniture:ttyTitle')).toEqual({ strategy: 'tty-title' });
+    });
+
+    it('returns null for a furniture target on the wrong page shape', () => {
+      expect(resolveTextAnchor(page({ templateId: 'flex-grid' }), 'furniture:coverName')).toBeNull();
+      expect(resolveTextAnchor(page({ templateId: 'cover-wrap' }), 'furniture:ttyKicker')).toBeNull();
+    });
+
+    it('returns null for a furniture key outside the allowlist', () => {
+      expect(resolveTextAnchor(page({ templateId: 'cover-wrap' }), 'furniture:notAllowlisted')).toBeNull();
+    });
+  });
 });
 
 describe('footerEntryIndexForMemory', () => {

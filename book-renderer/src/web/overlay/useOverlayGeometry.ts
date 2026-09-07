@@ -1,5 +1,5 @@
 import { useEffect, useState, type RefObject } from 'react';
-import type { BookPage } from '../../model/types';
+import type { BookManifest, BookPage } from '../../model/types';
 import type { MemoryBookEditsShape } from '../../model/edits';
 import { computeEditablePhotoSlots, computeTextFields, type EditablePhotoSlot } from '../book/editableFields';
 import { photoSelectorPlanForPage, resolveTextAnchor, type TextAnchorPlan } from './geometry';
@@ -60,6 +60,7 @@ export function useOverlayGeometry(
   containerRef: RefObject<HTMLElement | null>,
   pages: BookPage[],
   edits: MemoryBookEditsShape,
+  manifest: BookManifest,
 ): OverlayGeometry {
   const [geometry, setGeometry] = useState<OverlayGeometry>(EMPTY);
 
@@ -102,12 +103,29 @@ export function useOverlayGeometry(
           }
         }
 
-        const textFields = computeTextFields([page]);
+        // A consolidated footer-index row (several memories' numerals on one
+        // line, sharing one `note` — see `FooterIndex.tsx`) resolves EVERY
+        // one of those memories' own `caption:<memoryId>` target to the SAME
+        // DOM node (`geometry.ts`'s `footer-row` strategy keys by
+        // `entryIndex`, not memory id). Without de-duplicating, each would
+        // push its own full-size region at the identical rect — invisible
+        // stacked hitboxes where only the topmost is ever clickable, and the
+        // rest were only reachable through the now-removed `EditPanel`
+        // fallback list. Tracked per-page (a `footerIndex` never spans
+        // pages) so exactly ONE hitbox renders per rendered row, whichever
+        // of its memories' targets is encountered first.
+        const claimedFooterRowNodes = new Set<HTMLElement>();
+
+        const textFields = computeTextFields([page], manifest);
         for (const field of textFields) {
           const anchorPlan = resolveTextAnchor(page, field.target);
           if (!anchorPlan) continue;
           const found = resolveAnchorNode(frame, anchorPlan);
           if (!found) continue;
+          if (anchorPlan.strategy === 'footer-row') {
+            if (claimedFooterRowNodes.has(found.node)) continue;
+            claimedFooterRowNodes.add(found.node);
+          }
           textRegions.push({
             kind: 'text',
             target: field.target,
@@ -140,7 +158,7 @@ export function useOverlayGeometry(
       mo.disconnect();
       window.removeEventListener('resize', recompute);
     };
-  }, [containerRef, pages, edits]);
+  }, [containerRef, pages, edits, manifest]);
 
   return geometry;
 }
@@ -169,6 +187,22 @@ function resolveAnchorNode(frame: HTMLElement, plan: TextAnchorPlan): { node: HT
   if (plan.strategy === 'section-title') {
     const h2 = frame.querySelector<HTMLElement>('h2');
     return h2 ? { node: h2, approximate: false } : null;
+  }
+  if (plan.strategy === 'tty-title') {
+    // `data-testid="portrait-strip"` is the template's own testing hook
+    // (`ThroughTheYears.tsx`'s outer `.ttty` div) — a stable, already-there
+    // attribute selector, not a class added for this overlay.
+    const h2 = frame.querySelector<HTMLElement>('[data-testid="portrait-strip"] h2');
+    return h2 ? { node: h2, approximate: false } : null;
+  }
+  if (plan.strategy === 'tty-kicker') {
+    // No wrapping row here (unlike `SectionHeader.tsx`'s kicker+divider
+    // pair) — the kicker `<div>` IS the title `<h2>`'s previous sibling
+    // directly (see `ThroughTheYears.tsx`'s JSX: kicker div, then h2, both
+    // direct children of the same positioned wrapper).
+    const h2 = frame.querySelector<HTMLElement>('[data-testid="portrait-strip"] h2');
+    const kicker = h2?.previousElementSibling as HTMLElement | null;
+    return kicker ? { node: kicker, approximate: false } : null;
   }
   if (plan.strategy === 'section-kicker') {
     // `SectionHeader.tsx` renders no className at all (inline styles only —

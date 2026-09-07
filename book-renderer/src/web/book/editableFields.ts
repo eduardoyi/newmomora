@@ -1,8 +1,10 @@
-import type { BookPage, PhotoSlotContent } from '../../model/types';
+import type { BookManifest, BookPage } from '../../model/types';
+import type { PhotoSlotContent } from '../../model/types';
 import type { SectionHeaderParams } from '../../templates/common/SectionHeader.types';
 import { COVER_SLOT_KEY } from '../../model/edits';
 import type { MemoryBookEditsShape } from '../../model/edits';
 import { resolveEditableSlotKey } from './slotKeys';
+import { getFurniture, getLanguage } from '../../templates/furniture';
 
 export interface TextField {
   target: string;
@@ -18,9 +20,21 @@ export interface TextField {
  * `target`, since a target can legitimately appear on both a
  * `spread-title` page and a content page's `sectionHeader` in the same
  * unit (`applyPostFit`'s own "updated in lockstep" behavior).
+ *
+ * `manifest` is used ONLY to compute the six `furniture:<key>` fields'
+ * (owner-approved follow-up round) starting `value` when no edit has been
+ * saved yet — those fields are otherwise-fixed furniture copy (book chrome
+ * the templates own, see `templates/furniture.ts`), language-dependent via
+ * `manifest.language`, so an honest "what's actually rendered right now"
+ * pre-fill needs the same `getFurniture(getLanguage(manifest))` lookup the
+ * templates themselves use (`Dedication.tsx`/`ThroughTheYears.tsx`) — never
+ * re-derived by hand here, to avoid the exact class of drift this
+ * codebase's own comments repeatedly flag as dangerous (see `edits.ts`'s
+ * header comment on `geometry.ts`).
  */
-export function computeTextFields(pages: BookPage[]): TextField[] {
+export function computeTextFields(pages: BookPage[], manifest: BookManifest): TextField[] {
   const fields = new Map<string, TextField>();
+  const furniture = getFurniture(getLanguage(manifest));
 
   for (const page of pages) {
     if (page.templateId === 'dedication') {
@@ -30,12 +44,52 @@ export function computeTextFields(pages: BookPage[]): TextField[] {
         value: String(page.params.body ?? ''),
         multiline: true,
       });
+      const childName = String(page.params.childName ?? '');
+      fields.set('furniture:dedicationSalutation', {
+        target: 'furniture:dedicationSalutation',
+        label: 'Salutation',
+        value: typeof page.params.greeting === 'string' ? page.params.greeting : furniture.dedication.greeting(childName),
+        multiline: false,
+      });
+      fields.set('furniture:dedicationSignoff', {
+        target: 'furniture:dedicationSignoff',
+        label: 'Sign-off',
+        value: typeof page.params.signature === 'string' ? page.params.signature : furniture.dedication.signature,
+        multiline: false,
+      });
     }
     if (page.templateId === 'cover-wrap') {
       fields.set('backCover', {
         target: 'backCover',
         label: 'Back cover text',
         value: String(page.params.backCoverLine ?? ''),
+        multiline: true,
+      });
+      fields.set('furniture:coverName', {
+        target: 'furniture:coverName',
+        label: 'Cover name',
+        value: String(page.params.childName ?? ''),
+        multiline: false,
+      });
+      fields.set('furniture:coverTagline', {
+        target: 'furniture:coverTagline',
+        label: 'Cover tagline',
+        value: String(page.params.backCoverLine ?? ''),
+        multiline: true,
+      });
+    }
+    if (page.templateId === 'through-the-years') {
+      fields.set('furniture:ttyKicker', {
+        target: 'furniture:ttyKicker',
+        label: 'Kicker',
+        value: typeof page.params.ttyKicker === 'string' ? page.params.ttyKicker : furniture.throughTheYears.kicker,
+        multiline: false,
+      });
+      fields.set('furniture:ttyTitle', {
+        target: 'furniture:ttyTitle',
+        label: 'Title',
+        value:
+          typeof page.params.ttyTitle === 'string' ? page.params.ttyTitle : furniture.throughTheYears.titleLines.join('\n'),
         multiline: true,
       });
     }

@@ -70,12 +70,17 @@ export type TextAnchorPlan =
   /** The section-header title/kicker have NO className in `SectionHeader.tsx` (inline styles only) — located structurally: the title is the page's own `<h2>` (unique per page — see this module's header comment for why that's safe), and the kicker, when present, is that `<h2>`'s previous sibling's first child. */
   | { strategy: 'section-title' }
   | { strategy: 'section-kicker' }
-  /** A footer-index caption: `entryIndex` is the 0-based position of the matching entry within `page.params.footerIndex` — the SAME order `FooterIndex.tsx` renders its (unclassed) entry rows in, so `entryIndex`-th child of the entries container is the right DOM node. A consolidated same-date/same-caption row (`FooterIndex.tsx`'s own "several superscript numerals on one line") anchors to that WHOLE row for whichever memory's caption this target is — editing a different memory sharing that row is still reachable via the fallback list (`EditPanel`). */
-  | { strategy: 'footer-row'; entryIndex: number };
+  /** A footer-index caption: `entryIndex` is the 0-based position of the matching entry within `page.params.footerIndex` — the SAME order `FooterIndex.tsx` renders its (unclassed) entry rows in, so `entryIndex`-th child of the entries container is the right DOM node. A consolidated same-date/same-caption row (`FooterIndex.tsx`'s own "several superscript numerals on one line") anchors to that WHOLE row for whichever memory's caption this target is — editing a different memory sharing that row is now reachable inline (its own hitbox — see `footer-row` handling in `useOverlayGeometry.ts`), not just via a fallback list. */
+  | { strategy: 'footer-row'; entryIndex: number }
+  /** `ThroughTheYears.tsx`'s title `<h2>` — unclassed, but uniquely findable via the `data-testid="portrait-strip"` wrapper the template already renders for an unrelated reason (test targeting). */
+  | { strategy: 'tty-title' }
+  /** `ThroughTheYears.tsx`'s kicker `<div>` — NO wrapping row (unlike `SectionHeader.tsx`'s kicker+divider row), so it's simply the title `<h2>`'s own previous sibling. */
+  | { strategy: 'tty-kicker' };
 
 const SECTION_TITLE_PREFIX = 'sectionTitle:';
 const EYEBROW_PREFIX = 'eyebrow:';
 const CAPTION_PREFIX = 'caption:';
+const FURNITURE_PREFIX = 'furniture:';
 
 export function resolveTextAnchor(page: BookPage, target: string): TextAnchorPlan | null {
   if (target === 'dedication' && page.templateId === 'dedication') {
@@ -113,6 +118,40 @@ export function resolveTextAnchor(page: BookPage, target: string): TextAnchorPla
     const memoryId = target.slice(CAPTION_PREFIX.length);
     const entryIndex = footerEntryIndexForMemory(page, memoryId);
     return entryIndex === null ? null : { strategy: 'footer-row', entryIndex };
+  }
+  if (target.startsWith(FURNITURE_PREFIX)) {
+    return resolveFurnitureTextAnchor(page, target.slice(FURNITURE_PREFIX.length));
+  }
+  return null;
+}
+
+/**
+ * Anchor plans for the six `furniture:<key>` targets (owner-approved
+ * follow-up round — see `model/edits.ts`'s `applyFurnitureTextEdit` for the
+ * matching apply-side dispatch, which this mirrors key-for-key). Every key
+ * here is ALWAYS rendered by its template once its page exists (no
+ * conditional like `backCoverLine`'s `{p.backCoverLine && ...}`), so only
+ * `coverTagline` (which reuses the pre-existing `backCover` anchor's own
+ * "may not exist yet" shape) is `approximate: true`.
+ */
+function resolveFurnitureTextAnchor(page: BookPage, key: string): TextAnchorPlan | null {
+  if (key === 'coverName' && page.templateId === 'cover-wrap') {
+    return { strategy: 'selector', selector: '.cover-wrap__name', approximate: false };
+  }
+  if (key === 'coverTagline' && page.templateId === 'cover-wrap') {
+    return { strategy: 'selector', selector: '.cover-wrap__colophon-line', fallbackSelector: '.cover-wrap__colophon', approximate: true };
+  }
+  if (key === 'dedicationSalutation' && page.templateId === 'dedication') {
+    return { strategy: 'selector', selector: '.dedication__greeting', approximate: false };
+  }
+  if (key === 'dedicationSignoff' && page.templateId === 'dedication') {
+    return { strategy: 'selector', selector: '.dedication__signature', approximate: false };
+  }
+  if (key === 'ttyKicker' && page.templateId === 'through-the-years') {
+    return { strategy: 'tty-kicker' };
+  }
+  if (key === 'ttyTitle' && page.templateId === 'through-the-years') {
+    return { strategy: 'tty-title' };
   }
   return null;
 }

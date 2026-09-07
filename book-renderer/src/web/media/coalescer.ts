@@ -1,4 +1,5 @@
 import { supabase } from '../supabaseClient';
+import { getFixtureSlug, fixtureMediaUrls } from '../dev/fixture';
 
 /**
  * Batched `get-media-url` request coalescer for the web app (memory-book-5b
@@ -109,6 +110,18 @@ async function flush(): Promise<void> {
  */
 export function getMediaUrls(keys: string[], options?: { forceRefresh?: boolean }): Promise<Map<string, string>> {
   if (keys.length === 0) return Promise.resolve(new Map());
+
+  // DEV-ONLY fixture mode (owner-approved follow-up round) — no `bookId`
+  // parameter exists on this function (see this module's own header
+  // comment: exactly one book's assets are ever in play at a time), so the
+  // active fixture slug is read directly rather than threaded through;
+  // resolves synchronously to a local static URL, no `get-media-url`
+  // Edge Function call at all. See `dev/fixture.ts`'s header comment for
+  // the tree-shaking contract this whole branch relies on.
+  if (import.meta.env.DEV) {
+    const fixtureSlug = getFixtureSlug();
+    if (fixtureSlug) return Promise.resolve(fixtureMediaUrls(fixtureSlug, keys));
+  }
 
   const uncachedKeys = options?.forceRefresh
     ? keys

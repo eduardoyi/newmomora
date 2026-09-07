@@ -42,24 +42,6 @@
   white-space: nowrap;
 }
 
-.book-view__edit-toggle {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 16px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--color-primarySoft);
-  background: var(--color-white);
-  color: var(--color-primaryDark);
-  cursor: pointer;
-}
-
-.book-view__edit-toggle--active {
-  background: var(--color-primary);
-  color: var(--color-white);
-  border-color: var(--color-primary);
-}
-
 .book-view__hint {
   font-family: var(--font-sans);
   font-size: 14px;
@@ -77,12 +59,6 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-@media (min-width: 900px) {
-  .book-view__body {
-    flex-direction: row;
-  }
 }
 
 .book-view__main {
@@ -121,24 +97,4 @@
    REAL constraint on this screen; the inner cap only fights it. */
 .book-view__stage .spread-pager__stage {
   max-width: none;
-}
-
-.book-view__sidebar {
-  width: 100%;
-  padding: 16px;
-  border-top: 1px solid var(--color-border);
-  overflow-y: auto;
-}
-
-@media (min-width: 900px) {
-  .book-view__sidebar {
-    width: 340px;
-    flex-shrink: 0;
-    border-top: none;
-    border-left: 1px solid var(--color-border);
-    /* dvh keeps the panel's own scroll area (and its inputs) reachable
-       above a mobile-width keyboard even when this becomes a side panel on
-       a tablet/desktop-sized touch device. */
-    max-height: calc(100dvh - 57px);
-  }
 }

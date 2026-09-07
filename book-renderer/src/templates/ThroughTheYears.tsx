@@ -24,6 +24,17 @@ export function ThroughTheYears({ page, manifest, bookSlug, showGuides }: Templa
   const pageNumbers = page.pageNumbers ?? [];
   const lang = getLanguage(manifest);
   const furniture = getFurniture(lang);
+  // `furniture:ttyKicker`/`furniture:ttyTitle` edits (owner-approved
+  // follow-up round) — otherwise-fixed furniture copy, same optional
+  // params-override-with-fallback shape as the dedication fields above.
+  // `titleLines` is a fixed 2-line tuple in the furniture table; an edited
+  // title is stored as one string (`TextEditPopover`'s plain `<textarea>`)
+  // and split on `\n` here, capped to the same two lines the layout
+  // reserves space for — extra lines beyond the second are dropped rather
+  // than silently overflowing the header block.
+  const kicker = typeof page.params.ttyKicker === 'string' ? page.params.ttyKicker : furniture.throughTheYears.kicker;
+  const ttyTitleOverride = typeof page.params.ttyTitle === 'string' ? page.params.ttyTitle : null;
+  const titleLines: [string, string] = ttyTitleOverride !== null ? splitTitleLines(ttyTitleOverride) : furniture.throughTheYears.titleLines;
   const ageLabelFor = (p: ManifestPortrait) =>
     localizedAgeLabel({ ageLabel: p.ageLabel, date: p.date, dateOfBirth: manifest.child.dateOfBirth }, lang);
 
@@ -43,7 +54,7 @@ export function ThroughTheYears({ page, manifest, bookSlug, showGuides }: Templa
               marginBottom: '0.9em',
             }}
           >
-            {furniture.throughTheYears.kicker}
+            {kicker}
           </div>
           <h2
             style={{
@@ -56,9 +67,9 @@ export function ThroughTheYears({ page, manifest, bookSlug, showGuides }: Templa
               color: colors.ink,
             }}
           >
-            {furniture.throughTheYears.titleLines[0]}
+            {titleLines[0]}
             <br />
-            {furniture.throughTheYears.titleLines[1]}
+            {titleLines[1]}
           </h2>
         </div>
         <div
@@ -164,4 +175,13 @@ export function ThroughTheYears({ page, manifest, bookSlug, showGuides }: Templa
       {pageNumbers[1] != null && <Folio pageNumber={pageNumbers[1]} isEvenPage={false} isSpread />}
     </PageFrame>
   );
+}
+
+/** Splits a `furniture:ttyTitle` edit's single-string value into the
+ * fixed 2-line tuple the header layout reserves space for — a missing
+ * second line renders blank (never re-uses the first line), matching a
+ * deliberate one-line title being just that. */
+function splitTitleLines(value: string): [string, string] {
+  const [line1 = '', line2 = ''] = value.split('\n');
+  return [line1, line2];
 }

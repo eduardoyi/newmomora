@@ -3,6 +3,7 @@ import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { TEXT_TARGET_PATTERN,
   collectManifestAssetFiles,
   DEFAULT_DEPENDENCIES,
+  FURNITURE_KEYS,
   handleMemoryBookEdits,
   measureOriginalDimensions,
   type MemoryBookEditsDependencies,
@@ -817,4 +818,38 @@ Deno.test('save_edit text target accepts colon-namespaced element ids (backbone:
     if (!pattern.test(target)) throw new Error(`expected valid target rejected: ${target}`);
   }
   if (pattern.test('sectionTitle:')) throw new Error('empty suffix must stay invalid');
+});
+
+Deno.test('save_edit text target: furniture:<key> accepts every allowlisted key, case-insensitively, and nothing else', () => {
+  const pattern = TEXT_TARGET_PATTERN;
+  for (const key of FURNITURE_KEYS) {
+    if (!pattern.test(`furniture:${key}`)) throw new Error(`expected valid furniture target rejected: furniture:${key}`);
+    if (!pattern.test(`furniture:${key.toUpperCase()}`)) {
+      throw new Error(`expected case-insensitive furniture target rejected: furniture:${key.toUpperCase()}`);
+    }
+  }
+  // Not free-form -- an arbitrary/unlisted key, or a stale name from before
+  // the allowlist existed, must stay invalid (this is the whole point of an
+  // allowlist over a wildcard suffix like `sectionTitle:`/`eyebrow:` above).
+  for (const bad of ['furniture:', 'furniture:childName', 'furniture:yearRangeLabel', 'furniture:coverNameX']) {
+    if (pattern.test(bad)) throw new Error(`expected invalid furniture target accepted: ${bad}`);
+  }
+});
+
+Deno.test('save_edit: saves a valid furniture:coverName text edit and returns the merged edits', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'text', target: 'furniture:coverName', value: 'Mia' } }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook(), editsRow: null }) }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.edits.text['furniture:coverName'], { target: 'furniture:coverName', value: 'Mia' });
+});
+
+Deno.test('save_edit: rejects a furniture target outside the allowlist', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'text', target: 'furniture:notAllowlisted', value: 'x' } }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook() }) }),
+  );
+  assertEquals(response.status, 400);
 });

@@ -31,12 +31,29 @@ import react from '@vitejs/plugin-react';
  * `publicDir`/`input` based on `process.env.MODE` (or similar) is exactly
  * the kind of "one wrong branch away from shipping PII" shape this step
  * exists to rule out. Two files can't accidentally merge their behavior.
+ *
+ * One narrow, DEV-SERVER-ONLY exception (owner-approved follow-up round,
+ * "diagnose live"): `command === 'serve'` (i.e. `npm run dev:web` /
+ * `vite dev --config vite.web.config.ts`, never `vite build`) serves
+ * `book-data/` as this entry's `publicDir` too, exactly like the local
+ * preview app's own `vite.config.ts` does — this is what lets the DEV-ONLY
+ * `?fixture=<slug>` mode (`src/web/dev/fixture.ts`, gated behind
+ * `import.meta.env.DEV`) fetch `/<slug>/manifest.json` etc. without a
+ * running Supabase backend. `command === 'build'` still gets `publicDir:
+ * false`, unconditionally — the PII-safety guarantee this file exists for
+ * applies ONLY to the built bundle (`dist-web/`), which is what
+ * `check-web-bundle.mjs` inspects; a local dev server serving a
+ * gitignored, developer-machine-only data directory over `localhost` is a
+ * different, already-accepted risk (the exact same one `vite.config.ts`'s
+ * own dev server already carries for the preview app).
  */
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   root: __dirname,
   plugins: [react()],
-  // No publicDir passthrough of any kind for this entry — see header comment.
-  publicDir: false,
+  // `publicDir: false` for the build (see header comment) — dev serves
+  // `book-data/` so the fixture mode can fetch a book's manifest/outline
+  // locally, same as `vite.config.ts`'s preview app.
+  publicDir: command === 'serve' ? 'book-data' : false,
   server: {
     fs: {
       allow: ['..', '.'],
@@ -51,4 +68,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

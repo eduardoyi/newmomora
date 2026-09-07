@@ -6,6 +6,14 @@
   align-items: flex-end;
   justify-content: center;
   z-index: 100;
+  /* `PickerSheet` is always opened from `EditOverlay.tsx`, as a descendant
+     of `.edit-overlay`, which is `pointer-events: none` by design (only its
+     region hotspots opt back in). Without this override, that `none`
+     inherits onto the whole modal — it renders but nothing in it responds
+     to clicks (bug: opening "Choose a photo" made the page look stuck until
+     a refresh, since the visible modal couldn't be closed or interacted
+     with). */
+  pointer-events: auto;
 }
 
 @media (min-width: 640px) {
