@@ -334,12 +334,14 @@ unhappy path alarms rather than strands a paid order.
 - **Presign lifetimes**: 7-day for Prodigi fetches (proven), short for
   render-time image loads.
 
-## Open questions (owner)
+## Resolved owner decisions (2026-09-08)
 
-- **Currency**: Prodigi quotes in USD; launch customers are EU-first.
-  Charge in EUR (single currency, fx spread absorbed in price) or USD?
-  Decide with the price after the physical sample.
-- Fly org creation (prerequisite for step 3's deploy).
+- **Currency: USD** — Stripe Checkout Sessions and the quote passthrough
+  price in USD (matches Prodigi's billing currency; no fx spread to
+  manage). Stripe localizes the display for EU customers.
+- Fly org: created. Deploys stay owner-run (commands handed over), with
+  a scoped deploy token as the fallback if iteration demands it.
+- Still pending: the PRICE itself (awaits the physical sample).
 
 ## Out of scope
 
