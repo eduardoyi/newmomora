@@ -94,8 +94,12 @@ export async function renderBook(env: Env, input: RenderBookInput): Promise<Rend
   return parseRenderResult(json);
 }
 
-export async function getRenderStatus(env: Env, attemptId: string): Promise<RenderWorkerRenderResult> {
-  const response = await signedFetch(env, `/status/${encodeURIComponent(attemptId)}`, {}, 'GET');
+export async function getRenderStatus(env: Env, orderId: string, attemptId: string): Promise<RenderWorkerRenderResult> {
+  // The render worker's status route REQUIRES ?orderId= (its R2 state key
+  // is print-orders/<orderId>/<attemptId>/ — documented deviation in
+  // render/memory-book-renderer/src/server.ts; canary finding: the plan's
+  // shorthand /status/<attemptId> 400s without it).
+  const response = await signedFetch(env, `/status/${encodeURIComponent(attemptId)}?orderId=${encodeURIComponent(orderId)}`, {}, 'GET');
   const json = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) throw new RenderWorkerError(response.status, `render worker /status failed (${response.status})`);
   return parseRenderResult(json);

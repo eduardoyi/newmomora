@@ -159,7 +159,7 @@ export class MemoryBookOrderWorkflow extends WorkflowEntrypoint<Env, WorkflowDis
           { retries: { limit: 2, delay: '3 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
           async () => {
             try {
-              return await getRenderStatus(this.env, attemptId);
+              return await getRenderStatus(this.env, orderId, attemptId);
             } catch (error) {
               throw new RenderStageError(errorMessageOnly(error));
             }
