@@ -221,10 +221,17 @@ async function renderOneAttempt(browser: Browser, url: string): Promise<Uint8Arr
     // check already ran before data-print-ready could appear — see that
     // file's LoadState doc comment) and every <img> decoded, before capture.
     await page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready);
-    await page.evaluate(async () => {
+    const brokenImages = await page.evaluate(async () => {
       const imgs = Array.from(document.images);
       await Promise.all(imgs.map((img) => (img.complete && img.naturalWidth > 0 ? Promise.resolve() : img.decode().catch(() => undefined))));
+      // FAIL LOUD on any image that never produced pixels (canary PDF
+      // finding: a 404'd asset previously shipped as a broken-image icon
+      // in a submitted print file — same philosophy as the font hard-fail).
+      return imgs.filter((img) => !(img.complete && img.naturalWidth > 0)).map((img) => img.src.split('?')[0].slice(-120));
     });
+    if (brokenImages.length > 0) {
+      throw new Error(`print render broken images at ${url}: ${brokenImages.join(', ')}`);
+    }
     // timeout: page.pdf's DEFAULT is 30s — the real source of every
     // "Timed out after waiting 30000ms" in the 5c canary (PDF
     // serialization of print-res image pages can exceed it).

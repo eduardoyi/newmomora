@@ -75,9 +75,10 @@ describe('planPresign — manifest URL rewrite with originalFile precedence', ()
     const plan = planPresign(manifest, {});
 
     expect(plan.objectKeys).toEqual(expect.arrayContaining(['illustrations/illo-1.webp', 'portraits/p1.jpg']));
-    // sourceFile is never rendered as an <img src> by any template — see
-    // loader.ts's assetUrl() call sites — so it must not be presigned.
-    expect(plan.objectKeys).not.toContain('portraits/p1-source.jpg');
+    // sourceFile IS rendered — ThroughTheYears' real-photo thumb
+    // (.ttty__source-img). The original assumption here shipped a broken
+    // image in a submitted print PDF (canary, 2026-09-09).
+    expect(plan.objectKeys).toContain('portraits/p1-source.jpg');
 
     const rewritten = plan.rewrite({
       'illustrations/illo-1.webp': 'https://r2.example.com/illo-1.webp',

@@ -95,6 +95,10 @@ export function planPresign(manifest: BookManifest, edits: MemoryBookEditsShape)
   }
   for (const portrait of manifest.portraits) {
     note(portrait.file);
+    // The real-photo thumb beside the portrait (canary PDF finding
+    // 2026-09-09: this field was never presigned, so Through-The-Years
+    // pages shipped a broken image). Empty string = no source photo.
+    if (portrait.sourceFile) note(portrait.sourceFile);
   }
   for (const edit of Object.values(edits.images ?? {})) {
     note(sourceKeyForImageEdit(edit));
@@ -120,6 +124,7 @@ export function planPresign(manifest: BookManifest, edits: MemoryBookEditsShape)
     }
     for (const portrait of nextManifest.portraits) {
       portrait.file = resolve(portrait.file);
+      if (portrait.sourceFile) portrait.sourceFile = resolve(portrait.sourceFile);
     }
 
     const nextEdits: MemoryBookEditsShape = JSON.parse(JSON.stringify(edits));
