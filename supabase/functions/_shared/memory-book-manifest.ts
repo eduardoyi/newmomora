@@ -285,6 +285,19 @@ export interface ManifestAsset {
    * found missing". */
   originalWidth?: number;
   originalHeight?: number;
+  /**
+   * The ORIGINAL (not preview) R2 object key -- `memory_media.object_key`
+   * (memory-book-5c plan, Design Decision 1: "Originals reach print via the
+   * manifest"). Print needs full-resolution bytes; `file` above is the
+   * app's ~1280px preview key. Absent (never `null`) exactly when `file`
+   * already IS the original -- `selectMediaAsset`'s own fallback when no
+   * preview exists (no `preview_object_key` on the row) -- so this field
+   * never duplicates `file`'s own value; a caller can treat "absent" and
+   * "equal to file" as the same fact. Absent on every manifest built before
+   * this field existed, same backward-compatible-addition contract as
+   * `originalWidth`/`originalHeight`.
+   */
+  originalFile?: string;
 }
 
 /**
@@ -311,6 +324,15 @@ export function buildManifestAsset(params: {
   durationMs: number | null;
   dbAspectRatio: number | null;
   originalDimensions?: { width: number; height: number } | null;
+  /**
+   * `memory_media.object_key` -- see `ManifestAsset.originalFile`'s doc
+   * comment. Omitted (or explicitly `null`) sets nothing, same "never
+   * fabricated" contract as `originalDimensions`. When given AND equal to
+   * `params.file` (the fallback case: no preview existed, so the selected
+   * asset key already IS the original), this is a deliberate no-op -- the
+   * field is left unset rather than duplicating `file`'s own value.
+   */
+  originalFile?: string | null;
 }): ManifestAsset {
   const aspectRatio = params.dbAspectRatio ?? (params.height > 0 ? params.width / params.height : 1);
   const asset: ManifestAsset = {
@@ -324,6 +346,9 @@ export function buildManifestAsset(params: {
   if (params.originalDimensions) {
     asset.originalWidth = params.originalDimensions.width;
     asset.originalHeight = params.originalDimensions.height;
+  }
+  if (params.originalFile && params.originalFile !== params.file) {
+    asset.originalFile = params.originalFile;
   }
   return asset;
 }
@@ -552,6 +577,112 @@ export interface BookManifest {
   downloadFailures: DownloadFailure[];
   /** See `ManifestAssetMode`. */
   assetMode: ManifestAssetMode;
+}
+
+// ── originalFile backfill (memory-book-5c plan, Design Decision 1) ────────
+//
+// An existing `ready` `memory_books.book_document` was frozen before
+// `ManifestAsset.originalFile` existed, so its assets never carry it. This
+// is a NARROW, DETERMINISTIC patch -- no LLM, no re-curation, never
+// touches curation/ordering/content -- that fills the gap by looking up
+// each asset's `file` (the exported preview key, or the original itself in
+// the fallback case) against a `memory_media` map the caller builds
+// (`file -> object_key`, keyed by BOTH `preview_object_key` and
+// `object_key` so the fallback case resolves too -- see
+// `_shared/memory-book-backfill.ts`'s service-role helper, which is the
+// only intended caller of `originalFileByFile` construction). Pure and
+// runtime-agnostic like the rest of this module; the DB read lives in that
+// separate Deno-only helper.
+
+/** One asset the backfill could not resolve -- its `file` had no matching
+ * `memory_media` row in the caller's lookup map (deleted media, a stale/
+ * orphaned manifest entry, or a lookup scoped to the wrong family). Never
+ * silently dropped -- the caller (the future quote op, plan step 5) decides
+ * how to react, e.g. refusing to freeze a paid snapshot with any unresolved
+ * asset. */
+export interface UnresolvedManifestAsset {
+  memoryId: string;
+  file: string;
+  kind: ManifestAssetKind;
+}
+
+export interface ManifestOriginalFileBackfillResult {
+  /** A patched COPY of the input manifest -- the input is never mutated. */
+  manifest: BookManifest;
+  /** Count of assets that actually gained an `originalFile` (excludes
+   * already-backfilled and fallback-key no-op assets). */
+  patchedCount: number;
+  unresolved: UnresolvedManifestAsset[];
+}
+
+/**
+ * Patches `originalFile` onto every asset of every memory in `manifest`,
+ * looking each asset's `file` up in `originalFileByFile`. Idempotent (an
+ * asset that already carries `originalFile` -- e.g. a manifest built after
+ * this field existed, or a book this already ran against -- is left
+ * untouched and never re-counted or reported unresolved) and a deliberate
+ * no-op for the fallback-key case: when the lookup resolves `file` to
+ * itself (no preview existed, so `file` already IS the original --
+ * `selectMediaAsset`'s own fallback), `originalFile` is correctly left
+ * unset, mirroring `buildManifestAsset`'s own no-duplication contract.
+ */
+export function backfillManifestOriginalFiles(
+  manifest: BookManifest,
+  originalFileByFile: Record<string, string>,
+): ManifestOriginalFileBackfillResult {
+  const patched = JSON.parse(JSON.stringify(manifest)) as BookManifest;
+  let patchedCount = 0;
+  const unresolved: UnresolvedManifestAsset[] = [];
+
+  for (const [memoryId, memory] of Object.entries(patched.memories)) {
+    for (const asset of memory.assets) {
+      if (asset.originalFile) continue; // already backfilled -- idempotent no-op.
+      const original = originalFileByFile[asset.file];
+      if (!original) {
+        unresolved.push({ memoryId, file: asset.file, kind: asset.kind });
+        continue;
+      }
+      if (original === asset.file) continue; // fallback case: file already IS the original.
+      asset.originalFile = original;
+      patchedCount += 1;
+    }
+  }
+
+  return { manifest: patched, patchedCount, unresolved };
+}
+
+export interface BackfillBookDocumentResult {
+  /** Same `{ outline, manifest }` shape `book_document` is stored as
+   * (`outline` passed through byte-for-byte -- this step never touches
+   * curation); `manifest` is the patched copy. */
+  bookDocument: { outline: unknown; manifest: BookManifest };
+  patchedCount: number;
+  unresolved: UnresolvedManifestAsset[];
+}
+
+/**
+ * `book_document`-shaped wrapper around `backfillManifestOriginalFiles` --
+ * `memory_books.book_document` is stored (and read back) as untyped jsonb,
+ * so this validates just enough shape to fail loudly on a mismatch, same
+ * "report rather than guess" posture as book-renderer's own `loader.ts`.
+ */
+export function backfillBookDocumentOriginalFiles(
+  bookDocument: unknown,
+  originalFileByFile: Record<string, string>,
+): BackfillBookDocumentResult {
+  if (!bookDocument || typeof bookDocument !== 'object') {
+    throw new Error('book_document is not an object');
+  }
+  const doc = bookDocument as { outline?: unknown; manifest?: unknown };
+  if (!doc.manifest || typeof doc.manifest !== 'object') {
+    throw new Error('book_document.manifest is missing or not an object');
+  }
+
+  const { manifest, patchedCount, unresolved } = backfillManifestOriginalFiles(
+    doc.manifest as BookManifest,
+    originalFileByFile,
+  );
+  return { bookDocument: { outline: doc.outline, manifest }, patchedCount, unresolved };
 }
 
 export function buildManifest(input: {

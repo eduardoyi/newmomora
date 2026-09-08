@@ -24,6 +24,13 @@
  * Absent from the map (measurement failed, or the caller didn't attempt
  * it) -> `originalWidth`/`originalHeight` stay unset, exactly like a real
  * eval-CLI download failure -- never fabricated.
+ *
+ * `originalFile` (memory-book-5c plan, Design Decision 1): every asset also
+ * carries `row.object_key` as `originalFile` -- the print pipeline's source
+ * of original-resolution bytes, since `file` above is the exported PREVIEW
+ * key. `buildManifestAsset` is the no-op guard for the fallback case (no
+ * preview existed, so `file` already equals `object_key`) -- see that
+ * function's own doc comment.
  */
 import {
   buildManifest,
@@ -109,6 +116,15 @@ export function buildAssetsForMemory(
         // just relying on the map being empty for video jobs) keeps this
         // function correct even if a caller passes a map keyed more loosely.
         originalDimensions: selected.kind === 'photo' ? originalDimensionsByMediaId[row.id] ?? null : null,
+        // Design Decision 1 (memory-book-5c plan): print needs the
+        // original-resolution bytes; `row.object_key` IS that original for
+        // both a photo and a video-poster row (a video's own original
+        // video file is never printed -- only its poster `file` is -- but
+        // this field is populated uniformly regardless of kind, per the
+        // decision). `buildManifestAsset` itself is the no-op guard for the
+        // fallback case (`selected.key === row.object_key`, no preview
+        // existed) -- never duplicated here.
+        originalFile: row.object_key,
       }),
     );
   }

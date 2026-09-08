@@ -40,6 +40,20 @@ export interface ManifestAsset {
    */
   originalWidth?: number | null;
   originalHeight?: number | null;
+  /**
+   * The ORIGINAL (not preview) R2 object key (data contract addition,
+   * memory-book-5c plan, Design Decision 1) -- print needs full-resolution
+   * bytes; `file` above may be a downscaled preview. Absent on a manifest
+   * built before this field existed, and on an asset whose `file` already
+   * IS the original (no preview existed) -- the producer never duplicates
+   * `file`'s own value into this field, so "absent" and "equal to file" are
+   * the same fact. Optional (not `| null`, unlike `originalWidth`/
+   * `originalHeight`) -- both producers (the manifest builder, and
+   * `model/edits.ts`'s `substituteAsset`/`applyCoverImageEdit` copying
+   * `ImageEditRecord.originalFile`) always have a real key when they set it
+   * at all; nothing ever writes an explicit `null` here.
+   */
+  originalFile?: string;
 }
 
 /** AI illustration generated for a text memory (data contract addition, landed). */

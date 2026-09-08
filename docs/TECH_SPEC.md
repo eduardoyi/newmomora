@@ -723,6 +723,92 @@ last-write-wins for v1
 (`save_edit` always reads-merges-writes the whole `edits` object) — stated,
 not solved; per-field merge is a v2 follow-up.
 
+### 2.1f Memory Book orders & fulfillment (V5c)
+
+`plans/memory-book-5c-checkout-fulfillment.md` Design Decision 4 (binding
+table spec). One row per purchase attempt of a Memory Book — the schema and
+RLS contract only; the `memory-book-orders`/`stripe-webhook` Edge Functions
+and the Cloudflare order workflow that own every field/transition below are
+a separate, not-yet-shipped change (see
+[docs/features/memory-book-orders.md](./features/memory-book-orders.md)).
+
+```sql
+create table public.memory_book_orders (
+  id                        uuid primary key default gen_random_uuid(),
+  book_id                   uuid not null references public.memory_books on delete restrict,
+  family_id                 uuid not null references public.families on delete cascade,
+  requested_by              uuid references auth.users on delete set null,   -- the buyer
+
+  book_document_snapshot     jsonb,  -- frozen copies of the live book at CAS
+  edits_snapshot              jsonb,  -- quoted -> paid; null until paid
+
+  price_cents                integer,
+  currency                   text not null default 'usd',                   -- locked to 'usd' (owner decision 2026-09-08)
+  quoted_page_count          smallint,                                      -- render worker /fit SUBMITTED-INTERIOR count, persisted at quote time
+
+  shipping_address            jsonb,  -- persisted by the quote op, never a
+  shipping_method              text,   -- direct client write (PII — see RLS
+  shipping_cost_cents          integer, -- below)
+
+  stripe_session_id           text unique,
+  stripe_payment_intent_id     text,
+  prodigi_order_id            text,
+
+  status                    text not null default 'draft'
+                               check (status in (
+                                 'draft', 'quoted', 'paid', 'rendering', 'submitted',
+                                 'in_production', 'shipped', 'delivered', 'failed', 'cancelled')),
+  failure_reason             text,   -- required once status = 'failed'
+  refunded_at                 timestamptz,  -- set by the charge.refunded webhook; independent of status
+
+  -- CAS identity + recovery clocks for the (short-lived, ends at submission) order workflow
+  workflow_instance_id       text unique,
+  workflow_attempt_id         uuid,
+  workflow_started_at         timestamptz,
+  workflow_completed_at        timestamptz,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+```
+
+**State machine (Decision 4, binding):** `draft → quoted → paid → rendering
+→ submitted → in_production → shipped → delivered`, with `failed` reachable
+from any post-payment step and `cancelled` reachable pre-payment from
+`quoted` (the `checkout.session.expired` sweep ages an abandoned quote).
+Key constraints: `memory_book_orders_quoted_has_price` (anything past
+`draft` must already carry `price_cents` + `quoted_page_count`);
+`memory_book_orders_paid_has_snapshot` (every state from `paid` through
+`failed` must carry both frozen snapshots — `cancelled` is exempt since it
+can precede payment); `memory_book_orders_failed_has_reason`;
+`memory_book_orders_currency_usd` (hard-locked to `'usd'` until a future
+multi-currency change); non-negative price/shipping-cost, positive
+page-count sanity checks; `book_id` is `on delete restrict` (a purchase
+record must never silently disappear if a book is ever deleted).
+
+**RLS — deliberately NOT family-wide (round-3 hardening finding):** an order
+row carries the buyer's home address and Stripe payment identifiers, which
+must not be visible to every family member the way `memory_books` itself
+is.
+
+- `select`: `requested_by = auth.uid()` — the buyer only. (A family-visible
+  status-only projection is a possible future addition, not built here.)
+- `insert`: `has_family_role(family_id, ['owner','manager'])` +
+  `requested_by = auth.uid()` + a same-family check that `book_id` actually
+  belongs to `family_id` (the recurring cross-family-FK lesson, applied the
+  same way `memory_books`' own `child_id` check is) + a with-check pinning
+  the row to the exact bare-draft shape — `status = 'draft'` and **every**
+  server-computed field null: both snapshots, price/quote/page-count,
+  shipping (address included — it reaches the row only via the service-role
+  `quote` op), Stripe ids, Prodigi id, failure/refund bookkeeping, and every
+  CAS/clock field. Mirrors `memory_books`' insert with-check (§2.1d) line
+  for line.
+- **No update or delete policy exists for `authenticated` at all**, and the
+  table grants `authenticated` only `select, insert` — same "job is
+  service-only" contract as `memory_books`/`memory_book_edits`. Every state
+  transition and identifier write happens through a service-role Edge
+  Function or the order-workflow bridge (5c, not yet built).
+
 ### 2.2 Indexes
 
 ```sql

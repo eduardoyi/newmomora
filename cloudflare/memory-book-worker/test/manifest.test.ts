@@ -60,6 +60,33 @@ describe('buildAssetsForMemory', () => {
     expect(assets[0].originalHeight).toBeUndefined();
   });
 
+  it('sets originalFile from object_key when a preview exists', () => {
+    const media: DbMediaRow[] = [
+      { id: 'media-1', memory_id: 'm', object_key: 'raw-a.jpg', preview_object_key: 'a-preview.jpg', content_type: 'image/jpeg', position: 0, duration_ms: null, aspect_ratio: 1.33 },
+    ];
+    const assets = buildAssetsForMemory(media);
+    expect(assets[0].file).toBe('a-preview.jpg');
+    expect(assets[0].originalFile).toBe('raw-a.jpg');
+  });
+
+  it('sets originalFile on a video-poster asset too (uniform per Design Decision 1, even though print never reads it for video)', () => {
+    const media: DbMediaRow[] = [
+      { id: 'media-1', memory_id: 'm', object_key: 'clip.mp4', preview_object_key: 'poster.webp', content_type: 'video/mp4', position: 0, duration_ms: 4000, aspect_ratio: 1.78 },
+    ];
+    const assets = buildAssetsForMemory(media);
+    expect(assets[0].kind).toBe('video-poster');
+    expect(assets[0].originalFile).toBe('clip.mp4');
+  });
+
+  it('leaves originalFile unset when selectMediaAsset already fell back to object_key (no preview) -- no-op, not a duplicate of file', () => {
+    const media: DbMediaRow[] = [
+      { id: 'media-1', memory_id: 'm', object_key: 'raw-only.jpg', preview_object_key: null, content_type: 'image/jpeg', position: 0, duration_ms: null, aspect_ratio: 1 },
+    ];
+    const assets = buildAssetsForMemory(media);
+    expect(assets[0].file).toBe('raw-only.jpg');
+    expect(assets[0].originalFile).toBeUndefined();
+  });
+
   it('manifest parity: a measured photo asset matches buildManifestAsset\'s own preview-mode shape exactly', () => {
     // Locks in that this worker's manifest asset entries are semantically
     // identical to a PREVIEW-mode eval export on the originalWidth/
@@ -79,11 +106,13 @@ describe('buildAssetsForMemory', () => {
       durationMs: null,
       dbAspectRatio: 1.33,
       originalDimensions: measured,
+      originalFile: 'a.jpg',
     });
 
     expect(fromWorker).toEqual(expected);
     expect(fromWorker.originalWidth).toBe(4032);
     expect(fromWorker.originalHeight).toBe(3024);
+    expect(fromWorker.originalFile).toBe('a.jpg');
   });
 });
 

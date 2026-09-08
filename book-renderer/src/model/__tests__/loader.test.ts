@@ -80,6 +80,20 @@ describe('parseManifest', () => {
       parseManifest({ child: { id: 'c', name: 'C' }, memories: {}, portraits: 'nope' }),
     ).toThrow(BookDataError);
   });
+
+  it('passes an asset\'s originalFile through untouched (memory-book-5c plan, Design Decision 1 -- data contract addition, no shape validation needed for an optional field)', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ assets: [{ file: 'assets/preview.jpg', width: 1280, height: 960, aspectRatio: 1.33, kind: 'photo', durationMs: null, originalFile: 'assets/original.jpg' }] }),
+    });
+    const parsed = parseManifest(manifest);
+    expect(parsed.memories['mem-1'].assets[0].originalFile).toBe('assets/original.jpg');
+  });
+
+  it('tolerates a manifest whose assets omit originalFile -- old manifests predate the field', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [{ file: 'assets/preview.jpg', width: 1280, height: 960, aspectRatio: 1.33, kind: 'photo', durationMs: null }] }) });
+    const parsed = parseManifest(manifest);
+    expect(parsed.memories['mem-1'].assets[0].originalFile).toBeUndefined();
+  });
 });
 
 describe('resolveElementMemories', () => {

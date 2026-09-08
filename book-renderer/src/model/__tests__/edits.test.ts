@@ -104,6 +104,10 @@ describe('applyPreFit — image replace substitution', () => {
     expect(asset.aspectRatio).toBe(1.2);
     expect(asset.originalWidth).toBe(4000);
     expect(asset.originalHeight).toBe(3333);
+    // CRITICAL (memory-book-5c plan round-2 review): an edited photo's
+    // manifest entry must retain print-res originalFile — otherwise every
+    // edited slot would silently print at preview resolution.
+    expect(asset.originalFile).toBe('assets/replacement-original.jpg');
     // The untouched memory's asset must be byte-for-byte unchanged.
     expect(next.memories['mem-2'].assets[0].file).toBe('assets/untouched.jpg');
     // The input manifest itself must never be mutated (pure function).
@@ -233,6 +237,11 @@ describe('applyPreFit — cover photo edit', () => {
     expect(document.pages[0].templateId).toBe('cover-wrap');
     expect(document.pages[0].params.voice).toBe('mixed');
     expect(document.pages[0].params.assetFile).toBe('assets/chosen-cover.jpg');
+    // CRITICAL (memory-book-5c plan round-2 review): the synthetic cover
+    // asset applyCoverImageEdit builds must carry originalFile too, same as
+    // an ordinary substituteAsset edit.
+    const coverAsset = nextManifest.memories['__cover-edit__'].assets[0];
+    expect(coverAsset.originalFile).toBe('assets/chosen-cover-original.jpg');
   });
 
   it('is idempotent — applying twice never grows outline.coverCandidates', () => {

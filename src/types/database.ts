@@ -2507,6 +2507,102 @@ export type Database = {
           },
         ]
       }
+      memory_book_orders: {
+        Row: {
+          book_document_snapshot: Json | null
+          book_id: string
+          created_at: string
+          currency: string
+          edits_snapshot: Json | null
+          failure_reason: string | null
+          family_id: string
+          id: string
+          price_cents: number | null
+          prodigi_order_id: string | null
+          quoted_page_count: number | null
+          refunded_at: string | null
+          requested_by: string | null
+          shipping_address: Json | null
+          shipping_cost_cents: number | null
+          shipping_method: string | null
+          status: string
+          stripe_payment_intent_id: string | null
+          stripe_session_id: string | null
+          updated_at: string
+          workflow_attempt_id: string | null
+          workflow_completed_at: string | null
+          workflow_instance_id: string | null
+          workflow_started_at: string | null
+        }
+        Insert: {
+          book_document_snapshot?: Json | null
+          book_id: string
+          created_at?: string
+          currency?: string
+          edits_snapshot?: Json | null
+          failure_reason?: string | null
+          family_id: string
+          id?: string
+          price_cents?: number | null
+          prodigi_order_id?: string | null
+          quoted_page_count?: number | null
+          refunded_at?: string | null
+          requested_by?: string | null
+          shipping_address?: Json | null
+          shipping_cost_cents?: number | null
+          shipping_method?: string | null
+          status?: string
+          stripe_payment_intent_id?: string | null
+          stripe_session_id?: string | null
+          updated_at?: string
+          workflow_attempt_id?: string | null
+          workflow_completed_at?: string | null
+          workflow_instance_id?: string | null
+          workflow_started_at?: string | null
+        }
+        Update: {
+          book_document_snapshot?: Json | null
+          book_id?: string
+          created_at?: string
+          currency?: string
+          edits_snapshot?: Json | null
+          failure_reason?: string | null
+          family_id?: string
+          id?: string
+          price_cents?: number | null
+          prodigi_order_id?: string | null
+          quoted_page_count?: number | null
+          refunded_at?: string | null
+          requested_by?: string | null
+          shipping_address?: Json | null
+          shipping_cost_cents?: number | null
+          shipping_method?: string | null
+          status?: string
+          stripe_payment_intent_id?: string | null
+          stripe_session_id?: string | null
+          updated_at?: string
+          workflow_attempt_id?: string | null
+          workflow_completed_at?: string | null
+          workflow_instance_id?: string | null
+          workflow_started_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "memory_book_orders_book_id_fkey"
+            columns: ["book_id"]
+            isOneToOne: false
+            referencedRelation: "memory_books"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "memory_book_orders_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       memory_books: {
         Row: {
           book_document: Json | null

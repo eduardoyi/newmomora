@@ -3,22 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <title>Momora — Print</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!--
-      Same Google Fonts link index.html uses for the interactive preview
-      (see that file's own TODO note). The print pipeline (scripts/render-
-      pdf.mts) explicitly awaits `document.fonts.ready` before capturing a
-      page, so a network font load is safe here, but it is still a
-      deterministic-print-quality caveat worth carrying forward: embedding
-      these three families locally (woff2 baked into the bundle) would
-      remove the network dependency entirely. Not done in this phase — see
-      the render script's own reported caveats.
+      memory-book-5c plan, Step 2b: NO Google Fonts CDN link here (unlike
+      index.html/web.html, which still load it — see each file's own tag).
+      The print pipeline vendors Newsreader/Plus Jakarta Sans/Caveat locally
+      (src/print/fonts/*.woff2, OFL-licensed — see fonts/OFL-LICENSES.txt)
+      and imports the local @font-face stylesheet from src/print/main.tsx,
+      because a transient CDN failure at render time must never silently
+      ship a wrong-font book to print — the exact V4 silent-fallback defect
+      class this step exists to close. `PrintApp.tsx` hard-fails
+      (`data-print-error`) if any vendored face doesn't actually end up
+      loaded (`assertPrintFontsLoaded`), rather than trusting the network.
     -->
-    <link
-      href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400;1,6..72,500&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Caveat:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
     <style>
       /*
        * Base reset only — the exact `@page`/html/body physical size for the

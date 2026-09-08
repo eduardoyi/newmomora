@@ -272,6 +272,12 @@ function substituteAsset(asset: ManifestAsset, value: ImageEditRecord): void {
   asset.aspectRatio = value.aspectRatio;
   asset.originalWidth = value.originalWidth ?? null;
   asset.originalHeight = value.originalHeight ?? null;
+  // CRITICAL (memory-book-5c plan round-2 review): without this, every
+  // EDITED photo -- exactly the slots a customer touched -- would print at
+  // preview resolution, since the record already carries the original key
+  // (`ImageEditRecord.originalFile`, resolved server-side at save time) but
+  // this function previously dropped it on the floor.
+  asset.originalFile = value.originalFile;
   applyWidthHeight(asset, value);
 }
 
@@ -309,6 +315,9 @@ function applyCoverImageEdit(outline: BookOutline, manifest: BookManifest, value
     durationMs: null,
     originalWidth: value.originalWidth ?? null,
     originalHeight: value.originalHeight ?? null,
+    // Same CRITICAL fix as substituteAsset above — a cover-photo edit is
+    // just as printable as any other edited slot.
+    originalFile: value.originalFile,
     width: 0,
     height: 0,
   };
