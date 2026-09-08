@@ -192,12 +192,26 @@ function stopServer(server: http.Server): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function renderOne(browser: Browser, url: string): Promise<Uint8Array> {
+  // One retry per page (5c canary, 2026-09-08): a 122-page render pulls
+  // hundreds of MB of full-resolution originals over presigned URLs; one
+  // slow page or an R2 latency spike blew the old single-shot 30s wait and
+  // failed a paid order's whole render. The waits are also raised — this
+  // path's budget is minutes-per-book, not interactive.
+  try {
+    return await renderOneAttempt(browser, url);
+  } catch (firstError) {
+    console.warn(`renderOne retrying after failure at ${url}: ${firstError instanceof Error ? firstError.message : String(firstError)}`);
+    return await renderOneAttempt(browser, url);
+  }
+}
+
+async function renderOneAttempt(browser: Browser, url: string): Promise<Uint8Array> {
   const page = await browser.newPage();
   try {
-    await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+    await page.goto(url, { waitUntil: 'networkidle0', timeout: 120000 });
     await page.waitForFunction(
       () => document.querySelector('[data-print-ready="true"]') !== null || document.querySelector('[data-print-error]') !== null,
-      { timeout: 30000 },
+      { timeout: 90000 },
     );
     const errorMessage = await page.evaluate(() => document.querySelector('[data-print-error]')?.getAttribute('data-print-error') ?? null);
     if (errorMessage) {
