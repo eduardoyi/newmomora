@@ -359,7 +359,7 @@ role/tenancy model and the RLS rewrite.
 
 The primary image model is `gpt-image-2.5-flare`; prompts, reference order,
 quality, output size, and the `gpt-image-1.5` fallback are unchanged.
-Deploy `20260908120000_allow_flare_portrait_publication.sql` first, then both
+Deploy `20260908212000_allow_flare_portrait_publication.sql` first, then both
 Workflow bridges, then the memory/portrait Worker and legacy generation
 functions. Bridges and portrait publication continue accepting `gpt-image-2`
 so older jobs and retained outputs can finish during rollout or rollback.
