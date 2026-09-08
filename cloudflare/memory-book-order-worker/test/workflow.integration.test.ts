@@ -204,7 +204,7 @@ describe('memory book order workflow', () => {
 
     expect(result).toEqual({ orderId: ORDER_ID, status: 'failed', code: 'RENDER_FAILED' });
     const markFailedCall = calls.find((c) => c.body?.operation === 'mark_failed');
-    expect(markFailedCall?.body?.failureReason).toBe('RENDER_FAILED');
+    expect(markFailedCall?.body?.failureReason).toMatch(/^RENDER_FAILED/);
     const failureAlarm = calls.find((c) => c.body?.operation === 'send_order_email' && c.body?.emailKind === 'owner_alarm');
     expect(failureAlarm).toBeTruthy();
   });

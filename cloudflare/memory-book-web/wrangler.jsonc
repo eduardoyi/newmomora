@@ -19,6 +19,12 @@
   // file's header comment) rather than relying on
   // `not_found_handling: "single-page-application"`.
   "assets": {
+    // html_handling MUST be "none" (5c canary finding): the default
+    // pretty-URL behavior turns the worker's fallback fetch of /web.html
+    // into a 307 redirect to /web, which reaches the BROWSER and destroys
+    // deep paths + query strings — Stripe's return to /order/<id> landed
+    // on the book list with the ?checkout=success flag gone.
+    "html_handling": "none",
     "directory": "../../book-renderer/dist-web",
     "binding": "ASSETS"
   },

@@ -24,13 +24,22 @@ type FailureCode =
   | 'PRODIGI_SUBMIT_FAILED'
   | 'UNKNOWN_ERROR';
 
-class OrderLoadError extends Error {}
-class SpineLookupError extends Error {}
-class RenderStageError extends Error {}
-class RenderTimeoutError extends Error {}
-class RenderOutputMismatchError extends Error {}
-class VerifyOutputError extends Error {}
-class ProdigiSubmitError extends Error {}
+// Each class prefixes its failure code into the MESSAGE, because the
+// message is the only thing guaranteed to survive Cloudflare's step
+// boundary (class identity and custom fields do not — canary finding).
+class OrderLoadError extends Error { constructor(m: string) { super(`[ORDER_LOAD_FAILED] ${m}`); } }
+class SpineLookupError extends Error { constructor(m: string) { super(`[SPINE_LOOKUP_FAILED] ${m}`); } }
+class RenderStageError extends Error { constructor(m: string) { super(`[RENDER_FAILED] ${m}`); } }
+class RenderTimeoutError extends Error { constructor(m: string) { super(`[RENDER_TIMEOUT] ${m}`); } }
+class RenderOutputMismatchError extends Error { constructor(m: string) { super(`[RENDER_OUTPUT_MISMATCH] ${m}`); } }
+class VerifyOutputError extends Error { constructor(m: string) { super(`[VERIFY_OUTPUT_FAILED] ${m}`); } }
+class ProdigiSubmitError extends Error { constructor(m: string) { super(`[PRODIGI_SUBMIT_FAILED] ${m}`); } }
+
+const FAILURE_CODES: FailureCode[] = [
+  'ORDER_LOAD_FAILED', 'SPINE_LOOKUP_FAILED', 'RENDER_TIMEOUT',
+  'RENDER_OUTPUT_MISMATCH', 'RENDER_FAILED', 'VERIFY_OUTPUT_FAILED',
+  'PRODIGI_SUBMIT_FAILED',
+];
 
 function errorCode(error: unknown): FailureCode {
   if (error instanceof OrderLoadError || error instanceof NonRetryableError) return 'ORDER_LOAD_FAILED';
@@ -40,6 +49,14 @@ function errorCode(error: unknown): FailureCode {
   if (error instanceof RenderStageError) return 'RENDER_FAILED';
   if (error instanceof VerifyOutputError) return 'VERIFY_OUTPUT_FAILED';
   if (error instanceof ProdigiSubmitError) return 'PRODIGI_SUBMIT_FAILED';
+  // Class identity does NOT survive Cloudflare's step-retry boundary (the
+  // canary's every failure surfaced as UNKNOWN_ERROR despite the taxonomy
+  // above). The step errors' MESSAGES do survive — each custom error class
+  // prefixes its code (see constructors below), so parse it back out.
+  const message = error instanceof Error ? error.message : '';
+  for (const code of FAILURE_CODES) {
+    if (message.includes(`[${code}]`)) return code;
+  }
   return 'UNKNOWN_ERROR';
 }
 
@@ -257,10 +274,14 @@ export class MemoryBookOrderWorkflow extends WorkflowEntrypoint<Env, WorkflowDis
       return { orderId, status: 'submitted' as const };
     } catch (error) {
       const code = errorCode(error);
+      // Persist code + surviving message detail (sanitized, truncated) —
+      // the canary spent hours on bare UNKNOWN_ERRORs.
+      const detail = errorMessageOnly(error).replace(/^\[[A-Z_]+\] /, '');
+      const reason = `${code}: ${detail}`.slice(0, 300);
       await step.do(
         'record order failure',
         { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds' },
-        async () => await markFailed(this.env, orderId, attemptId, code),
+        async () => await markFailed(this.env, orderId, attemptId, reason),
       );
       try {
         await step.do(
