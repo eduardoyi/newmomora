@@ -183,7 +183,15 @@ fly secrets set \
 # Deploy — from render/memory-book-renderer/, same named-context mechanism
 # as the local `docker build` above (flyctl's remote builder proxies
 # BuildKit, which supports `--build-context`):
-fly deploy --build-context bookrenderer=../../book-renderer
+# flyctl has no --build-context (that's a Docker buildx flag; the
+# Dockerfile's named `bookrenderer` context requires buildx). Build the
+# image locally exactly like the parity proof does, push to Fly's
+# registry, and deploy by image:
+fly auth docker
+docker buildx build --platform linux/amd64 \
+  --build-context bookrenderer=../../book-renderer \
+  -t registry.fly.io/momora-memory-book-renderer:v1 --push .
+fly deploy --image registry.fly.io/momora-memory-book-renderer:v1
 ```
 
 The `RENDER_WORKER_HMAC_SECRET` value must also be handed to whatever calls
@@ -199,7 +207,15 @@ daemon in this environment (flyctl itself is not installed here, and deploys
 are owner-gated — an agent never runs `fly deploy`). `fly deploy` also
 accepts `--build-context` as of a reasonably recent flyctl, but that path
 was **not itself exercised** as part of this work. Before the owner's first
-real deploy: run `fly deploy --build-context bookrenderer=../../book-renderer
+real deploy: run `# flyctl has no --build-context (that's a Docker buildx flag; the
+# Dockerfile's named `bookrenderer` context requires buildx). Build the
+# image locally exactly like the parity proof does, push to Fly's
+# registry, and deploy by image:
+fly auth docker
+docker buildx build --platform linux/amd64 \
+  --build-context bookrenderer=../../book-renderer \
+  -t registry.fly.io/momora-memory-book-renderer:v1 --push .
+fly deploy --image registry.fly.io/momora-memory-book-renderer:v1
 --build-only` (or equivalent dry-run) once to confirm the flag reaches
 flyctl's remote builder on whatever flyctl version is installed; if it
 doesn't, the fallback is to build+push the image locally
