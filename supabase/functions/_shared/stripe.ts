@@ -26,7 +26,10 @@
  */
 
 const STRIPE_API_BASE = 'https://api.stripe.com/v1';
-const STRIPE_API_VERSION = '2024-06-20';
+// Pinned to the account's own version (2026-08-26.dahlia — the default the
+// account received at creation; webhook endpoint uses the same). Keep the
+// two in lockstep when upgrading: Workbench shows the account version.
+const STRIPE_API_VERSION = '2026-08-26.dahlia';
 
 export interface StripeAddressInput {
   line1: string;
