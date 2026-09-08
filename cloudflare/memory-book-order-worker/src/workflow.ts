@@ -210,7 +210,7 @@ export class MemoryBookOrderWorkflow extends WorkflowEntrypoint<Env, WorkflowDis
               recipient: mapRecipient(order.shippingAddress),
               interiorPdfUrl: output.interiorUrl,
               coverPdfUrl: output.coverUrl,
-              pageCount: fitResult.pageCount,
+              pageCount: freshPageCount,
             });
             return result.prodigiOrderId;
           } catch (error) {
