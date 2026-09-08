@@ -1,0 +1,10 @@
+# Copy to .dev.vars. Never commit real values.
+ENVIRONMENT=development
+SUPABASE_BRIDGE_URL=http://127.0.0.1:54321/functions/v1/workflow-memory-book-order-bridge
+DISPATCH_SIGNING_SECRET=
+SUPABASE_BRIDGE_HMAC_SECRET=
+RENDER_WORKER_URL=
+RENDER_WORKER_HMAC_SECRET=
+PRODIGI_API_BASE_URL=https://api.sandbox.prodigi.com
+PRODIGI_API_KEY=
+PRODIGI_SKU=BOOK-FE-8_3-SQ-LF-G

@@ -1,0 +1,27 @@
+# Docker build-context exclusions for book-renderer (memory-book-5c plan,
+# Step 3 — this directory is pulled into the render worker's image build as
+# a NAMED build context: `docker build --build-context bookrenderer=../book-renderer …`
+# from render/memory-book-renderer/, so THIS file is what Docker/BuildKit
+# actually enforces for that context — see render/memory-book-renderer/
+# Dockerfile's own header comment and README's "PII safety" section).
+#
+# book-data/ is the load-bearing line: 1.9GB of real exported family books
+# (child PII) used for local dev/CLI iteration. It must never reach the
+# render worker's image. vite.print.config.ts (publicDir: false, print.html
+# entry only) is the OTHER half of this guarantee — this file is the one
+# that keeps the raw directory out of the build context in the first place,
+# so a build-time bug in that config can't accidentally copy it anyway.
+book-data/
+book-data
+
+# Build outputs (rebuilt fresh at image-build time — never trust a stale
+# host-machine dist/).
+dist/
+dist-web/
+dist-print/
+
+node_modules/
+.git/
+.env*
+*.log
+coverage/

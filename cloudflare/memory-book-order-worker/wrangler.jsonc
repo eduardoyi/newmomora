@@ -1,0 +1,57 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "momora-memory-book-order-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-memory-book-order-bridge",
+    "PRODIGI_API_BASE_URL": "https://api.sandbox.prodigi.com",
+    "PRODIGI_SKU": "BOOK-FE-8_3-SQ-LF-G"
+  },
+  "secrets": {
+    "required": [
+      "DISPATCH_SIGNING_SECRET",
+      "SUPABASE_BRIDGE_HMAC_SECRET",
+      "RENDER_WORKER_URL",
+      "RENDER_WORKER_HMAC_SECRET",
+      "PRODIGI_API_KEY"
+    ]
+  },
+  // Deliberately NO r2_buckets binding (memory-book-5c plan, Design
+  // Decision 4/blast-radius note): this Worker holds the Prodigi API key,
+  // which can place real orders/spend real money -- it must never ALSO
+  // hold R2 credentials. Every R2 read (verify + presign the render
+  // worker's output) goes through the signed
+  // workflow-memory-book-order-bridge instead (see src/bridge.ts).
+  "workflows": [
+    { "binding": "MEMORY_BOOK_ORDER_WORKFLOW", "name": "momora-memory-book-order", "class_name": "MemoryBookOrderWorkflow" }
+  ],
+  "env": {
+    "staging": {
+      "name": "momora-memory-book-order-worker-staging",
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "SUPABASE_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/workflow-memory-book-order-bridge",
+        "PRODIGI_API_BASE_URL": "https://api.sandbox.prodigi.com",
+        "PRODIGI_SKU": "BOOK-FE-8_3-SQ-LF-G"
+      },
+      "secrets": {
+        "required": [
+          "DISPATCH_SIGNING_SECRET",
+          "SUPABASE_BRIDGE_HMAC_SECRET",
+          "RENDER_WORKER_URL",
+          "RENDER_WORKER_HMAC_SECRET",
+          "PRODIGI_API_KEY"
+        ]
+      },
+      "workflows": [
+        { "binding": "MEMORY_BOOK_ORDER_WORKFLOW", "name": "momora-memory-book-order-staging", "class_name": "MemoryBookOrderWorkflow" }
+      ]
+    }
+  }
+}

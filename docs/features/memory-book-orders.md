@@ -1,15 +1,20 @@
 # Feature: Memory Book orders & fulfillment (V5c)
 
-**Status:** `schema-only` — the `memory_book_orders` table and its RLS
-contract are shipped (this doc). The `memory-book-orders`/`stripe-webhook`
-Edge Functions, the Cloudflare order workflow, the render worker
-(`render/memory-book-renderer/`), and the web checkout UI
-(`shop.usemomora.com`) are **not built yet** — everything below that
-describes "who writes what" is the *contract* those changes must satisfy,
-not something you can call today. Check
+**Status:** `orchestration-built` — the `memory_book_orders` schema/RLS
+(wave-1), and the `memory-book-orders` / `stripe-webhook` /
+`workflow-memory-book-order-bridge` / `sweep-memory-book-orders` Edge
+Functions plus the Cloudflare order workflow
+(`cloudflare/memory-book-order-worker/`, wave-2, plan step 5) are now
+shipped, wired against the render worker's and Prodigi's DOCUMENTED
+contracts. The render worker itself (`render/memory-book-renderer/`, plan
+step 3) and the web checkout UI (`shop.usemomora.com`, plan step 6) are
+tracked separately — check their own state before assuming end-to-end
+checkout works; this change's own real-network calls (Stripe, Prodigi, the
+render worker) are entirely mocked in its test suite, per the task's
+"no real calls, no real money" scope. See "Implementation (wave-2)" below
+for the op/state contract as actually built, and
 [plans/memory-book-5c-checkout-fulfillment.md](../../plans/memory-book-5c-checkout-fulfillment.md)
-for the full hardened plan (Design Decisions 1-6, steps 1-7) before
-implementing any of the wave-2 pieces this doc describes.
+for the full hardened plan (Design Decisions 1-6, steps 1-7).
 **Last updated:** 2026-09-08
 **PRD reference:** none yet — canonical product doc is
 [docs/plans/memory-book.md](../plans/memory-book.md) §"V5 scope" 5c, plus
@@ -61,10 +66,140 @@ flowchart LR
   SW -->|advance submitted->in_production->shipped->delivered| O
 ```
 
-None of `memory-book-orders`, `stripe-webhook`, the order workflow, or the
-render worker exist yet. This diagram is the target shape from the plan's
-Design Decision 4, recorded here so wave-2 implementers build against the
-same picture rather than re-deriving it.
+`memory-book-orders`, `stripe-webhook`, `workflow-memory-book-order-bridge`,
+`sweep-memory-book-orders`, and the Cloudflare order workflow
+(`cloudflare/memory-book-order-worker/`) are now built (this diagram's
+shape, as shipped) — the render worker (`RW` above) is the one box in this
+diagram still tracked separately (plan step 3).
+
+## Implementation (wave-2, this change)
+
+**Edge Functions** (`supabase/functions/`):
+
+- `memory-book-orders/index.ts` — ops `create_draft` (owner/manager, bare
+  draft row for a `ready` book), `quote` (address in; backfills
+  `originalFile` onto the book's CURRENT `book_document` if it predates the
+  field via `_shared/memory-book-backfill.ts` and persists the patch back to
+  `memory_books`; calls the render worker's `POST /fit` via
+  `_shared/render-worker-client.ts` — an HMAC client mirroring
+  `generate-memory-book/index.ts`'s dispatch signing — for THE page count;
+  calls Prodigi's `POST /v4.0/quotes` via `_shared/prodigi.ts` for shipping;
+  computes the total from `PRICE_USD_CENTS`; CAS `draft -> quoted`),
+  `create_checkout` (Stripe Checkout Session via `_shared/stripe.ts`'s
+  plain-`fetch` REST client; `shipping_address_collection` omitted
+  entirely — Stripe only collects an address when that param is explicitly
+  set, so omission IS "disabled"; the quoted address is pinned via a
+  fresh Stripe Customer so `automatic_tax` computes VAT against the real
+  destination; does **not** change `status` — see the state-machine note
+  below), `status` (buyer-scoped convenience read).
+- `stripe-webhook/index.ts` (`verify_jwt = false`; Stripe signature verified
+  via `_shared/stripe.ts#verifyStripeSignature`, a WebCrypto
+  reimplementation of Stripe's documented HMAC scheme — no `stripe` SDK
+  dependency): `checkout.session.completed` verifies `amount_subtotal`
+  against the persisted quote and the session's address against the quoted
+  one (best-effort line1/postal/country match), re-runs the `originalFile`
+  backfill and REFUSES to freeze (CAS `quoted -> failed`,
+  `ORIGINAL_FILE_UNRESOLVED`) if anything is still unresolved, otherwise
+  freezes both snapshots and CASes `quoted -> paid` then, mark-before-
+  dispatch, `paid -> rendering` before calling the Cloudflare Worker's
+  signed `/dispatch`; `charge.refunded` sets `refunded_at`;
+  `checkout.session.expired` CASes `quoted -> cancelled`. **Event-id
+  idempotency is CAS-based, not a ledger table** — see the file's header
+  comment for the reasoning (mirrors `workflow-memory-book-bridge`'s own
+  documented nonce-ledger deviation).
+- `workflow-memory-book-order-bridge/index.ts` (`verify_jwt = false`, HMAC
+  bridge for the Cloudflare order workflow, mirroring
+  `workflow-memory-book-bridge`): ops `load_order` (gated on
+  `status = 'rendering'` AND `workflow_attempt_id` match),
+  `verify_and_presign_output` (HEADs the render worker's uploaded PDFs in
+  R2 and presigns 7-day GET URLs — this bridge is the only piece of the
+  whole pipeline with R2 credentials), `mark_submitted` / `mark_failed`
+  (terminal CAS steps), `send_order_email` (paid-confirmation to the buyer,
+  owner spot-check alarm with PDF links — kept server-side so Bento
+  credentials and the buyer's email never need to reach the Worker).
+- `sweep-memory-book-orders/index.ts` (`verify_jwt = false`, cron-secret):
+  zero-dispatch reconciliation (`paid` with no fresh `workflow_started_at`,
+  or stale `rendering`, redispatched — the stale-`rendering` case reuses
+  the EXISTING `workflow_instance_id`, which the Worker's `/dispatch`
+  already treats as an idempotent 202 on a duplicate id), post-submission
+  Prodigi polling (`submitted -> in_production -> shipped`, tracking email
+  on `shipped`), the "not in_production within 4h" / "stuck > 10 days"
+  alarms, and a 48h backstop that ages an abandoned `quoted` order to
+  `cancelled` (Stripe's own `checkout.session.expired` should handle this
+  reactively; this is a safety net for a lost webhook delivery). **Does
+  NOT advance to `delivered`** — Prodigi's Orders API reports
+  fulfillment/shipment stage, not carrier delivery confirmation, and no
+  carrier-tracking integration exists in this repo; a future change would
+  need one to close that last transition.
+- **Prodigi order webhook/callback check** (explicitly asked for, not to be
+  built on spec alone): `docs/plans/prodigi-order-spec.md` — the canonical
+  previously-researched reference in this repo — documents Orders/Quotes/
+  spine and the dashboard "Order edit window" in detail but contains NO
+  mention of a webhook/callback facility anywhere. This sweep is therefore
+  pure polling. Re-check Prodigi's live API reference
+  (https://www.prodigi.com/print-api/docs/reference/) for a "Webhooks"/
+  "Callbacks" section before the real canary (plan step 7) — if one is
+  real, demote this sweep to reconciliation-only behind it, per the plan's
+  own instruction.
+
+**State machine, exactly where each transition lands** (per the table
+below, unchanged from the schema doc — recorded here to answer the task's
+"decide and document whether quote/quoted status transition happens at
+quote or checkout" note): `quote` sets `status = 'quoted'`.
+`create_checkout` does **not** change `status` at all (only persists
+`stripe_session_id`) — the row stays `quoted` for the whole lifetime of a
+Checkout Session, including an abandoned/retried one, and only
+`stripe-webhook`'s `checkout.session.completed` handler CASes
+`quoted -> paid`. This was already the schema doc's documented contract;
+this change implements it as specified rather than deviating.
+
+**Cloudflare order workflow** (`cloudflare/memory-book-order-worker/`,
+mirrors `memory-book-worker`'s dispatcher/bridge/CAS architecture exactly):
+`src/index.ts` (HMAC-verified `/dispatch`, idempotent by attempt id),
+`src/workflow.ts` (`MemoryBookOrderWorkflow`: load order → re-fit the
+FROZEN snapshot, alarming — never failing — on divergence from the quoted
+count, then using the FRESH count for spine/print/submission → Prodigi
+spine width → render worker `/render` dispatched then polled via
+`GET /status/<attemptId>` in short steps with `step.sleep` between polls →
+page-count sanity check against the render output → verify+presign via the
+bridge → submit to Prodigi → CAS `rendering -> submitted` → paid-
+confirmation + owner spot-check emails → done). Any failure at any step:
+CAS to `failed` with a closed reason code + a best-effort owner alarm
+email. Deliberately holds **no R2 credentials and no Supabase service-role
+credentials** (blast-radius control: it DOES hold the Prodigi key, which
+can place real orders) — every DB/R2 operation goes through the signed
+bridge.
+
+**Secrets** (documented here for the owner; never committed — see
+`.dev.vars.example` in each package for the full list of names):
+
+| Secret | Used by |
+|---|---|
+| `STRIPE_SECRET_KEY` | `memory-book-orders` (Checkout Session creation) |
+| `STRIPE_WEBHOOK_SECRET` | `stripe-webhook` (signature verification) |
+| `PRICE_USD_CENTS` | `memory-book-orders` (our flat price; owner sets once the physical sample is priced) |
+| `MEMORY_BOOK_RENDER_WORKER_URL` / `MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET` | `memory-book-orders` (quote-time `/fit` call) |
+| `RENDER_WORKER_URL` / `RENDER_WORKER_HMAC_SECRET` | the Cloudflare order workflow (paid-time `/fit`, `/render`, `/status` — same shared secret VALUE as the pair above, different env var names per runtime) |
+| `PRODIGI_API_KEY` | both `memory-book-orders` (quote) and the Cloudflare order workflow (spine + order submission) and `sweep-memory-book-orders` (status polling) |
+| `PRODIGI_API_BASE_URL` | defaults to the sandbox (`api.sandbox.prodigi.com`) everywhere — flip to production only at the real canary |
+| `CLOUDFLARE_MEMORY_BOOK_ORDER_WORKFLOW_URL` / `CLOUDFLARE_MEMORY_BOOK_ORDER_DISPATCH_SECRET` | `stripe-webhook` and `sweep-memory-book-orders` (dispatch/redispatch) |
+| `CLOUDFLARE_MEMORY_BOOK_ORDER_BRIDGE_SECRET` | `workflow-memory-book-order-bridge` (verifies the Worker's signed calls) |
+| `MEMORY_BOOK_CHECKOUT_ORIGIN` | `memory-book-orders` (Stripe success/cancel return URLs) |
+| `MEMORY_BOOK_ORDER_ALERT_EMAIL` | all three (owner alarm recipient; defaults to `hello@usemomora.com`) |
+
+**Deviations from the plan/schema doc worth flagging:**
+
+- Event-id idempotency for the Stripe webhook is CAS-based, not a
+  dedicated ledger table (see above) — a documented, intentional trade,
+  not an oversight.
+- The sweep does not advance orders to `delivered` (see above).
+- Prodigi request field names (`attributes.pageCount` on the quote,
+  `printArea: 'cover'` for the wraparound cover asset) are BEST-EFFORT
+  inferences from `docs/plans/prodigi-order-spec.md`'s own documented open
+  questions, not independently confirmed against a live Prodigi response —
+  every call in this change's test suite is mocked; the real-order canary
+  (plan step 7) is the actual confirmation point, same as that doc already
+  flags for the render pipeline's own SKU/spine values.
 
 ## Data model
 
@@ -412,3 +547,4 @@ npm run typecheck  # tsc --noEmit
 | Date | Change |
 |------|--------|
 | 2026-09-08 | `memory_book_orders` schema + RLS shipped (plan step 4): buyer-scoped SELECT (not family-wide — round-3 finding), draft-only INSERT with every server-computed field null-locked, no client UPDATE/DELETE. `src/types/database.ts` hand-merged, `TECH_SPEC.md` §2.1f added, this feature doc created. Edge Functions, order workflow, render worker, and web checkout UI are separate, not-yet-shipped changes (plan steps 1-3, 5-7). |
+| 2026-09-08 | Orders orchestration shipped (plan step 5): `memory-book-orders`, `stripe-webhook`, `workflow-memory-book-order-bridge`, `sweep-memory-book-orders` Edge Functions + the Cloudflare order workflow (`cloudflare/memory-book-order-worker/`), all against MOCKED Stripe/Prodigi/render-worker calls (no real network, no real money — a later owner-gated canary). `create_checkout` does not itself transition `status`; `quoted -> paid` happens only in `stripe-webhook`. See "Implementation (wave-2)" above for the full op/state contract, secrets list, and documented deviations (CAS-based webhook idempotency, no `delivered` auto-transition, best-effort Prodigi field names). Render worker (step 3) and web checkout UI (step 6) remain separate, tracked elsewhere. |

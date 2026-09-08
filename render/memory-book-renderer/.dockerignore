@@ -1,0 +1,15 @@
+# Build-context exclusions for THIS directory (memory-book-5c plan, Step 3).
+# book-renderer/ itself is pulled in separately as a named build context
+# (`--build-context bookrenderer=../book-renderer`) — see Dockerfile's header
+# comment and book-renderer/.dockerignore for the PII exclusion that governs
+# THAT context. This file only governs render/memory-book-renderer/'s own
+# tree.
+node_modules/
+dist/
+coverage/
+.git/
+.env*
+*.log
+test/
+scripts/
+README.md

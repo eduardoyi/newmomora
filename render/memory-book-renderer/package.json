@@ -1,0 +1,28 @@
+{
+  "name": "memory-book-renderer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Memory book print-render worker (memory-book-5c plan, Step 3): HMAC-gated HTTP API around book-renderer's renderBookPdfs()/fitBookForPrint(), driving Puppeteer + R2 inside a Fly.io Docker image. See README.md.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "vite-node src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "parity-proof": "vite-node scripts/parity-proof.mts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.687.0",
+    "@aws-sdk/s3-request-presigner": "^3.687.0",
+    "vite": "^5.4.11",
+    "vite-node": "^2.1.9"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

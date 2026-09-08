@@ -459,6 +459,20 @@ verify_jwt = false
 [functions.billing-reconcile-owners]
 verify_jwt = false
 
+# The order workflow bridge has the same raw-body HMAC boundary as the other
+# workflow bridges (workflow-memory-book-bridge) -- the Cloudflare order
+# workflow (cloudflare/memory-book-order-worker/) has no Supabase JWT.
+[functions.workflow-memory-book-order-bridge]
+verify_jwt = false
+
+# Stripe signs this request with its own webhook signature
+# (Stripe-Signature header); it cannot supply a Supabase user JWT.
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.sweep-memory-book-orders]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

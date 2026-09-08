@@ -1,0 +1,59 @@
+# Memory book render worker — Fly.io app config (memory-book-5c plan, Step 3
+# / Design Decision 3: "Fly: scale-to-zero, 4GB, health endpoint",
+# "Fly concurrency hard_limit = 1 with machine autoscale so two renders
+# never share 4GB"). COMMITTED, NOT DEPLOYED — per the plan's "Fly.io
+# decision" (owner will create the Fly org; deploys stay owner-run, see
+# README.md's "Deploy" section for the exact commands).
+#
+# `app` is a placeholder — the owner names the real app at `fly launch`/
+# `fly apps create` time (see README.md).
+app = "momora-memory-book-renderer"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  # R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_ENDPOINT /
+  # R2_BUCKET / RENDER_WORKER_HMAC_SECRET are Fly SECRETS, never plain env
+  # vars here (see README.md's "Secrets" section) — this worker has no
+  # database credential and NO Prodigi key at all (Decision 2/3's
+  # blast-radius control: it can never itself place a Prodigi order).
+
+[http_service]
+  internal_port = 8080
+  # Scale-to-zero (Design Decision 3) — this worker is push-triggered by the
+  # order workflow's own POST /render, never polled; no reason to keep a
+  # machine warm between orders.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  # hard_limit = 1 (Decision 3's own wording, verbatim): a render worker
+  # process is a single headless-Chrome, concurrency-4 Puppeteer pool
+  # pinned to one 4GB machine — two /render requests must NEVER share it.
+  # Fly's autoscaler spins up an ADDITIONAL machine for a second concurrent
+  # request instead of queueing it onto this one (this is exactly why
+  # `/render`'s idempotency check lives in R2, not in-process state — see
+  # src/status.ts's own header comment).
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 1
+    soft_limit = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    # vite-node's cold start (no build step at request time, but IT does
+    # transform+load the whole book-renderer TS module graph — fitter.ts
+    # alone is thousands of lines — on every fresh process) was observed
+    # taking ~15-20s locally (Docker Desktop, arm64) before `/health`
+    # answered; scale-to-zero means EVERY request after an idle period pays
+    # this cold start, so the grace period has real margin over that.
+    grace_period = "45s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "4gb"

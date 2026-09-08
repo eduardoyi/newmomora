@@ -1,5 +1,6 @@
 node_modules
 dist
 dist-web
+dist-print
 book-data/index.json
 .env.local

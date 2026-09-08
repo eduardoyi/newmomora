@@ -2802,6 +2802,45 @@ still fully enforces regardless of cursor style. Keys only — the client
 presigns any thumbnails it renders through the existing `get-media-url`
 coalescer (§4.0b); this function never returns a URL.
 
+### 4.24 Memory Book orders & fulfillment (V5c orchestration)
+
+`plans/memory-book-5c-checkout-fulfillment.md` Design Decision 4. Four Edge
+Functions plus a Cloudflare order workflow against the `memory_book_orders`
+schema (§2.1f). See
+[docs/features/memory-book-orders.md](./features/memory-book-orders.md#implementation-wave-2-this-change)
+for the full op/state contract, secrets list, and documented deviations —
+this entry is a pointer, not a duplicate.
+
+**`memory-book-orders`** — `verify_jwt = true`. Ops `create_draft`,
+`quote` (backfills `originalFile`, calls the render worker's `/fit` and
+Prodigi's `/quotes`, CAS `draft -> quoted`), `create_checkout` (Stripe
+Checkout Session; does NOT change `status`), `status`.
+
+**`stripe-webhook`** — `verify_jwt = false`, Stripe signature verified via
+`_shared/stripe.ts` (WebCrypto, no SDK). `checkout.session.completed`
+(amount/address defense-in-depth, freeze-refusal precondition, CAS
+`quoted -> paid -> rendering`, dispatch), `charge.refunded`,
+`checkout.session.expired`. Event-id idempotency is CAS-based (no ledger
+table — documented deviation, same posture as `workflow-memory-book-bridge`).
+
+**`workflow-memory-book-order-bridge`** — `verify_jwt = false`, signed
+bridge for the Cloudflare order workflow (mirrors
+`workflow-memory-book-bridge`). Ops `load_order`,
+`verify_and_presign_output` (the only R2-credentialed piece of this
+pipeline), `mark_submitted`, `mark_failed`, `send_order_email`.
+
+**`sweep-memory-book-orders`** — `verify_jwt = false`, cron-secret.
+Zero-dispatch reconciliation, Prodigi status polling
+(`submitted -> in_production -> shipped`, no `delivered` auto-transition),
+stuck/not-in-production alarms, abandoned-quote aging backstop.
+
+**`cloudflare/memory-book-order-worker`** — same repo pattern as
+`cloudflare/memory-book-worker` (own `wrangler.jsonc`/`package.json`, Node
+22, `@cloudflare/vitest-pool-workers`), a single `MemoryBookOrderWorkflow`.
+Event payload `{ orderId, attemptId }` only. Holds the Prodigi API key but
+NO R2 credentials and NO Supabase service-role credentials (blast-radius
+control) — every DB/R2 operation goes through the signed bridge.
+
 ## 5. Client API Flow
 
 ### 5.1 Create Memory (text)

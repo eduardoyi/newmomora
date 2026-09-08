@@ -293,7 +293,21 @@ export async function renderBookPdfs(options: RenderBookPdfsOptions): Promise<Re
 
   let browser: Browser | null = null;
   try {
-    browser = await puppeteer.launch({ headless: true });
+    // `--no-sandbox`/`--disable-setuid-sandbox` (memory-book-5c plan, Step 3
+    // — found by actually booting the render worker's Docker image, not by
+    // inspection): the render worker's container runs Chrome as root (no
+    // Dockerfile-level `USER` switch), and Chrome refuses to start its own
+    // OS sandbox as root at all ("Running as root without --no-sandbox is
+    // not supported"). Harmless to pass unconditionally here too for the
+    // CLI's own non-Docker, non-root local runs — Chrome still applies every
+    // OTHER isolation layer (site/process isolation, V8 sandboxing) either
+    // way; only the setuid-helper sandbox is affected. Acceptable for BOTH
+    // callers' threat model: this renders OUR OWN generated HTML/CSS/JS
+    // against images fetched from OUR OWN R2 bucket (CLI: local disk;
+    // worker: presigned GETs) — never arbitrary third-party/user-supplied
+    // web content, which is the scenario `--no-sandbox` is actually
+    // dangerous for.
+    browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
 
     interface RenderedPage {
       job: RenderJob;
