@@ -66,6 +66,9 @@ export interface SubmitOrderInput {
   recipient: ProdigiRecipient;
   interiorPdfUrl: string;
   coverPdfUrl: string;
+  /** THE page count — required ON the default asset since Prodigi's API
+   * drift (canary 2026-09-08: orders 400 without it, same as quotes). */
+  pageCount: number;
   shippingMethod?: string;
 }
 
@@ -99,7 +102,7 @@ export async function submitOrder(env: Env, input: SubmitOrderInput): Promise<Su
         sizing: 'fillPrintArea',
         attributes: {},
         assets: [
-          { printArea: 'default', url: input.interiorPdfUrl },
+          { printArea: 'default', url: input.interiorPdfUrl, pageCount: input.pageCount },
           { printArea: 'cover', url: input.coverPdfUrl },
         ],
       },

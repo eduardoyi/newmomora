@@ -160,6 +160,8 @@ export interface ProdigiRecipient {
 }
 
 export interface ProdigiSubmitOrderInput {
+  /** Required on the default asset (canary 2026-09-08 API drift). */
+  pageCount: number;
   sku: string;
   shippingMethod: string;
   recipient: ProdigiRecipient;
@@ -215,7 +217,7 @@ export async function submitProdigiOrder(
         sizing: 'fillPrintArea',
         attributes: {},
         assets: [
-          { printArea: 'default', url: input.interiorPdfUrl },
+          { printArea: 'default', url: input.interiorPdfUrl, pageCount: input.pageCount },
           { printArea: 'cover', url: input.coverPdfUrl },
         ],
       },
