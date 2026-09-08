@@ -10,7 +10,8 @@
   "vars": {
     "ENVIRONMENT": "production",
     "SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-memory-book-order-bridge",
-    "PRODIGI_API_BASE_URL": "https://api.sandbox.prodigi.com",
+    // Production Prodigi — the account key is production-only (sandbox 401s, V4 finding).
+    "PRODIGI_API_BASE_URL": "https://api.prodigi.com",
     "PRODIGI_SKU": "BOOK-FE-8_3-SQ-LF-G"
   },
   "secrets": {
