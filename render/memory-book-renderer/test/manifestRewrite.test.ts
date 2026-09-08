@@ -83,10 +83,11 @@ describe('planPresign — manifest URL rewrite with originalFile precedence', ()
     const rewritten = plan.rewrite({
       'illustrations/illo-1.webp': 'https://r2.example.com/illo-1.webp',
       'portraits/p1.jpg': 'https://r2.example.com/p1.jpg',
+      'portraits/p1-source.jpg': 'https://r2.example.com/p1-source.jpg',
     });
     expect(rewritten.manifest.memories['memory-1'].illustration?.file).toBe('https://r2.example.com/illo-1.webp');
     expect(rewritten.manifest.portraits[0].file).toBe('https://r2.example.com/p1.jpg');
-    expect(rewritten.manifest.portraits[0].sourceFile).toBe('portraits/p1-source.jpg');
+    expect(rewritten.manifest.portraits[0].sourceFile).toBe('https://r2.example.com/p1-source.jpg');
   });
 
   it('presigns edits.images (imageReplace + coverPhoto) using originalFile precedence, rewriting BOTH file and originalFile to the resolved URL', () => {
