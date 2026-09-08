@@ -225,7 +225,10 @@ async function renderOneAttempt(browser: Browser, url: string): Promise<Uint8Arr
       const imgs = Array.from(document.images);
       await Promise.all(imgs.map((img) => (img.complete && img.naturalWidth > 0 ? Promise.resolve() : img.decode().catch(() => undefined))));
     });
-    return await page.pdf({ printBackground: true, preferCSSPageSize: true });
+    // timeout: page.pdf's DEFAULT is 30s — the real source of every
+    // "Timed out after waiting 30000ms" in the 5c canary (PDF
+    // serialization of print-res image pages can exceed it).
+    return await page.pdf({ printBackground: true, preferCSSPageSize: true, timeout: 120000 });
   } finally {
     await page.close();
   }

@@ -53,6 +53,9 @@ export function loadEnv(): RenderWorkerEnv {
       bucket: requireEnv('R2_BUCKET'),
     },
     servedDistDir: process.env.BOOK_RENDERER_DIST_DIR ?? '/app/book-renderer/dist-print',
-    concurrency: process.env.RENDER_CONCURRENCY ? Number(process.env.RENDER_CONCURRENCY) : 4,
+    // Default 2 (5c canary: concurrency 4 on the 4GB Fly machine OOM-killed
+    // Chrome around the heavy month pages — Target.closeTarget protocol
+    // errors). Print-res pages hold multi-MB decoded originals each.
+    concurrency: process.env.RENDER_CONCURRENCY ? Number(process.env.RENDER_CONCURRENCY) : 2,
   };
 }
