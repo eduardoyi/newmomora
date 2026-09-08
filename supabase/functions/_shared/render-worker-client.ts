@@ -74,9 +74,9 @@ export async function fitBookForQuote(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-dispatch-timestamp': timestamp,
-      'x-dispatch-nonce': nonce,
-      'x-dispatch-signature': signature,
+      'x-render-timestamp': timestamp,
+      'x-render-nonce': nonce,
+      'x-render-signature': signature,
     },
     body: rawBody,
   });

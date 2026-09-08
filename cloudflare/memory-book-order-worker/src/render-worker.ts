@@ -29,9 +29,9 @@ async function signedFetch(env: Env, path: string, body: Record<string, unknown>
     method,
     headers: {
       'content-type': 'application/json',
-      'x-dispatch-timestamp': timestamp,
-      'x-dispatch-nonce': nonce,
-      'x-dispatch-signature': signature,
+      'x-render-timestamp': timestamp,
+      'x-render-nonce': nonce,
+      'x-render-signature': signature,
     },
     body: method === 'POST' ? rawBody : undefined,
   });
