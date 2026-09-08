@@ -74,7 +74,7 @@ Key object layout (single bucket):
 
 Bucket name comes from Edge Function secret `R2_BUCKET` — not from the client.
 
-The durable executor uses the same `momora-prod` bucket through semantic Worker bindings for profile photos, character portraits, and style references; it does not introduce a staging bucket or lifecycle policy at the current scale. Both source and style references are required. The Workflow performs one `gpt-image-2` edit attempt, then at most one reference-aware `gpt-image-1.5` fallback for retryable provider failures. It requests 1024px WebP output and never makes a text-only fallback call.
+The durable executor uses the same `momora-prod` bucket through semantic Worker bindings for profile photos, character portraits, and style references; it does not introduce a staging bucket or lifecycle policy at the current scale. Both source and style references are required. The Workflow performs one `gpt-image-2.5-flare` edit attempt, then at most one reference-aware `gpt-image-1.5` fallback for retryable provider failures. It requests 1024px WebP output and never makes a text-only fallback call.
 
 ## Client integration
 

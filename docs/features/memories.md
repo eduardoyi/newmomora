@@ -279,7 +279,7 @@ portrait-migration blueprint behind this implementation.
   discard a valid result. A legacy manual regenerate may reuse an active job
   until the 5:30 window; this temporary compatibility behavior avoids
   unrequested duplicate paid jobs.
-- Model policy is `gpt-image-2` primary then sequential `gpt-image-1.5`
+- Model policy is `gpt-image-2.5-flare` primary then sequential `gpt-image-1.5`
   fallback. One/two references omit `quality`; three or more use `medium`.
   The previous 55-second parallel hedge is intentionally removed. Multi-
   reference fallback uses high input fidelity. Portrait fallback also uses
@@ -332,7 +332,7 @@ role/tenancy model and the RLS rewrite.
 - The safety rewrite returns `{"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}` (validated server-side, defaulting to `neutral`). `expressionStyle: "comedic"` only unlocks playful exaggerated expressions (see below) when the memory's `emotion` is also in `COMEDIC_ELIGIBLE_EMOTIONS` (`joy`, `funny`, `mischief`, `pride`).
 - `buildIllustrationPrompt` is scene-first, newline-separated sections (Scene → Characters → Emotional tone → Style/palette/date → Constraints) rather than one long paragraph. The Characters section PRESERVEs identity cues from each portrait reference (hairstyle, hair color, skin tone, face shape, approximate age, distinctive features) but ADAPTs pose/clothing/lighting/expression — the portrait's smile is explicitly called out as an identity sample only, not the required expression. The Emotional tone section maps `memory.emotion` to concrete expression guidance via `EMOTION_EXPRESSIONS` in `_shared/prompts.ts` (same keys as `EMOTION_PALETTES`) so illustrations stop defaulting every character to a smile — `worry`/`weary`/`sad` explicitly forbid smiles. When `expressionStyle === 'comedic'` and the emotion is whitelisted, an extra line invites playful exaggerated storybook expressions. `funny` is a first-class emotion (its own palette/expression entries); only the legacy label `joyful` is still mapped by `normalizeEmotion` (to `joy`) before palette/expression lookup; run `npm run eval:illustration -- --list-emotions` to audit labels in the DB.
 - **Auto-tag suppression vs illustration:** suppression is compose-session only. If a memory is saved with **zero** tags but the text still mentions names, `generate-illustration` may still infer members from text when no tags exist (existing fallback). That fallback is capped to the first 6 matched family members so it cannot bypass the portrait-input limit. Auto-tag reduces zero-tag saves with mentions.
-- Reference images are capped to **1024px** max edge before the OpenAI edit call. One/two-reference memories omit `quality`; three-or-more references explicitly request `medium`. `gpt-image-2` is primary and retryable failures may move sequentially to `gpt-image-1.5`; the former 55-second parallel hedge is removed to avoid duplicate paid generations. Multi-reference fallback uses high input fidelity. New output is compressed WebP to match its immutable `.webp` R2 key and `image/webp` metadata.
+- Reference images are capped to **1024px** max edge before the OpenAI edit call. One/two-reference memories omit `quality`; three-or-more references explicitly request `medium`. `gpt-image-2.5-flare` is primary and retryable failures may move sequentially to `gpt-image-1.5`; the former 55-second parallel hedge is removed to avoid duplicate paid generations. Multi-reference fallback uses high input fidelity. New output is compressed WebP to match its immutable `.webp` R2 key and `image/webp` metadata.
 - The Workflow reserves 4 minutes 30 seconds for provider work and 30 seconds for final upload/publication within its five-minute lease. A client only recovers a `generating` row after 5 minutes 30 seconds. Retryable transport/provider statuses (408, 409, 429, 5xx) may use the fallback; moderation/other deterministic provider rejections do not. Telemetry contains IDs, phases, and elapsed duration only—never prompts, content, member data, URLs, keys, or credentials.
 - New illustration work sets `illustration_status = 'pending'` only after the row is switched to `text_illustration`. A `text_only` row may retain a prior `pending`/`generating`/`ready`/`failed` status while its illustration is hidden; do not normalize retained state to `none`.
 - Poll every 3s while `illustration_status` is `pending`/`generating`, else every 5s while emotion analysis is still outstanding (`shouldPollForEmotion`), else idle. `useMemories`/`useCalendarMemoriesInRange` share ONE poll (`useGenerationStatusPolling`, keyed `['generation-status', familyId]`) instead of each running their own `refetchInterval` -- do not reintroduce a second interval on a list hook; extend the shared one instead. The memory-detail hook (`useMemory`) keeps its own single-row `refetchInterval` (cheap, self-contained) rather than sharing this poll.
@@ -353,3 +353,25 @@ role/tenancy model and the RLS rewrite.
 | E2E | `.maestro/flows/memories/create-memory.yaml`, `.maestro/flows/memories/auto-tag.yaml`, `.maestro/flows/memories/toggle-ai-on-edit.yaml`, `.maestro/flows/engagement/like-and-comment.yaml` |
 | Deno | `supabase/functions/analyze-emotion/index.test.ts`, `generate-illustration/index.test.ts` (claim-timeout cleanup and multi-reference provider strategy), `notify-memory-engagement/index.test.ts`, `_shared/member-mentions.test.ts`, `_shared/illustration-references.test.ts` (abort propagation), `_shared/openai.test.ts` (fallback behavior, tail hedge, output settings, deterministic-rejection stop, and abort stop), `_shared/image-bytes.test.ts` |
 | Database | `supabase/tests/memory_illustration_workflow.sql` — private-job RLS, one-use provider reservations, exact upload-token replay/completion, legacy status-reset publication, stale CAS, and retained-output failure |
+
+
+### Flare model rollout (2026-09-08)
+
+The primary image model is `gpt-image-2.5-flare`; prompts, reference order,
+quality, output size, and the `gpt-image-1.5` fallback are unchanged.
+Deploy `20260908120000_allow_flare_portrait_publication.sql` first, then both
+Workflow bridges, then the memory/portrait Worker and legacy generation
+functions. Bridges and portrait publication continue accepting `gpt-image-2`
+so older jobs and retained outputs can finish during rollout or rollback.
+No client release or stored-image regeneration is required.
+
+Token prices come from the [official model documentation](https://developers.openai.com/api/docs/models/gpt-image-2.5-flare).
+Per-image costs and visual quality have not been measured for this migration.
+Flare usage with aggregate cached tokens remains incomplete because the ledger
+cannot distinguish cached text from cached images.
+
+Validation: Worker `test/workflow.integration.test.ts`,
+`test/portrait-workflow.integration.test.ts`, and `test/openai.test.ts`;
+Edge `_shared/openai.test.ts`, `_shared/ai-pricing.test.ts`, and both
+`workflow-*-bridge/index.test.ts`; database
+`supabase/tests/portrait_generation_workflow.sql`.

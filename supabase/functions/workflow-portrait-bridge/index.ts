@@ -204,8 +204,10 @@ function detailedProviderUsage(body: BridgeRequest): Record<string, number | str
 }
 
 function isValidUsageEvent(body: BridgeRequest): boolean {
-  const expectedModel = body.provider === 'primary' ? 'gpt-image-2' : 'gpt-image-1.5';
-  return (body.provider === 'primary' || body.provider === 'fallback') && body.model === expectedModel &&
+  const validModel = body.provider === 'primary'
+    ? body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
+    : body.model === 'gpt-image-1.5';
+  return (body.provider === 'primary' || body.provider === 'fallback') && validModel &&
     body.attemptNumber === 1 && typeof body.aiCallId === 'string' && body.aiCallId.length <= 200 &&
     typeof body.success === 'boolean' && (body.billingStatus === undefined || body.billingStatus === 'known' || body.billingStatus === 'unknown') &&
     body.aiOperation === 'image_generation' &&
@@ -379,9 +381,11 @@ export async function handleWorkflowPortraitBridge(
         return jsonResponse(toPortraitWorkflowJobInput(data));
       }
       case 'reserve_attempt': {
-        const expectedModel = body.provider === 'primary' ? 'gpt-image-2' : 'gpt-image-1.5';
+        const validModel = body.provider === 'primary'
+          ? body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
+          : body.model === 'gpt-image-1.5';
         if ((body.provider !== 'primary' && body.provider !== 'fallback') ||
-          body.model !== expectedModel || body.attemptNumber !== 1) {
+          !validModel || body.attemptNumber !== 1) {
           return errorResponse('Invalid provider', 400, 'validation_error');
         }
         const { data: job, error: jobError } = await supabase
@@ -486,7 +490,7 @@ export async function handleWorkflowPortraitBridge(
         return jsonResponse({ completed: Boolean(data) });
       }
       case 'publish': {
-        if ((body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') ||
+        if ((body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') ||
           typeof body.outputKey !== 'string' || !body.outputKey) {
           return errorResponse('model and outputKey are required', 400, 'validation_error');
         }
@@ -529,7 +533,7 @@ export async function handleWorkflowPortraitBridge(
         });
       }
       case 'reconcile': {
-        if ((body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') ||
+        if ((body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') ||
           typeof body.outputKey !== 'string' || !body.outputKey) {
           return errorResponse('outputKey and model are required', 400, 'validation_error');
         }

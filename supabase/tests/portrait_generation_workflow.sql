@@ -124,7 +124,7 @@ select is((select status from public.portrait_generation_jobs where id = '630000
 
 select throws_ok(
   $$select public.publish_portrait_generation_workflow_job(
-    '63000000-0000-4000-8000-000000000002', 'gpt-image-2'
+    '63000000-0000-4000-8000-000000000002', 'gpt-image-2.5-flare'
   )$$,
   '55000', 'portrait upload has not completed',
   'portrait publication cannot bypass the exact output upload lease'
@@ -175,13 +175,13 @@ select is(
 );
 
 create temporary table publish_result as
-select * from public.publish_portrait_generation_workflow_job('63000000-0000-4000-8000-000000000002', 'gpt-image-2');
+select * from public.publish_portrait_generation_workflow_job('63000000-0000-4000-8000-000000000002', 'gpt-image-2.5-flare');
 select is((select published from publish_result), true, 'matching token publication succeeds');
 select is((select illustrated_profile_key from public.family_member_portrait_versions where id = '53000000-0000-4000-8000-000000000001'),
   '13000000-0000-4000-8000-000000000001/family/43000000-0000-4000-8000-000000000001/portraits/53000000-0000-4000-8000-000000000001/portrait/63000000-0000-4000-8000-000000000002.webp',
   'publish swaps the portrait pointer');
 select is((select source_photo_key is null and style_reference_key is null and portrait_prompt is null from public.portrait_generation_jobs where id = '63000000-0000-4000-8000-000000000002')::text, 'true', 'successful publication scrubs private input');
-select is((select already_published from public.reconcile_portrait_generation_workflow_job('63000000-0000-4000-8000-000000000002', 'gpt-image-2')), true, 'reconcile replay reports the already published portrait as success');
+select is((select already_published from public.reconcile_portrait_generation_workflow_job('63000000-0000-4000-8000-000000000002', 'gpt-image-2.5-flare')), true, 'reconcile replay reports the already published portrait as success');
 
 insert into public.family_member_portrait_versions (
   id, family_id, family_member_id, user_id, reference_date, date_source,
@@ -234,7 +234,7 @@ insert into public.portrait_generation_jobs (
   '63000000-0000-4000-8000-000000000004', 'initial', now() + interval '5 minutes',
   'private/source.jpg', '_assets/styles/default.png', 'private prompt', 'deleted/new.webp'
 );
-select is((select published from public.publish_portrait_generation_workflow_job('63000000-0000-4000-8000-000000000004', 'gpt-image-2')), false, 'deletion token rejects stale publication');
+select is((select published from public.publish_portrait_generation_workflow_job('63000000-0000-4000-8000-000000000004', 'gpt-image-2.5-flare')), false, 'deletion token rejects stale publication');
 select is((select status from public.portrait_generation_jobs where id = '63000000-0000-4000-8000-000000000004'), 'superseded', 'deletion race marks job superseded');
 select is((select source_photo_key is null and style_reference_key is null and portrait_prompt is null from public.portrait_generation_jobs where id = '63000000-0000-4000-8000-000000000004')::text, 'true', 'deletion-race supersession scrubs private input');
 
