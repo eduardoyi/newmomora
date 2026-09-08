@@ -47,17 +47,24 @@ export async function fitBook(env: Env, bookDocument: unknown, edits: unknown): 
 }
 
 function parseRenderResult(json: Record<string, unknown>): RenderWorkerRenderResult {
-  const state = json.state;
+  // The render worker's ACTUAL contract (render/memory-book-renderer/src/
+  // server.ts; canary seam #3): field is `status` with values
+  // pending|running|done|failed, and a 202 body is {accepted:true,...}.
+  // Map onto this client's state enum.
+  const raw = json.status ?? (json.accepted === true ? 'accepted' : json.state);
+  const state = raw === 'pending' || raw === 'running' ? 'in_progress' : raw;
   if (state !== 'accepted' && state !== 'in_progress' && state !== 'done' && state !== 'failed') {
     throw new RenderWorkerError(502, 'render worker returned an unrecognized state');
   }
   return {
     state,
-    interiorKey: typeof json.interiorKey === 'string' ? json.interiorKey : undefined,
-    coverKey: typeof json.coverKey === 'string' ? json.coverKey : undefined,
+    // Done-payload shape is NESTED on the worker: keys{interior,cover} +
+    // checksums{interior,cover} (status.ts RenderStatus) — canary seam.
+    interiorKey: typeof (json.keys as any)?.interior === 'string' ? (json.keys as any).interior : undefined,
+    coverKey: typeof (json.keys as any)?.cover === 'string' ? (json.keys as any).cover : undefined,
     pageCount: typeof json.pageCount === 'number' ? json.pageCount : undefined,
-    interiorChecksum: typeof json.interiorChecksum === 'string' ? json.interiorChecksum : undefined,
-    coverChecksum: typeof json.coverChecksum === 'string' ? json.coverChecksum : undefined,
+    interiorChecksum: typeof (json.checksums as any)?.interior === 'string' ? (json.checksums as any).interior : undefined,
+    coverChecksum: typeof (json.checksums as any)?.cover === 'string' ? (json.checksums as any).cover : undefined,
     errorCode: typeof json.errorCode === 'string' ? json.errorCode : undefined,
   };
 }

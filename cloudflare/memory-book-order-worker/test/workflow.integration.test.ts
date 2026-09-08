@@ -88,20 +88,20 @@ function buildFetchMock(overrides: {
     }
     if (url.includes('render.test/render')) {
       if (overrides.renderImmediateDone) {
-        return jsonResponse({ state: 'done', interiorKey: 'print-orders/order/interior.pdf', coverKey: 'print-orders/order/cover.pdf', pageCount: overrides.orderContext?.quotedPageCount ?? 118 });
+        return jsonResponse({ status: 'done', keys: { interior: 'print-orders/order/interior.pdf', cover: 'print-orders/order/cover.pdf' }, checksums: { interior: 'sha-i', cover: 'sha-c' }, pageCount: overrides.orderContext?.quotedPageCount ?? 118 });
       }
-      return jsonResponse({ state: 'accepted' });
+      return jsonResponse({ accepted: true }, 202);
     }
     if (url.includes('render.test/status/')) {
       const state = renderStates[Math.min(statusCallIndex, renderStates.length - 1)];
       statusCallIndex += 1;
       if (state === 'done') {
-        return jsonResponse({ state: 'done', interiorKey: 'print-orders/order/interior.pdf', coverKey: 'print-orders/order/cover.pdf', pageCount: overrides.orderContext?.quotedPageCount ?? 118 });
+        return jsonResponse({ status: 'done', keys: { interior: 'print-orders/order/interior.pdf', cover: 'print-orders/order/cover.pdf' }, checksums: { interior: 'sha-i', cover: 'sha-c' }, pageCount: overrides.orderContext?.quotedPageCount ?? 118 });
       }
       if (state === 'failed') {
-        return jsonResponse({ state: 'failed', errorCode: 'PUPPETEER_CRASHED' });
+        return jsonResponse({ status: 'failed', reason: 'PUPPETEER_CRASHED' });
       }
-      return jsonResponse({ state: 'in_progress' });
+      return jsonResponse({ status: 'running', startedAt: 'x' });
     }
     if (url.includes('prodigi.test/v4.0/products/spine')) {
       return jsonResponse({ success: true, message: 'ok', spineInfo: { widthMm: 28 } });
