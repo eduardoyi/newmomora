@@ -166,7 +166,11 @@ export async function createCheckoutSession(
       {
         price_data: {
           currency: input.currency,
-          product_data: { name: 'Momora Memory Book' },
+          // txcd_35020200 = printed books (reduced VAT rates in much of
+          // the EU); required-adjacent since new Stripe accounts default
+          // to Managed Payments (canary finding, 2026-09-08) and correct
+          // regardless.
+          product_data: { name: 'Momora Memory Book', tax_code: 'txcd_35020200' },
           unit_amount: input.priceCents,
         },
         quantity: 1,
@@ -174,13 +178,25 @@ export async function createCheckoutSession(
       {
         price_data: {
           currency: input.currency,
-          product_data: { name: 'Shipping' },
+          // txcd_92010001 = shipping.
+          product_data: { name: 'Shipping', tax_code: 'txcd_92010001' },
           unit_amount: input.shippingCostCents,
         },
         quantity: 1,
       },
     ],
-    automatic_tax: { enabled: true },
+    // Canary finding: new accounts enable Managed Payments (Stripe as
+    // merchant of record) by default. The 5c design is us-as-MoR with
+    // Stripe Tax (hardened plan Decision 4/round-3); disable per-session.
+    // Revisit deliberately at launch — Managed Payments may genuinely fit
+    // a global physical-goods launch better (owner decision, logged).
+    managed_payments: { enabled: false },
+    // Stripe Tax requires an ACTIVATED account (head-office address).
+    // Until activation (a launch prerequisite — legal entity, bank,
+    // verification), STRIPE_AUTOMATIC_TAX=disabled lets test-mode
+    // canaries run. Default is enabled: forgetting the env at launch
+    // fails loud in checkout, never silently untaxed.
+    automatic_tax: { enabled: Deno.env.get('STRIPE_AUTOMATIC_TAX') !== 'disabled' },
     metadata: { orderId: input.orderId },
     payment_intent_data: { metadata: { orderId: input.orderId } },
     success_url: input.successUrl,
