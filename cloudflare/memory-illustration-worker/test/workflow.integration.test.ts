@@ -338,11 +338,11 @@ describe('Workflow integration', () => {
 
     const result = await workflowWithEnv(setup.env).run({ payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, fakeStep());
 
-    expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-2' });
+    expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-2.5-flare' });
     expect(setup.output.put).toHaveBeenCalledWith(
       setup.workflowJob.outputKey,
       expect.any(ArrayBuffer),
-      expect.objectContaining({ customMetadata: { model: 'gpt-image-2' } }),
+      expect.objectContaining({ customMetadata: { model: 'gpt-image-2.5-flare' } }),
     );
     expect(setup.output.delete).toHaveBeenCalledWith(setup.workflowJob.oldIllustrationKey);
     expect(operations.map((operation) => operation.operation)).toEqual([
@@ -393,8 +393,8 @@ describe('Workflow integration', () => {
     await workflowWithEnv(setup.env).run({ payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, fakeStep());
 
     expect(operations.filter((operation) => operation.operation === 'reserve_attempt')).toEqual([
-      expect.objectContaining({ provider: 'primary', model: 'gpt-image-2', attemptNumber: 1 }),
-      expect.objectContaining({ provider: 'primary', model: 'gpt-image-2', attemptNumber: 2 }),
+      expect.objectContaining({ provider: 'primary', model: 'gpt-image-2.5-flare', attemptNumber: 1 }),
+      expect.objectContaining({ provider: 'primary', model: 'gpt-image-2.5-flare', attemptNumber: 2 }),
       expect.objectContaining({ provider: 'fallback', model: 'gpt-image-1.5', attemptNumber: 1 }),
     ]);
   });
@@ -580,7 +580,7 @@ describe('Workflow integration', () => {
     const setup = createEnvironment();
     setup.output.head
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ customMetadata: { model: 'gpt-image-2' } });
+      .mockResolvedValueOnce({ customMetadata: { model: 'gpt-image-2.5-flare' } });
     const { fetchMock, operations } = bridgeAndOpenAiFetch(setup.workflowJob, {
       bridgeResponses: {
         authorize_upload: [Response.json({

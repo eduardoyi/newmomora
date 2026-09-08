@@ -322,13 +322,13 @@ describe('portrait Workflow', () => {
       fakeStep(),
     );
 
-    expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-2' });
+    expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-2.5-flare' });
     expect(setup.styles.get).toHaveBeenCalledWith(setup.workflowJob.styleReferenceKey);
     expect(setup.profiles.get).toHaveBeenCalledWith(setup.workflowJob.sourcePhotoKey);
     expect(setup.styles.get.mock.invocationCallOrder[0]).toBeLessThan(setup.profiles.get.mock.invocationCallOrder[0]);
     expect(imageForms).toHaveLength(1);
     const form = imageForms[0];
-    expect(form.get('model')).toBe('gpt-image-2');
+    expect(form.get('model')).toBe('gpt-image-2.5-flare');
     expect(form.get('size')).toBe('1024x1024');
     expect(form.get('output_format')).toBe('webp');
     expect(form.get('output_compression')).toBe('85');
@@ -341,7 +341,7 @@ describe('portrait Workflow', () => {
     expect(setup.portraits.put).toHaveBeenCalledWith(
       setup.workflowJob.outputKey,
       expect.any(ArrayBuffer),
-      expect.objectContaining({ httpMetadata: { contentType: 'image/webp' }, customMetadata: { model: 'gpt-image-2' } }),
+      expect.objectContaining({ httpMetadata: { contentType: 'image/webp' }, customMetadata: { model: 'gpt-image-2.5-flare' } }),
     );
     expect(setup.portraits.delete).toHaveBeenCalledWith(setup.workflowJob.oldPortraitKey);
     expect(operations.map((operation) => operation.operation)).toEqual([
@@ -402,7 +402,7 @@ describe('portrait Workflow', () => {
 
     expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-1.5' });
     expect(operations.filter((operation) => operation.operation === 'reserve_attempt')).toEqual([
-      expect.objectContaining({ provider: 'primary', model: 'gpt-image-2', attemptNumber: 1 }),
+      expect.objectContaining({ provider: 'primary', model: 'gpt-image-2.5-flare', attemptNumber: 1 }),
       expect.objectContaining({ provider: 'fallback', model: 'gpt-image-1.5', attemptNumber: 1 }),
     ]);
     expect(imageForms).toHaveLength(2);
@@ -680,7 +680,7 @@ describe('portrait Workflow', () => {
     const setup = createEnvironment();
     setup.portraits.head
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ customMetadata: { model: 'gpt-image-2' } });
+      .mockResolvedValueOnce({ customMetadata: { model: 'gpt-image-2.5-flare' } });
     const { fetchMock, operations } = bridgeAndOpenAiFetch(setup.workflowJob, {
       bridgeResponses: {
         authorize_upload: [Response.json({

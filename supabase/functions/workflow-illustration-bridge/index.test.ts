@@ -139,7 +139,7 @@ Deno.test('illustration bridge preserves the v1 reservation response contract', 
   try {
     const response = await handleWorkflowIllustrationBridge(await signedRequest({
       operation: 'reserve_attempt', jobId: '22222222-2222-4222-8222-222222222222',
-      provider: 'primary', model: 'gpt-image-2', attemptNumber: 1,
+      provider: 'primary', model: 'gpt-image-2.5-flare', attemptNumber: 1,
     }), {
       createServiceClient: () => ({
         from(table: string) {
@@ -173,7 +173,7 @@ Deno.test('illustration bridge records grandfathered v1 Worker usage with server
     const response = await handleWorkflowIllustrationBridge(await signedRequest({
       operation: 'record_usage', jobId, usageRequestId: null, protocolVersion: 1,
       provider: 'primary', attemptNumber: 1, aiCallId: `${jobId}:primary:1`, aiOperation: 'image_generation',
-      model: 'gpt-image-2', success: true, familyId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', actorUserId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      model: 'gpt-image-2.5-flare', success: true, familyId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', actorUserId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       usage: { inputTextTokens: 10, inputImageTokens: 20, inputCachedTokens: 3, outputTextTokens: 4, outputImageTokens: 50 },
     }), {
       createServiceClient: () => ({
@@ -199,7 +199,7 @@ Deno.test('illustration bridge records grandfathered v1 Worker usage with server
       args: {
         p_ai_call_id: `${jobId}:primary:1`, p_usage_request_id: null,
         p_family_id: '44444444-4444-4444-8444-444444444444', p_actor_user_id: '66666666-6666-4666-8666-666666666666',
-        p_operation: 'illustration', p_model: 'gpt-image-2', p_success: true,
+        p_operation: 'illustration', p_model: 'gpt-image-2.5-flare', p_success: true,
         p_provider_usage: { provider: 'primary', input_text_tokens: 10, input_image_tokens: 20, cached_input_tokens: 3, output_text_tokens: 4, output_image_tokens: 50 },
         p_estimated_cost_usd: null, p_cost_basis: 'unpriced', p_billing_status: 'unknown', p_cost_is_complete: false, p_pricing_version: null,
       },

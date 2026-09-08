@@ -31,7 +31,7 @@ describe('OpenAI error classification', () => {
     expect(parseImageUsage({ input_tokens_details: { text_tokens: 1 } })).toMatchObject({
       inputImageTokens: null, outputImageTokens: null,
     });
-    expect(priceImageUsage('gpt-image-2', null)).toEqual({
+    expect(priceImageUsage('gpt-image-2.5-flare', null)).toEqual({
       costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null,
     });
   });
@@ -40,7 +40,7 @@ describe('OpenAI error classification', () => {
       { error: { code: 'moderation_blocked' } },
       { status: 400 },
     )));
-    await expect(editImage(fakeEnv, 'gpt-image-2', 'safe prompt', references, undefined, new AbortController().signal))
+    await expect(editImage(fakeEnv, 'gpt-image-2.5-flare', 'safe prompt', references, undefined, new AbortController().signal))
       .rejects.toMatchObject({ code: 'MODERATION_BLOCKED', retryable: false });
   });
 
@@ -64,7 +64,16 @@ describe('OpenAI error classification', () => {
 
   it('classifies malformed 200 responses as retryable instead of terminal', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{not-json', { status: 200 })));
-    await expect(editImage(fakeEnv, 'gpt-image-2', 'safe prompt', references, undefined, new AbortController().signal))
+    await expect(editImage(fakeEnv, 'gpt-image-2.5-flare', 'safe prompt', references, undefined, new AbortController().signal))
       .rejects.toMatchObject({ code: 'OPENAI_MALFORMED_RESPONSE', retryable: true });
+  });
+});
+
+
+describe('Flare pricing', () => {
+  it('prices image output and leaves ambiguous cached usage incomplete', () => {
+    const usage = { inputTextTokens: 10, inputImageTokens: 20, inputCachedTokens: 0, outputTextTokens: 0, outputImageTokens: 5 };
+    expect(priceImageUsage('gpt-image-2.5-flare', usage)).toEqual({ costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: 0.00036 });
+    expect(priceImageUsage('gpt-image-2.5-flare', { ...usage, inputCachedTokens: 3 })).toMatchObject({ costIsComplete: false, estimatedCostUsd: null });
   });
 });

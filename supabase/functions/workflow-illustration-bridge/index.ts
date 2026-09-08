@@ -191,9 +191,11 @@ function detailedProviderUsage(body: BridgeRequest): Record<string, number | str
 }
 
 function isValidUsageEvent(body: BridgeRequest, maxPrimaryAttempt: number): boolean {
-  const expectedModel = body.provider === 'primary' ? 'gpt-image-2' : 'gpt-image-1.5';
+  const validModel = body.provider === 'primary'
+    ? body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
+    : body.model === 'gpt-image-1.5';
   return (body.provider === 'primary' || body.provider === 'fallback') &&
-    body.model === expectedModel &&
+    validModel &&
     Number.isInteger(body.attemptNumber) && body.attemptNumber! >= 1 &&
     body.attemptNumber! <= (body.provider === 'primary' ? maxPrimaryAttempt : 1) &&
     typeof body.aiCallId === 'string' && body.aiCallId.length <= 200 &&
@@ -324,9 +326,11 @@ export async function handleWorkflowIllustrationBridge(
         return jsonResponse(toWorkflowJobInput(data));
       }
       case 'reserve_attempt': {
-        const expectedModel = body.provider === 'primary' ? 'gpt-image-2' : 'gpt-image-1.5';
+        const validModel = body.provider === 'primary'
+          ? body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
+          : body.model === 'gpt-image-1.5';
         const maxAttemptNumber = body.provider === 'primary' ? 2 : 1;
-        if ((body.provider !== 'primary' && body.provider !== 'fallback') || body.model !== expectedModel ||
+        if ((body.provider !== 'primary' && body.provider !== 'fallback') || !validModel ||
           !Number.isInteger(body.attemptNumber) || body.attemptNumber! < 1 || body.attemptNumber! > maxAttemptNumber) {
           return errorResponse('Invalid provider', 400, 'validation_error');
         }
@@ -457,7 +461,7 @@ export async function handleWorkflowIllustrationBridge(
       }
       case 'publish': {
         if (typeof body.model !== 'string' || typeof body.outputKey !== 'string' || !body.outputKey) return errorResponse('model and outputKey are required', 400, 'validation_error');
-        if (body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') return errorResponse('Invalid model', 400, 'validation_error');
+        if (body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') return errorResponse('Invalid model', 400, 'validation_error');
         const { data: job, error: jobError } = await supabase
           .from('memory_illustration_jobs')
           .select('output_key')
@@ -501,7 +505,7 @@ export async function handleWorkflowIllustrationBridge(
       }
       case 'reconcile': {
         if (typeof body.outputKey !== 'string' ||
-          (body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5')) {
+          (body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5')) {
           return errorResponse('outputKey and model are required', 400, 'validation_error');
         }
         const { data, error } = await supabase

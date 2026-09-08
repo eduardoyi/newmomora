@@ -236,7 +236,7 @@ Deno.test('portrait bridge handler validates narrow get, reserve, publish, fail,
 
     const reserve = createHandlerClient({});
     const reserveResponse = await handleWorkflowPortraitBridge(
-      await signedRequest({ operation: 'reserve_attempt', jobId: JOB_ID, provider: 'primary', model: 'gpt-image-2', attemptNumber: 1 }, '33333333-3333-4333-8333-333333333335'),
+      await signedRequest({ operation: 'reserve_attempt', jobId: JOB_ID, provider: 'primary', model: 'gpt-image-2.5-flare', attemptNumber: 1 }, '33333333-3333-4333-8333-333333333335'),
       { createServiceClient: () => reserve.client as never },
     );
     assertEquals(await reserveResponse.json(), { reserved: true });
@@ -244,14 +244,14 @@ Deno.test('portrait bridge handler validates narrow get, reserve, publish, fail,
 
     const alreadyPublished = createHandlerClient({ publishOutcome: { published: false, already_published: true, old_key: 'portraits/old.webp' } });
     const publishResponse = await handleWorkflowPortraitBridge(
-      await signedRequest({ operation: 'publish', jobId: JOB_ID, outputKey: 'portraits/new.webp', model: 'gpt-image-2' }, '33333333-3333-4333-8333-333333333336'),
+      await signedRequest({ operation: 'publish', jobId: JOB_ID, outputKey: 'portraits/new.webp', model: 'gpt-image-2.5-flare' }, '33333333-3333-4333-8333-333333333336'),
       { createServiceClient: () => alreadyPublished.client as never },
     );
     assertEquals(await publishResponse.json(), { published: true, oldPortraitKey: 'portraits/old.webp', deleteOutput: false });
 
     const mismatch = createHandlerClient({});
     const mismatchResponse = await handleWorkflowPortraitBridge(
-      await signedRequest({ operation: 'publish', jobId: JOB_ID, outputKey: 'other.webp', model: 'gpt-image-2' }, '33333333-3333-4333-8333-333333333337'),
+      await signedRequest({ operation: 'publish', jobId: JOB_ID, outputKey: 'other.webp', model: 'gpt-image-2.5-flare' }, '33333333-3333-4333-8333-333333333337'),
       { createServiceClient: () => mismatch.client as never },
     );
     assertEquals(mismatchResponse.status, 409);
@@ -272,7 +272,7 @@ Deno.test('portrait bridge handler validates narrow get, reserve, publish, fail,
 
     const superseded = createHandlerClient({ status: 'superseded' });
     const reconcileResponse = await handleWorkflowPortraitBridge(
-      await signedRequest({ operation: 'reconcile', jobId: JOB_ID, outputKey: 'portraits/new.webp', model: 'gpt-image-2' }, '33333333-3333-4333-8333-333333333340'),
+      await signedRequest({ operation: 'reconcile', jobId: JOB_ID, outputKey: 'portraits/new.webp', model: 'gpt-image-2.5-flare' }, '33333333-3333-4333-8333-333333333340'),
       { createServiceClient: () => superseded.client as never },
     );
     assertEquals(await reconcileResponse.json(), { published: false, oldPortraitKey: null, deleteOutput: true });
@@ -299,7 +299,7 @@ Deno.test('portrait bridge records a real Worker-shaped v2 usage event with dura
         attemptNumber: 1,
         aiCallId: `${usageRequestId}:primary:1`,
         aiOperation: 'image_generation',
-        model: 'gpt-image-2',
+        model: 'gpt-image-2.5-flare',
         success: true,
         billingStatus: 'known',
         pricingVersion: 'openai-image-2026-07-23',
@@ -322,7 +322,7 @@ Deno.test('portrait bridge records a real Worker-shaped v2 usage event with dura
     assertEquals(call?.args, {
       p_ai_call_id: `${usageRequestId}:primary:1`, p_usage_request_id: usageRequestId,
       p_job_kind: 'portrait', p_job_id: JOB_ID, p_provider: 'primary', p_attempt_number: 1,
-      p_operation: 'portrait', p_model: 'gpt-image-2',
+      p_operation: 'portrait', p_model: 'gpt-image-2.5-flare',
       p_provider_usage: { inputTextTokens: 10, inputImageTokens: 20, inputCachedTokens: 3, outputTextTokens: 4, outputImageTokens: 50 },
       p_success: true, p_billing_status: 'known', p_pricing_version: 'openai-image-2026-07-23',
       p_cost_basis: 'provider_usage', p_cost_is_complete: true, p_estimated_cost_usd: 0.0123,
@@ -339,7 +339,7 @@ Deno.test('portrait bridge records a grandfathered v1 Worker usage event with se
       await signedRequest({
         operation: 'record_usage', jobId: JOB_ID, usageRequestId: null, protocolVersion: 1,
         provider: 'primary', attemptNumber: 1, aiCallId: `${JOB_ID}:primary:1`, aiOperation: 'image_generation',
-        model: 'gpt-image-2', success: true, billingStatus: 'known', pricingVersion: 'openai-image-2026-07-23',
+        model: 'gpt-image-2.5-flare', success: true, billingStatus: 'known', pricingVersion: 'openai-image-2026-07-23',
         costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: 0.0123,
         // These hostile fields are intentionally absent from the detailed RPC.
         familyId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', actorUserId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
@@ -352,7 +352,7 @@ Deno.test('portrait bridge records a grandfathered v1 Worker usage event with se
     assertEquals(call?.args, {
       p_ai_call_id: `${JOB_ID}:primary:1`, p_usage_request_id: null,
       p_family_id: '44444444-4444-4444-8444-444444444444', p_actor_user_id: '55555555-5555-4555-8555-555555555555',
-      p_operation: 'portrait', p_model: 'gpt-image-2', p_success: true,
+      p_operation: 'portrait', p_model: 'gpt-image-2.5-flare', p_success: true,
       p_provider_usage: { provider: 'primary', input_text_tokens: 10, input_image_tokens: 20, cached_input_tokens: 3, output_text_tokens: 4, output_image_tokens: 50 },
       p_estimated_cost_usd: 0.0123, p_cost_basis: 'provider_usage', p_billing_status: 'known',
       p_cost_is_complete: true, p_pricing_version: 'openai-image-2026-07-23',
@@ -367,7 +367,7 @@ Deno.test('portrait bridge refuses a v1 usage event that tries to select a reque
       await signedRequest({
         operation: 'record_usage', jobId: JOB_ID, usageRequestId: '99999999-9999-4999-8999-999999999999', protocolVersion: 1,
         provider: 'primary', attemptNumber: 1, aiCallId: '99999999-9999-4999-8999-999999999999:primary:1', aiOperation: 'image_generation',
-        model: 'gpt-image-2', success: true,
+        model: 'gpt-image-2.5-flare', success: true,
       }, '33333333-3333-4333-8333-333333333345'),
       { createServiceClient: () => handler.client as never },
     );

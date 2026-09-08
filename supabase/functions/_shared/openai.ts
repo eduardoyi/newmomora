@@ -1,6 +1,6 @@
 const DEFAULT_CHAT_MODEL = 'gpt-4o-mini';
 const DEFAULT_TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe';
-const PRIMARY_IMAGE_MODEL = 'gpt-image-2';
+const PRIMARY_IMAGE_MODEL = 'gpt-image-2.5-flare';
 const FALLBACK_IMAGE_MODEL = 'gpt-image-1.5';
 const MODELS_SUPPORTING_INPUT_FIDELITY = new Set([FALLBACK_IMAGE_MODEL]);
 import { normalizeOpenAiUsage, priceOpenAiUsage } from './ai-pricing.ts';

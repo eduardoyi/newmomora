@@ -1,7 +1,7 @@
 export const WORKFLOW_JOB_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export type IllustrationModel = 'gpt-image-2' | 'gpt-image-1.5';
+export type IllustrationModel = 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5';
 
 export type BridgeOperation =
   | 'get_input'

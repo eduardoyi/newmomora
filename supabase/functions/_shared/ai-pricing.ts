@@ -21,9 +21,9 @@ export interface PricedAiUsage {
   estimatedCostUsd: number | null;
 }
 
-const PRICING_VERSION = 'openai-2026-07-27';
+const LEGACY_PRICING_VERSION = 'openai-2026-07-27';
 
-type KnownModel = 'gpt-4o-mini' | 'gpt-4o-mini-transcribe' | 'gpt-image-2' | 'gpt-image-1.5';
+type KnownModel = 'gpt-4o-mini' | 'gpt-4o-mini-transcribe' | 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5';
 
 const PER_MILLION_USD: Record<Exclude<KnownModel, 'gpt-4o-mini-transcribe'>, {
   inputText: number;
@@ -36,6 +36,7 @@ const PER_MILLION_USD: Record<Exclude<KnownModel, 'gpt-4o-mini-transcribe'>, {
   // silently edit them after deployment; add a new version instead.
   'gpt-4o-mini': { inputText: 0.15, inputImage: 0.15, cachedInput: 0.075, outputText: 0.60, outputImage: 0.60 },
   'gpt-image-2': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 30, outputImage: 30 },
+  'gpt-image-2.5-flare': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 0, outputImage: 30 },
   'gpt-image-1.5': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 10, outputImage: 32 },
 };
 
@@ -79,12 +80,13 @@ export function priceOpenAiUsage(
   dimensions: AiUsageDimensions,
   options: { audioDurationIsEstimate?: boolean } = {},
 ): PricedAiUsage {
+  const pricingVersion = model === 'gpt-image-2.5-flare' ? 'openai-2026-09-08' : LEGACY_PRICING_VERSION;
   const hasDimensions = Object.keys(dimensions).length > 0;
   if (model === 'gpt-4o-mini-transcribe') {
     const hasBillableDimension = hasValue(dimensions, 'audio_seconds') ||
       hasValue(dimensions, 'input_text_tokens') || hasValue(dimensions, 'output_text_tokens');
     if (!hasBillableDimension) {
-      return { dimensions, billingStatus: hasDimensions ? 'known' : 'unknown', pricingVersion: PRICING_VERSION, costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null };
+      return { dimensions, billingStatus: hasDimensions ? 'known' : 'unknown', pricingVersion, costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null };
     }
     const estimatedCostUsd =
       (dimensions.audio_seconds ?? 0) * TRANSCRIBE_USD_PER_AUDIO_SECOND +
@@ -93,7 +95,7 @@ export function priceOpenAiUsage(
     return {
       dimensions,
       billingStatus: 'known',
-      pricingVersion: PRICING_VERSION,
+      pricingVersion,
       costBasis: options.audioDurationIsEstimate ? 'request_shape_estimate' : 'provider_usage',
       // An audio-only fallback is useful as a request-shape estimate but it
       // cannot stand in for the model's separate input/output text charges.
@@ -107,18 +109,23 @@ export function priceOpenAiUsage(
 
   const rates = PER_MILLION_USD[model as Exclude<KnownModel, 'gpt-4o-mini-transcribe'>];
   if (!rates || !hasDimensions) {
-    return { dimensions, billingStatus: hasDimensions ? 'known' : 'unknown', pricingVersion: rates ? PRICING_VERSION : null, costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null };
+    return { dimensions, billingStatus: hasDimensions ? 'known' : 'unknown', pricingVersion: rates ? pricingVersion : null, costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null };
   }
 
   // A price is complete only when every billable dimension for this model's
   // response shape is known. Missing image dimensions are zero for chat; the
   // inverse is not true for image generation, whose usage must be itemized.
-  const isImage = model === 'gpt-image-2' || model === 'gpt-image-1.5';
+  const isImage = model === 'gpt-image-2.5-flare' || model === 'gpt-image-2' || model === 'gpt-image-1.5';
   const required = isImage
     ? ['input_text_tokens', 'input_image_tokens', 'cached_input_tokens', 'output_text_tokens', 'output_image_tokens'] as const
     : ['input_text_tokens', 'output_text_tokens'] as const;
   if (required.some((key) => !hasValue(dimensions, key))) {
-    return { dimensions, billingStatus: 'known', pricingVersion: PRICING_VERSION, costBasis: 'provider_usage', costIsComplete: false, estimatedCostUsd: null };
+    return { dimensions, billingStatus: 'known', pricingVersion, costBasis: 'provider_usage', costIsComplete: false, estimatedCostUsd: null };
+  }
+
+  // Aggregate cached tokens do not identify text versus image cache pricing.
+  if (model === 'gpt-image-2.5-flare' && (dimensions.cached_input_tokens ?? 0) > 0) {
+    return { dimensions, billingStatus: 'known', pricingVersion, costBasis: 'provider_usage', costIsComplete: false, estimatedCostUsd: null };
   }
 
   const cost = (
@@ -128,5 +135,5 @@ export function priceOpenAiUsage(
     (dimensions.output_text_tokens ?? 0) * rates.outputText +
     (dimensions.output_image_tokens ?? 0) * rates.outputImage
   ) / 1_000_000;
-  return { dimensions, billingStatus: 'known', pricingVersion: PRICING_VERSION, costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: cost };
+  return { dimensions, billingStatus: 'known', pricingVersion, costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: cost };
 }
