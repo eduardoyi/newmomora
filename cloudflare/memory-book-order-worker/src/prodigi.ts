@@ -95,6 +95,9 @@ export async function submitOrder(env: Env, input: SubmitOrderInput): Promise<Su
       {
         sku: env.PRODIGI_SKU,
         copies: 1,
+        // V4-proven order item shape (see _shared/prodigi.ts note).
+        sizing: 'fillPrintArea',
+        attributes: {},
         assets: [
           { printArea: 'default', url: input.interiorPdfUrl },
           { printArea: 'cover', url: input.coverPdfUrl },

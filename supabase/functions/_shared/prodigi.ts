@@ -85,15 +85,19 @@ export async function getProdigiQuote(
   apiKey: string,
   input: ProdigiQuoteInput,
 ): Promise<ProdigiQuoteResult> {
+  // Shape confirmed against the LIVE API at the 5c canary (2026-09-08):
+  // page count rides ON THE ASSET (assets[0].pageCount) — NOT as an
+  // attribute (UnexpectedAttributes) — and the assets array is required
+  // (MissingRequiredAssets). No currencyCode field; the account quotes USD.
   const result = await prodigiRequest(fetchFn, baseUrl, apiKey, '/v4.0/quotes', 'POST', {
     shippingMethod: input.shippingMethod,
     destinationCountryCode: input.destinationCountryCode,
-    currencyCode: 'USD',
     items: [
       {
         sku: input.sku,
         copies: input.copies ?? 1,
-        attributes: { pageCount: String(input.numberOfPages) },
+        attributes: {},
+        assets: [{ printArea: 'default', pageCount: input.numberOfPages }],
       },
     ],
   });
@@ -206,6 +210,10 @@ export async function submitProdigiOrder(
       {
         sku: input.sku,
         copies: 1,
+        // sizing + empty attributes: the exact V4-proven order item shape
+        // (three successful submissions incl. the in-production samples).
+        sizing: 'fillPrintArea',
+        attributes: {},
         assets: [
           { printArea: 'default', url: input.interiorPdfUrl },
           { printArea: 'cover', url: input.coverPdfUrl },
