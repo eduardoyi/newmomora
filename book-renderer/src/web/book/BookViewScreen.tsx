@@ -13,6 +13,7 @@ import { computeUnitAspect } from './unitAspect';
 import { useFitToViewportWidth } from './useFitToViewport';
 import { FirstVisitHint } from './FirstVisitHint';
 import { useDocumentTitle } from '../useDocumentTitle';
+import { CheckoutScreen } from '../order/CheckoutScreen';
 import './BookViewScreen.css';
 
 const EMPTY_IN_BOOK: InBookAssets = { assetFiles: new Set(), mediaIds: new Set() };
@@ -27,10 +28,40 @@ const EMPTY_IN_BOOK: InBookAssets = { assetFiles: new Set(), mediaIds: new Set()
  * about a read-only viewer's rendered page changes by this being always
  * mounted rather than toggled.
  */
-export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () => void }) {
+export function BookViewScreen({
+  bookId,
+  onBack,
+  onOrderPlaced,
+}: {
+  bookId: string;
+  onBack: () => void;
+  /** memory-book-5c plan Step 6: called with the new order's id once
+   * `CheckoutScreen`'s checkout session mocks a paid order (fixture mode
+   * only — the real flow leaves the page for Stripe instead, see
+   * `CheckoutScreen.tsx#handlePay`). The caller navigates to `/order/<id>`. */
+  onOrderPlaced: (orderId: string) => void;
+}) {
   const { loading, error, data, applyEditsPatch, handleEditsSaved, pendingUndo, undoing, handleUndo, dismissUndo } =
     useEditableBook(bookId);
   const [unitIndex, setUnitIndex] = useState(0);
+  const [orderingOpen, setOrderingOpen] = useState(false);
+
+  // Stripe Checkout's `cancel_url` (memory-book-orders/index.ts's
+  // `create_checkout` handler) lands back here as `/b/<id>?checkout=cancelled`
+  // — a one-time, dismissible notice that no charge happened, same "read the
+  // query param once, then scrub it" shape `OrderStatusScreen`'s own
+  // `?checkout=success` banner uses. `replaceState` (not `pushState`) so a
+  // back-button press from here doesn't bounce the visitor right back to
+  // this same query string.
+  const [checkoutCancelled, setCheckoutCancelled] = useState(
+    () => new URLSearchParams(window.location.search).get('checkout') === 'cancelled',
+  );
+  useEffect(() => {
+    if (!checkoutCancelled) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('checkout');
+    window.history.replaceState(null, '', url.pathname + url.search);
+  }, [checkoutCancelled]);
 
   // Item 3: "<child> — <scope label> · Momora" once the book has loaded —
   // same naming BookListScreen's own row label uses (`book.child.name` /
@@ -143,16 +174,52 @@ export function BookViewScreen({ bookId, onBack }: { bookId: string; onBack: () 
       ? `Pages ${currentUnit.rawIndices[0] + 1}-${currentUnit.rawIndices[1] + 1} / ${pages.length}`
       : `Page ${(currentUnit?.rawIndices[0] ?? 0) + 1} / ${pages.length}`;
 
+  const bookLabel = data.book.child?.name ? `${data.book.child.name} — ${data.book.scope_label}` : data.book.scope_label;
+
+  // memory-book-5c plan Step 6, Design Decision 5: a full-takeover checkout
+  // flow, not a modal over the pager — same "swap the whole screen" shape
+  // `App.tsx` already uses between the book list and this component, rather
+  // than another `EditOverlay`-style layered surface (checkout has its own
+  // multi-step flow with its own back button, not a single-purpose sheet).
+  if (orderingOpen) {
+    return (
+      <CheckoutScreen
+        bookId={bookId}
+        bookLabel={bookLabel}
+        onBack={() => setOrderingOpen(false)}
+        onOrderPlaced={onOrderPlaced}
+      />
+    );
+  }
+
   return (
     <div className="book-view">
       <header className="book-view__header">
         <button type="button" className="book-view__back" onClick={onBack}>
           ← Your books
         </button>
-        <span className="book-view__title">
-          {data.book.child?.name ? `${data.book.child.name} — ${data.book.scope_label}` : data.book.scope_label}
-        </span>
+        <span className="book-view__title">{bookLabel}</span>
+        {/* memory-book-5c plan Step 6: only an owner/manager can place an
+            order (mirrors `memory-book-orders/index.ts`'s `create_draft`
+            role check) — gating visibility on `data.canEdit` avoids showing
+            a viewer-role family member a button that would just 403. Always
+            reachable once shown: unlike editing affordances, this isn't a
+            hover-only hitbox. */}
+        {data.canEdit && (
+          <button type="button" className="book-view__order-cta" onClick={() => setOrderingOpen(true)}>
+            Order this book
+          </button>
+        )}
       </header>
+
+      {checkoutCancelled && (
+        <div className="book-view__checkout-cancelled" role="status">
+          <span>Checkout was cancelled — you weren't charged.</span>
+          <button type="button" aria-label="Dismiss" onClick={() => setCheckoutCancelled(false)}>
+            ×
+          </button>
+        </div>
+      )}
 
       {data.canEdit && <FirstVisitHint />}
 

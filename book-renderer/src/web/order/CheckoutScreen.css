@@ -1,0 +1,209 @@
+.checkout-screen {
+  /* dvh, not vh: keeps the submit button reachable above a mobile on-screen
+     keyboard rather than pinned behind it (repo UX rule: keyboard-safe
+     inputs — same pattern as LoginScreen.css). */
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+.checkout-screen__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--color-white);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.checkout-screen__back {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-ink2);
+}
+
+.checkout-screen__title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.checkout-screen__body {
+  max-width: 480px;
+  width: 100%;
+  margin: 0 auto;
+  /* Normal document flow, never fixed — the form and its submit button
+     scroll with the page, so an opening keyboard on mobile never covers
+     either. */
+  padding: 24px 20px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.checkout-screen__freeze-notice {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-ink2);
+  background: var(--lavender-pale);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.checkout-screen__hint {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--color-ink2);
+}
+
+.checkout-screen__error {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-primaryDark);
+  background: var(--color-primaryTint);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin: 0;
+}
+
+/* -- Address form -- */
+
+.address-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.address-form__row {
+  display: flex;
+  gap: 12px;
+}
+
+.address-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.address-field--grow {
+  flex: 2;
+}
+
+.address-field__label {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-ink2);
+  font-weight: 600;
+}
+
+.address-field__input {
+  font-family: var(--font-sans);
+  /* >=16px prevents iOS Safari auto-zoom on focus (repo UX rule). */
+  font-size: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  width: 100%;
+}
+
+.address-field__input:focus {
+  outline: none;
+  border-color: var(--lavender-deep);
+}
+
+.address-field__select {
+  appearance: auto;
+}
+
+.address-form__submit {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--color-primary);
+  color: var(--color-white);
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+.address-form__submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* -- Quote -- */
+
+.checkout-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.checkout-quote__lines {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  padding: 16px;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
+
+.checkout-quote__lines dt {
+  color: var(--color-ink2);
+}
+
+.checkout-quote__lines dd {
+  margin: 0;
+  text-align: right;
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.checkout-quote__total-label,
+.checkout-quote__total-value {
+  border-top: 1px solid var(--color-border);
+  padding-top: 8px;
+  margin-top: 2px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.checkout-quote__tax-note {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-ink3);
+  margin: 0;
+}
+
+.checkout-quote__pay {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--color-primary);
+  color: var(--color-white);
+  cursor: pointer;
+}
+
+.checkout-quote__pay:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

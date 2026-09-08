@@ -1,8 +1,9 @@
 import { parseManifest, parseOutline } from '../../model/loader';
 import type { BookManifest, BookOutline } from '../../model/types';
 import { COVER_SLOT_KEY, isFurnitureKey, type MemoryBookEditsShape } from '../../model/edits';
-import type { MemoryBookRow } from '../types';
+import type { MemoryBookOrderRow, MemoryBookOrderStatus, MemoryBookRow } from '../types';
 import type { PickerPoolItem, PickerPoolPage, SaveEditInput, SaveEditResult } from '../edits/editsApi';
+import type { ShippingAddressInput } from '../order/types';
 
 /**
  * DEV-ONLY fixture mode (owner-approved follow-up round: "diagnose live" —
@@ -275,4 +276,229 @@ export function fixtureMediaUrls(slug: string, keys: string[]): Map<string, stri
   const out = new Map<string, string>();
   for (const key of keys) out.set(key, fixtureAssetUrl(slug, key));
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Orders store (memory-book-5c plan Step 6) — mocks every
+// `memory-book-orders` op (`create_draft`/`quote`/`create_checkout`) AND the
+// buyer-scoped `memory_book_orders` SELECT `useOrderStatus.ts` reads
+// directly, so the whole "Order this book" → address → quote → pay →
+// order-status flow is interactively verifiable without a running Supabase
+// backend, Stripe, Prodigi, or the render worker — no real network call, no
+// real money, ever. Same two-layer shape as the edits store above: an
+// in-memory object is the ground truth every read/write goes through first
+// (also what makes this testable under vitest's `environment: 'node'`, which
+// has no `window`), best-effort mirrored into `sessionStorage` so a same-tab
+// reload (or navigating away to `/order/<id>` and back) still shows a
+// consistent order instead of resetting to nothing.
+// ---------------------------------------------------------------------------
+
+export interface FixtureOrder {
+  id: string;
+  bookId: string;
+  status: MemoryBookOrderStatus;
+  priceCents: number | null;
+  shippingCostCents: number | null;
+  currency: string;
+  quotedPageCount: number | null;
+  shippingAddress: ShippingAddressInput | null;
+  prodigiOrderId: string | null;
+  failureReason: string | null;
+  refundedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const ORDERS_STORAGE_KEY = 'momora-fixture-orders';
+// Placeholder figures only — the real price is config-driven and TBD
+// (plan §"Resolved owner decisions": "Still pending: the PRICE itself"); the
+// shipping figure mirrors prodigi-order-spec.md §6's own indicative Spain
+// shipping cost ($16.22) purely as a plausible-looking anchor, not a real
+// Prodigi quote.
+const FIXTURE_PRICE_CENTS = 4900;
+const FIXTURE_SHIPPING_CENTS = 1622;
+const FIXTURE_PAGE_COUNT = 64;
+
+let ordersMemoryStore: Record<string, FixtureOrder> | null = null;
+
+/** The in-memory ground truth, lazily hydrated from `sessionStorage` (once)
+ * on first access. Every fixture order function reads/writes THIS object
+ * directly (never a fresh copy), then `persistOrdersStore()` best-effort
+ * mirrors it out — same shape `currentEdits`/`persistEdits` use above. */
+function ordersStore(): Record<string, FixtureOrder> {
+  if (ordersMemoryStore) return ordersMemoryStore;
+  if (typeof window !== 'undefined' && window.sessionStorage) {
+    try {
+      const raw = window.sessionStorage.getItem(ORDERS_STORAGE_KEY);
+      ordersMemoryStore = raw ? (JSON.parse(raw) as Record<string, FixtureOrder>) : {};
+      return ordersMemoryStore;
+    } catch {
+      // Fall through to a fresh in-memory store below.
+    }
+  }
+  ordersMemoryStore = {};
+  return ordersMemoryStore;
+}
+
+function persistOrdersStore(): void {
+  if (!ordersMemoryStore || typeof window === 'undefined' || !window.sessionStorage) return;
+  try {
+    window.sessionStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(ordersMemoryStore));
+  } catch {
+    // Best-effort only — dev diagnosis tooling, never a real data path.
+  }
+}
+
+let fixtureOrderCounter = 0;
+
+/** Fixture stand-in for `memory-book-orders`' `create_draft` op. */
+export function fixtureCreateOrderDraft(bookId: string): { orderId: string } {
+  const store = ordersStore();
+  fixtureOrderCounter += 1;
+  const id = `fixture-order-${bookId}-${Date.now()}-${fixtureOrderCounter}`;
+  const now = new Date().toISOString();
+  store[id] = {
+    id,
+    bookId,
+    status: 'draft',
+    priceCents: null,
+    shippingCostCents: null,
+    currency: 'usd',
+    quotedPageCount: null,
+    shippingAddress: null,
+    prodigiOrderId: null,
+    failureReason: null,
+    refundedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  persistOrdersStore();
+  return { orderId: id };
+}
+
+export interface FixtureQuoteResult {
+  orderId: string;
+  status: 'quoted';
+  priceCents: number;
+  shippingCostCents: number;
+  totalCents: number;
+  currency: string;
+  pageCount: number;
+}
+
+/** Fixture stand-in for the `quote` op — skips the real worker `/fit` +
+ * Prodigi `/quotes` calls and returns a fixed, plausible-looking bundle. */
+export function fixtureQuoteOrder(orderId: string, address: ShippingAddressInput): FixtureQuoteResult | { error: string } {
+  const store = ordersStore();
+  const order = store[orderId];
+  if (!order) return { error: 'Order not found' };
+  if (order.status !== 'draft') return { error: 'Order has already been quoted' };
+  order.status = 'quoted';
+  order.priceCents = FIXTURE_PRICE_CENTS;
+  order.shippingCostCents = FIXTURE_SHIPPING_CENTS;
+  order.quotedPageCount = FIXTURE_PAGE_COUNT;
+  order.shippingAddress = address;
+  order.updatedAt = new Date().toISOString();
+  store[orderId] = order;
+  persistOrdersStore();
+  return {
+    orderId,
+    status: 'quoted',
+    priceCents: order.priceCents,
+    shippingCostCents: order.shippingCostCents,
+    totalCents: order.priceCents + order.shippingCostCents,
+    currency: order.currency,
+    pageCount: order.quotedPageCount,
+  };
+}
+
+/** Fixture stand-in for `create_checkout` — no `checkoutUrl` (there is no
+ * Stripe session in fixture mode): real money can never move here, so "pay"
+ * jumps straight to a paid order, matching the task brief exactly ("pay"
+ * (mock jumps straight to a paid order)). The caller (`ordersApi.ts`) reads
+ * `checkoutUrl === null` as the signal to navigate client-side to
+ * `/order/<id>` instead of redirecting to Stripe. */
+export function fixtureCreateCheckout(orderId: string): { orderId: string } | { error: string } {
+  const store = ordersStore();
+  const order = store[orderId];
+  if (!order) return { error: 'Order not found' };
+  if (order.status !== 'quoted') return { error: 'Order has not been quoted' };
+  order.status = 'paid';
+  order.updatedAt = new Date().toISOString();
+  store[orderId] = order;
+  persistOrdersStore();
+  return { orderId };
+}
+
+/** Fixture stand-in for the buyer-scoped `memory_book_orders` SELECT
+ * `useOrderStatus.ts` reads directly in the real flow. */
+export function fixtureGetOrder(orderId: string): FixtureOrder | null {
+  return ordersStore()[orderId] ?? null;
+}
+
+export function fixtureOrderRow(order: FixtureOrder): MemoryBookOrderRow {
+  return {
+    id: order.id,
+    book_id: order.bookId,
+    status: order.status,
+    price_cents: order.priceCents,
+    shipping_cost_cents: order.shippingCostCents,
+    currency: order.currency,
+    quoted_page_count: order.quotedPageCount,
+    prodigi_order_id: order.prodigiOrderId,
+    failure_reason: order.failureReason,
+    refunded_at: order.refundedAt,
+    created_at: order.createdAt,
+    updated_at: order.updatedAt,
+  };
+}
+
+const FIXTURE_ORDER_JUMP_STATES: MemoryBookOrderStatus[] = [
+  'draft',
+  'quoted',
+  'paid',
+  'rendering',
+  'submitted',
+  'in_production',
+  'shipped',
+  'delivered',
+  'failed',
+  'cancelled',
+];
+
+/** Dev-only "state switcher" (task brief: "mock a state switcher or
+ * sequential progression") — `OrderStatusScreen`'s fixture-only control
+ * panel uses this to jump an order directly to ANY status, so every one of
+ * `orderStatusCopy.ts`'s ten states can be exercised interactively without a
+ * render worker, Prodigi, or a cron sweep to drive real progression. Setting
+ * `submitted` (or later) fills in a fake `prodigiOrderId` and `failed` fills
+ * in a fake `failureReason`, mirroring what the real workflow/sweep would
+ * have already set by the time a buyer could see that status. */
+export function fixtureSetOrderStatus(orderId: string, status: MemoryBookOrderStatus): FixtureOrder | null {
+  const store = ordersStore();
+  const order = store[orderId];
+  if (!order) return null;
+  order.status = status;
+  order.updatedAt = new Date().toISOString();
+  const hasProdigiOrderFrom: MemoryBookOrderStatus[] = ['submitted', 'in_production', 'shipped', 'delivered'];
+  order.prodigiOrderId = hasProdigiOrderFrom.includes(status) ? 'fixture-prodigi-order-id' : null;
+  order.failureReason = status === 'failed' ? 'Fixture-simulated failure — the render worker returned an error.' : null;
+  store[orderId] = order;
+  persistOrdersStore();
+  return order;
+}
+
+export function fixtureToggleOrderRefunded(orderId: string): FixtureOrder | null {
+  const store = ordersStore();
+  const order = store[orderId];
+  if (!order) return null;
+  order.refundedAt = order.refundedAt ? null : new Date().toISOString();
+  order.updatedAt = new Date().toISOString();
+  store[orderId] = order;
+  persistOrdersStore();
+  return order;
+}
+
+export function fixtureOrderJumpStates(): MemoryBookOrderStatus[] {
+  return FIXTURE_ORDER_JUMP_STATES;
 }

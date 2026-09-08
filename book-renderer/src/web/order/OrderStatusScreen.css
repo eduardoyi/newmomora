@@ -1,0 +1,192 @@
+.order-status {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+}
+
+.order-status--center {
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.order-status__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--color-white);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.order-status__back {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-ink2);
+}
+
+.order-status__title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.order-status__hint,
+.order-status__error {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--color-ink2);
+}
+
+.order-status__error {
+  color: var(--color-primaryDark);
+}
+
+.order-status__body {
+  max-width: 480px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.order-status__thanks {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--lavender-ink);
+  background: var(--lavender-pale);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  line-height: 1.4;
+}
+
+.order-status-chip {
+  align-self: flex-start;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-ink2);
+}
+
+.order-status-chip--positive {
+  background: var(--lavender-pale);
+  color: var(--lavender-ink);
+}
+
+.order-status-chip--negative {
+  background: #fde8e8;
+  color: #b42318;
+}
+
+.order-status-chip--neutral {
+  background: var(--color-surface);
+  color: var(--color-ink2);
+}
+
+.order-status__message {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  color: var(--color-ink);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.order-status__refunded {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-primaryDark);
+  background: var(--color-primaryTint);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin: 0;
+}
+
+.order-status__facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  margin: 8px 0 0;
+  padding: 14px 16px;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+.order-status__facts dt {
+  color: var(--color-ink3);
+}
+
+.order-status__facts dd {
+  margin: 0;
+  color: var(--color-ink);
+  text-align: right;
+  font-weight: 600;
+}
+
+.order-status__resume {
+  align-self: flex-start;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--color-primary);
+  color: var(--color-white);
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+/* DEV-ONLY fixture state switcher — see OrderStatusScreen.tsx's
+   FixtureOrderControls doc comment. Visually distinct (dashed border) so it
+   reads unmistakably as a diagnostic affordance, never mistaken for real
+   product UI during an interactive walkthrough. */
+.order-status__fixture-controls {
+  margin: 24px 20px;
+  padding: 12px 14px;
+  border: 1px dashed var(--color-borderStrong);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-ink2);
+}
+
+.order-status__fixture-label {
+  font-weight: 600;
+}
+
+.order-status__fixture-select {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-white);
+}
+
+.order-status__fixture-btn {
+  all: unset;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--color-primaryDark);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-primarySoft);
+}

@@ -1,18 +1,21 @@
 # Feature: Memory Book orders & fulfillment (V5c)
 
-**Status:** `orchestration-built` — the `memory_book_orders` schema/RLS
-(wave-1), and the `memory-book-orders` / `stripe-webhook` /
+**Status:** `checkout-ui-built` — the `memory_book_orders` schema/RLS
+(wave-1), the `memory-book-orders` / `stripe-webhook` /
 `workflow-memory-book-order-bridge` / `sweep-memory-book-orders` Edge
 Functions plus the Cloudflare order workflow
-(`cloudflare/memory-book-order-worker/`, wave-2, plan step 5) are now
-shipped, wired against the render worker's and Prodigi's DOCUMENTED
-contracts. The render worker itself (`render/memory-book-renderer/`, plan
-step 3) and the web checkout UI (`shop.usemomora.com`, plan step 6) are
-tracked separately — check their own state before assuming end-to-end
-checkout works; this change's own real-network calls (Stripe, Prodigi, the
-render worker) are entirely mocked in its test suite, per the task's
-"no real calls, no real money" scope. See "Implementation (wave-2)" below
-for the op/state contract as actually built, and
+(`cloudflare/memory-book-order-worker/`, wave-2, plan step 5), and now the
+`shop.usemomora.com` web checkout UI itself (`book-renderer/src/web/order/`,
+wave-3, plan step 6) are shipped. The render worker
+(`render/memory-book-renderer/`, plan step 3) is the one box still tracked
+separately — the web UI's `quote` op call reaches it through the Edge
+Function, but nothing in this repo has actually stood the render worker up
+yet, so a REAL quote/checkout still cannot complete end to end; the
+interactive DEV-only fixture-mode walkthrough (see "Implementation (wave-3)"
+below) is what wave-3 verified instead, per the task's "no real calls, no
+real money" scope carried forward from wave-2. See "Implementation
+(wave-2)"/"(wave-3)" below for the op/state contract and web UI as actually
+built, and
 [plans/memory-book-5c-checkout-fulfillment.md](../../plans/memory-book-5c-checkout-fulfillment.md)
 for the full hardened plan (Design Decisions 1-6, steps 1-7).
 **Last updated:** 2026-09-08
@@ -35,16 +38,21 @@ reorders — explicitly out of scope for the UI in this wave, but the
 one-row-per-order shape doesn't preclude it), and each attempt gets its own
 row, its own frozen snapshot, its own payment.
 
-## User-facing behavior (not yet built)
+## User-facing behavior
 
-Per the plan: "Order this book" from the book view (`shop.usemomora.com`)
-→ an address form → a quote (our price + real shipping, computed against
-Prodigi) → Stripe Checkout → a return URL order-status page that tracks the
-order through production and shipping until delivery. No human in the loop
-for the happy path (soft-launch exception below); every unhappy path alarms
-the owner rather than silently stranding a paid order.
+Per the plan, now built (wave-3): "Order this book" from the book view
+(`shop.usemomora.com`, `book-renderer/src/web/book/BookViewScreen.tsx`)
+→ an address form (`order/AddressForm.tsx`) → a quote (our price + real
+shipping, computed against Prodigi, `order/CheckoutScreen.tsx`) → Stripe
+Checkout → a return URL order-status page (`order/OrderStatusScreen.tsx`)
+that tracks the order through production and shipping until delivery. No
+human in the loop for the happy path (soft-launch exception below); every
+unhappy path alarms the owner rather than silently stranding a paid order.
+"Built" here means the UI itself, wired against the real
+`memory-book-orders` Edge Function contract — see this doc's Status line for
+what still blocks a REAL order (the render worker isn't stood up yet).
 
-## Architecture (planned — not yet built)
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -69,8 +77,10 @@ flowchart LR
 `memory-book-orders`, `stripe-webhook`, `workflow-memory-book-order-bridge`,
 `sweep-memory-book-orders`, and the Cloudflare order workflow
 (`cloudflare/memory-book-order-worker/`) are now built (this diagram's
-shape, as shipped) — the render worker (`RW` above) is the one box in this
-diagram still tracked separately (plan step 3).
+shape, as shipped), and `U` above (the web checkout UI) is now built too
+(wave-3) — the render worker (`RW` above) is the one box in this diagram
+still tracked separately (plan step 3), which is why a REAL order still
+cannot complete end to end even though every other box exists.
 
 ## Implementation (wave-2, this change)
 
@@ -200,6 +210,97 @@ bridge.
   every call in this change's test suite is mocked; the real-order canary
   (plan step 7) is the actual confirmation point, same as that doc already
   flags for the render pipeline's own SKU/spine values.
+
+## Implementation (wave-3, this change)
+
+The `shop.usemomora.com` web checkout UI (plan step 6), entirely inside
+`book-renderer/src/web/`:
+
+- **Router** (`web/router.ts`): adds `/order/<id>` alongside the existing
+  `/`/`/b/<id>` routes (the plan's routing correction — the hosting Worker
+  already serves deep paths in place; the real gap was this router only
+  knowing two screens). `navigate()` now re-derives the route from
+  `window.location.pathname` AFTER `pushState` rather than parsing its raw
+  `path` argument directly — needed once a path could carry a query string
+  (fixture mode's own `?fixture=<slug>`, see below), since the route
+  patterns are anchored with `$` and would otherwise fail to match.
+- **"Order this book" entry** (`web/book/BookViewScreen.tsx`): a header CTA,
+  visible only when `data.canEdit` (owner/manager — mirrors
+  `memory-book-orders`' own `create_draft` role check, so a viewer-role
+  family member never sees a button that would just 403). Opens
+  `CheckoutScreen` as a full-takeover screen (not a route of its own — the
+  plan's only new route is `/order/<id>`, Stripe's own return target).
+  `?checkout=cancelled` (Stripe's `cancel_url`) shows a one-time dismissible
+  "you weren't charged" notice, scrubbed from the URL via `replaceState`.
+- **`order/ordersApi.ts`**: thin client for `memory-book-orders`'
+  `create_draft`/`quote`/`create_checkout` ops, mirroring
+  `edits/editsApi.ts`'s shape exactly (JWT via `supabase.functions.invoke`,
+  same `FunctionsHttpError` body-unwrap for real error messages).
+- **`order/CheckoutScreen.tsx` + `order/AddressForm.tsx`**: address
+  (`SHIPS_TO_COUNTRIES` in `order/shippingCountries.ts` — see that file's
+  own header comment: `prodigi-order-spec.md` has NO enumerated shipsTo list
+  to hardcode from, so this is a curated, explicitly-flagged-as-unconfirmed
+  constants file, not a documented Prodigi fact) → quote (price + shipping +
+  "tax calculated at checkout" note, USD) → "Continue to payment", which
+  either redirects to Stripe's real `checkoutUrl` or (fixture mode only)
+  navigates straight to `/order/<id>` since fixture mode's mocked
+  `create_checkout` already jumped the order to `paid`. Every step repeats
+  Decision 6's edits-freeze notice. Keyboard-safe per the repo rule:
+  `100dvh` wrapper, 16px+ input font (iOS Safari zoom guard), submit button
+  in normal document flow (never `position: fixed`).
+- **`order/OrderStatusScreen.tsx` + `order/useOrderStatus.ts`**: reads via a
+  DIRECT `memory_book_orders` SELECT (RLS already scopes it to the buyer),
+  not the Edge Function's `status` op — the op's response omits `book_id`,
+  which this screen needs for its "back to your book" link, and the
+  function's own header comment already calls that op "a convenience...RLS
+  select already covers this." Polls every 5s while the order is
+  non-terminal (`order/orderStatusCopy.ts#isTerminalOrderStatus` —
+  `delivered`/`failed`/`cancelled` only; `refunded_at` never re-arms polling
+  since it's independent of `status`). Per-status copy includes the task's
+  exact required `failed` wording and deliberately never invents tracking
+  copy for `shipped` — the schema has no tracking column yet (see the sweep
+  contract above).
+- **Fixture-mode mocks** (`web/dev/fixture.ts`, extended): every order op
+  (`fixtureCreateOrderDraft`/`fixtureQuoteOrder`/`fixtureCreateCheckout`)
+  plus a "state switcher" (`fixtureSetOrderStatus`,
+  `fixtureOrderJumpStates()` — all ten statuses) and a refund toggle
+  (`fixtureToggleOrderRefunded`), rendered as a DEV-only control panel on
+  `OrderStatusScreen` (visually distinct — dashed border — so it never reads
+  as real product UI). Backed by an in-memory store (mirrors the existing
+  edits-store pattern; also what makes it unit-testable under vitest's
+  `environment: 'node'`, which has no `window`), best-effort mirrored to
+  `sessionStorage`. `create_checkout`'s mock has NO `checkoutUrl` (no real
+  Stripe session exists) — "pay" jumps straight to a paid order, per the
+  task brief exactly. `check-web-bundle.mjs`'s existing fixture-string scan
+  covers this extension with no changes needed (same `import.meta.env.DEV`
+  gating discipline every call site already follows) — verified: the
+  production `build:web` output contains zero occurrences of "fixture".
+- **Tests**: `order/__tests__/orderStatusCopy.test.ts` (all ten statuses
+  have copy; exact `failed` wording; no `shipped` tracking claim),
+  `shippingCountries.test.ts` (shape/uniqueness), `fixtureOrders.test.ts`
+  (the full draft→quote→pay→state-switcher→refund lifecycle against the
+  in-memory fixture store, under Node).
+- **Interactive verification**: `npx vite dev --config vite.web.config.ts
+  --port 5199` (or the `book-web` `.claude/launch.json` entry) +
+  `http://localhost:5199/web.html?fixture=enzo-year-one` — full mock
+  checkout (address → quote → pay), all ten `OrderStatusScreen` states via
+  the jump switcher, the refund toggle, the `checkout=cancelled` notice, and
+  mobile-viewport (375×812) keyboard-safety (the whole address form +
+  submit button fits above the fold with no fixed-position elements to be
+  covered by an on-screen keyboard).
+
+**Bug found and fixed during this change, not present before it:**
+`useRouter`'s `navigate(path)` originally re-derived the route from its raw
+`path` argument. Fixture-mode in-app navigation needs to append
+`?fixture=<slug>` to every target path (`App.tsx`'s `navigateInFixture`) so
+`getFixtureSlug()` — which every fixture-aware hook/API call re-reads fresh,
+not just once at mount — keeps finding it after a client-side route change.
+That surfaced the anchored-regex bug: `BOOK_PATH_PATTERN`/
+`ORDER_PATH_PATTERN` end in `$`, so a path carrying a trailing `?query`
+never matched and every such navigation silently fell back to `{screen:
+'list'}`. Fixed by having `navigate()` read `window.location.pathname`
+(the browser's own post-`pushState` parse, which is already query-string
+-free) instead of the raw argument — see `router.ts`'s own comment.
 
 ## Data model
 
@@ -395,16 +496,19 @@ is reachable from a client `UPDATE` (there isn't one).
 
 ## Client integration
 
-Not built. The eventual client (`shop.usemomora.com`, a route inside
-`book-renderer/src/web/` per the plan's routing correction — see
+Built (wave-3) — `shop.usemomora.com`'s `/order/<id>` route inside
+`book-renderer/src/web/` per the plan's routing correction (see
 [memory-book-generation.md](./memory-book-generation.md#client-integration)
-for the sibling web-app precedent) will: insert a bare `memory_book_orders`
-draft (`book_id`, `family_id`, `requested_by` only — every other field
-null per the RLS with-check), call `quote` with the address it collected,
-display the returned price/shipping, call `create_checkout`, redirect to
-Stripe, and land back on `/order/<id>` to poll `select`-visible status
-(RLS already restricts this to the buyer, so no separate authorization
-check is needed client-side beyond "am I logged in as the buyer").
+for the sibling web-app precedent). `book-renderer/src/web/order/` does
+exactly what this section previously described as planned: `create_draft`
+via the Edge Function op (not a direct client insert — see that op's own
+header comment for why it exists despite RLS allowing a bare-draft insert
+directly), `quote` with the collected address, display of the returned
+price/shipping, `create_checkout`, a redirect to Stripe, and `/order/<id>`
+polling a DIRECT `memory_book_orders` SELECT (RLS already restricts this to
+the buyer, so no separate client-side authorization check is needed beyond
+"am I logged in as the buyer") rather than the `status` op — see
+"Implementation (wave-3)" above for the full file-by-file breakdown.
 
 ## Extension guide
 
@@ -534,12 +638,43 @@ pgTAP). A wave-2 change adding the Edge Functions/workflow should add Deno
 tests for those, following the pattern documented in
 [memory-book-generation.md](./memory-book-generation.md#testing).
 
+### Web checkout UI (wave-3)
+
+`book-renderer`'s own suites (this table has no direct dependency on them,
+but they exercise the client code that reads/writes it):
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 494 passed (483 baseline + 11 new: `orderStatusCopy`,
+  `shippingCountries`, `fixtureOrders` lifecycle). Template snapshot tests
+  (`templates.test.tsx`, 31 tests) byte-identical — this change touches no
+  template/rendering code.
+- `npm run build:web` (`tsc --noEmit && vite build --config
+  vite.web.config.ts && check-web-bundle.mjs`) — green, including the
+  existing fixture-string bundle scan against the new order-mock code.
+- Interactive: dev server (`npx vite dev --config vite.web.config.ts --port
+  5199`) + `?fixture=enzo-year-one` — full mock checkout walkthrough (draft
+  → address → quote → pay → paid order), all ten `OrderStatusScreen` states
+  via the fixture jump switcher, the refund toggle, the
+  `?checkout=cancelled` notice, and mobile-viewport (375×812) keyboard
+  safety. Found and fixed a real bug in the process (see "Implementation
+  (wave-3)" above: `navigate()`'s anchored-regex/query-string interaction).
+
+Not covered by this change: a real Stripe test-mode payment, a real
+render-worker `/fit` call, or anything against a live Supabase project (all
+of that is the plan's step-7 canary, gated on the render worker existing).
+
 ### Run this feature's tests
 
 ```bash
 npm run db:reset   # applies migrations (incl. this one) against local Postgres
 npm test           # src/types/database.ts is exercised transitively across the suite
 npm run typecheck  # tsc --noEmit
+
+# book-renderer's own suites (web checkout UI, wave-3):
+cd book-renderer
+npx tsc --noEmit
+npx vitest run
+npm run build:web
 ```
 
 ## Changelog
@@ -548,3 +683,4 @@ npm run typecheck  # tsc --noEmit
 |------|--------|
 | 2026-09-08 | `memory_book_orders` schema + RLS shipped (plan step 4): buyer-scoped SELECT (not family-wide — round-3 finding), draft-only INSERT with every server-computed field null-locked, no client UPDATE/DELETE. `src/types/database.ts` hand-merged, `TECH_SPEC.md` §2.1f added, this feature doc created. Edge Functions, order workflow, render worker, and web checkout UI are separate, not-yet-shipped changes (plan steps 1-3, 5-7). |
 | 2026-09-08 | Orders orchestration shipped (plan step 5): `memory-book-orders`, `stripe-webhook`, `workflow-memory-book-order-bridge`, `sweep-memory-book-orders` Edge Functions + the Cloudflare order workflow (`cloudflare/memory-book-order-worker/`), all against MOCKED Stripe/Prodigi/render-worker calls (no real network, no real money — a later owner-gated canary). `create_checkout` does not itself transition `status`; `quoted -> paid` happens only in `stripe-webhook`. See "Implementation (wave-2)" above for the full op/state contract, secrets list, and documented deviations (CAS-based webhook idempotency, no `delivered` auto-transition, best-effort Prodigi field names). Render worker (step 3) and web checkout UI (step 6) remain separate, tracked elsewhere. |
+| 2026-09-08 | Web checkout UI shipped (plan step 6, final wave): "Order this book" entry, address → quote → Stripe-redirect checkout flow, `/order/<id>` route + `OrderStatusScreen` (direct RLS-scoped SELECT, honest per-status copy, polling), and DEV-only fixture-mode mocks for the whole flow (state switcher covering all ten statuses + refund toggle) — all inside `book-renderer/src/web/order/` + small router/App/BookViewScreen changes. See "Implementation (wave-3)" above for the full file-by-file breakdown, the router bug found and fixed along the way, and interactive verification evidence. Render worker (step 3) remains the one box not yet built — a real order still cannot complete end to end. |

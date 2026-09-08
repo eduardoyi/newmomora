@@ -48,6 +48,48 @@
   color: var(--color-ink2);
 }
 
+/* memory-book-5c plan Step 6: Stripe's cancel_url notice — same bar shape
+   as FirstVisitHint.css but its own color (neutral, not the lavender
+   affordance-hint tone) since this reports an outcome, not a tip. */
+.book-view__checkout-cancelled {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--color-surface);
+  color: var(--color-ink2);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.book-view__checkout-cancelled span {
+  flex: 1;
+  min-width: 0;
+}
+
+.book-view__checkout-cancelled button {
+  all: unset;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--color-ink3);
+  flex-shrink: 0;
+}
+
+/* memory-book-5c plan Step 6: the "Order this book" entry point. */
+.book-view__order-cta {
+  all: unset;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-white);
+}
+
 .book-view__error {
   font-family: var(--font-sans);
   font-size: 14px;

@@ -37,3 +37,36 @@ export interface MemoryBookEditsRow {
   edits: unknown;
   updated_at: string;
 }
+
+/** memory-book-5c plan Step 6: the buyer-scoped columns
+ * `OrderStatusScreen` reads via a direct `memory_book_orders` SELECT (RLS
+ * already restricts this to `requested_by = auth.uid()` -- see
+ * `docs/features/memory-book-orders.md#rls`). Keep in sync BY HAND with
+ * `supabase/migrations/20260908120000_memory_book_orders.sql` if it changes,
+ * same maintenance contract as `MemoryBookRow`/`MemoryBookEditsRow` above. */
+export type MemoryBookOrderStatus =
+  | 'draft'
+  | 'quoted'
+  | 'paid'
+  | 'rendering'
+  | 'submitted'
+  | 'in_production'
+  | 'shipped'
+  | 'delivered'
+  | 'failed'
+  | 'cancelled';
+
+export interface MemoryBookOrderRow {
+  id: string;
+  book_id: string;
+  status: MemoryBookOrderStatus;
+  price_cents: number | null;
+  shipping_cost_cents: number | null;
+  currency: string;
+  quoted_page_count: number | null;
+  prodigi_order_id: string | null;
+  failure_reason: string | null;
+  refunded_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
