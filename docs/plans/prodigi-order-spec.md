@@ -627,6 +627,13 @@ Consequences for our pipeline:
   NORMAL, not an error, and it is precisely the slot for post-order
   verification (download what Prodigi received / re-check rasters) before
   the release.
+- Cancelled orders VANISH from the Orders API (proven live 2026-09-09
+  against dashboard-cancelled production order ord_71952321275370496):
+  `GET /v4.0/Orders/{id}` answers **404 `EntityNotFound`** — there is no
+  queryable `Cancelled` stage after a dashboard cancellation, same family
+  as held orders being invisible. Any consumer polling order status must
+  treat a post-submission 404 as the cancellation signal (the sweep does,
+  with a grace window for read-model lag on fresh orders).
 - Lesson origin: the first sample order (ord_14448173) raced to
   production before two defects were caught (English furniture from a
   silent language fallback — now a hard error; Through-The-Years spread

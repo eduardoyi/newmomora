@@ -66,13 +66,17 @@ import { sendTransactionalEmailWithOutcome } from '../_shared/bento.ts';
 import { validateCronSecret } from '../_shared/cron.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
-import { getProdigiOrderStatus, type ProdigiOrderStatus } from '../_shared/prodigi.ts';
+import { getProdigiOrderStatus, ProdigiApiError, type ProdigiOrderStatus } from '../_shared/prodigi.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 const DEFAULT_ALERT_RECIPIENT = 'hello@usemomora.com';
 const PAID_RECONCILE_GRACE_MS = 2 * 60_000;
 const RENDERING_STALE_MS = 15 * 60_000;
 const NOT_IN_PRODUCTION_ALARM_MS = 4 * 60 * 60_000;
+// How long after submission a 404 from Prodigi's Orders API is trusted as
+// "cancelled" rather than a read-model lag on a just-created order — see
+// the poll's catch block for the full reasoning.
+const NOT_FOUND_CANCEL_GRACE_MS = 15 * 60_000;
 const STUCK_ALARM_MS = 10 * 24 * 60 * 60_000;
 const QUOTED_ABANDON_BACKSTOP_MS = 48 * 60 * 60_000;
 
@@ -298,24 +302,14 @@ async function trackProdigiOrders(
 
     if (!order.prodigi_order_id || !prodigiApiKey) continue;
     polled += 1;
-    let prodigiStatus;
-    try {
-      prodigiStatus = await getProdigiOrderStatus(dependencies.fetch, prodigiBaseUrl, prodigiApiKey, order.prodigi_order_id);
-    } catch {
-      console.error('sweep-memory-book-orders Prodigi poll failed', order.id);
-      continue;
-    }
 
-    // Cancelled at Prodigi (owner cancels during the 2h edit window, or
-    // Prodigi rejects/cancels an order themselves) -- mirror it onto our
-    // row so /orders doesn't show a phantom in-flight order. Checked BEFORE
-    // the stage-advance mapping: a `Cancelled` stage must never be
-    // reinterpreted as progress. `shipped` rows are never regressed (a book
-    // that already left the printer isn't un-shipped by a stale stage), and
-    // the owner is alerted because a paid order that will never ship needs a
-    // manual refund decision.
-    if (prodigiStatus.stage.toLowerCase().includes('cancel')) {
-      if (order.status === 'shipped') continue;
+    // Mirrors a Prodigi-side cancellation onto our row (never from
+    // `shipped` -- a book that already left the printer isn't un-shipped
+    // by a stale read) with a CAS on the current status, and alerts the
+    // owner: a paid order that will never ship needs a manual refund
+    // decision. Returns true when the row was actually flipped.
+    const mirrorCancellation = async (evidence: string): Promise<boolean> => {
+      if (order.status === 'shipped') return false;
       const { data: cancelled, error: cancelError } = await supabase
         .from('memory_book_orders')
         .update({ status: 'cancelled' })
@@ -323,15 +317,55 @@ async function trackProdigiOrders(
         .eq('status', order.status)
         .select('id')
         .maybeSingle();
-      if (!cancelError && cancelled) {
-        autoCancelled += 1;
-        await alertOwner(
-          dependencies.sendEmail,
-          order.id,
-          'CANCELLED_AT_PRODIGI',
-          `Prodigi reports order ${order.prodigi_order_id} as cancelled; the row (was "${order.status}") is now cancelled. If the buyer paid, decide on a refund.`,
-        );
+      if (cancelError || !cancelled) return false;
+      autoCancelled += 1;
+      await alertOwner(
+        dependencies.sendEmail,
+        order.id,
+        'CANCELLED_AT_PRODIGI',
+        `Prodigi order ${order.prodigi_order_id}: ${evidence}. The row (was "${order.status}") is now cancelled. If the buyer paid, decide on a refund.`,
+      );
+      return true;
+    };
+
+    let prodigiStatus;
+    try {
+      prodigiStatus = await getProdigiOrderStatus(dependencies.fetch, prodigiBaseUrl, prodigiApiKey, order.prodigi_order_id);
+    } catch (error) {
+      // Cancelled orders VANISH from Prodigi's Orders API entirely --
+      // `GET /v4.0/Orders/{id}` answers 404 `EntityNotFound`, it never
+      // reports a `Cancelled` stage (owner-proven live 2026-09-09 against
+      // a dashboard-cancelled production order; same API family as the V4
+      // lesson that edit-window-held orders are invisible). So a 404 on an
+      // order WE successfully submitted IS the cancellation signal --
+      // guarded twice: never within NOT_FOUND_CANCEL_GRACE_MS of
+      // submission (a just-created order can 404 transiently while
+      // Prodigi's read model catches up; a wrongly-cancelled fresh order
+      // would be a disaster), and never for a `shipped` row (inside
+      // `mirrorCancellation`). A systemic 404 cause (wrong
+      // PRODIGI_API_BASE_URL after a bad secret rotation) is bounded by
+      // the per-order owner alert -- mass alerts would surface it on the
+      // first sweep tick.
+      if (
+        error instanceof ProdigiApiError &&
+        error.status === 404 &&
+        Number.isFinite(referenceMs) &&
+        now - referenceMs > NOT_FOUND_CANCEL_GRACE_MS
+      ) {
+        await mirrorCancellation('gone from the Orders API (404 EntityNotFound — how Prodigi reports a cancelled order)');
+        continue;
       }
+      console.error('sweep-memory-book-orders Prodigi poll failed', order.id);
+      continue;
+    }
+
+    // Belt-and-braces: kept alongside the 404 path above in case an
+    // API-cancelled (vs dashboard-cancelled) order ever DOES surface a
+    // `Cancelled` stage before disappearing. Checked BEFORE the
+    // stage-advance mapping: a cancelled stage must never be reinterpreted
+    // as progress.
+    if (prodigiStatus.stage.toLowerCase().includes('cancel')) {
+      await mirrorCancellation('reports a cancelled stage');
       continue;
     }
 

@@ -382,6 +382,122 @@ Deno.test('post-submission tracking: a shipped stage with no tracking number yet
   });
 });
 
+Deno.test('auto-cancel: a Prodigi 404 (EntityNotFound) past the grace window cancels the row and alerts the owner', async () => {
+  // Cancelled orders VANISH from Prodigi's Orders API (owner-proven live
+  // 2026-09-09: GET on a dashboard-cancelled production order answers 404
+  // EntityNotFound, never a Cancelled stage) — the 404 IS the signal.
+  await withCronSecret(async () => {
+    const previousKey = Deno.env.get('PRODIGI_API_KEY');
+    Deno.env.set('PRODIGI_API_KEY', 'prodigi-test-key');
+    try {
+      const client = createStubClient(
+        {
+          memory_book_orders: [{
+            id: ORDER_ID_1, status: 'submitted', prodigi_order_id: 'prodigi-1', requested_by: BUYER_ID,
+            // Submitted well past the 15-minute not-found grace window.
+            workflow_completed_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+            updated_at: new Date(Date.now() - 60 * 60_000).toISOString(), tracking_number: null,
+          }],
+        },
+        { userEmail: 'buyer@example.com' },
+      );
+      const emails: Array<{ subject: string }> = [];
+      const response = await handleSweepMemoryBookOrders(requestFor(), {
+        createServiceClient: client,
+        fetch: async (url) => {
+          if (String(url).includes('/v4.0/Orders/')) {
+            return new Response(JSON.stringify({ outcome: 'EntityNotFound' }), { status: 404 });
+          }
+          return new Response('{}', { status: 200 });
+        },
+        sendEmail: async (input) => { emails.push(input); return 'sent'; },
+      });
+      const body = await response.json();
+      assertEquals(body.track.autoCancelled, 1);
+
+      const row = await (client() as unknown as { from: (t: string) => any }).from('memory_book_orders').select().eq('id', ORDER_ID_1).maybeSingle();
+      assertEquals(row.data?.status, 'cancelled');
+      assertEquals(emails.length, 1);
+      assertStringIncludes(emails[0].subject, 'CANCELLED_AT_PRODIGI');
+    } finally {
+      if (previousKey === undefined) Deno.env.delete('PRODIGI_API_KEY'); else Deno.env.set('PRODIGI_API_KEY', previousKey);
+    }
+  });
+});
+
+Deno.test('auto-cancel: a Prodigi 404 within the grace window is treated as read-model lag, not cancellation', async () => {
+  await withCronSecret(async () => {
+    const previousKey = Deno.env.get('PRODIGI_API_KEY');
+    Deno.env.set('PRODIGI_API_KEY', 'prodigi-test-key');
+    try {
+      const client = createStubClient(
+        {
+          memory_book_orders: [{
+            id: ORDER_ID_1, status: 'submitted', prodigi_order_id: 'prodigi-1', requested_by: BUYER_ID,
+            // JUST submitted — a transient 404 here must never cancel.
+            workflow_completed_at: new Date().toISOString(), updated_at: new Date().toISOString(), tracking_number: null,
+          }],
+        },
+        { userEmail: 'buyer@example.com' },
+      );
+      let emailSent = false;
+      const response = await handleSweepMemoryBookOrders(requestFor(), {
+        createServiceClient: client,
+        fetch: async (url) => {
+          if (String(url).includes('/v4.0/Orders/')) {
+            return new Response(JSON.stringify({ outcome: 'EntityNotFound' }), { status: 404 });
+          }
+          return new Response('{}', { status: 200 });
+        },
+        sendEmail: async () => { emailSent = true; return 'sent'; },
+      });
+      const body = await response.json();
+      assertEquals(body.track.autoCancelled, 0);
+      assertEquals(emailSent, false);
+
+      const row = await (client() as unknown as { from: (t: string) => any }).from('memory_book_orders').select().eq('id', ORDER_ID_1).maybeSingle();
+      assertEquals(row.data?.status, 'submitted');
+    } finally {
+      if (previousKey === undefined) Deno.env.delete('PRODIGI_API_KEY'); else Deno.env.set('PRODIGI_API_KEY', previousKey);
+    }
+  });
+});
+
+Deno.test('auto-cancel: a Prodigi 404 never regresses an already-shipped order', async () => {
+  await withCronSecret(async () => {
+    const previousKey = Deno.env.get('PRODIGI_API_KEY');
+    Deno.env.set('PRODIGI_API_KEY', 'prodigi-test-key');
+    try {
+      const client = createStubClient(
+        {
+          memory_book_orders: [{
+            id: ORDER_ID_1, status: 'shipped', prodigi_order_id: 'prodigi-1', requested_by: BUYER_ID,
+            workflow_completed_at: new Date(Date.now() - 60 * 60_000).toISOString(),
+            updated_at: new Date(Date.now() - 60 * 60_000).toISOString(), tracking_number: 'TRACK123',
+          }],
+        },
+        { userEmail: 'buyer@example.com' },
+      );
+      const response = await handleSweepMemoryBookOrders(requestFor(), {
+        createServiceClient: client,
+        fetch: async (url) => {
+          if (String(url).includes('/v4.0/Orders/')) {
+            return new Response(JSON.stringify({ outcome: 'EntityNotFound' }), { status: 404 });
+          }
+          return new Response('{}', { status: 200 });
+        },
+      });
+      const body = await response.json();
+      assertEquals(body.track.autoCancelled, 0);
+
+      const row = await (client() as unknown as { from: (t: string) => any }).from('memory_book_orders').select().eq('id', ORDER_ID_1).maybeSingle();
+      assertEquals(row.data?.status, 'shipped');
+    } finally {
+      if (previousKey === undefined) Deno.env.delete('PRODIGI_API_KEY'); else Deno.env.set('PRODIGI_API_KEY', previousKey);
+    }
+  });
+});
+
 Deno.test('auto-cancel: a Prodigi Cancelled stage cancels the row and alerts the owner', async () => {
   await withCronSecret(async () => {
     const previousKey = Deno.env.get('PRODIGI_API_KEY');

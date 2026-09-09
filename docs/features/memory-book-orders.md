@@ -603,13 +603,26 @@ contract each satisfies:
      re-sending the shipped email (that only fires on the `shipped`
      transition itself). The shipped email includes the tracking link (or
      a bare number) plus the carrier name when present.
-   - **Auto-cancel (owner request, 2026-09-09):** a Prodigi `Cancelled`
-     stage is checked BEFORE the stage-advance mapping and mirrors onto the
-     row as a `cancelled` CAS — from `submitted`/`in_production` only
-     (a `shipped` row is never regressed by a stale stage), with a
-     `CANCELLED_AT_PRODIGI` owner alert email on the transition: a paid
-     order that will never ship needs a manual refund decision. Reported as
-     `track.autoCancelled` in the sweep's JSON result.
+   - **Auto-cancel (owner request, 2026-09-09):** a Prodigi-side
+     cancellation mirrors onto the row as a `cancelled` CAS — from
+     `submitted`/`in_production` only (a `shipped` row is never regressed),
+     with a `CANCELLED_AT_PRODIGI` owner alert email on the transition: a
+     paid order that will never ship needs a manual refund decision.
+     Reported as `track.autoCancelled` in the sweep's JSON result.
+     **The actual signal is a 404** (owner-proven live, same day): a
+     cancelled order VANISHES from Prodigi's Orders API — `GET
+     /v4.0/Orders/{id}` answers 404 `EntityNotFound`, it never reports a
+     `Cancelled` stage (same API family as the V4 lesson that
+     edit-window-held orders are invisible). The sweep treats a 404 on an
+     order we successfully submitted as the cancellation, guarded by a
+     15-minute post-submission grace window (a just-created order can 404
+     transiently while Prodigi's read model catches up — a wrongly
+     cancelled fresh order would be a disaster). A `Cancelled` STAGE is
+     also still honored (belt-and-braces, in case an API-cancelled order
+     ever surfaces one before disappearing), checked before the
+     stage-advance mapping. A systemic 404 cause (e.g. a bad
+     `PRODIGI_API_BASE_URL` rotation) is bounded by the per-order owner
+     alerts — mass alerts would surface it on the first sweep tick.
 
 Both sweeps write only via service-role, same as every other writer of this
 table (see [RLS](#rls) below).
