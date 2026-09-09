@@ -912,9 +912,17 @@ finding, fixed). The overnight canary before it surfaced and fixed 14
 production defects end to end (see project memory / commit trail
 41f4b01..4c1dc99). Remaining for launch (owner ledger): Stripe account
 activation + Managed-Payments decision, price after the physical
-sample, STRIPE_AUTOMATIC_TAX re-enable, render-worker idle-self-exit
-cost optimization, tracking column + delivered advancement, country
-list confirmation. 5a.5 (in-app picker) is the last unbuilt slice.
+sample, STRIPE_AUTOMATIC_TAX re-enable — bundled with it (decided
+2026-09-09): persist the actual charged amount (`amount_total` from the
+`checkout.session.completed` webhook) into a column and display THAT as
+the order total, dropping OrderStatusScreen's "(plus tax, if
+applicable)" hedge; the webhook's amount verification must switch to
+comparing `amount_subtotal` against our quote at the same time, since
+with tax on `amount_total` = quote + tax and the current equality check
+would reject every taxed payment. Also: render-worker idle-self-exit
+cost optimization, delivered advancement (tracking columns landed
+2026-09-09, order-status UX round), country list confirmation. 5a.5
+(in-app picker) is the last unbuilt slice.
 
 ## 10. Open questions
 
