@@ -140,7 +140,8 @@ export function OrderStatusScreen({ orderId, onBackToBook }: { orderId: string; 
             flow (including draft/quoted/failed) should always see a way
             out that isn't "wait and hope". */}
         <p className="order-status__contact-hint">
-          Questions about your order? Just reply to your confirmation email.
+          Questions about your order? Just reply to your confirmation email or message us at{' '}
+          <a href="mailto:hello@usemomora.com">hello@usemomora.com</a>.
         </p>
       </div>
 

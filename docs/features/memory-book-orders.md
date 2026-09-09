@@ -84,7 +84,8 @@ unhappy path alarms the owner rather than silently stranding a paid order.
   prominent "Track your package" button (or a plain tracking number if
   Prodigi supplied no URL).
 - An always-visible **exit hatch**: "Questions about your order? Just
-  reply to your confirmation email." — small print at the bottom of
+  reply to your confirmation email or message us at hello@usemomora.com"
+  (the address is a mailto link) — small print at the bottom of
   `OrderStatusScreen`, shown regardless of status.
 
 ## Architecture
