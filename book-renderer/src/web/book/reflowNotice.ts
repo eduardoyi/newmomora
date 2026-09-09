@@ -21,6 +21,12 @@ export interface ReflowResult {
   /** True when the slot's page was full-bleed/panorama-spread BEFORE this
    * save and isn't anymore AFTER it. */
   demoted: boolean;
+  /** True when the slot's page IS full-bleed/panorama-spread AFTER the
+   * save — `BookViewScreen` combines this with the edit record's measured
+   * `originalWidth` to warn when a kept full-page swap sits between the
+   * user-chosen (250ppi) and strict (~294ppi) trust floors: admitted by
+   * the fitter, but worth a "may print slightly soft" heads-up. */
+  keptFullBleed: boolean;
 }
 
 /**
@@ -46,5 +52,9 @@ export function computeReflowResult(
   // regular spot" demotion — an orphaned slot (no after-page at all,
   // `rawIndex: null`) has nowhere to navigate to and nothing concrete to
   // report as "regular" instead.
-  return { rawIndex, demoted: Boolean(afterPage) && wasFullBleed && !isFullBleedNow };
+  return {
+    rawIndex,
+    demoted: Boolean(afterPage) && wasFullBleed && !isFullBleedNow,
+    keptFullBleed: isFullBleedNow,
+  };
 }

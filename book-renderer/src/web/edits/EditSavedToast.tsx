@@ -25,6 +25,7 @@ export function EditSavedToast({
   pending,
   undoing,
   demoted,
+  softFullBleed,
   onUndo,
   onDismiss,
 }: {
@@ -36,6 +37,13 @@ export function EditSavedToast({
    * sentence into the SAME toast rather than stacking a second one (the
    * brief: "don't stack confusingly — one combined toast is fine"). */
   demoted: boolean;
+  /** Owner decision 2026-09-09 (250ppi user-chosen floor): the swap KEPT
+   * its full-page treatment but its measured original sits between the
+   * user-chosen (250ppi) and strict (~294ppi) trust floors — admitted,
+   * with this honest heads-up instead of silence. Mutually exclusive with
+   * `demoted` in practice (a kept slot wasn't demoted); `demoted` wins the
+   * message if both were ever set. */
+  softFullBleed: boolean;
   onUndo: () => void;
   onDismiss: () => void;
 }) {
@@ -61,6 +69,12 @@ export function EditSavedToast({
           <span className="edit-saved-toast__demotion">
             {' '}
             This photo may be too small to print full-page, so it moved to a regular spot.
+          </span>
+        )}
+        {!demoted && softFullBleed && (
+          <span className="edit-saved-toast__demotion">
+            {' '}
+            Kept full-page — this photo is a little under our ideal print resolution, so it may print slightly soft.
           </span>
         )}
       </span>

@@ -1961,9 +1961,21 @@ describe('fitBook — user-chosen photos are exempt from the full-bleed crop-los
     expect(document.pages.filter((p) => p.templateId === 'full-bleed')).toHaveLength(1);
   });
 
-  it('user-chosen but low-res: the resolution trust gate is NOT waived — print quality is not a taste call', () => {
+  it('user-chosen 9:16 phone portrait (2268px wide): admitted under the 250ppi user-chosen floor (owner decision 2026-09-09)', () => {
     const manifest = makeManifest({
-      // Width 2000 < 2500: a full-page square crop of this prints soft.
+      // 2268 sits between the user-chosen floor (2126, 250ppi) and the
+      // strict machine floor (2500) — full-bleed for a deliberate swap,
+      // with the preview's soft-print warning carrying the honesty.
+      'mem-1': makeMemory({ assets: [{ ...makeAsset({ width: 2268, height: 4032, aspectRatio: 0.5625 }), editedFromFile: 'assets/original.jpg' }] }),
+    });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const { document } = fitBook(outline, manifest);
+    expect(document.pages.filter((p) => p.templateId === 'full-bleed')).toHaveLength(1);
+  });
+
+  it('user-chosen but below even the 250ppi floor: the resolution trust gate still demotes — print quality is not a taste call', () => {
+    const manifest = makeManifest({
+      // Width 2000 < 2126: a full-page square crop of this prints soft.
       'mem-1': makeMemory({ assets: [{ ...makeAsset({ width: 2000, height: 3333, aspectRatio: 0.6 }), editedFromFile: 'assets/original.jpg' }] }),
     });
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);

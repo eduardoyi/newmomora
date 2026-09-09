@@ -200,6 +200,20 @@ const FULL_BLEED_MIN_WIDTH_PX = 2551;
  */
 const FULL_BLEED_TRUSTED_MIN_WIDTH_PX = 2500;
 /**
+ * Owner decision 2026-09-09 (follow-up to the crop-gate exemption): a
+ * USER-CHOSEN photo (`asset.editedFromFile` set) gets a lower print-trust
+ * floor — 250ppi at the 216mm full-bleed edge (216/25.4*250 ≈ 2126), the
+ * accepted photo-book reading-distance standard — instead of the strict
+ * ~294ppi bar machine picks keep. This admits the single most common
+ * deliberate swap (a 9:16 phone portrait, 2268px wide) into full-bleed.
+ * Exported (with the strict floor) so the web preview can WARN when a
+ * kept full-bleed swap lands between the two floors ("may print slightly
+ * soft" — see `BookViewScreen.tsx`'s reflow toast): admitted, but never
+ * silently.
+ */
+export const FULL_BLEED_USER_CHOSEN_MIN_WIDTH_PX = 2126;
+export const FULL_BLEED_STRICT_MIN_WIDTH_PX = FULL_BLEED_TRUSTED_MIN_WIDTH_PX;
+/**
  * Round-7 item 2a: max fraction of the source image a square full-bleed
  * crop may discard. Round-8 item 5a: raised from 0.2 to 0.25 — a STANDARD
  * 4:3 photo (aspect 1.333, the single most common camera/phone aspect)
@@ -1439,13 +1453,17 @@ function scoreFullBleed(
   const maxCropLoss = isHero ? FULL_BLEED_HERO_MAX_CROP_LOSS : FULL_BLEED_MAX_CROP_LOSS;
   if (!cropGateWaived && fullBleedCropLoss(aspect) > maxCropLoss) return null;
   const trustedWidthPx = asset.originalWidth ?? asset.width;
+  // User-chosen photos also get the lower 250ppi trust floor (see
+  // FULL_BLEED_USER_CHOSEN_MIN_WIDTH_PX's doc comment) — admitted with a
+  // preview-side soft-print warning, never silently.
+  const minTrustedWidthPx = cropGateWaived ? FULL_BLEED_USER_CHOSEN_MIN_WIDTH_PX : FULL_BLEED_TRUSTED_MIN_WIDTH_PX;
   if (isHero) {
     // Trusted hero path (owner review round 3, item 2): bypasses the face
     // gate as human-reviewed interim, same as panorama's trusted
     // candidates — and is PREFERRED (a higher score than anchor-media's
     // 0.9 and a non-hero's own full-bleed score below), not merely
     // permitted, so a trusted hero actually wins the page.
-    if (trustedWidthPx >= FULL_BLEED_TRUSTED_MIN_WIDTH_PX) return 0.97;
+    if (trustedWidthPx >= minTrustedWidthPx) return 0.97;
     // Untrusted fallback: the original high-resolution + real-face-clearance
     // path, for whenever a genuine per-photo face-detection field lands
     // (currently unreachable — `hasFaceClearance` fails closed with no such
@@ -1458,7 +1476,7 @@ function scoreFullBleed(
   // with a print-safe original width and a crop loss within the (tighter)
   // non-hero bar may win it, heroes still prioritized first (0.97/0.9
   // above both beat this).
-  if (trustedWidthPx < FULL_BLEED_TRUSTED_MIN_WIDTH_PX) return null;
+  if (trustedWidthPx < minTrustedWidthPx) return null;
   return 0.91;
 }
 

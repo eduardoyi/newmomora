@@ -17,6 +17,7 @@ import { CheckoutScreen } from '../order/CheckoutScreen';
 import { useHasPastOrders } from '../order/useHasPastOrders';
 import { computeDuplicateAssetOccurrences } from './duplicateAssets';
 import { computeReflowResult } from './reflowNotice';
+import { FULL_BLEED_STRICT_MIN_WIDTH_PX, FULL_BLEED_USER_CHOSEN_MIN_WIDTH_PX } from '../../model/fitter';
 import type { UndoAction } from '../edits/editsApi';
 import type { MemoryBookEditsShape } from '../../model/edits';
 import type { BookPage } from '../../model/types';
@@ -177,18 +178,32 @@ export function BookViewScreen({
   // below reacts once the refitted `pages` actually lands, comparing
   // before/after via `computeReflowResult` (pure, no DOM, unit-tested on
   // its own).
-  const pendingReflowRef = useRef<{ slotKey: string; beforePages: BookPage[] } | null>(null);
+  const pendingReflowRef = useRef<{ slotKey: string; beforePages: BookPage[]; recordWidth: number | null } | null>(null);
   const [demoted, setDemoted] = useState(false);
+  // Owner decision 2026-09-09 (user-chosen 250ppi floor): a kept full-page
+  // swap whose measured original sits between the user-chosen and strict
+  // trust floors is admitted by the fitter but warned about here.
+  const [softFullBleed, setSoftFullBleed] = useState(false);
 
   const handleEditOverlaySaved = useCallback(
     (nextEdits: MemoryBookEditsShape, undo: UndoAction) => {
       setDemoted(false);
+      setSoftFullBleed(false);
       // Only an image edit (replace/cover/reset) can move a slot to a new
       // page or change its template — text/focalPoint saves never reflow,
       // so they skip the reflow bookkeeping entirely (`pendingReflowRef`
       // stays `null`, and the effect below no-ops for them).
+      // `recordWidth` is the just-saved record's server-measured original
+      // width (already client-side in `nextEdits`) — what the soft-print
+      // warning below compares against the strict floor.
       pendingReflowRef.current =
-        undo.category === 'images' && data ? { slotKey: undo.key, beforePages: data.document.pages } : null;
+        undo.category === 'images' && data
+          ? {
+              slotKey: undo.key,
+              beforePages: data.document.pages,
+              recordWidth: nextEdits.images?.[undo.key]?.originalWidth ?? null,
+            }
+          : null;
       handleEditsSaved(nextEdits, undo);
     },
     [data, handleEditsSaved],
@@ -201,6 +216,12 @@ export function BookViewScreen({
     const result = computeReflowResult(pending.beforePages, data.document.pages, pending.slotKey);
     if (result.rawIndex !== null) navigateToPageIndex(result.rawIndex);
     setDemoted(result.demoted);
+    setSoftFullBleed(
+      result.keptFullBleed &&
+        pending.recordWidth !== null &&
+        pending.recordWidth >= FULL_BLEED_USER_CHOSEN_MIN_WIDTH_PX &&
+        pending.recordWidth < FULL_BLEED_STRICT_MIN_WIDTH_PX,
+    );
   }, [data, navigateToPageIndex]);
 
   if (loading) {
@@ -343,6 +364,7 @@ export function BookViewScreen({
           pending={pendingUndo}
           undoing={undoing}
           demoted={demoted}
+          softFullBleed={softFullBleed}
           onUndo={() => void handleUndo()}
           onDismiss={dismissUndo}
         />
