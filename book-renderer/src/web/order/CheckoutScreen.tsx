@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AddressForm } from './AddressForm';
 import { createOrderDraft, quoteOrder, createCheckoutSession } from './ordersApi';
 import type { QuoteResult, ShippingAddressInput } from './types';
@@ -46,9 +46,22 @@ export function CheckoutScreen({
   useDocumentTitle('Order this book · Momora');
   const [step, setStep] = useState<Step>({ kind: 'starting' });
 
+  // StrictMode guard (dev-only issue): React's double-invoked mount effect
+  // fired createOrderDraft twice, leaving a stray empty draft row per
+  // checkout open — visible on /orders as a confusing "Not started" entry.
+  // The ref (which survives StrictMode's simulated remount) caches the
+  // in-flight dispatch per bookId; every effect invocation SUBSCRIBES to the
+  // cached promise rather than skipping outright, because under StrictMode
+  // the first invocation's cleanup has already cancelled its subscription —
+  // only the second invocation is live to apply the result.
+  const draftDispatch = useRef<{ bookId: string; promise: ReturnType<typeof createOrderDraft> } | null>(null);
+
   useEffect(() => {
+    if (draftDispatch.current?.bookId !== bookId) {
+      draftDispatch.current = { bookId, promise: createOrderDraft(bookId) };
+    }
     let cancelled = false;
-    void createOrderDraft(bookId).then((result) => {
+    void draftDispatch.current.promise.then((result) => {
       if (cancelled) return;
       if ('error' in result) {
         setStep({ kind: 'start_failed', error: result.error });
