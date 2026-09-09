@@ -881,9 +881,15 @@ Sequenced as three independently shippable slices:
     to R2, calls the workflow back, auto-stops. At current volume this
     costs cents/month; the Dockerfile keeps Hetzner (or any host) as the
     volume-crossover fallback (~daily rendering is the break-even).
-  - State-machine lessons from V4, baked in: turn OFF the account-wide 2h
-    Prodigi edit window before launch (held orders are INVISIBLE to the
-    Orders API); rejection can arrive via support email rather than API
+  - State-machine lessons from V4, baked in: the account-wide 2h Prodigi
+    edit window STAYS ON for production (owner decision 2026-09-09,
+    reversing the earlier turn-off lean): it's the safety window to catch
+    buyer mistakes (wrong address, wrong book) before print. Compatible
+    with the pipeline as built — the sweep's NOT_IN_PRODUCTION alarm
+    threshold is 4h (past the hold), and the status poller treats the
+    held stage as non-advancing normal (canary-proven). The original
+    concern (held orders invisible to the Orders API) is mitigated by
+    that alarm; rejection can arrive via support email rather than API
     status, so "submitted but not in production within N hours" raises an
     alert — webhook trust alone is not enough; asset presigned URLs must
     comfortably outlive Prodigi's download window.

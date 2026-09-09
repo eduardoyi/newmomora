@@ -613,11 +613,15 @@ previously optional, silently falling back to the fitter's 9mm placeholder
 default) — a real order's cover must always use the exact Prodigi-quoted
 width for that book's real page count, never a guessed/default value.
 
-## Order edit window (owner-configured 2026-08-29)
+## Order edit window (owner-configured 2026-08-29; KEPT for production, owner decision 2026-09-09)
 
-The Prodigi dashboard now holds every new order for **2 hours** before
+The Prodigi dashboard holds every new order for **2 hours** before
 production ("Order edit window"), during which it can be edited or
-cancelled. Consequences for our pipeline:
+cancelled. Decided kept for production launch: it's the window to catch
+buyer mistakes (wrong address, wrong book state) before print — the
+sweep's 4h NOT_IN_PRODUCTION alarm sits safely past it, and the status
+poller treats the held stage as non-advancing normal.
+Consequences for our pipeline:
 - API order creation outcomes change: a new order sits in a paused stage
   before `inProduction` — the status poller must treat that stage as
   NORMAL, not an error, and it is precisely the slot for post-order
