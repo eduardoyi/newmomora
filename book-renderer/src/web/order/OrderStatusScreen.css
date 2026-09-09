@@ -136,6 +136,42 @@
   font-weight: 600;
 }
 
+.order-status__tracking {
+  margin-top: 4px;
+}
+
+.order-status__tracking-btn {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: var(--color-white);
+  text-decoration: none;
+}
+
+.order-status__tracking-plain {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-ink2);
+  margin: 0;
+}
+
+.order-status__tracking-plain span {
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.order-status__contact-hint {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-ink3);
+  margin: 20px 0 0;
+}
+
 .order-status__resume {
   align-self: flex-start;
   font-family: var(--font-sans);

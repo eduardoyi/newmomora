@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useOrderStatus } from './useOrderStatus';
 import { orderStatusCopy } from './orderStatusCopy';
+import { showsProgressStepper } from './orderProgressSteps';
+import { OrderProgressStepper } from './OrderProgressStepper';
 import { useDocumentTitle } from '../useDocumentTitle';
 import {
   getFixtureSlug,
@@ -74,6 +76,40 @@ export function OrderStatusScreen({ orderId, onBackToBook }: { orderId: string; 
           </p>
         )}
 
+        {/* Item 1: paid→delivered progress bar. Deliberately gated on
+            `showsProgressStepper` (draft/quoted -- nothing paid yet --
+            failed/cancelled/refunded already have their own full-width
+            copy above, and a stepper next to it would read as a
+            half-filled, contradictory "still on track" bar). */}
+        {showsProgressStepper(order.status, order.refunded_at) && (
+          <OrderProgressStepper status={order.status} carrier={order.carrier} />
+        )}
+
+        {/* Item 3: a prominent tracking CTA once the sweep has persisted
+            something to show -- a real button when Prodigi gave a URL,
+            a plain (non-clickable) number when it only gave that. Shown
+            regardless of the exact status (`shipped` and later) so it
+            keeps working after `delivered` too. */}
+        {(order.tracking_url || order.tracking_number) && (
+          <div className="order-status__tracking">
+            {order.tracking_url ? (
+              <a
+                className="order-status__tracking-btn"
+                href={order.tracking_url}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                Track your package
+              </a>
+            ) : (
+              <p className="order-status__tracking-plain">
+                Tracking number: <span>{order.tracking_number}</span>
+                {order.carrier ? ` (${order.carrier})` : ''}
+              </p>
+            )}
+          </div>
+        )}
+
         <dl className="order-status__facts">
           {order.price_cents !== null && order.shipping_cost_cents !== null && (
             <>
@@ -98,6 +134,14 @@ export function OrderStatusScreen({ orderId, onBackToBook }: { orderId: string; 
             Back to your book
           </button>
         )}
+
+        {/* Item 4: the exit hatch -- always visible, small print, no
+            conditional gating on status. A buyer stuck anywhere in this
+            flow (including draft/quoted/failed) should always see a way
+            out that isn't "wait and hope". */}
+        <p className="order-status__contact-hint">
+          Questions about your order? Just reply to your confirmation email.
+        </p>
       </div>
 
       {import.meta.env.DEV && getFixtureSlug() && (

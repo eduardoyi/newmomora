@@ -7,13 +7,16 @@ import type { MemoryBookOrderStatus } from '../types';
  * unit-tested without a DOM environment (this package's vitest config has no
  * jsdom -- see `vite.config.ts`'s `test` block).
  *
- * `shipped` deliberately does NOT reference a tracking number/URL: the
- * `memory_book_orders` schema has no tracking column yet (see
- * `docs/features/memory-book-orders.md`'s Sweep contract -- "does NOT
- * advance to `delivered` ... no carrier-tracking integration exists in this
- * repo"). Inventing tracking copy here would show something print software
- * never populates. `OrderStatusScreen` renders a tracking link if/when the
- * schema ever grows one, but this module never asserts one exists.
+ * `shipped` deliberately does NOT reference a tracking number/URL inline --
+ * even though `memory_book_orders` now has `tracking_number`/`tracking_url`/
+ * `carrier` columns (order-status UX round, item 3, migration
+ * `20260909130000_memory_book_order_tracking.sql`), those are all null
+ * until the sweep actually extracts them from a real Prodigi shipment, so
+ * this STATIC per-status copy table still can't assert one exists. Actual
+ * tracking display is a dedicated, data-driven CTA on `OrderStatusScreen`
+ * (only rendered when the order row's tracking fields are non-null) and a
+ * carrier line on `OrderProgressStepper`'s `shipped` step -- never baked
+ * into this sentence.
  */
 export interface OrderStatusCopy {
   /** Short label for the status chip. */

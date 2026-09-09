@@ -23,6 +23,13 @@
   color: var(--color-wordmarkDot);
 }
 
+.book-list__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.book-list__orders-link,
 .book-list__signout {
   all: unset;
   cursor: pointer;

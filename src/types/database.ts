@@ -2511,6 +2511,7 @@ export type Database = {
         Row: {
           book_document_snapshot: Json | null
           book_id: string
+          carrier: string | null
           created_at: string
           currency: string
           edits_snapshot: Json | null
@@ -2528,6 +2529,8 @@ export type Database = {
           status: string
           stripe_payment_intent_id: string | null
           stripe_session_id: string | null
+          tracking_number: string | null
+          tracking_url: string | null
           updated_at: string
           workflow_attempt_id: string | null
           workflow_completed_at: string | null
@@ -2537,6 +2540,7 @@ export type Database = {
         Insert: {
           book_document_snapshot?: Json | null
           book_id: string
+          carrier?: string | null
           created_at?: string
           currency?: string
           edits_snapshot?: Json | null
@@ -2554,6 +2558,8 @@ export type Database = {
           status?: string
           stripe_payment_intent_id?: string | null
           stripe_session_id?: string | null
+          tracking_number?: string | null
+          tracking_url?: string | null
           updated_at?: string
           workflow_attempt_id?: string | null
           workflow_completed_at?: string | null
@@ -2563,6 +2569,7 @@ export type Database = {
         Update: {
           book_document_snapshot?: Json | null
           book_id?: string
+          carrier?: string | null
           created_at?: string
           currency?: string
           edits_snapshot?: Json | null
@@ -2580,6 +2587,8 @@ export type Database = {
           status?: string
           stripe_payment_intent_id?: string | null
           stripe_session_id?: string | null
+          tracking_number?: string | null
+          tracking_url?: string | null
           updated_at?: string
           workflow_attempt_id?: string | null
           workflow_completed_at?: string | null

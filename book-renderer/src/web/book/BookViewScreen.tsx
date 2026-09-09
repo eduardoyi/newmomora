@@ -14,6 +14,7 @@ import { useFitToViewportWidth } from './useFitToViewport';
 import { FirstVisitHint } from './FirstVisitHint';
 import { useDocumentTitle } from '../useDocumentTitle';
 import { CheckoutScreen } from '../order/CheckoutScreen';
+import { useHasPastOrders } from '../order/useHasPastOrders';
 import './BookViewScreen.css';
 
 const EMPTY_IN_BOOK: InBookAssets = { assetFiles: new Set(), mediaIds: new Set() };
@@ -32,6 +33,7 @@ export function BookViewScreen({
   bookId,
   onBack,
   onOrderPlaced,
+  onOpenOrders,
 }: {
   bookId: string;
   onBack: () => void;
@@ -40,11 +42,16 @@ export function BookViewScreen({
    * only — the real flow leaves the page for Stripe instead, see
    * `CheckoutScreen.tsx#handlePay`). The caller navigates to `/order/<id>`. */
   onOrderPlaced: (orderId: string) => void;
+  /** order-status UX round, item 2: navigates to `/orders`. Only surfaced
+   * next to "Order this book" once `useHasPastOrders` confirms the buyer
+   * has at least one — see that hook's own header comment. */
+  onOpenOrders: () => void;
 }) {
   const { loading, error, data, applyEditsPatch, handleEditsSaved, pendingUndo, undoing, handleUndo, dismissUndo } =
     useEditableBook(bookId);
   const [unitIndex, setUnitIndex] = useState(0);
   const [orderingOpen, setOrderingOpen] = useState(false);
+  const hasPastOrders = useHasPastOrders();
 
   // Stripe Checkout's `cancel_url` (memory-book-orders/index.ts's
   // `create_checkout` handler) lands back here as `/b/<id>?checkout=cancelled`
@@ -206,9 +213,16 @@ export function BookViewScreen({
             reachable once shown: unlike editing affordances, this isn't a
             hover-only hitbox. */}
         {data.canEdit && (
-          <button type="button" className="book-view__order-cta" onClick={() => setOrderingOpen(true)}>
-            Order this book
-          </button>
+          <div className="book-view__order-actions">
+            {hasPastOrders && (
+              <button type="button" className="book-view__orders-link" onClick={onOpenOrders}>
+                Your orders
+              </button>
+            )}
+            <button type="button" className="book-view__order-cta" onClick={() => setOrderingOpen(true)}>
+              Order this book
+            </button>
+          </div>
         )}
       </header>
 

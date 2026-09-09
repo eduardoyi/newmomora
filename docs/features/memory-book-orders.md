@@ -1,24 +1,25 @@
 # Feature: Memory Book orders & fulfillment (V5c)
 
-**Status:** `checkout-ui-built` — the `memory_book_orders` schema/RLS
-(wave-1), the `memory-book-orders` / `stripe-webhook` /
-`workflow-memory-book-order-bridge` / `sweep-memory-book-orders` Edge
-Functions plus the Cloudflare order workflow
-(`cloudflare/memory-book-order-worker/`, wave-2, plan step 5), and now the
+**Status:** `checkout-ui-built`, plus a follow-up order-status UX round
+(this change) — the `memory_book_orders` schema/RLS (wave-1), the
+`memory-book-orders` / `stripe-webhook` / `workflow-memory-book-order-bridge`
+/ `sweep-memory-book-orders` Edge Functions plus the Cloudflare order
+workflow (`cloudflare/memory-book-order-worker/`, wave-2, plan step 5), the
 `shop.usemomora.com` web checkout UI itself (`book-renderer/src/web/order/`,
-wave-3, plan step 6) are shipped. The render worker
-(`render/memory-book-renderer/`, plan step 3) is the one box still tracked
-separately — the web UI's `quote` op call reaches it through the Edge
-Function, but nothing in this repo has actually stood the render worker up
-yet, so a REAL quote/checkout still cannot complete end to end; the
-interactive DEV-only fixture-mode walkthrough (see "Implementation (wave-3)"
-below) is what wave-3 verified instead, per the task's "no real calls, no
-real money" scope carried forward from wave-2. See "Implementation
-(wave-2)"/"(wave-3)" below for the op/state contract and web UI as actually
-built, and
+wave-3, plan step 6), and now a paid→delivered progress stepper, a "Your
+orders" history screen, carrier tracking (schema + sweep extraction + UI),
+and an always-visible support exit hatch (this change, see "Implementation
+(order-status UX round)" below) are all shipped. 5c itself has since gone
+live and run a real order end to end via the canary (see the
+`memory-book 5c: ...` commits after wave-3) — this change's own interactive
+verification is still the DEV-only fixture-mode walkthrough (no real
+Stripe/Prodigi calls), same posture every prior wave in this doc used. The
+render worker box in the architecture diagram below is stood up as of the
+canary. See "Implementation (wave-2)"/"(wave-3)"/"(order-status UX round)"
+below for the op/state contract and UI as actually built, and
 [plans/memory-book-5c-checkout-fulfillment.md](../../plans/memory-book-5c-checkout-fulfillment.md)
 for the full hardened plan (Design Decisions 1-6, steps 1-7).
-**Last updated:** 2026-09-08
+**Last updated:** 2026-09-09
 **PRD reference:** none yet — canonical product doc is
 [docs/plans/memory-book.md](../plans/memory-book.md) §"V5 scope" 5c, plus
 this feature's own plan file above (§Design decisions, §8 data-model
@@ -49,8 +50,35 @@ that tracks the order through production and shipping until delivery. No
 human in the loop for the happy path (soft-launch exception below); every
 unhappy path alarms the owner rather than silently stranding a paid order.
 "Built" here means the UI itself, wired against the real
-`memory-book-orders` Edge Function contract — see this doc's Status line for
-what still blocks a REAL order (the render worker isn't stood up yet).
+`memory-book-orders` Edge Function contract.
+
+**Order-status UX round (this change), once the order is placed:**
+
+- `OrderStatusScreen` shows a linear **paid → delivered progress stepper**
+  (`order/OrderProgressStepper.tsx`) for every non-terminal-in-the-good-way
+  status from `paid` through `delivered` — completed steps checked, the
+  current step subtly pulsing, task-specified time hints ("about 10
+  minutes" while rendering, "4–6 days" while in production), and a carrier
+  line ("Shipped via DPD") once tracking exists. `failed`/`cancelled`, and
+  any order with `refunded_at` set (regardless of its underlying status),
+  render the screen's EXISTING full-width chip + message instead of a
+  half-filled bar — see `order/orderProgressSteps.ts#showsProgressStepper`.
+- A **"Your orders" history** at `/orders` (`order/OrdersListScreen.tsx` +
+  `order/useOrders.ts`) lists every order the signed-in buyer has ever
+  placed (RLS-scoped the same way `OrderStatusScreen` already is — see
+  [RLS](#rls)), joined against `memory_books` for a book title, newest
+  first, tap-through to `/order/<id>`. Reached from a quiet "Your orders"
+  link in `BookListScreen`'s header (always visible) and from
+  `BookViewScreen` next to "Order this book" (only once
+  `order/useHasPastOrders.ts` confirms the buyer has at least one).
+- **Carrier tracking**: once the sweep sees `shipped`, it persists
+  `tracking_number`/`tracking_url`/`carrier` (new columns, see
+  [Data model](#data-model) below) and `OrderStatusScreen` shows a
+  prominent "Track your package" button (or a plain tracking number if
+  Prodigi supplied no URL).
+- An always-visible **exit hatch**: "Questions about your order? Just
+  reply to your confirmation email." — small print at the bottom of
+  `OrderStatusScreen`, shown regardless of status.
 
 ## Architecture
 
@@ -302,6 +330,131 @@ never matched and every such navigation silently fell back to `{screen:
 (the browser's own post-`pushState` parse, which is already query-string
 -free) instead of the raw argument — see `router.ts`'s own comment.
 
+## Implementation (order-status UX round, this change)
+
+Approved follow-up round on top of the shipped wave-3 checkout UI, adding
+four items: a progress stepper, a "Your orders" history screen, carrier
+tracking (schema + sweep + UI), and a support exit hatch. All inside
+`book-renderer/src/web/order/` (client) and
+`supabase/functions/sweep-memory-book-orders/` (backend), plus one new
+migration.
+
+- **Migration** `20260909130000_memory_book_order_tracking.sql`: adds
+  `tracking_number`/`tracking_url`/`carrier` (all nullable) to
+  `memory_book_orders`, and extends (via `alter policy ... with check`,
+  not a drop/recreate) the existing bare-draft insert with-check to
+  null-lock all three — mirrors every other post-draft field's null-lock.
+  Verified against a local reset (`supabase db reset --local`, ports
+  temporarily shifted the same way prior Memory Book migrations document,
+  then reverted): the migration applies cleanly on top of the full history,
+  and a client insert pre-seeding `tracking_number` or `carrier` is
+  rejected by RLS (`insufficient_privilege`) while a bare draft still
+  succeeds. `src/types/database.ts` regenerated
+  (`supabase gen types typescript --local`) and hand-merged (only the three
+  new columns added, alphabetically, to `memory_book_orders`' `Row`/
+  `Insert`/`Update`).
+- **`order/orderProgressSteps.ts`** (new, pure): the six-step
+  `paid → rendering → submitted → in_production → shipped → delivered`
+  mapping — `showsProgressStepper(status, refundedAt)` decides stepper vs.
+  the screen's existing full-width copy (`false` for `draft`/`quoted`/
+  `failed`/`cancelled`, and for ANY status once `refunded_at` is set — the
+  task's explicit "failed/cancelled/refunded... instead of the stepper"
+  grouping), `currentProgressStepIndex`/`progressStepState` compute
+  done/current/upcoming per step. Task-exact time hints ("about 10
+  minutes" rendering, "4–6 days" in production); `delivered` renders every
+  step `done` (nothing pulses once the book has arrived).
+- **`order/OrderProgressStepper.tsx` + `.css`** (new): renders the six
+  steps — checkmark for done, a subtly pulsing ring for current (CSS
+  `@keyframes`, respects `prefers-reduced-motion`), a hollow dot for
+  upcoming — with a `carrier` prop that, only while `shipped` is current,
+  renders "Shipped via {carrier}" as that step's hint line (never a
+  fabricated delivery ETA — Prodigi/carrier don't give us one). Horizontal
+  row with connecting lines on desktop/tablet; collapses to a vertical list
+  (markers connected top-to-bottom) under 520px so six steps never have to
+  squeeze sideways on a phone.
+- **`OrderStatusScreen.tsx`** (extended, not replaced): renders
+  `OrderProgressStepper` right after the existing chip+message block when
+  `showsProgressStepper` is true; renders a "Track your package" button
+  when `tracking_url` is set, or a plain (non-clickable) "Tracking number:
+  …" line when only `tracking_number` is set; and an always-visible small-
+  print line — "Questions about your order? Just reply to your
+  confirmation email." — regardless of status (the task's exit-hatch
+  item). `useOrderStatus.ts`'s SELECT grew the three tracking columns.
+- **`order/OrdersListScreen.tsx` + `.css` + `order/useOrders.ts`** (new):
+  `/orders` (new `router.ts` pattern) lists the buyer's own orders —
+  RLS-scoped the same way `useOrderStatus.ts` already is, no extra filter
+  needed — joined against `memory_books` for a title (falls back to a
+  generic "Memory Book" label if that embed comes back null, e.g. the
+  buyer has since left the book's family), status chip (reusing
+  `orderStatusCopy.ts` + `OrderStatusScreen.css`'s chip classes rather than
+  redefining the tone→color mapping), date, total, "Refunded" badge, tap
+  → `/order/<id>`. Empty state: "No orders yet — once you order a printed
+  Memory Book, it'll show up here so you can track it." Polls every 5s
+  (matches every other polling hook in this app) while any listed order is
+  non-terminal.
+- **`order/useHasPastOrders.ts`** (new): a cheap `limit(1)` existence
+  check backing `BookViewScreen`'s "Your orders" link, which only renders
+  next to "Order this book" once the buyer actually has a past order (item
+  2's second entry point). `BookListScreen`'s header link is unconditional
+  (no book-scoped context there to gate on, and the empty-state copy on
+  `/orders` itself is honest either way).
+- **`supabase/functions/sweep-memory-book-orders/index.ts`**: new exported
+  `extractOrderTracking(shipments)` — defensively picks the first shipment
+  carrying a `trackingNumber` out of `_shared/prodigi.ts`'s already-parsed
+  shipments array; everything stays `null` if none do (never fabricated).
+  Called on the `submitted`/`in_production → shipped` transition, persisted
+  in the SAME update as the status CAS; also backfills onto an
+  already-`shipped` order with `tracking_number is null`, the first later
+  sweep pass Prodigi actually supplies one (without re-sending the shipped
+  email — that only fires on the transition itself). The shipped email's
+  tracking line now names the carrier when present
+  ("Track your delivery via DPD: …" / "Tracking number (DPD): …").
+- **Fixture-mode extensions** (`web/dev/fixture.ts`): `FixtureOrder` grew
+  `trackingNumber`/`trackingUrl`/`carrier`, populated with plausible mock
+  values by `fixtureSetOrderStatus` on `shipped`/`delivered` and cleared
+  otherwise (interactive-only, `check-web-bundle.mjs`'s fixture-string scan
+  still passes — verified, zero occurrences in the production `build:web`
+  output). `registerFixtureBookLabel`/`fixtureBookLabel` (called from
+  `loadFixtureBook`) give `fixtureListOrders()` a book title to attach to
+  each mock order row, mirroring the real `useOrders.ts` join.
+  `fixtureHasOrders()` backs `useHasPastOrders.ts`'s fixture branch.
+- **Tests**: `order/__tests__/orderProgressSteps.test.ts` (new — step
+  mapping, `showsProgressStepper` for every status × refunded combination,
+  done/current/upcoming state transitions, the delivered-is-fully-done
+  case); `orderStatusCopy.test.ts` (comment updated — tracking now exists
+  as a column but is still never baked into this STATIC copy table, only
+  into the dynamic stepper/CTA); `fixtureOrders.test.ts` (extended: tracking
+  populated/cleared per status; new `fixtureListOrders`/`fixtureHasOrders`
+  coverage); `supabase/functions/sweep-memory-book-orders/index.test.ts`
+  (extended: five `extractOrderTracking` unit tests covering empty/no-
+  number/number-only/full-shape/multiple-shipments shapes, plus sweep-level
+  tests for persist-on-shipped, no-tracking-yet, and the shipped-order
+  backfill path — all reading the stub DB back after the sweep runs to
+  assert exactly what was persisted).
+- **Interactive verification**: same dev server/fixture URL as wave-3 —
+  full checkout walkthrough, then all ten `OrderStatusScreen` states via
+  the jump switcher with the stepper/tracking CTA correct at each one
+  (`paid` through `delivered` show the stepper with checkmarks advancing
+  and the current step's hint/carrier line; `shipped`/`delivered` show
+  "Track your package"; `failed`/`cancelled`/a refunded `shipped` order all
+  fall back to the existing full-width copy, confirmed by toggling
+  "Mark refunded" on a `shipped` order and watching the stepper disappear),
+  the exit-hatch line always present, `/orders` listing every order for the
+  fixture session (newest first, correct status chips/totals, tap-through
+  to `/order/<id>` working), and 375×812 mobile viewport for both the
+  stepper (collapses to a vertical list, everything above the fold) and
+  `/orders` (cards stack cleanly).
+- **Deviation found, not fixed (flagged as a follow-up task instead):**
+  `CheckoutScreen.tsx`'s `create_draft` mount effect is not idempotent
+  under React StrictMode's dev-only double-invoke (`main.tsx` wraps the
+  app in `<StrictMode>`) — its `cancelled` flag only guards the `setStep`
+  call, not the `createOrderDraft(bookId)` call itself, so one real
+  "Order this book" click in the interactive fixture walkthrough left a
+  stray extra `draft` order in the fixture store, visible for the first
+  time now that `/orders` actually lists everything. DEV-only (StrictMode
+  double-invoke does not happen in a production build), pre-existing in
+  wave-3 code, and outside this round's four items — not fixed here.
+
 ## Data model
 
 | Table | Role |
@@ -316,7 +469,8 @@ Full column list and constraints:
 ```
 draft → quoted → paid → rendering → submitted → in_production → shipped → delivered
                                   ↘ failed (from any post-payment step)
-        ↘ cancelled (abandoned/expired checkout, pre-payment only)
+        ↘ cancelled (abandoned/expired checkout — pre-payment)
+                                  ↘ cancelled (order cancelled AT Prodigi, mirrored by the sweep — from submitted/in_production only, never shipped)
 ```
 
 | Status | Meaning | Who sets it | Snapshot required? |
@@ -326,9 +480,9 @@ draft → quoted → paid → rendering → submitted → in_production → ship
 | `paid` | Stripe payment succeeded. `book_document_snapshot`/`edits_snapshot` are frozen (see [Freeze semantics](#freeze-semantics)); `stripe_payment_intent_id` set. | `stripe-webhook`'s `checkout.session.completed` handler (service-role CAS `quoted → paid`), only after verifying `amount_total` matches the persisted quote and the session's shipping address matches the quoted one (round-3 defense in depth on the money path). | **Yes** |
 | `rendering` | The order workflow has been dispatched. `workflow_instance_id`, `workflow_attempt_id`, `workflow_started_at` set. | The webhook's dispatch of the Cloudflare order workflow, via a service-role CAS `paid → rendering` (mirrors `memory_books`' dispatcher CAS — see [memory-book-generation.md](./memory-book-generation.md#status-machine)). | Yes |
 | `submitted` | PDFs rendered, verified, and the Prodigi order placed (`prodigi_order_id` set). `workflow_completed_at` set — **this is where the order workflow ends** (Decision 4: short-lived, no multi-day sleeping instances). | The order workflow's final step, service-role CAS `rendering → submitted`, same attempt-id discipline as the generation pipeline's publish. | Yes |
-| `in_production` / `shipped` / `delivered` | Prodigi's own fulfillment states, mirrored in ours. `shipped` sends a tracking email. | The post-submission tracking sweep (see [Sweep contract](#sweep-contract)) — never the order workflow, which has already ended by `submitted`. | Yes |
+| `in_production` / `shipped` / `delivered` | Prodigi's own fulfillment states, mirrored in ours. `shipped` sends a tracking email and persists `tracking_number`/`tracking_url`/`carrier` (order-status UX round, item 3 — see [Sweep contract](#sweep-contract)). | The post-submission tracking sweep (see [Sweep contract](#sweep-contract)) — never the order workflow, which has already ended by `submitted`. | Yes |
 | `failed` | `failure_reason` populated. Reachable from `rendering`/`submitted`/any post-payment step whenever the workflow or the sweep hits an unrecoverable error. | The order workflow (a render/verify/submit failure) or the sweep (a Prodigi-side rejection surfaced via support email, not the API — see the plan's Prodigi-lessons context) — both service-role, both send the owner an alarm email (never strand a paid order). | Yes |
-| `cancelled` | Abandoned checkout — the order never reached `paid`. | The `stripe-webhook`'s `checkout.session.expired` handler (a cron-driven sweep ages a `quoted` order whose Checkout Session expired). | No (pre-payment) |
+| `cancelled` | Abandoned checkout (the order never reached `paid`) — OR the Prodigi order itself was cancelled after submission (owner cancels during Prodigi's edit window, or Prodigi rejects/cancels the order), mirrored onto the row by the sweep. | Pre-payment: the `stripe-webhook`'s `checkout.session.expired` handler / the sweep's quoted-order aging. Post-submission: the sweep's auto-cancel (Prodigi `Cancelled` stage → CAS to `cancelled` from `submitted`/`in_production` only — a `shipped` row is never regressed — plus a `CANCELLED_AT_PRODIGI` owner alert, since a paid order that will never ship needs a manual refund decision). | Pre-payment: no. Post-submission: yes (the row already carries one) |
 
 `workflow_started_at`/`workflow_completed_at` are **dedicated recovery
 clocks**, not `created_at`/`updated_at` — exactly like
@@ -376,11 +530,11 @@ leaves `status = 'shipped'` (or wherever the sweep has since moved it) with
 
 ### Sweep contract
 
-Two sweeps consume this table, both cron-secret Edge Functions following
-the existing `x-cron-secret` pattern
-(`schedule-daily-reminders`,
-[TECH_SPEC §4.7](../TECH_SPEC.md#47-schedule-daily-reminders)) — neither is
-built yet, but the contract each must satisfy is fixed by this schema:
+One cron-secret Edge Function, `sweep-memory-book-orders`, consumes this
+table (wave-2, built; scheduled every 10 minutes via pg_cron as of
+migration `20260909100000_schedule_memory_book_orders_sweep.sql`), plus
+`stripe-webhook`'s reactive handlers for the pre-payment side — the
+contract each satisfies:
 
 1. **Zero-dispatch reconciliation** (round-2 review, mirrors the
    gallery-import mark-before-dispatch pattern): periodically scans for any
@@ -394,12 +548,32 @@ built yet, but the contract each must satisfy is fixed by this schema:
    `memory_book_orders_active_status_idx` partial index —
    [TECH_SPEC §2.1f](../TECH_SPEC.md#21f-memory-book-orders--fulfillment-v5c)
    — exists specifically for this scan, plus dispatcher polling of `paid`/
-   `rendering`), advances the status as Prodigi's own state changes, sends
-   the tracking email on the `shipped` transition, and raises the "not
-   `in_production` within N hours" / "stuck > X days" alarms the plan calls
-   for. The plan notes Prodigi order webhooks were never investigated as an
-   alternative to polling — a wave-2 implementer should check for those
-   before building the sweep as pure polling.
+   `rendering`), advances the status as Prodigi's own state changes, and
+   raises the "not `in_production` within N hours" / "stuck > X days"
+   alarms the plan calls for. Prodigi order webhooks were checked for
+   (task item 4's explicit ask, documented in the sweep's own header
+   comment) and found not to exist in `docs/plans/prodigi-order-spec.md`'s
+   reference — this sweep is pure polling, as anticipated.
+   - **Tracking extraction (order-status UX round, item 3):** on the
+     `shipped` transition, `extractOrderTracking()`
+     (`supabase/functions/sweep-memory-book-orders/index.ts`) defensively
+     pulls the first shipment in Prodigi's `getProdigiOrderStatus()`
+     response that actually carries a tracking number and persists
+     `tracking_number`/`tracking_url`/`carrier` in the SAME update as the
+     status CAS — absent fields stay null, never fabricated (Prodigi can
+     report `shipped` before a tracking number exists). If an order is
+     ALREADY `shipped` with no tracking persisted yet, the sweep backfills
+     it the first later pass Prodigi actually supplies one, without
+     re-sending the shipped email (that only fires on the `shipped`
+     transition itself). The shipped email includes the tracking link (or
+     a bare number) plus the carrier name when present.
+   - **Auto-cancel (owner request, 2026-09-09):** a Prodigi `Cancelled`
+     stage is checked BEFORE the stage-advance mapping and mirrors onto the
+     row as a `cancelled` CAS — from `submitted`/`in_production` only
+     (a `shipped` row is never regressed by a stale stage), with a
+     `CANCELLED_AT_PRODIGI` owner alert email on the transition: a paid
+     order that will never ship needs a manual refund decision. Reported as
+     `track.autoCancelled` in the sweep's JSON result.
 
 Both sweeps write only via service-role, same as every other writer of this
 table (see [RLS](#rls) below).
@@ -433,10 +607,13 @@ design.
   the row only through the service-role `quote` op, so there is exactly one
   write path for it, matching every other quote-time field instead of a
   second, client-writable path), Stripe ids, Prodigi id, failure/refund
-  bookkeeping, and every CAS/clock field. Mirrors `memory_books`' insert
-  with-check line for line (round-2 review: a client must not be able to
-  seed a draft with a favorable price that `create_checkout` would then
-  trust).
+  bookkeeping, **tracking** (`tracking_number`/`tracking_url`/`carrier` —
+  added by migration `20260909130000_memory_book_order_tracking.sql`,
+  order-status UX round item 3; the with-check was extended, not replaced,
+  to null-lock these too), and every CAS/clock field. Mirrors
+  `memory_books`' insert with-check line for line (round-2 review: a
+  client must not be able to seed a draft with a favorable price that
+  `create_checkout` would then trust).
 - **No update or delete policy exists for `authenticated` at all**, and the
   table grants `authenticated` only `select, insert` — same "job is
   service-only" contract as `memory_books`/`memory_book_edits`
@@ -510,6 +687,19 @@ the buyer, so no separate client-side authorization check is needed beyond
 "am I logged in as the buyer") rather than the `status` op — see
 "Implementation (wave-3)" above for the full file-by-file breakdown.
 
+**Order-status UX round (this change)** adds a second route,
+`/orders` (`order/OrdersListScreen.tsx` + `order/useOrders.ts`) — also a
+direct client SELECT, this time joined against `memory_books` for a title
+(`select ..., book:memory_books(scope_label, child:family_members(name))`;
+RLS on `memory_books` is `is_family_member(family_id)`, so the buyer's own
+membership in the book's family already covers the embed, no extra check
+needed). `OrderStatusScreen` gained `order/OrderProgressStepper.tsx` (pure
+mapping logic in `order/orderProgressSteps.ts`) and a tracking CTA reading
+the row's `tracking_number`/`tracking_url`/`carrier`, both driven by the
+SAME existing SELECT with three more columns added
+(`order/useOrderStatus.ts`). See "Implementation (order-status UX round)"
+below for the full file-by-file breakdown.
+
 ## Extension guide
 
 **Safe to extend**
@@ -519,10 +709,12 @@ the buyer, so no separate client-side authorization check is needed beyond
   fields — do this as a `security definer` function or a narrow view, not
   by loosening the base table's `select` policy (which would put the PII
   fields right back in scope).
-- Add columns the wave-2 Edge Functions discover they need (e.g. a
-  `tracking_url`/`carrier` pair once the sweep is built) via a new
+- Add columns the wave-2 Edge Functions discover they need via a new
   migration; keep the "app inserts bare draft, service owns everything
-  else" boundary intact.
+  else" boundary intact. (Done for tracking — `tracking_number`/
+  `tracking_url`/`carrier`, order-status UX round item 3, migration
+  `20260909130000_memory_book_order_tracking.sql` — cited here as the
+  worked example this bullet originally anticipated.)
 
 **Do not change without updating this doc**
 
@@ -631,12 +823,14 @@ used):
 
 ### Not yet covered
 
-No Deno/Edge Function tests exist yet (there is no Edge Function to test).
 No pgTAP suite for this table (matches the precedent set by
 `memory_books`/`memory_book_edits` — both verified manually, not via
-pgTAP). A wave-2 change adding the Edge Functions/workflow should add Deno
-tests for those, following the pattern documented in
-[memory-book-generation.md](./memory-book-generation.md#testing).
+pgTAP). Deno/Edge Function tests DO now exist (wave-2's
+`sweep-memory-book-orders/index.test.ts` and its siblings, extended again
+by this round's tracking-extraction tests — see "Order-status UX round"
+below) — this note is left here only because it was wrong to delete
+outright; the original wave-1 claim ("no Edge Function to test") is simply
+no longer true.
 
 ### Web checkout UI (wave-3)
 
@@ -661,7 +855,46 @@ but they exercise the client code that reads/writes it):
 
 Not covered by this change: a real Stripe test-mode payment, a real
 render-worker `/fit` call, or anything against a live Supabase project (all
-of that is the plan's step-7 canary, gated on the render worker existing).
+of that is the plan's step-7 canary — since done, per this doc's Status
+line, though this specific UX round's own verification stayed fixture-only
+same as wave-3).
+
+### Order-status UX round (this change)
+
+- **Migration**: applied cleanly against the full local history
+  (`supabase db reset --local`, ports shifted/reverted); RLS null-lock on
+  the three new tracking columns verified via `psql` (a client insert
+  pre-seeding `tracking_number` or `carrier` rejected with
+  `insufficient_privilege`; a bare draft with no tracking columns still
+  succeeds). Types regenerated (`supabase gen types typescript --local`)
+  and hand-merged.
+- **`npm run test:edge`** (repo root, Deno) — 1551 passed (1543 baseline +
+  8 new: 5 `extractOrderTracking` unit tests + 3 sweep-level tests for
+  persist-on-shipped / no-tracking-yet / already-shipped backfill).
+- **`book-renderer`'s own suites**:
+  - `npx tsc --noEmit` — clean.
+  - `npx vitest run` — 504 passed (494 baseline + 10 new: 8
+    `orderProgressSteps` + 2 `fixtureOrders` list/hasOrders). Template
+    snapshot tests (`templates.test.tsx`, 31 tests) byte-identical — this
+    round touches no template/rendering code.
+  - `npm run build:web` — green, including the fixture-string bundle scan
+    against the new `fixtureListOrders`/`fixtureHasOrders`/
+    `registerFixtureBookLabel` code (zero "fixture" occurrences in the
+    production `web.html`/JS output).
+- **Interactive**: `npx vite dev --config vite.web.config.ts --port 5199`
+  + `?fixture=enzo-year-one` — full checkout walkthrough, all ten
+  `OrderStatusScreen` states via the jump switcher with the stepper/
+  tracking correct at each (screenshots taken at `paid` through
+  `delivered`, `failed`, `cancelled`, `draft`, and a refunded `shipped`
+  order — the last one confirming the stepper correctly disappears once
+  `refunded_at` is set even though `status` itself is still mid-flight),
+  375×812 mobile viewport for the stepper (collapses to a vertical list)
+  and `/orders` (cards stack cleanly), and `/orders` itself listing every
+  order for the session with correct chips/totals and tap-through.
+- **Deviation found, not fixed**: see "Implementation (order-status UX
+  round)" above — `CheckoutScreen.tsx`'s `create_draft` effect isn't
+  StrictMode-idempotent (DEV-only artifact, pre-existing in wave-3 code,
+  flagged as a follow-up rather than fixed in this round).
 
 ### Run this feature's tests
 
@@ -669,8 +902,9 @@ of that is the plan's step-7 canary, gated on the render worker existing).
 npm run db:reset   # applies migrations (incl. this one) against local Postgres
 npm test           # src/types/database.ts is exercised transitively across the suite
 npm run typecheck  # tsc --noEmit
+npm run test:edge  # Deno — Edge Function suites, incl. the sweep's tracking extraction
 
-# book-renderer's own suites (web checkout UI, wave-3):
+# book-renderer's own suites (web checkout UI + order-status UX round):
 cd book-renderer
 npx tsc --noEmit
 npx vitest run
@@ -684,3 +918,5 @@ npm run build:web
 | 2026-09-08 | `memory_book_orders` schema + RLS shipped (plan step 4): buyer-scoped SELECT (not family-wide — round-3 finding), draft-only INSERT with every server-computed field null-locked, no client UPDATE/DELETE. `src/types/database.ts` hand-merged, `TECH_SPEC.md` §2.1f added, this feature doc created. Edge Functions, order workflow, render worker, and web checkout UI are separate, not-yet-shipped changes (plan steps 1-3, 5-7). |
 | 2026-09-08 | Orders orchestration shipped (plan step 5): `memory-book-orders`, `stripe-webhook`, `workflow-memory-book-order-bridge`, `sweep-memory-book-orders` Edge Functions + the Cloudflare order workflow (`cloudflare/memory-book-order-worker/`), all against MOCKED Stripe/Prodigi/render-worker calls (no real network, no real money — a later owner-gated canary). `create_checkout` does not itself transition `status`; `quoted -> paid` happens only in `stripe-webhook`. See "Implementation (wave-2)" above for the full op/state contract, secrets list, and documented deviations (CAS-based webhook idempotency, no `delivered` auto-transition, best-effort Prodigi field names). Render worker (step 3) and web checkout UI (step 6) remain separate, tracked elsewhere. |
 | 2026-09-08 | Web checkout UI shipped (plan step 6, final wave): "Order this book" entry, address → quote → Stripe-redirect checkout flow, `/order/<id>` route + `OrderStatusScreen` (direct RLS-scoped SELECT, honest per-status copy, polling), and DEV-only fixture-mode mocks for the whole flow (state switcher covering all ten statuses + refund toggle) — all inside `book-renderer/src/web/order/` + small router/App/BookViewScreen changes. See "Implementation (wave-3)" above for the full file-by-file breakdown, the router bug found and fixed along the way, and interactive verification evidence. Render worker (step 3) remains the one box not yet built — a real order still cannot complete end to end. |
+| 2026-09-09 | 5c goes live — a real order runs end to end via the canary (see the `memory-book 5c: ...` commits between wave-3 and this row: sweep cron scheduling, a deep-link `/order/<id>` 307 fix in the hosting Worker, and workflow failure reasons surviving Cloudflare's step-retry boundary). |
+| 2026-09-09 | Order-status UX round shipped: paid→delivered progress stepper (`order/OrderProgressStepper.tsx` + `order/orderProgressSteps.ts`) with task-exact time hints and a carrier line on `shipped`; a "Your orders" history at `/orders` (`order/OrdersListScreen.tsx` + `order/useOrders.ts`, RLS-scoped like `OrderStatusScreen`, joined against `memory_books` for a title) reached from `BookListScreen`'s header and `BookViewScreen` (via `order/useHasPastOrders.ts`); carrier tracking end to end — migration `20260909130000_memory_book_order_tracking.sql` (`tracking_number`/`tracking_url`/`carrier`, null-locked on client insert like every other post-draft field), `sweep-memory-book-orders`'s new `extractOrderTracking()` (defensive Prodigi shipments parse, persisted on the `shipped` transition and backfilled onto an already-shipped order), a "Track your package" CTA, and a carrier-aware shipped email; and an always-visible support exit hatch. `src/types/database.ts` hand-merged, `TECH_SPEC.md` §2.1f + §4.24 updated, this doc updated (including several stale wave-1 claims fixed in passing — the sweep saying "neither built yet", "no Deno tests exist yet"). Baselines: `npm run test:edge` 1543→1551, `book-renderer`'s `npx vitest run` 494→504 (template snapshots byte-identical). Deviation found but explicitly NOT fixed in this round (flagged as a follow-up task instead): `CheckoutScreen.tsx`'s `create_draft` mount effect isn't idempotent under React StrictMode's dev-only double-invoke, leaving a stray extra draft order per checkout in the interactive fixture walkthrough — DEV-only, pre-existing in wave-3 code. See "Implementation (order-status UX round)" above for the full file-by-file breakdown and interactive verification evidence. |

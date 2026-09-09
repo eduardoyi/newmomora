@@ -77,6 +77,21 @@
 }
 
 /* memory-book-5c plan Step 6: the "Order this book" entry point. */
+.book-view__order-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.book-view__orders-link {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-ink2);
+}
+
 .book-view__order-cta {
   all: unset;
   cursor: pointer;

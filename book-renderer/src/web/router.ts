@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 export type Route =
   | { screen: 'list' }
   | { screen: 'book'; bookId: string }
-  | { screen: 'order'; orderId: string };
+  | { screen: 'order'; orderId: string }
+  | { screen: 'orders' };
 
 const BOOK_PATH_PATTERN = /^\/b\/([^/]+)\/?$/;
 // memory-book-5c plan Step 6 routing correction: the hosting Worker already
@@ -12,12 +13,18 @@ const BOOK_PATH_PATTERN = /^\/b\/([^/]+)\/?$/;
 // `success_url` target (`?checkout=success` query string, ignored by this
 // pathname-only matcher -- OrderStatusScreen reads that param itself).
 const ORDER_PATH_PATTERN = /^\/order\/([^/]+)\/?$/;
+// order-status UX round, item 2: the buyer's order HISTORY list -- plural,
+// no id segment, deliberately checked AFTER `ORDER_PATH_PATTERN` below so
+// there's no ambiguity even though the two patterns can't actually collide
+// (`/order/<id>` always has a segment after `order`, `/orders` never does).
+const ORDERS_PATH_PATTERN = /^\/orders\/?$/;
 
 function parsePath(pathname: string): Route {
   const bookMatch = BOOK_PATH_PATTERN.exec(pathname);
   if (bookMatch) return { screen: 'book', bookId: decodeURIComponent(bookMatch[1]) };
   const orderMatch = ORDER_PATH_PATTERN.exec(pathname);
   if (orderMatch) return { screen: 'order', orderId: decodeURIComponent(orderMatch[1]) };
+  if (ORDERS_PATH_PATTERN.test(pathname)) return { screen: 'orders' };
   return { screen: 'list' };
 }
 

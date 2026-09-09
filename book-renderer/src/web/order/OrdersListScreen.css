@@ -1,0 +1,134 @@
+.orders-list {
+  min-height: 100dvh;
+  background: var(--color-bg);
+}
+
+.orders-list__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--color-white);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.orders-list__back {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-ink2);
+}
+
+.orders-list__title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.orders-list__body {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.orders-list__hint {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--color-ink2);
+}
+
+.orders-list__error {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--color-primaryDark);
+  background: var(--color-primaryTint);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.orders-list__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.orders-list__item {
+  all: unset;
+  cursor: pointer;
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  transition: border-color 0.15s ease;
+}
+
+.orders-list__item:hover {
+  border-color: var(--lavender-mid);
+}
+
+.orders-list__item-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.orders-list__item-title {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.orders-list__item-date {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-ink3);
+  flex-shrink: 0;
+}
+
+.orders-list__item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.orders-list__item-total {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink2);
+}
+
+.orders-list__item-refunded {
+  align-self: flex-start;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-primaryDark);
+}
+
+/* Mobile: tighter padding, stack date under title if it wraps. Everything
+   above is already a single column, so this is a light touch only. */
+@media (max-width: 480px) {
+  .orders-list__body {
+    padding: 18px 16px 48px;
+  }
+
+  .orders-list__item-main {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+}

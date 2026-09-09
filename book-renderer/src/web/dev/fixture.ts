@@ -1,7 +1,7 @@
 import { parseManifest, parseOutline } from '../../model/loader';
 import type { BookManifest, BookOutline } from '../../model/types';
 import { COVER_SLOT_KEY, isFurnitureKey, type MemoryBookEditsShape } from '../../model/edits';
-import type { MemoryBookOrderRow, MemoryBookOrderStatus, MemoryBookRow } from '../types';
+import type { MemoryBookOrderListRow, MemoryBookOrderRow, MemoryBookOrderStatus, MemoryBookRow } from '../types';
 import type { PickerPoolItem, PickerPoolPage, SaveEditInput, SaveEditResult } from '../edits/editsApi';
 import type { ShippingAddressInput } from '../order/types';
 
@@ -29,6 +29,25 @@ import type { ShippingAddressInput } from '../order/types';
  */
 
 const FIXTURE_QUERY_PARAM = 'fixture';
+
+// ---------------------------------------------------------------------------
+// Book label cache -- see `registerFixtureBookLabel`'s call site in
+// `loadFixtureBook` below for why this exists (item 2's orders list needs a
+// title the orders store itself never sees).
+// ---------------------------------------------------------------------------
+const fixtureBookLabelCache = new Map<string, string>();
+
+function registerFixtureBookLabel(slug: string, label: string): void {
+  fixtureBookLabelCache.set(slug, label);
+}
+
+/** Falls back to the bare slug if the owning book hasn't loaded in THIS
+ * session yet (e.g. `OrdersListScreen` visited directly without opening the
+ * book first) -- a readable-enough placeholder for dev-only fixture mode,
+ * never shown in production. */
+function fixtureBookLabel(slug: string): string {
+  return fixtureBookLabelCache.get(slug) ?? slug;
+}
 
 /** The active `?fixture=<slug>` slug, DEV-only — always `null` in a
  * production build (both because the query param won't be set on a real
@@ -85,6 +104,15 @@ export async function loadFixtureBook(slug: string): Promise<FixtureBook> {
     book_document: { outline: outlineRaw, manifest: manifestRaw },
     child: { name: manifest.child.name },
   };
+  // memory-book-5c order-status UX round, item 2: `OrdersListScreen`'s
+  // fixture stand-in needs a book TITLE per order, which the orders store
+  // itself has no way to derive (it only ever sees a bare `bookId`). Cache
+  // it here, keyed by slug, the same "registered once the manifest is
+  // available" shape `registerFixturePool` already uses below -- same
+  // `child.name — scope.label` label `BookListScreen.tsx`/
+  // `BookViewScreen.tsx` build for their own headers, so a fixture order's
+  // list-row title matches the book's real on-screen name exactly.
+  registerFixtureBookLabel(slug, manifest.child.name ? `${manifest.child.name} — ${manifest.scope.label}` : manifest.scope.label);
   return { book, outline, manifest };
 }
 
@@ -305,6 +333,11 @@ export interface FixtureOrder {
   prodigiOrderId: string | null;
   failureReason: string | null;
   refundedAt: string | null;
+  /** memory-book-5c order-status UX round, item 3 -- mirrors the real
+   * `tracking_number`/`tracking_url`/`carrier` columns. */
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  carrier: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -369,6 +402,9 @@ export function fixtureCreateOrderDraft(bookId: string): { orderId: string } {
     prodigiOrderId: null,
     failureReason: null,
     refundedAt: null,
+    trackingNumber: null,
+    trackingUrl: null,
+    carrier: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -448,6 +484,9 @@ export function fixtureOrderRow(order: FixtureOrder): MemoryBookOrderRow {
     prodigi_order_id: order.prodigiOrderId,
     failure_reason: order.failureReason,
     refunded_at: order.refundedAt,
+    tracking_number: order.trackingNumber,
+    tracking_url: order.trackingUrl,
+    carrier: order.carrier,
     created_at: order.createdAt,
     updated_at: order.updatedAt,
   };
@@ -466,13 +505,24 @@ const FIXTURE_ORDER_JUMP_STATES: MemoryBookOrderStatus[] = [
   'cancelled',
 ];
 
+/** Mock tracking data (memory-book-5c order-status UX round, item 3) --
+ * Prodigi's shape via `_shared/prodigi.ts`'s shipments parse, NOT a real
+ * Prodigi response, same "placeholder figures only" posture as
+ * `FIXTURE_PRICE_CENTS` above. Lets the interactive walkthrough exercise
+ * the stepper's carrier line and `OrderStatusScreen`'s tracking CTA
+ * without a real sweep/Prodigi call. */
+const FIXTURE_TRACKING_NUMBER = 'FIXTURE1234567890';
+const FIXTURE_TRACKING_URL = 'https://example.com/track/FIXTURE1234567890';
+const FIXTURE_CARRIER = 'DPD';
+
 /** Dev-only "state switcher" (task brief: "mock a state switcher or
  * sequential progression") — `OrderStatusScreen`'s fixture-only control
  * panel uses this to jump an order directly to ANY status, so every one of
  * `orderStatusCopy.ts`'s ten states can be exercised interactively without a
  * render worker, Prodigi, or a cron sweep to drive real progression. Setting
- * `submitted` (or later) fills in a fake `prodigiOrderId` and `failed` fills
- * in a fake `failureReason`, mirroring what the real workflow/sweep would
+ * `submitted` (or later) fills in a fake `prodigiOrderId`, `failed` fills in
+ * a fake `failureReason`, and `shipped`/`delivered` fill in the fake
+ * tracking triple above -- mirroring what the real workflow/sweep would
  * have already set by the time a buyer could see that status. */
 export function fixtureSetOrderStatus(orderId: string, status: MemoryBookOrderStatus): FixtureOrder | null {
   const store = ordersStore();
@@ -483,6 +533,10 @@ export function fixtureSetOrderStatus(orderId: string, status: MemoryBookOrderSt
   const hasProdigiOrderFrom: MemoryBookOrderStatus[] = ['submitted', 'in_production', 'shipped', 'delivered'];
   order.prodigiOrderId = hasProdigiOrderFrom.includes(status) ? 'fixture-prodigi-order-id' : null;
   order.failureReason = status === 'failed' ? 'Fixture-simulated failure — the render worker returned an error.' : null;
+  const hasTrackingFrom: MemoryBookOrderStatus[] = ['shipped', 'delivered'];
+  order.trackingNumber = hasTrackingFrom.includes(status) ? FIXTURE_TRACKING_NUMBER : null;
+  order.trackingUrl = hasTrackingFrom.includes(status) ? FIXTURE_TRACKING_URL : null;
+  order.carrier = hasTrackingFrom.includes(status) ? FIXTURE_CARRIER : null;
   store[orderId] = order;
   persistOrdersStore();
   return order;
@@ -501,4 +555,33 @@ export function fixtureToggleOrderRefunded(orderId: string): FixtureOrder | null
 
 export function fixtureOrderJumpStates(): MemoryBookOrderStatus[] {
   return FIXTURE_ORDER_JUMP_STATES;
+}
+
+/** Fixture stand-in for `useOrders.ts`'s real `memory_book_orders` SELECT +
+ * `memory_books` join (memory-book-5c order-status UX round, item 2) --
+ * newest first, same ordering the real query uses. `book_title` comes from
+ * `fixtureBookLabel`, not the order itself (see that function's own doc
+ * comment on why a fixture order carries no title of its own). */
+export function fixtureListOrders(): MemoryBookOrderListRow[] {
+  const orders = Object.values(ordersStore());
+  return orders
+    .slice()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map((order) => ({
+      id: order.id,
+      book_id: order.bookId,
+      status: order.status,
+      price_cents: order.priceCents,
+      shipping_cost_cents: order.shippingCostCents,
+      currency: order.currency,
+      refunded_at: order.refundedAt,
+      created_at: order.createdAt,
+      book_title: fixtureBookLabel(order.bookId),
+    }));
+}
+
+/** Fixture stand-in for `useHasPastOrders.ts`'s real `limit(1)` existence
+ * check -- cheap enough here to just check the in-memory store's size. */
+export function fixtureHasOrders(): boolean {
+  return Object.keys(ordersStore()).length > 0;
 }

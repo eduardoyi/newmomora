@@ -1,0 +1,149 @@
+/* OrderProgressStepper.tsx (memory-book-5c order-status UX round, item 1).
+   Desktop/tablet: a horizontal row, markers connected by a line, label +
+   optional hint below each marker. Mobile (<520px, matches this app's other
+   single-column breakpoints): collapses to a vertical list — markers
+   connected by a vertical line down the left edge, label + hint to the
+   right — so six steps never have to squeeze into a narrow viewport. */
+
+.order-progress {
+  display: flex;
+  align-items: flex-start;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 4px 4px 0;
+}
+
+.order-progress__step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.order-progress__marker {
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-white);
+  border: 1.5px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.order-progress__step--done .order-progress__marker {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-white);
+}
+
+.order-progress__step--current .order-progress__marker {
+  background: var(--lavender-pale);
+  border-color: var(--color-primary);
+  animation: order-progress-pulse 1.8s ease-in-out infinite;
+}
+
+.order-progress__check {
+  width: 12px;
+  height: 12px;
+}
+
+.order-progress__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary);
+}
+
+.order-progress__step--upcoming .order-progress__dot {
+  background: var(--color-border);
+}
+
+.order-progress__connector {
+  position: absolute;
+  top: 10px;
+  left: calc(50% + 11px);
+  right: calc(-50% + 11px);
+  height: 2px;
+  background: var(--color-border);
+}
+
+.order-progress__step--done .order-progress__connector {
+  background: var(--color-primary);
+}
+
+.order-progress__text {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.order-progress__label {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-ink2);
+}
+
+.order-progress__step--done .order-progress__label,
+.order-progress__step--current .order-progress__label {
+  color: var(--color-ink);
+}
+
+.order-progress__hint {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--lavender-ink);
+}
+
+/* Subtle pulse -- opacity + a soft ring, never a jarring flash. Respects
+   reduced-motion below. */
+@keyframes order-progress-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--lavender-pale);
+  }
+  50% {
+    box-shadow: 0 0 0 5px var(--lavender-pale);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .order-progress__step--current .order-progress__marker {
+    animation: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .order-progress {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+    padding: 4px 4px 0 2px;
+  }
+
+  .order-progress__step {
+    flex-direction: row;
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .order-progress__text {
+    margin-top: 0;
+    margin-left: 12px;
+  }
+
+  .order-progress__connector {
+    top: 22px;
+    left: 10px;
+    right: auto;
+    width: 2px;
+    height: 14px;
+  }
+}

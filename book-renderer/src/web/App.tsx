@@ -3,6 +3,7 @@ import { LoginScreen } from './auth/LoginScreen';
 import { BookListScreen } from './books/BookListScreen';
 import { BookViewScreen } from './book/BookViewScreen';
 import { OrderStatusScreen } from './order/OrderStatusScreen';
+import { OrdersListScreen } from './order/OrdersListScreen';
 import { useRouter } from './router';
 import { getFixtureSlug } from './dev/fixture';
 
@@ -55,11 +56,21 @@ function FixtureApp({ bookId }: { bookId: string }) {
     );
   }
 
+  if (route.screen === 'orders') {
+    return (
+      <OrdersListScreen
+        onOpenOrder={(orderId) => navigateInFixture(`/order/${orderId}`)}
+        onBack={() => navigateInFixture(`/b/${bookId}`)}
+      />
+    );
+  }
+
   return (
     <BookViewScreen
       bookId={bookId}
       onBack={() => {}}
       onOrderPlaced={(orderId) => navigateInFixture(`/order/${orderId}`)}
+      onOpenOrders={() => navigateInFixture('/orders')}
     />
   );
 }
@@ -86,6 +97,7 @@ function AuthenticatedApp() {
         bookId={route.bookId}
         onBack={() => navigate('/')}
         onOrderPlaced={(orderId) => navigate(`/order/${orderId}`)}
+        onOpenOrders={() => navigate('/orders')}
       />
     );
   }
@@ -94,5 +106,9 @@ function AuthenticatedApp() {
     return <OrderStatusScreen orderId={route.orderId} onBackToBook={(bookId) => navigate(`/b/${bookId}`)} />;
   }
 
-  return <BookListScreen onOpenBook={(bookId) => navigate(`/b/${bookId}`)} />;
+  if (route.screen === 'orders') {
+    return <OrdersListScreen onOpenOrder={(orderId) => navigate(`/order/${orderId}`)} onBack={() => navigate('/')} />;
+  }
+
+  return <BookListScreen onOpenBook={(bookId) => navigate(`/b/${bookId}`)} onOpenOrders={() => navigate('/orders')} />;
 }

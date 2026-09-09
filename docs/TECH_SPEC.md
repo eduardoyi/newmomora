@@ -761,6 +761,17 @@ create table public.memory_book_orders (
   failure_reason             text,   -- required once status = 'failed'
   refunded_at                 timestamptz,  -- set by the charge.refunded webhook; independent of status
 
+  -- Carrier tracking (order-status UX round, item 3, migration
+  -- 20260909130000_memory_book_order_tracking.sql). All three null until
+  -- the sweep extracts them from Prodigi's shipments array on the
+  -- submitted/in_production -> shipped transition -- defensively parsed,
+  -- never fabricated (tracking_url/carrier can stay null even once
+  -- tracking_number is set). Service-role written only, same null-locked
+  -- insert with-check as every other post-draft field below.
+  tracking_number             text,
+  tracking_url                 text,
+  carrier                     text,
+
   -- CAS identity + recovery clocks for the (short-lived, ends at submission) order workflow
   workflow_instance_id       text unique,
   workflow_attempt_id         uuid,
@@ -800,9 +811,11 @@ is.
   the row to the exact bare-draft shape — `status = 'draft'` and **every**
   server-computed field null: both snapshots, price/quote/page-count,
   shipping (address included — it reaches the row only via the service-role
-  `quote` op), Stripe ids, Prodigi id, failure/refund bookkeeping, and every
-  CAS/clock field. Mirrors `memory_books`' insert with-check (§2.1d) line
-  for line.
+  `quote` op), Stripe ids, Prodigi id, failure/refund bookkeeping,
+  tracking (`tracking_number`/`tracking_url`/`carrier`, added by migration
+  `20260909130000_memory_book_order_tracking.sql` — the with-check was
+  extended, not replaced, to null-lock these too), and every CAS/clock
+  field. Mirrors `memory_books`' insert with-check (§2.1d) line for line.
 - **No update or delete policy exists for `authenticated` at all**, and the
   table grants `authenticated` only `select, insert` — same "job is
   service-only" contract as `memory_books`/`memory_book_edits`. Every state
@@ -2832,7 +2845,16 @@ pipeline), `mark_submitted`, `mark_failed`, `send_order_email`.
 **`sweep-memory-book-orders`** — `verify_jwt = false`, cron-secret.
 Zero-dispatch reconciliation, Prodigi status polling
 (`submitted -> in_production -> shipped`, no `delivered` auto-transition),
-stuck/not-in-production alarms, abandoned-quote aging backstop.
+stuck/not-in-production alarms, abandoned-quote aging backstop. On the
+`shipped` transition, `extractOrderTracking()` defensively pulls the first
+shipment carrying a tracking number out of Prodigi's already-parsed
+shipments array (order-status UX round, item 3) and persists
+`tracking_number`/`tracking_url`/`carrier` alongside the status update —
+absent fields stay null, never fabricated. Also backfills tracking onto an
+order already sitting in `shipped` with no tracking yet, the first later
+sweep pass where Prodigi actually supplies one (without re-sending the
+shipped email). The shipped-transition email includes the tracking link
+(or a plain number) plus carrier name when present.
 
 **`cloudflare/memory-book-order-worker`** — same repo pattern as
 `cloudflare/memory-book-worker` (own `wrangler.jsonc`/`package.json`, Node

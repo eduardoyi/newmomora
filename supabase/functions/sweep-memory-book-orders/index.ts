@@ -66,7 +66,7 @@ import { sendTransactionalEmailWithOutcome } from '../_shared/bento.ts';
 import { validateCronSecret } from '../_shared/cron.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
-import { getProdigiOrderStatus } from '../_shared/prodigi.ts';
+import { getProdigiOrderStatus, type ProdigiOrderStatus } from '../_shared/prodigi.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 const DEFAULT_ALERT_RECIPIENT = 'hello@usemomora.com';
@@ -217,6 +217,7 @@ interface ActiveOrderRow {
   requested_by: string | null;
   workflow_completed_at: string | null;
   updated_at: string;
+  tracking_number: string | null;
 }
 
 function mapProdigiStageToStatus(stage: string, hasTracking: boolean): 'in_production' | 'shipped' | null {
@@ -226,27 +227,53 @@ function mapProdigiStageToStatus(stage: string, hasTracking: boolean): 'in_produ
   return null;
 }
 
+export interface ExtractedOrderTracking {
+  tracking_number: string | null;
+  tracking_url: string | null;
+  carrier: string | null;
+}
+
+/** Order-status UX round, item 3: pulls the first shipment that actually
+ * carries a tracking number out of Prodigi's (already-parsed, see
+ * `_shared/prodigi.ts#getProdigiOrderStatus`) shipments array. Deliberately
+ * defensive -- an empty/no-tracking-number shipments array (Prodigi reports
+ * `shipped` before a carrier tracking number exists, which does happen) is
+ * NOT an error, it's just "nothing to persist yet": every field comes back
+ * `null`, never a fabricated placeholder. `tracking_url`/`carrier` can each
+ * independently be `null` even when `tracking_number` is set -- Prodigi
+ * doesn't guarantee either alongside a bare number. */
+export function extractOrderTracking(shipments: ProdigiOrderStatus['shipments']): ExtractedOrderTracking {
+  const shipment = shipments.find((candidate) => Boolean(candidate.trackingNumber));
+  if (!shipment) return { tracking_number: null, tracking_url: null, carrier: null };
+  return {
+    tracking_number: shipment.trackingNumber ?? null,
+    tracking_url: shipment.trackingUrl ?? null,
+    carrier: shipment.carrier ?? null,
+  };
+}
+
 async function trackProdigiOrders(
   dependencies: SweepDependencies,
   supabase: SupabaseClient,
-): Promise<{ polled: number; advanced: number; alarmed: number }> {
+): Promise<{ polled: number; advanced: number; alarmed: number; autoCancelled: number }> {
   const prodigiApiKey = Deno.env.get('PRODIGI_API_KEY');
   const prodigiBaseUrl = Deno.env.get('PRODIGI_API_BASE_URL') ?? 'https://api.sandbox.prodigi.com';
   const now = dependencies.now();
 
   const { data: activeOrders, error } = await supabase
     .from('memory_book_orders')
-    .select('id, status, prodigi_order_id, requested_by, workflow_completed_at, updated_at')
+    .select('id, status, prodigi_order_id, requested_by, workflow_completed_at, updated_at, tracking_number')
     .in('status', ['submitted', 'in_production', 'shipped'])
     .returns<ActiveOrderRow[]>();
   if (error) {
     console.error('sweep-memory-book-orders track lookup failed', error.message);
-    return { polled: 0, advanced: 0, alarmed: 0 };
+    return { polled: 0, advanced: 0, alarmed: 0, autoCancelled: 0 };
   }
 
   let polled = 0;
   let advanced = 0;
   let alarmed = 0;
+  let autoCancelled = 0;
 
   for (const order of activeOrders ?? []) {
     // Stuck-too-long alarm applies regardless of Prodigi reachability.
@@ -274,16 +301,59 @@ async function trackProdigiOrders(
       continue;
     }
 
+    // Cancelled at Prodigi (owner cancels during the 2h edit window, or
+    // Prodigi rejects/cancels an order themselves) -- mirror it onto our
+    // row so /orders doesn't show a phantom in-flight order. Checked BEFORE
+    // the stage-advance mapping: a `Cancelled` stage must never be
+    // reinterpreted as progress. `shipped` rows are never regressed (a book
+    // that already left the printer isn't un-shipped by a stale stage), and
+    // the owner is alerted because a paid order that will never ship needs a
+    // manual refund decision.
+    if (prodigiStatus.stage.toLowerCase().includes('cancel')) {
+      if (order.status === 'shipped') continue;
+      const { data: cancelled, error: cancelError } = await supabase
+        .from('memory_book_orders')
+        .update({ status: 'cancelled' })
+        .eq('id', order.id)
+        .eq('status', order.status)
+        .select('id')
+        .maybeSingle();
+      if (!cancelError && cancelled) {
+        autoCancelled += 1;
+        await alertOwner(
+          dependencies.sendEmail,
+          order.id,
+          'CANCELLED_AT_PRODIGI',
+          `Prodigi reports order ${order.prodigi_order_id} as cancelled; the row (was "${order.status}") is now cancelled. If the buyer paid, decide on a refund.`,
+        );
+      }
+      continue;
+    }
+
     const hasTracking = prodigiStatus.shipments.some((shipment) => Boolean(shipment.trackingNumber));
     const nextStatus = mapProdigiStageToStatus(prodigiStatus.stage, hasTracking);
     if (!nextStatus) continue;
 
     const statusOrder = ['submitted', 'in_production', 'shipped'];
-    if (statusOrder.indexOf(nextStatus) <= statusOrder.indexOf(order.status)) continue;
+    if (statusOrder.indexOf(nextStatus) <= statusOrder.indexOf(order.status)) {
+      // Not an advance -- but if this order is ALREADY `shipped` and we
+      // never managed to persist tracking for it (Prodigi reported
+      // `shipped` before a tracking number existed, a common Prodigi
+      // sequencing quirk), backfill it now the first time Prodigi actually
+      // supplies one. Never overwrites an already-persisted value, and
+      // never sends a second "shipped" email -- that only fires on the
+      // transition below.
+      if (order.status === 'shipped' && !order.tracking_number && hasTracking) {
+        const tracking = extractOrderTracking(prodigiStatus.shipments);
+        await supabase.from('memory_book_orders').update(tracking).eq('id', order.id).eq('status', 'shipped');
+      }
+      continue;
+    }
 
+    const tracking = nextStatus === 'shipped' ? extractOrderTracking(prodigiStatus.shipments) : null;
     const { data: updated, error: updateError } = await supabase
       .from('memory_book_orders')
-      .update({ status: nextStatus })
+      .update({ status: nextStatus, ...(tracking ?? {}) })
       .eq('id', order.id)
       .eq('status', order.status)
       .select('id')
@@ -295,10 +365,12 @@ async function trackProdigiOrders(
       const { data: authUser } = await supabase.auth.admin.getUserById(order.requested_by);
       const email = authUser?.user?.email;
       if (email) {
-        const tracking = prodigiStatus.shipments.find((shipment) => shipment.trackingNumber);
-        const trackingHtml = tracking?.trackingUrl
-          ? `<p>Track your delivery: <a href="${tracking.trackingUrl}">${tracking.trackingUrl}</a></p>`
-          : '';
+        const carrierSuffix = tracking?.carrier ? ` via ${tracking.carrier}` : '';
+        const trackingHtml = tracking?.tracking_url
+          ? `<p>Track your delivery${carrierSuffix}: <a href="${tracking.tracking_url}">${tracking.tracking_url}</a></p>`
+          : tracking?.tracking_number
+            ? `<p>Tracking number${carrierSuffix}: ${tracking.tracking_number}</p>`
+            : '';
         await dependencies.sendEmail({
           to: email,
           subject: 'Your Momora Memory Book has shipped',
@@ -308,7 +380,7 @@ async function trackProdigiOrders(
     }
   }
 
-  return { polled, advanced, alarmed };
+  return { polled, advanced, alarmed, autoCancelled };
 }
 
 async function ageAbandonedQuotes(dependencies: SweepDependencies, supabase: SupabaseClient): Promise<number> {

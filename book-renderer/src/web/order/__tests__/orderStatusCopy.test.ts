@@ -32,7 +32,7 @@ describe('orderStatusCopy', () => {
     expect(orderStatusCopy('failed').tone).toBe('negative');
   });
 
-  it('never mentions tracking for shipped -- no tracking column exists yet', () => {
+  it('never mentions tracking inline for shipped -- tracking is its own dedicated CTA on OrderStatusScreen, not baked into this sentence', () => {
     expect(orderStatusCopy('shipped').message.toLowerCase()).not.toContain('tracking');
   });
 });

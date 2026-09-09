@@ -7,7 +7,18 @@ import { signOut } from '../auth/useAuthSession';
 import { useDocumentTitle } from '../useDocumentTitle';
 import './BookListScreen.css';
 
-export function BookListScreen({ onOpenBook }: { onOpenBook: (bookId: string) => void }) {
+export function BookListScreen({
+  onOpenBook,
+  onOpenOrders,
+}: {
+  onOpenBook: (bookId: string) => void;
+  /** memory-book-5c order-status UX round, item 2: a quiet, always-visible
+   * entry point to `/orders` — unlike the `BookViewScreen` entry point,
+   * this one doesn't gate on whether the buyer has any orders yet (there's
+   * no book-scoped context here to check against, and an empty orders list
+   * has its own honest empty-state copy). */
+  onOpenOrders: () => void;
+}) {
   useDocumentTitle('Your books · Momora');
   const { books, error, loading } = useFamilyBooks();
   const [thumbUrls, setThumbUrls] = useState<Map<string, string>>(new Map());
@@ -44,9 +55,14 @@ export function BookListScreen({ onOpenBook }: { onOpenBook: (bookId: string) =>
         <div className="book-list__wordmark">
           Momora<span className="book-list__wordmark-dot">.</span>
         </div>
-        <button type="button" className="book-list__signout" onClick={() => void signOut()}>
-          Sign out
-        </button>
+        <div className="book-list__header-actions">
+          <button type="button" className="book-list__orders-link" onClick={onOpenOrders}>
+            Your orders
+          </button>
+          <button type="button" className="book-list__signout" onClick={() => void signOut()}>
+            Sign out
+          </button>
+        </div>
       </header>
 
       <div className="book-list__body">

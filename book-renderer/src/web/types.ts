@@ -67,6 +67,36 @@ export interface MemoryBookOrderRow {
   prodigi_order_id: string | null;
   failure_reason: string | null;
   refunded_at: string | null;
+  /** memory-book-5c order-status UX round, item 3 (migration
+   * `20260909130000_memory_book_order_tracking.sql`). All three null until
+   * the sweep extracts them from Prodigi's shipments array on the `shipped`
+   * transition -- and `tracking_url`/`carrier` can stay null even once
+   * `tracking_number` is set, since Prodigi doesn't guarantee either. */
+  tracking_number: string | null;
+  tracking_url: string | null;
+  carrier: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** A row from the buyer's own order history (`OrdersListScreen`/`useOrders.ts`
+ * -- memory-book-5c order-status UX round, item 2). Deliberately a NARROWER
+ * projection than `MemoryBookOrderRow` (no shipping address/Stripe/Prodigi
+ * ids -- the list view never needs them) plus a `book_title` the row itself
+ * doesn't carry, resolved via a join against `memory_books` (RLS: the buyer
+ * is a family member of every book they've ordered, so `is_family_member`
+ * already allows the embedded read -- see `useOrders.ts`'s own comment). */
+export interface MemoryBookOrderListRow {
+  id: string;
+  book_id: string;
+  status: MemoryBookOrderStatus;
+  price_cents: number | null;
+  shipping_cost_cents: number | null;
+  currency: string;
+  refunded_at: string | null;
+  created_at: string;
+  /** Falls back to a generic label if the joined book row is unreadable
+   * (e.g. RLS hides it because the buyer left the family since ordering) --
+   * see `useOrders.ts`'s `FALLBACK_BOOK_TITLE`. */
+  book_title: string;
 }

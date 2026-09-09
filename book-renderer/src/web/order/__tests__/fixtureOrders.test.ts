@@ -8,6 +8,8 @@ import {
   fixtureSetOrderStatus,
   fixtureToggleOrderRefunded,
   fixtureOrderJumpStates,
+  fixtureListOrders,
+  fixtureHasOrders,
 } from '../../dev/fixture';
 
 /**
@@ -57,9 +59,19 @@ describe('fixture order lifecycle', () => {
     // already set by the time a buyer could see that status.
     fixtureSetOrderStatus(orderId, 'submitted');
     expect(fixtureGetOrder(orderId)?.prodigiOrderId).toBeTruthy();
+    // order-status UX round, item 3: shipped/delivered carry fake tracking;
+    // every other status (submitted included) does not.
+    expect(fixtureGetOrder(orderId)?.trackingNumber).toBeNull();
+    fixtureSetOrderStatus(orderId, 'shipped');
+    expect(fixtureGetOrder(orderId)?.trackingNumber).toBeTruthy();
+    expect(fixtureGetOrder(orderId)?.trackingUrl).toBeTruthy();
+    expect(fixtureGetOrder(orderId)?.carrier).toBeTruthy();
+    fixtureSetOrderStatus(orderId, 'delivered');
+    expect(fixtureGetOrder(orderId)?.trackingNumber).toBeTruthy();
     fixtureSetOrderStatus(orderId, 'failed');
     expect(fixtureGetOrder(orderId)?.failureReason).toBeTruthy();
     expect(fixtureGetOrder(orderId)?.prodigiOrderId).toBeNull();
+    expect(fixtureGetOrder(orderId)?.trackingNumber).toBeNull();
 
     // refunded_at is independent of status (docs/features/memory-book-
     // orders.md#refund-recording) -- toggling it never touches `status`.
@@ -85,5 +97,48 @@ describe('fixture order lifecycle', () => {
     const { orderId } = fixtureCreateOrderDraft('enzo-year-one');
     const result = fixtureCreateCheckout(orderId);
     expect('error' in result).toBe(true);
+  });
+});
+
+/**
+ * order-status UX round, item 2 -- `fixtureListOrders`/`fixtureHasOrders`
+ * back `OrdersListScreen`/`useHasPastOrders` under `?fixture=` mode. Not
+ * gated behind `registerFixtureBookLabel` here (that's only ever called by
+ * `loadFixtureBook`, which this file never exercises) -- so `book_title`
+ * falls back to the bare book id, exactly as `fixtureBookLabel`'s own doc
+ * comment says it should when a book hasn't loaded in this session yet.
+ */
+describe('fixture orders list', () => {
+  // NOTE: `ordersStore()` is a module-level singleton (by design -- see its
+  // own doc comment), shared across every test in this file. These
+  // assertions are therefore written relative to a fresh baseline taken at
+  // the start of each test, never against an assumed-empty store -- earlier
+  // describe blocks in this same file have already created orders by the
+  // time these run.
+  it('fixtureHasOrders is true once at least one draft exists', () => {
+    fixtureCreateOrderDraft('enzo-year-one');
+    expect(fixtureHasOrders()).toBe(true);
+  });
+
+  it('lists every order across books, newest first, with a fallback title', () => {
+    const baselineIds = new Set(fixtureListOrders().map((r) => r.id));
+    const first = fixtureCreateOrderDraft('enzo-year-one');
+    const second = fixtureCreateOrderDraft('enzo-year-one');
+
+    const rows = fixtureListOrders();
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(first.orderId);
+    expect(ids).toContain(second.orderId);
+    expect(rows.length).toBe(baselineIds.size + 2);
+    // `createdAt` for both orders is `Date.now()` at creation time, which can
+    // tie at millisecond resolution in a fast test run -- assert ordering is
+    // non-decreasing by `created_at` rather than assuming a strict tie-break.
+    for (let i = 1; i < rows.length; i++) {
+      expect(rows[i - 1].created_at >= rows[i].created_at).toBe(true);
+    }
+    for (const row of rows) {
+      expect(row.book_title).toBe('enzo-year-one');
+      expect(row.book_id).toBe('enzo-year-one');
+    }
   });
 });
