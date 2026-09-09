@@ -75,3 +75,5 @@ TECH_SPEC holds canonical API shapes; feature docs explain behavior, integration
 1. **Before building on a feature:** Read its `docs/features/<name>.md` + TECH_SPEC + TESTING.
 2. **After shipping a major feature:** Add feature doc + **unit, integration, and e2e tests** in the same PR.
 3. **When unsure:** Check this index; if missing, read the code and add the doc before extending.
+
+- [Personal Kindle frame](./kindle-frame.md) — private daily image batches and PW1 offline display; wireless cycle and daily startup verified; overnight acceptance pending.

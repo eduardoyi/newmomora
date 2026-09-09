@@ -2897,3 +2897,7 @@ All AI operations are **async** — client shows status and allows navigation aw
 ---
 
 *End of Technical Specification*
+
+## Personal Kindle frame (isolated Worker)
+
+`workers/kindle-frame` implements a fixed-owner private frame service without DB schema or mobile API changes. Scheduled generation reads the complete eligible image population, renders five 758×1024 grayscale PNGs with Cloudflare Browser Run and stores them under the owner's private R2 prefix. Separate hashed admin/device bearer credentials gate preparation and read-only batch access. `/manifest` supplies five checksummed image paths and Europe/Lisbon display times as UTC epochs; `/image/{generation}/{slot}` only serves the current authorized batch. See [kindle-frame.md](./features/kindle-frame.md) for contracts, deletion/revocation behavior and physical acceptance status.
