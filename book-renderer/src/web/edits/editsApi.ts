@@ -106,17 +106,32 @@ export interface PickerPoolPage {
   error: string | null;
 }
 
+/** Item 1 (owner-approved editing-UX round): optional `picker_pool`
+ * narrowing filters — mirrors the Edge Function's own optional
+ * `dateStart`/`dateEnd`/`memberId` request fields exactly (see
+ * `memory-book-edits/index.ts`'s `handlePickerPool`). All three absent is
+ * the pre-existing, unfiltered contract — no behavior change for a caller
+ * that never passes this second argument. */
+export interface PickerPoolFilters {
+  /** ISO `YYYY-MM-DD`, inclusive. */
+  dateStart?: string;
+  /** ISO `YYYY-MM-DD`, inclusive. */
+  dateEnd?: string;
+  memberId?: string;
+}
+
 export async function fetchPickerPool(
   bookId: string,
   cursor: string | null,
+  filters: PickerPoolFilters = {},
 ): Promise<PickerPoolPage> {
   if (import.meta.env.DEV) {
     const fixtureSlug = getFixtureSlug();
-    if (fixtureSlug && fixtureSlug === bookId) return fixtureFetchPickerPool(fixtureSlug, cursor);
+    if (fixtureSlug && fixtureSlug === bookId) return fixtureFetchPickerPool(fixtureSlug, cursor, filters);
   }
   const { data, error } = await supabase.functions.invoke<{ items: PickerPoolItem[]; nextCursor: string | null }>(
     'memory-book-edits',
-    { body: { op: 'picker_pool', bookId, cursor } },
+    { body: { op: 'picker_pool', bookId, cursor, ...filters } },
   );
   if (error) {
     return { items: [], nextCursor: null, error: await describeFunctionError(error) };

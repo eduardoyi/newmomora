@@ -5,6 +5,7 @@ import { TEXT_TARGET_PATTERN,
   DEFAULT_DEPENDENCIES,
   FURNITURE_KEYS,
   handleMemoryBookEdits,
+  intersectDateWindow,
   measureOriginalDimensions,
   type MemoryBookEditsDependencies,
   normalizeEdits,
@@ -17,6 +18,7 @@ const FOREIGN_FAMILY_ID = '99999999-9999-4999-8999-999999999999';
 const BOOK_ID = '33333333-3333-4333-8333-333333333333';
 const MEDIA_ID = '44444444-4444-4444-8444-444444444444';
 const MEMORY_ID = '55555555-5555-4555-8555-555555555555';
+const MEMBER_ID = '66666666-6666-4666-8666-666666666666';
 
 function fakeUser() {
   return { id: USER_ID, is_anonymous: false } as never;
@@ -65,6 +67,10 @@ interface StubOptions {
   upsertError?: { message: string } | null;
   memoriesEarliest?: { memory_date: string } | null;
   memoriesLatest?: { memory_date: string } | null;
+  /** picker_pool member filter (item 1): rows `memory_family_members`
+   * resolves for a given `family_member_id`. */
+  memberTagRows?: { memory_id: string }[];
+  memberTagError?: { message: string } | null;
   calls?: string[];
   onUpsert?: (payload: Record<string, unknown>) => void;
 }
@@ -91,9 +97,24 @@ function createStubClient(options: StubOptions = {}) {
             gte: () => chain,
             lt: () => chain,
             like: () => chain,
+            in: () => chain,
             order: () => chain,
             maybeSingle: async () => ({ data: options.media ?? null, error: options.mediaError ?? null }),
             range: async () => ({ data: options.mediaPool ?? [], error: options.mediaPoolError ?? null }),
+          };
+          return chain;
+        }
+
+        if (table === 'memory_family_members') {
+          // picker_pool's member filter (item 1) awaits this chain
+          // directly -- no terminal `.maybeSingle()`/`.range()` call, same
+          // as the real `PostgrestFilterBuilder` -- so the chain itself
+          // must be thenable.
+          const chain = {
+            select: () => chain,
+            eq: () => chain,
+            then: (resolve: (result: { data: unknown; error: unknown }) => void) =>
+              resolve({ data: options.memberTagRows ?? [], error: options.memberTagError ?? null }),
           };
           return chain;
         }
@@ -657,6 +678,118 @@ Deno.test('picker_pool: accepts a previously issued cursor and keeps paginating'
     baseDeps({ createServiceClient: createStubClient({ book: readyBook(), mediaPool: [poolRow()], editsRow: null }) }),
   );
   assertEquals(response.status, 200);
+});
+
+// ── picker_pool filters (item 1, owner-approved editing-UX round) ────────
+
+Deno.test('picker_pool: rejects a malformed dateStart', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, dateStart: 'not-a-date' }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook(), mediaPool: [] }) }),
+  );
+  assertEquals(response.status, 400);
+});
+
+Deno.test('picker_pool: rejects a calendrically invalid dateEnd (e.g. Feb 30)', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, dateEnd: '2026-02-30' }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook(), mediaPool: [] }) }),
+  );
+  assertEquals(response.status, 400);
+});
+
+Deno.test('picker_pool: rejects a malformed memberId', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: 'not-a-uuid' }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook(), mediaPool: [] }) }),
+  );
+  assertEquals(response.status, 400);
+});
+
+Deno.test('picker_pool: a well-formed dateStart/dateEnd range is accepted alongside a cursor (filters do not break offset pagination)', async () => {
+  const cursor = btoa('50');
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, cursor, dateStart: '2026-02-01', dateEnd: '2026-05-31' }),
+    baseDeps({ createServiceClient: createStubClient({ book: readyBook(), mediaPool: [poolRow()], editsRow: null }) }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.items.length, 1);
+});
+
+Deno.test('picker_pool: memberId with zero tagged memories short-circuits to an empty, exhausted page without querying memory_media', async () => {
+  const calls: string[] = [];
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({ book: readyBook(), memberTagRows: [], calls }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body, { items: [], nextCursor: null });
+  assertEquals(calls.includes('memory_media'), false);
+  assertEquals(calls.includes('memory_family_members'), true);
+});
+
+Deno.test('picker_pool: memberId with tagged memories proceeds to the normal media query', async () => {
+  const calls: string[] = [];
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook(),
+        memberTagRows: [{ memory_id: MEMORY_ID }],
+        mediaPool: [poolRow()],
+        editsRow: null,
+        calls,
+      }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.items.length, 1);
+  assertEquals(calls.includes('memory_media'), true);
+});
+
+Deno.test('picker_pool: a member-tag lookup failure surfaces as a 500, same as the media query failing', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({ book: readyBook(), memberTagError: { message: 'boom' } }),
+    }),
+  );
+  assertEquals(response.status, 500);
+});
+
+// ── intersectDateWindow (direct) ──────────────────────────────────────────
+
+Deno.test('intersectDateWindow: no filters passes the scope window through unchanged', () => {
+  const window = intersectDateWindow({ start: '2026-01-01', endExclusive: '2026-07-01' }, undefined, undefined);
+  assertEquals(window, { start: '2026-01-01', endExclusive: '2026-07-01' });
+});
+
+Deno.test('intersectDateWindow: a dateStart/dateEnd fully inside the window narrows it', () => {
+  const window = intersectDateWindow(
+    { start: '2026-01-01', endExclusive: '2026-07-01' },
+    '2026-02-01',
+    '2026-03-15',
+  );
+  assertEquals(window, { start: '2026-02-01', endExclusive: '2026-03-16' });
+});
+
+Deno.test('intersectDateWindow: a dateStart before the window, or a dateEnd past it, is clamped -- never widened', () => {
+  const window = intersectDateWindow(
+    { start: '2026-01-01', endExclusive: '2026-07-01' },
+    '2025-01-01', // before the scope window
+    '2026-12-31', // after the scope window
+  );
+  assertEquals(window, { start: '2026-01-01', endExclusive: '2026-07-01' });
+});
+
+Deno.test('intersectDateWindow: only dateStart supplied leaves the window end untouched', () => {
+  const window = intersectDateWindow({ start: '2026-01-01', endExclusive: '2026-07-01' }, '2026-05-01', undefined);
+  assertEquals(window, { start: '2026-05-01', endExclusive: '2026-07-01' });
 });
 
 // ── Direct unit coverage of exported helpers ──────────────────────────────

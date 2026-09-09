@@ -26,6 +26,12 @@
  *     already-in-book flag) for the image-replace picker sheet. The client
  *     presigns any thumbnails it actually renders through the existing
  *     `get-media-url` coalescer -- this function never returns a URL.
+ *     Optional `dateStart`/`dateEnd`/`memberId` filters (owner-approved
+ *     editing-UX round, item 1) narrow the pool further -- the date range
+ *     is always intersected with the book's own scope window (never
+ *     widened past it), and the member filter goes through
+ *     `memory_family_members`. All three are optional, so older clients
+ *     keep working unchanged.
  *
  * Both operations require the book to be `status = 'ready'` (there is no
  * book_document/manifest to edit against otherwise) and the caller to be
@@ -137,6 +143,13 @@ export interface MemoryBookEditsRequestBody {
   edit?: SaveEditInput;
   cursor?: string | null;
   limit?: number;
+  /** Item 1 (owner-approved editing-UX round): optional `picker_pool`
+   * narrowing filters. `unknown` here, same posture as `cursor`/`limit`
+   * above — real validation happens in `handlePickerPool`, never trusted
+   * from the wire as already the right shape. */
+  dateStart?: unknown;
+  dateEnd?: unknown;
+  memberId?: unknown;
 }
 
 export interface SaveEditResponse {
@@ -689,6 +702,53 @@ export async function resolveScopeWindow(
   };
 }
 
+// ── picker_pool filters (item 1, owner-approved editing-UX round) ────────
+
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Rejects a syntactically-shaped but calendrically bogus date (e.g.
+ * `2026-02-30`) -- `Date.UTC` silently rolls those over into the NEXT
+ * month, which would otherwise smuggle a slightly-wrong window past the
+ * regex alone. */
+function isValidDateOnly(value: unknown): value is string {
+  if (typeof value !== 'string' || !DATE_ONLY_PATTERN.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+const MEMBER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isValidMemberId(value: unknown): value is string {
+  return typeof value === 'string' && MEMBER_ID_PATTERN.test(value);
+}
+
+/**
+ * Item 1: narrows a resolved scope window by an optional caller-supplied
+ * `dateStart`/`dateEnd` pair -- NEVER widens past it. The window itself is
+ * already the book's own curation boundary (Decision 5's `picker_pool`
+ * scoping); letting a caller-supplied `dateEnd` reach past it would leak
+ * photos the book was never scoped to. `dateEnd` is inclusive on input (a
+ * calendar day picked in a `<input type="date">`), converted here to the
+ * same exclusive-end convention `resolveScopeWindow` itself returns.
+ * Exported for direct unit coverage (see this file's "Direct unit coverage
+ * of exported helpers" test section) -- the fake-client test harness can't
+ * meaningfully assert actual date FILTERING through the filter-blind
+ * `memory_media` stub, so this pure intersection logic is tested on its
+ * own instead.
+ */
+export function intersectDateWindow(
+  window: { start: string; endExclusive: string },
+  dateStart: string | undefined,
+  dateEnd: string | undefined,
+): { start: string; endExclusive: string } {
+  const start = dateStart && dateStart > window.start ? dateStart : window.start;
+  const dateEndExclusive = dateEnd ? addDaysToDateOnly(dateEnd, 1) : null;
+  const endExclusive =
+    dateEndExclusive && dateEndExclusive < window.endExclusive ? dateEndExclusive : window.endExclusive;
+  return { start, endExclusive };
+}
+
 /** Every `file` referenced by the book's PUBLISHED manifest (assets only --
  * illustrations/portraits are never photo-replace candidates, per Decision
  * 6's eligibility rule, so they're deliberately not collected here). Used
@@ -780,6 +840,9 @@ async function handlePickerPool(
   book: BookRow,
   cursorInput: unknown,
   limitInput: unknown,
+  dateStartInput: unknown,
+  dateEndInput: unknown,
+  memberIdInput: unknown,
 ): Promise<Response> {
   const limit =
     typeof limitInput === 'number' && Number.isInteger(limitInput) && limitInput > 0
@@ -795,9 +858,53 @@ async function handlePickerPool(
     offset = decoded;
   }
 
-  const window = await resolveScopeWindow(supabase, book);
+  let dateStart: string | undefined;
+  if (dateStartInput !== undefined && dateStartInput !== null) {
+    if (!isValidDateOnly(dateStartInput)) return errorResponse('Invalid dateStart', 400, 'validation_error');
+    dateStart = dateStartInput;
+  }
+  let dateEnd: string | undefined;
+  if (dateEndInput !== undefined && dateEndInput !== null) {
+    if (!isValidDateOnly(dateEndInput)) return errorResponse('Invalid dateEnd', 400, 'validation_error');
+    dateEnd = dateEndInput;
+  }
+  let memberId: string | undefined;
+  if (memberIdInput !== undefined && memberIdInput !== null) {
+    if (!isValidMemberId(memberIdInput)) return errorResponse('Invalid memberId', 400, 'validation_error');
+    memberId = memberIdInput;
+  }
 
-  const { data: rows, error } = await supabase
+  const scopeWindow = await resolveScopeWindow(supabase, book);
+  const window = intersectDateWindow(scopeWindow, dateStart, dateEnd);
+
+  // Item 1: the person filter goes through `memory_family_members` (the
+  // memory<->family_member tag join, migration 20260524201500) -- resolve
+  // the tagged memory ids FIRST, then narrow the media query by them. A
+  // member tagged on zero memories short-circuits to an empty, exhausted
+  // page rather than sending an empty `.in()` filter through to
+  // PostgREST (some versions treat `in.()` as "no filter" rather than
+  // "match nothing" -- not worth relying on either way).
+  let memberMemoryIds: string[] | null = null;
+  if (memberId) {
+    const { data: tagRows, error: tagError } = await supabase
+      .from('memory_family_members')
+      .select('memory_id')
+      .eq('family_member_id', memberId);
+    if (tagError) {
+      console.error('memory-book-edits picker_pool member-tag lookup failed', tagError.message);
+      return errorResponse('Failed to load photo pool', 500, 'internal_error');
+    }
+    memberMemoryIds = ((tagRows ?? []) as { memory_id: string }[]).map((row) => row.memory_id);
+    if (memberMemoryIds.length === 0) {
+      return jsonResponse({ items: [], nextCursor: null } satisfies PickerPoolResponse);
+    }
+  }
+
+  // `.in()` (a FILTER) must be chained before `.order()`/`.range()`
+  // (TRANSFORMS) -- supabase-js's builder narrows to a type without filter
+  // methods once a transform is applied, so this can't be tacked on after
+  // the fact the way it's applied conditionally here.
+  let filterQuery = supabase
     .from('memory_media')
     .select(
       'id, memory_id, preview_object_key, object_key, aspect_ratio, content_type, memories!inner(memory_date, family_id)',
@@ -805,7 +912,11 @@ async function handlePickerPool(
     .eq('memories.family_id', book.family_id)
     .gte('memories.memory_date', window.start)
     .lt('memories.memory_date', window.endExclusive)
-    .like('content_type', 'image/%')
+    .like('content_type', 'image/%');
+  if (memberMemoryIds) {
+    filterQuery = filterQuery.in('memory_id', memberMemoryIds);
+  }
+  const { data: rows, error } = await filterQuery
     .order('memory_date', { referencedTable: 'memories', ascending: true })
     .order('id', { ascending: true })
     .range(offset, offset + limit - 1);
@@ -907,7 +1018,7 @@ export async function handleMemoryBookEdits(
   if (body.op === 'save_edit') {
     return handleSaveEdit(dependencies, supabase, book, user.id, body.edit);
   }
-  return handlePickerPool(supabase, book, body.cursor, body.limit);
+  return handlePickerPool(supabase, book, body.cursor, body.limit, body.dateStart, body.dateEnd, body.memberId);
 }
 
 if (import.meta.main) {

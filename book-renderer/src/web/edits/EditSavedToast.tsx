@@ -24,11 +24,18 @@ const AUTO_DISMISS_MS = 6000;
 export function EditSavedToast({
   pending,
   undoing,
+  demoted,
   onUndo,
   onDismiss,
 }: {
   pending: UndoAction | null;
   undoing: boolean;
+  /** Item 4 (owner-approved editing-UX round): true when this save's
+   * edited slot was full-bleed/panorama BEFORE and isn't anymore AFTER the
+   * refit (`reflowNotice.ts`'s `computeReflowResult`) — folds an extra
+   * sentence into the SAME toast rather than stacking a second one (the
+   * brief: "don't stack confusingly — one combined toast is fine"). */
+  demoted: boolean;
   onUndo: () => void;
   onDismiss: () => void;
 }) {
@@ -47,8 +54,16 @@ export function EditSavedToast({
   if (!pending || dismissed) return null;
 
   return (
-    <div className="edit-saved-toast" role="status">
-      <span className="edit-saved-toast__message">Saved.</span>
+    <div className={`edit-saved-toast${demoted ? ' edit-saved-toast--demoted' : ''}`} role="status">
+      <span className="edit-saved-toast__message">
+        Saved.
+        {demoted && (
+          <span className="edit-saved-toast__demotion">
+            {' '}
+            This photo may be too small to print full-page, so it moved to a regular spot.
+          </span>
+        )}
+      </span>
       <button type="button" className="edit-saved-toast__undo" disabled={undoing} onClick={onUndo}>
         {undoing ? 'Undoing…' : 'Undo'}
       </button>

@@ -114,6 +114,43 @@
   color: var(--color-primaryDark);
 }
 
+/* Item 1 (owner-approved editing-UX round): date range + person filters —
+   wraps on a narrow viewport rather than overflowing (keyboard-safe rule:
+   nothing here is `position: fixed`, and the inputs below are 16px+ to
+   keep mobile Safari from zooming in on focus). */
+.picker-sheet__date-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px 20px 0;
+}
+
+.picker-sheet__date-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-ink2);
+}
+
+.picker-sheet__date-input,
+.picker-sheet__member-select {
+  font-family: var(--font-sans);
+  font-size: 16px; /* keeps mobile Safari from zooming in on focus */
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-white);
+  color: var(--color-ink);
+}
+
+.picker-sheet__member-select {
+  min-width: 120px;
+}
+
 .picker-sheet__error {
   margin: 12px 20px 0;
   font-family: var(--font-sans);
@@ -192,6 +229,22 @@
   color: var(--color-white);
   border-radius: var(--radius-sm);
   padding: 2px 4px;
+}
+
+/* Item 1: a compact absolute date under each thumbnail. */
+.picker-item__date {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  color: var(--color-ink3);
+  text-align: center;
+}
+
+/* Item 2: invisible — its only job is to sit at the bottom of the grid for
+   the IntersectionObserver to watch; spans every column so it doesn't
+   leave a stray gap in the last (possibly partial) row. */
+.picker-sheet__sentinel {
+  grid-column: 1 / -1;
+  height: 1px;
 }
 
 .picker-item__saving {

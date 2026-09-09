@@ -298,13 +298,13 @@ field rather than guessing.
 
 ### `picker_pool`
 
-`POST memory-book-edits { op: 'picker_pool', bookId, cursor?, limit? }`
-(limit capped at 50). Returns a keys-only page of the book's in-scope
-photos for the image-replace picker sheet — `memoryId`, `mediaId`,
-`previewKey`, `date`, `aspectRatio`, `alreadyInBook` — never a URL; the
-client presigns whichever thumbnails it actually renders through the
-existing `get-media-url` coalescer (same pattern the app's own media
-loading already uses). The scope window is resolved exactly like
+`POST memory-book-edits { op: 'picker_pool', bookId, cursor?, limit?,
+dateStart?, dateEnd?, memberId? }` (limit capped at 50). Returns a keys-only
+page of the book's in-scope photos for the image-replace picker sheet —
+`memoryId`, `mediaId`, `previewKey`, `date`, `aspectRatio`, `alreadyInBook`
+— never a URL; the client presigns whichever thumbnails it actually renders
+through the existing `get-media-url` coalescer (same pattern the app's own
+media loading already uses). The scope window is resolved exactly like
 `workflow-memory-book-bridge`'s `load_generation_context` (frozen dates, or
 the family's live min/max `memory_date` for an `everything`-scope book) —
 pagination is what keeps an `everything`-scope family's pool bounded per
@@ -312,6 +312,31 @@ request, not a soft nicety. Pagination is an **opaque offset cursor**, not a
 true `(memory_date, id)` keyset — see
 [TECH_SPEC §4.23](../TECH_SPEC.md#423-memory-book-edits-v5b-v1-edit-surface)
 for why, and its accepted trade-off.
+
+**Filters (owner-approved editing-UX round, item 1).** `dateStart`/`dateEnd`
+(ISO `YYYY-MM-DD`, both optional, validated and calendar-checked) narrow the
+pool by `memory_date` — `intersectDateWindow` always intersects them with
+the resolved scope window, never widening past it (a caller can't use these
+to see photos outside the book's own curation boundary). `memberId` (a
+`family_members.id` uuid) narrows the pool to memories tagged with that
+member via the `memory_family_members` join table (migration
+`20260524201500_initial_schema.sql`) — resolved as a separate lookup before
+the media query; a member tagged on zero memories short-circuits to an
+empty, exhausted page without querying `memory_media` at all. All three are
+optional and additive to the existing contract — an older client that never
+sends them gets the unfiltered behavior unchanged. The picker client
+(`PickerSheet.tsx`) resets its cursor and re-fetches from scratch whenever
+any filter changes, and reads the family roster for the person filter
+directly off `family_members` (client-side, via the book's own `family_id`
+— see `useFamilyMembers.ts`'s header comment for why that's simpler than
+threading a `members` array through this response).
+
+**Infinite scroll (item 2).** `PickerSheet.tsx` triggers the same
+`loadPage(cursor, true)` path via an `IntersectionObserver` sentinel at the
+bottom of the grid, in addition to the pre-existing "Load more" button
+(kept as an explicit fallback). A single `fetchLockRef` guards every caller
+of `loadPage` (initial load, a filter change, the button, and the
+sentinel) against a double-fire while a page is already in flight.
 
 ### How 5c will consume edits
 
@@ -326,6 +351,37 @@ re-paginate the book) and IMAGE edits apply PRE-fit (manifest/outline
 substitution, so a too-small replacement photo's reflow is real and
 visible, never silently hidden) — 5c reuses the identical `edits` row and
 the identical `applyBookEdits` split the web preview uses, by construction.
+
+### Editing-UX polish: duplicate badges and post-save reflow (owner-approved round)
+
+Two more `book-renderer/src/web/` pieces beyond the `picker_pool` filters/
+infinite-scroll above, both purely client-side (no server contract change):
+
+- **Duplicate badges (item 3).** `book/duplicateAssets.ts`'s
+  `computeDuplicateAssetOccurrences` scans the fitted document's `pages` for
+  any `PhotoSlotContent.assetFile` occupying 2+ photo slots (the cover photo
+  is deliberately excluded — it isn't a `PhotoSlotContent` slot) and returns
+  their occurrences in document order. `EditOverlay.tsx` renders a small,
+  always-visible badge on every duplicated slot; clicking one
+  (`nextOtherOccurrence`) navigates to the next OTHER occurrence, cycling
+  through and wrapping at the end — the intended workflow is placing a
+  photo somewhere new, then jumping back to its original spot to replace it
+  there too.
+- **Post-save auto-scroll + demotion notice (item 4).** After an image edit
+  saves and `useEditableBook` refits the document, `BookViewScreen.tsx`
+  scans the refitted pages for the just-saved slot
+  (`slotKeys.ts`'s `findPageForEditableSlot`) and navigates there. If that
+  slot's page was `full-bleed`/`panorama-spread` BEFORE the save and isn't
+  anymore AFTER it (`reflowNotice.ts`'s `computeReflowResult` — pure,
+  independently unit-tested, no server round trip needed since the refit
+  result itself is the signal), the existing Saved/Undo toast
+  (`EditSavedToast.tsx`) grows one extra sentence rather than stacking a
+  second toast. This is the client-side half of the fitter's own
+  `FULL_BLEED_TRUSTED_MIN_WIDTH_PX` resolution gate (`model/fitter.ts`) —
+  since commit `3bd7b33` a user-swapped photo keeps full-bleed regardless of
+  aspect, but a low-resolution swap (or one that shifts pagination enough to
+  move the slot into a different template) can still lose the treatment,
+  and this is how the parent finds out without digging through the book.
 
 ## Client integration
 
@@ -527,7 +583,16 @@ table's types added).
   direct unit coverage of the exported helpers (`normalizeEdits`,
   `collectManifestAssetFiles`, `resolveScopeWindow` incl. its
   `everything`-scope live-window resolution, `measureOriginalDimensions`
-  against real, hand-built PNG fixture bytes).
+  against real, hand-built PNG fixture bytes). `picker_pool` filters
+  (owner-approved editing-UX round, item 1): malformed `dateStart`/
+  `dateEnd`/`memberId` rejection (incl. a calendrically-invalid date like
+  `2026-02-30`), a well-formed date range accepted alongside an existing
+  cursor (filters don't break offset pagination), a `memberId` tagged on
+  zero memories short-circuiting to an empty page without querying
+  `memory_media`, a `memberId` with tagged memories reaching the normal
+  media query, a member-tag lookup failure surfacing as a 500, plus direct
+  unit coverage of `intersectDateWindow` (narrows inside the scope window,
+  clamps — never widens — a range that reaches past it).
 
 ### Generation pipeline tests (part C)
 
@@ -557,8 +622,12 @@ table's types added).
 
 ### Web app + hosting Worker tests (V5b steps 6-7)
 
-- `book-renderer`'s `npx vitest run` (404 tests as of this change — 403
-  baseline + 1 new): includes a `Closing` template test asserting
+- `book-renderer`'s `npx vitest run` (534 tests as of this change — 518
+  baseline + 16 new: `book/__tests__/duplicateAssets.test.ts` (9,
+  `computeDuplicateAssetOccurrences` + `nextOtherOccurrence`, item 3) and
+  `book/__tests__/reflowNotice.test.ts` (7, `computeReflowResult` +
+  `isFullBleedTemplate`, item 4) — see "Editing-UX polish" above). Includes
+  a `Closing` template test asserting
   `params.closingLine` (written by `applyPostFit` since step 4, but
   unread by `Closing.tsx` until this change — the "wave-1 wiring gap"
   fixed alongside steps 6-7) both overrides the furniture memory-count
@@ -605,6 +674,7 @@ cd cloudflare/memory-book-web && npm test && npm run typecheck && npm run deploy
 
 | Date | Change |
 |------|--------|
+| 2026-09-09 | Owner-approved editing-UX round (4 items, all client + `memory-book-edits` `picker_pool` only): (1) picker dates under each thumbnail + a date-range filter (`dateStart`/`dateEnd`, always intersected with the scope window, never widened past it) + a person filter (`memberId`, via `memory_family_members`) — fetched client-side against `family_members` for the roster, no new response field; (2) `PickerSheet`'s "Load more" button gains an `IntersectionObserver` sentinel as the primary infinite-scroll trigger, one `fetchLockRef` guarding every caller against a double-fire; (3) duplicate-photo badges (`book/duplicateAssets.ts`) on every slot whose rendered asset file occupies 2+ photo slots across the book, clicking one cycles to the next other occurrence; (4) after an image edit saves, the viewer auto-navigates to the slot's (possibly new) page and, if it lost the `full-bleed`/`panorama-spread` treatment on refit (`book/reflowNotice.ts`'s `computeReflowResult`), the Saved/Undo toast grows one extra sentence rather than stacking a second toast. `docs/TECH_SPEC.md` intentionally NOT touched in this change (it already carried unrelated in-progress edits at the time). |
 | 2026-09-07 | V5b steps 6-8 (+ one wave-1 wiring gap): the web app shipped — `book-renderer/src/web/` (a third Vite entry, `web.html`: email-OTP auth, family book list with status chips + polling + plain coalescer thumbnails, book view running `book_document -> applyPreFit -> fitBook -> applyPostFit -> SpreadPager`, an edit panel for all v1 text targets + image replace via a paginated picker sheet + focal-point reposition via a dedicated crop modal, skipped-orphan surfacing). Dedicated PII-safe build (`vite.web.config.ts`, `publicDir: false`, single `web.html` input, `dist-web/` output) with a real bundle check (`scripts/check-web-bundle.mjs`, wired into `build:web`) verified against an actual build (confirmed it FAILS on an injected `book-data`/`index.html` violation, not just passes on the real one). Hosting: `cloudflare/memory-book-web/`, a static-assets Worker with explicit SPA fallback to `web.html` (deliberately not Cloudflare's `index.html`-only convention), route `shop.usemomora.com` — `wrangler deploy --dry-run` and `wrangler check startup` both verified; not deployed (owner-gated). Wave-1 wiring gap fixed: `Closing.tsx` now reads `params.closingLine` (written by `applyPostFit` since step 4 but previously unread — a saved closing-line edit silently had no effect until this change). `docs/plans/memory-book.md` §V5's 5b bullet updated (Vite-entry decision, not Next.js; localStorage session note) — this doc's own stale "Next.js package" mention corrected too. Steps 3-5 (`applyBookEdits`, pluggable asset resolution, focal-point template wiring) were already shipped as part of wave 1 (commit `3acd5a9`) even though the entry below didn't call them out individually. |
 | 2026-09-07 | V5b steps 1-2: v1 edit-surface schema + Edge Function shipped — `memory_book_edits` migration (client select-only; every write service-role, verified via psql) and `memory-book-edits` (`save_edit` + `picker_pool`, server-side `mediaId` resolution and original-photo dimension measurement via presigned-GET + HTTP Range). `applyBookEdits`, focal-point wiring, and the web app itself remain not-yet-built (plan steps 3-9). Corrected this doc's earlier "add narrowly-scoped client update policies" extension-guide bullet, which the round-3-hardened plan superseded with the service-role-only design actually shipped. |
 | 2026-09-01 | V5a part C: durable generation pipeline shipped — `generate-memory-book` dispatcher, `workflow-memory-book-bridge`, and `cloudflare/memory-book-worker`'s `MemoryBookWorkflow` (curates the outline from ported eval-CLI logic + shared builders, verifies cover candidates, assembles `book_document`, publishes via CAS). No schema migration in this change (two deviations documented in TECH_SPEC §4.22: plain-CAS instead of a publish/fail RPC, no nonce-replay ledger). Scope-picker UI and web preview remain 5b; checkout remains 5c. |

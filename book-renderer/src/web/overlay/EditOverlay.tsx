@@ -8,6 +8,7 @@ import { useOverlayGeometry, type PositionedPhotoRegion } from './useOverlayGeom
 import { TextEditPopover } from './TextEditPopover';
 import { needsReposition } from './repositionGate';
 import type { InBookAssets } from '../media/inBookAssets';
+import { nextOtherOccurrence, type AssetOccurrence } from '../book/duplicateAssets';
 import './EditOverlay.css';
 
 /** Approximate front-cover-panel aspect for the focal-point crop preview —
@@ -34,19 +35,36 @@ const COVER_APPROX_ASPECT = 1;
  */
 export function EditOverlay({
   bookId,
+  familyId,
   containerRef,
   pages,
   manifest,
   edits,
   inBookAssets,
+  duplicateOccurrences,
+  onNavigateToPage,
   onEditsSaved,
 }: {
   bookId: string;
+  /** Threaded down to `PickerSheet`'s person filter (item 1) — see
+   * `useFamilyMembers.ts`'s own doc comment for why this is a plain prop
+   * rather than a second `picker_pool` server round trip. */
+  familyId: string;
   containerRef: RefObject<HTMLElement | null>;
   pages: BookPage[];
   manifest: BookManifest;
   edits: MemoryBookEditsShape;
   inBookAssets: InBookAssets;
+  /** Item 3: every asset file duplicated across the WHOLE fitted document
+   * (not just the pages currently on screen) — computed once by
+   * `BookViewScreen` from `data.document.pages`, see
+   * `duplicateAssets.ts`'s own doc comment. */
+  duplicateOccurrences: Map<string, AssetOccurrence[]>;
+  /** Item 3's badge click target — `BookViewScreen` owns the unit/page
+   * navigation state this overlay has no access to. Takes a RAW document
+   * page index (`AssetOccurrence.pageIndex`), same currency
+   * `computeUnits`'s `rawIndices` uses. */
+  onNavigateToPage: (rawPageIndex: number) => void;
   onEditsSaved: (edits: MemoryBookEditsShape, undo: UndoAction) => void;
 }) {
   const { photoRegions, textRegions } = useOverlayGeometry(containerRef, pages, edits, manifest);
@@ -118,6 +136,15 @@ export function EditOverlay({
     return needsReposition(nativeAspectFor(region), slotAspect);
   }
 
+  /** Item 3: where this region's duplicate badge should jump, or `null`
+   * when this asset isn't duplicated (no badge) or every occurrence lives
+   * on the page already on screen (badge would have nowhere new to go). */
+  function duplicateTargetFor(region: PositionedPhotoRegion): AssetOccurrence | null {
+    const occurrences = duplicateOccurrences.get(region.assetFile);
+    if (!occurrences) return null;
+    return nextOtherOccurrence(occurrences, region.pageId, region.key);
+  }
+
   return (
     <div className="edit-overlay" aria-hidden={photoRegions.length === 0 && textRegions.length === 0}>
       {photoRegions.map((region) => {
@@ -128,7 +155,8 @@ export function EditOverlay({
         // Item 1: hide Reposition once the photo is effectively uncropped
         // at this slot's own aspect — nothing meaningful left to adjust.
         const showReposition = showRepositionFor(region);
-        if (!showReplace && !showReposition) return null; // nothing left to offer — no empty hover affordance.
+        const duplicateTarget = duplicateTargetFor(region);
+        if (!showReplace && !showReposition && !duplicateTarget) return null; // nothing left to offer — no empty hover affordance.
         return (
           <div
             key={region.key}
@@ -162,6 +190,24 @@ export function EditOverlay({
                 </button>
               )}
             </div>
+            {duplicateTarget && (
+              // Item 3: unlike the Replace/Reposition actions above, this
+              // stays visible without hover (it's information, not an
+              // affordance that needs discovering) — subtle by staying
+              // small and low-contrast rather than by hiding.
+              <button
+                type="button"
+                className="edit-overlay__duplicate-badge"
+                title="Also used on another page — jump there"
+                aria-label="This photo is also used on another page — jump there"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onNavigateToPage(duplicateTarget.pageIndex);
+                }}
+              >
+                ⇄
+              </button>
+            )}
           </div>
         );
       })}
@@ -180,6 +226,7 @@ export function EditOverlay({
       {pickerRegion && (
         <PickerSheet
           bookId={bookId}
+          familyId={familyId}
           slotKey={pickerRegion.key}
           isCover={pickerRegion.isCover}
           targetAspect={targetAspectFor(pickerRegion)}

@@ -61,6 +61,36 @@
   background: var(--color-primaryTint);
 }
 
+/* Item 3 (owner-approved editing-UX round): a duplicate-photo badge, always
+   visible (unlike `.edit-overlay__photo-actions` above, which only appears
+   on hover/active) but kept subtle — small, low-contrast, tucked into the
+   corner rather than competing with the Replace/Reposition affordances. */
+.edit-overlay__duplicate-badge {
+  all: unset;
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  background: var(--color-white);
+  color: var(--color-ink2);
+  box-shadow: 0 1px 3px rgba(44, 36, 24, 0.18), 0 4px 12px rgba(44, 36, 24, 0.14);
+  opacity: 0.85;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.edit-overlay__duplicate-badge:hover {
+  opacity: 1;
+  color: var(--color-primaryDark);
+}
+
 .edit-overlay__text {
   all: unset;
   position: absolute;

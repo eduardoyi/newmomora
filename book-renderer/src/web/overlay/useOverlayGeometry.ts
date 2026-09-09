@@ -34,6 +34,15 @@ export interface PositionedPhotoRegion {
   isCover: boolean;
   /** See `editableFields.ts`'s `EditablePhotoSlot.isVideoPoster` doc comment — a locked-in-v1 video slot. */
   isVideoPoster: boolean;
+  /** The `BookPage.id` this region is rendered on (the `cover-wrap` page's
+   * own id for the cover slot — it's built in the same per-page loop as
+   * every other region below, not a special case). Item 3 (owner-approved
+   * editing-UX round)'s duplicate-badge navigation needs this to recognize
+   * "this is the occurrence I'm currently looking at" when deciding which
+   * occurrence to jump to next (`key` alone already tells two occurrences
+   * apart; `pageId` is what lets a click skip past any further occurrence
+   * still on the SAME page). */
+  pageId: string;
   rect: DOMRectLike;
 }
 
@@ -98,10 +107,10 @@ export function useOverlayGeometry(
           if (plan.perSlot) {
             photoSlots.forEach((slot, i) => {
               const node = nodes[i];
-              if (node) photoRegions.push(toPhotoRegion(slot, node, containerRect));
+              if (node) photoRegions.push(toPhotoRegion(slot, node, containerRect, page.id));
             });
           } else if (nodes[0] && photoSlots[0]) {
-            photoRegions.push(toPhotoRegion(photoSlots[0], nodes[0], containerRect));
+            photoRegions.push(toPhotoRegion(photoSlots[0], nodes[0], containerRect, page.id));
           }
         }
 
@@ -165,7 +174,12 @@ export function useOverlayGeometry(
   return geometry;
 }
 
-function toPhotoRegion(slot: EditablePhotoSlot, node: HTMLElement, containerRect: DOMRect): PositionedPhotoRegion {
+function toPhotoRegion(
+  slot: EditablePhotoSlot,
+  node: HTMLElement,
+  containerRect: DOMRect,
+  pageId: string,
+): PositionedPhotoRegion {
   return {
     kind: 'photo',
     key: slot.key,
@@ -173,6 +187,7 @@ function toPhotoRegion(slot: EditablePhotoSlot, node: HTMLElement, containerRect
     assetFile: slot.assetFile,
     isCover: slot.isCover,
     isVideoPoster: slot.isVideoPoster,
+    pageId,
     rect: relativeRect(node.getBoundingClientRect(), containerRect),
   };
 }

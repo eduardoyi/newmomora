@@ -1,5 +1,5 @@
 import { COVER_SLOT_KEY, slotKey } from '../../model/edits';
-import type { PhotoSlotContent } from '../../model/types';
+import type { BookPage, PhotoSlotContent } from '../../model/types';
 
 /**
  * Recovers the STABLE `images`/`focalPoints` edit key for a rendered photo
@@ -32,4 +32,30 @@ export function resolveEditableSlotKey(content: PhotoSlotContent): string {
  * sites never hardcode the sentinel string themselves. */
 export function coverSlotKey(): string {
   return COVER_SLOT_KEY;
+}
+
+/**
+ * Item 4 (owner-approved editing-UX round): finds the page currently
+ * rendering the STABLE editable slot `slotKey` — how `BookViewScreen`
+ * locates a just-saved image edit's page after the document refits (the
+ * slot may have moved), and how it decides which page to compare
+ * before/after for the full-bleed/panorama demotion notice (see
+ * `reflowNotice.ts`). The cover slot carries no `PhotoSlotContent` of its
+ * own to key off (its file lives on `cover-wrap`'s own
+ * `params.assetFile`), so it resolves to the `cover-wrap` page directly.
+ * `null` if the slot doesn't render anywhere in `pages` (shouldn't happen
+ * for a slot that was just successfully saved, but never assumed —
+ * mirrors `SkippedEditsToast`'s own "orphans cleanly" posture).
+ */
+export function findPageForEditableSlot(pages: BookPage[], slotKey: string): BookPage | null {
+  if (slotKey === COVER_SLOT_KEY) {
+    return pages.find((page) => page.templateId === 'cover-wrap') ?? null;
+  }
+  for (const page of pages) {
+    for (const slot of page.slots) {
+      if (slot.content.kind !== 'photo') continue;
+      if (resolveEditableSlotKey(slot.content as PhotoSlotContent) === slotKey) return page;
+    }
+  }
+  return null;
 }

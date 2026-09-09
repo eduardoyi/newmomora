@@ -28,6 +28,17 @@
   min-width: 0;
 }
 
+/* Item 4 (owner-approved editing-UX round): the combined Saved + demotion
+   message runs longer than a bare "Saved." — a wider cap keeps it
+   readable instead of wrapping into a tall, narrow column. */
+.edit-saved-toast--demoted {
+  max-width: min(380px, calc(100vw - 32px));
+}
+
+.edit-saved-toast__demotion {
+  color: var(--color-ink3);
+}
+
 .edit-saved-toast__undo {
   all: unset;
   cursor: pointer;

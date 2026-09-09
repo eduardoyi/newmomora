@@ -280,9 +280,26 @@ export function registerFixturePool(slug: string, manifest: BookManifest): void 
  * real Edge Function uses (see `handlePickerPool`'s own doc comment). An
  * item already chosen via a saved `imageReplace`/`coverPhoto` edit in THIS
  * fixture session is flagged `alreadyInBook`, mirroring
- * `collectImageEditMediaIds`. */
-export async function fixtureFetchPickerPool(slug: string, cursor: string | null): Promise<PickerPoolPage> {
-  const pool = poolForSlug(slug);
+ * `collectImageEditMediaIds`.
+ *
+ * Item 1 (owner-approved editing-UX round): `filters` mirrors the real
+ * function's optional `dateStart`/`dateEnd`/`memberId` -- date filtering
+ * works here (`item.date` is a bare `YYYY-MM-DD`, so a plain string
+ * comparison is correct). The person filter is a DELIBERATE no-op: the
+ * fixture pool (`buildPool` above) carries no member tags to filter
+ * against — real tagging lives in `memory_family_members`, which this
+ * dev-only, backend-free fixture never models — so a `memberId` here
+ * returns the unfiltered pool rather than fabricating tag data. */
+export async function fixtureFetchPickerPool(
+  slug: string,
+  cursor: string | null,
+  filters: { dateStart?: string; dateEnd?: string; memberId?: string } = {},
+): Promise<PickerPoolPage> {
+  const pool = poolForSlug(slug).filter((item) => {
+    if (filters.dateStart && item.date < filters.dateStart) return false;
+    if (filters.dateEnd && item.date > filters.dateEnd) return false;
+    return true;
+  });
   const offset = cursor ? Number(cursor) : 0;
   if (cursor && (!Number.isInteger(offset) || offset < 0)) {
     return { items: [], nextCursor: null, error: 'Invalid cursor' };

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditableBook } from './useEditableBook';
 import { useBookAssetProvider } from '../media/useBookAssetProvider';
 import { collectManifestAssetKeys } from '../media/manifestKeys';
@@ -15,6 +15,11 @@ import { FirstVisitHint } from './FirstVisitHint';
 import { useDocumentTitle } from '../useDocumentTitle';
 import { CheckoutScreen } from '../order/CheckoutScreen';
 import { useHasPastOrders } from '../order/useHasPastOrders';
+import { computeDuplicateAssetOccurrences } from './duplicateAssets';
+import { computeReflowResult } from './reflowNotice';
+import type { UndoAction } from '../edits/editsApi';
+import type { MemoryBookEditsShape } from '../../model/edits';
+import type { BookPage } from '../../model/types';
 import './BookViewScreen.css';
 
 const EMPTY_IN_BOOK: InBookAssets = { assetFiles: new Set(), mediaIds: new Set() };
@@ -89,6 +94,24 @@ export function BookViewScreen({
   const pages = data?.document.pages ?? [];
   const units = useMemo(() => computeUnits(pages), [pages]);
   const unitCount = units.length;
+  // Items 3/4 (owner-approved editing-UX round): a raw document page index
+  // -> unit index lookup, same pattern the local preview app's own
+  // `App.tsx` builds for its variant switcher — both the duplicate-badge
+  // jump (item 3) and the post-save auto-scroll (item 4) navigate by RAW
+  // page index, never a unit index directly, since the page that answers
+  // "where is this slot now" only exists in document terms.
+  const rawIndexToUnit = useMemo(() => {
+    const map = new Map<number, number>();
+    units.forEach((unit, ui) => unit.rawIndices.forEach((raw) => map.set(raw, ui)));
+    return map;
+  }, [units]);
+  const navigateToPageIndex = useCallback(
+    (rawIndex: number) => {
+      const ui = rawIndexToUnit.get(rawIndex);
+      if (ui !== undefined) setUnitIndex(ui);
+    },
+    [rawIndexToUnit],
+  );
   const currentUnit = units[unitIndex] ?? null;
   const rawPages = useMemo(() => {
     if (!currentUnit) return [];
@@ -140,6 +163,45 @@ export function BookViewScreen({
     () => (data ? collectInBookAssets(data.document, data.edits) : EMPTY_IN_BOOK),
     [data],
   );
+
+  // Item 3: every asset file duplicated across the WHOLE fitted document —
+  // recomputed only when the document itself changes, not on every
+  // page-navigation click.
+  const duplicateOccurrences = useMemo(() => computeDuplicateAssetOccurrences(pages), [pages]);
+
+  // Item 4: post-save auto-scroll + full-bleed/panorama demotion notice.
+  // `pendingReflowRef` carries the just-saved slot key + the document's
+  // `pages` from immediately BEFORE the save across the render where
+  // `data` itself updates (the refit happens inside `useEditableBook`'s own
+  // `data` useMemo, one render after this callback runs) — the effect
+  // below reacts once the refitted `pages` actually lands, comparing
+  // before/after via `computeReflowResult` (pure, no DOM, unit-tested on
+  // its own).
+  const pendingReflowRef = useRef<{ slotKey: string; beforePages: BookPage[] } | null>(null);
+  const [demoted, setDemoted] = useState(false);
+
+  const handleEditOverlaySaved = useCallback(
+    (nextEdits: MemoryBookEditsShape, undo: UndoAction) => {
+      setDemoted(false);
+      // Only an image edit (replace/cover/reset) can move a slot to a new
+      // page or change its template — text/focalPoint saves never reflow,
+      // so they skip the reflow bookkeeping entirely (`pendingReflowRef`
+      // stays `null`, and the effect below no-ops for them).
+      pendingReflowRef.current =
+        undo.category === 'images' && data ? { slotKey: undo.key, beforePages: data.document.pages } : null;
+      handleEditsSaved(nextEdits, undo);
+    },
+    [data, handleEditsSaved],
+  );
+
+  useEffect(() => {
+    const pending = pendingReflowRef.current;
+    if (!pending || !data) return;
+    pendingReflowRef.current = null; // one-shot per save
+    const result = computeReflowResult(pending.beforePages, data.document.pages, pending.slotKey);
+    if (result.rawIndex !== null) navigateToPageIndex(result.rawIndex);
+    setDemoted(result.demoted);
+  }, [data, navigateToPageIndex]);
 
   if (loading) {
     return (
@@ -259,12 +321,15 @@ export function BookViewScreen({
               {data.canEdit && (
                 <EditOverlay
                   bookId={bookId}
+                  familyId={data.book.family_id}
                   containerRef={stageRef}
                   pages={rawPages}
                   manifest={data.editedManifest}
                   edits={data.edits}
                   inBookAssets={inBookAssets}
-                  onEditsSaved={handleEditsSaved}
+                  duplicateOccurrences={duplicateOccurrences}
+                  onNavigateToPage={navigateToPageIndex}
+                  onEditsSaved={handleEditOverlaySaved}
                 />
               )}
             </div>
@@ -273,7 +338,15 @@ export function BookViewScreen({
       </div>
 
       {data.canEdit && <SkippedEditsToast bookId={bookId} skipped={data.skipped} onRemoved={applyEditsPatch} />}
-      {data.canEdit && <EditSavedToast pending={pendingUndo} undoing={undoing} onUndo={() => void handleUndo()} onDismiss={dismissUndo} />}
+      {data.canEdit && (
+        <EditSavedToast
+          pending={pendingUndo}
+          undoing={undoing}
+          demoted={demoted}
+          onUndo={() => void handleUndo()}
+          onDismiss={dismissUndo}
+        />
+      )}
     </div>
   );
 }
