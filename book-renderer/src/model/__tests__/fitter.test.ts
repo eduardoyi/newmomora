@@ -1938,6 +1938,40 @@ describe('fitBook — native aspect everywhere outside grids (owner review round
   });
 });
 
+describe('fitBook — user-chosen photos are exempt from the full-bleed crop-loss gate (owner decision 2026-09-09)', () => {
+  // Aspect 0.6 portrait: square crop loss = 0.4, over BOTH bars (0.25
+  // non-hero / 0.3 hero) — a machine-picked photo this shape never wins
+  // full-bleed. Width 2600 ≥ FULL_BLEED_TRUSTED_MIN_WIDTH_PX, so the
+  // RESOLUTION gate passes and crop-loss is the only thing in the way.
+  const croppy = () => makeAsset({ width: 2600, height: 4333, aspectRatio: 0.6 });
+
+  it('machine-picked: the crop-loss gate still demotes a heavy-crop portrait', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [croppy()] }) });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const { document } = fitBook(outline, manifest);
+    expect(document.pages.filter((p) => p.templateId === 'full-bleed')).toHaveLength(0);
+  });
+
+  it('user-chosen (editedFromFile set): the same portrait keeps/wins full-bleed — the parent judges the crop and holds the reposition tool', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ assets: [{ ...croppy(), editedFromFile: 'assets/original.jpg' }] }),
+    });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const { document } = fitBook(outline, manifest);
+    expect(document.pages.filter((p) => p.templateId === 'full-bleed')).toHaveLength(1);
+  });
+
+  it('user-chosen but low-res: the resolution trust gate is NOT waived — print quality is not a taste call', () => {
+    const manifest = makeManifest({
+      // Width 2000 < 2500: a full-page square crop of this prints soft.
+      'mem-1': makeMemory({ assets: [{ ...makeAsset({ width: 2000, height: 3333, aspectRatio: 0.6 }), editedFromFile: 'assets/original.jpg' }] }),
+    });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const { document } = fitBook(outline, manifest);
+    expect(document.pages.filter((p) => p.templateId === 'full-bleed')).toHaveLength(0);
+  });
+});
+
 describe('fitBook — full-bleed parity-aware facing credit (owner review round 3, item 2)', () => {
   it('forces a blank filler so a full-bleed page always lands even, keeping its credit on the TRUE facing page', () => {
     // mem-0 occupies page 2 (even) by itself; the full-bleed hero would

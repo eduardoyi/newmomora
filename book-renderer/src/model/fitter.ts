@@ -1422,8 +1422,22 @@ function scoreFullBleed(
   // floor (which let an arbitrarily wide photo through as "landscape" and
   // silently cropped away nearly half of it). A hero gets a looser bar —
   // human-reviewed downstream, so a bit more crop is an acceptable trade.
+  //
+  // USER-CHOSEN photos are exempt from the crop-loss gate entirely (owner
+  // decision 2026-09-09): the budget exists because the AUTOMATED layout
+  // can't be trusted to crop a mismatched photo well — but a parent who
+  // deliberately swapped this photo in CAN judge the square crop, and
+  // holds the reposition/focal-point tool to frame it. `editedFromFile` is
+  // set exactly and only on a substituted asset (`edits.ts`'s
+  // `substituteAsset`), so the exemption never applies to machine-picked
+  // photos. The RESOLUTION trust gate below still applies unconditionally
+  // — print quality is not a taste call. Side effect, accepted: the same
+  // exemption can also PROMOTE a user-swapped photo on an ordinary solo
+  // page into full-bleed (budget/pacing permitting) — the rule is
+  // symmetric ("don't crop-police the user's pick"), not demotion-only.
+  const cropGateWaived = Boolean(asset.editedFromFile);
   const maxCropLoss = isHero ? FULL_BLEED_HERO_MAX_CROP_LOSS : FULL_BLEED_MAX_CROP_LOSS;
-  if (fullBleedCropLoss(aspect) > maxCropLoss) return null;
+  if (!cropGateWaived && fullBleedCropLoss(aspect) > maxCropLoss) return null;
   const trustedWidthPx = asset.originalWidth ?? asset.width;
   if (isHero) {
     // Trusted hero path (owner review round 3, item 2): bypasses the face

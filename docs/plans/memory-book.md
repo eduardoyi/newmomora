@@ -407,7 +407,16 @@ illustrated-story width drift fixed (page-relative % applied inside an
 80%-width container silently shrank illos ~20% and defeated the split
 threshold); full-bleed non-hero crop-loss cap 20%→25% (a standard 4:3
 photo loses exactly 25% to square — the old cap excluded the entire
-phone-photo population), plus a paced soft target of ~1 full-bleed per
+phone-photo population). USER-CHOSEN photos (an `imageReplace` edit's
+substituted asset, `editedFromFile` set) are EXEMPT from the crop-loss
+gate entirely (owner decision 2026-09-09): the budget exists because the
+automated layout can't judge a crop, but a parent who deliberately
+swapped the photo can — and holds the reposition tool. The resolution
+trust gate stays unconditional (print quality is not a taste call — a
+2268px-wide 9:16 phone portrait still demotes at full-page square), and
+the exemption is symmetric: a user-swapped photo on an ordinary page can
+also PROMOTE into full-bleed, budget permitting. Plus a paced soft
+target of ~1 full-bleed per
 15 pages (rolling slot release, so early months can't consume the whole
 budget) under the existing ~1-per-10 ceiling; exporter measures original
 dimensions for ALL photos (previously only outline-nominated candidates —
