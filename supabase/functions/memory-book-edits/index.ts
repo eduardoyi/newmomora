@@ -917,7 +917,16 @@ async function handlePickerPool(
     filterQuery = filterQuery.in('memory_id', memberMemoryIds);
   }
   const { data: rows, error } = await filterQuery
-    .order('memory_date', { referencedTable: 'memories', ascending: true })
+    // Chronological pool (owner-reported live, 2026-09-09): ordering by an
+    // embedded column via `referencedTable` orders the EMBEDDED rows within
+    // each parent — NOT the top-level `memory_media` list, which came back
+    // in effectively random (uuid) order and looked scrambled the moment
+    // the picker started showing dates. PostgREST v12's
+    // `order=memories(memory_date)` syntax orders the PARENT list by the
+    // to-one embed's column (verified against the live project before this
+    // change); `id` stays as the deterministic tiebreak for stable
+    // offset pagination within a same-date run.
+    .order('memories(memory_date)', { ascending: true })
     .order('id', { ascending: true })
     .range(offset, offset + limit - 1);
 
