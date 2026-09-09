@@ -559,13 +559,15 @@ export function fixtureOrderJumpStates(): MemoryBookOrderStatus[] {
 
 /** Fixture stand-in for `useOrders.ts`'s real `memory_book_orders` SELECT +
  * `memory_books` join (memory-book-5c order-status UX round, item 2) --
- * newest first, same ordering the real query uses. `book_title` comes from
+ * newest first, same ordering and same bare-`draft` exclusion the real
+ * query uses (see `useOrders.ts` on why draft shells never surface).
+ * `book_title` comes from
  * `fixtureBookLabel`, not the order itself (see that function's own doc
  * comment on why a fixture order carries no title of its own). */
 export function fixtureListOrders(): MemoryBookOrderListRow[] {
   const orders = Object.values(ordersStore());
   return orders
-    .slice()
+    .filter((order) => order.status !== 'draft')
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map((order) => ({
       id: order.id,
@@ -581,7 +583,9 @@ export function fixtureListOrders(): MemoryBookOrderListRow[] {
 }
 
 /** Fixture stand-in for `useHasPastOrders.ts`'s real `limit(1)` existence
- * check -- cheap enough here to just check the in-memory store's size. */
+ * check -- and, matching it, bare `draft` shells don't count (see
+ * `fixtureListOrders` above: a buyer with only stray drafts would get a
+ * "Your orders" link into an empty-looking list). */
 export function fixtureHasOrders(): boolean {
-  return Object.keys(ordersStore()).length > 0;
+  return Object.values(ordersStore()).some((order) => order.status !== 'draft');
 }

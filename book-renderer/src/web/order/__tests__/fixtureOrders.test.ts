@@ -115,15 +115,31 @@ describe('fixture orders list', () => {
   // the start of each test, never against an assumed-empty store -- earlier
   // describe blocks in this same file have already created orders by the
   // time these run.
-  it('fixtureHasOrders is true once at least one draft exists', () => {
-    fixtureCreateOrderDraft('enzo-year-one');
+  it('bare draft shells never count as orders — not for the list, not for the has-orders probe', () => {
+    // Owner-reported (2026-09-09): a draft row is created on every checkout
+    // open, so abandoned "Order this book" clicks were piling up as
+    // meaningless "Not started" rows on /orders. Drafts are excluded from
+    // both surfaces — see `useOrders.ts`'s `.neq('status', 'draft')`.
+    const baseline = fixtureListOrders().length;
+    const hadOrders = fixtureHasOrders();
+    const draft = fixtureCreateOrderDraft('enzo-year-one');
+    expect(fixtureListOrders().length).toBe(baseline);
+    expect(fixtureListOrders().map((r) => r.id)).not.toContain(draft.orderId);
+    expect(fixtureHasOrders()).toBe(hadOrders);
+  });
+
+  it('fixtureHasOrders is true once at least one post-draft order exists', () => {
+    const { orderId } = fixtureCreateOrderDraft('enzo-year-one');
+    fixtureSetOrderStatus(orderId, 'paid');
     expect(fixtureHasOrders()).toBe(true);
   });
 
-  it('lists every order across books, newest first, with a fallback title', () => {
+  it('lists every post-draft order across books, newest first, with a fallback title', () => {
     const baselineIds = new Set(fixtureListOrders().map((r) => r.id));
     const first = fixtureCreateOrderDraft('enzo-year-one');
     const second = fixtureCreateOrderDraft('enzo-year-one');
+    fixtureSetOrderStatus(first.orderId, 'quoted');
+    fixtureSetOrderStatus(second.orderId, 'paid');
 
     const rows = fixtureListOrders();
     const ids = rows.map((r) => r.id);

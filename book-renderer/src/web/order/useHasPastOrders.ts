@@ -25,7 +25,10 @@ export function useHasPastOrders(): boolean {
         if (!cancelled) setHasOrders(fixtureHasOrders());
         return;
       }
-      const { data, error } = await supabase.from('memory_book_orders').select('id').limit(1);
+      // Same bare-`draft` exclusion as `useOrders.ts` -- a buyer whose only
+      // rows are abandoned draft shells has nothing to see on /orders, so
+      // the link shouldn't render for them either.
+      const { data, error } = await supabase.from('memory_book_orders').select('id').neq('status', 'draft').limit(1);
       if (cancelled || error) return;
       setHasOrders((data?.length ?? 0) > 0);
     }

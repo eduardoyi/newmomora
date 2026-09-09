@@ -80,6 +80,13 @@ export function useOrders() {
       .select(
         'id, book_id, status, price_cents, shipping_cost_cents, currency, refunded_at, created_at, book:memory_books(scope_label, child:family_members(name))',
       )
+      // Bare `draft` shells never surface: one is created the moment the
+      // checkout screen mounts (CheckoutScreen.tsx's own header comment on
+      // `create_draft`), so every abandoned "Order this book" click leaves
+      // one behind by design -- a wall of meaningless "Not started" rows
+      // (owner-reported, 2026-09-09). The first status a buyer should ever
+      // see here is `quoted` (they at least entered an address).
+      .neq('status', 'draft')
       .order('created_at', { ascending: false });
 
     if (error) {

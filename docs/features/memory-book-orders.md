@@ -71,6 +71,13 @@ unhappy path alarms the owner rather than silently stranding a paid order.
   link in `BookListScreen`'s header (always visible) and from
   `BookViewScreen` next to "Order this book" (only once
   `order/useHasPastOrders.ts` confirms the buyer has at least one).
+  **Bare `draft` shells are excluded from both** (`.neq('status',
+  'draft')` on the list query and the has-orders probe alike,
+  owner-reported 2026-09-09): a draft row is created on every checkout
+  open by design (see `CheckoutScreen.tsx`'s `create_draft` comment), so
+  every abandoned "Order this book" click would otherwise surface as a
+  meaningless "Not started" row. The first status a buyer can see on
+  /orders is `quoted`.
 - **Carrier tracking**: once the sweep sees `shipped`, it persists
   `tracking_number`/`tracking_url`/`carrier` (new columns, see
   [Data model](#data-model) below) and `OrderStatusScreen` shows a
