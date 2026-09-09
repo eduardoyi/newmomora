@@ -40,14 +40,52 @@ async function describeFunctionError(error: { message: string; context?: unknown
   return error.message;
 }
 
+/**
+ * Hang guard on every order op (owner-hit 2026-09-09: an infinite "Getting
+ * your quote…" spinner). `supabase.functions.invoke` can fail to settle at
+ * all — supabase-js serializes the pre-flight auth-token refresh through a
+ * cross-tab `navigator.locks` lock that is known to deadlock with the same
+ * origin open in other tabs, and neither it nor a stalled network request
+ * carries any timeout of its own. Racing the invoke against this cap turns
+ * any such hang into an ordinary `{ error }` the screens already render
+ * with a retry path. Retrying after a timeout is safe for every op: `quote`
+ * re-quotes a draft/quoted row idempotently, a duplicate `create_draft`
+ * just leaves one more hidden draft shell, and an abandoned Checkout
+ * Session from `create_checkout` simply expires unused. 45s comfortably
+ * exceeds the server's own 30s upstream timeout (memory-book-orders'
+ * `DEFAULT_DEPENDENCIES.fetch`), so a slow-but-alive server still answers
+ * first with its more specific error.
+ */
+const INVOKE_TIMEOUT_MS = 45_000;
+const TIMED_OUT = Symbol('invoke-timed-out');
+
+async function raceInvokeTimeout<T>(promise: Promise<T>): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), INVOKE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const TIMED_OUT_MESSAGE = 'This is taking longer than expected. Please try again.';
+
 export async function createOrderDraft(bookId: string): Promise<{ orderId: string } | { error: string }> {
   if (import.meta.env.DEV && getFixtureSlug()) {
     return fixtureCreateOrderDraft(bookId);
   }
-  const { data, error } = await supabase.functions.invoke<{ success: true; orderId: string; status: string }>(
-    'memory-book-orders',
-    { body: { op: 'create_draft', bookId } },
+  const raced = await raceInvokeTimeout(
+    supabase.functions.invoke<{ success: true; orderId: string; status: string }>('memory-book-orders', {
+      body: { op: 'create_draft', bookId },
+    }),
   );
+  if (raced === TIMED_OUT) return { error: TIMED_OUT_MESSAGE };
+  const { data, error } = raced;
   if (error) return { error: await describeFunctionError(error) };
   if (!data?.orderId) return { error: 'Failed to start an order.' };
   return { orderId: data.orderId };
@@ -71,9 +109,13 @@ export async function quoteOrder(
   if (import.meta.env.DEV && getFixtureSlug()) {
     return fixtureQuoteOrder(orderId, address);
   }
-  const { data, error } = await supabase.functions.invoke<QuoteFunctionResponse>('memory-book-orders', {
-    body: { op: 'quote', orderId, address },
-  });
+  const raced = await raceInvokeTimeout(
+    supabase.functions.invoke<QuoteFunctionResponse>('memory-book-orders', {
+      body: { op: 'quote', orderId, address },
+    }),
+  );
+  if (raced === TIMED_OUT) return { error: TIMED_OUT_MESSAGE };
+  const { data, error } = raced;
   if (error) return { error: await describeFunctionError(error) };
   if (!data) return { error: 'Failed to quote this order.' };
   return {
@@ -96,10 +138,13 @@ export async function createCheckoutSession(orderId: string): Promise<CreateChec
     // redirecting the whole page.
     return { orderId: result.orderId, checkoutUrl: null };
   }
-  const { data, error } = await supabase.functions.invoke<{ success: true; orderId: string; checkoutUrl: string | null }>(
-    'memory-book-orders',
-    { body: { op: 'create_checkout', orderId } },
+  const raced = await raceInvokeTimeout(
+    supabase.functions.invoke<{ success: true; orderId: string; checkoutUrl: string | null }>('memory-book-orders', {
+      body: { op: 'create_checkout', orderId },
+    }),
   );
+  if (raced === TIMED_OUT) return { error: TIMED_OUT_MESSAGE };
+  const { data, error } = raced;
   if (error) return { error: await describeFunctionError(error) };
   if (!data?.checkoutUrl) return { error: 'Unable to start checkout — please try again.' };
   return { orderId: data.orderId, checkoutUrl: data.checkoutUrl };

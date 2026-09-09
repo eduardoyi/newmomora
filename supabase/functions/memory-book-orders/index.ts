@@ -78,7 +78,14 @@ export const DEFAULT_DEPENDENCIES: MemoryBookOrdersDependencies = {
   getAuthenticatedUser: getAuthenticatedNonAnonymousUser,
   createServiceClient,
   getCallerFamilyRole,
-  fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
+  // Every upstream call (render worker /fit, Prodigi, Stripe) rides this
+  // fetch. A hung upstream must fail loud — each call site's catch turns
+  // the rejection into a clean 502 — never hang the whole op: the
+  // buyer-facing symptom of a hang is an infinite "Getting your quote…"
+  // spinner (owner-hit 2026-09-09). 30s is generous for all three
+  // upstreams (each normally answers in 1–3s).
+  fetch: (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    fetch(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(30_000) }),
   now: () => Date.now(),
 };
 

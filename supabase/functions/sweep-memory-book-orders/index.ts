@@ -133,7 +133,12 @@ export interface SweepDependencies {
 
 export const DEFAULT_DEPENDENCIES: SweepDependencies = {
   createServiceClient,
-  fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
+  // Same 30s upstream timeout as memory-book-orders' default fetch (see
+  // that file's comment): a hung Prodigi poll or dispatch must fail loud
+  // for THIS order and let the sweep move on, never stall the whole cron
+  // run until the platform kills it.
+  fetch: (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    fetch(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(30_000) }),
   now: () => Date.now(),
   sendEmail: sendTransactionalEmailWithOutcome,
 };

@@ -33,10 +33,17 @@ const FONTS = [
 
 /**
  * Tier 2 address entry (checkout address-entry plan): Stripe's Address
- * Element in shipping mode, with the Google-Maps-backed type-ahead
- * autocomplete Stripe provides on the owner's own key
- * (`autocomplete: { mode: 'automatic' }` is actually the default — listed
- * explicitly to document the choice, per Design Decision 4).
+ * Element in shipping mode. NOTE on autocomplete (corrected 2026-09-09,
+ * owner-verified live): Stripe's free Google-Maps-backed type-ahead only
+ * exists when the Address Element is used TOGETHER with the Payment
+ * Element — used standalone (our case; payment is hosted Checkout), the
+ * `automatic` mode silently provides NO suggestions, and enabling them
+ * requires the owner's own Google Maps Places API key via
+ * `autocomplete: { mode: 'google_maps_api', apiKey }` (a paid Google
+ * Cloud product, and Stripe's supported-country list excludes PT
+ * regardless). Until/unless the owner opts into that, this component's
+ * value is the Element's per-country field localization + validation,
+ * with browser/password-manager autofill for the type-ahead role.
  * `allowedCountries` narrows to the SAME `SHIPS_TO_COUNTRIES` list the
  * manual `AddressForm`'s `<select>` uses, so this path can never collect a
  * destination the manual path couldn't quote either. An `<Elements>`
