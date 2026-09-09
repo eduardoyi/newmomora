@@ -67,6 +67,23 @@ export interface MemoryBookOrderRow {
   prodigi_order_id: string | null;
   failure_reason: string | null;
   refunded_at: string | null;
+  /** The quoted shipping destination, persisted by the `quote` op
+   * (camelCase JSON, same shape as `order/types.ts`'s
+   * `ShippingAddressInput` — the server's `ShippingAddress` interface owns
+   * it). Null until `quoted`. Shown on `OrderStatusScreen` so a buyer can
+   * catch a wrong address while the kept 2h Prodigi edit window can still
+   * fix it. Declared structurally here rather than importing from
+   * `order/types.ts` — this file is the web package's base types module
+   * and imports nothing. */
+  shipping_address: {
+    name: string;
+    line1: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    postalCode: string;
+    countryCode: string;
+  } | null;
   /** memory-book-5c order-status UX round, item 3 (migration
    * `20260909130000_memory_book_order_tracking.sql`). All three null until
    * the sweep extracts them from Prodigi's shipments array on the `shipped`

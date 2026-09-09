@@ -484,6 +484,7 @@ export function fixtureOrderRow(order: FixtureOrder): MemoryBookOrderRow {
     prodigi_order_id: order.prodigiOrderId,
     failure_reason: order.failureReason,
     refunded_at: order.refundedAt,
+    shipping_address: order.shippingAddress,
     tracking_number: order.trackingNumber,
     tracking_url: order.trackingUrl,
     carrier: order.carrier,

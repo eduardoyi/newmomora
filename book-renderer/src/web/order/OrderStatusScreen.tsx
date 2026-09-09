@@ -3,6 +3,7 @@ import { useOrderStatus } from './useOrderStatus';
 import { orderStatusCopy } from './orderStatusCopy';
 import { showsProgressStepper } from './orderProgressSteps';
 import { OrderProgressStepper } from './OrderProgressStepper';
+import { SHIPS_TO_COUNTRIES } from './shippingCountries';
 import { useDocumentTitle } from '../useDocumentTitle';
 import {
   getFixtureSlug,
@@ -15,6 +16,14 @@ import './OrderStatusScreen.css';
 
 function formatMoney(cents: number, currency: string): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100);
+}
+
+/** Country display name for the "Ships to" block. Falls back to the bare
+ * ISO code for anything not in `SHIPS_TO_COUNTRIES` — possible in theory
+ * only for a historical row quoted before a country was removed from the
+ * list; never worth erroring the page over. */
+function shipsToCountryName(code: string): string {
+  return SHIPS_TO_COUNTRIES.find((country) => country.code === code)?.name ?? code;
 }
 
 /**
@@ -128,6 +137,43 @@ export function OrderStatusScreen({ orderId, onBackToBook }: { orderId: string; 
             </>
           )}
         </dl>
+
+        {/* The quoted destination, so a buyer can double-check where the
+            book is headed — half the value is the escalation line: a wrong
+            address caught fast is fixable, because the Prodigi 2h edit
+            window is deliberately KEPT on in production (owner decision
+            2026-09-09, docs/plans/prodigi-order-spec.md). The hint only
+            shows pre-`shipped` and post-payment — once shipped it's too
+            late for a fix, and pre-payment (`quoted`) the buyer is still in
+            checkout and can simply start over. */}
+        {order.shipping_address && (
+          <div className="order-status__ship-to">
+            <p className="order-status__ship-to-label">Ships to</p>
+            <p className="order-status__ship-to-address">
+              {order.shipping_address.name}
+              <br />
+              {order.shipping_address.line1}
+              {order.shipping_address.line2 && (
+                <>
+                  <br />
+                  {order.shipping_address.line2}
+                </>
+              )}
+              <br />
+              {[order.shipping_address.city, order.shipping_address.state, order.shipping_address.postalCode]
+                .filter(Boolean)
+                .join(', ')}
+              <br />
+              {shipsToCountryName(order.shipping_address.countryCode)}
+            </p>
+            {['paid', 'rendering', 'submitted', 'in_production'].includes(order.status) && (
+              <p className="order-status__ship-to-hint">
+                Wrong address? Reply to your confirmation email right away — mistakes caught quickly can usually still
+                be fixed.
+              </p>
+            )}
+          </div>
+        )}
 
         {(order.status === 'draft' || order.status === 'quoted') && (
           <button type="button" className="order-status__resume" onClick={() => onBackToBook(order.book_id)}>

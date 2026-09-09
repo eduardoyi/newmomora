@@ -58,7 +58,7 @@ export function useOrderStatus(orderId: string) {
       const { data, error } = await supabase
         .from('memory_book_orders')
         .select(
-          'id, book_id, status, price_cents, shipping_cost_cents, currency, quoted_page_count, prodigi_order_id, failure_reason, refunded_at, tracking_number, tracking_url, carrier, created_at, updated_at',
+          'id, book_id, status, price_cents, shipping_cost_cents, currency, quoted_page_count, prodigi_order_id, failure_reason, refunded_at, shipping_address, tracking_number, tracking_url, carrier, created_at, updated_at',
         )
         .eq('id', orderId)
         .maybeSingle();

@@ -165,6 +165,35 @@
   color: var(--color-ink);
 }
 
+.order-status__ship-to {
+  margin-top: 4px;
+}
+
+.order-status__ship-to-label {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-ink3);
+  margin: 0 0 4px;
+}
+
+.order-status__ship-to-address {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+.order-status__ship-to-hint {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--color-ink2);
+  margin: 8px 0 0;
+}
+
 .order-status__contact-hint {
   font-family: var(--font-sans);
   font-size: 12px;
