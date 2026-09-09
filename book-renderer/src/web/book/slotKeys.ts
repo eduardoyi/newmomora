@@ -1,4 +1,4 @@
-import { COVER_SLOT_KEY, slotKey, type MemoryBookEditsShape } from '../../model/edits';
+import { COVER_SLOT_KEY, slotKey } from '../../model/edits';
 import type { PhotoSlotContent } from '../../model/types';
 
 /**
@@ -6,33 +6,25 @@ import type { PhotoSlotContent } from '../../model/types';
  * slot, correctly even after that slot's photo has already been replaced by
  * a previous `imageReplace` edit.
  *
- * Why this is needed: `edits.ts`'s `slotKey(memoryId, assetFile)` (Design
+ * Why this exists: `edits.ts`'s `slotKey(memoryId, assetFile)` (Design
  * Decision 6) is built from a memory's ORIGINAL manifest asset file —
- * `applyPreFit` looks up `nextManifest.memories[memoryId].assets.find(a =>
- * a.file === assetFile)` against the PRISTINE (pre-substitution) manifest.
- * Once an edit has substituted a NEW file into that slot, the rendered
- * `PhotoSlotContent.assetFile` the templates show is that NEW file — naively
- * building `slotKey(memoryId, content.assetFile)` from the RENDERED slot
- * would therefore construct a key that no longer resolves against the
- * pristine manifest (the original file is gone from `content.assetFile`),
- * silently orphaning every subsequent edit (reposition, or a second
- * replace) on an already-edited slot.
+ * `applyPreFit` looks up the target against the PRISTINE (pre-substitution)
+ * manifest. Once an edit has substituted a NEW file into that slot, the
+ * rendered `PhotoSlotContent.assetFile` is that new file, so the naive key
+ * built from the rendered slot would orphan every subsequent edit on it.
  *
- * The fix: `edits.images` already tells us, for every `imageReplace`/
- * `coverPhoto` record, which substituted `file` was written into which
- * stable key (`record.slot`) — so a slot whose CURRENT `assetFile` matches
- * some edit's `record.file` recovers that edit's own key directly (already
- * correct, whatever it is); a slot that matches no edit's substituted file
- * is UNedited, meaning its current `assetFile` IS the original one, so the
- * ordinary `slotKey(memoryId, assetFile)` is correct as-is.
+ * Resolution is an EXACT lookup on `editedFromFile` — the slot's pristine
+ * identity, stamped by `substituteAsset` at apply time and threaded through
+ * the fitter (`ManifestAsset.editedFromFile`'s doc comment). The previous
+ * implementation instead reverse-engineered identity by scanning the edit
+ * records for one whose substituted FILE matched the rendered file — which
+ * collides the moment one photo occupies two slots (owner-hit 2026-09-09:
+ * after replacing slot A with a photo that natively lives in slot B, slot
+ * B's key resolved to slot A's edit record, so every replace attempted on
+ * B silently retargeted A).
  */
-export function resolveEditableSlotKey(content: PhotoSlotContent, edits: MemoryBookEditsShape): string {
-  for (const [key, record] of Object.entries(edits.images ?? {})) {
-    if (record.file === content.assetFile && key !== COVER_SLOT_KEY) {
-      return key;
-    }
-  }
-  return slotKey(content.memoryId, content.assetFile);
+export function resolveEditableSlotKey(content: PhotoSlotContent): string {
+  return slotKey(content.memoryId, content.editedFromFile ?? content.assetFile);
 }
 
 /** Same idea for the cover slot, which is always the literal `'cover'` key

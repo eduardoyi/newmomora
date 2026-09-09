@@ -185,7 +185,7 @@ export interface EditablePhotoSlot {
  * unit, de-duplicated by key (a memory whose photo appears twice on a
  * facing pair — rare, but the flex-grid/anchor-media layouts don't
  * guarantee otherwise — should offer exactly one "replace" control). */
-export function computeEditablePhotoSlots(pages: BookPage[], edits: MemoryBookEditsShape): EditablePhotoSlot[] {
+export function computeEditablePhotoSlots(pages: BookPage[]): EditablePhotoSlot[] {
   const slots = new Map<string, EditablePhotoSlot>();
 
   for (const page of pages) {
@@ -198,7 +198,7 @@ export function computeEditablePhotoSlots(pages: BookPage[], edits: MemoryBookEd
     for (const slot of page.slots) {
       if (slot.content.kind !== 'photo') continue;
       const content = slot.content as PhotoSlotContent;
-      const key = resolveEditableSlotKey(content, edits);
+      const key = resolveEditableSlotKey(content);
       if (!slots.has(key)) {
         slots.set(key, {
           key,

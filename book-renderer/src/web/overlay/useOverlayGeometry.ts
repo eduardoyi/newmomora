@@ -93,7 +93,7 @@ export function useOverlayGeometry(
 
         const plan = photoSelectorPlanForPage(page);
         if (plan) {
-          const photoSlots = computeEditablePhotoSlots([page], edits);
+          const photoSlots = computeEditablePhotoSlots([page]);
           const nodes = Array.from(frame.querySelectorAll<HTMLElement>(plan.selector));
           if (plan.perSlot) {
             photoSlots.forEach((slot, i) => {

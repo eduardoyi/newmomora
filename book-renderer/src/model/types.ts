@@ -54,6 +54,20 @@ export interface ManifestAsset {
    * at all; nothing ever writes an explicit `null` here.
    */
   originalFile?: string;
+  /**
+   * The memory's PRISTINE asset file this slot's photo replaced — set ONLY
+   * by `model/edits.ts`'s `substituteAsset` when an `imageReplace` edit
+   * overwrites `file`, and threaded by the fitter into
+   * `PhotoSlotContent.editedFromFile`. This is the slot's IDENTITY: the
+   * stable edit key is always `slotKey(memoryId, editedFromFile ?? file)`,
+   * which stays correct even when the substituted photo also natively
+   * exists elsewhere in the book (owner-hit duplicate-replace bug,
+   * 2026-09-09: resolving identity by scanning edit records for a matching
+   * rendered FILE collides the moment one photo occupies two slots). Never
+   * produced by the manifest builder; absent everywhere except an edited
+   * slot within one `applyPreFit` output.
+   */
+  editedFromFile?: string;
 }
 
 /** AI illustration generated for a text memory (data contract addition, landed). */
@@ -320,6 +334,11 @@ export type SlotKind =
 export interface PhotoSlotContent {
   kind: 'photo';
   assetFile: string;
+  /** `ManifestAsset.editedFromFile` threaded through verbatim (see that
+   * field's doc comment) — the slot's pristine identity when an edit has
+   * substituted `assetFile`; null/absent on an unedited slot (optional so
+   * hand-built test fixtures stay minimal, mirroring the manifest field). */
+  editedFromFile?: string | null;
   assetWidth: number;
   assetHeight: number;
   assetAspectRatio: number;

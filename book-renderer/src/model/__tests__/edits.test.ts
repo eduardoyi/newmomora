@@ -112,6 +112,13 @@ describe('applyPreFit — image replace substitution', () => {
     expect(next.memories['mem-2'].assets[0].file).toBe('assets/untouched.jpg');
     // The input manifest itself must never be mutated (pure function).
     expect(manifest.memories['mem-1'].assets[0].file).toBe('assets/original.jpg');
+    // Slot identity (owner-hit duplicate-replace bug, 2026-09-09): the
+    // substituted asset carries its PRISTINE file so the UI's
+    // `resolveEditableSlotKey` recovers the stable edit key exactly, even
+    // when the replacement photo also natively exists elsewhere in the
+    // book. Unedited assets never carry it.
+    expect(asset.editedFromFile).toBe('assets/original.jpg');
+    expect(next.memories['mem-2'].assets[0].editedFromFile).toBeUndefined();
   });
 
   it('never fabricates width/height when the original could not be measured — a tiny sentinel at the right aspect ratio fails every trust gate closed', () => {

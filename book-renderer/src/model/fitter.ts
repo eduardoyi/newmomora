@@ -1038,6 +1038,7 @@ function buildPhotoSlot(
   const content: PhotoSlotContent = {
     kind: 'photo',
     assetFile: asset.file,
+    editedFromFile: asset.editedFromFile ?? null,
     assetWidth: asset.width,
     assetHeight: asset.height,
     assetAspectRatio: asset.aspectRatio,

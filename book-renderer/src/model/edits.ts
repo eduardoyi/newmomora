@@ -268,6 +268,12 @@ export function applyPreFit(outline: BookOutline, manifest: BookManifest, edits:
  * whatever asset kind already lived at this slot stays correct.
  */
 function substituteAsset(asset: ManifestAsset, value: ImageEditRecord): void {
+  // Stamp the slot's pristine identity BEFORE overwriting `file` — see
+  // `ManifestAsset.editedFromFile`'s doc comment. `applyPreFit` always
+  // starts from a fresh clone of the pristine manifest, so `asset.file`
+  // here is always the original (each edit key applies at most once per
+  // pass); the `??` is belt-and-braces against any future double-apply.
+  asset.editedFromFile = asset.editedFromFile ?? asset.file;
   asset.file = value.file;
   asset.aspectRatio = value.aspectRatio;
   asset.originalWidth = value.originalWidth ?? null;

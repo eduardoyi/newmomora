@@ -564,8 +564,16 @@ table's types added).
   fixed alongside steps 6-7) both overrides the furniture memory-count
   line when present and stays byte-identical when absent. Snapshot suite
   unchanged. `src/web/` itself (auth, book list/view, edit panel, the
-  media coalescer, the substituted-file-aware slot-key resolver in
-  `book/slotKeys.ts`) has no dedicated unit tests yet — it's exercised via
+  media coalescer, the slot-key resolver in `book/slotKeys.ts` — since
+  2026-09-09 an EXACT lookup on `editedFromFile` (the slot's pristine
+  identity, stamped by `substituteAsset` and threaded through the fitter
+  into `PhotoSlotContent`), replacing the original file-matching scan that
+  collided when one photo occupied two slots — the owner-hit
+  duplicate-replace bug where a replace on a photo's native home silently
+  retargeted the slot it had been swapped into; `slotKeys.ts` now HAS
+  dedicated unit tests (`book/__tests__/slotKeys.test.ts`) covering both
+  the cross-memory and same-memory duplicate scenarios) has otherwise no
+  dedicated unit tests yet — it's exercised via
   `tsc --noEmit` (full package, including `src/web/`) and the real
   `npm run build:web` + `check-web-bundle.mjs` run; the live smoke against
   the canary book (step 9) is the functional check for the auth/render/

@@ -135,7 +135,7 @@ describe('computeEditablePhotoSlots — isVideoPoster (owner-approved follow-up 
       templateId: 'anchor-media',
       slots: [photoSlot({ memoryId: 'mem-1', assetFile: 'assets/a.jpg', qr: false })],
     });
-    const slots = computeEditablePhotoSlots([p], {});
+    const slots = computeEditablePhotoSlots([p]);
     expect(slots).toHaveLength(1);
     expect(slots[0].isVideoPoster).toBe(false);
   });
@@ -145,14 +145,14 @@ describe('computeEditablePhotoSlots — isVideoPoster (owner-approved follow-up 
       templateId: 'anchor-media',
       slots: [photoSlot({ memoryId: 'mem-1', assetFile: 'assets/video-poster.jpg', qr: true })],
     });
-    const slots = computeEditablePhotoSlots([p], {});
+    const slots = computeEditablePhotoSlots([p]);
     expect(slots).toHaveLength(1);
     expect(slots[0].isVideoPoster).toBe(true);
   });
 
   it('the cover slot is never isVideoPoster (buildCoverPages only ever nominates a photo)', () => {
     const p = page({ templateId: 'cover-wrap', params: { assetFile: 'assets/cover.jpg' } });
-    const slots = computeEditablePhotoSlots([p], {});
+    const slots = computeEditablePhotoSlots([p]);
     expect(slots).toEqual([{ key: COVER_SLOT_KEY, memoryId: null, assetFile: 'assets/cover.jpg', isCover: true, isVideoPoster: false }]);
   });
 
@@ -164,7 +164,7 @@ describe('computeEditablePhotoSlots — isVideoPoster (owner-approved follow-up 
         photoSlot({ memoryId: 'mem-1', assetFile: 'assets/a.jpg', qr: true }),
       ],
     });
-    const slots = computeEditablePhotoSlots([p], {});
+    const slots = computeEditablePhotoSlots([p]);
     expect(slots).toEqual([{ key: slotKey('mem-1', 'assets/a.jpg'), memoryId: 'mem-1', assetFile: 'assets/a.jpg', isCover: false, isVideoPoster: true }]);
   });
 });
