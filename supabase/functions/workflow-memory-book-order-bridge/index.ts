@@ -290,7 +290,14 @@ async function handleSendOrderEmail(
   const outcome = await deps.sendEmail({
     to: getAlertRecipient(),
     subject: `Momora order submitted -- spot-check ${order.id}`,
-    htmlBody: `<p>Order <code>${escapeHtml(order.id)}</code> was submitted to Prodigi (Prodigi order id: ${escapeHtml(order.prodigi_order_id ?? 'unknown')}).</p><ul>${linksHtml}</ul><p>${detail ? escapeHtml(detail) : 'Soft-launch human QA: please spot-check the rendered PDFs during Prodigi\'s order-edit window.'}</p>`,
+    // NOTE (canary finding, 2026-09-09): presigned URLs are signature-bound
+    // to their exact query string — Bento's link decoration (utm_*,
+    // bento_uuid) breaks them (proven 403). The Bento site setting should
+    // keep UTM appending OFF; as belt-and-braces the raw URLs are ALSO
+    // included inside <code> blocks (link rewriters leave code/plain text
+    // alone), so the owner can copy-paste even if a tracker mangles the
+    // anchors.
+    htmlBody: `<p>Order <code>${escapeHtml(order.id)}</code> was submitted to Prodigi (Prodigi order id: ${escapeHtml(order.prodigi_order_id ?? 'unknown')}).</p><ul>${linksHtml}</ul><p style="font-size:12px;color:#666">If a link 403s (tracker-mangled signature), copy-paste the raw URL:</p>${links.interiorUrl ? `<p><code style="font-size:10px;word-break:break-all">${escapeHtml(links.interiorUrl)}</code></p>` : ''}${links.coverUrl ? `<p><code style="font-size:10px;word-break:break-all">${escapeHtml(links.coverUrl)}</code></p>` : ''}<p>${detail ? escapeHtml(detail) : 'Soft-launch human QA: please spot-check the rendered PDFs during Prodigi\'s order-edit window.'}</p>`,
   });
   return jsonResponse({ sent: outcome === 'sent' });
 }
