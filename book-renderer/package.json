@@ -16,6 +16,8 @@
     "check:web-bundle": "node scripts/check-web-bundle.mjs"
   },
   "dependencies": {
+    "@stripe/react-stripe-js": "^6.9.0",
+    "@stripe/stripe-js": "^9.15.0",
     "@supabase/supabase-js": "^2.107.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",

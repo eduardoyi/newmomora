@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AddressForm } from './AddressForm';
+import { AddressStep } from './AddressStep';
 import { createOrderDraft, quoteOrder, createCheckoutSession } from './ordersApi';
 import type { QuoteResult, ShippingAddressInput } from './types';
 import { useDocumentTitle } from '../useDocumentTitle';
@@ -130,7 +130,7 @@ export function CheckoutScreen({
         {step.kind === 'address' && (
           <>
             {step.error && <p className="checkout-screen__error">{step.error}</p>}
-            <AddressForm submitting={false} onSubmit={(address) => void handleAddressSubmit(step.orderId, address)} />
+            <AddressStep submitting={false} onSubmit={(address) => void handleAddressSubmit(step.orderId, address)} />
           </>
         )}
 

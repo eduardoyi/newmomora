@@ -18,6 +18,17 @@ import type { ShippingAddressInput } from './types';
  * so it scrolls into view above the on-screen keyboard rather than being
  * pinned off-screen behind it, and the screen wrapper (`CheckoutScreen.css`)
  * uses `100dvh`, not `100vh`.
+ *
+ * Autofill hygiene (checkout address-entry plan, Tier 1 / Design Decision
+ * 7): this form is now the FALLBACK path (see `AddressStep.tsx` — Stripe's
+ * Address Element is primary when available), so a browser/password-manager
+ * autofill pass is the main thing standing between a parent and re-typing a
+ * whole address by hand here. Every input carries a `name` attribute AND an
+ * `autoComplete` token prefixed with the `shipping` section keyword (WHATWG
+ * HTML's "autofill detail tokens" — `shipping name`, `shipping
+ * address-line1`, etc.) rather than the bare tokens Tier 1 replaces, so an
+ * autofill suggestion here is scoped to a SHIPPING address specifically,
+ * not whatever the browser considers the user's default/billing address.
  */
 export function AddressForm({
   submitting,
@@ -56,7 +67,8 @@ export function AddressForm({
         <span className="address-field__label">Full name</span>
         <input
           type="text"
-          autoComplete="name"
+          name="name"
+          autoComplete="shipping name"
           required
           maxLength={200}
           value={name}
@@ -70,7 +82,8 @@ export function AddressForm({
         <span className="address-field__label">Address line 1</span>
         <input
           type="text"
-          autoComplete="address-line1"
+          name="address-line1"
+          autoComplete="shipping address-line1"
           required
           maxLength={200}
           value={line1}
@@ -84,7 +97,8 @@ export function AddressForm({
         <span className="address-field__label">Address line 2 (optional)</span>
         <input
           type="text"
-          autoComplete="address-line2"
+          name="address-line2"
+          autoComplete="shipping address-line2"
           maxLength={200}
           value={line2}
           onChange={(e) => setLine2(e.target.value)}
@@ -98,7 +112,8 @@ export function AddressForm({
           <span className="address-field__label">City</span>
           <input
             type="text"
-            autoComplete="address-level2"
+            name="city"
+            autoComplete="shipping address-level2"
             maxLength={200}
             value={city}
             onChange={(e) => setCity(e.target.value)}
@@ -109,7 +124,8 @@ export function AddressForm({
           <span className="address-field__label">State / region</span>
           <input
             type="text"
-            autoComplete="address-level1"
+            name="state"
+            autoComplete="shipping address-level1"
             maxLength={200}
             value={state}
             onChange={(e) => setState(e.target.value)}
@@ -123,7 +139,8 @@ export function AddressForm({
           <span className="address-field__label">Postal code</span>
           <input
             type="text"
-            autoComplete="postal-code"
+            name="postal-code"
+            autoComplete="shipping postal-code"
             required
             maxLength={20}
             value={postalCode}
@@ -134,7 +151,8 @@ export function AddressForm({
         <label className="address-field address-field--grow">
           <span className="address-field__label">Country</span>
           <select
-            autoComplete="country"
+            name="country"
+            autoComplete="shipping country"
             required
             value={countryCode}
             onChange={(e) => setCountryCode(e.target.value)}
