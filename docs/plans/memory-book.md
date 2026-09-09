@@ -899,6 +899,23 @@ Sequenced as three independently shippable slices:
     curation so editing costs $0.00). Guard: cap full REGENERATIONS —
     re-outline only when the scope's memories changed.
 
+
+### V5c CLOSED (2026-09-09) — end-to-end commerce live
+
+The clean run: order c9029dbd placed at shop.usemomora.com by the owner
+as a real customer — Stripe test payment -> webhook -> freeze ->
+workflow -> /fit -> spine -> Fly render (v4 image, broken-image
+hard-fail armed) -> verify -> presign -> Prodigi ord_71950055666928128
+(OnHold, owner window) -> `submitted`, untouched by human hands.
+TTY real-photo thumb verified rendered (the prior canary's broken-image
+finding, fixed). The overnight canary before it surfaced and fixed 14
+production defects end to end (see project memory / commit trail
+41f4b01..4c1dc99). Remaining for launch (owner ledger): Stripe account
+activation + Managed-Payments decision, price after the physical
+sample, STRIPE_AUTOMATIC_TAX re-enable, render-worker idle-self-exit
+cost optimization, tracking column + delivered advancement, country
+list confirmation. 5a.5 (in-app picker) is the last unbuilt slice.
+
 ## 10. Open questions
 
 1. Final price point within $99–149 (decide after V4 sample in hand).
