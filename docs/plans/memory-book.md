@@ -930,7 +930,17 @@ TTY real-photo thumb verified rendered (the prior canary's broken-image
 finding, fixed). The overnight canary before it surfaced and fixed 14
 production defects end to end (see project memory / commit trail
 41f4b01..4c1dc99). Remaining for launch (owner ledger): Stripe account
-activation + Managed-Payments decision, price after the physical
+activation under the US LLC (How Do You Turn This On LLC — Momora's
+owner entity; USD payouts to the LLC's US bank; PT-resident owner's
+LLC taxation is an accountant question, decided 2026-09-10).
+Managed Payments RESOLVED 2026-09-10: the entire printed-matter family
+(Books txcd_35010000, Periodicals, Printing) is INELIGIBLE for Managed
+Payments per the dashboard's own tax-code picker — the LLC stays
+merchant of record, Stripe Tax does calculation only, registrations
+(US home state + Prodigi UK/EU fulfillment nexus) go to the
+accountant. Same picker session caught that the canary-era line-item
+tax code txcd_35020200 was actually PERIODICALS, not printed books —
+corrected to txcd_35010000 (Books). Price after the physical
 sample, STRIPE_AUTOMATIC_TAX re-enable — bundled with it (decided
 2026-09-09): persist the actual charged amount (`amount_total` from the
 `checkout.session.completed` webhook) into a column and display THAT as

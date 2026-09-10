@@ -166,11 +166,17 @@ export async function createCheckoutSession(
       {
         price_data: {
           currency: input.currency,
-          // txcd_35020200 = printed books (reduced VAT rates in much of
-          // the EU); required-adjacent since new Stripe accounts default
-          // to Managed Payments (canary finding, 2026-09-08) and correct
-          // regardless.
-          product_data: { name: 'Momora Memory Book', tax_code: 'txcd_35020200' },
+          // txcd_35010000 = Books ("bound in a stiffer cover than the
+          // pages" -- a layflat hardcover exactly). CORRECTED 2026-09-10:
+          // the canary-era value txcd_35020200 was believed to be printed
+          // books but is actually PERIODICALS (magazines) -- owner-caught
+          // in the dashboard's tax-code picker during Stripe activation.
+          // Books/periodicals VAT rates differ across the EU, so the
+          // distinction is real money, not taxonomy. Also learned there:
+          // the whole printed-matter family (Books, Periodicals, Printing)
+          // is INELIGIBLE for Managed Payments, so the LLC stays merchant
+          // of record and Stripe Tax does calculation only.
+          product_data: { name: 'Momora Memory Book', tax_code: 'txcd_35010000' },
           unit_amount: input.priceCents,
         },
         quantity: 1,
