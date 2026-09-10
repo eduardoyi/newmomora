@@ -940,7 +940,18 @@ merchant of record, Stripe Tax does calculation only, registrations
 (US home state + Prodigi UK/EU fulfillment nexus) go to the
 accountant. Same picker session caught that the canary-era line-item
 tax code txcd_35020200 was actually PERIODICALS, not printed books —
-corrected to txcd_35010000 (Books). Price after the physical
+corrected to txcd_35010000 (Books). ZERO-REGISTRATION LAUNCH LIST
+(owner decision 2026-09-10): Prodigi layflat routing researched — the
+SKU is fulfilled from EU + US labs only (product page; the owner's PT
+sample provably shipped from Germany), so EU destinations are
+EU-located supplies (zero-threshold VAT for a non-established seller)
+and the UK is a sub-£135 import (also zero-threshold seller
+registration). SHIPS_TO_COUNTRIES trimmed to US, CA, MX, AU, NZ, JP,
+SG, CH, NO — all registration-free below non-resident thresholds at
+launch volume — enforced client-side AND in `validateShippingAddress`
+(a tax boundary now, not UX). EU (incl. PT!) + UK return after
+registrations (~one each: DE/OSS for EU, UK VAT); revisit with user
+growth. Price after the physical
 sample, STRIPE_AUTOMATIC_TAX re-enable — bundled with it (decided
 2026-09-09): persist the actual charged amount (`amount_total` from the
 `checkout.session.completed` webhook) into a column and display THAT as
