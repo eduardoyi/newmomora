@@ -19,11 +19,19 @@
  * actual confirmation point. If `POST /v4.0/quotes` or `POST /v4.0/Orders`
  * ever rejects a country on this list (or a customer asks for one that
  * isn't), prune/extend this list and cite the response, not guesswork.
- * `memory-book-orders`'s `quote` op re-validates `countryCode` as a bare
- * 2-letter ISO shape regardless of this list (see `validateShippingAddress`
- * in `supabase/functions/memory-book-orders/index.ts`) -- this list is a
- * client-side UX narrowing (don't let a parent fill out a whole address for
- * a destination we can't quote), not the real trust boundary.
+ * ZERO-REGISTRATION LAUNCH LIST (owner decision 2026-09-10): this list is
+ * now a TAX boundary, not just a UX narrowing. Prodigi's layflat SKU is
+ * fulfilled from EU + US labs (their product page; the owner's own sample
+ * shipped from Germany), which makes EU destinations EU-located supplies
+ * (zero-threshold VAT registration for a non-established seller) and UK
+ * destinations sub-£135 imports (also zero-threshold seller registration)
+ * -- both EXCLUDED until the LLC registers. Every remaining destination is
+ * registration-free below its non-resident seller threshold at launch
+ * volume. The server enforces the SAME list (`memory-book-orders`'s
+ * `validateShippingAddress` -- a crafted request must not be able to
+ * create the very obligation this list avoids); keep the two in sync when
+ * registrations land and countries return (EU/UK re-entry is one
+ * registration each -- see docs/plans/memory-book.md's launch ledger).
  */
 
 export interface ShipsToCountry {
@@ -33,28 +41,14 @@ export interface ShipsToCountry {
 
 export const SHIPS_TO_COUNTRIES: ShipsToCountry[] = [
   { code: 'US', name: 'United States' },
-  { code: 'GB', name: 'United Kingdom' },
-  { code: 'ES', name: 'Spain' },
-  { code: 'FR', name: 'France' },
-  { code: 'DE', name: 'Germany' },
-  { code: 'IT', name: 'Italy' },
-  { code: 'PT', name: 'Portugal' },
-  { code: 'NL', name: 'Netherlands' },
-  { code: 'BE', name: 'Belgium' },
-  { code: 'IE', name: 'Ireland' },
-  { code: 'AT', name: 'Austria' },
-  { code: 'CH', name: 'Switzerland' },
-  { code: 'SE', name: 'Sweden' },
-  { code: 'DK', name: 'Denmark' },
-  { code: 'FI', name: 'Finland' },
-  { code: 'NO', name: 'Norway' },
-  { code: 'PL', name: 'Poland' },
   { code: 'CA', name: 'Canada' },
+  { code: 'MX', name: 'Mexico' },
   { code: 'AU', name: 'Australia' },
   { code: 'NZ', name: 'New Zealand' },
   { code: 'JP', name: 'Japan' },
   { code: 'SG', name: 'Singapore' },
-  { code: 'MX', name: 'Mexico' },
+  { code: 'CH', name: 'Switzerland' },
+  { code: 'NO', name: 'Norway' },
 ];
 
 export const DEFAULT_SHIPS_TO_COUNTRY_CODE = 'US';

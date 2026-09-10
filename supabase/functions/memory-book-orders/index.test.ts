@@ -11,12 +11,16 @@ function fakeUser(email: string | null = 'buyer@example.com') {
   return { id: USER_ID, is_anonymous: false, email } as never;
 }
 
+// US address: GB (and all EU) are excluded from the zero-registration
+// launch list (owner decision 2026-09-10) — see SHIPS_TO_COUNTRY_CODES in
+// index.ts; the rejection of an excluded country is tested below.
 const VALID_ADDRESS = {
   name: 'Ada Lovelace',
   line1: '1 Analytical Engine Way',
-  city: 'London',
-  postalCode: 'SW1A 1AA',
-  countryCode: 'GB',
+  city: 'Springfield',
+  state: 'IL',
+  postalCode: '62704',
+  countryCode: 'US',
 };
 
 /**
@@ -78,6 +82,9 @@ Deno.test('validateShippingAddress rejects a missing line1 and accepts a valid a
 
 Deno.test('validateShippingAddress rejects a non-2-letter country code', () => {
   const bad = validateShippingAddress({ ...VALID_ADDRESS, countryCode: 'GBR' });
+  const excluded = validateShippingAddress({ ...VALID_ADDRESS, countryCode: 'GB' });
+  if (!('error' in excluded)) throw new Error('expected excluded-country rejection');
+  assertEquals(excluded.error, 'We do not ship to this country yet');
   assertEquals('error' in bad, true);
 });
 

@@ -102,6 +102,8 @@ function isBoundedString(value: unknown, maxLength: number): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength && !CONTROL_CHAR_PATTERN.test(value);
 }
 
+const SHIPS_TO_COUNTRY_CODES = new Set(['US', 'CA', 'MX', 'AU', 'NZ', 'JP', 'SG', 'CH', 'NO']);
+
 /** Validates the client-supplied shipping address shape. This is the ONLY
  * server-side gate on address content -- the row's `shipping_address`
  * column reaches the DB exclusively through this op (see the RLS
@@ -117,6 +119,17 @@ export function validateShippingAddress(input: unknown): { address: ShippingAddr
   if (!isBoundedString(input.postalCode, 20)) return { error: 'address.postalCode is required' };
   if (typeof input.countryCode !== 'string' || !COUNTRY_CODE_PATTERN.test(input.countryCode)) {
     return { error: 'address.countryCode must be a 2-letter ISO code' };
+  }
+  // Zero-registration launch list (owner decision 2026-09-10) -- a TAX
+  // boundary, enforced server-side so a crafted request can't create a
+  // seller VAT obligation in an excluded jurisdiction (EU destinations are
+  // EU-printed goods = zero-threshold registration for a non-established
+  // seller; UK is a sub-£135 import = zero-threshold seller registration).
+  // MUST stay in sync with the client's SHIPS_TO_COUNTRIES
+  // (book-renderer/src/web/order/shippingCountries.ts); countries return
+  // here as registrations land.
+  if (!SHIPS_TO_COUNTRY_CODES.has(input.countryCode)) {
+    return { error: 'We do not ship to this country yet' };
   }
   return {
     address: {
