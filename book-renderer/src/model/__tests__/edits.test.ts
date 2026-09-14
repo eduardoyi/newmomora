@@ -439,6 +439,21 @@ describe('applyPostFit — furniture:<key> text edits', () => {
     expect(skipped).toEqual([]);
   });
 
+  it('furniture:scanInstruction sets params.scanInstruction on the dedication page, independently of hasScanMarks', () => {
+    const doc = docWith([
+      emptyPage({ id: 'ded', sourceElementId: 'ded', templateId: 'dedication', params: { hasScanMarks: false } }),
+    ]);
+    const { document, skipped } = applyPostFit(doc, {
+      text: { 'furniture:scanInstruction': textEdit('Custom scan instruction.') },
+    });
+    expect(document.pages[0].params.scanInstruction).toBe('Custom scan instruction.');
+    // The apply-time dispatch never touches the fitter-owned gate — a saved
+    // override still round-trips even on a book with no scan marks today
+    // (Dedication.tsx's own hasScanMarks check governs visibility).
+    expect(document.pages[0].params.hasScanMarks).toBe(false);
+    expect(skipped).toEqual([]);
+  });
+
   it('furniture:ttyKicker and furniture:ttyTitle set params.ttyKicker/params.ttyTitle on the through-the-years page', () => {
     const doc = docWith([emptyPage({ id: 'tty', sourceElementId: 'tty', templateId: 'through-the-years', params: {} })]);
     const { document, skipped } = applyPostFit(doc, {
@@ -562,6 +577,7 @@ describe('applyPostFit — text edits never change the page count (real fixture)
         'furniture:coverTagline': textEdit('A new cover tagline.'),
         'furniture:dedicationSalutation': textEdit('A new salutation.'),
         'furniture:dedicationSignoff': textEdit('A new signoff.'),
+        'furniture:scanInstruction': textEdit('A new scan instruction.'),
         'furniture:ttyKicker': textEdit('A new kicker.'),
         'furniture:ttyTitle': textEdit('A new title\non two lines'),
         'furniture:closingTitle': textEdit('A new closing title.'),

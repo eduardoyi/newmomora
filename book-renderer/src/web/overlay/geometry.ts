@@ -147,6 +147,14 @@ function resolveFurnitureTextAnchor(page: BookPage, key: string): TextAnchorPlan
   if (key === 'dedicationSignoff' && page.templateId === 'dedication') {
     return { strategy: 'selector', selector: '.dedication__signature', approximate: false };
   }
+  if (key === 'scanInstruction' && page.templateId === 'dedication') {
+    // `approximate: false` is safe here (unlike `coverTagline`/`backCover`'s
+    // "may not exist yet" shape): `computeTextFields` only ever offers this
+    // field when `params.hasScanMarks` is true, and the template renders
+    // the block unconditionally whenever that flag is true — so the anchor
+    // always exists by the time this field is offered at all.
+    return { strategy: 'selector', selector: '.dedication__scan-instruction-text', approximate: false };
+  }
   if (key === 'ttyKicker' && page.templateId === 'through-the-years') {
     return { strategy: 'tty-kicker' };
   }

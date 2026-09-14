@@ -28,12 +28,20 @@ describe('real QR codes render wherever a scan mark appears', () => {
       <TemplateRenderer page={page!} manifest={manifest} bookSlug="test-book" showGuides={false} />,
     );
 
-    const expectedModules = QRCode.create(shareViewerUrl('tok-video-abc123'), { errorCorrectionLevel: 'M' }).modules.size;
+    // Print-polish round (owner decision 2026-09-14, item D2): error
+    // correction bumped M -> H so the centered badge overlay still leaves a
+    // scannable code — module count grows accordingly.
+    const expectedModules = QRCode.create(shareViewerUrl('tok-video-abc123'), { errorCorrectionLevel: 'H' }).modules.size;
     expect(html).toContain('data-testid="qr-code"');
     expect(html).toContain(`data-qr-modules="${expectedModules}"`);
     // Still the same shared scan-mark hook the rest of the codebase (and its
     // existing tests) key off of — a pure visual/data swap, not a new class.
     expect(html).toContain('scan-mark');
+    // A video mark carries the PLAY badge (item D2), never the audio one.
+    expect(html).toContain('data-qr-badge="play"');
+    expect(html).toContain('data-testid="qr-badge"');
+    // The old per-mark text label is gone (item D3) — the badge replaces it.
+    expect(html).not.toContain('scan to watch it');
   });
 
   it('an audio-note renders its 26mm mark as a real QR too', () => {
@@ -49,8 +57,11 @@ describe('real QR codes render wherever a scan mark appears', () => {
       <TemplateRenderer page={page!} manifest={manifest} bookSlug="test-book" showGuides={false} />,
     );
 
-    const expectedModules = QRCode.create(shareViewerUrl('tok-audio-xyz789'), { errorCorrectionLevel: 'M' }).modules.size;
+    const expectedModules = QRCode.create(shareViewerUrl('tok-audio-xyz789'), { errorCorrectionLevel: 'H' }).modules.size;
     expect(html).toContain(`data-qr-modules="${expectedModules}"`);
+    // An audio mark carries the AUDIO/waveform badge (item D2), never play.
+    expect(html).toContain('data-qr-badge="audio"');
+    expect(html).toContain('data-testid="qr-badge"');
   });
 
   it('falls back to the static placeholder mark (never a fabricated URL) when the manifest has no shareToken', () => {

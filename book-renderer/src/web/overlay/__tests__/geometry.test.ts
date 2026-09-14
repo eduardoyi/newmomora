@@ -169,6 +169,15 @@ describe('resolveTextAnchor', () => {
       });
     });
 
+    it('resolves furniture:scanInstruction on a dedication page', () => {
+      const dedicationPage = page({ templateId: 'dedication' });
+      expect(resolveTextAnchor(dedicationPage, 'furniture:scanInstruction')).toEqual({
+        strategy: 'selector',
+        selector: '.dedication__scan-instruction-text',
+        approximate: false,
+      });
+    });
+
     it('resolves furniture:ttyKicker and furniture:ttyTitle structurally on a through-the-years page', () => {
       const ttyPage = page({ templateId: 'through-the-years' });
       expect(resolveTextAnchor(ttyPage, 'furniture:ttyKicker')).toEqual({ strategy: 'tty-kicker' });

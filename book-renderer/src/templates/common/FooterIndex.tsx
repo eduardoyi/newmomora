@@ -1,6 +1,6 @@
 import { ptCqw, wPct } from '../mm';
 import { formatIndexDate } from './formatDate';
-import { getFurniture, type Language } from '../furniture';
+import type { Language } from '../furniture';
 import { ScanMark } from './ScanMark';
 import { lavender, colors } from '../../theme';
 import type { FooterIndexEntry } from './FooterIndex.types';
@@ -63,7 +63,6 @@ export function FooterIndex({
   isEvenPage?: boolean;
 }) {
   if (entries.length === 0) return null;
-  const furniture = getFurniture(language);
   return (
     <div
       className="footer-index"
@@ -107,17 +106,25 @@ export function FooterIndex({
                     marginRight: i === entry.indices.length - 1 ? '0.35em' : '0.15em',
                   }}
                 >
+                  {/* Print-polish round (owner decision 2026-09-14, item E):
+                      a consolidated multi-photo line used to read as "¹ ²"
+                      (numerals separated only by the margin above) — a
+                      trailing comma on every numeral but the last renders
+                      "¹, ²" instead, matching how a citation list is
+                      normally punctuated. */}
                   {n}
+                  {i < entry.indices.length - 1 ? ',' : ''}
                 </sup>
               ))}
               {formatIndexDate(entry.date, language)}
               {entry.note ? ` · ${entry.note}` : ''}
             </span>
+            {/* Print-polish round (owner decision 2026-09-14, item D3): the
+                "escanea para verlo"/"scan to watch it" label that used to
+                sit next to this credit-line mark is gone — same reasoning
+                as PhotoTile.tsx's identical removal. */}
             {entry.qr && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3em' }}>
-                <span style={{ fontFamily: 'var(--font-sans)', color: colors.ink3, fontSize: ptCqw(6, isSpread), lineHeight: 1 }}>
-                  {furniture.scanToWatch}
-                </span>
+              <span style={{ display: 'inline-flex', alignItems: 'center' }}>
                 <ScanMark size="inline" isSpread={isSpread} />
               </span>
             )}

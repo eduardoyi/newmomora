@@ -34,3 +34,24 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
+
+/* Print-polish round (owner decision 2026-09-14, item D1): a small
+   bottom-right footnote — sample scan mark + one italic line — teaching the
+   scan gesture. Only rendered on a book with at least one real scan mark
+   (see Dedication.tsx's `hasScanMarks` gate). Anchored at the page's own
+   safe-area corner, mirroring how PageFrame's own guide box is positioned. */
+.dedication__scan-instruction {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 0.7em;
+  max-width: 42%;
+}
+
+.dedication__scan-instruction-text {
+  margin: 0;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.45;
+}

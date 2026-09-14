@@ -562,7 +562,15 @@ export interface DownloadFailure {
 export type ManifestLanguage = 'es' | 'en';
 
 export interface BookManifest {
-  child: { id: string; name: string };
+  /**
+   * `dateOfBirth` is optional (print-polish round, owner decision
+   * 2026-09-14, item F) — when present, book-renderer computes an exact
+   * month-section age eyebrow from it (see book-renderer's `templates/
+   * age.ts`/`model/fitter.ts`); absent on any manifest built before this
+   * field existed, or when the worker's own `context.child` has none —
+   * the renderer degrades silently to no eyebrow, never a fabricated age.
+   */
+  child: { id: string; name: string; dateOfBirth?: string | null };
   scope: ManifestScope;
   generatedAt: string;
   outlineRun: string;
@@ -686,7 +694,7 @@ export function backfillBookDocumentOriginalFiles(
 }
 
 export function buildManifest(input: {
-  child: { id: string; name: string };
+  child: { id: string; name: string; dateOfBirth?: string | null };
   scope: ManifestScope;
   outlineRun: string;
   memories: Record<string, ManifestMemory>;

@@ -34,11 +34,25 @@ export function ScanMark({
   shareToken?: string | null;
 }) {
   const mm = size === 'audio' ? AUDIO_MARK_SIZE_MM : QR_SIZE_MM;
+  // Print-polish round (owner decision 2026-09-14, item D2): every `size:
+  // 'audio'` call site is the AudioNote page (the mark IS the page, always
+  // audio), and every `size: 'inline'` call site is a video mark (PhotoTile,
+  // the full-bleed/panorama video's FooterIndex credit, AnchorMedia's solo/
+  // pair video placement) — `size` alone is already an exact proxy for
+  // which badge belongs on this mark, with zero new prop threading needed
+  // at any call site.
+  const badge = size === 'audio' ? 'audio' : 'play';
 
   if (shareToken) {
-    return <QrCode value={shareViewerUrl(shareToken)} mm={mm} isSpread={isSpread} className="scan-mark" />;
+    return <QrCode value={shareViewerUrl(shareToken)} mm={mm} isSpread={isSpread} className="scan-mark" badge={badge} />;
   }
 
+  // No badge on the static placeholder: it's a fixed pre-drawn brand-mark
+  // ASSET, not a QrCode this component composes a badge into — the same
+  // gap Round-19's own header comment already documents (a placeholder
+  // never encodes anything real, so there's no scan behavior for a play/
+  // audio badge to be honest ABOUT). Practically dead code today per that
+  // same comment (every current video/audio call site has a shareToken).
   return (
     <img
       src={scanMarkUrl}

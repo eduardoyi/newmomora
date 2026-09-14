@@ -21,6 +21,21 @@ including inside this repository and any built product, per the license
 text reproduced below (reserved font names, if any, are the ones each
 license itself names; nothing here is renamed).
 
+Print-polish round (owner decision 2026-09-14, item A — the "Type 3 fix"):
+the *.woff2 files here were originally Google's VARIABLE-font instances
+(wght, and for Newsreader also opsz, axes intact). Chromium's `page.pdf`
+cannot embed a variable-font outline as a real font program and silently
+downgraded every one of them to Type 3 glyph-procedure fonts, which print
+RIPs rasterize badly — diagnosed via `pdffonts` on a real rendered PDF
+(every face reported `Type 3`). Each file was re-derived from the SAME
+vendored variable font, in place, via `fonttools varLib.instancer`
+(`pip install fonttools brotli`) pinning `wght` to that exact file's own
+named weight (and `opsz=16` for every Newsreader text face) and re-saved as
+a static (no `fvar`) woff2 — same filenames, same OFL-licensed glyph data,
+same Unicode-range subsetting, just single-instance rather than variable.
+This is still the identical OFL-licensed font software, instanced rather
+than renamed — the license terms below are unchanged and still apply.
+
 Families vendored (see fonts.css for the exact weight/style/subset list):
   - Newsreader        (normal 300/400/500/600, italic 300/400/500)
   - Plus Jakarta Sans  (normal 400/500/600/700)

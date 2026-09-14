@@ -336,6 +336,9 @@ export const FURNITURE_KEYS = [
   'ttyKicker',
   'ttyTitle',
   'closingTitle',
+  // Print-polish round (owner decision 2026-09-14, item D1) — mirrors
+  // book-renderer/src/model/edits.ts's identically-named addition.
+  'scanInstruction',
 ] as const;
 export type FurnitureKey = (typeof FURNITURE_KEYS)[number];
 

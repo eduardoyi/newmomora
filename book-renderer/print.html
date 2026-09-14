@@ -28,6 +28,20 @@
         margin: 0;
         padding: 0;
         background: #fff;
+        /*
+         * Print-polish round item A: the vendored Newsreader faces are now
+         * STATIC instances pinned at opsz=16 (see fonts/OFL-LICENSES.txt),
+         * not the variable font Chromium was silently downgrading to Type 3
+         * glyph procedures. `font-optical-sizing: auto` (the default) would
+         * ask the browser to keep varying the optical-size axis against a
+         * font that no longer HAS one — harmless on a static font in
+         * practice, but dishonest about what's actually embedded. Setting
+         * `none` here (inherited by every element, including Plus Jakarta
+         * Sans/Caveat, which have no opsz axis at all and simply ignore it)
+         * makes the CSS match reality: this is a fixed opsz=16 instance,
+         * full stop.
+         */
+        font-optical-sizing: none;
       }
       /*
        * NO line-height reset here. The original pipeline set

@@ -35,10 +35,41 @@ export function numberWord(n: number, lang: Language): string {
 
 export interface Furniture {
   throughTheYears: { kicker: string; titleLines: [string, string] };
-  dedication: { greeting: (childName: string) => string; signature: string };
+  dedication: {
+    greeting: (childName: string) => string;
+    signature: string;
+    /**
+     * Print-polish round (owner decision 2026-09-14, item D1): the
+     * dedication page's small bottom-right footnote explaining the book's
+     * scan marks — covers BOTH video and audio memories (never "watch"
+     * alone). Only rendered when the fitted document actually contains at
+     * least one scan mark (`BookPage.params.hasScanMarks`, computed in
+     * `fitter.ts`'s `documentHasScanMarks`) — a book with no media codes
+     * keeps a pristine dedication page. Editable per book via the
+     * `furniture:scanInstruction` edit target, same fallback-to-default
+     * shape as every other furniture field (see `edits.ts`).
+     */
+    scanInstruction: string;
+  };
   /** "Enzo, 10 de agosto de 2025 — seis momentos" — canvas's spread-title attribution pattern. */
   spreadTitleAttribution: (childName: string, dateStr: string, momentCount: number) => string;
-  /** Video credit-line microcopy under the inline scan mark ("escanea para verlo"). */
+  /**
+   * Video credit-line microcopy ("escanea para verlo") that used to render
+   * next to EVERY inline scan mark (PhotoTile, and the full-bleed/panorama
+   * video credit in FooterIndex). Print-polish round (owner decision
+   * 2026-09-14, item D3) removed both render sites — the new play/audio
+   * badge drawn INSIDE the mark itself (see `QrCode.tsx`'s `badge` prop)
+   * plus the dedication page's one-time `scanInstruction` footnote make a
+   * per-mark text label redundant, and it was cluttering photo pages with
+   * video. This field is intentionally kept (not deleted) even though
+   * nothing renders it any more: `scanToWatch` was never part of the
+   * editable `FURNITURE_KEYS` allowlist (`model/edits.ts`) so no saved
+   * per-book edit can be orphaned by its removal from render — this is
+   * purely "stop reading a value that used to have a UI", not a data-
+   * migration concern. Left in place rather than deleted so a future
+   * revert doesn't have to reconstruct the Spanish/English copy from
+   * scratch.
+   */
   scanToWatch: string;
   /** The single Caveat word on an audio-note page. */
   listenToIt: string;
@@ -68,6 +99,10 @@ const FURNITURE: Record<Language, Furniture> = {
       // Generic, not "mami y papi" — the household writing it isn't always
       // that shape (owner review round 3).
       signature: 'Escrito con amor, día a día',
+      // Owner-approved copy (print-polish round, 2026-09-14) — covers both
+      // video ("ver") and audio ("escuchar") memories, never just "watch".
+      scanInstruction:
+        'Cuando veas un código como este, escanéalo con la cámara de tu teléfono para ver o escuchar ese recuerdo.',
     },
     spreadTitleAttribution: (childName, dateStr, momentCount) =>
       momentCount > 1 ? `${childName}, ${dateStr} — ${numberWord(momentCount, 'es')} momentos` : `${childName}, ${dateStr}`,
@@ -88,6 +123,8 @@ const FURNITURE: Record<Language, Furniture> = {
     dedication: {
       greeting: (childName) => `For ${childName},`,
       signature: 'Written with love, day by day',
+      scanInstruction:
+        "When you see a code like this, scan it with your phone's camera to watch or listen to that memory.",
     },
     spreadTitleAttribution: (childName, dateStr, momentCount) =>
       momentCount > 1 ? `${childName}, ${dateStr} — ${numberWord(momentCount, 'en')} moments` : `${childName}, ${dateStr}`,

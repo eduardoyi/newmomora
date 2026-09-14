@@ -65,14 +65,10 @@
   gap: 0.3em;
 }
 
-.photo-tile__scan-text {
-  line-height: 1;
-}
-
-.photo-tile__scan-text {
-  font-family: var(--font-sans);
-  white-space: nowrap;
-}
+/* `.photo-tile__scan-text` (the "escanea para verlo"/"scan to watch it"
+   label rendered next to every mark) was removed in the print-polish round
+   (owner decision 2026-09-14, item D3) — the play badge drawn INSIDE the
+   mark itself now carries that meaning; these rules went with it. */
 
 /*
  * Round-9 item 4: SOLO video pages anchor the scan-to-watch group just

@@ -20,8 +20,15 @@ export const colors = {
   white: '#FFFFFF',
 
   ink: '#2C2418',
-  ink2: '#6B5E4F',
-  ink3: '#9A8B79',
+  // Print-polish round (owner decision 2026-09-14, item B): the physical
+  // sample book showed small text set in these mid-grays (captions,
+  // eyebrows, page numbers, dates) screening into visible halftone grain —
+  // darkened both a notch while keeping the warm brown hue (same hue
+  // family, just more depth/contrast against the paper-white page). Global
+  // book-design tokens — preview and print stay byte-identical (single-
+  // renderer rule); the mobile app's own theme is untouched.
+  ink2: '#55483C',
+  ink3: '#7A6B58',
 
   primary: '#D63E78',
   primaryDark: '#B22A60',

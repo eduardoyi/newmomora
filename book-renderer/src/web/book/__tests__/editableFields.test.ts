@@ -68,6 +68,30 @@ describe('computeTextFields — furniture:<key> fields', () => {
     expect(fields.find((f) => f.target === 'furniture:dedicationSignoff')?.value).toBe('With all our love');
   });
 
+  it('offers furniture:scanInstruction only when the dedication page has hasScanMarks true (print-polish round, item D1)', () => {
+    const manifest = makeManifest({}, { language: 'en' });
+    const withMarks = page({ templateId: 'dedication', params: { childName: 'Mia', hasScanMarks: true } });
+    const withoutMarks = page({ templateId: 'dedication', params: { childName: 'Mia', hasScanMarks: false } });
+
+    const fieldsWithMarks = computeTextFields([withMarks], manifest);
+    expect(fieldsWithMarks.find((f) => f.target === 'furniture:scanInstruction')?.value).toBe(
+      "When you see a code like this, scan it with your phone's camera to watch or listen to that memory.",
+    );
+
+    const fieldsWithoutMarks = computeTextFields([withoutMarks], manifest);
+    expect(fieldsWithoutMarks.find((f) => f.target === 'furniture:scanInstruction')).toBeUndefined();
+  });
+
+  it('prefers a saved params override over the furniture default for scanInstruction', () => {
+    const manifest = makeManifest({}, { language: 'en' });
+    const dedication = page({
+      templateId: 'dedication',
+      params: { childName: 'Mia', hasScanMarks: true, scanInstruction: 'Custom instruction.' },
+    });
+    const fields = computeTextFields([dedication], manifest);
+    expect(fields.find((f) => f.target === 'furniture:scanInstruction')?.value).toBe('Custom instruction.');
+  });
+
   it('defaults furniture:ttyKicker/ttyTitle to the language-appropriate furniture copy when unset, title joined by newline', () => {
     const manifest = makeManifest({}, { language: 'en' });
     const tty = page({ templateId: 'through-the-years', params: {} });

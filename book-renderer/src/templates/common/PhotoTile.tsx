@@ -2,7 +2,7 @@ import type { PhotoSlotContent } from '../../model/types';
 import { assetUrl } from '../../model/loader';
 import { ptCqw } from '../mm';
 import { colors } from '../../theme';
-import { getFurniture, type Language } from '../furniture';
+import type { Language } from '../furniture';
 import { ScanMark } from './ScanMark';
 import { objectPositionFor } from './focalPoint';
 import './PhotoTile.css';
@@ -53,7 +53,11 @@ export function PhotoTile({
   metaPlacement?: 'left' | 'right' | 'below';
 }) {
   const box = aspectRatio ?? content.targetAspect;
-  const furniture = getFurniture(language);
+  // `language` is kept in this component's prop contract (every caller
+  // already threads it through) even though the render body no longer
+  // reads it directly — the scan-to-watch text label it used to feed
+  // (`getFurniture(language).scanToWatch`) was removed in the print-polish
+  // round (item D3); see that block below.
   return (
     <figure className={`photo-tile${content.hero ? ' photo-tile--hero' : ''}`}>
       <div className="photo-tile__frame" style={{ aspectRatio: `${box}`, background: colors.surface2 }}>
@@ -72,10 +76,13 @@ export function PhotoTile({
             </figcaption>
           )}
           {content.qr && (
+            // Print-polish round (owner decision 2026-09-14, item D3): the
+            // "escanea para verlo"/"scan to watch it" text label next to
+            // every mark is gone — the play badge now drawn INSIDE the mark
+            // itself (QrCode.tsx's `badge` prop, via ScanMark) plus the
+            // dedication page's one-time scan-instruction footnote make a
+            // per-mark label redundant clutter on a page with video.
             <div className="photo-tile__scan">
-              <span className="photo-tile__scan-text" style={{ fontSize: ptCqw(6, isSpread), color: colors.ink3 }}>
-                {furniture.scanToWatch}
-              </span>
               <ScanMark size="inline" isSpread={isSpread} shareToken={content.shareToken} />
             </div>
           )}

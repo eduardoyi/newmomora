@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { fitBook } from '../../model/fitter';
+import { applyPostFit } from '../../model/edits';
 import { makeAsset, makeElement, makeManifest, makeMemory, makeOutline } from '../../model/__tests__/fixtures/build';
 import { TemplateRenderer } from '../index';
 import { FooterIndex } from '../common/FooterIndex';
@@ -176,6 +177,86 @@ describe('template snapshots', () => {
     );
     expect(html).toContain('Test Child');
     expect(html).toMatchSnapshot();
+  });
+
+  it('Dedication renders NO scan-instruction footnote when the book has no scan marks (print-polish round, item D1)', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ text: 'A quiet memory.', assets: [makeAsset()] }) });
+    const outline = makeOutline([
+      makeElement({ id: 'title', kind: 'title', title: 'Title & dedication' }),
+      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const dedicationPage = document.pages.find((p) => p.templateId === 'dedication')!;
+    expect(dedicationPage.params.hasScanMarks).toBe(false);
+    const html = renderToStaticMarkup(
+      <TemplateRenderer page={dedicationPage} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+    expect(html).not.toContain('dedication__scan-instruction');
+  });
+
+  it('Dedication renders the scan-instruction footnote (sample mark + italic line) when the book has a video scan mark (item D1)', () => {
+    const manifest = makeManifest({
+      'mem-video': makeMemory({
+        type: 'video',
+        text: 'Dancing in the kitchen.',
+        assets: [makeAsset({ kind: 'video-poster', durationMs: 9000 })],
+        shareToken: 'tok-video-abc',
+      }),
+    });
+    const outline = makeOutline([
+      makeElement({ id: 'title', kind: 'title', title: 'Title & dedication' }),
+      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-video'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const dedicationPage = document.pages.find((p) => p.templateId === 'dedication')!;
+    expect(dedicationPage.params.hasScanMarks).toBe(true);
+    const html = renderToStaticMarkup(
+      <TemplateRenderer page={dedicationPage} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+    expect(html).toContain('dedication__scan-instruction');
+    // React HTML-escapes the apostrophe as `&#x27;` in the SSR'd markup.
+    expect(html).toContain('scan it with your phone');
+    expect(html).toContain('watch or listen to that memory');
+    // The dedication sample mark is a real QR (badge=play), encoding the
+    // stable, decorative usemomora.com URL — never a fabricated share link.
+    expect(html).toContain('data-testid="qr-code"');
+    expect(html).toContain('data-qr-badge="play"');
+  });
+
+  it('Dedication renders the scan-instruction footnote when the book has only an audio scan mark (item D1 — covers audio, not just video)', () => {
+    const manifest = makeManifest({
+      'mem-audio': makeMemory({ type: 'audio', text: 'Singing happy birthday.', assets: [], shareToken: 'tok-audio-abc' }),
+    });
+    const outline = makeOutline([
+      makeElement({ id: 'title', kind: 'title', title: 'Title & dedication' }),
+      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-audio'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const dedicationPage = document.pages.find((p) => p.templateId === 'dedication')!;
+    expect(dedicationPage.params.hasScanMarks).toBe(true);
+  });
+
+  it('Dedication scan-instruction respects a saved furniture:scanInstruction override', () => {
+    const manifest = makeManifest({
+      'mem-video': makeMemory({
+        type: 'video',
+        assets: [makeAsset({ kind: 'video-poster', durationMs: 9000 })],
+        shareToken: 'tok-video-abc',
+      }),
+    });
+    const outline = makeOutline([
+      makeElement({ id: 'title', kind: 'title', title: 'Title & dedication' }),
+      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-video'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const { document: edited } = applyPostFit(document, {
+      text: { 'furniture:scanInstruction': { target: 'furniture:scanInstruction', value: 'A custom scan instruction.' } },
+    });
+    const dedicationPage = edited.pages.find((p) => p.templateId === 'dedication')!;
+    const html = renderToStaticMarkup(
+      <TemplateRenderer page={dedicationPage} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+    expect(html).toContain('A custom scan instruction.');
   });
 
   it('SpreadTitle renders quote mode with attribution and descriptive mode with a kicker when present', () => {

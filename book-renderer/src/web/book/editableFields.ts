@@ -57,6 +57,19 @@ export function computeTextFields(pages: BookPage[], manifest: BookManifest): Te
         value: typeof page.params.signature === 'string' ? page.params.signature : furniture.dedication.signature,
         multiline: false,
       });
+      // Print-polish round (owner decision 2026-09-14, item D1): only
+      // offered when the page actually renders the footnote
+      // (`params.hasScanMarks`, set by the fitter) — a book with no scan
+      // marks has no on-page anchor for the popover to attach to, same
+      // reasoning `computeEditablePhotoSlots` already applies elsewhere.
+      if (page.params.hasScanMarks) {
+        fields.set('furniture:scanInstruction', {
+          target: 'furniture:scanInstruction',
+          label: 'Scan instruction',
+          value: typeof page.params.scanInstruction === 'string' ? page.params.scanInstruction : furniture.dedication.scanInstruction,
+          multiline: true,
+        });
+      }
     }
     if (page.templateId === 'cover-wrap') {
       fields.set('backCover', {

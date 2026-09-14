@@ -91,3 +91,31 @@ export function localizeMonthLabel(label: string, lang: Language): string {
   const months = MONTHS_FULL[lang];
   return endIdx != null ? `${months[startIdx]}–${months[endIdx]} ${year}` : `${months[startIdx]} ${year}`;
 }
+
+/**
+ * Print-polish round (owner decision 2026-09-14, item F): parses a backbone
+ * element's own English `element.title` back into a single chronological
+ * {monthIndex, year} ONLY when it's a lone "Month YYYY" (never a range like
+ * "October–November 2024", which `localizeMonthLabel` still handles fine —
+ * a range has no single unambiguous "end of the month" to compute an age
+ * at). Returns `null` for anything else: a real editorial title
+ * ("El mes en que cumpliste dos"), a range, or unrecognized text — the
+ * fitter's age-eyebrow default only ever fires on a genuine month section.
+ */
+export function parseSingleMonthLabel(label: string): { monthIndex: number; year: number } | null {
+  const match = label.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (!match) return null;
+  const [, monthName, yearStr] = match;
+  const monthIndex = MONTH_NAME_TO_INDEX[monthName.toLowerCase()];
+  if (monthIndex == null) return null;
+  return { monthIndex, year: Number(yearStr) };
+}
+
+/** Last calendar day of a given {monthIndex (0-based), year}, as an ISO date string — UTC, matching `templates/age.ts`'s own UTC calendar math. */
+export function lastDayOfMonthIso(monthIndex: number, year: number): string {
+  // Day 0 of the FOLLOWING month is the last day of THIS month (JS Date's
+  // documented day-rollunder behavior) — avoids hand-rolling a per-month/
+  // leap-year day-count table.
+  const d = new Date(Date.UTC(year, monthIndex + 1, 0));
+  return d.toISOString().slice(0, 10);
+}

@@ -34,6 +34,7 @@ describe('furniture — table completeness', () => {
       expect(f.throughTheYears.titleLines[1].length).toBeGreaterThan(0);
       expect(f.dedication.greeting('Enzo').length).toBeGreaterThan(0);
       expect(f.dedication.signature.length).toBeGreaterThan(0);
+      expect(f.dedication.scanInstruction.length).toBeGreaterThan(0);
       expect(f.scanToWatch.length).toBeGreaterThan(0);
       expect(f.listenToIt.length).toBeGreaterThan(0);
       expect(f.firsts.kicker.length).toBeGreaterThan(0);
@@ -69,6 +70,17 @@ describe('furniture — Spanish strings match the design canvas verbatim', () =>
     const es = getFurniture('es');
     expect(es.scanToWatch).toBe('escanea para verlo');
     expect(es.listenToIt).toBe('escúchalo');
+  });
+
+  it('dedication scan-instruction covers both video and audio (print-polish round, owner-approved copy)', () => {
+    const es = getFurniture('es');
+    expect(es.dedication.scanInstruction).toBe(
+      'Cuando veas un código como este, escanéalo con la cámara de tu teléfono para ver o escuchar ese recuerdo.',
+    );
+    const en = getFurniture('en');
+    expect(en.dedication.scanInstruction).toBe(
+      "When you see a code like this, scan it with your phone's camera to watch or listen to that memory.",
+    );
   });
 
   it('firsts kicker', () => {

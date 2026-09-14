@@ -122,6 +122,10 @@ export const FURNITURE_KEYS = [
   'ttyKicker',
   'ttyTitle',
   'closingTitle',
+  // Print-polish round (owner decision 2026-09-14, item D1) — the
+  // dedication page's scan-instruction footnote, same "otherwise-fixed
+  // furniture copy, optional per-book override" shape as every key above.
+  'scanInstruction',
 ] as const;
 export type FurnitureKey = (typeof FURNITURE_KEYS)[number];
 const FURNITURE_KEY_SET: ReadonlySet<string> = new Set(FURNITURE_KEYS);
@@ -448,6 +452,10 @@ function applyTextEdit(document: BookDocument, target: string, value: string): b
  *   - `ttyKicker`/`ttyTitle` override the through-the-years page's kicker
  *     and (up to two-line, `\n`-joined) title — same "previously fixed
  *     furniture copy, now an optional params override" shape.
+ *   - `scanInstruction` (print-polish round, 2026-09-14) overrides the
+ *     dedication page's scan-mark footnote text — same fallback-to-
+ *     furniture-default shape; visibility is separately gated by
+ *     `params.hasScanMarks` (set by the fitter, never by an edit).
  */
 function applyFurnitureTextEdit(document: BookDocument, key: FurnitureKey, value: string): boolean {
   switch (key) {
@@ -466,6 +474,15 @@ function applyFurnitureTextEdit(document: BookDocument, key: FurnitureKey, value
     case 'dedicationSignoff':
       return setOnPages(document, (p) => p.templateId === 'dedication', (params) => {
         params.signature = value;
+      });
+    case 'scanInstruction':
+      // No `hasScanMarks` gate here deliberately: an edit saved while the
+      // book DID have scan marks must still round-trip correctly if a
+      // later regeneration drops them all (the field simply stops
+      // rendering — `Dedication.tsx`'s own `hasScanMarks` check governs
+      // visibility, not this apply-time dispatch).
+      return setOnPages(document, (p) => p.templateId === 'dedication', (params) => {
+        params.scanInstruction = value;
       });
     case 'ttyKicker':
       return setOnPages(document, (p) => p.templateId === 'through-the-years', (params) => {

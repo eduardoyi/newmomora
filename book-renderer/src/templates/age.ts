@@ -59,6 +59,31 @@ export function formatAge({ years, months }: AgeMonths, lang: Language): string 
 }
 
 /**
+ * Chip-style age ("2 years, 5 months" / "2 años, 5 meses") — print-polish
+ * round (owner decision 2026-09-14, item F): matches the app's own age-chip
+ * format (`formatAgeFromDob` in src/utils/family-members.ts) byte-for-byte
+ * in shape, reimplemented locally per book-renderer's "copied, not
+ * imported" isolation convention (this package has its own deps and never
+ * imports app code — see theme.ts's header comment for the same rule
+ * applied to design tokens). Deliberately a SEPARATE function from
+ * `formatAge` above: that one produces the through-the-years portrait
+ * caption's different phrasing ("2 años y 9 meses" / "2 years and 9 months
+ * old") — comma-joined, no "and"/"old" suffix, is a different microcopy
+ * register (a book-section eyebrow, not a caption sentence). Used by the
+ * fitter's month-section age eyebrow default (`model/fitter.ts`).
+ */
+export function formatAgeChip({ years, months }: AgeMonths, lang: Language): string {
+  if (lang === 'es') {
+    if (years <= 0) return `${months} ${months === 1 ? 'mes' : 'meses'}`;
+    if (months === 0) return `${years} ${years === 1 ? 'año' : 'años'}`;
+    return `${years} ${years === 1 ? 'año' : 'años'}, ${months} ${months === 1 ? 'mes' : 'meses'}`;
+  }
+  if (years <= 0) return `${months} ${months === 1 ? 'month' : 'months'}`;
+  if (months === 0) return `${years} ${years === 1 ? 'year' : 'years'}`;
+  return `${years} ${years === 1 ? 'year' : 'years'}, ${months} ${months === 1 ? 'month' : 'months'}`;
+}
+
+/**
  * The portrait strip's age label: prefers exact DOB-based math when the
  * manifest has it, otherwise parses+relocalizes the manifest's own English
  * label, otherwise (unparseable) falls back to the raw label untouched —

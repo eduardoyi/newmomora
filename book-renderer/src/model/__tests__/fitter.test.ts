@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fitBook, splitLongText, partitionQuoteRun, reorderUnitsForParity } from '../fitter';
 import { auditBookDocument } from '../audit';
+import { applyPostFit } from '../edits';
 import { makeAsset, makeElement, makeManifest, makeMemory, makeOutline } from './fixtures/build';
 import type { PhotoSlotContent, TextSlotContent, IllustrationSlotContent, DigestEntryContent, ManifestMemory } from '../types';
 
@@ -729,6 +730,117 @@ describe('fitBook — month-opener section headers', () => {
     const header = document.pages[0].params.sectionHeader as { kicker: string | null; title: string };
     expect(header.kicker).toBe('October–November 2024');
     expect(header.title).toBe('The month you turned two');
+  });
+});
+
+describe('fitBook — month-section age eyebrow (print-polish round, owner decision 2026-09-14, item F)', () => {
+  it('defaults the eyebrow to the age AT THE END of a plain month, in the app chip format, when dateOfBirth is present', () => {
+    const manifest = makeManifest(
+      { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+    );
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:2025-03', kind: 'backbone', title: 'March 2025', memoryIds: ['mem-1'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const header = document.pages[0].params.sectionHeader as { kicker: string | null; title: string };
+    // Last day of March 2025 (2025-03-31) against a 2022-10-23 birth date:
+    // turned 2 years old 2024-10-23, then 5 more full months (Nov/Dec/Jan/
+    // Feb/Mar) by 2025-03-23 — still 2y5m on 3/31 (turns 2y6m 2025-04-23).
+    expect(header.kicker).toBe('2 years, 5 months');
+  });
+
+  it('localizes the age eyebrow for an es book, matching the app chip format', () => {
+    const manifest = makeManifest(
+      { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
+      { language: 'es', child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+    );
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:2025-03', kind: 'backbone', title: 'March 2025', memoryIds: ['mem-1'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const header = document.pages[0].params.sectionHeader as { kicker: string | null; title: string };
+    expect(header.kicker).toBe('2 años, 5 meses');
+  });
+
+  it('formats under-1-year and exact-year ages without a "0 months"/"0 years" half', () => {
+    const underOne = makeManifest(
+      { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2024-08-10' } },
+    );
+    const underOneOutline = makeOutline([
+      makeElement({ id: 'backbone:2025-03', kind: 'backbone', title: 'March 2025', memoryIds: ['mem-1'] }),
+    ]);
+    const underOneHeader = fitBook(underOneOutline, underOne).document.pages[0].params.sectionHeader as { kicker: string | null };
+    // 2024-08-10 -> end of March 2025 (2025-03-31) = 7 months.
+    expect(underOneHeader.kicker).toBe('7 months');
+
+    const exactYear = makeManifest(
+      { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2023-03-15' } },
+    );
+    const exactYearOutline = makeOutline([
+      makeElement({ id: 'backbone:2025-03', kind: 'backbone', title: 'March 2025', memoryIds: ['mem-1'] }),
+    ]);
+    const exactYearHeader = fitBook(exactYearOutline, exactYear).document.pages[0].params.sectionHeader as { kicker: string | null };
+    // 2023-03-15 -> end of March 2025 (2025-03-31) = exactly 2 years (birthday already passed that month).
+    expect(exactYearHeader.kicker).toBe('2 years');
+  });
+
+  it('never fabricates an age when dateOfBirth is absent (older manifest — silently no eyebrow)', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) });
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:2025-03', kind: 'backbone', title: 'March 2025', memoryIds: ['mem-1'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const header = document.pages[0].params.sectionHeader as { kicker: string | null };
+    expect(header.kicker).toBeNull();
+  });
+
+  it('never computes an age eyebrow for a multi-month range (subtitle already owns the kicker)', () => {
+    const manifest = makeManifest(
+      { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+    );
+    const outline = makeOutline([
+      makeElement({
+        id: 'backbone:2024-10_2024-11',
+        kind: 'backbone',
+        title: 'The month you turned two',
+        subtitle: 'October–November 2024',
+        memoryIds: ['mem-1'],
+      }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const header = document.pages[0].params.sectionHeader as { kicker: string | null };
+    expect(header.kicker).toBe('October–November 2024');
+  });
+
+  it('never computes an age eyebrow for a real editorial title that only looks close to a month shape', () => {
+    const manifest = makeManifest(
+      { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+    );
+    const outline = makeOutline([
+      makeElement({ id: 'firsts-like', kind: 'backbone', title: 'lo que nos hiciste reír', memoryIds: ['mem-1'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const header = document.pages[0].params.sectionHeader as { kicker: string | null };
+    expect(header.kicker).toBeNull();
+  });
+
+  it('a saved eyebrow:<elementId> edit still overrides the computed age default', () => {
+    const manifest = makeManifest(
+      { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+    );
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:2025-03', kind: 'backbone', title: 'March 2025', memoryIds: ['mem-1'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    expect((document.pages[0].params.sectionHeader as { kicker: string | null }).kicker).toBe('2 years, 5 months');
+    const { document: edited } = applyPostFit(document, { text: { 'eyebrow:backbone:2025-03': { target: 'eyebrow:backbone:2025-03', value: 'A custom eyebrow.' } } });
+    expect((edited.pages[0].params.sectionHeader as { kicker: string | null }).kicker).toBe('A custom eyebrow.');
   });
 });
 

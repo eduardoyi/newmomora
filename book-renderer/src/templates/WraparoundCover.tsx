@@ -124,7 +124,16 @@ export function WraparoundCover({ page, bookSlug, showGuides }: TemplateProps) {
         </div>
         <div
           className="cover-wrap__colophon"
-          style={{ left: `${xPct(bleed + 14)}%`, bottom: `${yPct(bleed + 14)}%`, width: `${wPct(120)}%` }}
+          // Print-polish round (owner decision 2026-09-14, item C): the
+          // print lab stamps a ~10mm production data-matrix at the back
+          // cover's bottom-left corner — exactly where this block used to
+          // sit (14mm above trim bottom, confirmed colliding on the
+          // owner's physical sample). Prodigi's own print guide also
+          // reserves a 10mm no-content safety margin at every trim edge.
+          // Lifted ~12mm (14mm -> 26mm above trim bottom) so the block's
+          // bottom edge clears both the stamp and the safety margin with
+          // real headroom (26mm >> 22mm floor).
+          style={{ left: `${xPct(bleed + 14)}%`, bottom: `${yPct(bleed + 26)}%`, width: `${wPct(120)}%` }}
         >
           <div className="cover-wrap__years" style={{ fontSize: ptCqwFor(6.5, totalWidthMm), color: lavender.deep }}>
             {p.yearRangeLabel}

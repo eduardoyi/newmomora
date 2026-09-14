@@ -245,9 +245,14 @@ export function buildBookManifest(input: BuildManifestInput): BookManifest {
   );
 
   return buildManifest({
+    // `dateOfBirth` (print-polish round, owner decision 2026-09-14, item F):
+    // reuses the SAME `childDateOfBirth` already read above for the
+    // portraits' own age-label computation — one source of truth, never a
+    // second DB lookup. `null` (never omitted) when `context.child` is
+    // absent, matching every other field in that branch.
     child: input.context.child
-      ? { id: input.context.child.id, name: input.context.child.name }
-      : { id: input.context.book.familyId, name: input.context.familyName },
+      ? { id: input.context.child.id, name: input.context.child.name, dateOfBirth: childDateOfBirth }
+      : { id: input.context.book.familyId, name: input.context.familyName, dateOfBirth: null },
     scope,
     outlineRun: input.outlineRunId,
     memories: manifestMemories,

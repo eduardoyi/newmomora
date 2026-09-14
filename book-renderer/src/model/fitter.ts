@@ -34,8 +34,9 @@ import { PHYSICAL } from './types';
 // full rationale — same types, zero behavior change either side.
 import type { FooterIndexEntry } from '../templates/common/FooterIndex.types';
 import type { SectionHeaderParams } from '../templates/common/SectionHeader.types';
-import { localizeMonthLabel } from '../templates/common/formatDate';
+import { localizeMonthLabel, parseSingleMonthLabel, lastDayOfMonthIso } from '../templates/common/formatDate';
 import { getFurniture, getLanguage } from '../templates/furniture';
+import { ageAtDate, formatAgeChip } from '../templates/age';
 import { illustratedIlloFitHeightMm, SAFE_BOX_MM, SECTION_HEADER_RESERVE_MM, footerReserveMm, printableCaption } from '../templates/mm';
 import { anchorPairMeetsMinSize } from '../templates/layout/anchorMediaLayout';
 import { resolveElementMemories } from './loader';
@@ -2071,9 +2072,42 @@ function buildDedicationPages(element: OutlineElement, manifest: BookManifest, o
     id: element.id,
     sourceElementId: element.id,
     templateId: 'dedication',
-    params: { title: element.title, childName: manifest.child.name, body: outline.dedication ?? undefined },
+    // `hasScanMarks` starts false here and is patched to its real, final
+    // value once the WHOLE document is assembled — see `runFit`'s own
+    // post-process call to `documentHasScanMarks` right before it builds
+    // the `BookDocument`. Never trust this literal at this point in the
+    // fit: page-cap demotion (later in `fitBook`) can still drop every
+    // video/audio memory this book had, and a re-fit at a higher pairing
+    // level rebuilds this page from scratch anyway.
+    params: { title: element.title, childName: manifest.child.name, body: outline.dedication ?? undefined, hasScanMarks: false },
   });
   return [blank, dedication];
+}
+
+/**
+ * Print-polish round (owner decision 2026-09-14, item D1): true when ANY
+ * page in the (fully assembled) document carries a real scan-mark
+ * affordance — the three render paths that ever draw one:
+ *   - a photo slot whose `content.qr` is true (a video asset — PhotoTile
+ *     renders its mark directly under the tile, in AnchorMedia/FlexGrid/
+ *     PhotoStory);
+ *   - an `audio-note` slot (AudioNote.tsx — the mark IS the page, always);
+ *   - a synthetic `footerIndex` credit entry with `qr: true` (a full-bleed/
+ *     panorama video's mark, printed on its facing page — see
+ *     `pendingCredit` above).
+ * Deliberately NOT derived from the manifest/outline directly: the outline
+ * can't predict page-cap demotion, and a manifest memory that never made it
+ * into a fitted page (integrity exclusion, demotion, ...) has no mark on
+ * paper for the instruction to be honest about.
+ */
+function documentHasScanMarks(pages: BookPage[]): boolean {
+  return pages.some((page) => {
+    if (page.slots.some((slot) => slot.kind === 'audio-note')) return true;
+    if (page.slots.some((slot) => slot.content.kind === 'photo' && (slot.content as PhotoSlotContent).qr)) return true;
+    const footerIndex = page.params.footerIndex as FooterIndexEntry[] | undefined;
+    if (Array.isArray(footerIndex) && footerIndex.some((entry) => entry.qr)) return true;
+    return false;
+  });
 }
 
 /**
@@ -3697,8 +3731,30 @@ function runFit(
         // here already; see `buildContentPages`'s own trailing fallback for
         // the rest of the fix.
         const lang = getLanguage(manifest);
+        // Print-polish round (owner decision 2026-09-14, item F): a plain
+        // month section (no `element.subtitle` range of its own — those
+        // already get a real kicker above) defaults its eyebrow to the
+        // child's age AT THE END of that month ("2 años, 5 meses" / "2
+        // years, 5 months"), formatted like the app's own age chips —
+        // deterministic even for a mid-month birthday (owner decision: age
+        // at the section's own LAST day, not the birthday's exact date).
+        // Requires BOTH a genuine single-month title (never a range or a
+        // real editorial title — `parseSingleMonthLabel` returns `null` for
+        // either) AND `manifest.child.dateOfBirth` (absent on older
+        // manifests -> silently no eyebrow, never a fabricated age). This
+        // is only the DEFAULT: `eyebrow:<elementId>` edits still apply
+        // post-fit in `model/edits.ts` and overwrite whatever default (age
+        // or null) the fitter put here first.
+        const monthMeta = element.subtitle ? null : parseSingleMonthLabel(element.title);
+        const ageEyebrow =
+          monthMeta && manifest.child.dateOfBirth
+            ? (() => {
+                const age = ageAtDate(manifest.child.dateOfBirth as string, lastDayOfMonthIso(monthMeta.monthIndex, monthMeta.year));
+                return age ? formatAgeChip(age, lang) : null;
+              })()
+            : null;
         const header: SectionHeaderParams = {
-          kicker: element.subtitle ? localizeMonthLabel(element.subtitle, lang) : null,
+          kicker: element.subtitle ? localizeMonthLabel(element.subtitle, lang) : ageEyebrow,
           title: localizeMonthLabel(element.title, lang),
           special: Boolean(element.subtitle),
         };
@@ -3777,6 +3833,20 @@ function runFit(
       }),
     );
     totalPages = numberPages(pages);
+  }
+
+  // Print-polish round (owner decision 2026-09-14, item D1): the dedication
+  // page's scan-instruction footnote only renders in a book that actually
+  // HAS at least one scan mark to explain — computed here, AFTER every page
+  // is built, by scanning the fully assembled `pages` array directly rather
+  // than threading a "will this book have video/audio" flag down from the
+  // outline (the outline can't know what page-cap demotion ends up
+  // dropping — see `PageCapacityReport.omittedMemoryIds` above — so only
+  // the FINAL page set is an honest answer). Patches the dedication page's
+  // own params in place; `Dedication.tsx` reads `hasScanMarks` to gate the
+  // footnote block.
+  for (const page of pages) {
+    if (page.templateId === 'dedication') page.params.hasScanMarks = documentHasScanMarks(pages);
   }
 
   const document: BookDocument = {
