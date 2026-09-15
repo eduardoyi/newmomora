@@ -21,6 +21,7 @@ import { ContentActionSheet } from '@/components/content-action-sheet';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { FullScreenMediaViewer } from '@/components/full-screen-media-viewer';
 import { ReportSheet } from '@/components/report-sheet';
+import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useContentSafety } from '@/hooks/useContentSafety';
@@ -28,7 +29,7 @@ import { useMemberMemories } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
-import { editFamilyMemberRoute, memoryDetailRoute, portraitTimelineRoute } from '@/lib/routes';
+import { editFamilyMemberRoute, memoryBooksRoute, memoryDetailRoute, portraitTimelineRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
 import type { ReportTargetType } from '@/services/content-safety';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
@@ -349,6 +350,23 @@ export default function ViewFamilyMemberScreen() {
             portraitCount={portraitCount}
           />
         )}
+
+        {/* Persistent Memory Books entry point, near the portrait timeline
+            -- docs/plans/memory-book.md §"5a.5" locked design. Not buried
+            in settings, not a transient feed card. */}
+        {!isProfileHidden ? (
+          <SettingsBlock title="Keepsakes">
+            <SettingsRow
+              accessibilityLabel={`Memory Books for ${member.name}`}
+              chevron
+              first
+              label="Memory Books"
+              caption="Turn memories into a premium keepsake book"
+              onPress={() => router.push(memoryBooksRoute(member.id))}
+              testID="family-member-memory-books-row"
+            />
+          </SettingsBlock>
+        ) : null}
 
         {deleteError ? <Text style={styles.deleteErrorText}>{deleteError}</Text> : null}
 

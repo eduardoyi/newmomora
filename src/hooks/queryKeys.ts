@@ -44,6 +44,11 @@ export const galleryCaptionSettingsQueryKeyBase = 'gallery-caption-settings' as 
 // URLs that must not survive a cold start on disk.
 export const galleryImportRunStatusQueryKeyBase = 'gallery-import-run-status' as const;
 export const galleryImportCandidatesQueryKeyBase = 'gallery-import-candidates' as const;
+// Memory Book in-app scope picker (docs/plans/memory-book.md §"5a.5"). Keyed
+// by child, not just family, since the picker/status list is per-child (the
+// entry point lives on that child's profile screen).
+export const memoryBooksQueryKeyBase = 'memory-books' as const;
+export const memoryBookEligibilityQueryKeyBase = 'memory-book-eligibility' as const;
 
 export function memoriesQueryKey(familyId: string | null | undefined) {
   return [memoriesQueryKeyBase, familyId] as const;
@@ -126,4 +131,16 @@ export function familyActivityQueryKey(familyId: string | null | undefined) {
 
 export function familyActivityUnreadQueryKey(familyId: string | null | undefined) {
   return [familyActivityUnreadQueryKeyBase, familyId] as const;
+}
+
+export function memoryBooksQueryKey(familyId: string | null | undefined, childId: string | undefined) {
+  return [memoryBooksQueryKeyBase, familyId, childId] as const;
+}
+
+export function memoryBookEligibilityQueryKey(
+  familyId: string | null | undefined,
+  childId: string | undefined,
+  dateOfBirth: string | null | undefined,
+) {
+  return [memoryBookEligibilityQueryKeyBase, familyId, childId, dateOfBirth ?? null] as const;
 }

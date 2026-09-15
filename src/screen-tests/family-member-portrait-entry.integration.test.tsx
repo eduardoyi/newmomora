@@ -148,4 +148,20 @@ describe('family member portrait entry', () => {
     fireEvent.press(getByTestId('family-member-portrait-history'));
     expect(mockPush).toHaveBeenCalledWith('/(app)/family/member-1/portraits');
   });
+
+  it('shows a persistent Memory Books row that opens the scope picker (docs/plans/memory-book.md §5a.5)', () => {
+    const { getByTestId } = render(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <ViewFamilyMemberScreen />
+      </SafeAreaProvider>,
+    );
+
+    fireEvent.press(getByTestId('family-member-memory-books-row'));
+    expect(mockPush).toHaveBeenCalledWith('/(app)/family/member-1/memory-books');
+  });
 });

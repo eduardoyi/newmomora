@@ -93,3 +93,9 @@ export function editFamilyMemberRoute(memberId: string): Href {
 export function portraitTimelineRoute(memberId: string): Href {
   return `/(app)/family/${memberId}/portraits` as Href;
 }
+
+// Memory Book in-app scope picker (docs/plans/memory-book.md §"5a.5") --
+// entry point on the child profile screen, near the portrait timeline row.
+export function memoryBooksRoute(memberId: string): Href {
+  return `/(app)/family/${memberId}/memory-books` as Href;
+}

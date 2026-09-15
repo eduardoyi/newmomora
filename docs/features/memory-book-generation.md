@@ -1,7 +1,8 @@
 # Feature: Memory Book generation (V5a)
 
-**Status:** `in-progress` — schema + RLS contract (part A/B) and the durable
-generation pipeline (part C: dispatcher + Workflow) are shipped. 5b's v1
+**Status:** `in-progress` — schema + RLS contract (part A/B), the durable
+generation pipeline (part C: dispatcher + Workflow), and the **in-app scope
+picker (5a.5, [below](#in-app-scope-picker-5a5))** are shipped. 5b's v1
 edit-surface **schema + Edge Function** (`memory_book_edits`,
 `memory-book-edits`, [below](#edit-surface-v1)), `applyBookEdits`
 (`book-renderer/src/model/edits.ts`), pluggable asset resolution
@@ -9,13 +10,12 @@ edit-surface **schema + Edge Function** (`memory_book_edits`,
 (plan steps 1-5) are shipped. The web app itself
 (`book-renderer/src/web/`, plan step 6), its dedicated PII-safe build
 (`vite.web.config.ts` + `scripts/check-web-bundle.mjs`, step 7), and its
-hosting Worker (`cloudflare/memory-book-web/`, step 7) are also shipped —
-**not yet deployed** (owner-gated DNS/deploy; see that Worker's own
-README). Checkout (5c) and the in-app scope picker (5a.5) remain not
-started. Check
+hosting Worker (`cloudflare/memory-book-web/`, step 7) are shipped and
+DEPLOYED at shop.usemomora.com. Checkout (5c) is shipped, deployed, and
+canary-proven end to end (see docs/features/memory-book-orders.md). Check
 [plans/memory-book-5b-web-preview.md](../../plans/memory-book-5b-web-preview.md)
 and the relevant source directly for anything this summary doesn't cover.
-**Last updated:** 2026-09-07
+**Last updated:** 2026-09-15
 **PRD reference:** none yet (Memory Book is a new premium product, not in the
 original PRD) — canonical product doc is
 [docs/plans/memory-book.md](../plans/memory-book.md), specifically
@@ -46,20 +46,23 @@ status — it never writes it.
 
 ## User-facing behavior
 
-The in-app scope picker UI is not yet built (5b). This slice has no UI, but
-the pipeline it triggers is real and running end to end: given a `queued`
-row, `generate-memory-book` dispatches a Cloudflare Workflow that curates and
-publishes a complete `book_document`. The eventual flow (per the plan): the
-app's in-app scope picker (who/when) creates the `memory_books` row, calls
-`generate-memory-book`, and hands the family off to
-`shop.usemomora.com/b/<id>` via a one-time signed link; the web app polls
-`status` and renders the preview once `ready`.
+The Expo app ships a "Memory Books" row on each child's profile screen
+(near the portrait timeline). Tapping it opens the scope picker: age-year
+("Year One", "Year Two", ...), calendar-year, and "Everything" options, each
+either offering to start a book or showing the state of one already
+requested for that exact scope (in-progress / ready / failed). See
+[In-app scope picker (5a.5)](#in-app-scope-picker-5a5) below for the full
+contract. Once a book is `ready`, "View your book" hands the family off to
+`shop.usemomora.com/b/<id>` in the system browser — the web app has its own
+(separate) login; a one-time signed-link handoff is a deliberately deferred
+seam (not built by this slice). The web app polls `status` and renders the
+preview once `ready`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  A[App scope picker -- 5b, not yet built] -->|insert queued row| M[(memory_books)]
+  A[App scope picker -- 5a.5] -->|insert queued row| M[(memory_books)]
   A -->|POST memoryBookId| D[generate-memory-book]
   D -->|CAS to generating, HMAC dispatch| M
   D -->|"{ bookId, attemptId }"| W[Cloudflare MemoryBookWorkflow]
@@ -67,12 +70,15 @@ flowchart LR
   BR --> M
   W -->|outline + cover-verify calls| AI[OpenAI]
   W -->|read existing preview thumbnails| R2[(R2: momora-prod)]
-  M -->|status poll -- 5b, not yet built| B[shop.usemomora.com preview]
+  M -->|status poll| A
+  A -->|"Linking.openURL (ready only)"| B[shop.usemomora.com preview]
 ```
 
-The scope-picker UI and the web preview are still 5b. Everything else in the
-diagram — the dispatcher, the Workflow, the bridge, and their CAS discipline
-on `memory_books` — is shipped (part C).
+The scope-picker UI (this doc's [In-app scope picker (5a.5)](#in-app-scope-picker-5a5)
+section) inserts the row and polls it; the web preview is still 5b/5c for
+everything past the plain `Linking.openURL` handoff (no signed link yet).
+Everything else in the diagram — the dispatcher, the Workflow, the bridge,
+and their CAS discipline on `memory_books` — is shipped (part C).
 
 ## Data model
 
@@ -196,6 +202,208 @@ this task's scope excluded schema changes) are in
 [TECH_SPEC §4.22](../TECH_SPEC.md#422-memory-book-generation-v5a-part-c).
 See [docs/durable-ai-generation-workflows.md](../durable-ai-generation-workflows.md)
 for the general pattern this follows.
+
+## In-app scope picker (5a.5)
+
+Shipped 2026-09-15, app-side only (`app/` + `src/`) — no server, Edge
+Function, worker, or schema change; both the `memory_books` contract and
+`generate-memory-book` were already live in production (see the sections
+above). Implements `docs/plans/memory-book.md` §"5a.5"'s locked design
+(owner decision 2026-09-07) verbatim except where noted under
+[Deviations](#deviations-from-the-locked-design-brief) below.
+
+### Entry point
+
+One persistent "Memory Books" row on each child's profile screen
+(`app/(app)/family/[id]/index.tsx`, rendered via the shared
+`SettingsBlock`/`SettingsRow` chrome — same row look as Settings and the
+Family members screen), placed directly under the `CastCard` (which itself
+holds the portrait-timeline history button) so it reads as "near the
+portrait timeline" per the brief, not buried in Settings and not a feed
+card. It routes to `app/(app)/family/[id]/memory-books.tsx`
+(`memoryBooksRoute(memberId)` in `src/lib/routes.ts`).
+
+### Scope derivation
+
+`src/utils/memory-book-scope.ts` is a pure, dependency-free module —
+**not** a shared import from `supabase/functions/_shared/date-context.ts`,
+because the Expo app cannot import Deno Edge Function modules. It is a
+deliberate, documented duplicate of that file's date arithmetic
+(`addYears`'s Feb 29 → Feb 28 clamp, and the same Julian-Day-Number-based
+`addDays`/round-trip used by `eval-memory-book-outline.ts`'s
+`fromJulianDayNumber`) so the frozen window this module computes is
+byte-for-byte what `workflow-memory-book-bridge/index.ts` would derive from
+the same `date_of_birth` — the module's header comment spells out exactly
+which functions must stay in sync and why.
+
+- **age_year**: `startDate = addYearsClamped(dob, ageYear - 1)`,
+  inclusive `endDate` = the day before
+  `addYearsClamped(dob, ageYear)` — "Year One" (`ageYear = 1`) is birth →
+  the day before the 1st birthday, matching `ageYearLabel`'s existing
+  wording in `eval-memory-book-outline.ts` (already rendered in book
+  covers). Enumerated from Year One up through whichever age-year is
+  currently in progress (today falls inside its window) — every scope is
+  SHOWN, per the brief, never hidden for being in-progress or thin. Empty
+  when the child has no `date_of_birth` on file (no age-year math is
+  possible without it).
+- **calendar_year**: plain `Jan 1`–`Dec 31` windows, birth year through the
+  current year, **most recent year first** — not specified verbatim by the
+  brief (which only fixes the age-year ordering and labels); a documented
+  implementation choice, since calendar-year books are more naturally
+  browsed by recency than the developmental Year One/Two/... progression.
+  Falls back to a bounded "current year + previous year" when
+  `date_of_birth` is unknown (no anchor to compute a real origin from), and
+  caps the lookback at 25 years for a very old `date_of_birth` (loop-safety
+  bound, not a real product limit).
+- **everything**: both dates `null`, always offered.
+- Labels: primary `option.label` is stored verbatim as
+  `memory_books.scope_label` ("Year One", "2024", "Everything"). The
+  secondary "era line" ("Oct 2022 – Oct 2023") is rendered only for
+  age-year scopes, per the brief's example — calendar-year/everything have
+  no secondary line (the primary label already says everything there is to
+  say).
+
+### Thin-period threshold and eligibility count
+
+`MEMORY_BOOK_THIN_THRESHOLD = 30`; `thinPeriodReason(count)` returns the
+locked copy shape (`"12 memories in this period — books need about 30"`,
+singular "memory" at exactly 1) or `null` once the threshold is met. Every
+scope is always rendered; a thin one is disabled with that reason instead
+of hidden.
+
+`countEligibleMemoriesForScope` (`src/services/memory-books.ts`) approximates
+`cloudflare/memory-book-worker/src/eligibility.ts`'s
+`computeMemoryEligibility` (a memory is eligible iff tagged to THIS child,
+or has no tags at all) with **one query per scope** at picker-open: select
+`id, memory_family_members(family_member_id)` from `memories` for the
+family, filtered to the scope's half-open date window (or unfiltered for
+`everything`), then count eligibility client-side. **Documented
+divergence**: this does not apply the generation worker's additional
+`isPrintable` filter (`hasText || photoCount + videoCount > 0`) — in
+practice every memory already has either `content` or a media attachment
+by construction (the composer requires one), so the two counts coincide;
+this was a deliberate simplification, not an oversight, made to keep the
+count to exactly one query per scope as the brief asks for.
+
+### Status surface and generation
+
+`useMemoryBooks` (`src/hooks/useMemoryBooks.ts`) combines the scope options
+with:
+
+- `fetchMemoryBooksForChild` — every `memory_books` row ever requested for
+  this child, any status, polled every 4s (`refetchInterval`) while any row
+  is `queued`/`generating` and idle otherwise; React Query stops calling
+  `refetchInterval` once the picker screen unmounts (no observers), so
+  there's no separate visibility/focus wiring for the "poll while visible"
+  requirement.
+- the eligibility counts above (`staleTime` 5 minutes — counted once at
+  open, not kept live; the server re-derives eligibility fresh at
+  generation time regardless).
+
+For each scope, the most relevant existing row (any non-failed status
+first, then the most recent failed one) takes over the row instead of
+offering generation again, exactly as the brief specifies — see
+`pickRelevantBook`'s comment for the active/ready/failed tie-break when a
+scope has been requested more than once over time (allowed; the plan is
+explicit that "a family can order any number of books... scopes may
+overlap"). `generate(option)` is used for BOTH the first "Create book" tap
+AND the "Retry" tap on a `failed` row — both are a plain
+`createMemoryBook` insert + `generate-memory-book` dispatch from this
+hook's point of view, and the brief is explicit that retry creates a fresh
+row rather than mutating the failed one. A distinct `retryDispatch(option,
+bookId)` handles only the narrower "the row inserted fine but the dispatch
+call itself failed" case (contract note: "treat non-2xx as a failed
+dispatch — row stays queued; show retryable error") — it re-invokes
+`generate-memory-book` against the SAME already-`queued` row rather than
+inserting a new one; this transient error is session-local UI state
+(`MemoryBookScopeRow.dispatchError`), never persisted.
+
+The one-active-per-scope unique index conflict (Postgres `23505`) is
+handled without an error wall: `createMemoryBook` flags `conflict: true`
+distinctly from other errors, and the hook responds by refetching the list
+so the scope renders whichever row already won the race (another tab, a
+double-tap, or family sharing racing two managers).
+
+Roles (locked design point 6): `canEditFamilyContent(role)` gates the
+Create/Retry buttons in `MemoryBookScopeRow`. A viewer additionally never
+sees a scope row that has no existing book at all — RLS would reject their
+insert anyway, but the screen degrades gracefully rather than surfacing
+that as an error (`MemoryBooksScreen` filters `rows` to `book !== null`
+for non-owner/manager roles).
+
+### View / Retry / progress UI
+
+`src/components/memory-book-scope-row.tsx` renders, per `status`:
+`available` → "Create book" button (owner/manager only); `thin` → the
+disabled-reason copy, no button; `in_progress` (covers both `queued` and
+`generating`, per the brief) → a spinner + "Working on it — ready in about
+3 minutes", plus the transient dispatch-error banner and its own "Try
+again" button when present; `ready` → "View your book"
+(`Linking.openURL(memoryBookWebUrl(bookId))`, `https://shop.usemomora.com/b/<id>`
+— the web app's own separate login handles auth from there; the one-time
+signed-link handoff is a deliberately deferred seam, not built here);
+`failed` → the row's `failure_reason` (or a generic fallback) + "Retry"
+(owner/manager only).
+
+### Deviations from the locked design brief
+
+1. Calendar-year ordering (most-recent-first) and the no-`date_of_birth`
+   fallback range are implementation choices the brief didn't specify —
+   see [Scope derivation](#scope-derivation) above.
+2. The eligibility count skips the generation worker's `isPrintable`
+   filter — see [Thin-period threshold and eligibility
+   count](#thin-period-threshold-and-eligibility-count) above. Stated
+   divergence, negligible in practice given how memories are composed.
+3. No new i18n/strings system was introduced. AGENTS.md's "Coding
+   standards" section states the product is **English-only UI** today (no
+   `i18next`/`react-intl`/locale files exist anywhere in `app/`/`src/`);
+   the task brief's "add both en + es if the app has a strings system" is
+   conditional on one existing, and building a new localization system for
+   one screen was out of this slice's scope (schema/API changes were
+   explicitly excluded; a new cross-cutting i18n system is a bigger call
+   than one feature warrants). All picker copy is English, matching every
+   other screen in the app.
+
+### Testing
+
+- `src/utils/memory-book-scope.test.ts` — pure logic, unit only: `addYears`
+  clamping (incl. keeping Feb 29 when the target year is itself a leap
+  year), the Julian-Day-Number round trip and `addDaysToDate` across
+  month/leap-day boundaries, `ageYearLabel` (incl. the past-20 fallback),
+  `formatMonthYear`/`formatEraLine`, age-year enumeration (incl. a
+  leap-day birthday reaching a leap-day age-year five years later,
+  covering both the Feb 29 → Feb 28 clamp AND the reverse case), calendar-
+  year enumeration (ordering, no-DOB fallback, the lookback cap),
+  `buildMemoryBookScopeOptions` ordering, `memoryBookScopeKey`/
+  `memoryBookMatchesScope`, and `thinPeriodReason`'s exact copy shape
+  (singular/plural/zero) plus the locked constants.
+- `src/services/memory-books.integration.test.ts` — Jest, mocked Supabase
+  client: `fetchMemoryBooksForChild`'s filter/order shape, `createMemoryBook`'s
+  exact just-queued insert shape (incl. the `everything`-scope null dates),
+  the `23505` conflict flag distinct from other errors,
+  `dispatchMemoryBookGeneration`'s `generate-memory-book` invoke, and
+  `countEligibleMemoriesForScope`'s query shape (the half-open window one
+  day past the inclusive end date, no date filter for `everything`, the
+  untagged/tagged-to-child/tagged-to-others-only partition, and a null
+  embed treated as untagged).
+- `src/hooks/useMemoryBooks.integration.test.tsx` — React Query
+  `renderHook`, mocked service layer: eligibility merge, the thin-period
+  gate, an existing row taking over a scope's status, the full
+  generate-then-dispatch flow, 23505-conflict recovery without an error
+  wall, the transient-dispatch-error/`retryDispatch` path, and the
+  failed-row retry inserting a fresh row.
+- `src/screen-tests/memory-books.integration.test.tsx` and the added case
+  in `src/screen-tests/family-member-portrait-entry.integration.test.tsx`
+  — component-level, mocked hooks: every scope renders with its action,
+  the thin reason hides the button, tapping Create/Retry calls
+  `generate()`, the progress/ready/failed states render their own copy and
+  actions, `Linking.openURL` is called with the exact `shop.usemomora.com`
+  URL for a ready book, non-manager viewers see only rows with an existing
+  book, and the child-profile screen's persistent row navigates to the
+  picker.
+
+Run: `npm test` (Node 20) — no `npm run test:edge` needed for this change
+(no Edge Function touched).
 
 ## Edit surface (v1)
 
@@ -385,32 +593,45 @@ infinite-scroll above, both purely client-side (no server contract change):
 
 ## Client integration
 
-The in-app scope picker is not yet built (5b UI). It will: read
-`family_members.date_of_birth` to resolve `age_year` windows, compute
-`page_budget` from a printable-memory count in the chosen scope, insert the
-`memory_books` row, then call `generate-memory-book({ memoryBookId })` and
-poll `status`. `shop.usemomora.com` (also 5b — a third Vite entry inside
-`book-renderer` itself, `src/web/`, NOT a separate Next.js package; see
+The in-app scope picker (5a.5, [above](#in-app-scope-picker-5a5)) is the
+shipped client: it reads `family_members.date_of_birth` to resolve
+`age_year` windows, always inserts `page_budget = 122` (a fixed input to
+curation per the locked design — not computed from a live count; see that
+section), inserts the `memory_books` row, then calls
+`generate-memory-book({ memoryBookId })` and polls `status`.
+`shop.usemomora.com` (5b/5c — a third Vite entry inside `book-renderer`
+itself, `src/web/`, NOT a separate Next.js package; see
 `plans/memory-book-5b-web-preview.md` Design Decision 1 and
 `docs/plans/memory-book.md` §V5's 5b bullet) polls `status` and renders
 `book_document` through the shared `book-renderer` components
-(single-renderer rule — plan §3) once `ready`.
+(single-renderer rule — plan §3) once `ready`. The app hands off to it via
+a plain `Linking.openURL('https://shop.usemomora.com/b/<id>')` — the web
+app's own separate login covers auth from there; the one-time signed-link
+handoff described in earlier drafts of this doc remains a deliberately
+deferred seam, not built by 5a.5.
 
 ### How to invoke from another feature
 
 1. Resolve a concrete scope window (`age_year` needs the child's DOB;
    `calendar_year`/`custom_range` are computed directly; `everything` sends
-   both dates null).
+   both dates null). `src/utils/memory-book-scope.ts` already does this for
+   `age_year`/`calendar_year`/`everything` — reuse it rather than
+   re-deriving the same windows (`custom_range` remains unbuilt, v2).
 2. Insert a `memory_books` row as the requesting user: `family_id`,
    optional `child_id`, `requested_by: auth.uid()`, `scope_kind`,
    `scope_start_date`/`scope_end_date` (per above), `scope_label`,
-   `page_budget` (18–122). Leave `status` at its `queued` default and every
-   generation-identity/`book_document` field unset — the RLS with-check
-   rejects anything else.
+   `page_budget` (18–122; the picker always sends 122). Leave `status` at
+   its `queued` default and every generation-identity/`book_document` field
+   unset — the RLS with-check rejects anything else.
+   `src/services/memory-books.ts#createMemoryBook` does this and flags a
+   `23505` one-active-per-scope conflict distinctly so the caller can
+   recover by refetching instead of showing an error.
 3. Call `generate-memory-book({ memoryBookId })` to dispatch generation, then
-   poll `status` (once 5b's UI ships, hand off to its own recovery/retry
-   entry points — do not write `status` from the client; a retry after
-   `failed` is just calling `generate-memory-book` again with the same id).
+   poll `status` (`src/hooks/useMemoryBooks.ts` does this with a 4s
+   `refetchInterval` while any row is active — do not write `status` from
+   the client; a retry after `failed` is just calling `generate-memory-book`
+   again with the same id, or from the picker, tapping "Retry" which inserts
+   a fresh row per the locked design).
 
 ## Extension guide
 
@@ -529,8 +750,9 @@ poll `status`. `shop.usemomora.com` (also 5b — a third Vite entry inside
   `memory_book_edits.edits` at both preview render time and 5c print time —
   the edit shapes and the trust boundary above are the contract it's built
   against (check `book-renderer/src/model/edits.ts` for its current state).
-  The scope-picker UI, the web preview app itself, and checkout (5b steps
-  3-9 / 5c) are the other consumers of a `ready` book tracked by the plan.
+  The scope-picker UI ([shipped](#in-app-scope-picker-5a5), 5a.5), the web
+  preview app itself, and checkout (5b steps 3-9 / 5c) are the other
+  consumers of a `ready` book tracked by the plan.
 
 ## Testing
 
@@ -660,7 +882,10 @@ table's types added).
 
 ```bash
 npm run db:reset   # applies migrations (incl. this one) against local Postgres
-npm test           # src/types/database.ts is exercised transitively across the suite
+npm test           # src/types/database.ts is exercised transitively across the suite;
+                    # also runs the 5a.5 in-app scope picker's tests (src/utils/memory-book-scope.test.ts,
+                    # src/services/memory-books.integration.test.ts, src/hooks/useMemoryBooks.integration.test.tsx,
+                    # src/screen-tests/memory-books.integration.test.tsx)
 npm run test:edge   # generate-memory-book + workflow-memory-book-bridge + memory-book-edits (Deno)
 cd cloudflare/memory-book-worker && npm test   # Workflow/dispatch (Vitest, Node 22)
 
@@ -674,6 +899,7 @@ cd cloudflare/memory-book-web && npm test && npm run typecheck && npm run deploy
 
 | Date | Change |
 |------|--------|
+| 2026-09-15 | 5a.5 shipped: in-app scope picker, app-side only (no server/schema change). "Memory Books" row on the child profile screen (`app/(app)/family/[id]/index.tsx`, near the portrait timeline) opens `app/(app)/family/[id]/memory-books.tsx`, listing age-year/calendar-year/Everything scopes via `src/utils/memory-book-scope.ts` (a documented, byte-for-byte duplicate of the server's `addYears`/Julian-Day-Number date math — the Expo app cannot import Deno Edge Function modules). Thin scopes (< 30 eligible memories, one query per scope via `src/services/memory-books.ts#countEligibleMemoriesForScope`, approximating the Workflow's own tagged-or-untagged eligibility) show the locked "N memories in this period — books need about 30" copy instead of a Generate button. An existing `memory_books` row for a scope takes over its row (`src/hooks/useMemoryBooks.ts`): `queued`/`generating` → a ~3-minute progress state (polled every 4s while active), `ready` → "View your book" (`Linking.openURL` to `shop.usemomora.com/b/<id>` — the signed-link handoff stays a deferred seam), `failed` → the failure reason + Retry (inserts a fresh row, per the locked design). The one-active-per-scope `23505` conflict is handled by refetching, never an error wall. Viewers (non-owner/manager) see only scopes with an existing book, never the generation affordance. See [In-app scope picker (5a.5)](#in-app-scope-picker-5a5) for the full contract, its documented deviations (calendar-year ordering/no-DOB fallback, the `isPrintable` eligibility divergence, and staying English-only since the app has no i18n system yet), and its test list. `docs/plans/memory-book.md` §5a.5 marked shipped. |
 | 2026-09-09 | Owner-approved editing-UX round (4 items, all client + `memory-book-edits` `picker_pool` only): (1) picker dates under each thumbnail + a date-range filter (`dateStart`/`dateEnd`, always intersected with the scope window, never widened past it) + a person filter (`memberId`, via `memory_family_members`) — fetched client-side against `family_members` for the roster, no new response field; (2) `PickerSheet`'s "Load more" button gains an `IntersectionObserver` sentinel as the primary infinite-scroll trigger, one `fetchLockRef` guarding every caller against a double-fire; (3) duplicate-photo badges (`book/duplicateAssets.ts`) on every slot whose rendered asset file occupies 2+ photo slots across the book, clicking one cycles to the next other occurrence; (4) after an image edit saves, the viewer auto-navigates to the slot's (possibly new) page and, if it lost the `full-bleed`/`panorama-spread` treatment on refit (`book/reflowNotice.ts`'s `computeReflowResult`), the Saved/Undo toast grows one extra sentence rather than stacking a second toast. `docs/TECH_SPEC.md` intentionally NOT touched in this change (it already carried unrelated in-progress edits at the time). |
 | 2026-09-07 | V5b steps 6-8 (+ one wave-1 wiring gap): the web app shipped — `book-renderer/src/web/` (a third Vite entry, `web.html`: email-OTP auth, family book list with status chips + polling + plain coalescer thumbnails, book view running `book_document -> applyPreFit -> fitBook -> applyPostFit -> SpreadPager`, an edit panel for all v1 text targets + image replace via a paginated picker sheet + focal-point reposition via a dedicated crop modal, skipped-orphan surfacing). Dedicated PII-safe build (`vite.web.config.ts`, `publicDir: false`, single `web.html` input, `dist-web/` output) with a real bundle check (`scripts/check-web-bundle.mjs`, wired into `build:web`) verified against an actual build (confirmed it FAILS on an injected `book-data`/`index.html` violation, not just passes on the real one). Hosting: `cloudflare/memory-book-web/`, a static-assets Worker with explicit SPA fallback to `web.html` (deliberately not Cloudflare's `index.html`-only convention), route `shop.usemomora.com` — `wrangler deploy --dry-run` and `wrangler check startup` both verified; not deployed (owner-gated). Wave-1 wiring gap fixed: `Closing.tsx` now reads `params.closingLine` (written by `applyPostFit` since step 4 but previously unread — a saved closing-line edit silently had no effect until this change). `docs/plans/memory-book.md` §V5's 5b bullet updated (Vite-entry decision, not Next.js; localStorage session note) — this doc's own stale "Next.js package" mention corrected too. Steps 3-5 (`applyBookEdits`, pluggable asset resolution, focal-point template wiring) were already shipped as part of wave 1 (commit `3acd5a9`) even though the entry below didn't call them out individually. |
 | 2026-09-07 | V5b steps 1-2: v1 edit-surface schema + Edge Function shipped — `memory_book_edits` migration (client select-only; every write service-role, verified via psql) and `memory-book-edits` (`save_edit` + `picker_pool`, server-side `mediaId` resolution and original-photo dimension measurement via presigned-GET + HTTP Range). `applyBookEdits`, focal-point wiring, and the web app itself remain not-yet-built (plan steps 3-9). Corrected this doc's earlier "add narrowly-scoped client update policies" extension-guide bullet, which the round-3-hardened plan superseded with the service-role-only design actually shipped. |

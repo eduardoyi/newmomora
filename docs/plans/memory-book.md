@@ -860,10 +860,10 @@ Sequenced as three independently shippable slices:
     used in the book to signal duplicates), reposition-within-crop
     (per-slot focal point stored in the book document).
   - Explicitly v2: deleting images/memories (forces re-layout).
-- **5a.5 — In-app scope picker** (build AFTER 5b — its terminal action links
-  to the web preview, and the signed-link handoff seam is designed on the
-  web side; dogfooding meanwhile uses the canary script). Design decided
-  2026-09-07:
+- **5a.5 — In-app scope picker.** SHIPPED 2026-09-15 (app-side only; no
+  server/schema change -- see docs/features/memory-book-generation.md's
+  "In-app scope picker (5a.5)" section for the implementation, its unit
+  tests, and the manual device-test script). Design decided 2026-09-07:
   - Entry point: one persistent "Memory Books" row where the child already
     lives in the app (child profile / family area, near the portrait
     timeline). No settings burial, no feed transience. The moment-driven
@@ -962,7 +962,8 @@ with tax on `amount_total` = quote + tax and the current equality check
 would reject every taxed payment. Also: render-worker idle-self-exit
 cost optimization, delivered advancement (tracking columns landed
 2026-09-09, order-status UX round), country list confirmation. 5a.5
-(in-app picker) is the last unbuilt slice.
+(in-app picker) shipped 2026-09-15 -- see below and
+docs/features/memory-book-generation.md.
 
 ## 10. Open questions
 
