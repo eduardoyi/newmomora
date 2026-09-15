@@ -47,7 +47,11 @@ status — it never writes it.
 ## User-facing behavior
 
 The Expo app ships a "Memory Books" row on each child's profile screen
-(near the portrait timeline). Tapping it opens the scope picker: age-year
+(near the portrait timeline). The row renders for owners/managers only
+(owner decision 2026-09-15): viewers can't generate books, so they get no
+entry point at all — a ready-book viewing path for other members is a
+future concern (signed shop links), not this row. Tapping it opens the
+scope picker: age-year
 ("Year One", "Year Two", ...), calendar-year, and "Everything" options, each
 either offering to start a book or showing the state of one already
 requested for that exact scope (in-progress / ready / failed). See

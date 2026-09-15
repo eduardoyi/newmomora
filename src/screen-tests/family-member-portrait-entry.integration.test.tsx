@@ -164,4 +164,21 @@ describe('family member portrait entry', () => {
     fireEvent.press(getByTestId('family-member-memory-books-row'));
     expect(mockPush).toHaveBeenCalledWith('/(app)/family/member-1/memory-books');
   });
+
+  it('hides the Memory Books row from viewers — only owners/managers can generate books', () => {
+    mockedUseFamily.mockReturnValue({ role: 'viewer' } as ReturnType<typeof useFamily>);
+
+    const { queryByTestId } = render(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <ViewFamilyMemberScreen />
+      </SafeAreaProvider>,
+    );
+
+    expect(queryByTestId('family-member-memory-books-row')).toBeNull();
+  });
 });
