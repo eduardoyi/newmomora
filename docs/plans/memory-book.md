@@ -964,6 +964,24 @@ cost optimization, delivered advancement (tracking columns landed
 2026-09-09, order-status UX round), country list confirmation. 5a.5
 (in-app picker) shipped 2026-09-15 -- see below and
 docs/features/memory-book-generation.md.
+Post-launch picker polish (owner-requested 2026-09-15, after first
+device use):
+  - PUSH NOTIFICATION when a book turns `ready` -- the ~3-minute
+    generation is exactly long enough to wander off; today nothing
+    tells the parent it finished (the picker only shows it on
+    reopen). Likely the single highest-value small follow-up; the
+    app already has a push pipeline (notify-family-activity
+    precedent).
+  - REDESIGN the picker into a genuinely beautiful surface (design
+    task, not just polish): show a real PREVIEW of generated books --
+    e.g. each ready book's actual cover (the fitted document knows
+    its cover asset; a small cover-render or the cover photo's
+    thumbnail) instead of a text row -- and for families with no
+    books yet, show an EXAMPLE of what they'll get (a sample
+    cover/spread mock in the book's own design language) so the
+    empty state sells the product rather than listing disabled
+    scopes. Today's v1 is a functional settings-style list; the
+    keepsake it produces deserves a shelf, not a table.
 
 ## 10. Open questions
 
