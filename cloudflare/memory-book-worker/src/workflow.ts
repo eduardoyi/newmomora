@@ -158,7 +158,11 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
       // any individual unreadable photo. ───────────────────────────────────
       const originalDimensionsByMediaId = await step.do(
         'measure original photo dimensions',
-        { retries: { limit: 2, delay: '3 seconds', backoff: 'exponential' }, timeout: '90 seconds' },
+        // 300s (raised from 90s, 2026-09-15, same production incident as
+        // the outline step's raise): ranged-R2 measurement of the whole
+        // archive timed out at 90s twice on a slow-infra day — a slow
+        // read that completes beats a wasted run.
+        { retries: { limit: 2, delay: '3 seconds', backoff: 'exponential' }, timeout: '300 seconds' },
         async () => {
           try {
             const referenced = new Set(referencedMemoryIds);
