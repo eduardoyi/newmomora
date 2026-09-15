@@ -35,7 +35,7 @@ import type {
 // so both runtimes produce the exact same illustration prompt.
 import { buildIllustrationPrompt } from '../../../supabase/functions/_shared/prompts';
 
-const PRIMARY_MODEL: IllustrationModel = 'gpt-image-2';
+const PRIMARY_MODEL: IllustrationModel = 'gpt-image-2.5-flare';
 const FALLBACK_MODEL: IllustrationModel = 'gpt-image-1.5';
 const PROVIDER_RESERVE_MS = 30_000;
 const PRIMARY_ATTEMPT_WINDOW_MS = 180_000;

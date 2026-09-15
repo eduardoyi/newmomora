@@ -62,3 +62,9 @@ Deno.test('leaves transcription unpriced when neither provider usage nor duratio
     costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null,
   });
 });
+
+Deno.test('prices Flare from measured usage without guessing cached modality', () => {
+  const dimensions = { input_text_tokens: 10, input_image_tokens: 20, cached_input_tokens: 0, output_text_tokens: 0, output_image_tokens: 5 };
+  assertEquals(priceOpenAiUsage('gpt-image-2.5-flare', dimensions).estimatedCostUsd, 0.00036);
+  assertEquals(priceOpenAiUsage('gpt-image-2.5-flare', { ...dimensions, cached_input_tokens: 3 }).costIsComplete, false);
+});

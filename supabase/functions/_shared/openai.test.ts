@@ -104,7 +104,7 @@ Deno.test('generateImage retries the fallback model after a non-abort provider f
     const body = await request.json();
     models.push(body.model);
 
-    if (body.model === 'gpt-image-2') {
+    if (body.model === 'gpt-image-2.5-flare') {
       return new Response('temporary provider failure', { status: 503 });
     }
 
@@ -116,7 +116,7 @@ Deno.test('generateImage retries the fallback model after a non-abort provider f
   try {
     const bytes = await generateImage('A gentle scene');
     assertEquals(bytes, new Uint8Array([1, 2, 3]));
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
+    assertEquals(models, ['gpt-image-2.5-flare', 'gpt-image-1.5']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) {
@@ -135,7 +135,7 @@ Deno.test('image fallbacks reserve a distinct durable provider attempt before ea
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const body = await request.json();
-    if (body.model === 'gpt-image-2') return new Response('temporary failure', { status: 503 });
+    if (body.model === 'gpt-image-2.5-flare') return new Response('temporary failure', { status: 503 });
     return new Response(JSON.stringify({ data: [{ b64_json: 'AQID' }] }), { headers: { 'Content-Type': 'application/json' } });
   };
   try {
@@ -188,7 +188,7 @@ Deno.test('generateImage does not retry another model after a deterministic prov
 
   try {
     await assertRejects(() => generateImage('A gentle scene'));
-    assertEquals(models, ['gpt-image-2']);
+    assertEquals(models, ['gpt-image-2.5-flare']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) {
@@ -293,7 +293,7 @@ Deno.test('generateImage does not start its fallback after an aborted primary re
     };
 
     await assertRejects(() => generateImage('A gentle scene', { signal: controller.signal }));
-    assertEquals(models, ['gpt-image-2']);
+    assertEquals(models, ['gpt-image-2.5-flare']);
   });
 });
 
@@ -321,7 +321,7 @@ Deno.test('editImageWithReferences does not start another model after its reques
         { signal: controller.signal },
       ),
     );
-    assertEquals(models, ['gpt-image-2']);
+    assertEquals(models, ['gpt-image-2.5-flare']);
   });
 });
 
@@ -359,7 +359,7 @@ Deno.test('a parent deadline abort stops a hedged edit before its fallback start
         { signal: controller.signal, fallbackHedgeDelayMs: 0 },
       ),
     );
-    assertEquals(models, ['gpt-image-2']);
+    assertEquals(models, ['gpt-image-2.5-flare']);
   });
 });
 
@@ -375,7 +375,7 @@ Deno.test('multi-reference edit hedges a slow primary and returns the fallback r
     const model = String(body.get('model'));
     models.push(model);
 
-    if (model === 'gpt-image-2') {
+    if (model === 'gpt-image-2.5-flare') {
       return await new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener(
           'abort',
@@ -397,7 +397,7 @@ Deno.test('multi-reference edit hedges a slow primary and returns the fallback r
       { fallbackHedgeDelayMs: 0 },
     );
     assertEquals(bytes, new Uint8Array([1, 2, 3]));
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
+    assertEquals(models, ['gpt-image-2.5-flare', 'gpt-image-1.5']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
@@ -455,7 +455,7 @@ Deno.test('editImageWithReferences does not retry a deterministic provider rejec
         [{ bytes: new Uint8Array([1]), contentType: 'image/jpeg', filename: 'reference.jpg' }],
       ),
     );
-    assertEquals(models, ['gpt-image-2']);
+    assertEquals(models, ['gpt-image-2.5-flare']);
   });
 });
 
@@ -470,7 +470,7 @@ Deno.test('editImageWithReferences retries the alternate edit model after a tran
     const body = await request.formData();
     const model = String(body.get('model'));
     models.push(model);
-    if (model === 'gpt-image-2') {
+    if (model === 'gpt-image-2.5-flare') {
       return new Response('provider timeout', { status: 408 });
     }
     return new Response(JSON.stringify({ data: [{ b64_json: 'AQID' }] }), {
@@ -484,7 +484,7 @@ Deno.test('editImageWithReferences retries the alternate edit model after a tran
       [{ bytes: new Uint8Array([1]), contentType: 'image/jpeg', filename: 'reference.jpg' }],
     );
     assertEquals(bytes, new Uint8Array([1, 2, 3]));
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
+    assertEquals(models, ['gpt-image-2.5-flare', 'gpt-image-1.5']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
@@ -500,7 +500,7 @@ Deno.test('reference edits never fall through to text-only image generation', as
         [{ bytes: new Uint8Array([1]), contentType: 'image/jpeg', filename: 'reference.jpg' }],
       ),
     );
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
+    assertEquals(models, ['gpt-image-2.5-flare', 'gpt-image-1.5']);
   });
 });
 
@@ -537,7 +537,7 @@ Deno.test('a hedged fallback policy rejection does not cancel a healthy primary 
       { fallbackHedgeDelayMs: 0 },
     );
     assertEquals(bytes, new Uint8Array([1, 2, 3]));
-    assertEquals(models, ['gpt-image-2', 'gpt-image-1.5']);
+    assertEquals(models, ['gpt-image-2.5-flare', 'gpt-image-1.5']);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
