@@ -12,7 +12,10 @@ export const QR_SIZE_MM = 13;
 /** Audio-note scan mark: the mark IS the page image, composed at 26mm. */
 export const AUDIO_MARK_SIZE_MM = 26;
 /** Print-polish round (owner decision 2026-09-14, item D1): the dedication page's sample scan mark — a decorative, non-functional-content size the owner-approved mock specified as "~9-10mm". */
-export const DEDICATION_SAMPLE_MARK_SIZE_MM = 9;
+// 8mm (owner-tuned 2026-09-15 alongside the -30% instruction text size —
+// the 9mm mark read too large next to the smaller line; 7mm-at-28%-badge
+// scanned fine on the owner's home-printer test sheet, so 8mm keeps margin).
+export const DEDICATION_SAMPLE_MARK_SIZE_MM = 8;
 /** Safe content box side (210 - 2*10mm margin) — matches the system's documented "caja 190x190mm". */
 export const SAFE_BOX_MM = PHYSICAL.pageSizeMm - PHYSICAL.safeMarginMm * 2;
 /** Safe content box in baseline units (190mm / 5mm = 38 lines/page, per the system board). */

@@ -65,7 +65,7 @@ export function Dedication({ page, manifest, showGuides }: TemplateProps) {
           <QrCode value={SAMPLE_SCAN_URL} mm={DEDICATION_SAMPLE_MARK_SIZE_MM} isSpread={false} badge="play" />
           <p
             className="dedication__scan-instruction-text"
-            style={{ fontSize: ptCqw(canvasPxToPt(14.5), false), color: colors.ink2 }}
+            style={{ fontSize: ptCqw(canvasPxToPt(10.2), false), color: colors.ink2 }}
           >
             {scanInstruction}
           </p>

@@ -90,9 +90,12 @@ export function QrCode({ value, mm, isSpread, className, badge }: QrCodeProps) {
  * that real coverage.
  */
 function QrBadgeOverlay({ center, codeSize, kind }: { center: number; codeSize: number; kind: QrBadge }) {
-  // 18% of the code's own module width — under the ≤20% spec, with a hair
-  // of margin for rounding.
-  const badgeSize = codeSize * 0.18;
+  // 28% of the code's own module width (owner decision 2026-09-15, chosen
+  // from a printed home-printer test sheet: 28% scanned reliably at the
+  // real 13mm mark size on hardware WORSE than the production Indigo).
+  // Covers ~8% of the code's modules — well inside ECC H's ~30% recovery
+  // budget, and in line with industry logo-in-QR practice (25–33% width).
+  const badgeSize = codeSize * 0.28;
   const x = center - badgeSize / 2;
   const y = center - badgeSize / 2;
 
