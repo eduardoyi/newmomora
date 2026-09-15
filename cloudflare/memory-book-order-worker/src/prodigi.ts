@@ -39,10 +39,24 @@ async function prodigiRequest(
 
 /** `POST /v4.0/products/spine` -- documented special-case response shape
  * (`{ success, message, spineInfo: { widthMm } }`). */
-export async function getSpineWidthMm(env: Env, destinationCountryCode: string, numberOfPages: number): Promise<number> {
+export async function getSpineWidthMm(
+  env: Env,
+  destinationCountryCode: string,
+  numberOfPages: number,
+  state?: string | null,
+): Promise<number> {
+  // `state` (launch-canary finding, 2026-09-15, first-ever US-destination
+  // order): Prodigi's spine endpoint REQUIRES a state for some
+  // destinations -- a US call without one is a 400 "state is required for
+  // the selected destinationCountryCode" (curl-proven), while PT succeeds
+  // without it. The quote and order endpoints never demanded it, which is
+  // why every PT-destination canary sailed through and this only surfaced
+  // on the first real US order. Sent whenever the shipping address has
+  // one; omitted otherwise (matching the address's own optional field).
   const result = await prodigiRequest(env, '/v4.0/products/spine', 'POST', {
     sku: env.PRODIGI_SKU,
     destinationCountryCode,
+    ...(state ? { state } : {}),
     numberOfPages,
   });
   const spineInfo = result.spineInfo as Record<string, unknown> | undefined;

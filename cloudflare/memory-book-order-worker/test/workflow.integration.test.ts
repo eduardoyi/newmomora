@@ -37,7 +37,10 @@ function baseOrderContext(overrides: Record<string, unknown> = {}) {
     priceCents: 4999,
     shippingCostCents: 1234,
     currency: 'usd',
-    shippingAddress: { name: 'Ada Lovelace', line1: '1 Way', postalCode: 'X1', countryCode: 'GB' },
+    // US + state (launch-canary regression, 2026-09-15): the spine stub
+    // above 400s a US destination without a state, so this fixture proves
+    // the workflow threads the address's state into the spine call.
+    shippingAddress: { name: 'Ada Lovelace', line1: '1 Way', city: 'Springfield', state: 'IL', postalCode: '62704', countryCode: 'US' },
     ...overrides,
   };
 }
@@ -104,6 +107,16 @@ function buildFetchMock(overrides: {
       return jsonResponse({ status: 'running', startedAt: 'x' });
     }
     if (url.includes('prodigi.test/v4.0/products/spine')) {
+      // Launch-canary regression (2026-09-15): Prodigi requires `state`
+      // for US destinations -- the stub enforces the same contract so a
+      // future refactor can never silently drop it again.
+      const spineBody = JSON.parse(String(init?.body ?? '{}'));
+      if (spineBody.destinationCountryCode === 'US' && !spineBody.state) {
+        return jsonResponse(
+          { outcome: 'BadRequest', debugDetails: 'state is required for the selected destinationCountryCode' },
+          400,
+        );
+      }
       return jsonResponse({ success: true, message: 'ok', spineInfo: { widthMm: 28 } });
     }
     if (url.includes('prodigi.test/v4.0/Orders')) {

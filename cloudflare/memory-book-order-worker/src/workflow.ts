@@ -139,7 +139,7 @@ export class MemoryBookOrderWorkflow extends WorkflowEntrypoint<Env, WorkflowDis
         { retries: { limit: 2, delay: '3 seconds', backoff: 'exponential' }, timeout: '30 seconds' },
         async () => {
           try {
-            return await getSpineWidthMm(this.env, order.shippingAddress.countryCode, freshPageCount);
+            return await getSpineWidthMm(this.env, order.shippingAddress.countryCode, freshPageCount, order.shippingAddress.state ?? null);
           } catch (error) {
             throw new SpineLookupError(errorMessageOnly(error));
           }
