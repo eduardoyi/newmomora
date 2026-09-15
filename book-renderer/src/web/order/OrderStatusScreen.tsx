@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useOrderStatus } from './useOrderStatus';
-import { orderStatusCopy } from './orderStatusCopy';
+import { orderStatusCopy, CANCELLED_AFTER_PAYMENT_MESSAGE } from './orderStatusCopy';
 import { showsProgressStepper } from './orderProgressSteps';
 import { OrderProgressStepper } from './OrderProgressStepper';
 import { SHIPS_TO_COUNTRIES } from './shippingCountries';
@@ -59,6 +59,10 @@ export function OrderStatusScreen({ orderId, onBackToBook }: { orderId: string; 
   }
 
   const copy = orderStatusCopy(order.status);
+  // Post-payment cancellation reads differently from an abandoned
+  // checkout — see CANCELLED_AFTER_PAYMENT_MESSAGE's comment.
+  const statusMessage =
+    order.status === 'cancelled' && order.refunded_at ? CANCELLED_AFTER_PAYMENT_MESSAGE : copy.message;
 
   return (
     <div className="order-status">
@@ -77,7 +81,7 @@ export function OrderStatusScreen({ orderId, onBackToBook }: { orderId: string; 
         )}
 
         <span className={`order-status-chip order-status-chip--${copy.tone}`}>{copy.label}</span>
-        <p className="order-status__message">{copy.message}</p>
+        <p className="order-status__message">{statusMessage}</p>
 
         {order.refunded_at && (
           <p className="order-status__refunded" role="status">

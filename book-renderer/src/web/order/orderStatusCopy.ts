@@ -77,9 +77,24 @@ const COPY: Record<MemoryBookOrderStatus, OrderStatusCopy> = {
   cancelled: {
     label: 'Cancelled',
     message: "This order was cancelled — checkout wasn't completed, so nothing was charged.",
+    // NOTE: `OrderStatusScreen` swaps this message for
+    // `CANCELLED_AFTER_PAYMENT_MESSAGE` below when the row carries a
+    // `refunded_at` — see that constant's own comment.
     tone: 'neutral',
   },
 };
+
+/**
+ * Launch-canary copy fix (2026-09-15): the static `cancelled` message
+ * above was written for the PRE-payment path (abandoned checkout) and
+ * reads "nothing was charged" — false for an order cancelled AFTER
+ * payment (owner cancels at Prodigi, sweep auto-cancel mirrors it, and
+ * the refund webhook stamps `refunded_at`). `OrderStatusScreen` uses this
+ * message instead whenever `status === 'cancelled'` and `refunded_at` is
+ * set, so the copy and the refund line right below it agree.
+ */
+export const CANCELLED_AFTER_PAYMENT_MESSAGE =
+  'This order was cancelled and your payment was refunded.';
 
 export function orderStatusCopy(status: MemoryBookOrderStatus): OrderStatusCopy {
   return COPY[status];
