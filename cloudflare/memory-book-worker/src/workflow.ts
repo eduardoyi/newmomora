@@ -97,7 +97,13 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
       // infra-level step failure, not a hedge against a bad model call. ────
       const outline = await step.do(
         'curate outline',
-        { retries: { limit: 1, delay: '5 seconds' }, timeout: '120 seconds' },
+        // 300s (raised from 120s, 2026-09-15): two consecutive production
+        // generations died here with WorkflowTimeoutError at exactly 120s
+        // x2 attempts — the outline model call's latency varies widely by
+        // provider load, and a slow-but-succeeding call is strictly better
+        // than a timeout (the step is retried-then-failed, wasting the
+        // whole run). 300s stays far under the Workflow's own limits.
+        { retries: { limit: 1, delay: '5 seconds' }, timeout: '300 seconds' },
         async () => {
           try {
             const result = await runOutlineStage(this.env, context);
