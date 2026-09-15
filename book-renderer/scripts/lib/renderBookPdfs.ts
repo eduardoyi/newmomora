@@ -256,7 +256,17 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T,
 }
 
 const TRIM_PAGE_MM = PHYSICAL.pageSizeMm;
-const TOLERANCE_PT = 0.5;
+// 1.5pt (~0.53mm), raised from 0.5pt (launch-canary finding, 2026-09-15):
+// Chromium quantizes the @page box internally, drifting the produced PDF
+// ~0.2-0.35pt even for integer-mm sizes (a 210mm page renders 594.96pt vs
+// 595.28 expected). The first FRACTIONAL spine width — the US lab quotes
+// 31.75mm for 122pp where the EU lab quotes integers — pushed the cover's
+// width drift to 0.57pt and failed a real paid order at the old gate.
+// This audit exists to catch the bleed-class disasters (216mm instead of
+// 210mm = 17pt, the V4 rejection), not Chromium's sub-half-millimeter
+// page-box rounding; 1.5pt still flags any real sizing mistake by an
+// order of magnitude.
+const TOLERANCE_PT = 1.5;
 
 function assertSizeMm(label: string, widthPt: number, heightPt: number, expectedWidthMm: number, expectedHeightMm: number): void {
   const expectedWidthPt = mmToPt(expectedWidthMm);
