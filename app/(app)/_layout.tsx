@@ -161,6 +161,7 @@ export default function AppLayout() {
         <Stack.Screen name="gallery-import/review" options={{ presentation: 'modal' }} />
         <Stack.Screen name="gallery-import/approve" options={{ presentation: 'modal' }} />
         <Stack.Screen name="gallery-import/settings" />
+        <Stack.Screen name="widget-settings" />
         <Stack.Screen name="memory/[id]" />
         <Stack.Screen name="looking-back/[id]" options={{ animation: 'none' }} />
         <Stack.Screen

@@ -35,8 +35,8 @@ web-build/
 expo-env.d.ts
 
 # Native (generated locally; may contain signing config)
-ios/
-android/
+/ios/
+/android/
 
 # OS
 .DS_Store

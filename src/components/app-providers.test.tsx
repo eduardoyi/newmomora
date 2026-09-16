@@ -23,6 +23,10 @@ jest.mock('@/hooks/use-billing', () => ({
 jest.mock('@/hooks/use-pending-memory-uploads', () => ({
   PendingMemoryUploadsProvider: ({ children }: { children: ReactNode }) => children,
 }));
+jest.mock('@/hooks/useMemoryWidgetSync', () => ({
+  MemoryWidgetSyncProvider: ({ children }: { children: ReactNode }) => children,
+  registerMemoryWidgetNativeAdapter: jest.fn(),
+}));
 
 jest.mock('@/lib/connectivity', () => ({
   startConnectivityMonitoring: jest.fn(() => jest.fn()),

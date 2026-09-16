@@ -4360,6 +4360,21 @@ export type Database = {
           tint: string
         }[]
       }
+      get_widget_family_timezone: {
+        Args: { p_family_id: string }
+        Returns: string
+      }
+      get_widget_memory_candidates: {
+        Args: { p_family_id: string }
+        Returns: {
+          age_band: string
+          family_date: string
+          memory_date: string
+          memory_id: string
+          next_day_boundary: string
+          timezone_name: string
+        }[]
+      }
       has_family_role: {
         Args: { fam: string; roles: string[] }
         Returns: boolean

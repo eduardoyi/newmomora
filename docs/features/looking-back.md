@@ -265,3 +265,9 @@ LOOKING_BACK_E2E_PASSWORD='<same synthetic local password>' \
 | 2026-08-08 | Removed the nested Timeline header bottom safe-area inset that created an oversized Android gap before the first Recent memory |
 | 2026-08-08 | Android stabilization: Timeline section order, preview-backed photo recovery, reliable intro/detail pause ownership, single media fade, fresh reopen, final-frame completion, equal-width progress, and simplified completion copy |
 | 2026-08-08 | Initial implementation in progress |
+
+## Home-screen widget
+
+The [home-screen widget](./home-screen-widget.md) shares the cover-card visual
+language but selects memories independently, including today and one-memory
+archives. It neither creates Looking Back packages nor changes package viewed state.

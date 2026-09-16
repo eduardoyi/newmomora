@@ -25,6 +25,55 @@ export function newMemoryRoute(source?: NewMemorySource): Href {
 export const timelineRoute = '/(app)/(tabs)/timeline' as Href;
 export const noFamilyRoute = '/(app)/no-family' as Href;
 
+/** Settings screen for the optional home-screen widget. */
+export const widgetSetupRoute = '/(app)/widget-settings' as Href;
+
+const WIDGET_ROUTE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+export interface WidgetMemoryTarget {
+  memoryId: string;
+  familyId: string;
+  mediaIndex?: number;
+}
+
+export function isValidWidgetRouteId(value: unknown): value is string {
+  return typeof value === 'string' && WIDGET_ROUTE_ID_PATTERN.test(value);
+}
+
+function validWidgetMediaIndex(value: number | undefined): value is number | undefined {
+  return value === undefined || (Number.isInteger(value) && value >= 0 && value <= 9);
+}
+
+/** Builds the app route used by a native widget tap. Invalid input is inert. */
+export function widgetMemoryRoute(target: WidgetMemoryTarget): Href | null {
+  if (!isValidWidgetRouteId(target.memoryId)
+    || !isValidWidgetRouteId(target.familyId)
+    || !validWidgetMediaIndex(target.mediaIndex)) {
+    return null;
+  }
+  return {
+    pathname: '/widget',
+    params: {
+      memoryId: target.memoryId,
+      familyId: target.familyId,
+      ...(target.mediaIndex === undefined ? {} : { mediaIndex: String(target.mediaIndex) }),
+    },
+  } as unknown as Href;
+}
+
+/** Deep-link form shared by native widget timeline entries. */
+export function widgetMemoryUrl(target: WidgetMemoryTarget): string | null {
+  const route = widgetMemoryRoute(target);
+  if (!route) return null;
+  const mediaIndex = target.mediaIndex === undefined ? '' : `&mediaIndex=${target.mediaIndex}`;
+  return `momora://widget?memoryId=${encodeURIComponent(target.memoryId)}&familyId=${encodeURIComponent(target.familyId)}${mediaIndex}`;
+}
+
+// Keep names easy to discover for native callers and future tests while the
+// route itself remains one implementation.
+export const widgetEntryRoute = widgetMemoryRoute;
+export const widgetEntryUrl = widgetMemoryUrl;
+
 // Family-owner-only caption language/instructions screen, pushed from the
 // Settings tab row (src/components/gallery-import/gallery-import-settings.tsx).
 export const galleryCaptionSettingsRoute = '/(app)/gallery-import/settings' as Href;

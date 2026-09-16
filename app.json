@@ -2,7 +2,7 @@
   "expo": {
     "name": "Momora",
     "slug": "momora",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "momora",
@@ -15,6 +15,15 @@
       ],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
+      },
+      "entitlements": {
+        "com.apple.developer.applesignin": [
+          "Default"
+        ],
+        "com.apple.security.application-groups": [
+          "group.com.memora.app.shared",
+          "group.com.memora.app.widgets"
+        ]
       }
     },
     "android": {
@@ -58,7 +67,29 @@
     "plugins": [
       "./plugins/withAndroidAllowBackup",
       "./plugins/withAndroidLaunchMode",
+      "./plugins/withMomoraWidget",
       "expo-router",
+      [
+        "expo-widgets",
+        {
+          "groupIdentifier": "group.com.memora.app.widgets",
+          "widgets": [
+            {
+              "name": "MomoraMemoryWidget",
+              "displayName": "Momora",
+              "description": "A memory from your family journal",
+              "ios": {
+                "supportedFamilies": [
+                  "systemSmall"
+                ],
+                "contentMarginsDisabled": true
+              }
+            }
+          ],
+          "enableAndroid": false,
+          "bundleIdentifier": "com.memora.app.ExpoWidgetsTarget"
+        }
+      ],
       [
         "expo-splash-screen",
         {

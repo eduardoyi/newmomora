@@ -1,0 +1,18 @@
+appId: com.memora.app
+---
+# Requires a widget-enabled development build and an authenticated fixture
+# account belonging to WIDGET_FAMILY_ID with WIDGET_MEMORY_ID. The app prepares
+# the active family's widget automatically. This tests app integration, not
+# launcher layout.
+- runFlow: ../auth/login.yaml
+- openLink: momora://widget-settings
+- extendedWaitUntil:
+    visible:
+      id: widget-refresh-button
+    timeout: 15000
+- assertNotVisible:
+    id: widget-unsupported-message
+- openLink: "momora://widget?memoryId=${WIDGET_MEMORY_ID}&familyId=${WIDGET_FAMILY_ID}"
+- extendedWaitUntil:
+    visible: ${WIDGET_MEMORY_TEXT}
+    timeout: 15000

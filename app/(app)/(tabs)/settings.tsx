@@ -36,6 +36,7 @@ import {
   sharingMembersRoute,
   sharingPendingInvitesRoute,
   sharingRedeemRoute,
+  widgetSetupRoute,
 } from '@/lib/routes';
 import { getDeviceTimezone } from '@/services/auth';
 import { createAndShareDataExport } from '@/services/export';
@@ -47,6 +48,7 @@ import { AuthField, AuthInput } from '@/components/auth-screen';
 import { SelectField, type SelectFieldHandle, type SelectOption } from '@/components/select-field';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 import { GalleryImportSettingsBlock } from '@/components/gallery-import/gallery-import-settings';
+import { clearMemoryWidgetForScope } from '@/hooks/useMemoryWidgetSync';
 
 const DEFAULT_REMINDER_TIME = '20:00:00';
 const FAQ_URL = 'https://usemomora.com/faq/';
@@ -223,6 +225,7 @@ function FamilySection() {
                 if (error) {
                   throw new Error(error.message);
                 }
+                await clearMemoryWidgetForScope({ accountId: user.id, familyId }).catch(() => undefined);
                 // Purge the persisted cache before refetching memberships --
                 // a device handed to another user, or this user re-invited
                 // later, must never cold-boot into memories from a family
@@ -442,7 +445,7 @@ function FamilySection() {
 
 export default function SettingsScreen() {
   const { user, signOut } = useAuth();
-  const { role } = useFamily();
+  const { familyId, role } = useFamily();
   const isViewer = isViewerRole(role);
   const { status: billingStatus, isLoading: isBillingLoading } = useBilling();
   const [isExporting, setIsExporting] = useState(false);
@@ -627,6 +630,9 @@ export default function SettingsScreen() {
   const scheduleAccountDeletion = async () => {
     try {
       await deleteAccount();
+      if (user?.id && familyId) {
+        await clearMemoryWidgetForScope({ accountId: user.id, familyId }).catch(() => undefined);
+      }
     } catch (error) {
       showMutationError('Could not schedule account deletion', error, 'Please try again.');
     }
@@ -750,6 +756,16 @@ export default function SettingsScreen() {
             <FamilySection />
 
             <GalleryImportSettingsBlock />
+
+            <SettingsBlock title="Personalise">
+              <SettingsRow
+                chevron
+                label="Home-screen widget"
+                caption="Keep a private memory card on your phone."
+                onPress={() => router.push(widgetSetupRoute)}
+                testID="settings-home-screen-widget"
+              />
+            </SettingsBlock>
 
             {isOwnerRole(role) ? (
               <SettingsBlock title="Subscription & archive">

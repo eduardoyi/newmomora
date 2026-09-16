@@ -992,6 +992,34 @@ deleted, allowing notification delivery to ignore stale/repeated writes.
   owners with lapsed write access and household viewers retain archive read
   access.
 
+**Home-screen widget candidate access (updated 2026-09-16):**
+
+- Eligibility is photo-containing media or ready, unreported illustrations only;
+  text-only, audio-only and video-only entries are excluded before the 40-ID cap.
+  Mixed carousels qualify via an image asset; the client chooses that photo.
+
+- `get_widget_memory_candidates(p_family_id uuid)` is an authenticated,
+  `security invoker`, read-only RPC. It rejects anonymous sessions and checks
+  exact-family membership; underlying memory/media RLS remains in force.
+- Returns at most 40 rows with `memory_id uuid`, `memory_date date`,
+  `age_band text` (`recent`, `medium`, `old`, `deep`), `family_date date`,
+  `timezone_name text`, and `next_day_boundary timestamptz`. Empty archives
+  return one clock-only sentinel with null memory fields. A daily deterministic
+  sample reserves up to 10 places per age band and backfills unused places.
+  Pending onboarding media, personally reported memories, and blocked authors
+  are excluded before sampling. Reports for the current illustration generation
+  also exclude that memory; older-generation reports do not hide regenerated artwork.
+- `get_widget_family_timezone(p_family_id uuid)` is a narrow authenticated
+  `security definer` helper: it verifies exact-family membership before reading
+  the owner's timezone, validates that timezone, and returns only its name
+  (UTC fallback). It does not change `user_profiles` RLS. Both RPCs revoke
+  PUBLIC/anon execution and set `search_path = pg_catalog, public`.
+- Selected and retained IDs are hydrated through existing RLS-scoped memory
+  reads. Widget selection has no minimum memory age and never changes Looking
+  Back packages or viewed state. No new server table, Edge Function, or R2
+  bucket is introduced. See [home-screen-widget.md](features/home-screen-widget.md)
+  for the device snapshot and offline lease contract.
+
 **Family activity feed (2026-08-22, `docs/plans/family-activity.md`):**
 
 - `family_activity_events` has RLS enabled with **no client policies** —

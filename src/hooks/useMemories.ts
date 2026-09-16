@@ -11,6 +11,7 @@ import { AppState } from 'react-native';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { clearMemoryWidgetForScope } from '@/hooks/useMemoryWidgetSync';
 import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
 import { useGenerationStatusPolling } from '@/hooks/useGenerationStatusPolling';
 import {
@@ -342,6 +343,11 @@ export function useMemoryMutations() {
       queryClient.invalidateQueries({ queryKey: [lookingBackQueryKeyBase] });
       invalidateFamilyMemberTagOrdering(queryClient);
       removeMemoryFromListCaches(queryClient, familyId, memoryId);
+      if (user?.id && familyId) {
+        // Deletion is definitive. Remove the native snapshot immediately;
+        // waiting for the next online sync could expose the deleted card.
+        void clearMemoryWidgetForScope({ accountId: user.id, familyId }).catch(() => undefined);
+      }
     },
   });
 

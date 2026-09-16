@@ -3,6 +3,7 @@ import { useCallback, useMemo } from 'react';
 
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
+import { clearMemoryWidgetForScope } from '@/hooks/useMemoryWidgetSync';
 import {
   createContentReport,
   fetchMyBlockedFamilyAccounts,
@@ -127,6 +128,12 @@ export function useContentSafety() {
             targetKey(familyId, targetType, targetId, targetVersionId)
         ),
       ]);
+      if (userId) {
+        // A report is an immediate hide decision. Clear before any later
+        // refresh so a network failure cannot leave the reported card on the
+        // native widget while the normal mutation subscription catches up.
+        void clearMemoryWidgetForScope({ accountId: userId, familyId }).catch(() => undefined);
+      }
     },
   });
 
@@ -147,6 +154,9 @@ export function useContentSafety() {
           ? [data, ...current.filter((block) => block.id !== data.id)]
           : current.filter((block) => block.id !== data.id),
       );
+      if (userId && input.shouldBlock) {
+        void clearMemoryWidgetForScope({ accountId: userId, familyId }).catch(() => undefined);
+      }
     },
   });
 

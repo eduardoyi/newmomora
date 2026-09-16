@@ -7,9 +7,14 @@ import { AuthProvider } from '@/hooks/use-auth';
 import { BillingProvider } from '@/hooks/use-billing';
 import { FamilyProvider } from '@/hooks/use-family';
 import { PendingMemoryUploadsProvider } from '@/hooks/use-pending-memory-uploads';
+import {
+  MemoryWidgetSyncProvider,
+  registerMemoryWidgetNativeAdapter,
+} from '@/hooks/useMemoryWidgetSync';
 import { startConnectivityMonitoring } from '@/lib/connectivity';
 import { PersistedQueryProvider } from '@/lib/query-persistence';
 import { sweepAudioRecordingsDirectory } from '@/utils/audio-clip-custody';
+import { momoraWidgetAdapter } from '@/widgets';
 
 export function AppProviders({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -39,14 +44,24 @@ export function AppProviders({ children }: { children: ReactNode }) {
     void sweepAudioRecordingsDirectory();
   }, []);
 
+  // Native widget support is optional on older binaries and Expo Go. Register
+  // the adapter once for the app session; the coordinator still fails closed
+  // if its capability probe says this runtime cannot host widgets.
+  useEffect(() => {
+    registerMemoryWidgetNativeAdapter(momoraWidgetAdapter);
+    return () => registerMemoryWidgetNativeAdapter(null);
+  }, []);
+
   return (
     <KeyboardProvider preload={false}>
       <PersistedQueryProvider>
         <AuthProvider>
           <FamilyProvider>
-            <BillingProvider>
-              <PendingMemoryUploadsProvider>{children}</PendingMemoryUploadsProvider>
-            </BillingProvider>
+            <MemoryWidgetSyncProvider>
+              <BillingProvider>
+                <PendingMemoryUploadsProvider>{children}</PendingMemoryUploadsProvider>
+              </BillingProvider>
+            </MemoryWidgetSyncProvider>
           </FamilyProvider>
         </AuthProvider>
       </PersistedQueryProvider>
