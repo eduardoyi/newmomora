@@ -982,6 +982,22 @@ device use):
     empty state sells the product rather than listing disabled
     scopes. Today's v1 is a functional settings-style list; the
     keepsake it produces deserves a shelf, not a table.
+    DIRECTION AGREED (owner, 2026-09-16), design phase next:
+    (1) 2-column GRID of book-cover tiles for existing books
+    (ready / generating-shimmer / failed-with-retry-badge states on
+    the tile); (2) single "Create a book" CTA opening a bottom
+    sheet with 2-3 SMART SUGGESTION rows (last completed age-year,
+    current calendar year, Everything — each with memory count and
+    inline thin warning) plus a "More options" expander for the
+    full scope list; dropdown rejected (weak mobile pattern). Sheet
+    leaves room for the future custom-range row. (3) Empty state =
+    example cover + one-line pitch + CTA. (4) Covers are
+    APP-COMPOSED facsimiles (path A): surface the generation's
+    cover asset + title on the memory_books row and compose
+    photo + Newsreader title on linen in RN — no new render
+    infra; a real cover JPEG from the renderer (path B) was
+    considered and rejected for v1. Order status on tiles
+    deliberately deferred (delivered-advancement item's territory).
 
 ## 10. Open questions
 
