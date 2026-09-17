@@ -237,7 +237,7 @@ export function GalleryImportDeckCard({
         {/* The hero print inside its photo mat, with the one script mark. */}
         <View style={styles.hero}>
           {heroUri ? (
-            <Image contentFit="cover" onError={onHeroUnavailable} source={{ uri: heroUri }} style={styles.heroImage} testID="gallery-import-hero" />
+            <Image contentFit="cover" onError={onHeroUnavailable} recyclingKey={candidate.id} source={{ uri: heroUri }} style={styles.heroImage} testID="gallery-import-hero" />
           ) : (
             <View style={styles.heroFallback} testID="gallery-import-hero-fallback"><Text style={styles.heroFallbackMark}>✦</Text></View>
           )}

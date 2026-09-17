@@ -15,7 +15,7 @@ import { getBottomSheetBottomPadding, shouldDismissBottomSheet } from '@/utils/b
 import type { GalleryImportComingIndicator } from '@/utils/gallery-import-deck';
 
 const GALLERY_IMPORT_SWEEP_ACTIVE_PHASES = new Set<GalleryImportDriverPhase>([
-  'scanning', 'preparing', 'uploading', 'dispatching',
+  'scanning', 'sending', 'dispatching',
 ]);
 
 export interface FamilyActivitySheetGalleryImportProps {

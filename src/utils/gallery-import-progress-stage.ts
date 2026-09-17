@@ -13,9 +13,8 @@ import type { GalleryImportRunnerProgress } from '@/services/gallery-import-runn
 
 export type GalleryImportStageKey =
   | 'scanning'
-  | 'preparing'
+  | 'sending'
   | 'waitingWifi'
-  | 'uploading'
   | 'processing'
   | 'ready'
   | 'paused'
@@ -199,11 +198,8 @@ export function deriveGalleryImportProgressOutcome(input: GalleryImportProgressS
   if (live?.stage === 'scanning') {
     return { kind: 'stage', stage: 'scanning', ready: input.readyCount, value: null, total: null, scannedAssetCount: live.scannedAssetCount ?? live.completed };
   }
-  if (live?.stage === 'preparing') {
-    return { kind: 'stage', stage: 'preparing', ready: input.readyCount, value: live.completed, total: live.total, scannedAssetCount: null };
-  }
-  if (live?.stage === 'uploading') {
-    return { kind: 'stage', stage: 'uploading', ready: input.readyCount, value: live.completed, total: live.total, scannedAssetCount: null };
+  if (live?.stage === 'sending') {
+    return { kind: 'stage', stage: 'sending', ready: input.readyCount, value: live.completed, total: live.total, scannedAssetCount: null };
   }
   if (live?.stage === 'dispatching') {
     return { kind: 'stage', stage: 'processing', ready: input.readyCount, value: null, total: null, scannedAssetCount: null };

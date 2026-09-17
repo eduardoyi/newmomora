@@ -129,7 +129,7 @@ async function mapError(error: unknown): Promise<GalleryImportServiceError> {
   // distinguishable, content-free, retryable code instead of a generic
   // transport failure message.
   if (error instanceof FunctionsFetchError && (error.context as { name?: unknown } | undefined)?.name === 'AbortError') {
-    return { message: 'The gallery import service took too long to respond. Your place is saved — try again.', code: 'timeout' };
+    return { message: 'The gallery import service took too long to respond. Your place is saved. Try again.', code: 'timeout' };
   }
   return { message: error instanceof Error ? error.message : 'The gallery import service failed.' };
 }

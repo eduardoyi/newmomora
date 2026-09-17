@@ -199,9 +199,9 @@ export function GalleryImportEntry({ surface = 'settings' }: { surface?: Gallery
       scrollTestID="gallery-import-entry-scroll"
       testID="gallery-import-entry"
     >
-      <Text style={styles.eyebrow}>Before you start writing</Text>
-      <Text style={styles.display}>Some of it is{`\n`}already on{`\n`}<Text style={styles.displayAccent}>your phone.</Text></Text>
-      <Text style={styles.body}>Momora suggests photos only, and only you decide what becomes a memory.</Text>
+      <Text style={styles.eyebrow}>No need to start from scratch</Text>
+      <Text style={styles.display}>Turn your{`\n`}camera roll{`\n`}into <Text style={styles.displayAccent}>memories.</Text></Text>
+      <Text style={styles.body}>Momora looks through your photos, picks the best moments, and writes a draft caption for each one. All you do is swipe to add them to your journal.</Text>
       <View accessibilityLabel="A stack of family photo prints" style={styles.printStack}>
         <View style={[styles.print, styles.printBackOne]} />
         <View style={[styles.print, styles.printBackTwo]} />

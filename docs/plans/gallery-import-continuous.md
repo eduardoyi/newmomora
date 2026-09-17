@@ -426,3 +426,41 @@ Play Console → App content → Photo and video permissions.
 - No additional Apple declaration required; normal review. App Privacy
   labels already declare Photos under user content collection — verify the
   label mentions "Photos" linked to the user before submitting.
+
+## 2026-09-16 polish round (owner device feedback on 1.3.0)
+
+Owner-reported rough edges, all fixed in one pass (uncommitted until the
+device pass confirms):
+
+1. **Entry + trust copy rewritten for first-time context.** Entry now says
+   what the feature does ("No need to start from scratch" / "Turn your
+   camera roll into memories." + explanation); trust explainer eyebrow is
+   "Before Momora starts", rows sequenced for a first-timer. Details sheet
+   unchanged.
+2. **Merged `preparing`/`uploading` into one `sending` stage** end to end
+   (runner progress union, driver phase, stage derivation, screen). The
+   runner works chunk-by-chunk, so the old two-stage split flip-flopped the
+   eyebrow, counter, and pill every few seconds. The merged stage counts
+   uploads over all planned assets (monotonic) and is `keepOpen` for its
+   whole duration -- the old `uploading` pill said "Safe to close", which
+   was wrong: preparation and sending both need the app in the foreground.
+3. **Context lines + pill notes on the progress screen** ("we" voice per
+   owner), and the review button is now "Review N suggestions".
+4. **Deck stale-photo flash on set-aside** fixed with
+   `recyclingKey={candidate.id}` on the hero expo-image (the reused image
+   view kept showing the previous card's photo until the next URI decoded).
+5. **Empty captions save as media-only memories.** Client guard removed;
+   edge draft validator allows ''; migration
+   `20260916120000_gallery_import_optional_caption.sql` relaxes the
+   candidate caption check and recreates `finalize_gallery_import_candidate`
+   to insert `nullif(btrim(caption),'')` as `memories.content`. AI drafts
+   are still required non-empty at the workflow bridge, so only a user edit
+   can be empty. Known edge case (accepted): a save that fails after the
+   caption update returns the card to the deck with an empty caption.
+6. **Em-dashes removed** from the two remaining user-visible service error
+   strings.
+
+Deployed 2026-09-16: the migration (db push) and
+`update-gallery-import-candidate` (only function whose bundle uses the
+relaxed validator). No worker changes. Client changes ride Metro/EAS update.
+Verified: tsc clean, full jest suite 2585/2585, edge suite 1569/1569.

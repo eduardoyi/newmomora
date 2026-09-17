@@ -58,9 +58,9 @@ describe('GalleryImportTrustExplainer', () => {
 
   it('shows the three one-line facts and no numbered cards, pills, or badges', () => {
     const screen = render(<GalleryImportTrustExplainer onCancel={jest.fn()} onContinue={jest.fn()} />);
-    expect(screen.getByText('Your phone reads dates and groups photos. Nothing is changed.')).toBeTruthy();
-    expect(screen.getByText(/Small previews go to Momora to write draft captions/)).toBeTruthy();
-    expect(screen.getByText('Only what you keep is saved. The rest clears on its own.')).toBeTruthy();
+    expect(screen.getByText('Your phone groups your photos by day. Nothing is changed or deleted.')).toBeTruthy();
+    expect(screen.getByText(/Small previews go to Momora to pick the best photos and write draft captions/)).toBeTruthy();
+    expect(screen.getByText(/Only what you keep is saved\. The rest clears on its own\./)).toBeTruthy();
     // The former per-card "detail" links are gone -- only one "Details"
     // affordance remains for the whole screen.
     expect(screen.queryByText('What a preview is')).toBeNull();

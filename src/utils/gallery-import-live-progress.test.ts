@@ -17,15 +17,15 @@ describe('gallery import live progress bus', () => {
   it('notifies subscribers and retains the latest snapshot for late mounts', () => {
     const seen: unknown[] = [];
     const unsubscribe = subscribeGalleryImportLiveProgress('run-1', (progress) => seen.push(progress));
-    publishGalleryImportLiveProgress('run-1', { stage: 'preparing', completed: 1, total: 10 });
-    expect(seen).toEqual([{ stage: 'preparing', completed: 1, total: 10 }]);
-    expect(getLatestGalleryImportLiveProgress('run-1')).toEqual({ stage: 'preparing', completed: 1, total: 10 });
+    publishGalleryImportLiveProgress('run-1', { stage: 'sending', completed: 1, total: 10 });
+    expect(seen).toEqual([{ stage: 'sending', completed: 1, total: 10 }]);
+    expect(getLatestGalleryImportLiveProgress('run-1')).toEqual({ stage: 'sending', completed: 1, total: 10 });
 
     // A screen mounting after the fact reads the retained snapshot without
     // needing to have been subscribed when it was published.
     expect(getLatestGalleryImportLiveProgress('run-1')).not.toBeNull();
     unsubscribe();
-    publishGalleryImportLiveProgress('run-1', { stage: 'uploading', completed: 2, total: 10 });
+    publishGalleryImportLiveProgress('run-1', { stage: 'sending', completed: 2, total: 10 });
     expect(seen).toHaveLength(1);
   });
 

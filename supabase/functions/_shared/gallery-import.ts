@@ -658,7 +658,7 @@ export async function setGalleryImportCandidateSkip(context: GalleryImportReques
 
 export function isValidGalleryImportCandidateDraft(input: Record<string, unknown>): boolean {
   const { caption, memoryDate, assetTokens, familyMemberIds } = input;
-  return typeof caption === 'string' && caption.trim().length >= 1 && caption.length <= 1_000 &&
+  return typeof caption === 'string' && caption.length <= 1_000 &&
     hasText(memoryDate, 10) && isCalendarDate(memoryDate) &&
     Array.isArray(assetTokens) && assetTokens.length >= 1 && assetTokens.length <= 10 && assetTokens.every(isUuid) &&
     Array.isArray(familyMemberIds) && familyMemberIds.every(isUuid);

@@ -92,11 +92,23 @@ interface StageDisplay {
   eyebrow: string;
   /** The one number this stage leads with. */
   title: string;
+  /** A short line under the title explaining what is happening right now.
+   * Only set for a few stages (scanning, sending, processing) -- see
+   * describeStage. */
+  context?: string;
   /** A bar shows only for the "in progress" family of stages. */
   bar: { indeterminate: boolean; value: number | null; total: number | null } | null;
   pill: 'keepOpen' | 'safeToClose' | null;
   /** True once nothing further can happen to this run. */
   terminal: boolean;
+}
+
+/** One line explaining what the pill above it means -- derived from the pill
+ * kind itself rather than repeated per stage. */
+function pillNoteFor(pill: StageDisplay['pill']): string | null {
+  if (pill === 'keepOpen') return 'This step needs the app on screen. Your progress is saved if you leave.';
+  if (pill === 'safeToClose') return 'We keep working on our own. Come back anytime.';
+  return null;
 }
 
 interface StageContext {
@@ -114,15 +126,8 @@ function describeStage(stage: GalleryImportStageKey, ctx: StageContext): StageDi
       return {
         eyebrow: 'Looking through your photos',
         title: ctx.scannedAssetCount ? `${ctx.scannedAssetCount} photos read` : 'Getting started',
+        context: "We're grouping your photos into moments. Nothing has left your phone yet.",
         bar: { indeterminate: true, value: null, total: null },
-        pill: 'keepOpen',
-        terminal: false,
-      };
-    case 'preparing':
-      return {
-        eyebrow: 'Preparing previews',
-        title: ctx.total ? `${ctx.value ?? 0} of ${ctx.total} previews prepared` : 'Getting the previews ready',
-        bar: { indeterminate: !ctx.total, value: ctx.value, total: ctx.total },
         pill: 'keepOpen',
         terminal: false,
       };
@@ -134,12 +139,21 @@ function describeStage(stage: GalleryImportStageKey, ctx: StageContext): StageDi
         pill: 'safeToClose',
         terminal: false,
       };
-    case 'uploading':
+    // Merges the runner's former separate 'preparing' and 'uploading'
+    // stages into one monotonic stage: the runner works chunk by chunk
+    // (prepare chunk N, upload chunk N, prepare chunk N+1), so keeping them
+    // distinct flip-flopped the screen between two eyebrows/pills every few
+    // seconds. This whole stage needs the app in the foreground (native
+    // preview preparation is foreground-only), so it stays 'keepOpen' for
+    // its entire duration -- unlike the old 'uploading' stage, which was
+    // (incorrectly) 'safeToClose'.
+    case 'sending':
       return {
-        eyebrow: 'Sending previews',
-        title: ctx.total ? `${ctx.value ?? 0} of ${ctx.total} previews sent` : 'Sending previews',
+        eyebrow: 'Getting your suggestions ready',
+        title: ctx.total ? `${ctx.value ?? 0} of ${ctx.total} previews sent` : 'Getting the previews ready',
+        context: "We're receiving small photo previews so we can write captions for you. This happens in batches, you can start reviewing memories before it finishes completely.",
         bar: { indeterminate: !ctx.total, value: ctx.value, total: ctx.total },
-        pill: 'safeToClose',
+        pill: 'keepOpen',
         terminal: false,
       };
     case 'processing':
@@ -148,6 +162,7 @@ function describeStage(stage: GalleryImportStageKey, ctx: StageContext): StageDi
         title: ctx.batchesTotal > 0
           ? `${ctx.batchesWritten} of ${ctx.batchesTotal} ${pluralize(ctx.batchesTotal, 'batch', 'batches')} written${ctx.ready > 0 ? ` · ${ctx.ready} ready` : ''}`
           : ctx.ready > 0 ? `${ctx.ready} ${pluralize(ctx.ready, 'suggestion')} ready so far` : 'Writing the first drafts',
+        context: "We have your photo previews. We'll start suggesting memories to review in a bit.",
         bar: null,
         pill: 'safeToClose',
         terminal: false,
@@ -610,7 +625,7 @@ function MainFooter({
   return (
     <>
       {readyCount > 0 ? (
-        <PrimaryButton label={`Review ${readyCount}`} onPress={onReview} testID="gallery-import-review" />
+        <PrimaryButton label={`Review ${readyCount} ${pluralize(readyCount, 'suggestion')}`} onPress={onReview} testID="gallery-import-review" />
       ) : terminal ? (
         <PrimaryButton
           label={stage === 'expired' ? 'Look through my photos again' : 'Back to my journal'}
@@ -671,6 +686,7 @@ function StageScreen({ meta, footer, onClose, onStop, onUseCellular, scrollTestI
       <View style={pg.header}>
         <Text style={pg.eyebrow}>{meta.eyebrow}</Text>
         <Text style={pg.title}>{meta.title}</Text>
+        {meta.context ? <Text style={pg.context}>{meta.context}</Text> : null}
       </View>
 
       {meta.bar ? (
@@ -680,11 +696,14 @@ function StageScreen({ meta, footer, onClose, onStop, onUseCellular, scrollTestI
       ) : null}
 
       {meta.pill ? (
-        <View style={[pg.pill, meta.pill === 'keepOpen' ? pg.pillKeepOpen : pg.pillSafe]}>
-          <Text style={[pg.pillText, meta.pill === 'keepOpen' ? pg.pillTextKeepOpen : pg.pillTextSafe]}>
-            {meta.pill === 'keepOpen' ? 'Keep Momora open' : 'Safe to close'}
-          </Text>
-        </View>
+        <>
+          <View style={[pg.pill, meta.pill === 'keepOpen' ? pg.pillKeepOpen : pg.pillSafe]}>
+            <Text style={[pg.pillText, meta.pill === 'keepOpen' ? pg.pillTextKeepOpen : pg.pillTextSafe]}>
+              {meta.pill === 'keepOpen' ? 'Keep Momora open' : 'Safe to close'}
+            </Text>
+          </View>
+          {pillNoteFor(meta.pill) ? <Text style={pg.pillNote}>{pillNoteFor(meta.pill)}</Text> : null}
+        </>
       ) : null}
 
       {onUseCellular ? (
@@ -706,6 +725,7 @@ const pg = StyleSheet.create({
   header: { paddingHorizontal: spacing.lg, paddingTop: 24 },
   eyebrow: { color: colors.ink3, fontFamily: fonts.sansBold, fontSize: 11, letterSpacing: 1.4, textTransform: 'uppercase' },
   title: { color: colors.ink, fontFamily: fonts.display, fontSize: 34, lineHeight: 38, marginTop: 10 },
+  context: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 14.5, lineHeight: 22, marginTop: 12 },
   barWrap: { paddingHorizontal: spacing.lg, paddingTop: 24 },
   pill: { alignSelf: 'flex-start', borderRadius: radius.pill, marginHorizontal: spacing.lg, marginTop: 20, paddingHorizontal: 14, paddingVertical: 8 },
   pillKeepOpen: { backgroundColor: colors.sunSoft },
@@ -713,6 +733,7 @@ const pg = StyleSheet.create({
   pillText: { fontFamily: fonts.sansBold, fontSize: 12.5 },
   pillTextKeepOpen: { color: colors.sunInk },
   pillTextSafe: { color: colors.seaInk },
+  pillNote: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 12, marginHorizontal: spacing.lg, marginTop: 6 },
   ghostLink: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 13.5, marginTop: 20, paddingHorizontal: spacing.lg, textAlign: 'center' },
   abandonedLine: { color: colors.ink3, fontFamily: fonts.sans, fontSize: 12.5, marginTop: 20, paddingHorizontal: spacing.lg, textAlign: 'center' },
   error: { color: colors.error, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 18, marginTop: 12, paddingHorizontal: spacing.lg },

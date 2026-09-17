@@ -443,7 +443,6 @@ export function GalleryImportApproval({
   const submit = async () => {
     if (!checkpoint || !candidate || !runId || !candidateId || !userId || !familyId || approvalActionInFlightRef.current) return;
     const trimmedCaption = caption.trim();
-    if (!trimmedCaption) { setError('Add a caption before saving this memory.'); return; }
     if (trimmedCaption.length > GALLERY_IMPORT_CAPTION_MAX_LENGTH) { setError('Keep the caption to 1,000 characters or fewer.'); return; }
     if (!isValidCalendarDate(memoryDate)) { setError('Enter a real date in YYYY-MM-DD format.'); return; }
     if (assetTokens.length === 0) { setError('Choose at least one photo.'); return; }

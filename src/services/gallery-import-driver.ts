@@ -55,8 +55,7 @@ function loadScanner(): ScannerModule {
 export type GalleryImportDriverPhase =
   | 'idle'
   | 'scanning'
-  | 'preparing'
-  | 'uploading'
+  | 'sending'
   | 'dispatching'
   | 'waiting_wifi'
   | 'paused_fair_use'

@@ -55,13 +55,13 @@ export function GalleryImportTrustExplainer({ platform = Platform.OS === 'androi
         testID={testID}
       >
         <View style={tr.header}>
-          <Text style={tr.eyebrow}>Before we look</Text>
-          <Text style={tr.display}>Here is exactly{'\n'}what happens.</Text>
+          <Text style={tr.eyebrow}>Before Momora starts</Text>
+          <Text style={tr.display}>Here is how{'\n'}it works.</Text>
         </View>
         <View style={tr.rows}>
-          <Text style={tr.row}>Your phone reads dates and groups photos. Nothing is changed.</Text>
-          <Text style={tr.row}>Small previews go to Momora to write draft captions. No faces, no location.</Text>
-          <Text style={tr.row}>Only what you keep is saved. The rest clears on its own.</Text>
+          <Text style={tr.row}>Your phone groups your photos by day. Nothing is changed or deleted.</Text>
+          <Text style={tr.row}>Small previews go to Momora to pick the best photos and write draft captions. No names, no faces recognized, no location.</Text>
+          <Text style={tr.row}>You review every suggestion. Only what you keep is saved. The rest clears on its own.</Text>
         </View>
         <Pressable accessibilityRole="button" onPress={() => setIsDetailsOpen(true)} style={tr.detailsLink} testID="gallery-import-trust-details">
           <Text style={tr.detailsLinkText}>Details</Text>

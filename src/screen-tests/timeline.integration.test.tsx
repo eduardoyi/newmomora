@@ -453,7 +453,7 @@ describe('TimelineScreen', () => {
         checkpoint: { runId: 'run-1' },
         run: { status: 'reviewing' },
         comingIndicator: { kind: 'count', count: 2 },
-        driverState: { phase: 'uploading', runId: 'run-1', pausedUntil: null, lastError: null, isActive: true },
+        driverState: { phase: 'sending', runId: 'run-1', pausedUntil: null, lastError: null, isActive: true },
       }));
       render(<TimelineScreen />);
 
@@ -461,7 +461,7 @@ describe('TimelineScreen', () => {
       expect(lastCall.galleryImport).toMatchObject({
         readyCount: 7,
         comingIndicator: { kind: 'count', count: 2 },
-        phase: 'uploading',
+        phase: 'sending',
       });
 
       lastCall.galleryImport.onOpen();

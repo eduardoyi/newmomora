@@ -110,7 +110,7 @@ describe('GalleryImportSettingsBlock', () => {
       state: 'processing',
       readyCount: 0,
       checkpoint: { runId: 'run-1' },
-      driverState: { phase: 'uploading', runId: 'run-1', pausedUntil: null, lastError: null, isActive: true },
+      driverState: { phase: 'sending', runId: 'run-1', pausedUntil: null, lastError: null, isActive: true },
     }));
     const screen = render(<GalleryImportSettingsBlock />);
     expect(screen.getByText('Looking through your photos · 0 ready')).toBeTruthy();

@@ -159,7 +159,7 @@ class GalleryImportIncompleteCheckpointError extends Error {
 }
 
 export interface GalleryImportRunnerProgress {
-  stage: 'scanning' | 'preparing' | 'uploading' | 'dispatching';
+  stage: 'scanning' | 'sending' | 'dispatching';
   completed: number;
   total: number;
   scannedAssetCount?: number;
@@ -239,7 +239,7 @@ const GALLERY_PREVIEW_ATTEMPT_DEADLINE_MS = 90_000;
 
 class GalleryPreviewAttemptTimeoutError extends Error {
   constructor() {
-    super('The connection stalled while sending a preview. Your place is saved — try continuing.');
+    super('The connection stalled while sending a preview. Your place is saved. Try continuing.');
   }
 }
 
@@ -600,11 +600,7 @@ export async function processGalleryImportChunks(input: {
     .filter((chunk) => ['planned', 'failed', 'registered', 'uploaded'].includes(chunk.status) && (chunk.attempts ?? 0) < GALLERY_IMPORT_CHUNK_MAX_ATTEMPTS)
     .map((chunk) => chunk.ordinal);
 
-  const totalToPrepare = checkpoint.chunks
-    .filter((chunk) => !chunk.chunkId && (chunk.status === 'planned' || chunk.status === 'failed'))
-    .reduce((count, chunk) => count + chunk.clusters.reduce((assetCount, cluster) => assetCount + cluster.assetTokens.length, 0), 0);
   const totalAssets = checkpoint.chunks.reduce((count, chunk) => count + chunk.clusters.reduce((assetCount, cluster) => assetCount + cluster.assetTokens.length, 0), 0);
-  let preparedCount = 0;
   let uploadedCount = checkpoint.uploadedAssetTokens.length;
 
   for (const ordinal of eligibleOrdinals) {
@@ -626,8 +622,14 @@ export async function processGalleryImportChunks(input: {
           try {
             const preview = await prepareGalleryImportAssetPreview({ adapter: input.adapter, osAssetId: asset.osAssetId, runId: input.runId, assetToken, preparationDeadlineAtMs: input.passDeadlineAtMs });
             preparedPreviews.set(assetToken, preview);
-            preparedCount += 1;
-            input.onProgress?.({ stage: 'preparing', completed: preparedCount, total: totalToPrepare });
+            // Same shape as the upload-site emission below (merged
+            // preparing+uploading into one monotonic 'sending' stage, see
+            // the gallery-import fix plan): this call only keeps the
+            // progress stream alive while a chunk's previews are being
+            // prepared, so the counter must be uploads over all assets
+            // (never resets, never jumps backwards), not a separate
+            // per-chunk preparation counter.
+            input.onProgress?.({ stage: 'sending', completed: uploadedCount, total: totalAssets });
           } catch (error) {
             if (error instanceof GalleryImportPreparationBudgetExceededError) return { reason: 'pass_deadline' };
             // Deliberately content-free: the failed local asset never reaches
@@ -729,7 +731,7 @@ export async function processGalleryImportChunks(input: {
           await FileSystem.deleteAsync(preview.uri, { idempotent: true }).catch(() => undefined);
           preparedPreviews.delete(assetToken);
           uploadedCount += 1;
-          input.onProgress?.({ stage: 'uploading', completed: uploadedCount, total: totalAssets });
+          input.onProgress?.({ stage: 'sending', completed: uploadedCount, total: totalAssets });
           const capturedPreview = preview;
           if (!await applyUpdate((current) => ({
             ...current,

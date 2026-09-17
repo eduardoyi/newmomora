@@ -53,8 +53,8 @@ describe('beginGalleryImportPipeline', () => {
     expect(getGalleryImportPendingStart()).toEqual({ status: 'started', runId: 'run-1' });
     expect(isGalleryImportRunnerActive('run-1')).toBe(true);
 
-    onProgress?.({ stage: 'preparing', completed: 1, total: 4 });
-    expect(getLatestGalleryImportLiveProgress('run-1')).toEqual({ stage: 'preparing', completed: 1, total: 4 });
+    onProgress?.({ stage: 'sending', completed: 1, total: 4 });
+    expect(getLatestGalleryImportLiveProgress('run-1')).toEqual({ stage: 'sending', completed: 1, total: 4 });
   });
 
   it('reports waitingWifi distinctly from a generic failure', async () => {

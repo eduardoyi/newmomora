@@ -380,7 +380,7 @@ describe('FamilyActivitySheet', () => {
 
     it('shows the ready copy with a Review pill above the empty state, and ready wins over an active sweep', () => {
       const { getByTestId, getByText } = renderSheet({
-        galleryImport: galleryImportProp({ readyCount: 12, phase: 'uploading', comingIndicator: { kind: 'count', count: 3 } }),
+        galleryImport: galleryImportProp({ readyCount: 12, phase: 'sending', comingIndicator: { kind: 'count', count: 3 } }),
       });
       expect(getByTestId('family-activity-gallery-import-row')).toBeTruthy();
       expect(getByTestId('family-activity-gallery-import-row-review')).toBeTruthy();
@@ -397,7 +397,7 @@ describe('FamilyActivitySheet', () => {
 
     it('shows "still looking" copy with no Review pill while a sweep is active and nothing is ready yet', () => {
       const { getByText, queryByTestId } = renderSheet({
-        galleryImport: galleryImportProp({ phase: 'preparing' }),
+        galleryImport: galleryImportProp({ phase: 'sending' }),
       });
       expect(getByText('Momora is still looking through your photos')).toBeTruthy();
       expect(queryByTestId('family-activity-gallery-import-row-review')).toBeNull();

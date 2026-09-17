@@ -11,7 +11,7 @@ import {
   GalleryImportEmptyLibraryError,
   GalleryImportServiceRequestError,
 } from '@/services/gallery-import-runner';
-import { clearGalleryImportLiveProgress } from '@/utils/gallery-import-live-progress';
+import { clearGalleryImportLiveProgress, publishGalleryImportLiveProgress } from '@/utils/gallery-import-live-progress';
 import { clearGalleryImportPendingStart, setGalleryImportPendingStart } from '@/utils/gallery-import-pending-start';
 import { beginGalleryImportPipeline } from '@/utils/gallery-import-pipeline';
 
@@ -360,7 +360,7 @@ describe('gallery import progress', () => {
     const screen = render(<GalleryImportProgress runId="run-1" />);
     await waitFor(() => expect(screen.getByText('Momora will keep looking tomorrow')).toBeTruthy());
     expect(screen.getByTestId('gallery-import-review')).toBeTruthy();
-    expect(screen.getByText('Review 5')).toBeTruthy();
+    expect(screen.getByText('Review 5 suggestions')).toBeTruthy();
   });
 
   it('shows one muted line with the abandoned-chunk count only when it is greater than zero', async () => {
@@ -427,5 +427,45 @@ describe('gallery import progress', () => {
     await waitFor(() => expect(screen.getByTestId('gallery-import-progress')).toBeTruthy());
     expect(screen.getByText('Safe to close')).toBeTruthy();
     expect(screen.queryByText('Keep Momora open')).toBeNull();
+  });
+
+  // The runner's former separate 'preparing' (Keep Momora open) and
+  // 'uploading' (Safe to close) stages flip-flopped every few seconds since
+  // the runner alternates within a chunk loop. They are merged into one
+  // monotonic 'sending' stage, and -- because native preview preparation is
+  // foreground-only for its whole duration -- it stays 'keepOpen' the entire
+  // time, unlike the old 'uploading' stage.
+  it('shows the merged sending stage as keepOpen, with its context line and pill note, while chunks are prepared/uploaded', async () => {
+    mockCheckpoint = checkpoint({ status: 'processing' });
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'processing', readyCandidates: 0 }, error: null });
+    const screen = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-progress')).toBeTruthy());
+    act(() => { publishGalleryImportLiveProgress('run-1', { stage: 'sending', completed: 3, total: 10 }); });
+    await waitFor(() => expect(screen.getByText('3 of 10 previews sent')).toBeTruthy());
+    expect(screen.getByText('Getting your suggestions ready')).toBeTruthy();
+    expect(screen.getByText('Keep Momora open')).toBeTruthy();
+    expect(screen.queryByText('Safe to close')).toBeNull();
+    expect(screen.getByText(/receiving small photo previews/)).toBeTruthy();
+    expect(screen.getByText('This step needs the app on screen. Your progress is saved if you leave.')).toBeTruthy();
+  });
+
+  it('shows a context line for the scanning and processing stages, and none for a stage that does not define one', async () => {
+    setGalleryImportPendingStart({ status: 'starting', scannedAssetCount: 5 });
+    const scanning = render(<GalleryImportProgress />);
+    await waitFor(() => expect(scanning.getByText('5 photos read')).toBeTruthy());
+    expect(scanning.getByText("We're grouping your photos into moments. Nothing has left your phone yet.")).toBeTruthy();
+    scanning.unmount();
+
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'processing', readyCandidates: 0 }, error: null });
+    const processing = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(processing.getByText('Writing the drafts')).toBeTruthy());
+    expect(processing.getByText("We have your photo previews. We'll start suggesting memories to review in a bit.")).toBeTruthy();
+    processing.unmount();
+
+    (galleryService.getGalleryImportRun as jest.Mock).mockResolvedValue({ data: { status: 'reviewing', readyCandidates: 3 }, error: null });
+    const ready = render(<GalleryImportProgress runId="run-1" />);
+    await waitFor(() => expect(ready.getByText('3 ready to review')).toBeTruthy());
+    expect(ready.queryByText(/grouping your photos into moments/)).toBeNull();
+    expect(ready.getByText('We keep working on our own. Come back anytime.')).toBeTruthy();
   });
 });

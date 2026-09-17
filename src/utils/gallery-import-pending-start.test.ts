@@ -41,7 +41,7 @@ describe('gallery import pending-start state', () => {
 
   it('only applies scanning-stage progress to the scanned count', () => {
     setGalleryImportPendingStart({ status: 'starting' });
-    applyGalleryImportPendingScanProgress({ stage: 'preparing', completed: 3, total: 10 });
+    applyGalleryImportPendingScanProgress({ stage: 'sending', completed: 3, total: 10 });
     expect(getGalleryImportPendingStart()?.scannedAssetCount).toBeUndefined();
 
     applyGalleryImportPendingScanProgress({ stage: 'scanning', completed: 12, total: 12, scannedAssetCount: 12 });

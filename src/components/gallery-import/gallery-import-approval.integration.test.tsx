@@ -301,6 +301,21 @@ describe('gallery import approval composer', () => {
     expect(galleryService.beginGalleryImportApproval).not.toHaveBeenCalled();
   });
 
+  // Media-only memories are already legal elsewhere in the app -- an empty
+  // caption must be allowed through to save, not blocked with a
+  // "Add a caption before saving this memory." guard (the server side is
+  // relaxed in parallel to accept an empty caption and store null content).
+  it('allows saving with an empty caption', async () => {
+    const screen = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    await waitFor(() => expect(screen.getByTestId('gallery-import-approve')).toBeTruthy());
+    fireEvent.changeText(screen.getByTestId('gallery-import-caption'), '');
+    fireEvent.press(screen.getByTestId('gallery-import-approve'));
+    await waitFor(() => expect(galleryService.finalizeGalleryImportCandidate).toHaveBeenCalledTimes(1));
+    expect(galleryService.updateGalleryImportCandidate).toHaveBeenCalledWith(expect.objectContaining({ caption: '' }));
+    expect(galleryService.beginGalleryImportApproval).toHaveBeenCalledTimes(1);
+    expect(mockCheckpoint.approvalOutbox).toEqual([]);
+  });
+
   it('refuses an approval lease when every selected original disappeared', async () => {
     const original = jest.requireMock('@/utils/gallery-import-original').getGalleryImportOriginalUpload as jest.Mock;
     original.mockRejectedValueOnce(new Error('removed'));

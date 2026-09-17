@@ -206,6 +206,14 @@ Deno.test('gallery candidate drafts reject captions over the durable 1,000-chara
   assertEquals(isValidGalleryImportCandidateDraft({ ...draft, caption: 'x'.repeat(1_000) }), true);
 });
 
+Deno.test('gallery candidate drafts allow a caption the user has cleared, saving as a media-only memory', () => {
+  const draft = {
+    caption: '', memoryDate: '2026-08-09', assetTokens: [token], familyMemberIds: [],
+  };
+  assertEquals(isValidGalleryImportCandidateDraft(draft), true);
+  assertEquals(isValidGalleryImportCandidateDraft({ ...draft, caption: '   ' }), true);
+});
+
 Deno.test('gallery manifest bounds per-cluster selection before preview creation', () => {
   const tooMany = validManifest();
   tooMany.clusters[0].assets = Array.from({ length: 11 }, (_, index) => ({

@@ -57,6 +57,17 @@ values ('b6000000-0000-4000-8000-000000000001',(select id from run_one),(select 
   'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',encode(extensions.digest((select id::text from run_one)||':aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:b5000000-0000-4000-8000-000000000001','sha256'),'hex'),
   'A rainy afternoon',current_date,.8,array['b5000000-0000-4000-8000-000000000001'::uuid],transaction_timestamp()+interval '30 days');
 
+-- A user-cleared draft caption ('' — never null at the candidate level)
+-- must still be an accepted row: finalize_gallery_import_candidate is what
+-- turns it into memories.content = null.
+select lives_ok(
+  $$insert into public.gallery_import_candidates (id,run_id,chunk_id,family_id,actor_id,cluster_signature,candidate_fingerprint,caption,memory_date,confidence,selected_asset_tokens,expires_at)
+    values ('b6000000-0000-4000-8000-000000000002',(select id from run_one),(select id from chunk_one),'b2000000-0000-4000-8000-000000000001','b1000000-0000-4000-8000-000000000001',
+      'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',encode(extensions.digest((select id::text from run_one)||':cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:b5000000-0000-4000-8000-000000000001','sha256'),'hex'),
+      '',current_date,.8,array['b5000000-0000-4000-8000-000000000001'::uuid],transaction_timestamp()+interval '30 days')$$,
+  'a user-cleared empty caption is an accepted candidate row'
+);
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub','b1000000-0000-4000-8000-000000000001',true);
 select is((select status from public.set_gallery_import_candidate_unavailable('b6000000-0000-4000-8000-000000000001','11111111111111111111111111111111',true)),'unavailable','all-missing originals mark the card unavailable without skipping it');

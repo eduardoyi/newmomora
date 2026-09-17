@@ -1,5 +1,5 @@
 // A tiny in-memory pub/sub bus that lets the progress screen render the
-// runner's live scanning/preparing/uploading/dispatching counts even though
+// runner's live scanning/sending/dispatching counts even though
 // the runner is kicked off from the entry screen and keeps running after
 // entry navigates away (see gallery-import-entry.tsx's requestPermissionThenStart
 // and docs/plans/gallery-import.md's progress redesign notes).

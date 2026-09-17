@@ -43,18 +43,15 @@ describe('deriveGalleryImportProgressOutcome', () => {
       .toEqual({ kind: 'exception', exception: 'offline' });
   });
 
-  it('renders live preparing progress with real counts', () => {
+  // The runner's former separate 'preparing'/'uploading' stages are merged
+  // into one monotonic 'sending' stage (see gallery-import-runner.ts): both
+  // emission sites now publish the same shape, so this is the single branch
+  // that renders it.
+  it('renders live sending progress with real counts', () => {
     const outcome = deriveGalleryImportProgressOutcome(baseInput({
-      live: { stage: 'preparing', completed: 40, total: 120 },
+      live: { stage: 'sending', completed: 40, total: 120 },
     }));
-    expect(outcome).toEqual({ kind: 'stage', stage: 'preparing', ready: 0, value: 40, total: 120, scannedAssetCount: null });
-  });
-
-  it('renders live uploading progress with real counts', () => {
-    const outcome = deriveGalleryImportProgressOutcome(baseInput({
-      live: { stage: 'uploading', completed: 5, total: 12 },
-    }));
-    expect(outcome).toEqual({ kind: 'stage', stage: 'uploading', ready: 0, value: 5, total: 12, scannedAssetCount: null });
+    expect(outcome).toEqual({ kind: 'stage', stage: 'sending', ready: 0, value: 40, total: 120, scannedAssetCount: null });
   });
 
   it('maps live dispatching to the processing stage while the server has not confirmed anything past it', () => {
@@ -87,8 +84,8 @@ describe('deriveGalleryImportProgressOutcome', () => {
     expect((deriveGalleryImportProgressOutcome(baseInput({ live: stale, serverStatus: 'failed', readyCount: 3 })) as any).stage).toBe('failed');
   });
 
-  it('still prefers live scanning/preparing/uploading detail while the server genuinely has not moved past processing', () => {
-    expect((deriveGalleryImportProgressOutcome(baseInput({ live: { stage: 'preparing', completed: 1, total: 5 }, serverStatus: 'processing' })) as any).stage).toBe('preparing');
+  it('still prefers live scanning/sending detail while the server genuinely has not moved past processing', () => {
+    expect((deriveGalleryImportProgressOutcome(baseInput({ live: { stage: 'sending', completed: 1, total: 5 }, serverStatus: 'processing' })) as any).stage).toBe('sending');
   });
 
   it('maps server expired/cancelled statuses onto their stages', () => {

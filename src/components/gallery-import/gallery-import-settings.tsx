@@ -12,7 +12,7 @@ import type { GalleryImportCheckpoint } from '@/utils/gallery-import-checkpoint'
 import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
 import { isOwnerRole, isViewerRole } from '@/utils/roles';
 
-const SWEEP_ACTIVE_PHASES = new Set<GalleryImportDriverPhase>(['scanning', 'preparing', 'uploading', 'dispatching']);
+const SWEEP_ACTIVE_PHASES = new Set<GalleryImportDriverPhase>(['scanning', 'sending', 'dispatching']);
 
 function pluralizeDays(count: number): string {
   return count === 1 ? '1 day' : `${count} days`;

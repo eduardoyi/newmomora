@@ -126,11 +126,11 @@ describe('gallery import driver', () => {
   it('publishes onProgress through the shared live-progress bus, and reflects it in its own state via that same subscription', async () => {
     mockedLoadCheckpoint.mockResolvedValue(checkpointFixture());
     mockedResume.mockImplementation(async (input: any) => {
-      input.onProgress?.({ stage: 'uploading', completed: 3, total: 10 });
+      input.onProgress?.({ stage: 'sending', completed: 3, total: 10 });
     });
     kickGalleryImportDriver('test');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(getLatestGalleryImportLiveProgress('run-1')).toEqual({ stage: 'uploading', completed: 3, total: 10 });
+    expect(getLatestGalleryImportLiveProgress('run-1')).toEqual({ stage: 'sending', completed: 3, total: 10 });
   });
 
   it('reports done once every chunk is settled and there is no more history', async () => {
