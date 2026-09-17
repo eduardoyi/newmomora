@@ -39,7 +39,6 @@ export default function GalleryImportApprovalRoute() {
         <GalleryImportPhotoChooser
           candidate={chooser.candidate}
           initialSelected={chooser.selectedAssetTokens}
-          mode="select"
           onClose={() => setChooser(null)}
           onUseSelection={chooser.setPhotos}
           pool={pool}

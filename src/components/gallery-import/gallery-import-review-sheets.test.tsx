@@ -34,7 +34,7 @@ describe('gallery import photo chooser', () => {
   it('selects in tap order, enforces the ten-photo cap with the locked message, and never drops below one photo', async () => {
     const onUseSelection = jest.fn();
     const screen = render(
-      <GalleryImportPhotoChooser candidate={candidate} mode="select" onClose={jest.fn()} onUseSelection={onUseSelection} pool={pool} />,
+      <GalleryImportPhotoChooser candidate={candidate} onClose={jest.fn()} onUseSelection={onUseSelection} pool={pool} />,
     );
     await flushUriResolution();
 
@@ -69,7 +69,7 @@ describe('gallery import photo chooser', () => {
   it('hands back device uris for pool photos beyond the candidate previews', async () => {
     const onUseSelection = jest.fn();
     const screen = render(
-      <GalleryImportPhotoChooser candidate={candidate} mode="select" onClose={jest.fn()} onUseSelection={onUseSelection} pool={pool} />,
+      <GalleryImportPhotoChooser candidate={candidate} onClose={jest.fn()} onUseSelection={onUseSelection} pool={pool} />,
     );
     await flushUriResolution();
     fireEvent.press(screen.getByTestId('gallery-import-chooser-photo-token-5'));
@@ -81,18 +81,6 @@ describe('gallery import photo chooser', () => {
         { assetToken: 'token-5', uri: 'file://local/os-5' },
       ]);
     });
-  });
-
-  it('is browse-only from the read-only deck: no toggling, no footer, no note box or hint', async () => {
-    const onUseSelection = jest.fn();
-    const screen = render(
-      <GalleryImportPhotoChooser candidate={candidate} mode="browse" onClose={jest.fn()} onUseSelection={onUseSelection} pool={pool} />,
-    );
-    await flushUriResolution();
-    expect(screen.queryByTestId('gallery-import-chooser-browse-hint')).toBeNull();
-    expect(screen.queryByTestId('gallery-import-chooser-use')).toBeNull();
-    fireEvent.press(screen.getByTestId('gallery-import-chooser-photo-token-2'));
-    expect(screen.queryByTestId('gallery-import-chooser-order-token-2')).toBeNull();
   });
 });
 

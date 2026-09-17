@@ -1,12 +1,15 @@
 // Gallery import -- the review flow's two bottom sheets (design:
 // gi-review-sheets.jsx): the day's photo pool, and the set-aside list.
-// Editing a draft is the memory composer, not a sheet.
+// Editing a caption/date/tags is still the memory composer, not a sheet.
 //
 // The photo pool is the candidate's server-admitted cluster reconstructed
-// from the local checkpoint (see buildGalleryImportDayPool). From the deck
-// the chooser is browse-only -- the deck is read-only per
-// docs/design/gallery-import/README.md; selection editing happens when the
-// chooser is opened from the composer's Add-photos seam.
+// from the local checkpoint (see buildGalleryImportDayPool). Photo selection
+// itself is editable wherever the chooser opens -- from the deck's own
+// day-photos sheet (persists immediately, owner decision 2026-09-17, see
+// docs/design/gallery-import/README.md) and from the composer's Add-photos
+// seam (held in local state until submit). There is only one mode now; a
+// prior read-only "browse" mode was removed once the deck's own opening
+// became selectable and nothing else used it.
 import { Image } from 'expo-image';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -71,29 +74,24 @@ function GallerySheet({
   );
 }
 
-// ── Choose (or browse) the day's photos ──────────────────────────────────
+// ── Choose the day's photos ────────────────────────────────────────────
 export function GalleryImportPhotoChooser({
   candidate,
   pool,
-  mode,
   initialSelected,
   onClose,
   onUseSelection,
 }: {
   candidate: Pick<GalleryImportCandidate, 'memoryDate' | 'selectedAssetTokens' | 'previewUrls'>;
   pool: GalleryImportDayPoolAsset[];
-  /** 'browse' from the read-only deck; 'select' from the composer seam. */
-  mode: 'browse' | 'select';
-  /** Select mode only: the composer's current ordered selection. */
+  /** The caller's current ordered selection; defaults to the candidate's own. */
   initialSelected?: string[];
   onClose: () => void;
-  /** Select mode only: called with the ordered selection on Done. */
+  /** Called with the ordered selection on Done/"Use these N". */
   onUseSelection?: (photos: GalleryImportChosenPhoto[]) => void;
 }) {
   const max = GALLERY_IMPORT_PHOTO_CHOICE_MAX;
-  const [selected, setSelected] = useState<string[]>(
-    () => (mode === 'select' ? initialSelected ?? candidate.selectedAssetTokens : candidate.selectedAssetTokens),
-  );
+  const [selected, setSelected] = useState<string[]>(() => initialSelected ?? candidate.selectedAssetTokens);
   const previewByToken = useMemo(() => {
     const map: Record<string, string | undefined> = {};
     candidate.selectedAssetTokens.forEach((token, index) => { map[token] = candidate.previewUrls?.[index]; });
@@ -127,7 +125,6 @@ export function GalleryImportPhotoChooser({
 
   const atCap = selected.length >= max;
   const toggle = (token: string) => {
-    if (mode !== 'select') return;
     setSelected((current) => {
       if (current.includes(token)) {
         // Never below one photo -- a memory keeps at least one.
@@ -137,16 +134,14 @@ export function GalleryImportPhotoChooser({
     });
   };
   const done = () => {
-    if (mode === 'select' && onUseSelection) {
-      onUseSelection(selected.map((token) => ({ assetToken: token, uri: previewByToken[token] ?? localUriByToken[token] })));
-    }
+    onUseSelection?.(selected.map((token) => ({ assetToken: token, uri: previewByToken[token] ?? localUriByToken[token] })));
     onClose();
   };
 
   return (
     <GallerySheet
       closeLabel="Done"
-      footer={mode === 'select' ? (
+      footer={(
         <View style={styles.chooserFooter}>
           <View style={styles.chooserFooterCopy}>
             <Text style={styles.chooserFooterTitle}>{selected.length} of {max} chosen</Text>
@@ -155,10 +150,10 @@ export function GalleryImportPhotoChooser({
             </Text>
           </View>
           <Pressable accessibilityRole="button" onPress={done} style={styles.chooserUseButton} testID="gallery-import-chooser-use">
-            <Text style={styles.chooserUseButtonText}>Use these {selected.length}</Text>
+            <Text style={styles.chooserUseButtonText}>{selected.length === 1 ? 'Use this photo' : `Use these ${selected.length}`}</Text>
           </Pressable>
         </View>
-      ) : undefined}
+      )}
       onClose={done}
       subtitle={`${pool.length} ${pool.length === 1 ? 'photo' : 'photos'} from ${formatFullDisplayDate(candidate.memoryDate)}, all still on your phone.`}
       testID="gallery-import-photo-chooser"
@@ -170,14 +165,14 @@ export function GalleryImportPhotoChooser({
             const token = asset.assetToken;
             const on = selected.includes(token);
             const order = selected.indexOf(token) + 1;
-            const capBlocked = mode === 'select' && !on && atCap;
+            const capBlocked = !on && atCap;
             const uri = previewByToken[token] ?? localUriByToken[token];
             return (
               <Pressable
                 accessibilityLabel={on ? `Photo ${order}, included` : 'Not included'}
-                accessibilityRole={mode === 'select' ? 'checkbox' : 'image'}
-                accessibilityState={mode === 'select' ? { checked: on, disabled: capBlocked } : undefined}
-                disabled={mode !== 'select' || capBlocked}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: on, disabled: capBlocked }}
+                disabled={capBlocked}
                 key={token}
                 onPress={() => toggle(token)}
                 style={[styles.chooserTile, capBlocked && styles.chooserTileBlocked]}

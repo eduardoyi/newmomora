@@ -19,6 +19,7 @@ import {
   getGalleryImportCandidates,
   getGalleryImportRun,
   setGalleryImportCandidateSkip,
+  updateGalleryImportCandidate,
   type GalleryImportCandidate,
   type GalleryImportRun,
 } from '@/services/gallery-import';
@@ -37,7 +38,7 @@ import {
 import { loadGalleryImportFrontier, type GalleryImportFrontier } from '@/utils/gallery-import-frontier';
 
 import { GalleryImportDeckCard } from './gallery-import-deck-card';
-import { GalleryImportPhotoChooser, GalleryImportSetAsideSheet } from './gallery-import-review-sheets';
+import { GalleryImportPhotoChooser, GalleryImportSetAsideSheet, type GalleryImportChosenPhoto } from './gallery-import-review-sheets';
 import { DeviceBoundNotice, exitGalleryImportToTimeline, gi, humanError, styles as sharedStyles, useRunCheckpoint } from './gallery-import-shared';
 
 const DECK_TICK_MAX = 12;
@@ -353,6 +354,56 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
     }
   };
 
+  // Deliberately NOT wrapped in useCallback -- same React Compiler mismatch
+  // as changeSkip above (a closure mixing ref mutations, a conditional early
+  // return, and try/catch/finally the compiler's own dependency inference
+  // does not agree with by hand). Nothing here is costly enough to need the
+  // memoization the compiler cannot verify.
+  const applyPhotoSelection = async (photos: GalleryImportChosenPhoto[]) => {
+    if (!checkpoint || !runId || !current || actionInFlightRef.current) return;
+    const nextTokens = photos.map((photo) => photo.assetToken);
+    const previousTokens = current.selectedAssetTokens;
+    const unchanged = nextTokens.length === previousTokens.length && nextTokens.every((token, index) => token === previousTokens[index]);
+    if (unchanged) return;
+    actionInFlightRef.current = true;
+    setIsActioning(true);
+    setActionError(null);
+    try {
+      const result = await updateGalleryImportCandidate({
+        candidateId: current.id,
+        capability: checkpoint.runCapability,
+        caption: current.caption,
+        memoryDate: current.memoryDate,
+        assetTokens: nextTokens,
+        familyMemberIds: current.familyMemberIds,
+      });
+      if (result.error || !result.data) { setActionError(result.error?.message ?? 'Could not update this suggestion.'); return; }
+      mutationSeqRef.current += 1;
+      // previewUrls is index-aligned with selectedAssetTokens, and this
+      // response carries no preview URLs (only get-candidates signs them).
+      // Carry over whatever this device already had signed for each token
+      // from the in-memory candidate being replaced, and only if every new
+      // token resolves -- otherwise leave previewUrls undefined so the
+      // deck's self-healing hero (and the refresh right below) fills it in,
+      // the same way changeSkip's optimistic merge does for bring-back.
+      const previousUrlByToken: Record<string, string | undefined> = {};
+      previousTokens.forEach((token, index) => { previousUrlByToken[token] = current.previewUrls?.[index]; });
+      const nextUrls = nextTokens.map((token) => previousUrlByToken[token]);
+      const resolvedUrls = nextUrls.every((url): url is string => Boolean(url)) ? nextUrls : undefined;
+      setCandidates((items) => items.map((item) => {
+        if (item.id !== current.id) return item;
+        const next = result.data!.candidate;
+        return { ...next, selectedAssetTokens: nextTokens, previewUrls: resolvedUrls };
+      }));
+      void refresh();
+    } catch (caught) {
+      setActionError(humanError(caught));
+    } finally {
+      actionInFlightRef.current = false;
+      setIsActioning(false);
+    }
+  };
+
   // One commit path for swipe, buttons, and screen-reader actions: play the
   // 240ms exit (90ms under reduced motion), then act.
   const fire = useCallback((direction: GalleryDeckSwipeDirection) => {
@@ -430,8 +481,8 @@ export function GalleryImportReview({ runId }: { runId?: string }) {
       {sheet === 'photos' && current ? (
         <GalleryImportPhotoChooser
           candidate={current}
-          mode="browse"
           onClose={() => setSheet(null)}
+          onUseSelection={(photos) => void applyPhotoSelection(photos)}
           pool={dayPool}
         />
       ) : null}

@@ -20,6 +20,7 @@ jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/services/gallery-import', () => ({
   completeGalleryImportRun: jest.fn(), getGalleryImportCandidates: jest.fn(),
   getGalleryImportRun: jest.fn(), setGalleryImportCandidateSkip: jest.fn(),
+  updateGalleryImportCandidate: jest.fn(),
 }));
 jest.mock('@/utils/gallery-import-e2e-adapter', () => ({ getGalleryImportE2eAdapter: () => undefined }));
 jest.mock('@/utils/gallery-import-scanner', () => ({
@@ -62,6 +63,7 @@ describe('gallery import review deck', () => {
     // Mirror the real endpoint: set-gallery-import-candidate-skip responds
     // WITHOUT preview urls (only get-candidates signs them).
     (galleryService.setGalleryImportCandidateSkip as jest.Mock).mockResolvedValue({ data: { candidate: { ...candidate, status: 'skipped', previewUrls: [] } }, error: null });
+    (galleryService.updateGalleryImportCandidate as jest.Mock).mockResolvedValue({ data: { candidate }, error: null });
   });
 
   it('keeps the deck read-only and requires explicit set-aside then bring back from the sheet', async () => {
@@ -647,7 +649,7 @@ describe('gallery import review deck', () => {
     expect(mockRouter.replace).not.toHaveBeenCalledWith('/(app)/(tabs)/timeline');
   });
 
-  it('keeps the locked deck copy: no permanent hint line, and a film strip that opens the day pool', async () => {
+  it('keeps the locked deck copy: no permanent hint line, and a film strip that opens the day pool, selectable', async () => {
     mockCheckpoint = checkpoint({
       assetByToken: {
         'asset-1': { assetToken: 'asset-1', osAssetId: 'os-1', captureAtMs: Date.UTC(2025, 4, 12, 9, 0, 0), width: 100, height: 100, isFavorite: false },
@@ -669,12 +671,91 @@ describe('gallery import review deck', () => {
 
     fireEvent.press(screen.getByTestId('gallery-import-film-strip'));
     await waitFor(() => expect(screen.getByTestId('gallery-import-photo-chooser')).toBeTruthy());
-    // Browse-only from the read-only deck -- I4b dropped the chooser's own
-    // browse hint (docs/plans/gallery-import-continuous.md I4b step 5), so
-    // browse mode now renders with no footer at all.
-    expect(screen.queryByTestId('gallery-import-chooser-browse-hint')).toBeNull();
-    expect(screen.queryByTestId('gallery-import-chooser-cap')).toBeNull();
-    expect(screen.queryByTestId('gallery-import-chooser-use')).toBeNull();
+    // Owner decision 2026-09-17: the deck's day-photos sheet is now fully
+    // selectable, not browse-only -- the cap hint and the "Use these N"
+    // button both render, and a tap toggles a photo.
+    expect(screen.getByTestId('gallery-import-chooser-cap')).toBeTruthy();
+    expect(screen.getByTestId('gallery-import-chooser-use')).toBeTruthy();
+    fireEvent.press(screen.getByTestId('gallery-import-chooser-photo-asset-2'));
+    expect(screen.getByTestId('gallery-import-chooser-order-asset-2')).toBeTruthy();
+  });
+
+  it('persists an added pool photo from the deck sheet through the same call the composer uses, and reflects it on the card', async () => {
+    mockCheckpoint = checkpoint({
+      assetByToken: {
+        'asset-1': { assetToken: 'asset-1', osAssetId: 'os-1', captureAtMs: Date.UTC(2025, 4, 12, 9, 0, 0), width: 100, height: 100, isFavorite: false },
+        'asset-2': { assetToken: 'asset-2', osAssetId: 'os-2', captureAtMs: Date.UTC(2025, 4, 12, 10, 0, 0), width: 100, height: 100, isFavorite: false },
+      },
+      uploadedAssetTokens: ['asset-1', 'asset-2'],
+    });
+    const updatedCandidate = { ...candidate, selectedAssetTokens: ['asset-1', 'asset-2'] };
+    (galleryService.updateGalleryImportCandidate as jest.Mock).mockResolvedValue({ data: { candidate: updatedCandidate }, error: null });
+    (galleryService.getGalleryImportCandidates as jest.Mock)
+      .mockResolvedValueOnce({ data: { candidates: [candidate] }, error: null })
+      .mockResolvedValue({ data: { candidates: [{ ...updatedCandidate, previewUrls: ['https://preview', 'https://preview-2'] }] }, error: null });
+
+    const screen = render(<GalleryImportReview runId="run-1" />);
+    await waitFor(() => expect(screen.getByText('1 photo chosen')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('gallery-import-film-strip'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-photo-chooser')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-chooser-photo-asset-2'));
+    fireEvent.press(screen.getByTestId('gallery-import-chooser-use'));
+
+    await waitFor(() => expect(galleryService.updateGalleryImportCandidate).toHaveBeenCalledWith({
+      candidateId: 'candidate-1',
+      capability: 'cap',
+      caption: candidate.caption,
+      memoryDate: candidate.memoryDate,
+      assetTokens: ['asset-1', 'asset-2'],
+      familyMemberIds: candidate.familyMemberIds,
+    }));
+    // The card reflects the new selection once the mocked refresh settles.
+    await waitFor(() => expect(screen.getByText('2 photos chosen')).toBeTruthy());
+  });
+
+  it('does not call updateGalleryImportCandidate when the sheet is used with an unchanged selection', async () => {
+    mockCheckpoint = checkpoint({
+      assetByToken: {
+        'asset-1': { assetToken: 'asset-1', osAssetId: 'os-1', captureAtMs: Date.UTC(2025, 4, 12, 9, 0, 0), width: 100, height: 100, isFavorite: false },
+        'asset-2': { assetToken: 'asset-2', osAssetId: 'os-2', captureAtMs: Date.UTC(2025, 4, 12, 10, 0, 0), width: 100, height: 100, isFavorite: false },
+      },
+      uploadedAssetTokens: ['asset-1', 'asset-2'],
+    });
+    const screen = render(<GalleryImportReview runId="run-1" />);
+    await waitFor(() => expect(screen.getByText('1 photo chosen')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('gallery-import-film-strip'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-photo-chooser')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-chooser-use'));
+
+    await waitFor(() => expect(screen.queryByTestId('gallery-import-photo-chooser')).toBeNull());
+    expect(galleryService.updateGalleryImportCandidate).not.toHaveBeenCalled();
+    expect(screen.getByText('1 photo chosen')).toBeTruthy();
+  });
+
+  it('surfaces an error and leaves the selection unchanged when the update fails', async () => {
+    mockCheckpoint = checkpoint({
+      assetByToken: {
+        'asset-1': { assetToken: 'asset-1', osAssetId: 'os-1', captureAtMs: Date.UTC(2025, 4, 12, 9, 0, 0), width: 100, height: 100, isFavorite: false },
+        'asset-2': { assetToken: 'asset-2', osAssetId: 'os-2', captureAtMs: Date.UTC(2025, 4, 12, 10, 0, 0), width: 100, height: 100, isFavorite: false },
+      },
+      uploadedAssetTokens: ['asset-1', 'asset-2'],
+    });
+    (galleryService.updateGalleryImportCandidate as jest.Mock).mockResolvedValue({
+      data: null,
+      error: { message: 'Could not save this selection right now.' },
+    });
+    const screen = render(<GalleryImportReview runId="run-1" />);
+    await waitFor(() => expect(screen.getByText('1 photo chosen')).toBeTruthy());
+
+    fireEvent.press(screen.getByTestId('gallery-import-film-strip'));
+    await waitFor(() => expect(screen.getByTestId('gallery-import-photo-chooser')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('gallery-import-chooser-photo-asset-2'));
+    fireEvent.press(screen.getByTestId('gallery-import-chooser-use'));
+
+    await waitFor(() => expect(screen.getByText('Could not save this selection right now.')).toBeTruthy());
+    expect(screen.getByText('1 photo chosen')).toBeTruthy();
   });
 
   it.each(['uploading', 'finalizing', 'failed'] as const)('redirects a relaunched review with a %s outbox before rendering deck actions', async (status) => {

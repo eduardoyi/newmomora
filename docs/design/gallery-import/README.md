@@ -19,8 +19,11 @@ hard-coded browser frame dimensions or simulated OS permission dialogs.
 These decisions resolve contradictions between the prototype, its notes, and
 `docs/plans/gallery-import.md`:
 
-- The review deck is read-only and asks only **Keep** or **Set aside**. Photo,
-  caption, date, and tag editing happens in the existing-style memory composer.
+- The review deck's card itself is read-only and asks only **Keep** or **Set
+  aside**. Photo selection is editable from the deck's own "Photos from that
+  day" sheet and persists to the suggestion immediately (owner decision
+  2026-09-17). Caption, date, and tag editing still only happens in the
+  existing-style memory composer.
 - Imported memories have one caption/content field and no separate title.
 - Skipped suggestions are never intentionally resurfaced. Permanent receipts
   provide best-effort suppression across runs without storing raw photo IDs or
