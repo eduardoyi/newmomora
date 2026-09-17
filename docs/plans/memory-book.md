@@ -998,6 +998,25 @@ device use):
     infra; a real cover JPEG from the renderer (path B) was
     considered and rejected for v1. Order status on tiles
     deliberately deferred (delivered-advancement item's territory).
+    DESIGN LOCKED (owner review rounds, 2026-09-17; canvas:
+    claude.ai/design project 93705dce "Memory Books shelf design",
+    Memory Books.dc.html + MemoryBooksScreen.dc.html — variants
+    shelf/empty/sheet/sheetMore/retry): NO price anywhere on the
+    picker (creating is free; price appears only at order/checkout);
+    NO teasers (custom-range row removed, not "Soon"-badged); cover
+    facsimiles are PRINT-EXACT (no accent dot over photo covers —
+    WraparoundCover only dots light covers); current calendar year
+    is NEVER a smart suggestion (mid-year creation claims the scope
+    permanently) — it lives only under More options with a "so far"
+    label; suggestion trio = last completed age-year + Everything
+    (+ inline thin warning where counts are low); failed tiles get a
+    retry CONFIRMATION sheet ("Let's try that again / Nothing was
+    lost"), not retry-on-tap; toast promises "We'll let you know
+    when it's ready" — so the READY-PUSH NOTIFICATION ships in the
+    SAME release; empty state is PERSONALIZED (real child name + a
+    random photo the child is tagged in composing the example cover,
+    wash fallback only if zero tagged photos; no "an example"
+    annotation); size copy 8.3×8.3 inches (210mm trim).
 
 ## 10. Open questions
 
