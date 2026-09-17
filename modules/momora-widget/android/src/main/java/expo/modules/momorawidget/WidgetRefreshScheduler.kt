@@ -14,6 +14,18 @@ internal object WidgetRefreshScheduler {
   private const val UNIQUE_WORK_NAME = "momora-widget-refresh"
   private const val MIN_DELAY_MILLIS = 10_000L
 
+  /**
+   * Return the next real timeline boundary, followed by the fixed lease
+   * expiry. Entries are already UTC instants from the app's validated family
+   * timezone, so Android must not rebuild 08:00/13:00/18:00 from its device
+   * timezone or use a periodic WorkManager interval.
+   */
+  internal fun nextRefreshAt(manifest: WidgetManifestSnapshot, now: Instant): Instant? {
+    if (!manifest.expiresAt.isAfter(now)) return null
+    return manifest.entries.firstOrNull { it.startsAt.isAfter(now) }?.startsAt
+      ?: manifest.expiresAt
+  }
+
   fun schedule(context: Context) {
     val appContext = context.applicationContext
     val raw = WidgetStore(appContext).readManifest()
@@ -28,10 +40,11 @@ internal object WidgetRefreshScheduler {
       return
     }
     val now = Instant.now()
-    val next = manifest.entries
-      .map { it.startsAt }
-      .firstOrNull { it.isAfter(now) }
-      ?: manifest.expiresAt
+    val next = nextRefreshAt(manifest, now)
+    if (next == null) {
+      cancel(appContext)
+      return
+    }
     val delay = Duration.between(now, next).toMillis().coerceAtLeast(MIN_DELAY_MILLIS)
     val work = OneTimeWorkRequestBuilder<WidgetRefreshWorker>()
       .setInitialDelay(delay, TimeUnit.MILLISECONDS)

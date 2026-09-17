@@ -5,11 +5,13 @@ import { Image as NativeImage } from 'react-native';
 
 import {
   WIDGET_MAX_CACHE_BYTES,
+  WIDGET_MAX_CACHED_IMAGES,
   WIDGET_MAX_ENTRIES,
   WIDGET_MAX_IMAGE_BYTES,
   WIDGET_MAX_IMAGE_EDGE,
   WIDGET_MAX_SOURCE_DOWNLOAD_BYTES,
   WIDGET_MANIFEST_SCHEMA_VERSION,
+  WIDGET_MAX_RETAINED_MEMORY_IDS,
   WIDGET_LEASE_MS,
   type WidgetCacheScope,
   type WidgetManifest,
@@ -19,10 +21,12 @@ import { parseWidgetManifest } from '@/widgets/manifest';
 
 export {
   WIDGET_MAX_CACHE_BYTES,
+  WIDGET_MAX_CACHED_IMAGES,
   WIDGET_MAX_IMAGE_BYTES,
   WIDGET_MAX_IMAGE_EDGE,
   WIDGET_MAX_SOURCE_DOWNLOAD_BYTES,
   WIDGET_MANIFEST_SCHEMA_VERSION,
+  WIDGET_MAX_RETAINED_MEMORY_IDS,
   WIDGET_LEASE_MS,
   type WidgetCacheScope,
   type WidgetManifest,
@@ -505,6 +509,10 @@ export class WidgetCacheController {
         .map((entry) => entry.imageFilename)
         .filter((filename): filename is string => Boolean(filename)),
     );
+    if (expectedFiles.size > WIDGET_MAX_CACHED_IMAGES) return false;
+    if (new Set(manifest.entries.map((entry) => entry.memoryId)).size > WIDGET_MAX_RETAINED_MEMORY_IDS) {
+      return false;
+    }
     for (const filename of expectedFiles) {
       if (typeof files[filename] !== 'string' || files[filename].length === 0) return false;
     }

@@ -1,10 +1,12 @@
 import {
   WIDGET_LEASE_MS,
+  WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT,
   WIDGET_TIMELINE_SLOT_COUNT,
   buildWidgetTimeline,
   classifyWidgetAgeBand,
   selectWidgetMemorySlots,
   widgetLocalDateAt,
+  widgetNextLocalDaytimeBoundary,
   widgetNextLocalMidnight,
   widgetTimelineIsExpired,
 } from '@/utils/widget-selection';
@@ -235,5 +237,110 @@ describe('widget timezone timeline', () => {
       '2026-09-17T00:00:00.000Z',
     ]);
     expect(timeline?.entries[2].endsAt).toBe('2026-09-22T12:00:00.000Z');
+  });
+
+  it('uses every strict daytime boundary and reaches the full spring-DST lease', () => {
+    const verifiedAt = '2026-03-02T12:30:00.000Z';
+    const timeline = buildWidgetTimeline({
+      verifiedAt,
+      timezoneName: 'America/New_York',
+      maxTimelineEntries: WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT,
+      slots: Array.from({ length: 7 }, (_, slotIndex) => ({
+        slotIndex,
+        memoryId: `memory-${slotIndex}`,
+      })),
+    });
+
+    expect(timeline).not.toBeNull();
+    expect(timeline!.entries).toHaveLength(23);
+    expect(new Date(timeline!.expiresAt).getTime() - Date.parse(verifiedAt)).toBe(WIDGET_LEASE_MS);
+    expect(timeline!.entries[0].startsAt).toBe(verifiedAt);
+    expect(timeline!.entries[1].startsAt).toBe('2026-03-02T13:00:00.000Z');
+    expect(timeline!.entries.some((entry) => entry.startsAt === '2026-03-08T12:00:00.000Z')).toBe(true);
+    expect(timeline!.entries.every((entry) => Date.parse(entry.startsAt) < Date.parse(timeline!.expiresAt))).toBe(true);
+    expect(timeline!.entries.at(-1)?.endsAt).toBe(timeline!.expiresAt);
+  });
+
+  it('keeps the fall-DST lease covered without scheduling past expiry', () => {
+    const verifiedAt = '2026-10-26T11:30:00.000Z';
+    const timeline = buildWidgetTimeline({
+      verifiedAt,
+      timezoneName: 'America/New_York',
+      maxTimelineEntries: WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT,
+      slots: Array.from({ length: 7 }, (_, slotIndex) => ({
+        slotIndex,
+        memoryId: `memory-${slotIndex}`,
+      })),
+    });
+
+    expect(timeline).not.toBeNull();
+    expect(timeline!.entries).toHaveLength(22);
+    expect(timeline!.entries.every((entry) => Date.parse(entry.startsAt) < Date.parse(timeline!.expiresAt))).toBe(true);
+    expect(timeline!.entries.at(-1)?.endsAt).toBe(timeline!.expiresAt);
+    expect(widgetTimelineIsExpired(timeline!, new Date(Date.parse(timeline!.expiresAt) - 1))).toBe(false);
+    expect(widgetTimelineIsExpired(timeline!, timeline!.expiresAt)).toBe(true);
+  });
+
+  it('starts before-eight, after-six, and exact-eight validations at strict boundaries', () => {
+    const slots = [{ slotIndex: 0, memoryId: 'a' }, { slotIndex: 1, memoryId: 'b' }];
+    const beforeEight = buildWidgetTimeline({
+      verifiedAt: '2026-09-15T06:30:00.000Z',
+      timezoneName: 'UTC',
+      maxTimelineEntries: WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT,
+      slots,
+    });
+    const afterSix = buildWidgetTimeline({
+      verifiedAt: '2026-09-15T19:30:00.000Z',
+      timezoneName: 'UTC',
+      maxTimelineEntries: WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT,
+      slots,
+    });
+    const exactEight = buildWidgetTimeline({
+      verifiedAt: '2026-09-15T08:00:00.000Z',
+      timezoneName: 'UTC',
+      maxTimelineEntries: WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT,
+      slots,
+    });
+
+    expect(beforeEight?.entries[1].startsAt).toBe('2026-09-15T08:00:00.000Z');
+    expect(afterSix?.entries[1].startsAt).toBe('2026-09-16T08:00:00.000Z');
+    expect(exactEight?.entries[0].startsAt).toBe('2026-09-15T08:00:00.000Z');
+    expect(exactEight?.entries[1].startsAt).toBe('2026-09-15T13:00:00.000Z');
+    expect(exactEight?.entries[0].startsAt).not.toBe(exactEight?.entries[1].startsAt);
+  });
+
+  it('handles quarter-hour zones and excludes an exact boundary from the future list', () => {
+    const exactEight = widgetNextLocalDaytimeBoundary(
+      '2026-09-15T02:15:00.000Z',
+      'Asia/Kathmandu',
+    );
+    expect(exactEight?.toISOString()).toBe('2026-09-15T07:15:00.000Z');
+
+    const timeline = buildWidgetTimeline({
+      verifiedAt: '2026-09-15T02:15:00.000Z',
+      timezoneName: 'Asia/Kathmandu',
+      maxTimelineEntries: WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT,
+      slots: [{ slotIndex: 0, memoryId: 'a' }, { slotIndex: 1, memoryId: 'b' }],
+    });
+    expect(timeline?.entries[0].startsAt).toBe('2026-09-15T02:15:00.000Z');
+    expect(timeline?.entries[1].startsAt).toBe('2026-09-15T07:15:00.000Z');
+  });
+
+  it('cycles unique daytime IDs so the wrap does not repeat a card', () => {
+    const timeline = buildWidgetTimeline({
+      verifiedAt: '2026-09-15T12:00:00.000Z',
+      timezoneName: 'UTC',
+      maxTimelineEntries: WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT,
+      slots: [
+        { slotIndex: 0, memoryId: 'a' },
+        { slotIndex: 1, memoryId: 'b' },
+        { slotIndex: 2, memoryId: 'a' },
+        { slotIndex: 3, memoryId: 'b' },
+      ],
+    });
+
+    expect(timeline).not.toBeNull();
+    expect(timeline!.entries.length).toBeGreaterThan(7);
+    expect(timeline!.entries.every((entry, index, entries) => index === 0 || entry.memoryId !== entries[index - 1].memoryId)).toBe(true);
   });
 });

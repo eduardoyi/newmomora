@@ -5,6 +5,9 @@ import WidgetKit
 
 private let momoraWidgetAppGroup = "group.com.memora.app.widgets"
 private let momoraWidgetLease: TimeInterval = 168 * 60 * 60
+private let momoraWidgetMaxEntries = 24
+private let momoraWidgetMaxCachedImages = 7
+private let momoraWidgetMaxRetainedMemoryIds = 7
 private let momoraWidgetMaxImageBytes: Int64 = 1 * 1024 * 1024
 private let momoraWidgetMaxCacheBytes: Int64 = 10 * 1024 * 1024
 private let momoraWidgetMaxImageEdge = 512
@@ -246,7 +249,7 @@ private final class MomoraWidgetStore {
           let timezone = boundedString(root["timezone"], max: 128), !timezone.isEmpty,
           let verifiedAt = parseDate(root["verifiedAt"]),
           let expiresAt = parseDate(root["expiresAt"]),
-          let entries = root["entries"] as? [[String: Any]], entries.count <= 7 else {
+          let entries = root["entries"] as? [[String: Any]], entries.count <= momoraWidgetMaxEntries else {
       throw MomoraWidgetError.invalidManifest("manifest fields are invalid")
     }
     _ = timezone
@@ -308,6 +311,13 @@ private final class MomoraWidgetStore {
         background: background,
         foreground: foreground,
       ))
+    }
+
+    guard Set(parsedEntries.map(\.memoryId)).count <= momoraWidgetMaxRetainedMemoryIds else {
+      throw MomoraWidgetError.invalidManifest("manifest contains too many retained memory IDs")
+    }
+    guard Set(parsedEntries.compactMap(\.imageFilename)).count <= momoraWidgetMaxCachedImages else {
+      throw MomoraWidgetError.invalidManifest("manifest contains too many cached images")
     }
 
     return MomoraWidgetManifest(
@@ -417,6 +427,7 @@ public class MomoraWidgetModule: Module {
         "platform": "ios",
         "supportsSystemSmall": true,
         "supportsAndroidTall": false,
+        "maxTimelineEntries": momoraWidgetMaxEntries,
       ]
       if let sharedDirectory {
         capabilities["sharedDirectory"] = sharedDirectory

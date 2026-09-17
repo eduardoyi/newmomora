@@ -191,3 +191,35 @@ settings, old disabled preferences, anonymous sessions, logout, in-flight family
 switches, deleted profiles and offline cache reconciliation. The Maestro flow
 was updated but not run. New layout awaits physical-device visual acceptance.
 No native build or OTA deployment was performed for this JavaScript change.
+
+## Daytime rotation contract (2026-09-17)
+
+The working tree now carries the native contract for three family-local
+daylight rotations at 08:00, 13:00, and 18:00 across a fixed 168-hour lease.
+The app/native manifest accepts up to 24 ordered entries, while native cache
+validation keeps seven unique memory IDs and seven unique image files, with the
+existing 1 MB per-image and 10 MB total limits. iOS schedules every manifest
+entry. Android schedules one-time WorkManager work at the next actual
+`startsAt`, followed by `expiresAt`.
+
+The native capability response includes `maxTimelineEntries: 24`. Older
+installed binaries that do not expose this field default to seven entries; the
+adapter rejects an oversized publish before invoking them, and the client
+keeps the original seven-entry daily schedule. Full seven-day daytime coverage
+therefore requires a new native build. No native build, deployment, OTA, or
+commit was performed for this contract update.
+
+Validation: the full app run passed 248 suites / 2,627 tests, and the final
+focused client run passed five suites / 55 tests after the last regression
+additions. The focused native contract/cache/adapter run passed five suites /
+53 tests. Edge tests passed 1,597 with one ignored. Lint has zero errors and
+96 existing warnings; typecheck retains 23 unrelated baseline errors and no
+widget errors. Root independently compared scheduled instants against a
+minute-by-minute Intl oracle in UTC, New York, Lisbon, Lord Howe and Kathmandu,
+including DST and half/quarter-hour timezone offsets; all matched.
+
+Android Kotlin compilation and all 15 native unit tests passed in the isolated
+project using ANDROID_HOME=/usr/local/share/android-commandlinetools (eight
+parser, four scheduler, three Intent tests). Swift syntax parsing passed; a
+linked iOS/Xcode build was not run. These checks cannot prove launcher timing
+or physical-device behavior. New EAS builds and device acceptance are pending.

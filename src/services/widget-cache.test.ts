@@ -1,6 +1,7 @@
 import {
   WIDGET_LEASE_MS,
   WIDGET_MANIFEST_SCHEMA_VERSION,
+  WIDGET_MAX_ENTRIES,
   WidgetCacheController,
   neutralWidgetManifest,
   readWidgetPreference,
@@ -76,6 +77,48 @@ describe('widget cache manifest', () => {
     await expect(cache.publish(scope, withImage, { 'memory-a.jpg': 'file:///tmp/a.jpg' }, epoch))
       .resolves.toBe(true);
     expect(native.publishManifest).toHaveBeenCalledWith(withImage, { 'memory-a.jpg': 'file:///tmp/a.jpg' });
+  });
+
+  it('accepts 24 timeline entries while publishing at most seven unique images', async () => {
+    const native = adapter();
+    const cache = new WidgetCacheController({ adapter: native });
+    const base = manifest().entries[0];
+    const daytime = manifest({
+      entries: Array.from({ length: WIDGET_MAX_ENTRIES }, (_, index) => ({
+        ...base,
+        startsAt: new Date(Date.parse(base.startsAt) + index * 6 * 60 * 60 * 1000).toISOString(),
+        memoryId: `memory-${index % 7}`,
+        imageFilename: `memory-${index % 7}.jpg`,
+      })),
+    });
+    const files = Object.fromEntries(Array.from({ length: 7 }, (_, index) => [
+      `memory-${index}.jpg`,
+      `file:///tmp/memory-${index}.jpg`,
+    ]));
+
+    expect(validateWidgetManifest(daytime)).toEqual({ valid: true });
+    await expect(cache.publish(scope, daytime, files)).resolves.toBe(true);
+    expect(native.publishManifest).toHaveBeenCalledWith(daytime, files);
+  });
+
+  it('rejects more than seven unique cached images before native publication', async () => {
+    const native = adapter();
+    const cache = new WidgetCacheController({ adapter: native });
+    const base = manifest().entries[0];
+    const tooManyImages = manifest({
+      entries: Array.from({ length: 8 }, (_, index) => ({
+        ...base,
+        startsAt: new Date(Date.parse(base.startsAt) + index * 60 * 60 * 1000).toISOString(),
+        imageFilename: `memory-${index}.jpg`,
+      })),
+    });
+    const files = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [
+      `memory-${index}.jpg`,
+      `file:///tmp/memory-${index}.jpg`,
+    ]));
+
+    await expect(cache.publish(scope, tooManyImages, files)).resolves.toBe(false);
+    expect(native.publishManifest).not.toHaveBeenCalled();
   });
 
   it('serializes an in-flight publish before clearing the old generation', async () => {

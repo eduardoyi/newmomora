@@ -10,17 +10,22 @@ import org.junit.Test
 class WidgetManifestParserTest {
   private val verified = Instant.parse("2026-09-15T12:00:00Z")
 
-  private fun fixture(): JSONObject {
+  private fun fixture(
+    entryCount: Int = 7,
+    uniqueMemoryIds: Int = 1,
+    uniqueImages: Int = 0,
+  ): JSONObject {
     val entries = JSONArray()
-    for (day in 0..6) {
+    for (index in 0 until entryCount) {
       entries.put(JSONObject().apply {
-        put("startsAt", verified.plusSeconds(day * 86400L).toString())
-        put("memoryId", "one-memory")
+        put("startsAt", verified.plusSeconds(index * 6 * 60 * 60L).toString())
+        put("memoryId", "memory-${index % uniqueMemoryIds}")
         put("sourceUpdatedAt", verified.toString())
         put("memoryDate", "2026-09-15")
         put("dateLabel", "September 15")
         put("excerpt", "Synthetic test memory")
         put("kind", "text")
+        if (uniqueImages > 0) put("imageFilename", "memory-${index % uniqueImages}.jpg")
         put("colors", JSONObject().put("background", "#FFFFFF").put("foreground", "#222222"))
       })
     }
@@ -40,6 +45,26 @@ class WidgetManifestParserTest {
     val parsed = WidgetManifestParser.parse(fixture().toString(), verified)
     assertEquals(7, parsed.entries.size)
     assertEquals(1, parsed.entries.map { it.memoryId }.toSet().size)
+  }
+
+  @Test fun accepts24EntriesForDaytimeTimeline() {
+    val parsed = WidgetManifestParser.parse(fixture(24, uniqueMemoryIds = 7, uniqueImages = 7).toString(), verified)
+    assertEquals(24, parsed.entries.size)
+  }
+
+  @Test fun rejects25Entries() {
+    assertThrows(WidgetManifestException::class.java) {
+      WidgetManifestParser.parse(fixture(25, uniqueMemoryIds = 7, uniqueImages = 7).toString(), verified)
+    }
+  }
+
+  @Test fun rejectsMoreThanSevenRetainedIdsOrCachedImages() {
+    assertThrows(WidgetManifestException::class.java) {
+      WidgetManifestParser.parse(fixture(8, uniqueMemoryIds = 8).toString(), verified)
+    }
+    assertThrows(WidgetManifestException::class.java) {
+      WidgetManifestParser.parse(fixture(8, uniqueMemoryIds = 1, uniqueImages = 8).toString(), verified)
+    }
   }
 
   @Test fun expiresAtExactLeaseBoundary() {

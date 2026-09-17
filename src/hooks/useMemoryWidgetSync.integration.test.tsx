@@ -63,10 +63,13 @@ function manifestWithEntries(memoryIds: string[]): WidgetManifest {
   };
 }
 
-function makeAdapter(initial: WidgetManifest | null = null) {
+function makeAdapter(initial: WidgetManifest | null = null, maxTimelineEntries?: number) {
   let current = initial;
   const native: WidgetNativeAdapter = {
     available: () => true,
+    ...(maxTimelineEntries === undefined
+      ? {}
+      : { maxTimelineEntries: jest.fn(async () => maxTimelineEntries) }),
     readManifest: jest.fn(async () => current),
     publishManifest: jest.fn(async (next) => {
       current = next;
@@ -114,7 +117,7 @@ describe('MemoryWidgetSyncCoordinator', () => {
     const memories = Array.from({ length: 40 }, (_, index) => memory(`memory-${index}`, {
       memory_date: ['2026-09-01', '2025-09-01', '2024-09-01', '2020-09-01'][index % 4],
     }));
-    const adapter = makeAdapter(manifestWithEntries(['memory-0']));
+    const adapter = makeAdapter(manifestWithEntries(['memory-0']), 24);
     const coordinator = new MemoryWidgetSyncCoordinator(adapter.native, dependencies(memories, {
       fetchRetained: async () => ({ data: memories, error: null, failure: null }),
     }));
@@ -172,6 +175,28 @@ describe('MemoryWidgetSyncCoordinator', () => {
     expect(result).toEqual({ published: true, cleared: false });
     expect(adapter.getManifest()?.entries).toHaveLength(7);
     expect(new Set(adapter.getManifest()?.entries.map((entry) => entry.memoryId))).toEqual(new Set(['memory-a']));
+  });
+
+  it('uses daytime boundaries when native capacity is 24 while staging only seven unique images', async () => {
+    const memories = Array.from({ length: 7 }, (_, index) => memory(`memory-${index}`));
+    const adapter = makeAdapter(null, 24);
+    const stageImage = jest.fn(async (_generationId: string, image: { filename: string; url: string }) => ({
+      filename: image.filename,
+      uri: `file://${image.filename}`,
+      sizeBytes: 10,
+    }));
+    const result = await new MemoryWidgetSyncCoordinator(
+      adapter.native,
+      dependencies(memories, { stageImage: stageImage as MemoryWidgetSyncDependencies['stageImage'] }),
+    ).sync(scope);
+
+    expect(result).toEqual({ published: true, cleared: false });
+    const entries = adapter.getManifest()?.entries ?? [];
+    expect(entries.length).toBeGreaterThan(7);
+    expect(new Set(entries.map((entry) => entry.memoryId)).size).toBeLessThanOrEqual(7);
+    expect(stageImage).toHaveBeenCalledTimes(7);
+    expect(entries.every((entry) => Date.parse(entry.startsAt) < Date.parse(adapter.getManifest()!.expiresAt))).toBe(true);
+    expect(entries.every((entry, index) => index === 0 || entry.memoryId !== entries[index - 1].memoryId)).toBe(true);
   });
 
   it('stages a repeated preview image once and keeps its preview media key', async () => {
@@ -243,6 +268,83 @@ describe('MemoryWidgetSyncCoordinator', () => {
     expect(adapter.getManifest()?.entries).toHaveLength(7);
     expect(adapter.getManifest()?.entries[0]?.memoryId).toBe(current.id);
     expect(adapter.getManifest()?.entries.slice(1).some((entry) => entry.memoryId === next.id)).toBe(true);
+  });
+
+  it('keeps the current evening card until the next eight o’clock boundary', async () => {
+    const previous = manifestWithEntries(['memory-current', 'memory-next']);
+    previous.entries[0].startsAt = '2026-09-15T19:00:00.000Z';
+    previous.entries[1].startsAt = '2026-09-16T08:00:00.000Z';
+    const adapter = makeAdapter(previous, 24);
+    const current = memory('memory-current');
+    const next = memory('memory-next', { memory_date: '2025-01-01' });
+    const result = await new MemoryWidgetSyncCoordinator(
+      adapter.native,
+      dependencies([next], {
+        now: () => Date.parse('2026-09-15T20:00:00.000Z'),
+        fetchRetained: async () => ({ data: [current, next], error: null, failure: null }),
+      }),
+    ).sync(scope);
+
+    expect(result.published).toBe(true);
+    const entries = adapter.getManifest()?.entries ?? [];
+    expect(entries[0]?.memoryId).toBe('memory-current');
+    expect(entries[0]?.startsAt).toBe('2026-09-15T20:00:00.000Z');
+    expect(entries[1]?.startsAt).toBe('2026-09-16T08:00:00.000Z');
+  });
+
+  it('deduplicates future timeline IDs before retained revalidation and does not count them as seen', async () => {
+    const retainedIds = ['memory-current', 'memory-future', 'memory-current', 'memory-future'];
+    const previous = manifestWithEntries(retainedIds);
+    previous.entries.forEach((entry, index) => {
+      entry.startsAt = new Date(Date.parse(verifiedAt) + (index === 0 ? -60 : index * 60) * 60 * 1000).toISOString();
+    });
+    const adapter = makeAdapter(previous, 24);
+    const current = memory('memory-current');
+    const future = memory('memory-future', { memory_date: '2025-01-01' });
+    const fetchRetained = jest.fn(async () => ({ data: [current, future], error: null, failure: null }));
+    const coordinator = new MemoryWidgetSyncCoordinator(
+      adapter.native,
+      dependencies([current, future], {
+        fetchRetained,
+      }),
+    );
+
+    await coordinator.sync(scope);
+
+    expect(fetchRetained).toHaveBeenCalledWith(scope.familyId, ['memory-current', 'memory-future']);
+    expect(adapter.getManifest()?.entries[0]?.memoryId).toBe('memory-current');
+
+    const random = jest.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      await coordinator.sync(scope, { showAnother: true });
+      expect(adapter.getManifest()?.entries[0]?.memoryId).toBe('memory-future');
+    } finally {
+      random.mockRestore();
+    }
+  });
+
+  it('revalidates only seven unique IDs from a 22-entry daytime snapshot', async () => {
+    const uniqueMemories = Array.from({ length: 7 }, (_, index) => memory(`retained-${index}`));
+    const previous = manifestWithEntries(Array.from({ length: 22 }, (_, index) => `retained-${index % 7}`));
+    previous.entries.forEach((entry, index) => {
+      entry.startsAt = new Date(Date.parse(previous.verifiedAt) + index * 60 * 1000).toISOString();
+    });
+    const adapter = makeAdapter(previous, 24);
+    const fetchRetained = jest.fn(async () => ({
+      data: uniqueMemories,
+      error: null,
+      failure: null,
+    }));
+
+    await new MemoryWidgetSyncCoordinator(
+      adapter.native,
+      dependencies(uniqueMemories, { fetchRetained }),
+    ).sync(scope);
+
+    expect(fetchRetained).toHaveBeenCalledWith(
+      scope.familyId,
+      uniqueMemories.map((item) => item.id),
+    );
   });
 
   it('preserves the old lease on a temporary candidate failure', async () => {
@@ -323,4 +425,24 @@ it('fills failed artwork slots with a successfully staged image and preserves al
   expect(entries).toHaveLength(7);
   expect(entries.every((entry) => entry.memoryId === 'good' && entry.imageFilename)).toBe(true);
   expect(new Set(entries.map((entry) => entry.startsAt)).size).toBe(7);
+});
+
+it('rotates successful daytime images around a failed image without adjacent repeats', async () => {
+  const adapter = makeAdapter(null, 24);
+  const goodA = memory('good-a');
+  const broken = memory('broken');
+  const goodB = memory('good-b');
+  const result = await new MemoryWidgetSyncCoordinator(adapter.native, dependencies([goodA, broken, goodB], {
+    stageImage: async (_generation, image) => {
+      if (image.filename.includes('broken')) throw new Error('download failed');
+      return { filename: image.filename, uri: `file://${image.filename}`, sizeBytes: 10 };
+    },
+  })).sync(scope);
+
+  expect(result.published).toBe(true);
+  const entries = adapter.getManifest()?.entries ?? [];
+  expect(entries.length).toBeGreaterThan(7);
+  expect(new Set(entries.map((entry) => entry.imageFilename)).size).toBe(2);
+  expect(entries.every((entry) => entry.memoryId !== 'broken')).toBe(true);
+  expect(entries.every((entry, index) => index === 0 || entry.memoryId !== entries[index - 1].memoryId)).toBe(true);
 });

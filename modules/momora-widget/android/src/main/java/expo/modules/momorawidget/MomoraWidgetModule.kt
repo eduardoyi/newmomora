@@ -22,6 +22,7 @@ class MomoraWidgetModule : Module() {
         "sharedDirectory" to store.sharedDirectory(),
         "supportsAndroidTall" to true,
         "supportsSystemSmall" to false,
+        "maxTimelineEntries" to WIDGET_MAX_ENTRIES,
       )
     }
 

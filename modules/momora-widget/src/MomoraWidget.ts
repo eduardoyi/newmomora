@@ -8,6 +8,8 @@ export interface MomoraWidgetNativeModule {
     sharedDirectory?: string;
     supportsSystemSmall?: boolean;
     supportsAndroidTall?: boolean;
+    /** Maximum manifest entries supported by this native binary. */
+    maxTimelineEntries?: number;
   };
   readManifest: () => Promise<string | null>;
   publishManifest: (manifestJson: string, filesJson: string) => Promise<void>;

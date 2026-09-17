@@ -1,7 +1,9 @@
 import {
   WIDGET_LEASE_MS,
   WIDGET_MANIFEST_SCHEMA_VERSION,
+  WIDGET_MAX_CACHED_IMAGES,
   WIDGET_MAX_ENTRIES,
+  WIDGET_MAX_RETAINED_MEMORY_IDS,
   type WidgetManifest,
   type WidgetManifestColors,
   type WidgetManifestEntry,
@@ -154,6 +156,18 @@ export function parseWidgetManifest(value: unknown): WidgetManifest {
   }
 
   const entries = manifest.entries.map(parseEntry);
+  const memoryIds = new Set(entries.map((entry) => entry.memoryId));
+  if (memoryIds.size > WIDGET_MAX_RETAINED_MEMORY_IDS) {
+    invalid('Widget manifest contains too many retained memory IDs.');
+  }
+  const imageFilenames = new Set(
+    entries
+      .map((entry) => entry.imageFilename)
+      .filter((filename): filename is string => Boolean(filename)),
+  );
+  if (imageFilenames.size > WIDGET_MAX_CACHED_IMAGES) {
+    invalid('Widget manifest contains too many cached images.');
+  }
   let previousStart = verifiedMilliseconds - 1;
   for (const entry of entries) {
     const startsMilliseconds = Date.parse(entry.startsAt);

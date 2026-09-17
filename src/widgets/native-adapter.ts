@@ -12,6 +12,10 @@ import type {
   WidgetNativeCapabilities,
   WidgetNativeAdapter,
 } from './types';
+import {
+  WIDGET_LEGACY_MAX_ENTRIES,
+  WIDGET_MAX_ENTRIES,
+} from './types';
 
 interface MomoraIosTimelineEntry {
   date: Date;
@@ -64,7 +68,22 @@ function capabilities(): WidgetNativeCapabilities | null {
   if (!raw || typeof raw.supported !== 'boolean' || typeof raw.enabled !== 'boolean') {
     return null;
   }
-  return raw;
+  const reportedLimit = raw.maxTimelineEntries;
+  const maxTimelineEntries = typeof reportedLimit === 'number'
+    && Number.isInteger(reportedLimit)
+    && reportedLimit >= WIDGET_MAX_ENTRIES
+    ? Math.min(reportedLimit, WIDGET_MAX_ENTRIES)
+    : WIDGET_LEGACY_MAX_ENTRIES;
+  return { ...raw, maxTimelineEntries };
+}
+
+/**
+ * Binaries shipped before the daytime contract have no capability field and
+ * understand only the original seven daily entries. Keep that fallback
+ * conservative; the coordinator uses this value when choosing its timeline.
+ */
+function nativeTimelineCapacity(): number {
+  return capabilities()?.maxTimelineEntries ?? WIDGET_LEGACY_MAX_ENTRIES;
 }
 
 function localFileUri(sharedDirectory: string | undefined, manifest: WidgetManifest, filename: string): string | undefined {
@@ -145,6 +164,8 @@ function createAdapter(native: MomoraWidgetNativeModule | null): WidgetNativeAda
         && (Platform.OS !== 'ios' || getIosWidget()));
     },
 
+    maxTimelineEntries: () => nativeTimelineCapacity(),
+
     readManifest: async () => {
       if (!native) return null;
       try {
@@ -158,6 +179,12 @@ function createAdapter(native: MomoraWidgetNativeModule | null): WidgetNativeAda
     publishManifest: async (manifest, files) => {
       if (!native) return;
       const normalized = parseWidgetManifest(manifest);
+      const maxEntries = nativeTimelineCapacity();
+      if (normalized.entries.length > maxEntries) {
+        throw new Error(
+          `Widget manifest has ${normalized.entries.length} entries; installed native binary supports ${maxEntries}`,
+        );
+      }
       if (!exactFiles(normalized, files)) {
         throw new Error('Widget files do not match the manifest');
       }

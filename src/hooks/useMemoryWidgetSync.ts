@@ -49,6 +49,8 @@ import {
   buildWidgetTimeline,
   selectWidgetMemorySlots,
   widgetLocalDateAt,
+  WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT,
+  WIDGET_TIMELINE_SLOT_COUNT,
   type WidgetSelectionCandidate,
 } from '@/utils/widget-selection';
 import type { MemoryWithTags, MemoryMediaAsset } from '@/services/memories';
@@ -139,6 +141,14 @@ interface ProjectedMemory {
 
 function scopeKey(scope: WidgetCacheScope): string {
   return `${scope.accountId}:${scope.familyId}`;
+}
+
+function normalizeNativeTimelineCapacity(value: number | undefined): number {
+  return typeof value === 'number'
+    && Number.isInteger(value)
+    && value >= WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT
+    ? WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT
+    : WIDGET_TIMELINE_SLOT_COUNT;
 }
 
 function safeFilename(memoryId: string, index: number): string {
@@ -318,6 +328,18 @@ export class MemoryWidgetSyncCoordinator {
     return this.controller.currentEpoch;
   }
 
+  private async nativeTimelineCapacity(): Promise<number> {
+    const readCapacity = this.adapter?.maxTimelineEntries;
+    if (!readCapacity) return WIDGET_TIMELINE_SLOT_COUNT;
+    try {
+      return normalizeNativeTimelineCapacity(await readCapacity());
+    } catch {
+      // A capability read is local metadata, not freshness evidence. Keep the
+      // old seven-entry schedule when an older/partial binary cannot answer.
+      return WIDGET_TIMELINE_SLOT_COUNT;
+    }
+  }
+
   invalidate(): number {
     return this.controller.invalidate();
   }
@@ -363,7 +385,10 @@ export class MemoryWidgetSyncCoordinator {
       return { published: false, cleared: false, reason: 'candidate_unavailable' };
     }
 
-    const retainedIds = previous?.entries.map((entry) => entry.memoryId) ?? [];
+    // A daytime manifest repeats at most seven selected IDs over many entries.
+    // Deduplicate before passing the retained set through its seven-ID bound.
+    const retainedIds = [...new Set(previous?.entries.map((entry) => entry.memoryId) ?? [])]
+      .filter((memoryId) => memoryId.length > 0);
     let retainedMemories: MemoryWithTags[] = [];
     if (retainedIds.length > 0) {
       const retainedResult = await this.dependencies.fetchRetained(scope.familyId, retainedIds);
@@ -430,13 +455,23 @@ export class MemoryWidgetSyncCoordinator {
     const familyDate = candidateData.clock?.familyDate
       ?? widgetLocalDateAt(verifiedAt, timezoneName)
       ?? new Date(verifiedAt).toISOString().slice(0, 10);
+    const maxTimelineEntries = await this.nativeTimelineCapacity();
+    if (!this.controller.isCurrent(epoch) || signal.aborted) {
+      return { published: false, cleared: false, reason: 'superseded' };
+    }
     const currentEntry = previous?.entries
       .filter((entry) => Date.parse(entry.startsAt) <= Date.parse(verifiedAt))
       .sort((left, right) => Date.parse(right.startsAt) - Date.parse(left.startsAt))[0];
     const selectionMemories = [...byId.values()].filter((memory) =>
       !options.showAnother || byId.size <= 1 || memory.id !== currentEntry?.memoryId);
     const candidates = widgetCandidatesFromMemories(selectionMemories, familyDate);
-    const recentScheduledIds = previous?.entries.map((entry) => entry.memoryId) ?? [];
+    const verifiedMilliseconds = Date.parse(verifiedAt);
+    // Future entries are planned exposure, not displayed history. They must
+    // not make an automatic refresh or a manual shuffle treat those IDs as
+    // already seen before their boundary arrives.
+    const recentScheduledIds = [...new Set(previous?.entries
+      .filter((entry) => Date.parse(entry.startsAt) <= verifiedMilliseconds)
+      .map((entry) => entry.memoryId) ?? [])];
     let slots = selectWidgetMemorySlots({
       familyId: scope.familyId,
       familyDate,
@@ -486,14 +521,21 @@ export class MemoryWidgetSyncCoordinator {
       verifiedAt,
       timezoneName,
       slots,
+      maxTimelineEntries,
     });
     if (!timeline) return { published: false, cleared: false, reason: 'timeline_invalid' };
 
-    const projected = timeline.entries.flatMap((timelineEntry) => {
-      const memory = byId.get(timelineEntry.memoryId);
-      return memory ? [{ timelineEntry, projection: projectMemory(memory, safety.reports) }] : [];
-    });
-    const imageCandidates = projected.flatMap(({ projection }) => projection.image ? [projection.image] : []);
+    // The timeline can carry up to 24 entries, but the selected rotation is
+    // intentionally capped at seven unique memories/files.
+    const rotationMemoryIds = [...new Set(timeline.entries.map((entry) => entry.memoryId))]
+      .slice(0, WIDGET_TIMELINE_SLOT_COUNT);
+    const projectedById = new Map<string, ProjectedMemory>();
+    for (const memoryId of rotationMemoryIds) {
+      const memory = byId.get(memoryId);
+      if (memory) projectedById.set(memoryId, projectMemory(memory, safety.reports));
+    }
+    const imageCandidates = [...projectedById.values()]
+      .flatMap((projection) => projection.image ? [projection.image] : []);
     const mediaKeys = [...new Set(imageCandidates.map((image) => image.key))];
     let signedUrls: Record<string, string> = {};
     if (mediaKeys.length > 0) {
@@ -504,21 +546,19 @@ export class MemoryWidgetSyncCoordinator {
     const generationId = `${scope.accountId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.controller.markGenerationStaged(generationId);
     const files: Record<string, string> = {};
-    const failedImageFilenames = new Set<string>();
-    const entries: WidgetManifestEntry[] = [];
+    const successfulById = new Map<string, ProjectedMemory>();
+    const successfulIds: string[] = [];
     try {
-      for (const { timelineEntry, projection } of projected) {
-        const entry: WidgetManifestEntry = {
-          ...projection.entry,
-          startsAt: timelineEntry.startsAt,
-        };
+      for (const memoryId of rotationMemoryIds) {
+        const projection = projectedById.get(memoryId);
+        if (!projection) continue;
         const image = projection.image;
         const url = image ? signedUrls[image.key] : undefined;
-        if (image && url && !failedImageFilenames.has(image.filename)) {
+        if (image && url) {
           try {
-            // A small archive can intentionally repeat one memory across
-            // several daily slots. Stage its file once and reuse the same
-            // filename in each manifest entry.
+            // Repeated daytime slots reuse one staged file. With seven
+            // selected IDs this keeps both cache bytes and native retained
+            // IDs within the existing seven-item budget.
             if (!files[image.filename]) {
               const staged = await this.dependencies.stageImage(
                 generationId,
@@ -528,31 +568,61 @@ export class MemoryWidgetSyncCoordinator {
               files[staged.filename] = staged.uri;
             }
           } catch {
-            failedImageFilenames.add(image.filename);
+            // An unavailable image is replaced by a different successful
+            // image below; the journal memory itself remains untouched.
+          }
+          if (files[image.filename]) {
+            successfulById.set(memoryId, projection);
+            successfulIds.push(memoryId);
           }
         }
         if (!this.controller.isCurrent(epoch) || signal.aborted) {
           await this.controller.cleanupGeneration(generationId);
           return { published: false, cleared: false, reason: 'superseded' };
         }
-        // Never turn failed/missing artwork into a private text card.
-        if (!image || !files[image.filename]) continue;
-        entries.push(entry);
       }
 
-      if (entries.length === 0) {
+      if (successfulIds.length === 0) {
         await this.controller.cleanupGeneration(generationId);
         const published = await this.controller.publish(
           scope, neutralWidgetManifest(scope, new Date(syncStartedAt)), {}, epoch,
         );
         return { published, cleared: false, ...(published ? {} : { reason: 'superseded' as const }) };
       }
-      // Keep all seven day boundaries while replacing an unavailable image
-      // with another successfully staged photo/illustration from this batch.
-      const completeEntries = timeline.entries.map((slot, index) => ({
-        ...(entries.find((entry) => entry.memoryId === slot.memoryId) ?? entries[index % entries.length]),
-        startsAt: slot.startsAt,
-      }));
+      // Keep every scheduled boundary while replacing failures with a
+      // successful staged image. Rotate fallback IDs so two surviving images
+      // can never appear consecutively, including at the cycle boundary.
+      let fallbackCursor = 0;
+      let previousDisplayedId: string | undefined;
+      const completeEntries: WidgetManifestEntry[] = timeline.entries.map((slot) => {
+        const preferredId = slot.memoryId;
+        let selectedId = preferredId;
+        if (
+          !successfulById.has(selectedId)
+          || (successfulIds.length > 1 && selectedId === previousDisplayedId)
+        ) {
+          for (let offset = 0; offset < successfulIds.length; offset += 1) {
+            const index = (fallbackCursor + offset) % successfulIds.length;
+            const candidateId = successfulIds[index];
+            if (successfulIds.length === 1 || candidateId !== previousDisplayedId) {
+              selectedId = candidateId;
+              fallbackCursor = (index + 1) % successfulIds.length;
+              break;
+            }
+          }
+        } else {
+          fallbackCursor = (successfulIds.indexOf(selectedId) + 1) % successfulIds.length;
+        }
+        const projection = successfulById.get(selectedId) ?? successfulById.get(successfulIds[0]);
+        // successfulIds is non-empty, so this fallback is only for defensive
+        // type narrowing if a future refactor changes the map construction.
+        if (!projection) throw new Error('Widget staged image projection is missing');
+        previousDisplayedId = selectedId;
+        return {
+          ...projection.entry,
+          startsAt: slot.startsAt,
+        };
+      });
 
       const manifest: WidgetManifest = {
         schemaVersion: WIDGET_MANIFEST_SCHEMA_VERSION,

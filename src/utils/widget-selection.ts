@@ -10,8 +10,14 @@
 export const WIDGET_CANDIDATE_LIMIT = 40;
 export const WIDGET_RETAINED_MEMORY_LIMIT = 7;
 export const WIDGET_TIMELINE_SLOT_COUNT = 7;
+/** Maximum number of entries a daytime-capable native widget can accept. */
+export const WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT = 24;
+export const WIDGET_MAX_TIMELINE_ENTRIES = WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT;
 export const WIDGET_LEASE_HOURS = 168;
 export const WIDGET_LEASE_MS = WIDGET_LEASE_HOURS * 60 * 60 * 1000;
+
+/** Family-local daylight rotation boundaries, expressed as local hours. */
+export const WIDGET_DAYTIME_BOUNDARY_HOURS = [8, 13, 18] as const;
 
 export const widgetAgeBands = ['recent', 'medium', 'old', 'deep'] as const;
 export type WidgetAgeBand = (typeof widgetAgeBands)[number];
@@ -358,6 +364,61 @@ function timeZoneParts(instant: Date, timezoneName: string): CalendarDate & {
   };
 }
 
+function wallClockKey(
+  parts: CalendarDate & { hour: number; minute: number; second: number },
+): string {
+  return `${formatCalendarDate(parts)}T${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}:${String(parts.second).padStart(2, '0')}`;
+}
+
+/**
+ * Resolves a local wall-clock boundary to UTC. The common path uses the
+ * timezone offset at a few fixed-point guesses, which also handles quarter-
+ * hour zones. A bounded search is the fallback for a skipped local time.
+ */
+function zonedLocalDateTimeToUtc(
+  date: CalendarDate,
+  hour: number,
+  timezoneName: string,
+): Date | null {
+  const targetMillis = Date.UTC(date.year, date.month - 1, date.day, hour, 0, 0);
+  const targetKey = `${formatCalendarDate(date)}T${String(hour).padStart(2, '0')}:00:00`;
+  let guess = targetMillis;
+
+  for (let iteration = 0; iteration < 6; iteration += 1) {
+    const parts = timeZoneParts(new Date(guess), timezoneName);
+    const localMillis = Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+    );
+    guess = targetMillis - (localMillis - guess);
+    const resolved = new Date(guess);
+    if (wallClockKey(timeZoneParts(resolved, timezoneName)) === targetKey) {
+      return resolved;
+    }
+  }
+
+  // Local 08:00/13:00/18:00 almost always exists. If a timezone skips a
+  // wall-clock range, only accept an exact result; the caller will skip that
+  // boundary and continue with the next one.
+  let low = targetMillis - 72 * 60 * 60 * 1000;
+  let high = targetMillis + 72 * 60 * 60 * 1000;
+  for (let iteration = 0; iteration < 52 && high - low > 1; iteration += 1) {
+    const middle = Math.floor((low + high) / 2);
+    const middleKey = wallClockKey(timeZoneParts(new Date(middle), timezoneName));
+    if (middleKey < targetKey) low = middle;
+    else high = middle;
+  }
+  const fallback = new Date(high);
+  return Number.isNaN(fallback.getTime())
+    || wallClockKey(timeZoneParts(fallback, timezoneName)) !== targetKey
+    ? null
+    : fallback;
+}
+
 function zonedMidnightToUtc(date: CalendarDate, timezoneName: string): Date {
   const naiveUtc = new Date(Date.UTC(date.year, date.month - 1, date.day));
   const targetDate = formatCalendarDate(date);
@@ -405,10 +466,57 @@ export function widgetNextLocalMidnight(
   return zonedMidnightToUtc(addCalendarDays(local, 1), timezone);
 }
 
+/** Returns the next strict 08:00, 13:00, or 18:00 family-local boundary. */
+export function widgetNextLocalDaytimeBoundary(
+  instant: Date | string,
+  timezoneName: string,
+): Date | null {
+  const parsed = parseInstant(instant);
+  if (!parsed) return null;
+
+  const timezone = validTimeZone(timezoneName);
+  const local = timeZoneParts(parsed, timezone);
+  const localMinutes = local.hour * 60 + local.minute + local.second / 60;
+  for (let dayOffset = 0; dayOffset < 4; dayOffset += 1) {
+    const date = addCalendarDays(local, dayOffset);
+    for (const hour of WIDGET_DAYTIME_BOUNDARY_HOURS) {
+      if (dayOffset === 0 && localMinutes >= hour * 60) continue;
+      const candidate = zonedLocalDateTimeToUtc(date, hour, timezone);
+      if (candidate && candidate.getTime() > parsed.getTime()) return candidate;
+    }
+  }
+  return null;
+}
+
+function uniqueTimelineSlots(slots: readonly WidgetSelectionSlot[]): WidgetSelectionSlot[] {
+  const seen = new Set<string>();
+  const unique: WidgetSelectionSlot[] = [];
+  for (const slot of slots) {
+    if (!slot.memoryId || seen.has(slot.memoryId)) continue;
+    seen.add(slot.memoryId);
+    unique.push(slot);
+    if (unique.length >= WIDGET_TIMELINE_SLOT_COUNT) break;
+  }
+  return unique;
+}
+
+function normalizedTimelineEntryLimit(value: number | undefined): number {
+  // Native exposes a deliberately tiny capability contract: seven means the
+  // existing daily schedule, while 24 opts into daytime coverage. Unknown,
+  // fractional, and intermediate values stay on the safe legacy cadence.
+  if (value === undefined || !Number.isFinite(value) || !Number.isInteger(value)) {
+    return WIDGET_TIMELINE_SLOT_COUNT;
+  }
+  return value >= WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT
+    ? WIDGET_DAYTIME_TIMELINE_ENTRY_LIMIT
+    : WIDGET_TIMELINE_SLOT_COUNT;
+}
+
 /**
- * Builds the seven-entry daily timeline. The first slot starts at validation
- * time; every later slot starts at a successive local midnight. Expiry is
- * always exactly 168 elapsed hours after validation.
+ * Builds a lease timeline. The first slot starts at validation time; legacy
+ * entries start at successive local midnights, while a daytime-capable
+ * timeline uses strict 08:00/13:00/18:00 boundaries. Expiry is always exactly
+ * 168 elapsed hours after validation.
  */
 export function buildWidgetTimeline(input: {
   verifiedAt: Date | string;
@@ -418,6 +526,8 @@ export function buildWidgetTimeline(input: {
   candidates?: readonly WidgetSelectionCandidate[];
   recentScheduledIds?: readonly string[];
   slots?: readonly WidgetSelectionSlot[];
+  /** Native timeline capacity. Missing/7 keeps the legacy daily cadence. */
+  maxTimelineEntries?: number;
 }): WidgetTimeline | null {
   const verified = parseInstant(input.verifiedAt);
   if (!verified) {
@@ -439,11 +549,16 @@ export function buildWidgetTimeline(input: {
           recentScheduledIds: input.recentScheduledIds,
         })
       : []));
-  // A manifest has exactly seven daily slots. Clamp caller-provided fixtures
-  // too, so a malformed/native caller cannot create starts beyond the lease.
-  const boundedSlots = slots.slice(0, WIDGET_TIMELINE_SLOT_COUNT);
+  const maxTimelineEntries = normalizedTimelineEntryLimit(input.maxTimelineEntries);
+  const daytimeTimeline = maxTimelineEntries > WIDGET_TIMELINE_SLOT_COUNT;
+  // The legacy path intentionally retains seven repeated daily slots for a
+  // small archive. Daytime schedules instead cycle unique IDs so the wrap
+  // from the final selected slot never repeats a card back-to-back.
+  const boundedSlots = daytimeTimeline
+    ? uniqueTimelineSlots(slots)
+    : slots.slice(0, Math.min(WIDGET_TIMELINE_SLOT_COUNT, maxTimelineEntries));
 
-  if (boundedSlots.length === 0) {
+  if (boundedSlots.length === 0 || maxTimelineEntries === 0) {
     return {
       entries: [],
       verifiedAt: verified.toISOString(),
@@ -455,22 +570,33 @@ export function buildWidgetTimeline(input: {
 
   const expires = new Date(verified.getTime() + WIDGET_LEASE_MS);
   const starts: Date[] = [verified];
-  for (let index = 1; index < boundedSlots.length; index += 1) {
-    const previous = widgetNextLocalMidnight(starts[index - 1], timezone);
-    if (!previous) {
-      return null;
+  if (daytimeTimeline) {
+    while (starts.length < maxTimelineEntries) {
+      const next = widgetNextLocalDaytimeBoundary(starts[starts.length - 1], timezone);
+      if (!next || next.getTime() >= expires.getTime()) break;
+      // A timezone conversion must make progress. If a pathological timezone
+      // rule maps a skipped boundary backwards, stop rather than looping.
+      if (next.getTime() <= starts[starts.length - 1].getTime()) break;
+      starts.push(next);
     }
-    starts.push(previous);
+  } else {
+    for (let index = 1; index < boundedSlots.length; index += 1) {
+      const previous = widgetNextLocalMidnight(starts[index - 1], timezone);
+      if (!previous) return null;
+      starts.push(previous);
+    }
   }
 
-  const entries = boundedSlots.map((slot, index) => {
+  const entries = starts.map((start, index) => {
+    const slot = boundedSlots[index % boundedSlots.length];
     const nextStart = starts[index + 1] ?? expires;
     const end = nextStart.getTime() < expires.getTime() ? nextStart : expires;
     return {
-      ...slot,
-      startsAt: starts[index].toISOString(),
+      slotIndex: index,
+      memoryId: slot.memoryId,
+      startsAt: start.toISOString(),
       endsAt: end.toISOString(),
-      localDate: widgetLocalDateAt(starts[index], timezone) ?? familyDate,
+      localDate: widgetLocalDateAt(start, timezone) ?? familyDate,
     };
   });
 

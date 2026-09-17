@@ -443,3 +443,35 @@ presentation concepts but has separate selection and no package viewed state.
 Implementation authorized on 2026-09-15 using Luna Max subagents with root
 orchestration and adversarial review. Production deployment and store submission
 remain separate release actions. Measured verification is recorded in the [readiness report](../testing/home-screen-widget-readiness.md) and feature doc.
+
+## 11. Daytime rotation contract (2026-09-17)
+
+The rotation schedule is now three family-local daylight boundaries per day:
+08:00, 13:00, and 18:00. The client resolves each boundary to an absolute
+`startsAt` instant in the validated family timezone, preserving the actual
+offset on DST days. The lease remains exactly 168 elapsed hours from
+`verifiedAt`; the schedule never extends or shortens that lease.
+
+The shared manifest accepts at most 24 ordered entries. This leaves room for
+the immediate snapshot and up to 22 future daylight boundaries around DST,
+while the cache remains independently bounded at seven unique retained memory
+IDs, seven unique local image files, 1 MB per image, and 10 MB total including
+manifest metadata. Repeated entries must reuse those staged files; file count
+must not be inferred from entry count.
+
+Native capability negotiation keeps upgrades safe. New iOS and Android modules
+advertise `maxTimelineEntries: 24`. Older binaries have no capability field and
+are treated as seven-entry binaries, so the client uses the original seven-slot
+daily timeline on them. The adapter rejects an oversized manifest before native
+publication. A new native build is required for full seven-day daytime
+coverage; JavaScript delivery alone cannot add capacity to an installed binary.
+
+iOS receives all manifest entries plus a neutral entry at lease expiry. Android
+uses one-time WorkManager requests scheduled for the next actual manifest
+`startsAt`, then `expiresAt`; it does not use periodic work as a substitute for
+the daytime boundaries. A small pure scheduler helper is covered at times
+before 08:00, at 13:00, at 18:00, after 18:00, and exactly at expiry.
+
+The existing native parser, atomic generation swap, and image byte/dimension
+checks remain in force. No new build, deployment, or commit is part of this
+contract update.

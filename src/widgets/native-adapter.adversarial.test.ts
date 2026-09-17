@@ -10,6 +10,7 @@ const mockNative = {
 };
 let mockNativePresent = true;
 let mockStoredManifest: WidgetManifest | null;
+let mockMaxTimelineEntries: number | undefined;
 
 jest.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
 jest.mock('../../modules/momora-widget', () => ({
@@ -19,6 +20,7 @@ jest.mock('../../modules/momora-widget', () => ({
     enabled: true,
     platform: 'ios',
     sharedDirectory: '/private/widget-cache',
+    ...(mockMaxTimelineEntries === undefined ? {} : { maxTimelineEntries: mockMaxTimelineEntries }),
   } : null,
 }));
 jest.mock('./MomoraMemoryWidget', () => ({
@@ -51,6 +53,27 @@ function manifest(): WidgetManifest {
   };
 }
 
+function daytimeManifest(): WidgetManifest {
+  const base = manifest();
+  return {
+    ...base,
+    entries: Array.from({ length: 24 }, (_, index) => ({
+      ...base.entries[0],
+      startsAt: new Date(Date.parse(base.verifiedAt) + index * 6 * 60 * 60 * 1000).toISOString(),
+      memoryId: `memory-${index % 7}`,
+      imageFilename: `memory-${index % 7}.jpg`,
+    })),
+  };
+}
+
+function daytimeFiles(): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (let index = 0; index < 7; index += 1) {
+    files[`memory-${index}.jpg`] = `file:///staging/memory-${index}.jpg`;
+  }
+  return files;
+}
+
 function loadAdapter() {
   // A fresh import models a new app process, including old installed binaries.
   jest.resetModules();
@@ -62,6 +85,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockTimeline.mockReset();
   mockNativePresent = true;
+  mockMaxTimelineEntries = 24;
   mockStoredManifest = null;
   mockNative.readManifest.mockImplementation(async () => mockStoredManifest ? JSON.stringify(mockStoredManifest) : null);
   mockNative.publishManifest.mockImplementation(async (raw: string) => {
@@ -85,6 +109,27 @@ it('schedules a neutral expiry and never puts signed image URLs in iOS props', a
     date: new Date('2026-09-22T12:00:00.000Z'),
     props: { kind: 'neutral' },
   });
+});
+
+it('passes every daytime entry to the iOS timeline and exposes native capacity', async () => {
+  const adapter = loadAdapter();
+  expect(adapter.maxTimelineEntries?.()).toBe(24);
+  await adapter.publishManifest(daytimeManifest(), daytimeFiles());
+  const timeline = mockTimeline.mock.calls[0][0];
+  expect(timeline).toHaveLength(25);
+  expect(timeline.slice(0, 24).map((entry: { props: { memoryId?: string } }) => entry.props.memoryId))
+    .toEqual(Array.from({ length: 24 }, (_, index) => `memory-${index % 7}`));
+  expect(timeline.at(-1).props.kind).toBe('neutral');
+});
+
+it('defaults old native binaries to seven entries and blocks a daytime publish', async () => {
+  mockMaxTimelineEntries = undefined;
+  const adapter = loadAdapter();
+  expect(adapter.maxTimelineEntries?.()).toBe(7);
+  await expect(adapter.publishManifest(daytimeManifest(), daytimeFiles())).rejects.toThrow(
+    'installed native binary supports 7',
+  );
+  expect(mockNative.publishManifest).not.toHaveBeenCalled();
 });
 
 it('clears the separately persisted iOS timeline on logout', async () => {

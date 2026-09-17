@@ -1,7 +1,16 @@
 /** Shared app/native wire types for the home-screen widget. */
 
 export const WIDGET_MANIFEST_SCHEMA_VERSION = 1 as const;
-export const WIDGET_MAX_ENTRIES = 7;
+/**
+ * A daytime manifest can carry the current card plus the next daylight
+ * boundaries in the seven-day lease.  Native binaries that predate this
+ * contract advertise (or default to) the legacy seven-entry capacity.
+ */
+export const WIDGET_MAX_ENTRIES = 24;
+export const WIDGET_LEGACY_MAX_ENTRIES = 7;
+/** Native storage is intentionally bounded independently of timeline slots. */
+export const WIDGET_MAX_CACHED_IMAGES = 7;
+export const WIDGET_MAX_RETAINED_MEMORY_IDS = 7;
 export const WIDGET_LEASE_MS = 168 * 60 * 60 * 1000;
 export const WIDGET_MAX_IMAGE_EDGE = 512;
 export const WIDGET_MAX_IMAGE_BYTES = 1024 * 1024;
@@ -63,6 +72,8 @@ export interface WidgetNativeCapabilities {
   sharedDirectory?: string;
   supportsSystemSmall?: boolean;
   supportsAndroidTall?: boolean;
+  /** Maximum manifest entries understood by this installed native binary. */
+  maxTimelineEntries?: number;
 }
 
 /**
@@ -72,6 +83,11 @@ export interface WidgetNativeCapabilities {
  */
 export interface WidgetNativeAdapter {
   available: () => boolean | Promise<boolean>;
+  /**
+   * Returns the installed native binary's manifest capacity. Missing or
+   * malformed capability data is treated as the legacy seven-entry limit.
+   */
+  maxTimelineEntries?: () => number | Promise<number>;
   readManifest: () => WidgetManifest | null | Promise<WidgetManifest | null>;
   publishManifest: (
     manifest: WidgetManifest,

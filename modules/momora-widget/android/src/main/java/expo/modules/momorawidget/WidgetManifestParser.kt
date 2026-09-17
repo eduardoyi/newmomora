@@ -8,7 +8,9 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 
 internal const val WIDGET_SCHEMA_VERSION = 1
-internal const val WIDGET_MAX_ENTRIES = 7
+internal const val WIDGET_MAX_ENTRIES = 24
+internal const val WIDGET_MAX_CACHED_IMAGES = 7
+internal const val WIDGET_MAX_RETAINED_MEMORY_IDS = 7
 internal const val WIDGET_LEASE_SECONDS = 168L * 60L * 60L
 internal const val WIDGET_MAX_IMAGE_BYTES = 1L * 1024L * 1024L
 internal const val WIDGET_MAX_CACHE_BYTES = 10L * 1024L * 1024L
@@ -101,6 +103,13 @@ internal object WidgetManifestParser {
       }
       previousStart = parsed.startsAt
       entries += parsed
+    }
+
+    if (entries.map { it.memoryId }.toSet().size > WIDGET_MAX_RETAINED_MEMORY_IDS) {
+      invalid("retained_ids", "Widget manifest contains too many retained memory IDs.")
+    }
+    if (entries.mapNotNull { it.imageFilename }.toSet().size > WIDGET_MAX_CACHED_IMAGES) {
+      invalid("cached_images", "Widget manifest contains too many cached images.")
     }
 
     return WidgetManifestSnapshot(
