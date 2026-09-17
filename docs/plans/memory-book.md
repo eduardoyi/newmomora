@@ -965,7 +965,12 @@ cost optimization, delivered advancement (tracking columns landed
 (in-app picker) shipped 2026-09-15 -- see below and
 docs/features/memory-book-generation.md.
 Post-launch picker polish (owner-requested 2026-09-15, after first
-device use):
+device use) -- BOTH ITEMS SHIPPED + device-verified 2026-09-18 (shelf
+redesign implemented to the locked design below, ready-push sent by
+workflow-memory-book-bridge's publish CAS to `requested_by` with a
+'memory-book' deep link, cover_asset_key column with edit-aware
+recompute in memory-book-edits; see
+docs/features/memory-book-generation.md and TECH_SPEC):
   - PUSH NOTIFICATION when a book turns `ready` -- the ~3-minute
     generation is exactly long enough to wander off; today nothing
     tells the parent it finished (the picker only shows it on

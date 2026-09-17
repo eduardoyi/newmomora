@@ -22,6 +22,8 @@
  * this gap the same way the illustration bridge does.
  */
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { sendExpoPushNotification } from '../_shared/expo-push.ts';
+import { pickCoverAssetKey } from '../_shared/memory-book-cover.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
@@ -320,11 +322,69 @@ async function handleEnsureShareTokens(
   return jsonResponse({ tokensByMemoryId });
 }
 
+interface PublishedBookRow {
+  id: string;
+  family_id: string;
+  child_id: string | null;
+  scope_label: string;
+  requested_by: string | null;
+}
+
+/**
+ * "Your memory book is ready" transactional push -- sent to the family
+ * member who REQUESTED this book (`requested_by`), never the whole family
+ * (unlike notify-family-activity's new-memory push, which fans out to every
+ * OTHER member). Deliberately NOT gated on `notify_new_memories` or any
+ * other notification preference: this reports the outcome of the
+ * requester's own action (they tapped "create book"), the same class of
+ * notification as an order-confirmation email, not an activity ping about
+ * someone else's content.
+ *
+ * Called only when `handlePublish`'s CAS actually won (see call site) --
+ * that CAS is keyed on `generation_attempt_id` + `status = 'generating'`,
+ * so it can succeed at most ONCE per attempt (Postgres evaluates the
+ * `UPDATE ... WHERE` against the row's live state at write time, same
+ * argument as this file's header comment / `handlePublish`'s own CAS
+ * comment). This bridge still has no nonce-replay ledger, but a replayed
+ * publish request within the signature window re-runs the identical CAS
+ * against a row that is no longer `'generating'` -- `data` comes back null,
+ * this function is never called a second time, and no duplicate push goes
+ * out.
+ */
+async function sendBookReadyPush(
+  supabase: ReturnType<typeof createServiceClient>,
+  sendPush: typeof sendExpoPushNotification,
+  book: PublishedBookRow,
+): Promise<void> {
+  if (!book.requested_by) return; // No requester on record -- nothing to notify.
+
+  const { data: profile, error } = await supabase
+    .from('user_profiles')
+    .select('id, expo_push_token, deleted_at')
+    .eq('id', book.requested_by)
+    .maybeSingle();
+  // Same deleted_at/missing-token guard style as send-daily-reminder/index.ts.
+  if (error || !profile || profile.deleted_at || !profile.expo_push_token) return;
+
+  await sendPush(
+    profile.expo_push_token,
+    'Your memory book is ready',
+    `“${book.scope_label}” is ready to look through.`,
+    {
+      route: 'memory-book',
+      familyId: book.family_id,
+      ...(book.child_id ? { memberId: book.child_id } : {}),
+      bookId: book.id,
+    },
+  );
+}
+
 async function handlePublish(
   supabase: ReturnType<typeof createServiceClient>,
   bookId: string,
   attemptId: string,
   bookDocument: unknown,
+  sendPush: typeof sendExpoPushNotification = sendExpoPushNotification,
 ): Promise<Response> {
   if (!bookDocument || typeof bookDocument !== 'object') {
     return errorResponse('bookDocument is required', 400, 'validation_error');
@@ -339,13 +399,32 @@ async function handlePublish(
       status: 'ready',
       book_document: bookDocument,
       generation_completed_at: new Date().toISOString(),
+      // Memory-book shelf redesign (migration
+      // 20260917120000_memory_book_cover_asset.sql) -- denormalized here, in
+      // the SAME CAS update that flips status to 'ready', so the picker's
+      // poll loop never has to ship the whole book_document to render a
+      // shelf tile. See _shared/memory-book-cover.ts's own header comment
+      // for the precedence this mirrors.
+      cover_asset_key: pickCoverAssetKey(bookDocument),
     })
     .eq('id', bookId)
     .eq('generation_attempt_id', attemptId)
     .eq('status', 'generating')
-    .select('id')
-    .maybeSingle();
+    .select('id, family_id, child_id, scope_label, requested_by')
+    .maybeSingle<PublishedBookRow>();
   if (error) return errorResponse('Failed to publish memory book', 500, 'internal_error');
+
+  if (data) {
+    try {
+      await sendBookReadyPush(supabase, sendPush, data);
+    } catch {
+      // A push failure must NEVER fail the publish response -- the book is
+      // already durably 'ready' by this point. Log the book id only, no
+      // PII/memory content (AGENTS.md "Child & family data" house rule).
+      console.error('workflow-memory-book-bridge ready push failed', bookId);
+    }
+  }
+
   return jsonResponse({ published: Boolean(data) });
 }
 
@@ -385,6 +464,13 @@ async function handleReconcile(
   if (!row) return jsonResponse({ outcome: 'failed' });
 
   if (row.status === 'ready') {
+    // Deliberately no ready-push here on the 'succeeded' outcome: reconcile
+    // only runs after a LOST publish response (the Workflow never learned
+    // whether its own publish call landed), and the flip to 'ready' already
+    // happened -- either from that same lost call, or (mid-window replay)
+    // from `handlePublish`'s own CAS, which already sent the push when it
+    // won. Sending one here too would risk a duplicate on every reconcile
+    // of an already-notified book.
     return jsonResponse({ outcome: row.generation_attempt_id === attemptId ? 'succeeded' : 'superseded' });
   }
   if (row.status === 'failed') return jsonResponse({ outcome: 'failed' });
@@ -396,7 +482,10 @@ async function handleReconcile(
 
 export async function handleWorkflowMemoryBookBridge(
   req: Request,
-  dependencyOverrides: { createServiceClient?: typeof createServiceClient } = {},
+  dependencyOverrides: {
+    createServiceClient?: typeof createServiceClient;
+    sendExpoPushNotification?: typeof sendExpoPushNotification;
+  } = {},
 ): Promise<Response> {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405, 'method_not_allowed');
 
@@ -431,7 +520,13 @@ export async function handleWorkflowMemoryBookBridge(
         return await handleEnsureShareTokens(supabase, bookId, attemptId, memoryIds);
       }
       case 'publish':
-        return await handlePublish(supabase, bookId, attemptId, body.bookDocument);
+        return await handlePublish(
+          supabase,
+          bookId,
+          attemptId,
+          body.bookDocument,
+          dependencyOverrides.sendExpoPushNotification ?? sendExpoPushNotification,
+        );
       case 'fail': {
         const reason = typeof body.failureReason === 'string' && body.failureReason.trim() ? body.failureReason.trim() : 'UNKNOWN_ERROR';
         return await handleFail(supabase, bookId, attemptId, reason);

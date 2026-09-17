@@ -48,6 +48,7 @@ import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
+import { pickCoverAssetKey } from '../_shared/memory-book-cover.ts';
 import { createPresignedGetUrls } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 
@@ -514,6 +515,31 @@ async function resolveImageEditRecord(
   return { ok: true, status: 200, code: '', message: '', record };
 }
 
+/**
+ * Value-equality for two cover `ImageEditRecord`s (or the absence of one) --
+ * used to gate the `cover_asset_key` recompute below on the ONE thing that
+ * can actually change it (2026-09-17 owner decision: cover-edit-aware
+ * shelf tiles). `slot` is deliberately excluded -- both records are always
+ * `COVER_SLOT_KEY` by construction, and comparing it would add nothing.
+ * Reference-equal (including both `undefined`, i.e. no cover edit before OR
+ * after) short-circuits true without a field-by-field walk -- covers every
+ * non-cover edit (text/focalPoint/non-cover imageReplace/delete of a
+ * different category), since none of those touch `nextEdits.images.cover`
+ * at all, so it's still the SAME object reference as `currentEdits`'s.
+ */
+function coverRecordsEqual(a: ImageEditRecord | undefined, b: ImageEditRecord | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.file === b.file &&
+    a.originalFile === b.originalFile &&
+    a.mediaId === b.mediaId &&
+    a.aspectRatio === b.aspectRatio &&
+    a.originalWidth === b.originalWidth &&
+    a.originalHeight === b.originalHeight
+  );
+}
+
 // ── save_edit ────────────────────────────────────────────────────────────
 
 interface BookRow {
@@ -642,6 +668,36 @@ async function handleSaveEdit(
   if (upsertError) {
     console.error('memory-book-edits save failed', upsertError.message);
     return errorResponse('Failed to save edit', 500, 'internal_error');
+  }
+
+  // Shelf cover-edit awareness (2026-09-17 owner decision): recompute
+  // `memory_books.cover_asset_key` ONLY when the cover slot itself changed
+  // (added, changed, or removed) -- every other edit kind is a guaranteed
+  // no-op per `coverRecordsEqual`'s own doc comment, so it never touches
+  // `memory_books` at all. `pickCoverAssetKey` applies the SAME width gate
+  // to a cover edit as any AI candidate (see `_shared/memory-book-cover.ts`)
+  // -- this is not an unconditional override, and removing a cover edit
+  // (`nextCoverRecord` undefined) correctly recomputes back to the AI pick.
+  // Done SYNCHRONOUSLY, before responding -- not fire-and-forget -- so a
+  // client that re-reads the book immediately after this response can never
+  // race a stale `cover_asset_key`. A recompute failure must never fail the
+  // edit save itself (the edit is already durably saved above); only the
+  // book id is logged, never PII/memory content (house rule).
+  const previousCoverRecord = currentEdits.images[COVER_SLOT_KEY];
+  const nextCoverRecord = nextEdits.images[COVER_SLOT_KEY];
+  if (!coverRecordsEqual(previousCoverRecord, nextCoverRecord)) {
+    try {
+      const coverAssetKey = pickCoverAssetKey(book.book_document, nextCoverRecord);
+      const { error: coverUpdateError } = await supabase
+        .from('memory_books')
+        .update({ cover_asset_key: coverAssetKey })
+        .eq('id', book.id);
+      if (coverUpdateError) {
+        console.error('memory-book-edits cover_asset_key recompute failed', book.id);
+      }
+    } catch {
+      console.error('memory-book-edits cover_asset_key recompute failed', book.id);
+    }
   }
 
   return jsonResponse({ success: true, edits: nextEdits } satisfies SaveEditResponse);

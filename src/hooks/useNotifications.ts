@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import { useFamily } from '@/hooks/use-family';
 import { useUserProfile } from '@/hooks/useUserProfile';
-import { memoryDetailRoute, newMemoryRoute, sharingApprovalsRoute, timelineRoute } from '@/lib/routes';
+import { memoryBooksRoute, memoryDetailRoute, newMemoryRoute, sharingApprovalsRoute, timelineRoute } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
 
 /**
@@ -138,11 +138,18 @@ async function registerForPushNotifications(
  * - 'new-memory': open the create-memory screen (daily reminder)
  * - 'memory': open the memory detail screen for `memoryId` (family-activity
  *   new-memory push) -- falls back to the timeline if `memoryId` is missing
+ * - 'memory-book': open the Memory Books shelf for `memberId` (a book
+ *   finished generating, or failed) -- falls back to the timeline if
+ *   `memberId` is missing
  */
 export interface PushRouteData {
-  route?: 'timeline' | 'approvals' | 'new-memory' | 'memory';
+  route?: 'timeline' | 'approvals' | 'new-memory' | 'memory' | 'memory-book';
   familyId?: string;
   memoryId?: string;
+  /** 'memory-book' only -- the child (`family_members.id`) whose shelf to open. */
+  memberId?: string;
+  /** 'memory-book' only -- informational; the shelf itself is keyed off `memberId`, not `bookId`. */
+  bookId?: string;
 }
 
 /**
@@ -204,6 +211,50 @@ function routeToMemoryDetail(payload: PushRouteData, context: RouteFromPushDataC
     });
 }
 
+/**
+ * Routes a `'memory-book'` push (a book finished generating, or failed) to
+ * the Memory Books shelf for `memberId`. Mirrors `routeToMemoryDetail`'s
+ * active-family reconciliation structure: a recipient can belong to more
+ * than one family, and the shelf screen resolves its scope/role off the
+ * active family, so a book push for a non-active family must switch first
+ * (or fall back to the timeline if the recipient no longer belongs to that
+ * family at all).
+ */
+function routeToMemoryBooks(payload: PushRouteData, context: RouteFromPushDataContext): void {
+  const { memberId, familyId: targetFamilyId } = payload;
+
+  if (!memberId) {
+    router.push(timelineRoute);
+    return;
+  }
+
+  const { activeFamilyId, memberFamilyIds, setActiveFamily } = context;
+
+  const needsSwitch =
+    Boolean(targetFamilyId) && targetFamilyId !== activeFamilyId && Boolean(setActiveFamily);
+
+  if (!needsSwitch) {
+    router.push(memoryBooksRoute(memberId));
+    return;
+  }
+
+  if (memberFamilyIds && !memberFamilyIds.includes(targetFamilyId as string)) {
+    router.push(timelineRoute);
+    return;
+  }
+
+  void setActiveFamily?.(targetFamilyId as string)
+    .catch((error) => {
+      console.warn(
+        'Failed to switch active family for a memory-book push deep link',
+        error instanceof Error ? error.message : 'unknown',
+      );
+    })
+    .finally(() => {
+      router.push(memoryBooksRoute(memberId));
+    });
+}
+
 // The recognized `PushRouteData.route` literals -- checked against at
 // runtime before reporting `notification_opened` so an unrecognized/garbage
 // route value (a payload typo, or a future route this build doesn't know
@@ -215,6 +266,7 @@ const RECOGNIZED_PUSH_ROUTES = new Set<NonNullable<PushRouteData['route']>>([
   'approvals',
   'new-memory',
   'memory',
+  'memory-book',
 ]);
 
 export function routeFromPushData(data: unknown, context: RouteFromPushDataContext = {}): void {
@@ -246,6 +298,11 @@ export function routeFromPushData(data: unknown, context: RouteFromPushDataConte
 
   if (payload?.route === 'memory') {
     routeToMemoryDetail(payload, context);
+    return;
+  }
+
+  if (payload?.route === 'memory-book') {
+    routeToMemoryBooks(payload, context);
   }
 }
 

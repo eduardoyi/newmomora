@@ -13,6 +13,7 @@ import {
 import { useFamily } from '@/hooks/use-family';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import {
+  memoryBooksRoute,
   memoryDetailRoute,
   newMemoryRoute,
   sharingApprovalsRoute,
@@ -150,6 +151,18 @@ describe('routeFromPushData (plan §10 push deep links)', () => {
 
     expect(mockedPush).toHaveBeenCalledWith(timelineRoute);
   });
+
+  it('routes to the Memory Books shelf for a memory-book push', () => {
+    routeFromPushData({ route: 'memory-book', memberId: 'member-1', familyId: 'family-1', bookId: 'book-1' });
+
+    expect(mockedPush).toHaveBeenCalledWith(memoryBooksRoute('member-1'));
+  });
+
+  it('falls back to the timeline for a memory-book push with no memberId', () => {
+    routeFromPushData({ route: 'memory-book', familyId: 'family-1', bookId: 'book-1' });
+
+    expect(mockedPush).toHaveBeenCalledWith(timelineRoute);
+  });
 });
 
 describe('routeFromPushData - notification_opened target mapping', () => {
@@ -162,6 +175,7 @@ describe('routeFromPushData - notification_opened target mapping', () => {
     ['timeline', { route: 'timeline' as const, familyId: 'family-1' }],
     ['new-memory', { route: 'new-memory' as const }],
     ['memory', { route: 'memory' as const, memoryId: 'memory-1', familyId: 'family-1' }],
+    ['memory-book', { route: 'memory-book' as const, memberId: 'member-1', familyId: 'family-1' }],
   ])('reports the literal %s route as the notification_opened target', (target, payload) => {
     routeFromPushData(payload);
 
@@ -252,6 +266,70 @@ describe('routeFromPushData - memory route family-context handling', () => {
     await flushPromises();
 
     expect(mockedPush).toHaveBeenCalledWith(memoryDetailRoute('memory-1'));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to switch active family'),
+      'network down',
+    );
+
+    warnSpy.mockRestore();
+  });
+});
+
+describe('routeFromPushData - memory-book route family-context handling', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('opens the shelf directly when the push family already matches the active family', () => {
+    const setActiveFamily = jest.fn();
+
+    routeFromPushData(
+      { route: 'memory-book', memberId: 'member-1', familyId: 'family-1' },
+      { activeFamilyId: 'family-1', setActiveFamily },
+    );
+
+    expect(setActiveFamily).not.toHaveBeenCalled();
+    expect(mockedPush).toHaveBeenCalledWith(memoryBooksRoute('member-1'));
+  });
+
+  it('switches the active family before opening the shelf for a non-active family the recipient still belongs to', async () => {
+    const setActiveFamily = jest.fn().mockResolvedValue(undefined);
+
+    routeFromPushData(
+      { route: 'memory-book', memberId: 'member-1', familyId: 'family-2' },
+      { activeFamilyId: 'family-1', memberFamilyIds: ['family-1', 'family-2'], setActiveFamily },
+    );
+
+    await flushPromises();
+
+    expect(setActiveFamily).toHaveBeenCalledWith('family-2');
+    expect(mockedPush).toHaveBeenCalledWith(memoryBooksRoute('member-1'));
+  });
+
+  it('falls back to the timeline instead of switching when the recipient no longer belongs to the push family', () => {
+    const setActiveFamily = jest.fn();
+
+    routeFromPushData(
+      { route: 'memory-book', memberId: 'member-1', familyId: 'family-2' },
+      { activeFamilyId: 'family-1', memberFamilyIds: ['family-1'], setActiveFamily },
+    );
+
+    expect(setActiveFamily).not.toHaveBeenCalled();
+    expect(mockedPush).toHaveBeenCalledWith(timelineRoute);
+  });
+
+  it('still opens the shelf if switching the active family fails', async () => {
+    const setActiveFamily = jest.fn().mockRejectedValue(new Error('network down'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(jest.fn());
+
+    routeFromPushData(
+      { route: 'memory-book', memberId: 'member-1', familyId: 'family-2' },
+      { activeFamilyId: 'family-1', memberFamilyIds: ['family-1', 'family-2'], setActiveFamily },
+    );
+
+    await flushPromises();
+
+    expect(mockedPush).toHaveBeenCalledWith(memoryBooksRoute('member-1'));
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Failed to switch active family'),
       'network down',

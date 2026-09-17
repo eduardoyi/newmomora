@@ -659,11 +659,27 @@ create table public.memory_books (
 
   page_budget                smallint not null check (page_budget between 18 and 122),
   book_document               jsonb,  -- null until status = 'ready'; single-renderer book JSON (plan §3/§9)
+  cover_asset_key             text,   -- R2 object key for the shelf/list cover facsimile; null until status = 'ready'
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 ```
+
+**`cover_asset_key`** (migration `20260917120000_memory_book_cover_asset.sql`, memory-book shelf redesign; precedence corrected by `20260917150000_memory_book_cover_asset_refine.sql` after a device-testing finding that the shelf cover didn't match the book's real cover; made cover-edit-aware by `20260917170000_memory_book_cover_asset_edits.sql`, 2026-09-17 owner decision): one representative R2 object key for a ready book's shelf/list-tile cover facsimile, so the picker's poll loop can render a tile without shipping the whole `book_document` jsonb.
+
+**Writers (two):**
+1. `workflow-memory-book-bridge`'s `handlePublish`, in the SAME CAS `UPDATE` that flips `status` to `'ready'` (§4.22) — `cover_asset_key: pickCoverAssetKey(bookDocument)`, no `coverEdit` argument (a book can't have a saved edit before it's ever been `ready`, since the edit surface itself requires `status = 'ready'`).
+2. `memory-book-edits`' `save_edit` (§4.23), but ONLY when the saved edit's `images.cover` record itself changed (added, changed, or removed) — compared structurally against the previous saved value; every other edit kind (text, focal point, a non-cover `imageReplace`) is a guaranteed no-op here and never touches `memory_books` at all. When it changed, `save_edit` recomputes `cover_asset_key: pickCoverAssetKey(book.book_document, nextEdits.images.cover)` SYNCHRONOUSLY, before responding — never fire-and-forget — so a client that re-reads the book right after the save can't race a stale value. A recompute failure (rare: only the `memory_books` `UPDATE` itself) is logged with the book id only and never fails the edit save, which already durably persisted in `memory_book_edits` first.
+
+**Precedence** (via `_shared/memory-book-cover.ts`'s `pickCoverAssetKey(bookDocument, coverEdit?)`) mirrors `book-renderer/src/model/fitter.ts`'s `buildCoverPages` (and its `effectiveCoverWidth`/`pickMiddleOfRangeCoverPhoto` helpers) BYTE-FOR-BYTE — this is the actual rendered-cover selection, not the web list's own looser `pickListThumbnailKey` (`book-renderer/src/web/books/thumbnail.ts`), which this column no longer mirrors:
+0. If a `coverEdit` (`ImageEditRecord`) is given, it is checked FIRST — mirroring `book-renderer/src/model/edits.ts`'s `applyCoverImageEdit`, which prepends a synthetic `'__cover-edit__'` memory id to `outline.coverCandidates`. This is **not an unconditional override**: the synthetic candidate (built via the same `applyWidthHeight` derivation — `originalWidth` if present, else `round(100 * aspectRatio)` as a fail-closed sentinel) must clear the identical width gate as any AI candidate. A too-small (or malformed/absent) edit is silently skipped, falling through unchanged to steps 1–4 below.
+1. Walk `outline.coverCandidates` in order; for each id, the first asset (in that memory's own `assets` array order) with `kind === 'photo'` AND `effectiveCoverWidth(asset) >= 2000` — `effectiveCoverWidth` prefers `asset.originalWidth` (the real source-pixel width) over `asset.width` (the ~1280px preview-export width). First id that yields one wins.
+2. Legacy fallback: the first asset — iterating every manifest memory in `Object.entries(manifest.memories)` order, then that memory's own `assets` order — whose memory id is in `outline.heroCandidates` AND `kind === 'photo'`. NO width floor (kept byte-identical to the pre-existing behavior for already-issued books).
+3. `pickMiddleOfRangeCoverPhoto`: among ALL `kind === 'photo'` assets (across every memory) with `effectiveCoverWidth(asset) >= 2000`, the one whose memory date is closest to the midpoint of `manifest.scope.start`/`.end`; ties broken by widest `effectiveCoverWidth`, then lowest memory id (string compare).
+4. Nothing qualifies → `null` (the real cover renders `'minimal'`/no photo; the shelf shows a placeholder wash — correct, not a bug).
+
+Fully defensive against a malformed `book_document`/`coverEdit` — this runs on the publish and edit-save paths, neither of which may ever fail over malformed data. **Backfill:** `20260917120000`'s original backfill used the OLD (wrong, `assets[0]`-based) precedence and is not edited — it already ran against the live DB. `20260917150000` re-backfills every pre-existing `status = 'ready'` row with the corrected 3-pass AI-only precedence in SQL (jsonb), OVERWRITING `cover_asset_key` (including to `null` when nothing qualifies, since the old value may be wrong) rather than coalescing; its pass 2 (hero-candidate fallback) iterates manifest memories in SQL's own (arbitrary) row order rather than JSON key-insertion order — an accepted approximation for a one-time backfill, since new books always go through the exact JS precedence regardless. `20260917170000` layers a cover-edit-aware pass on top: it joins `memory_book_edits`, and for every `ready` book with a qualifying saved cover edit (same width gate, evaluated in SQL with regex-guarded numeric casts), overwrites `cover_asset_key` to that edit's `file`. A book with no cover edit, or a non-qualifying one, is left completely untouched — `150000`'s AI-only value is already the exact correct answer for that case (that's precisely what `pickCoverAssetKey` itself falls through to), so re-deriving it here would be redundant, not a simplification worth making; the migration is deliberately conservative — any ambiguous/malformed edit record is skipped (left as-is) rather than guessed at.
 
 Key constraints: `book_document` required once `ready`, `failure_reason`
 required once `failed`, `age_year` requires `child_id`, every scope but
@@ -2732,6 +2748,38 @@ min/max `memory_date` instead), and returns every raw row the Workflow
 needs (memories, media, tags, milestones, engagement counts, family
 members, portrait versions, plus a sparse-window language-evidence caption
 sample).
+
+*Ready push (memory-book shelf redesign):* `handlePublish`'s CAS `UPDATE`
+also selects back `id, family_id, child_id, scope_label, requested_by`;
+when the CAS wins (`data` non-null — the row genuinely transitioned
+`generating` → `ready` on THIS call), it looks up `requested_by` in
+`user_profiles` (`id, expo_push_token, deleted_at`, same guard style as
+`send-daily-reminder`) and, unless `requested_by` is null or the profile
+is missing/soft-deleted/tokenless, sends one push via
+`sendExpoPushNotification` (`_shared/expo-push.ts`):
+title `Your memory book is ready`, body `"${scope_label}" is ready to look
+through.`, data `{ route: 'memory-book', familyId, ...(child_id ?
+{ memberId: child_id } : {}), bookId: id }` — see `PushRouteData` in
+`_shared/expo-push.ts` (kept in lockstep with the client's own copy in
+`src/hooks/useNotifications.ts`). The whole push is wrapped in try/catch;
+a failure is logged with the book id only (no PII/memory content) and
+never fails the publish response. **Not gated** on `notify_new_memories`
+or any other preference — unlike `notify-family-activity`'s fan-out push
+to other family members, this is a transactional notification reporting
+the outcome of the requester's OWN action (they tapped "create book"), the
+same class as an order-confirmation email. **Replay safety:** this bridge
+still has no nonce-replay ledger (see the file's own header comment), but
+the push only fires when the CAS itself wins, which — being a plain
+`UPDATE ... WHERE status = 'generating' AND generation_attempt_id = $attempt`
+— can succeed at most once per attempt; a replayed publish request within
+the signature window re-runs the identical CAS against a row that is no
+longer `generating`, so `data` comes back null and no second push is
+sent. `handleReconcile`'s `'succeeded'` outcome deliberately sends no push
+of its own (a one-line comment at that call site notes why) — reconcile
+only runs after a LOST publish response, and the flip to `ready` already
+either sent the push itself (mid-window replay hitting the same CAS) or
+came from the original lost call; adding a second send there would risk a
+duplicate on every reconcile of an already-notified book.
 
 **`cloudflare/memory-book-worker`** — same repo pattern as
 `memory-illustration-worker` (own `wrangler.jsonc`/`package.json`, Node 22,

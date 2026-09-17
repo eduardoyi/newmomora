@@ -170,6 +170,17 @@ export function formatEraLine(startDate: string, endDateInclusive: string): stri
   return `${formatMonthYear(startDate)} – ${formatMonthYear(endDateInclusive)}`;
 }
 
+/** "2022 – 2023" (or "2023" when both dates fall in the same year) -- the
+ * shelf-redesign book-cover scope line's year component (owner-approved
+ * picker-redesign brief). `endDateInclusive` is the frozen inclusive end
+ * date, same convention as `formatEraLine`. Callers omit this entirely for
+ * an `everything` scope (both dates null). */
+export function formatYearRange(startDate: string, endDateInclusive: string): string {
+  const startYear = parseDateParts(startDate).year;
+  const endYear = parseDateParts(endDateInclusive).year;
+  return startYear === endYear ? String(startYear) : `${startYear} – ${endYear}`;
+}
+
 /**
  * Every age-year scope that has already started as of `todayIso`, oldest
  * first (Year One, Year Two, ...). Empty when `dateOfBirth` is null -- a
@@ -286,4 +297,48 @@ export function thinPeriodReason(eligibleCount: number): string | null {
   if (eligibleCount >= MEMORY_BOOK_THIN_THRESHOLD) return null;
   const noun = eligibleCount === 1 ? 'memory' : 'memories';
   return `${eligibleCount} ${noun} in this period — books need about ${MEMORY_BOOK_THIN_THRESHOLD}`;
+}
+
+/**
+ * The "create a book" sheet's short SUGGESTIONS list (shelf-redesign,
+ * owner-approved picker-redesign brief). Pure: takes the full scope option
+ * list, a map of which scopes already have an existing `memory_books` row
+ * (any status -- keyed by `memoryBookScopeKey`), and "today" -- never reads
+ * eligibility counts or touches the network itself.
+ *
+ * Rules (locked):
+ * - Completed age-years only (`endDate < todayIso` -- the in-progress
+ *   current age-year is never suggested, since it hasn't finished yet).
+ * - Only age-years with NO existing book at all (any status) are eligible.
+ * - Most-recent-first, up to 2.
+ * - The `everything` option is appended when it has no existing book.
+ * - `calendar_year` scopes are NEVER suggested here -- the owner decision
+ *   recorded in the brief is that claiming a calendar-year scope mid-year
+ *   permanently locks that scope's window, so it must be a deliberate pick
+ *   from the expanded grouped list, never a one-tap suggestion.
+ * - Max 3 total (2 age-years + everything already bounds this, but the cap
+ *   is enforced explicitly rather than relied upon).
+ */
+export function pickSuggestedScopes(
+  options: MemoryBookScopeOption[],
+  rowsByScopeKey: Record<string, boolean>,
+  todayIso: string,
+): MemoryBookScopeOption[] {
+  const completedAgeYearsWithoutBook = options.filter(
+    (option) =>
+      option.kind === 'age_year' &&
+      option.endDate !== null &&
+      option.endDate < todayIso &&
+      !rowsByScopeKey[memoryBookScopeKey(option)],
+  );
+  // Options are enumerated oldest-first (Year One, Year Two, ...) --
+  // reverse for "most recent first".
+  const suggestions = completedAgeYearsWithoutBook.slice().reverse().slice(0, 2);
+
+  const everything = options.find((option) => option.kind === 'everything');
+  if (everything && !rowsByScopeKey[memoryBookScopeKey(everything)]) {
+    suggestions.push(everything);
+  }
+
+  return suggestions.slice(0, 3);
 }

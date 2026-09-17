@@ -25,7 +25,7 @@ function mapSupabaseError(error: { message: string; code?: string }): ServiceErr
 }
 
 const MEMORY_BOOK_LIST_COLUMNS =
-  'id, family_id, child_id, status, scope_kind, scope_start_date, scope_end_date, scope_label, failure_reason, created_at';
+  'id, family_id, child_id, status, scope_kind, scope_start_date, scope_end_date, scope_label, failure_reason, cover_asset_key, created_at, updated_at';
 
 export type MemoryBookListRow = Pick<
   MemoryBookRow,
@@ -38,7 +38,9 @@ export type MemoryBookListRow = Pick<
   | 'scope_end_date'
   | 'scope_label'
   | 'failure_reason'
+  | 'cover_asset_key'
   | 'created_at'
+  | 'updated_at'
 >;
 
 /** Every book ever requested for this child (any status, including
@@ -187,6 +189,52 @@ export async function countEligibleMemoriesForScope(
   }).length;
 
   return { data: eligibleCount, error: null };
+}
+
+interface ExampleCoverRow {
+  id: string;
+  memory_date: string;
+  memory_media: { preview_object_key: string | null; object_key: string; content_type: string }[] | null;
+}
+
+/**
+ * Picks one real photo of this child at random, for the empty-state's
+ * personalized example book cover (shelf-redesign, owner-approved
+ * picker-redesign brief). Reads only the last 30 (by `memory_date`) image
+ * memories tagged to this exact child -- `memory_family_members!inner` +
+ * `memory_media!inner` narrow both the outer query AND the embedded
+ * `memory_media` array to matching rows (PostgREST inner-join embedding
+ * semantics), so every returned row is already an eligible photo. The
+ * random pick happens here, once, so the caller's query cache (long
+ * `staleTime`) is what keeps it stable across re-renders within a mount --
+ * not this function re-deriving the same pick twice.
+ */
+export async function fetchExampleCoverAssetKey(
+  familyId: string,
+  memberId: string,
+): Promise<{ data: string | null; error: ServiceError | null }> {
+  const { data, error } = await supabase
+    .from('memories')
+    .select('id, memory_date, memory_media!inner(preview_object_key, object_key, content_type), memory_family_members!inner(family_member_id)')
+    .eq('family_id', familyId)
+    .eq('memory_family_members.family_member_id', memberId)
+    .like('memory_media.content_type', 'image/%')
+    .order('memory_date', { ascending: false })
+    .limit(30);
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  const rows = (data ?? []) as unknown as ExampleCoverRow[];
+  const candidates = rows.flatMap((row) => (row.memory_media ?? []).map((media) => media.preview_object_key ?? media.object_key));
+
+  if (candidates.length === 0) {
+    return { data: null, error: null };
+  }
+
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  return { data: pick, error: null };
 }
 
 // The web preview/checkout app -- see docs/features/memory-book-generation.md's

@@ -8,6 +8,7 @@ import {
   countEligibleMemoriesForScope,
   createMemoryBook,
   dispatchMemoryBookGeneration,
+  fetchExampleCoverAssetKey,
   fetchMemoryBooksForChild,
   type MemoryBookListRow,
 } from '@/services/memory-books';
@@ -19,6 +20,7 @@ jest.mock('@/services/memory-books', () => ({
   createMemoryBook: jest.fn(),
   dispatchMemoryBookGeneration: jest.fn(),
   countEligibleMemoriesForScope: jest.fn(),
+  fetchExampleCoverAssetKey: jest.fn(),
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
@@ -26,6 +28,7 @@ const mockedFetch = fetchMemoryBooksForChild as jest.MockedFunction<typeof fetch
 const mockedCreate = createMemoryBook as jest.MockedFunction<typeof createMemoryBook>;
 const mockedDispatch = dispatchMemoryBookGeneration as jest.MockedFunction<typeof dispatchMemoryBookGeneration>;
 const mockedCount = countEligibleMemoriesForScope as jest.MockedFunction<typeof countEligibleMemoriesForScope>;
+const mockedExampleCover = fetchExampleCoverAssetKey as jest.MockedFunction<typeof fetchExampleCoverAssetKey>;
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -50,7 +53,9 @@ function book(overrides: Partial<MemoryBookListRow> = {}): MemoryBookListRow {
     scope_end_date: '2024-05-31',
     scope_label: 'Year One',
     failure_reason: null,
+    cover_asset_key: null,
     created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
 }
@@ -61,6 +66,7 @@ describe('useMemoryBooks', () => {
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } } as ReturnType<typeof useAuth>);
     mockedFetch.mockResolvedValue({ data: [], error: null });
     mockedCount.mockResolvedValue({ data: 40, error: null });
+    mockedExampleCover.mockResolvedValue({ data: null, error: null });
   });
 
   it('merges scope options with eligibility counts once both queries settle', async () => {
@@ -203,5 +209,27 @@ describe('useMemoryBooks', () => {
 
     expect(mockedCreate).toHaveBeenCalledTimes(1);
     expect(mockedDispatch).toHaveBeenCalledWith('retry-book');
+  });
+
+  it('surfaces the example cover asset key once it resolves', async () => {
+    mockedExampleCover.mockResolvedValue({ data: 'preview-key-1', error: null });
+
+    const { result } = renderHook(
+      () => useMemoryBooks({ familyId: 'family-1', childId: 'child-1', dateOfBirth: '2023-06-01' }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.exampleCoverAssetKey).toBe('preview-key-1'));
+    expect(mockedExampleCover).toHaveBeenCalledWith('family-1', 'child-1');
+  });
+
+  it('defaults exampleCoverAssetKey to null when there is no eligible photo', async () => {
+    const { result } = renderHook(
+      () => useMemoryBooks({ familyId: 'family-1', childId: 'child-1', dateOfBirth: '2023-06-01' }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.exampleCoverAssetKey).toBeNull();
   });
 });

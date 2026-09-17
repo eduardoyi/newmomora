@@ -6,22 +6,29 @@
 
 /**
  * Deep-link routing conventions carried in the push `data` payload (plan
- * §10, deliverable 6). Must stay in sync with `PushRouteData` in
- * `src/hooks/useNotifications.ts` -- the two can't share a type import
- * across the Deno/RN boundary. The client's notification-response listener
- * switches on `route`:
+ * §10, deliverable 6; 'memory-book' added by the memory-book shelf redesign
+ * ready-push, workflow-memory-book-bridge's `handlePublish`). Must stay in
+ * sync with `PushRouteData` in `src/hooks/useNotifications.ts` -- the two
+ * can't share a type import across the Deno/RN boundary. The client's
+ * notification-response listener switches on `route`:
  * - 'timeline': open the family timeline
  * - 'approvals': open the pending-approvals screen
  * - 'new-memory': open the create-memory screen (send-daily-reminder)
  * - 'memory': open the memory detail screen for `memoryId`
  *   (notify-family-activity's new-memory push)
+ * - 'memory-book': open the memory book at `bookId`
+ *   (workflow-memory-book-bridge's "your book is ready" push)
  * `familyId` is required for 'memory' so the client can reconcile the
  * recipient's active family before navigating; it's otherwise informational.
+ * `memberId` (the book's `child_id`, when the book is scoped to one child)
+ * and `bookId` are carried only by the 'memory-book' route.
  */
 export interface PushRouteData {
-  route: 'timeline' | 'approvals' | 'new-memory' | 'memory';
+  route: 'timeline' | 'approvals' | 'new-memory' | 'memory' | 'memory-book';
   familyId?: string;
   memoryId?: string;
+  memberId?: string;
+  bookId?: string;
 }
 
 export async function sendExpoPushNotification(

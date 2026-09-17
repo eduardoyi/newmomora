@@ -56,7 +56,10 @@ async function withBridgeSecret<T>(run: () => Promise<T>): Promise<T> {
  */
 function createStubClient(
   tables: Record<string, unknown[]>,
-  options: { onInsert?: (table: string, rows: unknown[]) => { error: unknown } | void } = {},
+  options: {
+    onInsert?: (table: string, rows: unknown[]) => { error: unknown } | void;
+    onUpdate?: (table: string, patch: Record<string, unknown>) => void;
+  } = {},
 ) {
   return () => ({
     from(table: string) {
@@ -73,7 +76,10 @@ function createStubClient(
         in: () => chain,
         order: () => chain,
         limit: () => chain,
-        update: () => chain,
+        update: (patch: Record<string, unknown>) => {
+          options.onUpdate?.(table, patch);
+          return chain;
+        },
         insert: async (newRows: unknown[]) => {
           const result = options.onInsert?.(table, Array.isArray(newRows) ? newRows : [newRows]);
           return result ?? { error: null };
@@ -151,6 +157,177 @@ Deno.test('publish rejects a missing bookDocument before touching the database',
       { createServiceClient: createStubClient({ memory_books: [{ id: BOOK_ID }] }) },
     );
     assertEquals(response.status, 400);
+  });
+});
+
+// Shaped to actually resolve via _shared/memory-book-cover.ts's pass 1 (see
+// that module's tests for the full precedence coverage): a coverCandidates
+// hit needs a >=2000px-wide photo asset, and pickCoverAssetKey also reads
+// manifest.scope + the memory's own `date` even when pass 1 is expected to
+// win, so both are populated here for realism.
+const READY_BOOK_DOCUMENT = {
+  outline: { coverCandidates: ['memory-1'] },
+  manifest: {
+    scope: { start: '2025-01-01', end: '2025-12-31' },
+    memories: {
+      'memory-1': { date: '2025-06-01', assets: [{ file: 'covers/memory-1.jpg', kind: 'photo', width: 2000 }] },
+    },
+  },
+};
+
+function requesterRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: BOOK_ID,
+    family_id: 'family-1',
+    child_id: 'child-1',
+    scope_label: 'Year One',
+    requested_by: 'requester-1',
+    ...overrides,
+  };
+}
+
+type PushCall = { token: string; title: string; body: string; data: unknown };
+
+function recordingPush(pushCalls: PushCall[]) {
+  return async (token: string, title: string, body: string, data: unknown) => {
+    pushCalls.push({ token, title, body, data });
+    return true;
+  };
+}
+
+Deno.test('publish includes cover_asset_key (resolved from the outline/manifest) in the CAS update', async () => {
+  await withBridgeSecret(async () => {
+    const updatePatches: Array<Record<string, unknown>> = [];
+    const response = await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'publish', bookId: BOOK_ID, attemptId: ATTEMPT_ID, bookDocument: READY_BOOK_DOCUMENT }),
+      {
+        createServiceClient: createStubClient(
+          { memory_books: [requesterRow({ requested_by: null })] },
+          { onUpdate: (table, patch) => { if (table === 'memory_books') updatePatches.push(patch); } },
+        ),
+      },
+    );
+    assertEquals(await response.json(), { published: true });
+    assertEquals(updatePatches.length, 1);
+    assertEquals(updatePatches[0].cover_asset_key, 'covers/memory-1.jpg');
+    // The CAS predicates themselves are unchanged -- only the update payload
+    // grew a field.
+    assertEquals(updatePatches[0].status, 'ready');
+  });
+});
+
+Deno.test('publish sends the ready push to the requester on a CAS win', async () => {
+  await withBridgeSecret(async () => {
+    const pushCalls: PushCall[] = [];
+    const response = await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'publish', bookId: BOOK_ID, attemptId: ATTEMPT_ID, bookDocument: READY_BOOK_DOCUMENT }),
+      {
+        createServiceClient: createStubClient({
+          memory_books: [requesterRow()],
+          user_profiles: [{ id: 'requester-1', expo_push_token: 'ExponentPushToken[abc]', deleted_at: null }],
+        }),
+        sendExpoPushNotification: recordingPush(pushCalls),
+      },
+    );
+    assertEquals(await response.json(), { published: true });
+    assertEquals(pushCalls.length, 1);
+    assertEquals(pushCalls[0].token, 'ExponentPushToken[abc]');
+    assertEquals(pushCalls[0].title, 'Your memory book is ready');
+    assertEquals(pushCalls[0].body, '“Year One” is ready to look through.');
+    assertEquals(pushCalls[0].data, {
+      route: 'memory-book',
+      familyId: 'family-1',
+      memberId: 'child-1',
+      bookId: BOOK_ID,
+    });
+  });
+});
+
+Deno.test('publish omits memberId when the book has no child_id, and sends no push on a CAS loss', async () => {
+  await withBridgeSecret(async () => {
+    const pushCalls: PushCall[] = [];
+    const response = await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'publish', bookId: BOOK_ID, attemptId: ATTEMPT_ID, bookDocument: READY_BOOK_DOCUMENT }),
+      {
+        // No memory_books row -- the CAS loses (superseded/no-longer-generating).
+        createServiceClient: createStubClient({
+          memory_books: [],
+          user_profiles: [{ id: 'requester-1', expo_push_token: 'ExponentPushToken[abc]', deleted_at: null }],
+        }),
+        sendExpoPushNotification: recordingPush(pushCalls),
+      },
+    );
+    assertEquals(await response.json(), { published: false });
+    assertEquals(pushCalls.length, 0);
+  });
+});
+
+Deno.test('publish still returns { published: true } when the push send throws (network failure)', async () => {
+  await withBridgeSecret(async () => {
+    const response = await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'publish', bookId: BOOK_ID, attemptId: ATTEMPT_ID, bookDocument: READY_BOOK_DOCUMENT }),
+      {
+        createServiceClient: createStubClient({
+          memory_books: [requesterRow()],
+          user_profiles: [{ id: 'requester-1', expo_push_token: 'ExponentPushToken[abc]', deleted_at: null }],
+        }),
+        sendExpoPushNotification: async () => { throw new Error('network down'); },
+      },
+    );
+    assertEquals(await response.json(), { published: true });
+  });
+});
+
+Deno.test('publish sends no push when requested_by is null', async () => {
+  await withBridgeSecret(async () => {
+    const pushCalls: PushCall[] = [];
+    const response = await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'publish', bookId: BOOK_ID, attemptId: ATTEMPT_ID, bookDocument: READY_BOOK_DOCUMENT }),
+      {
+        createServiceClient: createStubClient({
+          memory_books: [requesterRow({ requested_by: null })],
+        }),
+        sendExpoPushNotification: recordingPush(pushCalls),
+      },
+    );
+    assertEquals(await response.json(), { published: true });
+    assertEquals(pushCalls.length, 0);
+  });
+});
+
+Deno.test('publish sends no push when the requester has no expo_push_token', async () => {
+  await withBridgeSecret(async () => {
+    const pushCalls: PushCall[] = [];
+    const response = await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'publish', bookId: BOOK_ID, attemptId: ATTEMPT_ID, bookDocument: READY_BOOK_DOCUMENT }),
+      {
+        createServiceClient: createStubClient({
+          memory_books: [requesterRow()],
+          user_profiles: [{ id: 'requester-1', expo_push_token: null, deleted_at: null }],
+        }),
+        sendExpoPushNotification: recordingPush(pushCalls),
+      },
+    );
+    assertEquals(await response.json(), { published: true });
+    assertEquals(pushCalls.length, 0);
+  });
+});
+
+Deno.test('publish sends no push when the requester profile is soft-deleted', async () => {
+  await withBridgeSecret(async () => {
+    const pushCalls: PushCall[] = [];
+    const response = await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'publish', bookId: BOOK_ID, attemptId: ATTEMPT_ID, bookDocument: READY_BOOK_DOCUMENT }),
+      {
+        createServiceClient: createStubClient({
+          memory_books: [requesterRow()],
+          user_profiles: [{ id: 'requester-1', expo_push_token: 'ExponentPushToken[abc]', deleted_at: '2026-01-01T00:00:00Z' }],
+        }),
+        sendExpoPushNotification: recordingPush(pushCalls),
+      },
+    );
+    assertEquals(await response.json(), { published: true });
+    assertEquals(pushCalls.length, 0);
   });
 });
 

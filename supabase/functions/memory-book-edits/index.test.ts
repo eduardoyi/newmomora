@@ -73,6 +73,9 @@ interface StubOptions {
   memberTagError?: { message: string } | null;
   calls?: string[];
   onUpsert?: (payload: Record<string, unknown>) => void;
+  /** save_edit's cover_asset_key recompute: `memory_books.update(...)`. */
+  coverUpdateError?: { message: string } | null;
+  onCoverUpdate?: (payload: Record<string, unknown>) => void;
 }
 
 function createStubClient(options: StubOptions = {}) {
@@ -86,6 +89,16 @@ function createStubClient(options: StubOptions = {}) {
             select: () => chain,
             eq: () => chain,
             maybeSingle: async () => ({ data: options.book ?? null, error: options.bookError ?? null }),
+            // save_edit's cover_asset_key recompute: `.update({...}).eq(...)`
+            // -- awaited directly (no terminal `.maybeSingle()`), same
+            // thenable-chain convention as the memory_family_members stub
+            // below.
+            update: (payload: Record<string, unknown>) => {
+              options.onCoverUpdate?.(payload);
+              return chain;
+            },
+            then: (resolve: (result: { data: unknown; error: unknown }) => void) =>
+              resolve({ data: null, error: options.coverUpdateError ?? null }),
           };
           return chain;
         }
@@ -539,6 +552,147 @@ Deno.test('save_edit: dimension measurement absent (never fabricated) when the o
   assertEquals('originalWidth' in record, false);
   assertEquals('originalHeight' in record, false);
   assertEquals(record.aspectRatio, 1.4); // still trusts the DB column when present
+});
+
+// ── save_edit: cover_asset_key recompute (shelf cover-edit awareness,
+// 2026-09-17 owner decision) ──────────────────────────────────────────────
+
+Deno.test('save_edit: a qualifying coverPhoto edit recomputes memory_books.cover_asset_key from the edit itself', async () => {
+  const pngBytes = buildPngBytes(3000, 2000);
+  let coverUpdate: Record<string, unknown> | undefined;
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'coverPhoto', mediaId: MEDIA_ID } }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook(), // book_document: { manifest: { memories: {} } } -- no AI candidate at all
+        media: {
+          id: MEDIA_ID,
+          memory_id: MEMORY_ID,
+          object_key: 'k/original.jpg',
+          preview_object_key: 'k/preview.jpg',
+          content_type: 'image/jpeg',
+          aspect_ratio: 1.5,
+          memories: { family_id: FAMILY_ID },
+        },
+        onCoverUpdate: (payload) => {
+          coverUpdate = payload;
+        },
+      }),
+      fetch: async () => new Response(new Blob([pngBytes]), { status: 206 }), // originalWidth 3000 clears the 2000px gate
+    }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.edits.images.cover.file, 'k/preview.jpg');
+  assertEquals(coverUpdate?.cover_asset_key, 'k/preview.jpg');
+});
+
+Deno.test('save_edit: a non-cover edit (text/focalPoint/non-cover imageReplace) never touches memory_books.cover_asset_key', async () => {
+  let coverUpdateCalls = 0;
+  const deps = (edit: Record<string, unknown>) =>
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook(),
+        media: {
+          id: MEDIA_ID,
+          memory_id: MEMORY_ID,
+          object_key: 'k/original.jpg',
+          preview_object_key: 'k/preview.jpg',
+          content_type: 'image/jpeg',
+          aspect_ratio: 1.5,
+          memories: { family_id: FAMILY_ID },
+        },
+        onCoverUpdate: () => {
+          coverUpdateCalls += 1;
+        },
+      }),
+    });
+
+  const textResponse = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'text', target: 'dedication', value: 'For Mia' } }),
+    deps({}),
+  );
+  assertEquals(textResponse.status, 200);
+
+  const focalPointResponse = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'focalPoint', slot: `${MEMORY_ID}:${MEDIA_ID}`, x: 0.5, y: 0.5 } }),
+    deps({}),
+  );
+  assertEquals(focalPointResponse.status, 200);
+
+  const imageReplaceResponse = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'imageReplace', slot: `${MEMORY_ID}:${MEDIA_ID}`, mediaId: MEDIA_ID } }),
+    deps({}),
+  );
+  assertEquals(imageReplaceResponse.status, 200);
+
+  assertEquals(coverUpdateCalls, 0);
+});
+
+Deno.test('save_edit: removing a cover edit (delete images/cover) recomputes back to the AI pick', async () => {
+  let coverUpdate: Record<string, unknown> | undefined;
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'delete', category: 'images', key: 'cover' } }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook({
+          book_document: {
+            outline: { coverCandidates: ['memory-1'] },
+            manifest: {
+              scope: { start: '2025-01-01', end: '2025-12-31' },
+              memories: {
+                'memory-1': { date: '2025-06-01', assets: [{ file: 'ai-pick.jpg', kind: 'photo', width: 2500 }] },
+              },
+            },
+          },
+        }),
+        editsRow: {
+          edits: {
+            images: {
+              cover: {
+                slot: 'cover', mediaId: MEDIA_ID, file: 'edited-cover.jpg', originalFile: 'orig.jpg',
+                aspectRatio: 1.5, originalWidth: 3000, originalHeight: 2000,
+              },
+            },
+          },
+        },
+        onCoverUpdate: (payload) => {
+          coverUpdate = payload;
+        },
+      }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.edits.images.cover, undefined);
+  assertEquals(coverUpdate?.cover_asset_key, 'ai-pick.jpg');
+});
+
+Deno.test('save_edit: a cover_asset_key recompute failure still returns a successful edit save', async () => {
+  const pngBytes = buildPngBytes(3000, 2000);
+  const response = await handleMemoryBookEdits(
+    request({ op: 'save_edit', bookId: BOOK_ID, edit: { kind: 'coverPhoto', mediaId: MEDIA_ID } }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook(),
+        media: {
+          id: MEDIA_ID,
+          memory_id: MEMORY_ID,
+          object_key: 'k/original.jpg',
+          preview_object_key: 'k/preview.jpg',
+          content_type: 'image/jpeg',
+          aspect_ratio: 1.5,
+          memories: { family_id: FAMILY_ID },
+        },
+        coverUpdateError: { message: 'boom' },
+      }),
+      fetch: async () => new Response(new Blob([pngBytes]), { status: 206 }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.success, true);
+  assertEquals(body.edits.images.cover.file, 'k/preview.jpg');
 });
 
 // ── save_edit: focalPoint ─────────────────────────────────────────────────

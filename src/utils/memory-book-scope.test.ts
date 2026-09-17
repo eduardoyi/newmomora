@@ -8,10 +8,12 @@ import {
   everythingScopeOption,
   formatEraLine,
   formatMonthYear,
+  formatYearRange,
   memoryBookMatchesScope,
   memoryBookScopeKey,
   MEMORY_BOOK_PAGE_BUDGET,
   MEMORY_BOOK_THIN_THRESHOLD,
+  pickSuggestedScopes,
   thinPeriodReason,
   toJulianDayNumber,
   fromJulianDayNumber,
@@ -233,5 +235,84 @@ describe('constants', () => {
   it('matches the locked design brief', () => {
     expect(MEMORY_BOOK_THIN_THRESHOLD).toBe(30);
     expect(MEMORY_BOOK_PAGE_BUDGET).toBe(122);
+  });
+});
+
+describe('formatYearRange', () => {
+  it('spans two years when the window crosses a calendar year', () => {
+    expect(formatYearRange('2022-10-14', '2023-10-13')).toBe('2022 – 2023');
+  });
+
+  it('collapses to a single year when start and end share a year', () => {
+    expect(formatYearRange('2024-01-01', '2024-12-31')).toBe('2024');
+  });
+});
+
+describe('pickSuggestedScopes', () => {
+  const todayIso = '2026-09-17';
+  const dateOfBirth = '2022-06-01';
+  const options = buildMemoryBookScopeOptions(dateOfBirth, todayIso);
+
+  it('excludes calendar-year options entirely', () => {
+    const suggestions = pickSuggestedScopes(options, {}, todayIso);
+    expect(suggestions.every((option) => option.kind !== 'calendar_year')).toBe(true);
+  });
+
+  it('excludes scopes that already have an existing book', () => {
+    const yearOne = options.find((option) => option.label === 'Year One')!;
+    const rowsByScopeKey = { [memoryBookScopeKey(yearOne)]: true };
+
+    const suggestions = pickSuggestedScopes(options, rowsByScopeKey, todayIso);
+
+    expect(suggestions.some((option) => option.label === 'Year One')).toBe(false);
+  });
+
+  it('never returns more than 3 suggestions', () => {
+    const suggestions = pickSuggestedScopes(options, {}, todayIso);
+    expect(suggestions.length).toBeLessThanOrEqual(3);
+  });
+
+  it('orders completed age-years most-recent-first, up to 2', () => {
+    // DOB 2022-06-01 as of today 2026-09-17: Year Five (2026-06-01 -- ) is
+    // still in progress; Year Four (2025-06-01 -- 2026-05-31) is the most
+    // recently completed, then Year Three.
+    const suggestions = pickSuggestedScopes(options, {}, todayIso);
+    const ageYearSuggestions = suggestions.filter((option) => option.kind === 'age_year');
+
+    expect(ageYearSuggestions.length).toBe(2);
+    expect(ageYearSuggestions[0].label).toBe('Year Four');
+    expect(ageYearSuggestions[1].label).toBe('Year Three');
+  });
+
+  it('excludes the in-progress (not-yet-completed) current age-year', () => {
+    const suggestions = pickSuggestedScopes(options, {}, todayIso);
+    expect(suggestions.some((option) => option.label === 'Year Five')).toBe(false);
+  });
+
+  it('includes the everything option exactly once when it has no book', () => {
+    const suggestions = pickSuggestedScopes(options, {}, todayIso);
+    const everythingCount = suggestions.filter((option) => option.kind === 'everything').length;
+    expect(everythingCount).toBe(1);
+  });
+
+  it('omits everything once it already has a book', () => {
+    const everything = everythingScopeOption();
+    const rowsByScopeKey = { [memoryBookScopeKey(everything)]: true };
+
+    const suggestions = pickSuggestedScopes(options, rowsByScopeKey, todayIso);
+
+    expect(suggestions.some((option) => option.kind === 'everything')).toBe(false);
+  });
+
+  it('returns an empty result when every eligible scope already has a book', () => {
+    const rowsByScopeKey = Object.fromEntries(
+      options
+        .filter((option) => option.kind !== 'calendar_year')
+        .map((option) => [memoryBookScopeKey(option), true]),
+    );
+
+    const suggestions = pickSuggestedScopes(options, rowsByScopeKey, todayIso);
+
+    expect(suggestions).toEqual([]);
   });
 });

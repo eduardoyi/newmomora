@@ -2616,6 +2616,7 @@ export type Database = {
         Row: {
           book_document: Json | null
           child_id: string | null
+          cover_asset_key: string | null
           created_at: string
           failure_reason: string | null
           family_id: string
@@ -2636,6 +2637,7 @@ export type Database = {
         Insert: {
           book_document?: Json | null
           child_id?: string | null
+          cover_asset_key?: string | null
           created_at?: string
           failure_reason?: string | null
           family_id: string
@@ -2656,6 +2658,7 @@ export type Database = {
         Update: {
           book_document?: Json | null
           child_id?: string | null
+          cover_asset_key?: string | null
           created_at?: string
           failure_reason?: string | null
           family_id?: string

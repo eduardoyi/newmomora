@@ -4,6 +4,7 @@ import {
   countEligibleMemoriesForScope,
   createMemoryBook,
   dispatchMemoryBookGeneration,
+  fetchExampleCoverAssetKey,
   fetchMemoryBooksForChild,
   memoryBookWebUrl,
 } from '@/services/memory-books';
@@ -248,6 +249,76 @@ describe('memory-books service integration', () => {
       mockedSupabase.from.mockReturnValue({ select } as never);
 
       const result = await countEligibleMemoriesForScope('family-1', 'child-1', '2023-06-01', '2024-05-31');
+
+      expect(result.data).toBeNull();
+      expect(result.error).toEqual({ message: 'boom', code: '500' });
+    });
+  });
+
+  describe('fetchExampleCoverAssetKey', () => {
+    function mockExampleCoverQuery(rows: unknown[], error: { message: string; code?: string } | null = null) {
+      const limit = jest.fn().mockResolvedValue({ data: error ? null : rows, error });
+      const order = jest.fn().mockReturnValue({ limit });
+      const like = jest.fn().mockReturnValue({ order });
+      const eqMember = jest.fn().mockReturnValue({ like });
+      const eqFamily = jest.fn().mockReturnValue({ eq: eqMember });
+      const select = jest.fn().mockReturnValue({ eq: eqFamily });
+      mockedSupabase.from.mockReturnValue({ select } as never);
+      return { select, eqFamily, eqMember, like, order, limit };
+    }
+
+    it('queries the last 30 image memories tagged to this child, newest first', async () => {
+      const { select, eqFamily, eqMember, like, order, limit } = mockExampleCoverQuery([
+        { id: 'm1', memory_date: '2026-01-01', memory_media: [{ preview_object_key: 'preview-1', object_key: 'orig-1', content_type: 'image/jpeg' }] },
+      ]);
+
+      await fetchExampleCoverAssetKey('family-1', 'child-1');
+
+      expect(mockedSupabase.from).toHaveBeenCalledWith('memories');
+      expect(select).toHaveBeenCalledWith(
+        'id, memory_date, memory_media!inner(preview_object_key, object_key, content_type), memory_family_members!inner(family_member_id)',
+      );
+      expect(eqFamily).toHaveBeenCalledWith('family_id', 'family-1');
+      expect(eqMember).toHaveBeenCalledWith('memory_family_members.family_member_id', 'child-1');
+      expect(like).toHaveBeenCalledWith('memory_media.content_type', 'image/%');
+      expect(order).toHaveBeenCalledWith('memory_date', { ascending: false });
+      expect(limit).toHaveBeenCalledWith(30);
+    });
+
+    it('prefers the preview key over the original object key', async () => {
+      mockExampleCoverQuery([
+        { id: 'm1', memory_date: '2026-01-01', memory_media: [{ preview_object_key: 'preview-1', object_key: 'orig-1', content_type: 'image/jpeg' }] },
+      ]);
+
+      const result = await fetchExampleCoverAssetKey('family-1', 'child-1');
+
+      expect(result.data).toBe('preview-1');
+      expect(result.error).toBeNull();
+    });
+
+    it('falls back to the original object key when there is no preview', async () => {
+      mockExampleCoverQuery([
+        { id: 'm1', memory_date: '2026-01-01', memory_media: [{ preview_object_key: null, object_key: 'orig-1', content_type: 'image/jpeg' }] },
+      ]);
+
+      const result = await fetchExampleCoverAssetKey('family-1', 'child-1');
+
+      expect(result.data).toBe('orig-1');
+    });
+
+    it('returns null (never an error) when there are no eligible photos', async () => {
+      mockExampleCoverQuery([]);
+
+      const result = await fetchExampleCoverAssetKey('family-1', 'child-1');
+
+      expect(result.data).toBeNull();
+      expect(result.error).toBeNull();
+    });
+
+    it('maps a Supabase error', async () => {
+      mockExampleCoverQuery([], { message: 'boom', code: '500' });
+
+      const result = await fetchExampleCoverAssetKey('family-1', 'child-1');
 
       expect(result.data).toBeNull();
       expect(result.error).toEqual({ message: 'boom', code: '500' });

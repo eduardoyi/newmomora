@@ -10,6 +10,7 @@ import {
   countEligibleMemoriesForScope,
   createMemoryBook,
   dispatchMemoryBookGeneration,
+  fetchExampleCoverAssetKey,
   fetchMemoryBooksForChild,
   type MemoryBookListRow,
 } from '@/services/memory-books';
@@ -118,6 +119,26 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth }: UseMemoryBook
     },
     enabled: Boolean(familyId && childId) && scopeOptions.length > 0,
     staleTime: 5 * 60 * 1000,
+  });
+
+  // Shelf-redesign empty state's personalized example cover (owner-approved
+  // picker-redesign brief): one real photo of this child, picked at random
+  // -- see `fetchExampleCoverAssetKey`'s header comment for why the random
+  // pick itself lives in the service layer rather than here. A long
+  // `staleTime` is what keeps the pick stable across this mount's
+  // re-renders; it's read only while the shelf is actually empty (the
+  // screen only renders the empty state's example cover in that case), but
+  // kept unconditional here so switching from empty -> populated mid-session
+  // (a book finishes generating) never shows a loading flicker if the parent
+  // navigates back to an empty shelf for a sibling.
+  const exampleCoverQuery = useQuery({
+    queryKey: ['memory-book-example-cover', familyId, childId],
+    queryFn: async () => {
+      const { data } = await fetchExampleCoverAssetKey(familyId!, childId!);
+      return data;
+    },
+    enabled: Boolean(familyId && childId),
+    staleTime: 30 * 60 * 1000,
   });
 
   const [dispatchErrors, setDispatchErrors] = useState<Record<string, string>>({});
@@ -253,6 +274,7 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth }: UseMemoryBook
     isLoading: booksQuery.isLoading,
     isError: booksQuery.isError,
     isEligibilityLoading: eligibilityQuery.isLoading,
+    exampleCoverAssetKey: exampleCoverQuery.data ?? null,
     generate,
     retryDispatch,
     refresh,

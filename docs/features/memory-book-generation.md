@@ -15,7 +15,7 @@ DEPLOYED at shop.usemomora.com. Checkout (5c) is shipped, deployed, and
 canary-proven end to end (see docs/features/memory-book-orders.md). Check
 [plans/memory-book-5b-web-preview.md](../../plans/memory-book-5b-web-preview.md)
 and the relevant source directly for anything this summary doesn't cover.
-**Last updated:** 2026-09-15
+**Last updated:** 2026-09-17
 **PRD reference:** none yet (Memory Book is a new premium product, not in the
 original PRD) — canonical product doc is
 [docs/plans/memory-book.md](../plans/memory-book.md), specifically
@@ -209,202 +209,197 @@ for the general pattern this follows.
 
 ## In-app scope picker (5a.5)
 
-Shipped 2026-09-15, app-side only (`app/` + `src/`) — no server, Edge
-Function, worker, or schema change; both the `memory_books` contract and
-`generate-memory-book` were already live in production (see the sections
-above). Implements `docs/plans/memory-book.md` §"5a.5"'s locked design
-(owner decision 2026-09-07) verbatim except where noted under
+Originally shipped 2026-09-15 as a plain scope-status list (see
+[git history](#) for that version if needed). **Redesigned 2026-09-17**
+(owner-approved picker-redesign brief) into a book-cover shelf; app-side
+only (`app/` + `src/`) — still no server, Edge Function, worker, or schema
+change beyond the additive `memory_books.cover_asset_key` column this round
+added (see [Data model](#data-model)/TECH_SPEC §2.1d). Implements the
+locked shelf-redesign brief verbatim except where noted under
 [Deviations](#deviations-from-the-locked-design-brief) below.
 
 ### Entry point
 
-One persistent "Memory Books" row on each child's profile screen
-(`app/(app)/family/[id]/index.tsx`, rendered via the shared
-`SettingsBlock`/`SettingsRow` chrome — same row look as Settings and the
-Family members screen), placed directly under the `CastCard` (which itself
-holds the portrait-timeline history button) so it reads as "near the
-portrait timeline" per the brief, not buried in Settings and not a feed
-card. It routes to `app/(app)/family/[id]/memory-books.tsx`
-(`memoryBooksRoute(memberId)` in `src/lib/routes.ts`).
+Unchanged: one persistent "Memory Books" row on each child's profile screen
+(`app/(app)/family/[id]/index.tsx`), routing to
+`app/(app)/family/[id]/memory-books.tsx` (`memoryBooksRoute(memberId)` in
+`src/lib/routes.ts`).
 
 ### Scope derivation
 
-`src/utils/memory-book-scope.ts` is a pure, dependency-free module —
-**not** a shared import from `supabase/functions/_shared/date-context.ts`,
-because the Expo app cannot import Deno Edge Function modules. It is a
-deliberate, documented duplicate of that file's date arithmetic
-(`addYears`'s Feb 29 → Feb 28 clamp, and the same Julian-Day-Number-based
-`addDays`/round-trip used by `eval-memory-book-outline.ts`'s
-`fromJulianDayNumber`) so the frozen window this module computes is
-byte-for-byte what `workflow-memory-book-bridge/index.ts` would derive from
-the same `date_of_birth` — the module's header comment spells out exactly
-which functions must stay in sync and why.
-
-- **age_year**: `startDate = addYearsClamped(dob, ageYear - 1)`,
-  inclusive `endDate` = the day before
-  `addYearsClamped(dob, ageYear)` — "Year One" (`ageYear = 1`) is birth →
-  the day before the 1st birthday, matching `ageYearLabel`'s existing
-  wording in `eval-memory-book-outline.ts` (already rendered in book
-  covers). Enumerated from Year One up through whichever age-year is
-  currently in progress (today falls inside its window) — every scope is
-  SHOWN, per the brief, never hidden for being in-progress or thin. Empty
-  when the child has no `date_of_birth` on file (no age-year math is
-  possible without it).
-- **calendar_year**: plain `Jan 1`–`Dec 31` windows, birth year through the
-  current year, **most recent year first** — not specified verbatim by the
-  brief (which only fixes the age-year ordering and labels); a documented
-  implementation choice, since calendar-year books are more naturally
-  browsed by recency than the developmental Year One/Two/... progression.
-  Falls back to a bounded "current year + previous year" when
-  `date_of_birth` is unknown (no anchor to compute a real origin from), and
-  caps the lookback at 25 years for a very old `date_of_birth` (loop-safety
-  bound, not a real product limit).
-- **everything**: both dates `null`, always offered.
-- Labels: primary `option.label` is stored verbatim as
-  `memory_books.scope_label` ("Year One", "2024", "Everything"). The
-  secondary "era line" ("Oct 2022 – Oct 2023") is rendered only for
-  age-year scopes, per the brief's example — calendar-year/everything have
-  no secondary line (the primary label already says everything there is to
-  say).
+Unchanged from the original picker — still `src/utils/memory-book-scope.ts`,
+a pure, dependency-free, documented byte-for-byte duplicate of
+`supabase/functions/_shared/date-context.ts`'s date arithmetic (the Expo app
+cannot import Deno Edge Function modules). Age-year (`addYearsClamped`),
+calendar-year (most-recent-first, no-DOB fallback), and `everything` options
+are built exactly as before — see that file's header comment for the exact
+functions that must stay in sync. Two additions for the shelf redesign:
+`formatYearRange(startDate, endDateInclusive)` ("2022 – 2023", or a single
+year when both dates share one) for a book tile's on-cover scope line, and
+`pickSuggestedScopes(options, rowsByScopeKey, todayIso)` (pure; see
+[Create sheet](#create-sheet) below) for the create-sheet's SUGGESTIONS list.
 
 ### Thin-period threshold and eligibility count
 
-`MEMORY_BOOK_THIN_THRESHOLD = 30`; `thinPeriodReason(count)` returns the
-locked copy shape (`"12 memories in this period — books need about 30"`,
-singular "memory" at exactly 1) or `null` once the threshold is met. Every
-scope is always rendered; a thin one is disabled with that reason instead
-of hidden.
+Unchanged math (`MEMORY_BOOK_THIN_THRESHOLD = 30`,
+`thinPeriodReason(count)`, `countEligibleMemoriesForScope`'s one-query-per-
+scope approximation of the generation worker's eligibility pass — same
+documented `isPrintable` divergence as before). **UI treatment changed**:
+the original picker used a thin scope to hide the Create button entirely;
+the redesigned create sheet instead shows a thin-period warning chip next
+to a still-tappable row (owner decision: warn, don't block — a parent who
+wants a slim book anyway shouldn't be stopped).
 
-`countEligibleMemoriesForScope` (`src/services/memory-books.ts`) approximates
-`cloudflare/memory-book-worker/src/eligibility.ts`'s
-`computeMemoryEligibility` (a memory is eligible iff tagged to THIS child,
-or has no tags at all) with **one query per scope** at picker-open: select
-`id, memory_family_members(family_member_id)` from `memories` for the
-family, filtered to the scope's half-open date window (or unfiltered for
-`everything`), then count eligibility client-side. **Documented
-divergence**: this does not apply the generation worker's additional
-`isPrintable` filter (`hasText || photoCount + videoCount > 0`) — in
-practice every memory already has either `content` or a media attachment
-by construction (the composer requires one), so the two counts coincide;
-this was a deliberate simplification, not an oversight, made to keep the
-count to exactly one query per scope as the brief asks for.
+### Shelf
 
-### Status surface and generation
+`app/(app)/family/[id]/memory-books.tsx` (full rewrite) renders one of two
+top-level states from `useMemoryBooks`' `rows`:
 
-`useMemoryBooks` (`src/hooks/useMemoryBooks.ts`) combines the scope options
-with:
+- **Shelf state** (any scope has a book): a 2-column grid of book-cover
+  tiles (`src/components/memory-books/book-cover-tile.tsx`), one per scope
+  that has ever had a book requested (the existing `pickRelevantBook`
+  active/ready/failed tie-break still collapses multiple historical rows
+  for the same scope to one), sorted by the winning book's `created_at`
+  descending. Each tile renders one of three states — `ready` (the book's
+  `cover_asset_key` photo via `useMediaUrl` + a warm deterministic wash
+  fallback from `src/components/memory-books/cover-washes.ts` while the
+  photo is null/unresolved), `generating` (a static "We're making it / Ready
+  in about 3 minutes" panel with a Reanimated pulse), `failed` (a muted wash
+  + ghosted name + a "Didn't finish" pill) — tapping a tile opens the web
+  viewer (ready), the retry sheet (failed), or does nothing (generating).
+- **Empty state** (no books at all): a personalized example cover built
+  from a REAL random photo of the child
+  (`fetchExampleCoverAssetKey(familyId, memberId)` in
+  `src/services/memory-books.ts`, wired through `useMemoryBooks`'
+  `exampleCoverAssetKey`) rendered through the same `BookCoverTile` (`ready`
+  state, rotated -2.5° via a wrapper `View`), plus the two-bullet feature
+  card (layflat 8.3×8.3in, "chosen for you" curation).
 
-- `fetchMemoryBooksForChild` — every `memory_books` row ever requested for
-  this child, any status, polled every 4s (`refetchInterval`) while any row
-  is `queued`/`generating` and idle otherwise; React Query stops calling
-  `refetchInterval` once the picker screen unmounts (no observers), so
-  there's no separate visibility/focus wiring for the "poll while visible"
-  requirement.
-- the eligibility counts above (`staleTime` 5 minutes — counted once at
-  open, not kept live; the server re-derives eligibility fresh at
-  generation time regardless).
+Both states share a fixed-bottom "Create a book" CTA (owner/manager only,
+`canEditFamilyContent(role)` — unchanged role gate from the original
+picker) that opens the create sheet, and an in-screen toast
+(`src/components/memory-books/book-toast.tsx`) after a create/retry tap.
 
-For each scope, the most relevant existing row (any non-failed status
-first, then the most recent failed one) takes over the row instead of
-offering generation again, exactly as the brief specifies — see
-`pickRelevantBook`'s comment for the active/ready/failed tie-break when a
-scope has been requested more than once over time (allowed; the plan is
-explicit that "a family can order any number of books... scopes may
-overlap"). `generate(option)` is used for BOTH the first "Create book" tap
-AND the "Retry" tap on a `failed` row — both are a plain
-`createMemoryBook` insert + `generate-memory-book` dispatch from this
-hook's point of view, and the brief is explicit that retry creates a fresh
-row rather than mutating the failed one. A distinct `retryDispatch(option,
-bookId)` handles only the narrower "the row inserted fine but the dispatch
-call itself failed" case (contract note: "treat non-2xx as a failed
-dispatch — row stays queued; show retryable error") — it re-invokes
-`generate-memory-book` against the SAME already-`queued` row rather than
-inserting a new one; this transient error is session-local UI state
-(`MemoryBookScopeRow.dispatchError`), never persisted.
+### Create sheet
 
-The one-active-per-scope unique index conflict (Postgres `23505`) is
-handled without an error wall: `createMemoryBook` flags `conflict: true`
-distinctly from other errors, and the hook responds by refetching the list
-so the scope renders whichever row already won the race (another tab, a
-double-tap, or family sharing racing two managers).
+`src/components/memory-books/create-book-sheet.tsx` — a house `Modal` +
+pan-to-dismiss bottom sheet (copied from `family-activity-sheet.tsx`'s
+pattern, no new dependency). Two layers:
 
-Roles (locked design point 6): `canEditFamilyContent(role)` gates the
-Create/Retry buttons in `MemoryBookScopeRow`. A viewer additionally never
-sees a scope row that has no existing book at all — RLS would reject their
-insert anyway, but the screen degrades gracefully rather than surfacing
-that as an error (`MemoryBooksScreen` filters `rows` to `book !== null`
-for non-owner/manager roles).
+1. **SUGGESTIONS** (up to 3 rows): `pickSuggestedScopes` picks completed
+   age-years with no existing book (most-recent-first, max 2) plus
+   `everything` if it has no book — **never** a `calendar_year` option
+   (owner decision: claiming a calendar-year scope mid-year permanently
+   locks that scope's window, so it must always be a deliberate pick from
+   the expanded list, never a one-tap suggestion).
+2. An expandable grouped list ("More options"/"Fewer options" toggle,
+   defaults open when there are zero suggestions) covering every scope:
+   "Years of life" (oldest first), "Calendar years" (most-recent-first, the
+   current year's row gets a display-only " so far" suffix), "Everything".
+   A row with an existing ready/generating book is muted and non-tappable
+   ("Created ✓" / "Making it now"); a `failed` row stays tappable ("Didn't
+   finish") and retries the same way a failed tile does.
 
-### View / Retry / progress UI
+Tapping any tappable row calls the hook's `generate(option)`, dismisses the
+sheet, and shows the toast — this is the same insert-then-dispatch flow the
+original picker used, just triggered from a different surface.
 
-`src/components/memory-book-scope-row.tsx` renders, per `status`:
-`available` → "Create book" button (owner/manager only); `thin` → the
-disabled-reason copy, no button; `in_progress` (covers both `queued` and
-`generating`, per the brief) → a spinner + "Working on it — ready in about
-3 minutes", plus the transient dispatch-error banner and its own "Try
-again" button when present; `ready` → "View your book"
-(`Linking.openURL(memoryBookWebUrl(bookId))`, `https://shop.usemomora.com/b/<id>`
-— the web app's own separate login handles auth from there; the one-time
-signed-link handoff is a deliberately deferred seam, not built here);
-`failed` → the row's `failure_reason` (or a generic fallback) + "Retry"
-(owner/manager only).
+### Retry sheet
+
+`src/components/memory-books/retry-book-sheet.tsx` — a short, non-scrolling
+confirmation ("Let's try that again") before retrying a `failed` scope.
+Confirming calls `generate(option)` for that scope exactly like the
+original picker's inline "Retry" button did (a fresh insert; the failed row
+stays as history) — this sheet only adds an explicit confirm step in front
+of that same call.
+
+### Status surface and generation (hook)
+
+`useMemoryBooks` (`src/hooks/useMemoryBooks.ts`) is extended, not rewritten:
+its return shape (`rows`, `generate`, `retryDispatch`, `refresh`, the
+dispatch-error surface, the `thin` classification) is unchanged so the
+shelf/sheets can keep consuming it the same way the original row-list UI
+did. Additions: each row's `book` now carries `cover_asset_key`,
+`created_at`, and `updated_at` (added to `MEMORY_BOOK_LIST_COLUMNS` in
+`src/services/memory-books.ts`) for the tiles to render from, and a new
+`exampleCoverAssetKey` field (a long-`staleTime` React Query wrapping
+`fetchExampleCoverAssetKey`) for the empty state. Polling cadence, the
+23505-conflict recovery, and the `pickRelevantBook` tie-break are all
+unchanged from the original picker — see the "Status surface and
+generation" history in this doc's git log for that write-up if needed.
+
+### Ready/failed push notification (deep link)
+
+New this round: `src/hooks/useNotifications.ts`'s `PushRouteData` gained a
+`'memory-book'` route (`{ route: 'memory-book', memberId, familyId?,
+bookId? }`) so a push telling a parent their book finished (or failed) can
+deep-link straight to that child's shelf. `routeFromPushData` resolves it
+exactly like the existing `'memory'` route — reconciling the recipient's
+active family first (`setActiveFamily`, with the same membership-fallback-
+to-timeline safety net) — then pushes `memoryBooksRoute(memberId)`; with no
+`memberId` it falls back to the timeline. The mirrored Deno type
+(`supabase/functions/_shared/expo-push.ts`'s `PushRouteData`) is kept in
+sync by whichever change actually sends this push — **this change only
+adds the client's routing half**; it does not add a new Edge Function or
+notification trigger. `bookId` is carried for potential future use
+(e.g. deep-linking straight into a specific book) but the shelf itself is
+keyed off `memberId`, not `bookId`, today.
 
 ### Deviations from the locked design brief
 
 1. Calendar-year ordering (most-recent-first) and the no-`date_of_birth`
-   fallback range are implementation choices the brief didn't specify —
-   see [Scope derivation](#scope-derivation) above.
-2. The eligibility count skips the generation worker's `isPrintable`
+   fallback range remain implementation choices the original picker made
+   that the redesign brief didn't revisit — see
+   [Scope derivation](#scope-derivation) above.
+2. The eligibility count still skips the generation worker's `isPrintable`
    filter — see [Thin-period threshold and eligibility
    count](#thin-period-threshold-and-eligibility-count) above. Stated
    divergence, negligible in practice given how memories are composed.
-3. No new i18n/strings system was introduced. AGENTS.md's "Coding
-   standards" section states the product is **English-only UI** today (no
-   `i18next`/`react-intl`/locale files exist anywhere in `app/`/`src/`);
-   the task brief's "add both en + es if the app has a strings system" is
-   conditional on one existing, and building a new localization system for
-   one screen was out of this slice's scope (schema/API changes were
-   explicitly excluded; a new cross-cutting i18n system is a bigger call
-   than one feature warrants). All picker copy is English, matching every
-   other screen in the app.
+3. No new i18n/strings system was introduced (same rationale as the
+   original picker — AGENTS.md's "Coding standards" states the product is
+   English-only UI today). All shelf/sheet copy is English.
+4. The below-tile "range line" for an `everything`-scope book (spec:
+   `"Since {formatMonthYear(first)}"` when known) is omitted always, not
+   conditionally — this app has no live "earliest memory date" query to
+   derive `first` from yet. Documented, not a silent gap; a future change
+   adding that query can fill this in (`rangeLineForRow` in
+   `memory-books.tsx`).
+5. `BookToast`'s entrance animation uses Reanimated's `FadeIn`, not
+   `FadeInDown` as the brief suggested — `jest.setup.ts`'s shared
+   Reanimated mock (outside this change's file ownership) only exports
+   `FadeIn`/`FadeOut`; a plain fade reads close enough and keeps the
+   component test-safe without touching shared test infra.
 
 ### Testing
 
-- `src/utils/memory-book-scope.test.ts` — pure logic, unit only: `addYears`
-  clamping (incl. keeping Feb 29 when the target year is itself a leap
-  year), the Julian-Day-Number round trip and `addDaysToDate` across
-  month/leap-day boundaries, `ageYearLabel` (incl. the past-20 fallback),
-  `formatMonthYear`/`formatEraLine`, age-year enumeration (incl. a
-  leap-day birthday reaching a leap-day age-year five years later,
-  covering both the Feb 29 → Feb 28 clamp AND the reverse case), calendar-
-  year enumeration (ordering, no-DOB fallback, the lookback cap),
-  `buildMemoryBookScopeOptions` ordering, `memoryBookScopeKey`/
-  `memoryBookMatchesScope`, and `thinPeriodReason`'s exact copy shape
-  (singular/plural/zero) plus the locked constants.
-- `src/services/memory-books.integration.test.ts` — Jest, mocked Supabase
-  client: `fetchMemoryBooksForChild`'s filter/order shape, `createMemoryBook`'s
-  exact just-queued insert shape (incl. the `everything`-scope null dates),
-  the `23505` conflict flag distinct from other errors,
-  `dispatchMemoryBookGeneration`'s `generate-memory-book` invoke, and
-  `countEligibleMemoriesForScope`'s query shape (the half-open window one
-  day past the inclusive end date, no date filter for `everything`, the
-  untagged/tagged-to-child/tagged-to-others-only partition, and a null
-  embed treated as untagged).
-- `src/hooks/useMemoryBooks.integration.test.tsx` — React Query
-  `renderHook`, mocked service layer: eligibility merge, the thin-period
-  gate, an existing row taking over a scope's status, the full
-  generate-then-dispatch flow, 23505-conflict recovery without an error
-  wall, the transient-dispatch-error/`retryDispatch` path, and the
-  failed-row retry inserting a fresh row.
-- `src/screen-tests/memory-books.integration.test.tsx` and the added case
-  in `src/screen-tests/family-member-portrait-entry.integration.test.tsx`
-  — component-level, mocked hooks: every scope renders with its action,
-  the thin reason hides the button, tapping Create/Retry calls
-  `generate()`, the progress/ready/failed states render their own copy and
-  actions, `Linking.openURL` is called with the exact `shop.usemomora.com`
-  URL for a ready book, non-manager viewers see only rows with an existing
-  book, and the child-profile screen's persistent row navigates to the
-  picker.
+- `src/utils/memory-book-scope.test.ts` — unchanged coverage (see git
+  history) plus new unit tests for `formatYearRange` (two-year span vs.
+  same-year collapse) and `pickSuggestedScopes` (excludes calendar years,
+  excludes scopes with an existing book, max 3, most-recent-first among
+  completed age-years, the in-progress current age-year excluded,
+  `everything` included exactly once, empty result when every eligible
+  scope already has a book).
+- `src/services/memory-books.integration.test.ts` — existing coverage
+  (unchanged) plus `fetchExampleCoverAssetKey`: the exact select/filter/
+  order/limit shape, preferring `preview_object_key` over `object_key`,
+  null (never an error) when there are no eligible photos, and Supabase
+  error mapping.
+- `src/hooks/useMemoryBooks.integration.test.tsx` — existing coverage
+  (unchanged) plus `exampleCoverAssetKey` resolving from the service call
+  and defaulting to `null`.
+- `src/hooks/useNotifications.test.ts` — existing coverage plus the
+  `'memory-book'` route: routes to `memoryBooksRoute(memberId)`, falls back
+  to the timeline with no `memberId`, reports the literal `notification_opened`
+  target, and the same active-family reconciliation/fallback/failure cases
+  the `'memory'` route already had, mirrored for `'memory-book'`.
+- `src/screen-tests/memory-books.integration.test.tsx` — rewritten for the
+  shelf structure (mocked `useMemoryBooks`, `useMediaUrl`): a tile per book
+  state renders, a ready tile opens the web URL, a failed tile opens the
+  retry sheet and confirming calls `generate`, the Create CTA opens the
+  create sheet, tapping a suggestion calls `generate` and shows the toast,
+  expanding "More options" shows "Created ✓" for an existing ready book, a
+  non-manager viewer sees no Create CTA, and the empty state renders the
+  personalized headline.
 
 Run: `npm test` (Node 20) — no `npm run test:edge` needed for this change
 (no Edge Function touched).
@@ -903,6 +898,7 @@ cd cloudflare/memory-book-web && npm test && npm run typecheck && npm run deploy
 
 | Date | Change |
 |------|--------|
+| 2026-09-17 | Picker redesign (owner-approved brief), app-side only: the original scope-status row list is replaced by a book-cover shelf. `app/(app)/family/[id]/memory-books.tsx` (full rewrite) renders a 2-column grid of `src/components/memory-books/book-cover-tile.tsx` tiles (ready/generating/failed, a real cover photo via the new `memory_books.cover_asset_key` column or a deterministic wash fallback) when any book exists, else a personalized empty state (a random real photo of the child via `fetchExampleCoverAssetKey`). A fixed "Create a book" CTA opens `create-book-sheet.tsx` (a short SUGGESTIONS list from the new pure `pickSuggestedScopes` helper, plus an expandable grouped list — calendar-year scopes are never suggested, only ever a deliberate pick); a failed tile opens `retry-book-sheet.tsx`; both flows show an in-screen toast (`book-toast.tsx`). `useMemoryBooks`/`memory-books.ts` extended (not rewritten) for the new column plus `exampleCoverAssetKey`; the underlying scope math, polling, dispatch-error surface, and role gating are unchanged. Also added: `PushRouteData`'s `'memory-book'` route in `src/hooks/useNotifications.ts`, deep-linking a book-ready/failed push to the shelf. See [In-app scope picker (5a.5)](#in-app-scope-picker-5a5) for the full contract and its deviations. |
 | 2026-09-15 | 5a.5 shipped: in-app scope picker, app-side only (no server/schema change). "Memory Books" row on the child profile screen (`app/(app)/family/[id]/index.tsx`, near the portrait timeline) opens `app/(app)/family/[id]/memory-books.tsx`, listing age-year/calendar-year/Everything scopes via `src/utils/memory-book-scope.ts` (a documented, byte-for-byte duplicate of the server's `addYears`/Julian-Day-Number date math — the Expo app cannot import Deno Edge Function modules). Thin scopes (< 30 eligible memories, one query per scope via `src/services/memory-books.ts#countEligibleMemoriesForScope`, approximating the Workflow's own tagged-or-untagged eligibility) show the locked "N memories in this period — books need about 30" copy instead of a Generate button. An existing `memory_books` row for a scope takes over its row (`src/hooks/useMemoryBooks.ts`): `queued`/`generating` → a ~3-minute progress state (polled every 4s while active), `ready` → "View your book" (`Linking.openURL` to `shop.usemomora.com/b/<id>` — the signed-link handoff stays a deferred seam), `failed` → the failure reason + Retry (inserts a fresh row, per the locked design). The one-active-per-scope `23505` conflict is handled by refetching, never an error wall. Viewers (non-owner/manager) see only scopes with an existing book, never the generation affordance. See [In-app scope picker (5a.5)](#in-app-scope-picker-5a5) for the full contract, its documented deviations (calendar-year ordering/no-DOB fallback, the `isPrintable` eligibility divergence, and staying English-only since the app has no i18n system yet), and its test list. `docs/plans/memory-book.md` §5a.5 marked shipped. |
 | 2026-09-09 | Owner-approved editing-UX round (4 items, all client + `memory-book-edits` `picker_pool` only): (1) picker dates under each thumbnail + a date-range filter (`dateStart`/`dateEnd`, always intersected with the scope window, never widened past it) + a person filter (`memberId`, via `memory_family_members`) — fetched client-side against `family_members` for the roster, no new response field; (2) `PickerSheet`'s "Load more" button gains an `IntersectionObserver` sentinel as the primary infinite-scroll trigger, one `fetchLockRef` guarding every caller against a double-fire; (3) duplicate-photo badges (`book/duplicateAssets.ts`) on every slot whose rendered asset file occupies 2+ photo slots across the book, clicking one cycles to the next other occurrence; (4) after an image edit saves, the viewer auto-navigates to the slot's (possibly new) page and, if it lost the `full-bleed`/`panorama-spread` treatment on refit (`book/reflowNotice.ts`'s `computeReflowResult`), the Saved/Undo toast grows one extra sentence rather than stacking a second toast. `docs/TECH_SPEC.md` intentionally NOT touched in this change (it already carried unrelated in-progress edits at the time). |
 | 2026-09-07 | V5b steps 6-8 (+ one wave-1 wiring gap): the web app shipped — `book-renderer/src/web/` (a third Vite entry, `web.html`: email-OTP auth, family book list with status chips + polling + plain coalescer thumbnails, book view running `book_document -> applyPreFit -> fitBook -> applyPostFit -> SpreadPager`, an edit panel for all v1 text targets + image replace via a paginated picker sheet + focal-point reposition via a dedicated crop modal, skipped-orphan surfacing). Dedicated PII-safe build (`vite.web.config.ts`, `publicDir: false`, single `web.html` input, `dist-web/` output) with a real bundle check (`scripts/check-web-bundle.mjs`, wired into `build:web`) verified against an actual build (confirmed it FAILS on an injected `book-data`/`index.html` violation, not just passes on the real one). Hosting: `cloudflare/memory-book-web/`, a static-assets Worker with explicit SPA fallback to `web.html` (deliberately not Cloudflare's `index.html`-only convention), route `shop.usemomora.com` — `wrangler deploy --dry-run` and `wrangler check startup` both verified; not deployed (owner-gated). Wave-1 wiring gap fixed: `Closing.tsx` now reads `params.closingLine` (written by `applyPostFit` since step 4 but previously unread — a saved closing-line edit silently had no effect until this change). `docs/plans/memory-book.md` §V5's 5b bullet updated (Vite-entry decision, not Next.js; localStorage session note) — this doc's own stale "Next.js package" mention corrected too. Steps 3-5 (`applyBookEdits`, pluggable asset resolution, focal-point template wiring) were already shipped as part of wave 1 (commit `3acd5a9`) even though the entry below didn't call them out individually. |
