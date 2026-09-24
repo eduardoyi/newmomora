@@ -131,7 +131,10 @@ export default function JoinEmailScreen() {
       return;
     }
 
-    setStep('email');
+    // Session changes can happen while this screen is active (notably when
+    // the anonymous preview session is discarded before OTP). Only initialize
+    // the screen; do not reset an in-progress code, finishing, or error state.
+    setStep((current) => (current === 'checking' ? 'email' : current));
   }, [isAuthLoading, session, finishJoin]);
 
   useEffect(() => {

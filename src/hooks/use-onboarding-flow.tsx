@@ -41,6 +41,12 @@ const OnboardingFlowContext = createContext<OnboardingFlowContextValue | null>(n
 
 export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
   const { user, isLoading: isAuthLoading } = useAuth();
+  // Anonymous sessions are temporary onboarding plumbing, not an account
+  // identity. In the join flow we discard that session before requesting the
+  // OTP; treating anonymous -> signed-out as an account switch would reset
+  // hydration and unmount the join email screen before its local code step
+  // can render.
+  const accountUserId = user && !user.is_anonymous ? user.id : null;
   const [draft, setDraft] = useState<OnboardingDraft>(() => createEmptyOnboardingDraft());
   const [isHydrated, setIsHydrated] = useState(false);
   const [isAccountDraftHidden, setIsAccountDraftHidden] = useState(false);
@@ -54,7 +60,6 @@ export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
     let isMounted = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- account changes must gate the previous user's draft before rendering it
     setIsHydrated(false);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- account changes must hide scoped resume data before rendering it
     setIsAccountDraftHidden(false);
     isFirstPersistableChangeRef.current = true;
 
@@ -68,19 +73,19 @@ export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
       // however, it belongs to the account that created that family. Never
       // show another account's child names, capture, or paywall resume state
       // after a device-level sign-out/sign-in switch.
-      if (stored?.ownerUserId && !user?.id) {
+      if (stored?.ownerUserId && !accountUserId) {
         // Keep the signed-in user's resume marker on disk so the same account
         // can continue after Leave, but never expose its child/capture data to
         // an unauthenticated session using the device.
         setIsAccountDraftHidden(true);
         setDraft(createEmptyOnboardingDraft());
-      } else if (stored?.ownerUserId && user?.id && stored.ownerUserId !== user.id) {
+      } else if (stored?.ownerUserId && accountUserId && stored.ownerUserId !== accountUserId) {
         void clearOnboardingDraft();
         setDraft(createEmptyOnboardingDraft());
       } else {
         setDraft(
-          stored && user?.id && stored.committedFamilyId && !stored.ownerUserId
-            ? { ...stored, ownerUserId: user.id }
+          stored && accountUserId && stored.committedFamilyId && !stored.ownerUserId
+            ? { ...stored, ownerUserId: accountUserId }
             : stored ?? createEmptyOnboardingDraft(),
         );
       }
@@ -91,7 +96,7 @@ export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
     return () => {
       isMounted = false;
     };
-  }, [isAuthLoading, user?.id]);
+  }, [accountUserId, isAuthLoading]);
 
   // Debounced persist on every draft change, once hydration has had its
   // chance to run -- an earlier write would race the hydration read above
