@@ -51,6 +51,8 @@ function makeEvent(overrides: Partial<FamilyActivityEvent> = {}): FamilyActivity
     memoryIllustrationKey: null,
     memoryMediaKey: null,
     memoryMediaPreviewKey: null,
+    memoryType: null,
+    memoryEmotion: null,
     memoryMediaContentType: null,
     commentId: null,
     commentSnippet: null,
@@ -381,6 +383,34 @@ describe('FamilyActivitySheet', () => {
 
     const keys = mockedUseBatchedMediaUrls.mock.calls.at(-1)?.[0] ?? [];
     expect([...keys].sort()).toEqual(['m1/illustration.webp', 'm2/photo-preview.jpg']);
+  });
+
+  it('draws a quote tile for text memories and a sound tile for audio memories instead of a blank box', () => {
+    mockedUseFamilyActivity.mockReturnValue({
+      events: [
+        makeEvent({ id: 'e1', memoryId: 'text-memory', memoryType: 'text_only', memoryEmotion: 'joy' }),
+        makeEvent({
+          id: 'e2',
+          kind: 'memory_liked',
+          memoryId: 'audio-memory',
+          memoryType: 'audio',
+          memoryMediaKey: 'audio-memory/clip.m4a',
+          memoryMediaContentType: 'audio/mp4',
+        }),
+      ],
+      isLoading: false,
+      isRefetching: false,
+      isError: false,
+      error: null,
+      refetch,
+    });
+
+    const { getByTestId } = renderSheet();
+
+    expect(getByTestId('family-activity-thumbnail-text-memory-quote')).toBeTruthy();
+    expect(getByTestId('family-activity-thumbnail-audio-memory-sound')).toBeTruthy();
+    // The audio clip is never requested as an image.
+    expect(mockedUseBatchedMediaUrls.mock.calls.at(-1)?.[0]).toEqual([]);
   });
 
   it('fires mark-seen on open', () => {

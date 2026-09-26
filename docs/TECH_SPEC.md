@@ -1075,7 +1075,10 @@ deleted, allowing notification delivery to ignore stale/repeated writes.
   `memory_media_preview_key` is the cover (`position = 0`) `memory_media`
   row's `preview_object_key` (photo preview or video poster; null for legacy
   rows) so the sheet's thumbnails load the list-sized variant
-  (20260926120000_family_activity_media_preview_key.sql).
+  (20260926120000_family_activity_media_preview_key.sql). `memory_type` and
+  `memory_emotion` (`m.emotion`) let the sheet draw the quote/sound fallback
+  tile for memories without an image
+  (20260926140000_family_activity_memory_type.sql).
 - `get_family_activity_unread(target_family_id uuid) returns boolean` —
   same guards, `member_pending` role filter, and blocked-actor exclusion;
   true when any qualifying event's `created_at` is after the caller's

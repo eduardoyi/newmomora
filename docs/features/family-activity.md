@@ -35,8 +35,12 @@ the bell shows there's something new since the viewer last opened it.
   comment row, otherwise a short excerpt of the memory), a timestamp, and — for
   memories — up to 3 stacked 44px thumbnails on the right (illustration first,
   then the cover asset's list-sized preview / video poster
-  (`memory_media_preview_key`), then the original image — never a video
-  original — falling back to a placeholder box). Thumbnail URLs are signed
+  (`memory_media_preview_key`), then the original image — never a video or
+  audio original). A memory with no image draws the same type-aware tile the
+  calendar stamp and member-profile thumb use, tinted by `memory_emotion`: a
+  `“` quote mark for text memories (including a text_illustration whose
+  illustration hasn't landed), a `SoundTile` for audio; anything else falls
+  back to a plain surface box. Thumbnail URLs are signed
   once for the whole sheet by `useBatchedMediaUrls` (reusing any URL the
   timeline already signed, batching the rest ≤50 keys per `get-media-url`
   call) and passed to each row — rows must not call `useMediaUrls`

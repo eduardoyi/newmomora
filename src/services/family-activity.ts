@@ -40,6 +40,8 @@ export type FamilyActivityRpcRow = Omit<
   | 'memory_media_key'
   | 'memory_media_content_type'
   | 'memory_media_preview_key'
+  | 'memory_type'
+  | 'memory_emotion'
   | 'comment_id'
   | 'comment_snippet'
   | 'invite_id'
@@ -55,6 +57,9 @@ export type FamilyActivityRpcRow = Omit<
   // Cover asset's list-sized preview (photo) or poster (video) -- null for
   // legacy rows without one.
   memory_media_preview_key: string | null;
+  // Drive the no-image fallback tile (quote mark / SoundTile) and its tint.
+  memory_type: string | null;
+  memory_emotion: string | null;
   comment_id: string | null;
   comment_snippet: string | null;
   invite_id: string | null;
@@ -74,6 +79,8 @@ export interface FamilyActivityEvent {
   memoryMediaKey: string | null;
   memoryMediaContentType: string | null;
   memoryMediaPreviewKey: string | null;
+  memoryType: string | null;
+  memoryEmotion: string | null;
   commentId: string | null;
   commentSnippet: string | null;
   inviteId: string | null;
@@ -94,6 +101,8 @@ export function mapFamilyActivityRow(row: FamilyActivityRpcRow): FamilyActivityE
     memoryMediaKey: row.memory_media_key,
     memoryMediaContentType: row.memory_media_content_type,
     memoryMediaPreviewKey: row.memory_media_preview_key ?? null,
+    memoryType: row.memory_type ?? null,
+    memoryEmotion: row.memory_emotion ?? null,
     commentId: row.comment_id,
     commentSnippet: row.comment_snippet,
     inviteId: row.invite_id,

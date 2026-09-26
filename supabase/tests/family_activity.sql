@@ -9,7 +9,7 @@ begin;
 -- retention (200-cap / 90-day), the no-direct-client-access grant posture
 -- on family_activity_events, and the memory_likes select-policy flip
 -- (household-read, insert/delete still self-only).
-select plan(37);
+select plan(38);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures. All base data is inserted as the connection's default (postgres)
@@ -311,6 +311,12 @@ select is(
   (select memory_excerpt from public.get_family_activity('92000000-0000-4000-8000-000000000001') where memory_id = '94000000-0000-4000-8000-000000000003'),
   'Grandma tells the best bedtime stories',
   'memory_excerpt falls back to audio_transcript when content is null'
+);
+
+select is(
+  (select memory_type from public.get_family_activity('92000000-0000-4000-8000-000000000001') where memory_id = '94000000-0000-4000-8000-000000000003'),
+  'audio',
+  'memory_type is returned so the sheet can draw a sound tile for audio memories'
 );
 
 set local role postgres;
