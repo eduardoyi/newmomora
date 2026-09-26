@@ -18,7 +18,7 @@ import {
   searchMemories,
   updateMemory,
   MEMORIES_PAGE_SIZE,
-  MEMORIES_SEARCH_LIMIT,
+  MEMORY_SEARCH_PAGE_SIZE,
   LOOKING_BACK_MEMORY_FETCH_LIMIT,
 } from '@/services/memories';
 
@@ -2301,11 +2301,12 @@ describe('memories service integration', () => {
     });
   });
 
-  describe('searchMemories (Workstream E1b/E2/E3)', () => {
+  describe('searchMemories (timeline search, search_memories RPC)', () => {
     function searchMemoryRow(overrides: Record<string, unknown> = {}) {
       return {
         id: 'memory-1',
         user_id: 'user-1',
+        family_id: 'family-1',
         content: 'Bedtime stories',
         memory_date: '2026-05-24',
         created_at: '2026-05-24T00:00:00.000Z',
@@ -2313,193 +2314,107 @@ describe('memories service integration', () => {
         emotion: null,
         illustration_key: null,
         illustration_status: 'none',
-        illustration_prompt: null,
         media_key: null,
         media_content_type: null,
+        link_previews: {},
         updated_at: '2026-05-24T00:00:00.000Z',
         ...overrides,
       };
     }
 
-    it('returns an empty result without querying for a blank/whitespace query', async () => {
-      const { data, error } = await searchMemories('   ');
+    function mockTables(memoryRows: unknown[]) {
+      const memoriesBuilder = createQueryBuilder({ data: memoryRows, error: null });
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return memoriesBuilder;
+        if (table === 'memory_family_members' || table === 'memory_media') {
+          return createQueryBuilder({ data: [], error: null });
+        }
+        throw new Error(`Unexpected table ${table}`);
+      });
+      return memoriesBuilder;
+    }
+
+    it('does nothing without text or a chip', async () => {
+      const { data, error } = await searchMemories({ familyId: 'family-1', query: '   ' });
 
       expect(error).toBeNull();
       expect(data).toEqual([]);
+      expect(supabase.rpc).not.toHaveBeenCalled();
       expect(supabase.from).not.toHaveBeenCalled();
     });
 
-    it('runs a websearch full-text query on content, capped at the search limit, and drops fetchMemories entirely', async () => {
-      const contentBuilder = createQueryBuilder({ data: [searchMemoryRow()], error: null });
-      let fromMemoriesCallCount = 0;
+    it('calls search_memories scoped to the family with trimmed text, chips and paging', async () => {
+      (supabase.rpc as jest.Mock).mockResolvedValue({ data: [], error: null });
 
-      (supabase.from as jest.Mock).mockImplementation((table: string) => {
-        if (table === 'memories') {
-          fromMemoriesCallCount += 1;
-          return contentBuilder;
-        }
-        if (table === 'memory_family_members' || table === 'memory_media') {
-          return createQueryBuilder({ data: [], error: null });
-        }
-        throw new Error(`Unexpected table ${table}`);
+      await searchMemories({ familyId: 'family-1', query: '  cumple  ', memberId: 'member-1', emotion: 'joy', offset: 30 });
+
+      expect(supabase.rpc).toHaveBeenCalledWith('search_memories', {
+        p_family_id: 'family-1',
+        p_query: 'cumple',
+        p_member_id: 'member-1',
+        p_emotion: 'joy',
+        p_limit: MEMORY_SEARCH_PAGE_SIZE,
+        p_offset: 30,
       });
-
-      const { data, error } = await searchMemories('  bedtime  ');
-
-      expect(error).toBeNull();
-      // Trimmed, not stripped/escaped the way the old ILIKE arm mangled it --
-      // `websearch_to_tsquery` parsing handles free text safely, no manual
-      // `%`/`_` stripping needed.
-      expect(contentBuilder.textSearch).toHaveBeenCalledWith('content', 'bedtime', {
-        type: 'websearch',
-        config: 'english',
-      });
-      expect(contentBuilder.limit).toHaveBeenCalledWith(MEMORIES_SEARCH_LIMIT);
-      // 'bedtime' isn't a known emotion label, so the emotion arm is skipped
-      // -- but content AND audio_transcript (P3.4) both always run.
-      expect(fromMemoriesCallCount).toBe(2);
-      expect(data?.[0]?.id).toBe('memory-1');
     });
 
-    it('OR-merges a known emotion label with the content search, deduping overlapping rows', async () => {
-      const contentBuilder = createQueryBuilder({
-        data: [searchMemoryRow({ id: 'memory-1', emotion: 'joy' })],
-        error: null,
-      });
-      const transcriptBuilder = createQueryBuilder({ data: [], error: null });
-      const emotionBuilder = createQueryBuilder({
+    it('runs a chip-only search with no text', async () => {
+      (supabase.rpc as jest.Mock).mockResolvedValue({ data: [], error: null });
+
+      await searchMemories({ familyId: 'family-1', memberId: 'member-1' });
+
+      expect(supabase.rpc).toHaveBeenCalledWith('search_memories', expect.objectContaining({
+        p_query: undefined,
+        p_member_id: 'member-1',
+        p_emotion: undefined,
+      }));
+    });
+
+    it('returns full rows in the RPC\'s ranked order with why each matched', async () => {
+      (supabase.rpc as jest.Mock).mockResolvedValue({
         data: [
-          searchMemoryRow({ id: 'memory-1', emotion: 'joy' }),
-          searchMemoryRow({ id: 'memory-2', content: 'Playground afternoon', emotion: 'joy' }),
+          { memory_id: 'memory-2', matched_in: 'voice', score: 0.9 },
+          { memory_id: 'memory-1', matched_in: 'text', score: 0.4 },
         ],
         error: null,
       });
-      const memoriesBuilders = [contentBuilder, transcriptBuilder, emotionBuilder];
-      let callIndex = 0;
+      // The table returns them in a different order; the RPC order wins.
+      const memoriesBuilder = mockTables([
+        searchMemoryRow({ id: 'memory-1' }),
+        searchMemoryRow({ id: 'memory-2', memory_type: 'audio', content: 'Bedtime' }),
+      ]);
 
-      (supabase.from as jest.Mock).mockImplementation((table: string) => {
-        if (table === 'memories') {
-          return memoriesBuilders[callIndex++] ?? contentBuilder;
-        }
-        if (table === 'memory_family_members' || table === 'memory_media') {
-          return createQueryBuilder({ data: [], error: null });
-        }
-        throw new Error(`Unexpected table ${table}`);
-      });
-
-      const { data, error } = await searchMemories('Joy');
+      const { data, error } = await searchMemories({ familyId: 'family-1', query: 'dientes' });
 
       expect(error).toBeNull();
-      expect(emotionBuilder.eq).toHaveBeenCalledWith('emotion', 'joy');
-      expect(emotionBuilder.limit).toHaveBeenCalledWith(MEMORIES_SEARCH_LIMIT);
-      // memory-1 matched both arms -- deduped to a single row, not duplicated.
-      expect(data).toHaveLength(2);
-      expect(data?.map((memory) => memory.id).sort()).toEqual(['memory-1', 'memory-2']);
+      expect(memoriesBuilder.in).toHaveBeenCalledWith('id', ['memory-2', 'memory-1']);
+      expect(data?.map((hit) => [hit.memory.id, hit.matchedIn])).toEqual([
+        ['memory-2', 'voice'],
+        ['memory-1', 'text'],
+      ]);
+      expect(data?.[0].memory.taggedMembers).toEqual([]);
+      expect(data?.[0].memory.mediaAssets).toEqual([]);
     });
 
-    it('does not run an emotion query when the term is not a known emotion label', async () => {
-      const contentBuilder = createQueryBuilder({ data: [], error: null });
-      (supabase.from as jest.Mock).mockImplementation((table: string) => {
-        if (table === 'memories') {
-          return contentBuilder;
-        }
-        if (table === 'memory_family_members' || table === 'memory_media') {
-          return createQueryBuilder({ data: [], error: null });
-        }
-        throw new Error(`Unexpected table ${table}`);
+    it('drops a memory deleted between the RPC and the row fetch', async () => {
+      (supabase.rpc as jest.Mock).mockResolvedValue({
+        data: [{ memory_id: 'gone', matched_in: 'text', score: 1 }, { memory_id: 'memory-1', matched_in: null, score: 0 }],
+        error: null,
       });
+      mockTables([searchMemoryRow({ id: 'memory-1' })]);
 
-      await searchMemories('stroller');
+      const { data } = await searchMemories({ familyId: 'family-1', emotion: 'joy' });
 
-      expect(contentBuilder.eq).not.toHaveBeenCalled();
+      expect(data?.map((hit) => [hit.memory.id, hit.matchedIn])).toEqual([['memory-1', null]]);
     });
 
-    describe('audio transcript matching (P3.4)', () => {
-      it('runs a second websearch query on audio_transcript', async () => {
-        const contentBuilder = createQueryBuilder({ data: [], error: null });
-        const transcriptBuilder = createQueryBuilder({ data: [], error: null });
-        const memoriesBuilders = [contentBuilder, transcriptBuilder];
-        let callIndex = 0;
+    it('surfaces RPC errors', async () => {
+      (supabase.rpc as jest.Mock).mockResolvedValue({ data: null, error: { message: 'Not authorized', code: '42501' } });
 
-        (supabase.from as jest.Mock).mockImplementation((table: string) => {
-          if (table === 'memories') {
-            return memoriesBuilders[callIndex++] ?? contentBuilder;
-          }
-          if (table === 'memory_family_members' || table === 'memory_media') {
-            return createQueryBuilder({ data: [], error: null });
-          }
-          throw new Error(`Unexpected table ${table}`);
-        });
+      const { data, error } = await searchMemories({ familyId: 'family-1', query: 'mara' });
 
-        await searchMemories('twinkle');
-
-        expect(transcriptBuilder.textSearch).toHaveBeenCalledWith('audio_transcript', 'twinkle', {
-          type: 'websearch',
-          config: 'english',
-        });
-        expect(transcriptBuilder.limit).toHaveBeenCalledWith(MEMORIES_SEARCH_LIMIT);
-      });
-
-      it('merges a transcript-only match with the content results, deduping overlap', async () => {
-        const audioRow = searchMemoryRow({
-          id: 'memory-audio-1',
-          memory_type: 'audio',
-          content: null,
-          audio_transcript: 'twinkle twinkle little star',
-        });
-        const overlapRow = searchMemoryRow({ id: 'memory-1' });
-
-        const contentBuilder = createQueryBuilder({ data: [overlapRow], error: null });
-        const transcriptBuilder = createQueryBuilder({
-          data: [overlapRow, audioRow],
-          error: null,
-        });
-        const memoriesBuilders = [contentBuilder, transcriptBuilder];
-        let callIndex = 0;
-
-        (supabase.from as jest.Mock).mockImplementation((table: string) => {
-          if (table === 'memories') {
-            return memoriesBuilders[callIndex++] ?? contentBuilder;
-          }
-          if (table === 'memory_family_members' || table === 'memory_media') {
-            return createQueryBuilder({ data: [], error: null });
-          }
-          throw new Error(`Unexpected table ${table}`);
-        });
-
-        const { data, error } = await searchMemories('twinkle');
-
-        expect(error).toBeNull();
-        // memory-1 matched both content and transcript -- deduped, not
-        // duplicated; memory-audio-1 only matched transcript.
-        expect(data).toHaveLength(2);
-        expect(data?.map((memory) => memory.id).sort()).toEqual([
-          'memory-1',
-          'memory-audio-1',
-        ]);
-      });
-
-      it('surfaces an error from the transcript query', async () => {
-        const contentBuilder = createQueryBuilder({ data: [], error: null });
-        const transcriptBuilder = createQueryBuilder({
-          data: null,
-          error: { message: 'transcript search failed' },
-        });
-        const memoriesBuilders = [contentBuilder, transcriptBuilder];
-        let callIndex = 0;
-
-        (supabase.from as jest.Mock).mockImplementation((table: string) => {
-          if (table === 'memories') {
-            return memoriesBuilders[callIndex++] ?? contentBuilder;
-          }
-          throw new Error(`Unexpected table ${table}`);
-        });
-
-        const { data, error } = await searchMemories('twinkle');
-
-        expect(data).toBeNull();
-        expect(error?.message).toBe('transcript search failed');
-      });
+      expect(data).toBeNull();
+      expect(error).toEqual({ message: 'Not authorized', code: '42501' });
     });
   });
 

@@ -29,6 +29,7 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
 import { TimelineActivityBell } from '@/components/timeline-activity-bell';
+import { TimelineSearchButton } from '@/components/timeline-search-button';
 import { useFamilyActivityUnread } from '@/hooks/useFamilyActivity';
 import { useMemories } from '@/hooks/useMemories';
 import { useContentSafety } from '@/hooks/useContentSafety';
@@ -167,6 +168,7 @@ function TimelineTitle({ unread, onPressBell }: ActivityBellSlotProps) {
           <Text style={styles.title}>Your moments.</Text>
         </View>
         <View style={styles.headerGlyphs}>
+          <TimelineSearchButton />
           <TimelineActivityBell onPress={onPressBell} unread={unread} />
         </View>
       </View>
@@ -280,8 +282,8 @@ export default function TimelineScreen() {
   // unmount so it fired far more than intended. Freshness is now staleTime +
   // mutation/poll cache patches + this pull-to-refresh + an app-foreground
   // reconcile inside useMemories, gated to near-top scroll positions (see
-  // docs/features/memories.md). No search UI exists yet (useMemories no
-  // longer takes a search query -- see useMemoriesSearch in useMemories.ts).
+  // docs/features/memories.md). Search lives on its own screen
+  // (app/(app)/search.tsx), not in this query.
   const {
     memories,
     isLoading,

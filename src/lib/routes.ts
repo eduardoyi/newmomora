@@ -23,6 +23,7 @@ export function newMemoryRoute(source?: NewMemorySource): Href {
 }
 
 export const timelineRoute = '/(app)/(tabs)/timeline' as Href;
+export const memorySearchRoute = '/(app)/search' as Href;
 export const noFamilyRoute = '/(app)/no-family' as Href;
 
 /** Settings screen for the optional home-screen widget. */

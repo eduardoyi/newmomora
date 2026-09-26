@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/r
 import type { ReactNode } from 'react';
 import { AppState } from 'react-native';
 
-import { useMemberMemories, useMemories, useMemory, useMemoryMutations } from '@/hooks/useMemories';
+import { useMemberMemories, useMemories, useMemory, useMemoryMutations, useMemorySearch } from '@/hooks/useMemories';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
@@ -19,6 +19,7 @@ import {
   retryMemoryIllustration,
   runMediaPhotoEmotionAnalysis,
   runTextOnlyEmotionAnalysis,
+  searchMemories,
   updateMemory,
   type MemoriesPage,
   type MemoryWithTags,
@@ -53,6 +54,7 @@ jest.mock('@/services/memories', () => ({
   searchMemories: jest.fn(),
   updateMemory: jest.fn(),
   MEMORIES_PAGE_SIZE: 40,
+  MEMORY_SEARCH_PAGE_SIZE: 2,
 }));
 
 jest.mock('@/services/media', () => ({
@@ -1470,6 +1472,59 @@ describe('useMemories integration', () => {
       await expect(result.current.regenerateIllustration('memory-1')).rejects.toThrow(
         'Illustration regeneration is only available for illustrated memories',
       );
+    });
+  });
+
+  describe('useMemorySearch (timeline search)', () => {
+    const mockedSearchMemories = searchMemories as jest.MockedFunction<typeof searchMemories>;
+
+    function hit(id: string) {
+      return { memory: { id } as MemoryWithTags, matchedIn: 'text' as const };
+    }
+
+    it('does not search without text or a chip', () => {
+      const { result } = renderHook(() => useMemorySearch({ query: '  ', memberId: null, emotion: null }), {
+        wrapper: createWrapper(),
+      });
+
+      expect(result.current.hasCriteria).toBe(false);
+      expect(result.current.hits).toEqual([]);
+      expect(mockedSearchMemories).not.toHaveBeenCalled();
+    });
+
+    it('searches the active family and pages by offset until a short page', async () => {
+      mockedSearchMemories
+        .mockResolvedValueOnce({ data: [hit('a'), hit('b')], error: null })
+        .mockResolvedValueOnce({ data: [hit('c')], error: null });
+
+      const { result } = renderHook(() => useMemorySearch({ query: ' mara ', memberId: 'member-1', emotion: 'joy' }), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => expect(result.current.hits.map((h) => h.memory.id)).toEqual(['a', 'b']));
+      expect(mockedSearchMemories).toHaveBeenCalledWith({
+        familyId: 'family-1', query: 'mara', memberId: 'member-1', emotion: 'joy', offset: 0,
+      });
+      expect(result.current.hasNextPage).toBe(true);
+
+      await act(async () => { await result.current.fetchNextPage(); });
+
+      await waitFor(() => expect(result.current.hits.map((h) => h.memory.id)).toEqual(['a', 'b', 'c']));
+      expect(mockedSearchMemories).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 2 }));
+      expect(result.current.hasNextPage).toBe(false);
+    });
+
+    it('clears results when the text and chips are cleared', async () => {
+      mockedSearchMemories.mockResolvedValue({ data: [hit('a')], error: null });
+      const { result, rerender } = renderHook(
+        (search: { query: string; memberId: string | null; emotion: string | null }) => useMemorySearch(search),
+        { wrapper: createWrapper(), initialProps: { query: 'mara', memberId: null, emotion: null } },
+      );
+      await waitFor(() => expect(result.current.hits).toHaveLength(1));
+
+      rerender({ query: '', memberId: null, emotion: null });
+
+      expect(result.current.hits).toEqual([]);
     });
   });
 });

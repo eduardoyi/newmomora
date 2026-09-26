@@ -79,6 +79,8 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 | `invite_resolved` | `outcome: 'approved'\|'rejected'`, `family_id: string` | `app/(app)/sharing/approvals.tsx` |
 | `notification_opened` | `target: NonNullable<PushRouteData['route']>` (literal `memory\|new-memory\|approvals\|timeline` — `new-memory` is hyphenated verbatim, no renaming layer) | `src/hooks/useNotifications.ts` — `routeFromPushData`/`handleNotificationResponse`, plain functions, not the hook body |
 | `looking_back_package_opened` | `package_type`, `memory_count`, `was_revisited` | Timeline rail package press |
+| `memory_search_opened` | `source` (`timeline`) | Search screen mount |
+| `memory_search_result_opened` | `matched_in` (`text`/`voice`/`details`/`chip`), `position`, `has_text`, `has_person`, `has_feeling` | Search result row press (never the query text) |
 | `looking_back_package_completed` | `package_type`, `memory_count`, `frame_count` | Looking Back viewer completion |
 | `looking_back_memory_opened` | `package_type`, `memory_type` | Looking Back viewer → memory detail |
 | `looking_back_package_replayed` | `package_type`, `memory_count` | Looking Back completion replay |

@@ -45,6 +45,7 @@ import {
   runMediaPhotoEmotionAnalysis,
   runTextOnlyEmotionAnalysis,
   searchMemories,
+  MEMORY_SEARCH_PAGE_SIZE,
   updateMemory,
   MEMORIES_PAGE_SIZE,
   type MemoriesPage,
@@ -732,36 +733,58 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
   };
 }
 
-// Search results (Workstream A2): a separate, non-infinite query so the
-// InfiniteData shape the timeline/member lists rely on never has to share a
-// cache-key prefix with a flat search-results array. Search currently has no
-// reachable UI (no caller sets a non-empty query), so this is exercised by
-// tests only until the search feature ships -- see E1b/E2/E3 for the rest of
-// the search work.
-export function useMemoriesSearch(searchQuery: string) {
+/**
+ * Timeline search (docs/features/memory-search.md): pages of results from
+ * the `search_memories` RPC. Kept apart from the timeline's InfiniteData
+ * caches (own key prefix) so search pages never mix into timeline pages.
+ * Runs only when there is text or a chip; callers debounce the text.
+ */
+export function useMemorySearch(search: { query: string; memberId: string | null; emotion: string | null }) {
   const { user } = useAuth();
   const { familyId } = useFamily();
-  const trimmed = searchQuery.trim();
+  const query = search.query.trim();
+  const hasCriteria = Boolean(query || search.memberId || search.emotion);
 
-  const query = useQuery({
-    queryKey: memoriesSearchQueryKey(familyId, trimmed),
-    queryFn: async () => {
-      const { data, error } = await searchMemories(trimmed);
-
-      if (error) {
-        throw toError(error, 'Could not search memories');
-      }
-
+  const result = useInfiniteQuery({
+    queryKey: memoriesSearchQueryKey(familyId, { query, memberId: search.memberId, emotion: search.emotion }),
+    queryFn: async ({ pageParam }) => {
+      if (!familyId) return [];
+      const { data, error } = await searchMemories({
+        familyId,
+        query,
+        memberId: search.memberId,
+        emotion: search.emotion,
+        offset: pageParam,
+      });
+      if (error) throw toError(error, 'Could not search memories');
       return data ?? [];
     },
-    enabled: Boolean(user && familyId && trimmed),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => (lastPage.length < MEMORY_SEARCH_PAGE_SIZE
+      ? undefined
+      : allPages.reduce((count, page) => count + page.length, 0)),
+    enabled: Boolean(user && familyId && hasCriteria),
+    // Keep the previous results on screen while a refined query loads, so
+    // the list doesn't flash empty on every keystroke.
+    placeholderData: (previous) => previous,
   });
 
+  // placeholderData would otherwise keep showing the last results after
+  // the text and chips are cleared.
+  const hits = useMemo(
+    () => (hasCriteria ? result.data?.pages.flat() ?? [] : []),
+    [hasCriteria, result.data],
+  );
   return {
-    memories: query.data ?? [],
-    isLoading: query.isLoading,
-    isError: query.isError,
-    error: query.error,
+    hits,
+    hasCriteria,
+    isLoading: hasCriteria && result.isLoading,
+    isFetching: result.isFetching,
+    isError: result.isError,
+    refetch: result.refetch,
+    fetchNextPage: result.fetchNextPage,
+    hasNextPage: result.hasNextPage,
+    isFetchingNextPage: result.isFetchingNextPage,
   };
 }
 

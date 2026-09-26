@@ -4449,6 +4449,17 @@ export type Database = {
         Args: { p_actor_user_id: string; p_request_id: string }
         Returns: boolean
       }
+      memory_search_document: {
+        Args: {
+          p_audio_transcript: string
+          p_content: string
+          p_description: string
+          p_labels: string[]
+          p_topics: string[]
+        }
+        Returns: unknown
+      }
+      memory_search_query: { Args: { p_text: string }; Returns: unknown }
       owner_has_billing_access: {
         Args: { p_now?: string; p_owner_user_id: string }
         Returns: boolean
@@ -4833,6 +4844,22 @@ export type Database = {
         Returns: string
       }
       scrub_gallery_chunk: { Args: { p_chunk_id: string }; Returns: boolean }
+      search_memories: {
+        Args: {
+          p_emotion?: string
+          p_family_id: string
+          p_limit?: number
+          p_member_id?: string
+          p_offset?: number
+          p_query?: string
+        }
+        Returns: {
+          matched_in: string
+          memory_id: string
+          score: number
+        }[]
+      }
+      search_normalize: { Args: { value: string }; Returns: string }
       set_family_account_block: {
         Args: {
           p_block_id?: string

@@ -39,26 +39,11 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
 - Illustrated memory detail header includes a regenerate control (left of edit) to manually rerun the illustration pipeline; confirms before replacing a ready image. New clients call `generate-illustration` with `requestIntent: 'manual_regenerate'` and retain `forceRegenerate: true` only for legacy-backend compatibility.
 - Failed illustration shows retry option ("Illustration failed — tap to retry" on the timeline card overlay, `src/components/memory-card.tsx`); no retry concept for media memories. With illustration deferral (above), a not-yet-ready portrait no longer lands here — `failed` is reserved for a genuine dead end (no ready or fresh in-flight portrait at all).
 - Calendar renders virtualized week rows back to the user's oldest memory. It fetches only the visible date window plus a small buffer; tap opens the first memory for that day.
-- Search bar on Timeline filters by content/emotion. Not reachable from any
-  current UI (`timeline.tsx` has no setter for its search query) --
-  `useMemoriesSearch` is a separate, ready-to-wire hook (see Pagination
-  below). `searchMemories` (`src/services/memories.ts`) runs content matching
-  through Postgres full-text search (`.textSearch('content', trimmed, {
-  type: 'websearch', config: 'english' })`, using
-  `idx_memories_content_search`, a GIN index over
-  `to_tsvector('english', content)`) instead of `content.ilike`, which could
-  never use that index. A known emotion label (matched against the same
-  label set as `src/constants/theme.ts`'s `emotionColors`) runs as a second,
-  separate `.eq('emotion', ...)` query and is merged + deduped client-side
-  with the content results rather than a single `.or()` filter string --
-  emotion is an exact short label, not prose, so the second query is cheap
-  and keeps the merge logic verifiable without depending on PostgREST's
-  `.or()` + `wfts` filter-string syntax. Results are capped at 100
-  (`MEMORIES_SEARCH_LIMIT`); there is no pagination UI for search.
-  `fetchMemories()` (the old unpaginated full-library fetch) was deleted in
-  the same pass -- its only caller was this function's empty-query fallback,
-  and `useMemoriesSearch` never runs for an empty/whitespace query, so
-  `searchMemories('')` now short-circuits to an empty result instead.
+- Timeline search (header icon → full-screen search: text + person/feeling
+  chips, compact rows) — see [memory-search.md](./memory-search.md). The
+  `search_memories` RPC replaced the earlier, never-shipped client-side
+  English FTS search. `fetchMemories()` (the old unpaginated full-library
+  fetch) remains deleted.
 - Timeline tag/media enrichment batches memory IDs in groups of 100. This
   keeps PostgREST `.in(...)` request URLs below proxy limits for large family
   histories while preserving the existing virtualized full-history feed.
@@ -73,9 +58,9 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
   instead of client-filtering the whole timeline; its query key
   (`[...memoriesQueryKey(familyId), 'member', memberId]`) is deliberately
   nested under the timeline's own key prefix so cache patches (mutations,
-  the status poll, search) keep reaching it. `useMemoriesSearch` is a
-  separate, non-infinite, non-patched query (`'memories-search'` key) --
-  search results never share the InfiniteData cache shape.
+  the status poll) keep reaching it. `useMemorySearch` is a separate,
+  non-patched infinite query under its own `'memories-search'` key -- search
+  pages never mix into the timeline's InfiniteData caches.
   - **Mutation cache model:** create/update/delete/retry/regenerate patch the
     list caches directly with the data they already have (sorted prepend on
     create, in-place patch on update, removal on delete) instead of
@@ -295,7 +280,7 @@ authorized Supabase publication path.
 | Layer | Files |
 |-------|-------|
 | Routes | `app/(app)/new-memory.tsx`, `app/(app)/memory/[id]/index.tsx`, `app/(app)/memory/[id]/edit.tsx`, `app/(app)/(tabs)/timeline.tsx`, `calendar.tsx` |
-| Hooks | `src/hooks/useMemories.ts` (`useMemories`, `useMemberMemories`, `useMemoriesSearch`, `useMemory`, `useMemoryMutations`), `src/hooks/memory-cache.ts` (shared list/detail cache patch helpers), `src/hooks/useGenerationStatusPolling.ts` (shared illustration/emotion status poll), `src/hooks/useMemoriesRealtime.ts` (postgres_changes subscription, mounted once in `FamilyProvider`), `src/hooks/realtime-status.ts` (reactive poll-suppression store), `src/hooks/useCalendarMemories.ts`, `src/hooks/useAutoMemoryTags.ts`, `src/hooks/useVoiceInput.ts` |
+| Hooks | `src/hooks/useMemories.ts` (`useMemories`, `useMemberMemories`, `useMemorySearch`, `useMemory`, `useMemoryMutations`), `src/hooks/memory-cache.ts` (shared list/detail cache patch helpers), `src/hooks/useGenerationStatusPolling.ts` (shared illustration/emotion status poll), `src/hooks/useMemoriesRealtime.ts` (postgres_changes subscription, mounted once in `FamilyProvider`), `src/hooks/realtime-status.ts` (reactive poll-suppression store), `src/hooks/useCalendarMemories.ts`, `src/hooks/useAutoMemoryTags.ts`, `src/hooks/useVoiceInput.ts` |
 | Utils | `src/utils/member-mentions.ts`, `src/utils/auto-memory-tags.ts`, `src/utils/new-memory-draft.ts` (draft autosave storage) |
 | Constants | `src/constants/journaling-prompts.ts` (rotating placeholder list + `pickJournalingPrompt`) |
 | Services | `src/services/memories.ts`, `src/services/engagement.ts`, `src/services/ai.ts` |
@@ -349,7 +334,7 @@ role/tenancy model and the RLS rewrite.
 | Layer | File |
 |-------|------|
 | Unit | `src/components/memory-card.test.tsx` (tagged-member overflow + `React.memo` render-count probe + failed-illustration overlay copy), `src/components/memory-tag-picker.test.tsx` (including the incomplete-profile chip hint from `isFamilyMemberProfileIncomplete`, `src/utils/family-members.ts` — chip stays selectable), `src/components/family-roster-sheet.test.tsx`, `src/utils/memories.test.ts` (including null-clock fallback, pending 3-minute recovery, and generating 5:30 boundary), `src/utils/calendar.test.ts`, `src/utils/member-mentions.test.ts`, `src/utils/auto-memory-tags.test.ts`, `src/utils/profile-photo.test.ts`, `src/utils/new-memory-draft.test.ts` (round-trip, per-user+family key scoping, corrupted/invalid-JSON and storage-failure degradation, `isEmptyDraft`), `src/constants/journaling-prompts.test.ts` (list shape/uniqueness, includes the original static prompt, `pickJournalingPrompt` index selection + clamping), `src/hooks/memory-cache.test.ts` (InfiniteData patch/prepend/remove helpers, sorted-insert + drop/append-at-window-edge cases), `src/hooks/realtime-status.test.ts` (reactive suppression store, both directions, familyId mismatch guards) |
-| Integration | `src/services/ai.integration.test.ts` (legacy and queued dispatcher responses), `src/services/memories.integration.test.ts` (server-only retry/regenerate dispatch, no direct status writes, mode switching, retained illustrations, large-timeline relation/engagement batching, `fetchMemoriesPage`/`fetchMemoriesPageForMember` keyset predicates, `fetchMemoryGenerationStatuses`, `searchMemories` FTS call shape + emotion-label merge/dedupe + limit, `PORTRAITS_NOT_READY` pipeline short-circuit + distinct regenerate notice, the type-toggle trap), `src/services/engagement.integration.test.ts`, `src/hooks/useMemories.integration.test.tsx` (infinite-shape loading, `useMemberMemories`, mutation cache patches asserted against a `fetchMemoriesPage` call-count spy so no page-2+ refetch sneaks back in, recovery loop retrying a deferred-`pending` memory, regenerate mutation resolving non-fatally on deferral), `src/hooks/useMemoryEngagement.integration.test.tsx` (engagement patch on `InfiniteData`), `src/hooks/useGenerationStatusPolling.test.tsx` (patch-on-change, stops when nothing pending, wake-from-idle on re-render, idles/resumes with realtime live/down), `src/hooks/useMemoriesRealtime.test.tsx` (mocked postgres_changes channel: UPDATE patch + ready-transition invalidation, INSERT delayed-prepend + own-device dedup + media retry-once, DELETE removal, SUBSCRIBED forces a generation-status reconcile, channel/timer cleanup on unmount), `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/use-pending-memory-uploads.test.tsx` (media-queue sorted prepend + `refetchType: 'none'` backstops), `src/hooks/useAutoMemoryTags.integration.test.tsx`, `src/screen-tests/timeline.integration.test.tsx` (no focus refetch, pull-to-refresh wiring, `onEndReached` → `fetchNextPage`, footer spinner while `isFetchingNextPage`), `src/screen-tests/new-memory.integration.test.tsx` (capture-date prefill; a second describe block covers draft autosave/restore/clear-on-post, per-family scoping, prefill-wins-over-draft precedence, media-never-persisted, and the rotating placeholder), `src/screen-tests/edit-memory.integration.test.tsx`, `src/screen-tests/memory-detail.integration.test.tsx`, `src/screen-tests/family-member-portrait-entry.integration.test.tsx` |
+| Integration | `src/services/ai.integration.test.ts` (legacy and queued dispatcher responses), `src/services/memories.integration.test.ts` (server-only retry/regenerate dispatch, no direct status writes, mode switching, retained illustrations, large-timeline relation/engagement batching, `fetchMemoriesPage`/`fetchMemoriesPageForMember` keyset predicates, `fetchMemoryGenerationStatuses`, `searchMemories` RPC call shape + ranked-order preservation, `PORTRAITS_NOT_READY` pipeline short-circuit + distinct regenerate notice, the type-toggle trap), `src/services/engagement.integration.test.ts`, `src/hooks/useMemories.integration.test.tsx` (infinite-shape loading, `useMemberMemories`, mutation cache patches asserted against a `fetchMemoriesPage` call-count spy so no page-2+ refetch sneaks back in, recovery loop retrying a deferred-`pending` memory, regenerate mutation resolving non-fatally on deferral), `src/hooks/useMemoryEngagement.integration.test.tsx` (engagement patch on `InfiniteData`), `src/hooks/useGenerationStatusPolling.test.tsx` (patch-on-change, stops when nothing pending, wake-from-idle on re-render, idles/resumes with realtime live/down), `src/hooks/useMemoriesRealtime.test.tsx` (mocked postgres_changes channel: UPDATE patch + ready-transition invalidation, INSERT delayed-prepend + own-device dedup + media retry-once, DELETE removal, SUBSCRIBED forces a generation-status reconcile, channel/timer cleanup on unmount), `src/hooks/useCalendarMemories.integration.test.tsx`, `src/hooks/use-pending-memory-uploads.test.tsx` (media-queue sorted prepend + `refetchType: 'none'` backstops), `src/hooks/useAutoMemoryTags.integration.test.tsx`, `src/screen-tests/timeline.integration.test.tsx` (no focus refetch, pull-to-refresh wiring, `onEndReached` → `fetchNextPage`, footer spinner while `isFetchingNextPage`), `src/screen-tests/new-memory.integration.test.tsx` (capture-date prefill; a second describe block covers draft autosave/restore/clear-on-post, per-family scoping, prefill-wins-over-draft precedence, media-never-persisted, and the rotating placeholder), `src/screen-tests/edit-memory.integration.test.tsx`, `src/screen-tests/memory-detail.integration.test.tsx`, `src/screen-tests/family-member-portrait-entry.integration.test.tsx` |
 | E2E | `.maestro/flows/memories/create-memory.yaml`, `.maestro/flows/memories/auto-tag.yaml`, `.maestro/flows/memories/toggle-ai-on-edit.yaml`, `.maestro/flows/engagement/like-and-comment.yaml` |
 | Deno | `supabase/functions/analyze-emotion/index.test.ts`, `generate-illustration/index.test.ts` (claim-timeout cleanup and multi-reference provider strategy), `notify-memory-engagement/index.test.ts`, `_shared/member-mentions.test.ts`, `_shared/illustration-references.test.ts` (abort propagation), `_shared/openai.test.ts` (fallback behavior, tail hedge, output settings, deterministic-rejection stop, and abort stop), `_shared/image-bytes.test.ts` |
 | Database | `supabase/tests/memory_illustration_workflow.sql` — private-job RLS, one-use provider reservations, exact upload-token replay/completion, legacy status-reset publication, stale CAS, and retained-output failure |

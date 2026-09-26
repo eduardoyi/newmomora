@@ -1,13 +1,13 @@
 import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { seedFromKey } from '@/components/audio/audio-seed';
-import { SoundTile } from '@/components/audio/sound-tile';
-import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
+import { MemoryFallbackTile } from '@/components/memory-fallback-tile';
+import { colors, fonts, radius, spacing } from '@/constants/theme';
 import type { FamilyActivityEvent, FamilyActivityGroup } from '@/services/family-activity';
 import { formatEngagementTimestamp } from '@/utils/engagement';
 import { buildFamilyActivityCopy, familyActivityCopyPlainText } from '@/utils/family-activity-copy';
 import { mediaImageSource } from '@/utils/media-image-source';
+import { memoryFallbackKind, type MemoryFallbackKind } from '@/utils/memory-fallback';
 
 const THUMBNAIL_SIZE = 44;
 const MAX_THUMBNAILS = 3;
@@ -22,24 +22,20 @@ function resolveThumbnailKey(event: FamilyActivityEvent): string | null {
   return event.memoryMediaKey ?? null;
 }
 
-type ThumbnailFallback = 'quote' | 'sound' | 'blank';
 
 interface ActivityThumbnail {
   memoryId: string;
   key: string | null;
   // What to draw when there is no image key -- the same type-aware tiles the
   // calendar stamp and member-profile thumb use.
-  fallback: ThumbnailFallback;
+  fallback: MemoryFallbackKind;
   emotion: string | null;
 }
 
-function resolveThumbnailFallback(event: FamilyActivityEvent): ThumbnailFallback {
-  if (event.memoryType === 'audio' || event.memoryMediaContentType?.startsWith('audio/')) return 'sound';
-  // text_only, or a text_illustration whose illustration hasn't landed.
-  if (event.memoryType === 'text_only' || event.memoryType === 'text_illustration') return 'quote';
+function resolveThumbnailFallback(event: FamilyActivityEvent): MemoryFallbackKind {
   // Older server without memory_type: a memory with no media at all is text.
   if (!event.memoryType && !event.memoryMediaKey) return 'quote';
-  return 'blank';
+  return memoryFallbackKind(event.memoryType, event.memoryMediaContentType);
 }
 
 function collectThumbnails(events: FamilyActivityEvent[]): ActivityThumbnail[] {
@@ -61,33 +57,6 @@ function collectThumbnails(events: FamilyActivityEvent[]): ActivityThumbnail[] {
 
 export function collectThumbnailKeys(events: FamilyActivityEvent[]): string[] {
   return collectThumbnails(events).flatMap((thumbnail) => (thumbnail.key ? [thumbnail.key] : []));
-}
-
-function ThumbnailFallbackTile({ thumbnail }: { thumbnail: ActivityThumbnail }) {
-  if (thumbnail.fallback === 'sound') {
-    return (
-      <SoundTile
-        durationSeconds={0}
-        emotion={thumbnail.emotion}
-        seed={seedFromKey(thumbnail.memoryId)}
-        showDuration={false}
-        size={THUMBNAIL_SIZE - 3}
-        testID={`family-activity-thumbnail-${thumbnail.memoryId}-sound`}
-      />
-    );
-  }
-  if (thumbnail.fallback === 'quote') {
-    const emo = getEmotionColors(thumbnail.emotion);
-    return (
-      <View
-        style={[styles.fallbackFill, { backgroundColor: emo?.soft ?? colors.surface }]}
-        testID={`family-activity-thumbnail-${thumbnail.memoryId}-quote`}
-      >
-        <Text style={[styles.quoteMark, { color: emo?.ink ?? colors.ink3 }]}>“</Text>
-      </View>
-    );
-  }
-  return null;
 }
 
 interface FamilyActivityRowProps {
@@ -159,7 +128,13 @@ export function FamilyActivityRow({ group, mediaUrls, onPress }: FamilyActivityR
                     />
                   ) : null
                 ) : (
-                  <ThumbnailFallbackTile thumbnail={thumbnail} />
+                  <MemoryFallbackTile
+                    emotion={thumbnail.emotion}
+                    kind={thumbnail.fallback}
+                    memoryId={thumbnail.memoryId}
+                    size={THUMBNAIL_SIZE - 3}
+                    testID={`family-activity-thumbnail-${thumbnail.memoryId}`}
+                  />
                 )}
               </View>
             );
@@ -207,7 +182,4 @@ const styles = StyleSheet.create({
     width: THUMBNAIL_SIZE,
   },
   thumbnailStacked: { marginLeft: -18 },
-  fallbackFill: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
-  // Member-profile thumbQuote (54px thumb), scaled to 44px.
-  quoteMark: { fontFamily: fonts.display, fontSize: 26, lineHeight: 26, marginTop: -3, opacity: 0.45 },
 });

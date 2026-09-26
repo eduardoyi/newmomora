@@ -845,11 +845,10 @@ create index idx_family_members_user_id on public.family_members (user_id);
 -- Extended 2026-07-15 (timeline keyset pagination, see memories.md) to cover
 -- the created_at tie-break within a same-date group.
 create index idx_memories_family_id_memory_date on public.memories (family_id, memory_date desc, created_at desc);
-create index idx_memories_content_search on public.memories using gin (to_tsvector('english', content));
--- Audio memories (2026-08-19): a SEPARATE GIN index from the one above --
--- audio_transcript is its own column, not folded into a combined tsvector --
--- so searchMemories runs it as a second query merged/deduped client-side.
-create index idx_memories_audio_transcript_search on public.memories using gin (to_tsvector('english', audio_transcript));
+-- Timeline search (2026-09-27, replaced the per-column English FTS indexes):
+create index idx_memories_search_document on public.memories using gin (
+  public.memory_search_document(content, audio_transcript, description, labels, topics)
+);
 create index idx_user_profiles_scheduled_delete on public.user_profiles (scheduled_hard_delete_at)
   where scheduled_hard_delete_at is not null;
 
@@ -2976,6 +2975,30 @@ shipped email). The shipped-transition email includes the tracking link
 Event payload `{ orderId, attemptId }` only. Holds the Prodigi API key but
 NO R2 credentials and NO Supabase service-role credentials (blast-radius
 control) — every DB/R2 operation goes through the signed bridge.
+
+### 4.25 Timeline search
+
+`search_memories(p_family_id uuid, p_query text = null, p_member_id uuid =
+null, p_emotion text = null, p_limit int = 30, p_offset int = 0) returns table
+(memory_id uuid, matched_in text, score real)` — `security invoker`, granted to
+`authenticated`; raises `42501` unless `auth.uid()` is a member of
+`p_family_id`. Returns nothing when there is no text and no chip. Text goes
+through `memory_search_query()` (words split on non-alphanumerics after
+`search_normalize()` = `lower(unaccent())`, max 8, AND-ed, each a `:*`
+prefix). Matches `memory_search_document(content, audio_transcript,
+description, labels, topics)` (weights A/B/C, `simple` config, backed by
+`idx_memories_search_document`). Person filter: `exists` on
+`memory_family_members`; feeling filter: `emotion =`. Excludes memories whose
+`user_id` the caller blocked in that family (`blocked_family_accounts`).
+`matched_in`: `text` (content, or content+transcript together), `voice`
+(transcript only — the client never shows the transcript), `details` (AI
+description/labels/topics), `null` for chip-only. Order: `ts_rank_cd ×
+(1 + 0.5·exp(−age_days/365))` desc, then `memory_date desc, created_at desc,
+id`; chip-only scores are 0 (newest first). Limit clamped to 1–50.
+Migration `20260927100000_memory_search.sql`. The client
+(`searchMemories`) then reads the rows with `select * … in (ids)` plus tags and
+media and preserves the RPC order. See
+[memory-search.md](./features/memory-search.md).
 
 ## 5. Client API Flow
 

@@ -1,5 +1,4 @@
 import { supabase } from '@/lib/supabase';
-import { emotionColors, type EmotionName } from '@/constants/theme';
 import type { Database } from '@/types/database';
 import {
   analyzeMemoryEmotion,
@@ -355,10 +354,8 @@ async function replaceMemoryMediaAssets(
 // of the timeline per fetch without re-introducing the full-library cost.
 export const MEMORIES_PAGE_SIZE = 40;
 
-// Search results cap (Workstream E2) -- search has no pagination UI, so this
-// just bounds the worst case (a very common term across a large family
-// history) instead of enriching/rendering an unbounded result set.
-export const MEMORIES_SEARCH_LIMIT = 100;
+// Timeline search page size -- the search screen loads more on scroll.
+export const MEMORY_SEARCH_PAGE_SIZE = 30;
 
 export interface MemoriesPageCursor {
   memoryDate: string;
@@ -660,130 +657,86 @@ export async function fetchMemoryById(memoryId: string): Promise<{
   };
 }
 
-// Emotion values are short enum-like labels (docs/plans/performance-optimizations.md
-// Workstream E3) -- reuses the same key set the UI already trusts as the
-// canonical emotion vocabulary (src/constants/theme.ts, kept in sync with
-// the classifier's EMOTION_PALETTES) rather than maintaining a second list
-// here.
-function matchKnownEmotionLabel(trimmed: string): EmotionName | null {
-  const lower = trimmed.toLowerCase();
-  return lower in emotionColors ? (lower as EmotionName) : null;
+export type MemorySearchMatch = 'text' | 'voice' | 'details';
+
+export interface MemorySearchParams {
+  familyId: string;
+  /** Free text; each word must match, the last one as a prefix. */
+  query?: string;
+  /** Person chip: only memories tagging this family member. */
+  memberId?: string | null;
+  /** Feeling chip: only memories with this emotion. */
+  emotion?: string | null;
+  offset?: number;
 }
 
-function dedupeById<T extends { id: string }>(rows: T[]): T[] {
-  const seen = new Set<string>();
-  const deduped: T[] = [];
-
-  for (const row of rows) {
-    if (seen.has(row.id)) {
-      continue;
-    }
-    seen.add(row.id);
-    deduped.push(row);
-  }
-
-  return deduped;
+export interface MemorySearchHit {
+  memory: MemoryWithTags;
+  /** Why a text search matched; null for chip-only searches. */
+  matchedIn: MemorySearchMatch | null;
 }
 
-function compareMemoriesDesc(a: Memory, b: Memory): number {
-  if (a.memory_date !== b.memory_date) {
-    return a.memory_date > b.memory_date ? -1 : 1;
-  }
-  if (a.created_at !== b.created_at) {
-    return a.created_at > b.created_at ? -1 : 1;
-  }
-  return 0;
+interface SearchMemoriesRow {
+  memory_id: string;
+  matched_in: string | null;
 }
 
-// Workstream E3: content search runs through Postgres FTS
-// (`idx_memories_content_search`, a GIN index over
-// `to_tsvector('english', content)` -- see
-// supabase/migrations/20260524201500_initial_schema.sql) instead of
-// `content.ilike '%term%'`, which could never use that index. `websearch`
-// parsing (`.textSearch(..., { type: 'websearch' })`) accepts free-form user
-// text the way a search engine would (quotes, `-exclude`, `or`) without
-// throwing on stray punctuation the way `to_tsquery` would.
-//
-// Emotion matching stays a *separate* query merged client-side rather than a
-// single `.or()` with a `wfts` filter: emotion is an exact short label, not
-// prose, so a second `.eq('emotion', ...)` is cheap and keeps this function
-// verifiable against the mocked query builder in
-// memories.integration.test.ts without depending on PostgREST's `.or()` +
-// `wfts` filter-string syntax actually being exercised against a live
-// database in this pass.
-export async function searchMemories(query: string): Promise<{
-  data: MemoryWithTags[] | null;
+function toSearchMatch(value: string | null): MemorySearchMatch | null {
+  return value === 'text' || value === 'voice' || value === 'details' ? value : null;
+}
+
+/**
+ * Timeline search (docs/features/memory-search.md). Ranking, family
+ * scoping, blocked-account exclusion and accent-insensitive prefix matching
+ * all happen in the `search_memories` RPC; this fetches the matching rows
+ * with their tags and media for display, preserving the RPC's order.
+ * Engagement counts aren't fetched -- result rows don't show them.
+ */
+export async function searchMemories(params: MemorySearchParams): Promise<{
+  data: MemorySearchHit[] | null;
   error: ServiceError | null;
 }> {
-  const trimmed = query.trim();
-
-  if (!trimmed) {
+  const query = params.query?.trim() ?? '';
+  if (!query && !params.memberId && !params.emotion) {
     return { data: [], error: null };
   }
 
-  const emotionMatch = matchKnownEmotionLabel(trimmed);
-
-  // Audio's invisible transcript (docs/plans/audio-memories-v1.md P3.4) gets
-  // its own FTS query merged + deduped client-side, same established pattern
-  // as the emotion query below -- audio_transcript has its own GIN index
-  // (idx_memories_audio_transcript_search,
-  // supabase/migrations/20260819120000_audio_memories.sql) separate from
-  // content's, so a single combined tsvector isn't how the schema is shaped.
-  // The visible description already matches via the content FTS query above
-  // for free (content and audio_transcript are two independent columns on
-  // the same row).
-  const [contentResult, transcriptResult, emotionResult] = await Promise.all([
-    supabase
-      .from('memories')
-      .select('*')
-      .textSearch('content', trimmed, { type: 'websearch', config: 'english' })
-      .order('memory_date', { ascending: false })
-      .limit(MEMORIES_SEARCH_LIMIT),
-    supabase
-      .from('memories')
-      .select('*')
-      .textSearch('audio_transcript', trimmed, { type: 'websearch', config: 'english' })
-      .order('memory_date', { ascending: false })
-      .limit(MEMORIES_SEARCH_LIMIT),
-    emotionMatch
-      ? supabase
-          .from('memories')
-          .select('*')
-          .eq('emotion', emotionMatch)
-          .order('memory_date', { ascending: false })
-          .limit(MEMORIES_SEARCH_LIMIT)
-      : Promise.resolve({ data: [] as Memory[], error: null }),
-  ]);
-
-  if (contentResult.error) {
-    return { data: null, error: mapSupabaseError(contentResult.error) };
-  }
-  if (transcriptResult.error) {
-    return { data: null, error: mapSupabaseError(transcriptResult.error) };
-  }
-  if (emotionResult.error) {
-    return { data: null, error: mapSupabaseError(emotionResult.error) };
+  const { data: rows, error } = await supabase.rpc('search_memories', {
+    p_family_id: params.familyId,
+    p_query: query || undefined,
+    p_member_id: params.memberId ?? undefined,
+    p_emotion: params.emotion ?? undefined,
+    p_limit: MEMORY_SEARCH_PAGE_SIZE,
+    p_offset: params.offset ?? 0,
+  });
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
   }
 
-  const memories = dedupeById([
-    ...(contentResult.data ?? []),
-    ...(transcriptResult.data ?? []),
-    ...(emotionResult.data ?? []),
-  ])
-    .sort(compareMemoriesDesc)
-    .slice(0, MEMORIES_SEARCH_LIMIT);
+  const hits = (rows ?? []) as SearchMemoriesRow[];
+  const memoryIds = hits.map((hit) => hit.memory_id);
+  if (memoryIds.length === 0) {
+    return { data: [], error: null };
+  }
 
-  const memoryIds = memories.map((memory) => memory.id);
-  const [tagMap, mediaMap, engagementMap] = await Promise.all([
+  const [{ data: memories, error: memoriesError }, tagMap, mediaMap] = await Promise.all([
+    supabase.from('memories').select('*').in('id', memoryIds),
     fetchTagsForMemories(memoryIds),
     fetchMediaForMemories(memoryIds),
-    fetchEngagementForMemories(memoryIds),
   ]);
+  if (memoriesError) {
+    return { data: null, error: mapSupabaseError(memoriesError) };
+  }
+
+  const enriched = new Map(
+    attachMediaAssets(attachTags(memories ?? [], tagMap), mediaMap).map((memory) => [memory.id, memory]),
+  );
   return {
-    data: attachEngagement(
-      attachMediaAssets(attachTags(memories, tagMap), mediaMap),
-      engagementMap,
-    ),
+    data: hits.flatMap((hit) => {
+      const memory = enriched.get(hit.memory_id);
+      // A memory deleted between the two reads simply drops out.
+      return memory ? [{ memory, matchedIn: toSearchMatch(hit.matched_in) }] : [];
+    }),
     error: null,
   };
 }

@@ -1,0 +1,64 @@
+appId: com.memora.app
+---
+# Timeline search (docs/features/memory-search.md): add a memory with a
+# distinctive accented word, then find it by typing a partial, unaccented
+# prefix ("zanahor" -> "Zanahória"), check the row highlights it, open it,
+# and come back to the search. Chips render; a no-match search explains
+# itself.
+- runFlow: ../memories/create-memory.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible:
+      id: new-memory-content
+    timeout: 15000
+- tapOn:
+    id: new-memory-content
+- eraseText
+- inputText: "Mateo probó la Zanahória por primera vez"
+- tapOn: "New memory"
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
+
+- tapOn:
+    id: timeline-search-button
+- extendedWaitUntil:
+    visible:
+      id: memory-search-input
+    timeout: 10000
+- assertVisible:
+    id: memory-search-hint
+- assertVisible:
+    id: memory-search-feeling-joy
+- inputText: "zanahor"
+- extendedWaitUntil:
+    visible: ".*Mateo probó la Zanahória.*"
+    timeout: 15000
+- tapOn: ".*Mateo probó la Zanahória.*"
+- extendedWaitUntil:
+    notVisible:
+      id: memory-search-input
+    timeout: 10000
+- back
+- extendedWaitUntil:
+    visible:
+      id: memory-search-input
+    timeout: 10000
+
+- tapOn:
+    id: memory-search-clear
+- inputText: "qwxzvbnonsense"
+- extendedWaitUntil:
+    visible:
+      id: memory-search-empty
+    timeout: 15000
+- tapOn:
+    id: memory-search-cancel
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 10000

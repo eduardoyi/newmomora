@@ -56,9 +56,9 @@ export function memoriesQueryKey(familyId: string | null | undefined) {
 
 export function memoriesSearchQueryKey(
   familyId: string | null | undefined,
-  searchQuery: string,
+  search: { query: string; memberId: string | null; emotion: string | null },
 ) {
-  return [memoriesSearchQueryKeyBase, familyId, searchQuery] as const;
+  return [memoriesSearchQueryKeyBase, familyId, search.query, search.memberId, search.emotion] as const;
 }
 
 export function memoryDetailQueryKey(familyId: string | null | undefined, memoryId: string | undefined) {

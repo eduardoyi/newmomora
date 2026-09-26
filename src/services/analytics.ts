@@ -118,6 +118,17 @@ export interface AnalyticsEventMap {
   illustration_retry_requested: {
     intent: Extract<IllustrationRequestIntent, 'recovery' | 'manual_regenerate'>;
   };
+  memory_search_opened: {
+    source: 'timeline';
+  };
+  memory_search_result_opened: {
+    /** Why a text search matched, or 'chip' for a person/feeling-only search. */
+    matched_in: 'text' | 'voice' | 'details' | 'chip';
+    position: number;
+    has_text: boolean;
+    has_person: boolean;
+    has_feeling: boolean;
+  };
   looking_back_package_opened: {
     package_type: LookingBackPackageType;
     memory_count: number;
