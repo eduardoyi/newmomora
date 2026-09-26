@@ -20,6 +20,8 @@
     "jest.setup.ts",
     "supabase/functions/**",
     "supabase/scripts/**",
-    "book-renderer/**"
+    "book-renderer/**",
+    "cloudflare/**",
+    "workers/**"
   ]
 }

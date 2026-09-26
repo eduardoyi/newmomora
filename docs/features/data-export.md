@@ -1,155 +1,190 @@
 # Feature: Data export
 
 **Status:** `done`
-**Last updated:** 2026-08-02
+**Last updated:** 2026-09-26
 **PRD reference:** [PRD §6.9](../PRD.md#69-paid-access-and-data-export)
 
 ## Overview
 
-Owners can download a private ZIP archive containing their Momora profile,
-owner-owned families, memories, tags, media metadata, portrait versions and
-referenced private R2 assets. Export is deliberately available forever,
-including after subscription lapse, so paid access never makes the family
-archive hostage.
+Owners can export their whole family archive: every memory's words, photos,
+videos, voice recordings and illustrations, plus everyone's photos and
+portrait history. An archive can be gigabytes, so it is **built in the
+background and emailed as a download link** rather than pushed onto the
+phone. Export stays available forever, including after a subscription lapses,
+so paid access never holds the family archive hostage.
 
 ## User-facing behavior
 
-- Settings exposes **Export your memories** only to a family owner.
-- The app creates a short-lived export job, downloads the current archive, and
-  opens the native share sheet with `expo-sharing`.
-- Export includes structured `manifest.json` plus numbered files under
-  `assets/`; the manifest maps every present asset to its family/member/memory
-  context and lists missing private objects.
-- Export is read-only and does not alter journal rows or subscription state.
-- No export is offered when native sharing is unavailable, the user is signed
-  out, the worker is unreachable, the job has expired, or the archive exceeds
-  the bounded ZIP32 size limit.
+- Settings shows **Export your memories** ("We'll email you a download link")
+  to family owners only.
+- Tapping it shows "Preparing your archive — we'll email a download link to
+  <email> when it's ready". Tapping again while one is building says it's
+  already on its way (no second build). More than 3 exports in 24 hours is
+  refused with "please try again tomorrow".
+- The email ("Your Momora archive is ready") links to a download page listing
+  the files and sizes. The link works for **7 days**, then the files are
+  deleted; the owner can always export again.
+- If the build fails, the owner gets "We couldn't prepare your Momora
+  archive" instead, and can retry from Settings.
+- Downloads are resumable (Range requests), so a dropped connection doesn't
+  restart a multi-gigabyte file.
+
+### What's in the archive
+
+One ZIP for **Family & portraits**, then one per **year** (a year bigger than
+~1.8 GB splits into "(part 1 of 2)"…). All of a family's ZIPs share one top
+folder, so unzipping them side by side merges into one tree:
+
+```
+Momora - Los Yi/
+  README.txt                       what's here and how to unzip it
+  manifest.json                    everything below as structured data
+  Family/Enzo/profile-photo.jpg
+  Family/Enzo/portrait.webp
+  Family/Enzo/Portraits over time/2025-06-01 photo.jpg, 2025-06-01 portrait.webp
+  2026/2026-09-09 - Enzo le puso el parche en el ojo a Mara, con/
+    memory.txt                     date, who added it, who's in it, feeling,
+                                   the words, voice transcript, links, comments
+    photo-1.jpg, video-2.mp4       originals, in their original order
+    voice.m4a                      audio memories
+    illustration.webp              AI illustration, if any
+```
+
+Media are the original uploaded files (no previews, share cards or discarded
+portrait attempts). Files get their memory's date as their modified time.
+Generated separators are ASCII hyphens: accented characters from memory text
+are UTF-8-flagged and extract correctly with macOS Archive Utility, Windows
+10+, 7-Zip and libarchive, but ancient unzip tools can mangle them.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  A[Owner taps Export] --> B[Expo client]
-  B -->|owner JWT| C[Cloudflare export Worker]
-  C --> D[Supabase PostgREST + RLS/service key]
-  C --> E[Private R2 HEAD/GET]
-  D --> F[Manifest]
-  E --> G[Streaming ZIP]
-  F --> G
-  G --> H[Native share sheet]
+  A[Owner taps Export] -->|owner JWT| B[Export Worker POST /exports]
+  B -->|start_export_job| C[(export_jobs)]
+  B --> D[ExportArchiveWorkflow]
+  D -->|service role reads| E[(Supabase tables)]
+  D -->|stream objects| F[(R2 private media)]
+  D -->|multipart ZIPs| G[(R2 exports/job/)]
+  D -->|HMAC| H[send-export-email Edge Fn]
+  H -->|Bento| I[Owner inbox]
+  I -->|link + token| J[Worker /download page]
+  J -->|Range| G
+  K[Daily cron] -->|delete exports/job/| G
 ```
 
-The Worker authenticates the Supabase JWT, creates an owner-scoped one-hour
-`export_jobs` row through PostgREST, then rebuilds the manifest at download
-time. It verifies every referenced R2 object with `HEAD` and streams the ZIP
-without creating public URLs or persisting export bytes.
+1. `POST /exports` authenticates the JWT, checks family ownership and that the
+   account has an email, calls `start_export_job` (dedupes an in-flight job,
+   rate limits), then starts the Workflow with the job id as instance id.
+2. **plan** step reads the owner's families, members, memories, tags, media,
+   comments and portrait versions, lays them out (`src/plan.ts` +
+   `src/layout.ts`, pure and unit-tested) and saves `plan.json` to R2.
+3. **archive i of n** — one step per group. `src/builder.ts` streams each R2
+   object through `ZipWriter` into an R2 multipart upload, starting a new part
+   archive when the next object would pass 1.8 GiB. An object that vanished
+   since planning is listed in `manifest.json` → `missingFiles`, not fatal.
+   The Family & portraits group runs last so its README/manifest know every
+   other archive and every missing file.
+4. **publish** sets the job `ready` with the archive list, a fresh token's
+   SHA-256 and `expires_at = now + 7 days`, then asks `send-export-email` to
+   email the link.
+5. The daily cron deletes `exports/<job>/` for expired and failed jobs.
 
 ## Data model
 
 | Table / bucket | Role in this feature |
 |----------------|----------------------|
-| `export_jobs` | Owner-scoped short-lived job and access metadata |
-| `families`, `family_members`, `memories` | Structured owner archive data |
-| `memory_family_members`, `memory_media` | Tags and ordered media metadata |
-| `family_member_portrait_versions` | Immutable portrait timeline metadata |
-| Private R2 bucket bound as `MEDIA` | Profile photos, portraits, illustrations and media bytes |
+| `export_jobs` | Job lifecycle `queued → building → ready → expired` (or `failed`), `archives`, `total_bytes`, `download_token_hash`, timestamps, `failure_code`, `files_deleted_at` |
+| `families`, `family_members`, `memories`, `memory_family_members`, `memory_media`, `memory_comments`, `family_member_portrait_versions`, `user_profiles` | Read (service role) to build the archive |
+| R2 `momora-prod` → `exports/<job id>/` | `work/plan.json`, `work/group-<i>.json`, `archives/<group>-<part>.zip` |
 
-`export_jobs` has RLS for owner reads but the Worker uses its service-role
-PostgREST connection for creation and updates. The Worker independently checks
-the JWT subject against the job owner and only queries families where
-`owner_id` equals that subject. Family members who are not owners cannot
-export another household's archive.
+`export_jobs` has owner-only select RLS; only the Worker's service role writes
+it. `start_export_job` and `expire_export_jobs` are service-role only.
 
 ## API & Edge Functions
 
 | Function / endpoint | Input | Output | Auth |
 |---------------------|-------|--------|------|
-| `POST /exports` | Bearer Supabase JWT | `{ jobId, downloadUrl, expiresAt }` | Owner JWT |
-| `GET /exports/:jobId` | Bearer Supabase JWT | Streaming `application/zip` | Same owner JWT |
-| `expire_export_jobs` | Optional timestamp | Number of expired jobs | Service role/cron |
+| `POST /exports` (Worker) | — | `202 { jobId, status, alreadyRunning, email }`; `403 not_owner`, `409 email_required`, `429 export_rate_limited` | Owner JWT |
+| `GET /download/:jobId?t=` (Worker) | token | HTML download page | Download token |
+| `GET/HEAD /download/:jobId/:n?t=` (Worker) | token, optional `Range` | `application/zip`, `200`/`206` | Download token |
+| `send-export-email` (Edge Fn) | `{ kind: 'ready', jobId, downloadUrl, expiresAt, archiveCount, totalBytes }` or `{ kind: 'failed', jobId }` | `200`/`202`; `409` if job state disagrees; `502` Bento rejected | HMAC (`EXPORT_EMAIL_BRIDGE_SECRET`) |
+| `start_export_job` RPC | owner id, family count, max per day | `(job_id, status, already_running)` | Service role |
+| `expire_export_jobs` RPC | optional timestamp | count of stuck builds failed | Service role (billing sweep) |
 
-The export Worker is `cloudflare/momora-export-worker`; it is not a Supabase
-Edge Function. Its Supabase URL/service-role key and R2 binding are Worker
-configuration/secrets. See [TECH_SPEC §7](../TECH_SPEC.md#7-environment-variables)
-for the secret boundary.
+Contracts are in [TECH_SPEC §4.19](../TECH_SPEC.md#419-owner-data-export).
 
 ## Client integration
 
 | Layer | Files | Responsibility |
 |-------|-------|----------------|
-| Routes | `app/(app)/(tabs)/settings.tsx` | Owner-only export action and feedback |
-| Services | `src/services/export.ts` | JWT request, temporary download, native share |
-| Native dependencies | `expo-sharing`, `expo-file-system` | Share sheet and cache download |
-| Worker | `cloudflare/momora-export-worker/src/*` | Auth, snapshot, R2 access and ZIP streaming |
-
-### How to invoke from another feature
-
-1. Reuse `createAndShareDataExport()` rather than calling the Worker directly.
-2. Keep export controls owner-only in the UI; the Worker remains the final
-   authorization boundary.
-3. Treat `fileUri` as a temporary cache file and do not upload or log it.
+| Routes | `app/(app)/(tabs)/settings.tsx` | Owner-only row, confirmation alert naming the email |
+| Services | `src/services/export.ts` | `requestDataExport()` — JWT `POST /exports`, typed result |
+| Worker | `cloudflare/momora-export-worker/src/*` | Request, Workflow, archive building, download page, cleanup |
+| Edge Function | `supabase/functions/send-export-email` | Owner email lookup + Bento send |
 
 ## Extension guide
 
 **Safe to extend**
 
-- Add a manifest field with a versioned schema and a corresponding test.
-- Add an asset kind by extending the candidate/manifest types and preserving
-  owner-family scoping.
-- Add pagination or bounded batching to new PostgREST queries.
+- Add data to `memory.txt` (`renderMemoryText`) or `manifest.json`
+  (`buildFamilyManifest`, bump `version` for breaking shape changes).
+- Add a new kind of file: add a planned `object` entry in `buildExportPlan`,
+  pick its path in `layout.ts`, extend `ExportAssetKind`, cover it in
+  `test/plan.test.ts`.
+- New columns in a select list must exist in production — the Worker test
+  fake does not validate columns; run the local end-to-end (below).
 
 **Do not change without updating this doc**
 
-- Owner-only authorization and private R2 access.
-- One-hour job expiration and active-job rate limiting.
-- Streaming ZIP behavior and the 2 GiB safety cap.
-- The manifest's stable format/version and missing-asset reporting.
+- Owner-only export; token-only downloads (never serve `exports/` from
+  `get-media-url`); only the token hash is stored.
+- 7-day link lifetime and the cleanup cron (files must be deleted before a
+  job is marked expired).
+- Group/split rules (per year, 1.8 GiB, 60,000 entries) and stored (not
+  deflated) entries — CPU per Workflow step is capped at 5 minutes.
+- R2 multipart parts must all be `PART_SIZE` except the last.
 
 ## Constraints & gotchas
 
-- Export never uses RevenueCat access checks; a lapsed owner must still be
-  able to export.
-- The Worker uses ID-batched PostgREST filters to avoid URL-size limits and
-  caps families/assets/rows to bound memory and runtime.
-- R2 objects can disappear between `HEAD` and `GET`; the manifest reports
-  missing objects found during the snapshot, while a later disappearance
-  aborts that download rather than silently returning a partial archive.
-- Export does include sensitive family/child data. Never log manifest data,
-  object keys, JWTs, or archive contents.
-- The native share sheet is unavailable on some platforms/test environments;
-  this is reported as a user-facing error rather than a silent success.
+- Export never checks billing access; a lapsed owner can still export.
+- Never log manifest data, object keys, tokens, emails or archive contents.
+- Each archive step re-reads `plan.json` from R2 because Workflow step results
+  are capped at 1 MiB; keep large state in R2, not step return values.
+- A retried `publish` step mints a new token (the earlier email, if any,
+  holds a dead link). `send-export-email` answers `202` for an ambiguous Bento
+  outcome so that case doesn't double-send.
+- The download page and files require no Momora login — anyone with the link
+  can download until it expires. The email says so.
 
 ## Dependencies
 
-- Depends on: auth, family-sharing, memories, media memories, Cloudflare R2,
-  Supabase PostgREST.
-- Used by: settings and the subscription/lapsed-owner trust promise.
+- Depends on: auth, family-sharing, memories, media memories, audio memories,
+  likes-and-comments, portrait timeline, Cloudflare R2 + Workflows, Bento.
+- Used by: Settings and the subscription/lapsed-owner trust promise.
 
 ## Testing
 
-### Unit tests
+### Unit / integration tests
 
 | File | Covers |
 |------|--------|
-| `cloudflare/momora-export-worker/test/zip.test.ts` | Streaming ZIP structure and JSON entry output |
-| `cloudflare/momora-export-worker/src/manifest.ts` (covered by Worker test suite) | Snapshot filtering, batching and missing assets |
+| `cloudflare/momora-export-worker/test/zip.test.ts` | ZIP structure, CRCs, UTF-8 names, DOS dates |
+| `cloudflare/momora-export-worker/test/builder.test.ts` | Splitting, equal multipart parts, missing objects, abort on failure |
+| `cloudflare/momora-export-worker/test/layout.test.ts`, `test/plan.test.ts` | Safe names, folder/file naming, memory.txt, year grouping, dedupe |
+| `cloudflare/momora-export-worker/test/index.test.ts` | `POST /exports` rules; full Workflow run → download page → Range → expiry → cleanup; failure email |
+| `supabase/functions/send-export-email/index.test.ts` | HMAC, job-state check, email content, Bento outcomes |
+| `supabase/tests/export_jobs.sql` | `start_export_job` dedupe/rate limit, `expire_export_jobs`, client lockout |
+| `src/services/export.test.ts`, `src/screen-tests/settings.*.test.tsx` | Client request + Settings confirmation |
 
-### Integration tests
+### Local end-to-end (recommended after changing queries)
 
-| File | Scenarios |
-|------|-----------|
-| `src/screen-tests/settings.family-section.test.tsx` | Owner-only export action and success/error UI |
-
-### E2E (Maestro)
-
-The release smoke path should export from a seeded owner account and confirm
-the native share sheet opens without inspecting archive contents on-device.
-
-### Edge Function tests (Deno)
-
-No Supabase Edge Function owns the export stream. The Worker tests above cover
-the equivalent server boundary; migration validation covers `export_jobs` and
-`expire_export_jobs`.
+With local Supabase running: seed an owner, family and memories, put fake
+objects in local R2 (`wrangler r2 object put momora-prod/<key> --local
+--persist-to <dir>`), run `wrangler dev --local --persist-to <dir>
+--test-scheduled` with `--var` overrides pointing `SUPABASE_URL` at local and
+`EXPORT_EMAIL_BRIDGE_URL` at a stub, `POST /exports` with the owner's JWT,
+then download and `ditto -x -k` the archives. Hit `/__scheduled` to run cleanup.
 
 ### Run this feature's tests
 
@@ -163,4 +198,5 @@ npm run typecheck && npm test
 | Date | Change |
 |------|--------|
 | 2026-08-01 | Owner-scoped manifest + private R2 streaming ZIP export shipped |
-| 2026-08-02 | Connected the owner Settings action to the export service and added success/error integration coverage. |
+| 2026-08-02 | Connected the owner Settings action to the export service |
+| 2026-09-26 | Rebuilt as background Workflow + emailed 7-day link; per-year archives with readable folders and memory.txt; fixed nonexistent-column queries that made every export return a ~100-byte error file |

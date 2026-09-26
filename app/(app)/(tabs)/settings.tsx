@@ -39,7 +39,7 @@ import {
   widgetSetupRoute,
 } from '@/lib/routes';
 import { getDeviceTimezone } from '@/services/auth';
-import { createAndShareDataExport } from '@/services/export';
+import { requestDataExport } from '@/services/export';
 import { leaveFamily, updateFamilyName, updateFamilyViewerSharing } from '@/services/family';
 import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { isPendingInviteActive } from '@/utils/invites';
@@ -616,10 +616,20 @@ export default function SettingsScreen() {
 
     setIsExporting(true);
     try {
-      const result = await createAndShareDataExport();
-      if (result.error) {
+      const result = await requestDataExport();
+      if (result.error || !result.data) {
         showMutationError('Could not export memories', result.error, 'Please try again.');
+        return;
       }
+      // The archive can be gigabytes, so it's prepared in the background and
+      // emailed as a download link rather than pushed onto the phone.
+      const destination = result.data.email ?? 'your email address';
+      Alert.alert(
+        result.data.alreadyRunning ? 'Already on its way' : 'Preparing your archive',
+        result.data.alreadyRunning
+          ? `We're still preparing your archive and will email a download link to ${destination} when it's ready.`
+          : `We'll email a download link to ${destination} when it's ready — usually within an hour. It's best opened on a computer.`,
+      );
     } catch (error) {
       showMutationError('Could not export memories', error, 'Please try again.');
     } finally {
@@ -795,8 +805,8 @@ export default function SettingsScreen() {
                 />
                 <SettingsRow
                   chevron={!isExporting}
-                  label={isExporting ? 'Preparing your archive…' : 'Export your memories'}
-                  caption={isExporting ? 'This may take a moment.' : 'Download a ZIP of your memories'}
+                  label="Export your memories"
+                  caption="We'll email you a download link"
                   onPress={isExporting ? undefined : () => void handleExportMemories()}
                   right={isExporting ? <ActivityIndicator color={colors.primary} size="small" /> : undefined}
                   testID="settings-export-memories"

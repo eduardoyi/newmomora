@@ -1,6 +1,3 @@
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
-
 import { supabase } from '@/lib/supabase';
 
 export interface ServiceError {
@@ -8,15 +5,18 @@ export interface ServiceError {
   code?: string;
 }
 
-export interface DataExportResult {
-  shared: boolean;
-  expiresAt: string;
+export interface DataExportRequestResult {
+  jobId: string;
+  /** True when an export was already being prepared -- no new one started. */
+  alreadyRunning: boolean;
+  /** Where the download link will be sent. */
+  email: string | null;
 }
 
-interface CreateExportResponse {
-  jobId: string;
-  downloadUrl: string;
-  expiresAt: string;
+interface RequestExportResponse {
+  jobId?: unknown;
+  alreadyRunning?: unknown;
+  email?: unknown;
 }
 
 async function readError(response: Response, fallback: string): Promise<ServiceError> {
@@ -31,19 +31,23 @@ async function readError(response: Response, fallback: string): Promise<ServiceE
   }
 }
 
-function getExportUrl(): string {
+function getExportUrl(): string | null {
   const workerUrl = process.env.EXPO_PUBLIC_EXPORT_WORKER_URL;
-  if (!workerUrl) throw new Error('Memory export is not configured');
-  return workerUrl.replace(/\/$/, '');
+  return workerUrl ? workerUrl.replace(/\/$/, '') : null;
 }
 
-/** Starts an owner-only streamed ZIP export and opens the native share sheet. */
-export async function createAndShareDataExport(): Promise<{
-  data: DataExportResult | null;
+/**
+ * Asks the export Worker to prepare the owner's archive in the background.
+ * Nothing is downloaded to the phone: when the archive is ready the Worker
+ * emails the owner a 7-day download link (docs/features/data-export.md).
+ */
+export async function requestDataExport(): Promise<{
+  data: DataExportRequestResult | null;
   error: ServiceError | null;
 }> {
-  if (!(await Sharing.isAvailableAsync())) {
-    return { data: null, error: { message: 'Sharing is not available on this device', code: 'sharing_unavailable' } };
+  const exportUrl = getExportUrl();
+  if (!exportUrl) {
+    return { data: null, error: { message: 'Memory export is not configured', code: 'not_configured' } };
   }
 
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
@@ -54,7 +58,7 @@ export async function createAndShareDataExport(): Promise<{
 
   let response: Response;
   try {
-    response = await fetch(`${getExportUrl()}/exports`, {
+    response = await fetch(`${exportUrl}/exports`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -66,32 +70,21 @@ export async function createAndShareDataExport(): Promise<{
     return { data: null, error: await readError(response, 'Could not start the export') };
   }
 
-  const created = await response.json() as Partial<CreateExportResponse>;
-  if (!created.downloadUrl || !created.jobId || !created.expiresAt) {
+  let body: RequestExportResponse;
+  try {
+    body = await response.json() as RequestExportResponse;
+  } catch {
+    body = {};
+  }
+  if (typeof body.jobId !== 'string') {
     return { data: null, error: { message: 'The export service returned an invalid response', code: 'invalid_response' } };
   }
-
-  const targetUri = `${FileSystem.cacheDirectory ?? ''}momora-export-${created.jobId}.zip`;
-  let downloadedUri: string | null = null;
-  try {
-    const download = await FileSystem.downloadAsync(created.downloadUrl, targetUri, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    downloadedUri = download.uri;
-    await Sharing.shareAsync(download.uri, {
-      dialogTitle: 'Share your Momora archive',
-      mimeType: 'application/zip',
-      UTI: 'com.pkware.zip-archive',
-    });
-    return {
-      data: { shared: true, expiresAt: created.expiresAt },
-      error: null,
-    };
-  } catch {
-    return { data: null, error: { message: 'Could not download or share your archive. Please try again.', code: 'export_download_failed' } };
-  } finally {
-    if (downloadedUri) {
-      await Promise.resolve(FileSystem.deleteAsync(downloadedUri, { idempotent: true })).catch(() => undefined);
-    }
-  }
+  return {
+    data: {
+      jobId: body.jobId,
+      alreadyRunning: body.alreadyRunning === true,
+      email: typeof body.email === 'string' ? body.email : null,
+    },
+    error: null,
+  };
 }

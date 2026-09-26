@@ -398,6 +398,11 @@ verify_jwt = false
 [functions.send-content-report-alert]
 verify_jwt = false
 
+# Called only by the export Worker's Workflow (cloudflare/momora-export-worker),
+# authenticated with an HMAC signature (EXPORT_EMAIL_BRIDGE_SECRET), not a JWT.
+[functions.send-export-email]
+verify_jwt = false
+
 # This scheduled maintenance endpoint authenticates with x-cron-secret. It
 # cannot require a user JWT because pg_cron/pg_net invokes it directly.
 [functions.run-ai-usage-alerts]

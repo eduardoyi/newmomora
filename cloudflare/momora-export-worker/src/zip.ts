@@ -12,6 +12,10 @@ const CRC_TABLE = (() => {
   return table;
 })();
 
+/** ZIP32 hard limits: 16-bit entry count, 32-bit offsets/sizes. */
+export const ZIP_MAX_ENTRIES = 65_535;
+export const ZIP_MAX_BYTES = 0xffff_ffff;
+
 function u16(value: number): Uint8Array {
   return new Uint8Array([value & 0xff, (value >>> 8) & 0xff]);
 }
@@ -35,22 +39,30 @@ function concat(...parts: Uint8Array[]): Uint8Array {
   return result;
 }
 
-function crc32Update(crc: number, bytes: Uint8Array): number {
+export function crc32Update(crc: number, bytes: Uint8Array): number {
   let value = crc;
-  for (const byte of bytes) value = CRC_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
+  for (let index = 0; index < bytes.length; index += 1) {
+    value = CRC_TABLE[(value ^ bytes[index]) & 0xff] ^ (value >>> 8);
+  }
   return value >>> 0;
 }
 
-function dosDateTime(now = new Date()): { date: number; time: number } {
-  const date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
-  const time = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+function dosDateTime(when: Date): { date: number; time: number } {
+  // DOS timestamps can't represent anything before 1980.
+  const safe = when.getUTCFullYear() < 1980 ? new Date(Date.UTC(1980, 0, 1)) : when;
+  const date = ((safe.getUTCFullYear() - 1980) << 9) | ((safe.getUTCMonth() + 1) << 5) | safe.getUTCDate();
+  const time = (safe.getUTCHours() << 11) | (safe.getUTCMinutes() << 5) | Math.floor(safe.getUTCSeconds() / 2);
   return { date, time };
 }
 
-export interface StreamZipEntry {
-  name: string;
-  getBody: () => Promise<ReadableStream<Uint8Array> | Uint8Array>;
+/** Bytes an entry adds beyond its data: local header + descriptor + central record. */
+export function zipEntryOverhead(name: string): number {
+  const nameLength = textEncoder.encode(name).length;
+  return 30 + nameLength + 16 + 46 + nameLength;
 }
+
+/** Bytes the end-of-central-directory record adds. */
+export const ZIP_END_OVERHEAD = 22;
 
 interface CentralRecord {
   name: Uint8Array;
@@ -62,90 +74,85 @@ interface CentralRecord {
 }
 
 /**
- * Creates a ZIP stream without buffering R2 objects. Entries use the ZIP data
- * descriptor form: the header is emitted before the object is read, and the
- * CRC/size are emitted immediately after it. This keeps exports bounded by
- * the device's disk, not the Worker memory limit.
+ * Writes a stored (uncompressed) ZIP incrementally to `sink`. Photos,
+ * videos and audio are already compressed, so storing them keeps CPU
+ * bounded. Entries use the data-descriptor form: the local header is
+ * written before the body is read, CRC/size right after it, so R2 objects
+ * are streamed through without buffering. Names are flagged UTF-8.
  */
-async function* generateZipChunks(entries: StreamZipEntry[], now: Date): AsyncGenerator<Uint8Array> {
-  const central: CentralRecord[] = [];
-  let offset = 0;
-  const { date, time } = dosDateTime(now);
+export class ZipWriter {
+  private readonly central: CentralRecord[] = [];
+  private written = 0;
 
-  const emit = async function* (bytes: Uint8Array): AsyncGenerator<Uint8Array> {
-    offset += bytes.length;
-    yield bytes;
-  };
+  constructor(private readonly sink: (bytes: Uint8Array) => Promise<void>) {}
 
-  for (const entry of entries) {
-    const name = textEncoder.encode(entry.name);
-    const localOffset = offset;
-    yield* emit(concat(
+  get bytesWritten(): number {
+    return this.written;
+  }
+
+  get entryCount(): number {
+    return this.central.length;
+  }
+
+  private async emit(bytes: Uint8Array): Promise<void> {
+    if (bytes.length === 0) return;
+    this.written += bytes.length;
+    if (this.written > ZIP_MAX_BYTES) throw new Error('zip_too_large');
+    await this.sink(bytes);
+  }
+
+  async addEntry(
+    entryName: string,
+    body: ReadableStream<Uint8Array> | Uint8Array,
+    modifiedAt: Date,
+  ): Promise<void> {
+    if (this.central.length >= ZIP_MAX_ENTRIES) throw new Error('zip_too_many_entries');
+    const name = textEncoder.encode(entryName);
+    const { date, time } = dosDateTime(modifiedAt);
+    const offset = this.written;
+    await this.emit(concat(
       u32(0x04034b50), u16(20), u16(0x808), u16(0), u16(time), u16(date),
       u32(0), u32(0), u32(0), u16(name.length), u16(0), name,
     ));
 
     let crc = 0xffffffff;
     let size = 0;
-    const body = await entry.getBody();
     if (body instanceof Uint8Array) {
       crc = crc32Update(crc, body);
       size = body.length;
-      yield* emit(body);
+      await this.emit(body);
     } else {
       const reader = body.getReader();
       while (true) {
         const next = await reader.read();
         if (next.done) break;
-        const chunk = next.value;
-        crc = crc32Update(crc, chunk);
-        size += chunk.length;
-        yield* emit(chunk);
+        crc = crc32Update(crc, next.value);
+        size += next.value.length;
+        await this.emit(next.value);
       }
     }
     const finalCrc = (crc ^ 0xffffffff) >>> 0;
-    yield* emit(concat(u32(0x08074b50), u32(finalCrc), u32(size), u32(size)));
-    central.push({ name, crc: finalCrc, size, offset: localOffset, date, time });
+    await this.emit(concat(u32(0x08074b50), u32(finalCrc), u32(size), u32(size)));
+    this.central.push({ name, crc: finalCrc, size, offset, date, time });
   }
 
-  const centralOffset = offset;
-  for (const record of central) {
-    yield* emit(concat(
-      u32(0x02014b50), u16(20), u16(20), u16(0x808), u16(0), u16(record.time),
-      u16(record.date), u32(record.crc), u32(record.size), u32(record.size),
-      u16(record.name.length), u16(0), u16(0), u16(0), u16(0), u32(0),
-      u32(record.offset), record.name,
+  async finish(): Promise<void> {
+    const centralOffset = this.written;
+    for (const record of this.central) {
+      await this.emit(concat(
+        u32(0x02014b50), u16(20), u16(20), u16(0x808), u16(0), u16(record.time),
+        u16(record.date), u32(record.crc), u32(record.size), u32(record.size),
+        u16(record.name.length), u16(0), u16(0), u16(0), u16(0), u32(0),
+        u32(record.offset), record.name,
+      ));
+    }
+    await this.emit(concat(
+      u32(0x06054b50), u16(0), u16(0), u16(this.central.length), u16(this.central.length),
+      u32(this.written - centralOffset), u32(centralOffset), u16(0),
     ));
   }
-  yield* emit(concat(
-    u32(0x06054b50), u16(0), u16(0), u16(central.length), u16(central.length),
-    u32(offset - centralOffset), u32(centralOffset), u16(0),
-  ));
 }
 
-export function createStreamingZip(entries: StreamZipEntry[], now = new Date()): ReadableStream<Uint8Array> {
-  const iterator = generateZipChunks(entries, now);
-  let pulling = false;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (pulling) return;
-      pulling = true;
-      try {
-        const next = await iterator.next();
-        if (next.done) controller.close();
-        else controller.enqueue(next.value);
-      } catch (error) {
-        controller.error(error);
-      } finally {
-        pulling = false;
-      }
-    },
-    cancel() {
-      void iterator.return(undefined);
-    },
-  });
-}
-
-export function zipJson(value: unknown): Uint8Array {
-  return textEncoder.encode(JSON.stringify(value, null, 2));
+export function utf8(value: string): Uint8Array {
+  return textEncoder.encode(value);
 }

@@ -1,37 +1,43 @@
 import { describe, expect, it } from 'vitest';
 
-import { createStreamingZip, zipJson } from '../src/zip';
+import { utf8, ZipWriter } from '../src/zip';
+import { concatChunks, readZip } from './helpers/zip-reader';
 
-async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
-    chunks.push(next.value);
-    length += next.value.length;
-  }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return bytes;
+function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(utf8(chunk));
+      controller.close();
+    },
+  });
 }
 
-describe('streaming ZIP writer', () => {
-  it('emits a valid descriptor-based archive without buffering entries', async () => {
-    const output = await readStream(createStreamingZip([
-      { name: 'manifest.json', getBody: async () => zipJson({ ok: true }) },
-      { name: 'assets/one.txt', getBody: async () => new TextEncoder().encode('hello') },
-    ], new Date('2026-08-01T12:00:00.000Z')));
+describe('ZipWriter', () => {
+  it('writes a stored ZIP a standard reader can walk, with correct CRCs and UTF-8 names', async () => {
+    const chunks: Uint8Array[] = [];
+    const writer = new ZipWriter(async (bytes) => { chunks.push(bytes.slice()); });
+    await writer.addEntry('Momora - Los Yi/2026/2026-09-09 - Enzo le puso el parche/memory.txt', utf8('¡Hola!'), new Date('2026-09-09T12:00:00Z'));
+    await writer.addEntry('Momora - Los Yi/2026/video.mp4', streamOf('chunk-1', 'chunk-2'), new Date('2026-09-10T12:00:00Z'));
+    await writer.finish();
 
-    const signatures = [0x50, 0x4b, 0x03, 0x04];
-    expect([...output.slice(0, 4)]).toEqual(signatures);
-    expect([...output.slice(-22, -18)]).toEqual([0x50, 0x4b, 0x05, 0x06]);
-    expect(new TextDecoder().decode(output)).toContain('manifest.json');
-    expect(new TextDecoder().decode(output)).toContain('assets/one.txt');
+    const bytes = concatChunks(chunks);
+    expect(writer.bytesWritten).toBe(bytes.length);
+    expect(writer.entryCount).toBe(2);
+    const entries = readZip(bytes);
+    expect(entries.map((entry) => entry.name)).toEqual([
+      'Momora - Los Yi/2026/2026-09-09 - Enzo le puso el parche/memory.txt',
+      'Momora - Los Yi/2026/video.mp4',
+    ]);
+    expect(new TextDecoder().decode(entries[0].data)).toBe('¡Hola!');
+    expect(new TextDecoder().decode(entries[1].data)).toBe('chunk-1chunk-2');
+    expect(entries[0].modified).toEqual({ year: 2026, month: 9, day: 9 });
+  });
+
+  it('clamps pre-1980 dates DOS timestamps cannot represent', async () => {
+    const chunks: Uint8Array[] = [];
+    const writer = new ZipWriter(async (bytes) => { chunks.push(bytes.slice()); });
+    await writer.addEntry('old.txt', utf8('x'), new Date('1975-06-01T00:00:00Z'));
+    await writer.finish();
+    expect(readZip(concatChunks(chunks))[0].modified.year).toBe(1980);
   });
 });

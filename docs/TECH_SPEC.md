@@ -2426,24 +2426,55 @@ secrets only; public SDK keys are Expo variables.
 
 ### 4.19 Owner data export
 
+Exports are built in the background and emailed as a download link; nothing
+is downloaded to the phone. Full design: [data-export.md](./features/data-export.md).
+
 The Cloudflare Worker at `cloudflare/momora-export-worker` exposes:
 
-- `POST /exports` — authenticates a Supabase JWT, verifies that the subject owns
-  at least one non-deleted family, creates a one-hour `export_jobs` row, and
-  returns a job URL.
-- `GET /exports/:jobId` — re-authenticates the same owner, rebuilds the
-  owner-scoped manifest, heads private R2 assets, and streams a ZIP containing
-  `manifest.json` and numbered asset files.
+- `POST /exports` -- authenticates a Supabase JWT (non-anonymous, with an
+  email), verifies the subject owns at least one non-deleted family, calls
+  `start_export_job`, and starts the `ExportArchiveWorkflow` Workflow
+  (instance id = job id). Returns `202 { jobId, status, alreadyRunning, email }`.
+  An in-flight job is returned instead of starting a second one; more than 3
+  non-failed jobs per owner per rolling 24h returns `429 export_rate_limited`.
+- `GET /download/:jobId?t=<token>` -- HTML page listing the job's archives.
+- `GET|HEAD /download/:jobId/:n?t=<token>` -- streams archive `n` from R2 with
+  `Content-Length` and `Range`/`206` support (resumable).
+- Cron `23 4 * * *` -- deletes `exports/<job>/` from R2 for expired `ready`
+  jobs and for `failed` jobs, then sets `files_deleted_at` (and
+  `status = 'expired'`, `download_token_hash = null` for ready jobs).
 
-The worker uses service-role PostgREST access only on the server and a private
-R2 binding. It batches ID filters, caps families/assets, and rejects archives
-over 2 GiB to stay within ZIP32 limits. It never creates public asset URLs or
-logs archive contents. Export-job admission uses the atomic `create_export_job`
-RPC, which serializes the active-job limit per owner; `export_jobs` has
-owner-only RLS for metadata and is expired by the scheduled
-`expire_export_jobs` function. The ZIP stream is pull-driven so backpressure
-does not accumulate the full archive in Worker memory. The native client
-downloads the short-lived job URL into the cache and opens `expo-sharing`.
+`ExportArchiveWorkflow` steps: `plan` (service-role PostgREST reads; the plan
+is written to R2 `exports/<job>/work/plan.json`) → one `archive i of n` step per
+group (each memory year, then each family's "Family & portraits" group, which
+also carries `README.txt` and `manifest.json`) → `publish` (writes
+`status = 'ready'`, `archives`, `total_bytes`, the SHA-256 of a fresh 256-bit
+download token, `expires_at = now + 7 days`, then emails the link via
+`send-export-email`). Any unrecoverable error marks the job `failed` and sends
+the failure email. Archives are stored ZIPs (no compression) written to R2 via
+multipart upload (16 MiB parts); a group splits into "(part n of m)" archives
+before 1.8 GiB or 60,000 entries (ZIP32 limits). Worker `limits`: `cpu_ms`
+300000, `subrequests` 200000.
+
+`export_jobs` (owner-only select RLS; written only by the Worker's service
+role): `status` `queued | building | ready | expired | failed`, `archives`
+jsonb (`[{ index, key, fileName, bytes }]`), `total_bytes`,
+`download_token_hash`, `started_at`, `completed_at`, `failure_code`,
+`email_sent_at`, `files_deleted_at`. RPCs (service role only):
+`start_export_job(p_owner_user_id, p_family_count, p_max_per_day = 3)` returns
+`(job_id, status, already_running)`; `expire_export_jobs(p_now)` (still called
+by `process-billing-webhooks`) now only fails `queued`/`building` jobs past their
+1-day build deadline with `failure_code = 'build_timeout'`
+(20260926170000_export_jobs_email_delivery.sql).
+
+`send-export-email` (Edge Function, `verify_jwt = false`) -- HMAC-SHA256 of
+`${timestamp}.${nonce}.${body}` with `EXPORT_EMAIL_BRIDGE_SECRET` in
+`x-export-timestamp` / `x-export-nonce` / `x-export-signature` (5-minute
+window). Body `{ kind: 'ready', jobId, downloadUrl, expiresAt, archiveCount,
+totalBytes }` or `{ kind: 'failed', jobId }`. Requires the job's status to
+match the kind, looks the owner's email up with `auth.admin.getUserById`, sends
+via Bento. 502 on a definite Bento rejection (Workflow retries); 200/202
+otherwise.
 
 ### 4.20 `compose-share-card`
 
@@ -3279,8 +3310,10 @@ service-role key. Do not put any of these values in Expo variables or commit
 `.dev.vars`.
 
 The `cloudflare/momora-export-worker` deployment binds the private `momora-prod`
-R2 bucket as `MEDIA` and keeps `SUPABASE_ANON_KEY` and
-`SUPABASE_SERVICE_ROLE_KEY` in the Worker secret store. Its public
+R2 bucket as `MEDIA` and keeps `SUPABASE_ANON_KEY`,
+`SUPABASE_SERVICE_ROLE_KEY` and `EXPORT_EMAIL_BRIDGE_SECRET` in the Worker
+secret store. `EXPORT_EMAIL_BRIDGE_SECRET` must match the Supabase Edge
+Function secret of the same name used by `send-export-email`. Its public
 `workers.dev` URL is the value of `EXPO_PUBLIC_EXPORT_WORKER_URL`; the mobile
 bundle never receives the service-role key.
 
@@ -3378,7 +3411,7 @@ All AI operations are **async** — client shows status and allows navigation aw
 - [ ] RevenueCat restore behavior verifies the current App User ID and every purchase/restore is reconciled before UI success
 - [ ] Production billing ignores sandbox entitlements unless an explicit non-production setting enables them
 - [ ] Complimentary access is stored in a private owner-keyed table, never represented as a store entitlement, and managed only through the operator runbook
-- [ ] Export Worker re-authenticates the owner for both job creation and download; R2 remains private and archive contents never enter logs
+- [ ] Export Worker authenticates the owner JWT for job creation; downloads require the emailed 256-bit token (only its SHA-256 is stored); R2 remains private, `exports/` is never signed by `get-media-url`, and archive contents never enter logs
 - [ ] Illustrated-memory max of 6 family member tags enforced server-side; text-only/media tags remain unlimited
 - [ ] Family-scoped RLS goes through `is_family_member`/`has_family_role`, never a hand-rolled join
 - [ ] Role/family checks are bound to one specific `family_id`, never "has this role somewhere"

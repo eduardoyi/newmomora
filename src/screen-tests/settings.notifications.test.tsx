@@ -13,7 +13,7 @@ import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
 import { useUserProfile } from '@/hooks/useUserProfile';
-import { createAndShareDataExport } from '@/services/export';
+import { requestDataExport } from '@/services/export';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -61,7 +61,7 @@ jest.mock('@/services/family', () => ({
 }));
 
 jest.mock('@/services/export', () => ({
-  createAndShareDataExport: jest.fn(),
+  requestDataExport: jest.fn(),
 }));
 
 jest.mock('@/lib/query-persistence', () => ({
@@ -75,8 +75,8 @@ jest.mock('@/services/auth', () => ({
   getDeviceTimezone: jest.fn(() => 'America/Denver'),
 }));
 
-const mockedCreateAndShareDataExport = createAndShareDataExport as jest.MockedFunction<
-  typeof createAndShareDataExport
+const mockedRequestDataExport = requestDataExport as jest.MockedFunction<
+  typeof requestDataExport
 >;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseBilling = useBilling as jest.MockedFunction<typeof useBilling>;
@@ -551,9 +551,9 @@ describe('Settings notifications toggles', () => {
 
     await waitFor(() => {
       expect(openUrlSpy).toHaveBeenCalledWith('https://apps.apple.com/account/subscriptions');
-      expect(mockedCreateAndShareDataExport).toHaveBeenCalledTimes(1);
+      expect(mockedRequestDataExport).toHaveBeenCalledTimes(1);
     });
-    expect(getByText('Download a ZIP of your memories')).toBeTruthy();
+    expect(getByText("We'll email you a download link")).toBeTruthy();
     openUrlSpy.mockRestore();
   });
 

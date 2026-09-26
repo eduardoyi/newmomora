@@ -978,34 +978,58 @@ export type Database = {
       }
       export_jobs: {
         Row: {
+          archives: Json
           asset_count: number
+          completed_at: string | null
           created_at: string
+          download_token_hash: string | null
+          email_sent_at: string | null
           expires_at: string
+          failure_code: string | null
           family_count: number
+          files_deleted_at: string | null
           id: string
           last_accessed_at: string | null
           owner_user_id: string
+          started_at: string | null
           status: string
+          total_bytes: number
         }
         Insert: {
+          archives?: Json
           asset_count?: number
+          completed_at?: string | null
           created_at?: string
+          download_token_hash?: string | null
+          email_sent_at?: string | null
           expires_at?: string
+          failure_code?: string | null
           family_count?: number
+          files_deleted_at?: string | null
           id?: string
           last_accessed_at?: string | null
           owner_user_id: string
+          started_at?: string | null
           status?: string
+          total_bytes?: number
         }
         Update: {
+          archives?: Json
           asset_count?: number
+          completed_at?: string | null
           created_at?: string
+          download_token_hash?: string | null
+          email_sent_at?: string | null
           expires_at?: string
+          failure_code?: string | null
           family_count?: number
+          files_deleted_at?: string | null
           id?: string
           last_accessed_at?: string | null
           owner_user_id?: string
+          started_at?: string | null
           status?: string
+          total_bytes?: number
         }
         Relationships: []
       }
@@ -3825,29 +3849,6 @@ export type Database = {
         }
         Returns: string
       }
-      create_export_job: {
-        Args: {
-          p_family_count: number
-          p_max_active?: number
-          p_owner_user_id: string
-        }
-        Returns: {
-          asset_count: number
-          created_at: string
-          expires_at: string
-          family_count: number
-          id: string
-          last_accessed_at: string | null
-          owner_user_id: string
-          status: string
-        }[]
-        SetofOptions: {
-          from: "*"
-          to: "export_jobs"
-          isOneToOne: false
-          isSetofReturn: true
-        }
-      }
       create_family: {
         Args: { name: string }
         Returns: {
@@ -4207,12 +4208,12 @@ export type Database = {
           invite_id: string
           kind: string
           memory_creation_source: string
+          memory_emotion: string
           memory_excerpt: string
           memory_id: string
           memory_illustration_key: string
           memory_media_content_type: string
           memory_media_key: string
-          memory_emotion: string
           memory_media_preview_key: string
           memory_type: string
         }[]
@@ -4925,6 +4926,18 @@ export type Database = {
           changed: boolean
           like_count: number
           liked: boolean
+        }[]
+      }
+      start_export_job: {
+        Args: {
+          p_family_count: number
+          p_max_per_day?: number
+          p_owner_user_id: string
+        }
+        Returns: {
+          already_running: boolean
+          job_id: string
+          status: string
         }[]
       }
       supersede_memory_illustration_workflow_jobs: {

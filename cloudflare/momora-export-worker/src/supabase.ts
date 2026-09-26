@@ -34,7 +34,12 @@ async function supabaseRequest<T>(
   return await response.json() as T;
 }
 
-export async function authenticate(request: Request, env: Env): Promise<string | null> {
+export interface AuthenticatedUser {
+  id: string;
+  email: string | null;
+}
+
+export async function authenticate(request: Request, env: Env): Promise<AuthenticatedUser | null> {
   const authorization = request.headers.get('authorization');
   if (!authorization?.startsWith('Bearer ')) return null;
 
@@ -48,8 +53,9 @@ export async function authenticate(request: Request, env: Env): Promise<string |
     await response.text().catch(() => '');
     return null;
   }
-  const user = await response.json() as { id?: unknown };
-  return typeof user.id === 'string' ? user.id : null;
+  const user = await response.json() as { id?: unknown; email?: unknown; is_anonymous?: unknown };
+  if (typeof user.id !== 'string' || user.is_anonymous === true) return null;
+  return { id: user.id, email: typeof user.email === 'string' && user.email ? user.email : null };
 }
 
 export async function listRows<T>(env: Env, resource: string, select: string, filters: Record<string, string>): Promise<T[]> {
@@ -76,14 +82,20 @@ export async function listRows<T>(env: Env, resource: string, select: string, fi
   return requestedLimit != null ? rows.slice(0, requestedLimit) : rows;
 }
 
-export async function createExportJob(
+export interface StartedExportJob {
+  job_id: string;
+  status: ExportJob['status'];
+  already_running: boolean;
+}
+
+export async function startExportJob(
   env: Env,
   ownerUserId: string,
   familyCount: number,
-): Promise<ExportJob> {
-  const rows = await supabaseRequest<ExportJob[]>(env, 'rpc/create_export_job', {
+): Promise<StartedExportJob> {
+  const rows = await supabaseRequest<StartedExportJob[]>(env, 'rpc/start_export_job', {
     method: 'POST',
-    body: JSON.stringify({ p_owner_user_id: ownerUserId, p_family_count: familyCount, p_max_active: 3 }),
+    body: JSON.stringify({ p_owner_user_id: ownerUserId, p_family_count: familyCount }),
   });
   if (!rows[0]) throw new Error('export_job_not_created');
   return rows[0];
@@ -94,14 +106,47 @@ export async function findExportJob(env: Env, jobId: string): Promise<ExportJob 
   return rows[0] ?? null;
 }
 
+export type ExportJobUpdate = Partial<Pick<ExportJob,
+  | 'status'
+  | 'expires_at'
+  | 'asset_count'
+  | 'archives'
+  | 'total_bytes'
+  | 'download_token_hash'
+  | 'started_at'
+  | 'completed_at'
+  | 'failure_code'
+  | 'email_sent_at'
+  | 'files_deleted_at'
+  | 'last_accessed_at'>>;
+
+/**
+ * Patches a job. `onlyIfStatus` makes it a compare-and-set so a late
+ * Workflow retry can never resurrect a job the cron already expired.
+ * Returns whether a row was updated.
+ */
 export async function updateExportJob(
   env: Env,
   jobId: string,
-  values: Partial<Pick<ExportJob, 'status' | 'asset_count' | 'last_accessed_at'>>,
-): Promise<void> {
-  await supabaseRequest(env, 'export_jobs', {
+  values: ExportJobUpdate,
+  onlyIfStatus?: ExportJob['status'][],
+): Promise<boolean> {
+  const filters: Record<string, string> = { id: `eq.${jobId}` };
+  if (onlyIfStatus) filters.status = `in.(${onlyIfStatus.join(',')})`;
+  const rows = await supabaseRequest<Array<{ id: string }>>(env, 'export_jobs', {
     method: 'PATCH',
-    headers: { Prefer: 'return=minimal' },
+    headers: { Prefer: 'return=representation' },
     body: JSON.stringify(values),
-  }, { id: `eq.${jobId}` });
+  }, { ...filters, select: 'id' });
+  return rows.length > 0;
+}
+
+/** Jobs whose R2 files should be deleted: expired downloads, and failed builds. */
+export async function listJobsNeedingCleanup(env: Env, now: Date, limit = 50): Promise<ExportJob[]> {
+  return await listRows<ExportJob>(env, 'export_jobs', 'id,status,expires_at', {
+    files_deleted_at: 'is.null',
+    or: `(and(status.eq.ready,expires_at.lt.${now.toISOString()}),status.eq.failed,status.eq.expired)`,
+    order: 'expires_at.asc',
+    limit: String(limit),
+  });
 }

@@ -1,12 +1,39 @@
+export type ExportJobStatus = 'queued' | 'building' | 'ready' | 'expired' | 'failed';
+
+export interface ExportArchiveRecord {
+  /** 1-based position on the download page and in the download URL. */
+  index: number;
+  /** Private R2 key under exports/<job id>/ -- never shown to the user. */
+  key: string;
+  /** Human-friendly download name, e.g. "Momora - The Yis - 2026.zip". */
+  fileName: string;
+  bytes: number;
+}
+
 export interface ExportJob {
   id: string;
   owner_user_id: string;
-  status: 'ready' | 'expired' | 'failed';
+  status: ExportJobStatus;
   expires_at: string;
   family_count: number;
   asset_count: number;
+  archives: ExportArchiveRecord[];
+  total_bytes: number;
+  download_token_hash: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  failure_code: string | null;
+  email_sent_at: string | null;
+  files_deleted_at: string | null;
   last_accessed_at: string | null;
   created_at: string;
+}
+
+export interface ExportWorkflowParams {
+  jobId: string;
+  ownerUserId: string;
+  /** Origin of the Worker that accepted the request -- download links point here. */
+  origin: string;
 }
 
 export interface ExportFamily {
@@ -37,7 +64,10 @@ export interface ExportMemory {
   id: string;
   family_id: string;
   user_id: string | null;
+  memory_type: string;
   content: string | null;
+  audio_transcript: string | null;
+  link_previews: unknown;
   memory_date: string;
   emotion: string | null;
   illustration_key: string | null;
@@ -59,8 +89,14 @@ export interface ExportMedia {
   content_type: string;
   duration_ms: number | null;
   position: number;
-  preview_object_key: string | null;
-  preview_content_type: string | null;
+  created_at: string;
+}
+
+export interface ExportComment {
+  id: string;
+  memory_id: string;
+  user_id: string | null;
+  content: string;
   created_at: string;
 }
 
@@ -74,7 +110,6 @@ export interface ExportPortraitVersion {
   profile_picture_key: string;
   illustrated_profile_key: string | null;
   illustrated_profile_status: string;
-  generation_output_key: string | null;
   created_at: string;
 }
 
@@ -82,35 +117,71 @@ export interface ExportProfile {
   id: string;
   name: string;
   timezone: string;
-  illustration_style: string;
   created_at: string;
 }
 
-export interface ExportAsset {
-  path: string;
-  kind: 'memory_media' | 'memory_media_preview' | 'memory_illustration' | 'family_photo' | 'family_portrait' | 'portrait_photo' | 'portrait_illustration' | 'portrait_attempt';
-  contentType: string | null;
+export type ExportAssetKind =
+  | 'memory_photo'
+  | 'memory_video'
+  | 'memory_audio'
+  | 'memory_media'
+  | 'memory_illustration'
+  | 'family_photo'
+  | 'family_portrait'
+  | 'portrait_photo'
+  | 'portrait_illustration';
+
+/** One entry to write into an archive, in order. */
+export type PlannedEntry =
+  | { type: 'text'; path: string; text: string; modifiedAt: string; memoryId?: string }
+  | {
+    type: 'object';
+    path: string;
+    objectKey: string;
+    kind: ExportAssetKind;
+    modifiedAt: string;
+    memoryId?: string;
+    familyMemberId?: string;
+    portraitVersionId?: string;
+  };
+
+/** One logical archive ("Family & portraits" or one year); may split into parts. */
+export interface ArchiveGroup {
+  id: string;
   familyId: string;
-  memoryId?: string;
-  familyMemberId?: string;
-  portraitVersionId?: string;
-  exists: boolean;
-  bytes?: number;
-  objectKey: string;
+  kind: 'family' | 'year';
+  /** e.g. "Momora - The Yis - 2026" (".zip" and any "(part n of m)" added later). */
+  baseName: string;
+  entries: PlannedEntry[];
 }
 
-export interface ExportManifest {
-  format: 'momora-export';
-  version: 1;
+export interface ExportPlan {
+  jobId: string;
   exportedAt: string;
   ownerUserId: string;
   profile: ExportProfile | null;
   families: ExportFamily[];
+  /** Structured data per family, written as that family's manifest.json. */
+  familyData: Record<string, FamilyManifestData>;
+  /** Top folder every archive of a family shares, e.g. "Momora - The Yis". */
+  familyRoots: Record<string, string>;
+  /** Year groups first, each family's "Family & portraits" group last (it carries the manifest). */
+  groups: ArchiveGroup[];
+}
+
+export interface FamilyManifestData {
   familyMembers: ExportMember[];
   memories: ExportMemory[];
   memoryTags: ExportTag[];
   memoryMedia: ExportMedia[];
+  memoryComments: ExportComment[];
   portraitVersions: ExportPortraitVersion[];
-  assets: Array<Omit<ExportAsset, 'objectKey'>>;
-  missingAssets: string[];
+}
+
+/** What building one group produced -- persisted to R2 between Workflow steps. */
+export interface GroupBuildResult {
+  groupId: string;
+  archives: Array<{ key: string; fileName: string; bytes: number; entryCount: number }>;
+  /** Entry paths whose R2 object no longer existed at build time. */
+  missing: string[];
 }

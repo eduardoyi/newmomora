@@ -5,11 +5,15 @@
   "compatibility_date": "2026-07-21",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Archive builds run inside ExportArchiveWorkflow steps: CRC32 over a
+  // ~1.8 GiB archive is CPU-bound, and every R2 read/write is a subrequest.
+  "limits": { "cpu_ms": 300000, "subrequests": 200000 },
   "vars": {
-    "SUPABASE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co"
+    "SUPABASE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co",
+    "EXPORT_EMAIL_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/send-export-email"
   },
   "secrets": {
-    "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"]
+    "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "EXPORT_EMAIL_BRIDGE_SECRET"]
   },
   "r2_buckets": [
     {
@@ -17,21 +21,31 @@
       "bucket_name": "momora-prod"
     }
   ],
+  "workflows": [
+    { "binding": "EXPORT_WORKFLOW", "name": "momora-export-archive", "class_name": "ExportArchiveWorkflow" }
+  ],
+  // Daily: delete expired/failed jobs' archives from R2, then mark them.
+  "triggers": { "crons": ["23 4 * * *"] },
   "env": {
     "staging": {
       "name": "momora-export-worker-staging",
       "vars": {
-        "SUPABASE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co"
+        "SUPABASE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co",
+        "EXPORT_EMAIL_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/send-export-email"
       },
       "secrets": {
-        "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY"]
+        "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "EXPORT_EMAIL_BRIDGE_SECRET"]
       },
       "r2_buckets": [
         {
           "binding": "MEDIA",
           "bucket_name": "REPLACE_WITH_STAGING_MEDIA_BUCKET"
         }
-      ]
+      ],
+      "workflows": [
+        { "binding": "EXPORT_WORKFLOW", "name": "momora-export-archive-staging", "class_name": "ExportArchiveWorkflow" }
+      ],
+      "triggers": { "crons": ["23 4 * * *"] }
     }
   }
 }

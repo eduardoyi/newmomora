@@ -537,9 +537,10 @@ Momora Plus is a transparent hard-paywall subscription for family owners.
 - Active/trial/grace owners can create memories, use paid AI generation, and
   perform other journal mutations. A lapsed owner can still read and export
   the archive, but new paid mutations route to resubscribe.
-- Owners can export their archive as a private ZIP containing structured
-  metadata and private media. Export remains free forever, including after
-  cancellation.
+- Owners can export their archive. It is prepared in the background and
+  emailed as a private 7-day download link: ZIP files (one for family
+  portraits, one per year) with a readable folder per memory plus structured
+  metadata. Export remains free forever, including after cancellation.
 
 ### 6.10 Subscription and export acceptance criteria
 
