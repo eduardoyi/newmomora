@@ -25,8 +25,12 @@ appId: com.memora.app
 
 - tapOn:
     id: tab-settings
+# Approvals live on the members screen; Settings' Members row only shows
+# "N waiting for approval".
 - tapOn:
-    id: settings-approvals
+    id: settings-family-members
+- tapOn:
+    id: members-approvals
 # Exactly one redeemed invite is awaiting approval at this point on a clean
 # run; a partial id match against `approval-<inviteId>-approve` is enough.
 - tapOn:

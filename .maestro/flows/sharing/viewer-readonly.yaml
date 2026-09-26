@@ -44,12 +44,19 @@ appId: com.memora.app
 - assertNotVisible:
     id: new-memory-fab
 
-# Settings hides controls that only make sense for journal contributors.
+# Viewers get the trimmed Settings screen: no journaling reminder, invites,
+# family settings, or photo import. Members stays (report/block safety).
 - tapOn:
     text: "Settings"
 - assertNotVisible:
     id: settings-daily-reminder-toggle
 - assertNotVisible:
+    id: settings-invite-family-member
+- assertNotVisible:
+    id: settings-family-settings
+- assertNotVisible:
+    id: settings-gallery-import
+- assertVisible:
     id: settings-family-members
 
 # Open the first memory and confirm no edit affordances

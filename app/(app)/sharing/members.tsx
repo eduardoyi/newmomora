@@ -9,11 +9,13 @@ import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 import { colors, fonts, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { MemberChangedElsewhereError, useMemberManagement } from '@/hooks/useMemberManagement';
-import { sharingInviteRoute } from '@/lib/routes';
+import { sharingApprovalsRoute, sharingInviteRoute, sharingPendingInvitesRoute } from '@/lib/routes';
 import type { FamilyMemberProfile } from '@/services/family';
+import { isPendingInviteActive } from '@/utils/invites';
 import { canEditFamilyContent, canManageMember, roleLabel } from '@/utils/roles';
 
 // Safety net for a blank `user_profiles.name` (WP6: S12A now collects the
@@ -48,6 +50,18 @@ export default function FamilyMembersScreen() {
   const { changeRole, removeMember: removeMemberMutation } = useMemberManagement(familyId);
   const canInvite = canEditFamilyContent(role);
   const contentSafety = useContentSafety();
+  // The invites query is manager+-only under RLS, so it is gated on role
+  // rather than fired (and denied) for viewers.
+  const { pendingInvites, redeemedInvites, isLoading: isInvitesLoading } = useFamilyInvites(familyId, {
+    enabled: canInvite,
+  });
+  // "Expired" pending invites (status stays 'pending' until read/redemption
+  // time -- see docs/features/family-sharing.md's invite-lifecycle section)
+  // shouldn't keep this row alive once there's nothing left to act on. While
+  // invite data is loading, neither row renders -- no flicker placeholder.
+  const showPendingInvites = canInvite && !isInvitesLoading
+    && pendingInvites.some((invite) => isPendingInviteActive(invite.expires_at));
+  const showApprovals = canInvite && !isInvitesLoading && redeemedInvites.length > 0;
 
   const [manageTarget, setManageTarget] = useState<FamilyMemberProfile | null>(null);
   const [reportTarget, setReportTarget] = useState<FamilyMemberProfile | null>(null);
@@ -151,6 +165,24 @@ export default function FamilyMembersScreen() {
               label="Invite a family member"
               onPress={() => router.push(sharingInviteRoute)}
               testID="members-invite-family-member"
+            />
+          )}
+          {showApprovals && (
+            <SettingsRow
+              chevron
+              label="Waiting for approval"
+              onPress={() => router.push(sharingApprovalsRoute)}
+              testID="members-approvals"
+              value={String(redeemedInvites.length)}
+            />
+          )}
+          {showPendingInvites && (
+            <SettingsRow
+              chevron
+              label="Pending invites"
+              caption="Invite codes that haven't been used yet."
+              onPress={() => router.push(sharingPendingInvitesRoute)}
+              testID="members-pending-invites"
             />
           )}
           {profiles.map((profile, index) => {

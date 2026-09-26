@@ -29,6 +29,8 @@ export interface SettingsRowProps {
   onPress?: () => void;
   testID?: string;
   accessibilityLabel?: string;
+  /** Renders the label in the error color, for rows like "Leave family". */
+  destructive?: boolean;
 }
 
 export function SettingsRow({
@@ -41,11 +43,12 @@ export function SettingsRow({
   onPress,
   testID,
   accessibilityLabel,
+  destructive,
 }: SettingsRowProps) {
   const content = (
     <>
       <View style={styles.rowContent}>
-        <Text style={styles.rowLabel}>{label}</Text>
+        <Text style={[styles.rowLabel, destructive && styles.rowLabelDestructive]}>{label}</Text>
         {caption && <Text style={styles.rowCaption}>{caption}</Text>}
       </View>
       {value && <Text style={styles.rowValue}>{value}</Text>}
@@ -112,6 +115,9 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sansBold,
     fontSize: 14.5,
     color: colors.ink,
+  },
+  rowLabelDestructive: {
+    color: colors.error,
   },
   rowCaption: {
     fontFamily: fonts.sans,

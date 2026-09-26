@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 
-import { SettingsBlock, SettingsRow } from '@/components/settings-row';
+import { SettingsRow } from '@/components/settings-row';
 import { formatGalleryCaptionLocaleLabel, getGalleryCaptionLocaleOptions } from '@/constants/gallery-caption-locales';
 import { useFamily } from '@/hooks/use-family';
 import { useGalleryCaptionSettings, useGalleryImportEntryStatus } from '@/hooks/useGalleryImport';
@@ -80,30 +80,44 @@ export function deriveGalleryImportSettingsRow(status: FindMemoriesRowStatus): G
 }
 
 /**
- * The "Photo caption language" row now pushes the dedicated, family-owner-only
- * caption settings screen (src/components/gallery-import/gallery-import-caption-settings.tsx)
- * instead of expanding an in-place editor -- see
- * docs/design/gallery-import/README.md. Viewers (and non-owner managers) see
- * only the explanatory disabled row below and have no way to open or edit the
- * screen: no `onPress` is wired for them, so there is nothing to navigate.
+ * "Find memories in your photos" -- rendered inside Settings' "Your journal"
+ * block. Viewers never start or resume an import, so they get no row at all
+ * (the trimmed viewer Settings screen) and never reach the device-bound
+ * `useGalleryImportEntryStatus` (enabled: false below).
  */
-export function GalleryImportSettingsBlock() {
+export function GalleryImportSettingsRow({ first }: { first?: boolean }) {
   const { role } = useFamily();
   const isViewer = isViewerRole(role);
+  const entryStatus = useGalleryImportEntryStatus({ enabled: !isViewer });
+
+  if (!isGalleryImportFeatureEnabled || isViewer) return null;
+
+  const findMemoriesRow = deriveGalleryImportSettingsRow(entryStatus);
+
+  const handleFindMemoriesPress = () => {
+    const runId = entryStatus.checkpoint?.runId;
+    router.push(runId && findMemoriesRow.pathname !== '/(app)/gallery-import'
+      ? { pathname: findMemoriesRow.pathname as never, params: { runId } }
+      : (findMemoriesRow.pathname as never));
+  };
+
+  return <SettingsRow chevron first={first} label="Find memories in your photos" caption={findMemoriesRow.caption} onPress={handleFindMemoriesPress} testID="settings-gallery-import" />;
+}
+
+/**
+ * "Photo caption language" -- a family-level setting, so it lives on the
+ * Family settings screen (app/(app)/family-settings.tsx, owner/manager only),
+ * not in Settings' personal "Your journal" block. It pushes the dedicated,
+ * family-owner-only caption settings screen
+ * (src/components/gallery-import/gallery-import-caption-settings.tsx); a
+ * non-owner manager sees only the explanatory disabled row with no `onPress`.
+ */
+export function GalleryCaptionLanguageRow({ first }: { first?: boolean }) {
+  const { role } = useFamily();
   const isOwner = isOwnerRole(role);
-  const canStart = !isViewer;
-  const entryStatus = useGalleryImportEntryStatus({ enabled: canStart });
   const captionSettings = useGalleryCaptionSettings();
 
   if (!isGalleryImportFeatureEnabled) return null;
-
-  // Viewers see no entry point except this explanatory disabled row --
-  // device-bound status is meaningless to a role that can never start or
-  // resume an import, so it never reaches useGalleryImportEntryStatus at all
-  // (enabled: false above).
-  const findMemoriesRow = isViewer
-    ? { caption: 'Only a family owner or manager can look through your photos for memories.', pathname: undefined }
-    : deriveGalleryImportSettingsRow(entryStatus);
 
   const captionLanguage = captionSettings.settings?.language;
   const selectedOption = captionLanguage
@@ -111,24 +125,12 @@ export function GalleryImportSettingsBlock() {
     : undefined;
   const languageLabel = selectedOption ? formatGalleryCaptionLocaleLabel(selectedOption) : undefined;
 
-  const handleFindMemoriesPress = () => {
-    if (!findMemoriesRow.pathname) return;
-    const runId = entryStatus.checkpoint?.runId;
-    router.push(runId && findMemoriesRow.pathname !== '/(app)/gallery-import'
-      ? { pathname: findMemoriesRow.pathname as never, params: { runId } }
-      : (findMemoriesRow.pathname as never));
-  };
-
-  return <SettingsBlock title="Your journal">
-    <SettingsRow chevron={!isViewer} label="Find memories in your photos" caption={findMemoriesRow.caption} onPress={isViewer ? undefined : handleFindMemoriesPress} testID="settings-gallery-import" />
-    {isViewer
-      ? <SettingsRow label="Photo caption language" caption="Only the family owner can change this setting." testID="settings-gallery-caption-viewer" />
-      : <SettingsRow
-          chevron={isOwner}
-          label="Photo caption language"
-          caption={isOwner ? (languageLabel ?? 'How Momora writes photo captions for your family.') : 'Only the family owner can change this setting.'}
-          onPress={isOwner ? () => router.push(galleryCaptionSettingsRoute) : undefined}
-          testID="settings-gallery-caption"
-        />}
-  </SettingsBlock>;
+  return <SettingsRow
+    chevron={isOwner}
+    first={first}
+    label="Photo caption language"
+    caption={isOwner ? (languageLabel ?? 'How Momora writes photo captions for your family.') : 'Only the family owner can change this setting.'}
+    onPress={isOwner ? () => router.push(galleryCaptionSettingsRoute) : undefined}
+    testID="settings-gallery-caption"
+  />;
 }

@@ -27,35 +27,38 @@ to family-membership checks. There is no "personal, unshared" mode anymore
 - **New signup:** lands in the **no-family** state (`app/(app)/no-family.tsx`)
   — no auto-created family. Two ways out: "Create family journal" (names a
   new family, becomes its owner) or "Have an invite code?" (redeem screen).
-- **Invite (owner/manager):** Settings → Invite a family member → pick role
+- **Invite (owner/manager):** Settings → Invite someone → pick role
   (Viewer or Manager) → Create invite & share opens the native share sheet
   with a pre-written two-step message containing a universal link and the
   raw code. The code is visible again any time on **Pending invites**.
 - **Redeem (any signed-in or new user):** enter the 3-word code (dash- or
   space-separated, case-insensitive) → **waiting screen** ("X will confirm
   it's you shortly"), polling every 5s.
-- **Approve (owner/manager):** Settings → Approvals shows every redeemed
+- **Approve (owner/manager):** Settings → Members → Waiting for approval
+  (the Members row shows "N waiting for approval") lists every redeemed
   invite awaiting a decision, with the redeemer's **name + email** so the
   approver can verify it's really them → Approve or Reject.
 - **Role gating:** viewers cannot create/edit/delete memories or children and
   cannot invite/approve members. They can browse the timeline/calendar/family
   roster and may like or comment on memories. Restricted screens still bounce
-  direct navigation, and Settings remains trimmed (no name-edit affordance).
+  direct navigation, and Settings is trimmed for viewers (no invites, family
+  settings, journal reminder, photo import, subscription, or export).
 - **Attribution:** memory detail shows "Added by {name}" (falls back to "a
   former member" if the creator's account was hard-deleted). Not shown on
   timeline cards — a plan deviation, see [Outcome](../plans/family-sharing.md#16-outcome).
-- **Family section (Settings):** family name (owner/manager can rename), a
-  "Family members" row showing the active-member count and pushing to the
-  **Family members** screen (`app/(app)/sharing/members.tsx`, owner/manager
-  only — see [Member management](#member-management) below for the list
-  itself and the promote/demote/remove affordance), "Invite a family member"
-  (owner/manager only), "Pending invites" (owner/manager only, and only
-  rendered when at least one non-expired pending invite exists), "Approvals"
-  (owner/manager only, and only rendered when at least one redeemed invite
-  is awaiting a decision — keeps its count badge), "Join a family" (anyone),
-  a family switcher when the user has more than one membership, and "Leave
-  family" (non-owners only). The conditional rows simply don't render while
-  invite data is loading, rather than showing a placeholder.
+- **Family section (Settings):** covers only the *active* family's people.
+  A header row with the family name + your role and a **Switch** link
+  (labelled "Families" when you only have one) that opens
+  `FamilySwitcherSheet` (`src/components/family-switcher-sheet.tsx`): your
+  families (tap to switch), **Join another family** (redeem screen), and
+  **Manage families**. Below it: **Members** (active-member count, plus
+  "N waiting for approval" for owner/manager — pushes the **Family members**
+  screen, see [Member management](#member-management)), **Invite someone**
+  (owner/manager), **Family settings** (owner/manager — pushes
+  `app/(app)/family-settings.tsx`: family name, "Viewers can share
+  memories", and photo caption language), and **Leave family**
+  (non-owners). Pending invites and Approvals rows live on the members
+  screen and don't render while invite data is loading.
 - **Universal link:** `https://usemomora.com/invite?code=sunny-tiger-lake`
   opens the app, stashes the code, and routes straight to the redeem screen
   (prefilled) or through signup first if signed out.
@@ -121,9 +124,11 @@ to 50 members per family that grew Settings unboundedly, so it moved to its
 own screen. Settings → Family now only has a constant-size **"Family
 members"** row (`settings-family-members`) showing the active-member count
 and pushing to `sharing/members`; that screen carries the actual list, the
-tap-to-manage affordance, and (owner/manager only) an "Invite a family
-member" row at the top. `members.tsx` remains a direct read-only route for
-every role, but its Settings entry point is hidden from viewers. The
+tap-to-manage affordance, and (owner/manager only) "Invite a family
+member", "Waiting for approval" (with count, only when a redeemed invite
+awaits a decision), and "Pending invites" (only when a non-expired pending
+invite exists) rows at the top. Every role reaches it from Settings —
+viewers need it for the report/block safety actions. The
 row/block chrome
 (`SettingsBlock`/`SettingsRow`) was extracted to
 `src/components/settings-row.tsx` so Settings and the members screen share
@@ -195,9 +200,9 @@ style per family, not per user), `deleted_at` (soft delete).
 the client currently shows. `FamilyProvider` (`src/hooks/use-family.tsx`)
 resolves it: match `active_family_id` against the user's memberships, or
 fall back to the first membership (and persist the correction) if it's
-stale/missing/removed. A family picker only appears in Settings when a user
-has more than one membership — the common case (one family) never sees it
-(a "Switch" link next to the family name opens the same picker). Switching
+stale/missing/removed. The "Switch" link next to the family name in Settings
+opens `FamilySwitcherSheet`, which lists every membership plus the join and
+manage entry points (with one membership the link reads "Families"). Switching
 families invalidates every family-scoped React Query cache
 (`memoriesQueryKeyBase`, `calendarMemoriesQueryKeyBase`,
 `familyMembersQueryKeyBase`, `familyMemberProfilesQueryKeyBase`).
@@ -216,7 +221,7 @@ still sees their own soft-deleted families through RLS — `FamilyProvider`'s
 memberships queryFn filters embedded families with `deleted_at` set so a
 deleted family drops out of the switcher/Manage list immediately.
 
-**Managing families:** Settings → "Manage families"
+**Managing families:** Settings → Switch/Families → "Manage families"
 (`app/(app)/sharing/manage.tsx`) lists all memberships, creates additional
 families (reuses `create_family`; client-side `setActiveFamily` after —
 the RPC only sets `active_family_id` when it was null), and lets owners
@@ -707,9 +712,10 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 | `src/hooks/use-auth.integration.test.tsx` | OTP request/verify flow, dev password sign-in |
 | `src/hooks/useFamilyMembers.integration.test.tsx` | Family-scoped queries |
 | `src/hooks/useMemberManagement.test.tsx` | Optimistic role-change/removal apply + rollback on failure, `MemberChangedElsewhereError` on a zero-row result |
-| `src/screen-tests/settings.family-section.test.tsx` | Family section rendering by role, owner/manager-only "Family members" row count + navigation, leave/switch family, conditional Pending invites/Approvals rows (non-expired-only, hidden while loading, count badge) |
+| `src/screen-tests/settings.family-section.test.tsx` | Family section rendering by role (trimmed viewer screen), Members row count + "N waiting for approval", invite/family-settings routing, leave family, switcher sheet (switch/join/manage), owner-only export, identity-card name editing |
+| `src/screen-tests/family-settings.test.tsx` | Family settings screen: viewer empty state, family rename, viewer-sharing toggle (optimistic + billing-lockout error), caption-language row |
 | `src/screen-tests/calendar.role-gating.test.tsx` | Calendar create-FAB role gate (viewer hidden, manager visible) |
-| `src/screen-tests/sharing.members.test.tsx` | Family members screen: invite affordance by role, member-management affordance matrix (owner/manager/viewer × own/owner/other rows), promote/demote/remove wiring, destructive-confirm gating, zero-row refresh copy |
+| `src/screen-tests/sharing.members.test.tsx` | Family members screen: invite affordance by role, conditional Waiting for approval/Pending invites rows (non-expired-only, hidden while loading, never queried for viewers), member-management affordance matrix (owner/manager/viewer × own/owner/other rows), promote/demote/remove wiring, destructive-confirm gating, zero-row refresh copy |
 | `src/screen-tests/no-family.test.tsx` | Create-family / redeem entry points, single state-driven post-create navigation, `pendingInviteCode` guard precedence |
 | `src/screen-tests/sharing.redeem.test.tsx` | Redeem screen prefill, definitive-vs-transient error handling |
 | `src/screen-tests/invite.integration.test.tsx` | Universal-link routing distinguishes anonymous onboarding sessions from permanent accounts |
@@ -720,7 +726,7 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 |---|---|
 | `.maestro/flows/auth/login.yaml`, `sign-in.yaml` | OTP dev-path login (reused by every other flow's login step) |
 | `.maestro/flows/sharing/01-owner-create-invite.yaml` → `04-second-account-sees-timeline.yaml` | Full two-account invite → redeem → approve loop (run together — see `.maestro/flows/sharing/README.md`). **Not run in this change** — authored against current testIDs only. |
-| `.maestro/flows/sharing/viewer-readonly.yaml` | Viewer sees timeline/calendar but no create FAB, and Settings hides daily reminders and the Family members entry. **Not run in this change.** |
+| `.maestro/flows/sharing/viewer-readonly.yaml` | Viewer sees timeline/calendar but no create FAB, and the trimmed Settings screen (no daily reminder, invite, family settings, or photo import; Members stays). **Not run in this change.** |
 
 ### Edge Function tests (Deno)
 
@@ -764,3 +770,4 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 | 2026-07-13 | Likes/comments add a deliberate viewer-write exception: all active roles may engage, authors may delete their own comments, manager+ may moderate, and engagement notifications deep-link to memory detail. |
 | 2026-07-20 | Multi-family correctness + management: timeline/calendar/children-roster reads now filter by the active `family_id` client-side (previously RLS-only, which mixed families for multi-family users); joining a family now reliably sets it active (waiting-screen invalidation-order race fixed); new "Manage families" screen (create additional families in-app, owner soft-delete via new `delete_family` RPC); "Switch" link next to the family name; invite share message rewritten to walk fresh installs through signup → "I have an invite code" → code entry, and the no-family screen's invite button promoted to an equal-weight CTA with that exact label. |
 | 2026-07-29 | WP-SEC anonymous authorization lockdown (`20260729130000_onboarding_anonymous_lockdown.sql`), landing alongside onboarding's pre-auth anonymous sessions: `handle_new_user` no longer provisions a profile for an anonymous Auth user; a new RESTRICTIVE `is_anonymous_user()`-based "deny anonymous" policy sits on every shared table; every mutating SECURITY DEFINER RPC (`create_family`, `create_family_invite`, `delete_family`, `replace_memory_media_assets`, `set_memory_like`, `create_content_report`, `set_family_account_block`, the portrait-version RPCs) gained an explicit anonymous guard plus a tightened execute grant; new `preview-family-invite` Edge Function (J2's pre-auth dependency, rate-limited by code); every other normal Edge Function now goes through the new `getAuthenticatedNonAnonymousUser` chokepoint in `_shared/auth.ts`. Also closed, found during the RPC audit rather than anticipated by the plan: five portrait-generation-attempt RPCs in `20260715120000_portrait_timeline.sql` had a narrow `revoke ... from public;` that left them callable by the fully unauthenticated `anon` role directly. Same package, `20260729150000_abandoned_anonymous_cleanup.sql` + new scheduled `cleanup-abandoned-anonymous-users` Edge Function: deletes an abandoned anonymous Auth user (>7 days old) only after re-verifying, immediately before each delete, that it is still anonymous and still owns no real family/membership row. |
+| 2026-09-26 | Settings IA regroup: Family block now covers only the active family's people (Members with approvals count, Invite someone, Family settings, Leave family); switch/join/manage moved into `FamilySwitcherSheet`; family name, viewer sharing, and photo caption language moved to the new owner/manager `app/(app)/family-settings.tsx`; Pending invites/Approvals moved onto the members screen; viewers get a trimmed Settings screen. **Extending:** anything that applies to the whole family goes on Family settings, anything about which families you belong to goes in the switcher sheet, anything personal stays on Settings. |

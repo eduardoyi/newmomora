@@ -7,8 +7,9 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import FamilyMembersScreen from '../../app/(app)/sharing/members';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
-import { sharingInviteRoute } from '@/lib/routes';
+import { sharingApprovalsRoute, sharingInviteRoute, sharingPendingInvitesRoute } from '@/lib/routes';
 import { removeMember, updateMemberRole } from '@/services/family';
 
 jest.mock('expo-router', () => ({
@@ -26,6 +27,10 @@ jest.mock('@/hooks/use-auth', () => ({
 jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
   familyMembershipsQueryKey: ['family-memberships'],
+}));
+
+jest.mock('@/hooks/useFamilyInvites', () => ({
+  useFamilyInvites: jest.fn(),
 }));
 
 jest.mock('@/hooks/useFamilyMemberProfiles', () => ({
@@ -58,6 +63,7 @@ const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.MockedFunction<
   typeof useFamilyMemberProfiles
 >;
+const mockedUseFamilyInvites = useFamilyInvites as jest.MockedFunction<typeof useFamilyInvites>;
 const mockedUpdateMemberRole = updateMemberRole as jest.MockedFunction<typeof updateMemberRole>;
 const mockedRemoveMember = removeMember as jest.MockedFunction<typeof removeMember>;
 
@@ -105,6 +111,31 @@ function renderScreen() {
   );
 }
 
+const FUTURE_EXPIRY = '2030-01-01T00:00:00Z';
+const PAST_EXPIRY = '2020-01-01T00:00:00Z';
+
+function setInvites({
+  pendingInvites = [],
+  redeemedInvites = [],
+  isLoading = false,
+}: {
+  pendingInvites?: { id: string; status: string; expires_at: string }[];
+  redeemedInvites?: { id: string; status: string }[];
+  isLoading?: boolean;
+} = {}) {
+  mockedUseFamilyInvites.mockReturnValue({
+    invites: [],
+    pendingInvites,
+    redeemedInvites,
+    isLoading,
+    isError: false,
+    error: null,
+    refetch: jest.fn(),
+    revokeInvite: jest.fn(),
+    isRevoking: false,
+  } as never);
+}
+
 function setFamily(role: string, userId = 'user-1') {
   mockedUseAuth.mockReturnValue({
     session: { user: { id: userId } } as never,
@@ -131,6 +162,7 @@ function setFamily(role: string, userId = 'user-1') {
 describe('Family members screen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    setInvites();
     mockedUseFamilyMemberProfiles.mockReturnValue({
       profiles: [ownerProfile, managerProfile, viewerProfile],
       isLoading: false,
@@ -321,5 +353,59 @@ describe('Family members screen', () => {
     });
 
     alertSpy.mockRestore();
+  });
+
+  describe('pending invites and approvals', () => {
+    it('routes a manager to approvals with the redeemed-invite count', () => {
+      const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
+      setFamily('manager', 'user-2');
+      setInvites({ redeemedInvites: [{ id: 'invite-1', status: 'redeemed' }, { id: 'invite-2', status: 'redeemed' }] });
+
+      const { getByTestId, getByText } = renderScreen();
+
+      expect(getByText('Waiting for approval')).toBeTruthy();
+      expect(getByText('2')).toBeTruthy();
+      fireEvent.press(getByTestId('members-approvals'));
+      expect(router.push).toHaveBeenCalledWith(sharingApprovalsRoute);
+    });
+
+    it('only shows Pending invites for a non-expired pending invite', () => {
+      const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
+      setFamily('owner');
+      setInvites({ pendingInvites: [{ id: 'invite-1', status: 'pending', expires_at: PAST_EXPIRY }] });
+
+      const { queryByTestId, unmount } = renderScreen();
+      expect(queryByTestId('members-pending-invites')).toBeNull();
+      unmount();
+
+      setInvites({ pendingInvites: [{ id: 'invite-2', status: 'pending', expires_at: FUTURE_EXPIRY }] });
+      const { getByTestId } = renderScreen();
+      fireEvent.press(getByTestId('members-pending-invites'));
+      expect(router.push).toHaveBeenCalledWith(sharingPendingInvitesRoute);
+    });
+
+    it('does not flicker either row while invite data is loading', () => {
+      setFamily('owner');
+      setInvites({
+        pendingInvites: [{ id: 'invite-1', status: 'pending', expires_at: FUTURE_EXPIRY }],
+        redeemedInvites: [{ id: 'invite-2', status: 'redeemed' }],
+        isLoading: true,
+      });
+
+      const { queryByTestId } = renderScreen();
+
+      expect(queryByTestId('members-pending-invites')).toBeNull();
+      expect(queryByTestId('members-approvals')).toBeNull();
+    });
+
+    it('never fires the invites query for a viewer', () => {
+      setFamily('viewer', 'user-3');
+
+      const { queryByTestId } = renderScreen();
+
+      expect(mockedUseFamilyInvites).toHaveBeenCalledWith('family-1', { enabled: false });
+      expect(queryByTestId('members-approvals')).toBeNull();
+      expect(queryByTestId('members-pending-invites')).toBeNull();
+    });
   });
 });

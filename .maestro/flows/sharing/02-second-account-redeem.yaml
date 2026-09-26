@@ -53,7 +53,9 @@ appId: com.memora.app
       - tapOn:
           id: tab-settings
       - tapOn:
-          id: settings-join-family
+          id: settings-family-switch
+      - tapOn:
+          id: family-switcher-join
 
 - tapOn:
     id: redeem-code-input

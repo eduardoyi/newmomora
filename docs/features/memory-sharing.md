@@ -46,7 +46,7 @@ screen.
   there's no separate "hide for video-only" code path.
 - **Viewer permission:** owner/manager can always share. Viewers share by
   default; an owner/manager can turn this off per family from **Settings →
-  Family → "Viewers can share memories"**. When off, the icon disappears
+  Family → Family settings → "Viewers can share memories"**. When off, the icon disappears
   entirely for viewers in that family (see Permission matrix below).
 - **Errors** are non-blocking alerts, never a dead-end:
   - Offline (or any network-level failure): "You're offline — connect to the
@@ -188,7 +188,7 @@ service-role client.
 
 | Table / field | Role in this feature |
 |----------------|----------------------|
-| `families.viewer_sharing_enabled` | `boolean not null default true`. Owner/manager-editable (Settings → Family). Enforced server-side in `compose-share-card`, not just hidden client-side — see Permission matrix. |
+| `families.viewer_sharing_enabled` | `boolean not null default true`. Owner/manager-editable (Settings → Family settings). Enforced server-side in `compose-share-card`, not just hidden client-side — see Permission matrix. |
 | `memories.share_card_key` | `text null`. Store-through cache key for a text_only/text_illustration memory's card (`{ownerUserId}/memories/{memoryId}/share-card/{designVersion}-{generationId}.png`). Written only by `compose-share-card`'s service-role client; cleared by a trigger on content/memory_date/emotion UPDATE. |
 | `memory_media.share_card_key` | `text null`. Same shape, per-ASSET — one cached card per carousel page for a `media` memory. Written only by `compose-share-card`'s service-role client; no trigger needed (`replace_memory_media_assets` always inserts fresh rows, which start `null`). |
 
@@ -253,7 +253,7 @@ contract and [§2.1](../TECH_SPEC.md#21-tables) for the schema entry.
 | Components (lifted state) | `src/components/memory-card.tsx`, `app/(app)/memory/[id]/index.tsx` | Lift the carousel's current page (`onActiveIndexChange`) so the bar knows which `mediaAssetId` to send |
 | Components (carousel) | `src/components/memory-media-carousel.tsx` | `onActiveIndexChange` — fires once on mount with the initial page, then on every settled page change (`handleScrollEnd`, unifying `onMomentumScrollEnd`/`onScrollEndDrag`) |
 | Hooks (permission) | `src/hooks/use-family.tsx`, `src/services/family.ts` | Exposes `family.viewerSharingEnabled` (from `fetchMyFamilyMemberships`'s `families` join) |
-| Settings | `app/(app)/(tabs)/settings.tsx` | "Viewers can share memories" toggle (owner/manager only) |
+| Family settings | `app/(app)/family-settings.tsx` | "Viewers can share memories" toggle (owner/manager only) |
 | Warm hooks (call sites) | `src/hooks/useMemories.ts` (`createMutation`/`updateMutation` `onSuccess`), `src/hooks/use-pending-memory-uploads.tsx` (post-create step) | Fire `warmShareCardForMemoryFireAndForget(memory)` after a text/illustrated create, a media post, or any edit — see Architecture's "Store-through cache" section for the full table |
 
 ### How to invoke from another feature

@@ -1,7 +1,6 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -20,34 +19,30 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useBilling } from '@/hooks/use-billing';
-import {
-  familyMembershipsQueryKey,
-  useFamily,
-  type FamilyMembershipSummary,
-} from '@/hooks/use-family';
+import { useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useNotificationsRegistration } from '@/hooks/useNotifications';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import {
-  sharingApprovalsRoute,
+  familySettingsRoute,
   sharingInviteRoute,
   sharingManageRoute,
   sharingMembersRoute,
-  sharingPendingInvitesRoute,
   sharingRedeemRoute,
   widgetSetupRoute,
 } from '@/lib/routes';
 import { getDeviceTimezone } from '@/services/auth';
 import { requestDataExport } from '@/services/export';
-import { leaveFamily, updateFamilyName, updateFamilyViewerSharing } from '@/services/family';
+import { leaveFamily } from '@/services/family';
 import { clearPersistedQueryCache } from '@/lib/query-persistence';
-import { isPendingInviteActive } from '@/utils/invites';
+import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
 import { canEditFamilyContent, isOwnerRole, isViewerRole, roleLabel } from '@/utils/roles';
-import { AuthField, AuthInput } from '@/components/auth-screen';
-import { SelectField, type SelectFieldHandle, type SelectOption } from '@/components/select-field';
+import { AuthInput } from '@/components/auth-screen';
+import { FamilySwitcherSheet } from '@/components/family-switcher-sheet';
+import { SelectField, type SelectOption } from '@/components/select-field';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
-import { GalleryImportSettingsBlock } from '@/components/gallery-import/gallery-import-settings';
+import { GalleryImportSettingsRow } from '@/components/gallery-import/gallery-import-settings';
 import { clearMemoryWidgetForScope } from '@/hooks/useMemoryWidgetSync';
 
 const DEFAULT_REMINDER_TIME = '20:00:00';
@@ -89,122 +84,33 @@ function normalizeReminderTime(notificationTime: string | null | undefined): str
   return `${hour}:00:00`;
 }
 
+/**
+ * Settings' Family block covers only the *active* family's people: who is in
+ * it, inviting more, and (for owners/managers) a link to the family-wide
+ * rules on app/(app)/family-settings.tsx. Everything about *which* families
+ * you belong to -- switching, joining, creating/deleting -- lives behind the
+ * "Switch" link in FamilySwitcherSheet. Pending invites and approvals live on
+ * the members screen; the Members row just surfaces the approvals count.
+ */
 function FamilySection() {
   const { user } = useAuth();
   const { family, familyId, role, memberships, setActiveFamily, refetchMemberships } = useFamily();
   const { profiles } = useFamilyMemberProfiles(familyId);
-  const queryClient = useQueryClient();
-  const canEditName = canEditFamilyContent(role);
+  const canManage = canEditFamilyContent(role);
   const isOwner = isOwnerRole(role);
-  // Pending/approvals rows: the invites query is manager+-only under RLS, so
-  // it is gated on role rather than fired (and denied) for viewers.
-  const { pendingInvites, redeemedInvites, isLoading: isInvitesLoading } = useFamilyInvites(familyId, {
-    enabled: canEditName,
+  // The invites query is manager+-only under RLS, so it is gated on role
+  // rather than fired (and denied) for viewers.
+  const { redeemedInvites, isLoading: isInvitesLoading } = useFamilyInvites(familyId, {
+    enabled: canManage,
   });
 
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState(family?.name ?? '');
-  const [isSavingName, setIsSavingName] = useState(false);
-  const [nameError, setNameError] = useState('');
+  const [isSwitcherOpen, setIsSwitcherOpen] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
   const [leaveError, setLeaveError] = useState('');
-  const [viewerSharingError, setViewerSharingError] = useState('');
-  // Backs the "Switch" link next to the family name: the picker below
-  // renders modal-only (hideTrigger) and this ref is its sole opener.
-  const familyPickerRef = useRef<SelectFieldHandle>(null);
-
-  // "Viewers can share memories" (Settings -> Family, docs/plans/
-  // offline-awareness-and-share-cards.md S1/S2). Optimistic update + rollback
-  // against the family-memberships cache -- the same cache useFamily() derives
-  // `family.viewerSharingEnabled` from -- mirrors useMemberManagement's
-  // onMutate/onError/onSettled pattern rather than updateFamilyName's fire-
-  // and-forget (this toggle needs its own error surface for the billing-
-  // lockout case below).
-  const membershipsQueryKey = [...familyMembershipsQueryKey, user?.id];
-  const viewerSharingMutation = useMutation({
-    mutationFn: async (enabled: boolean) => {
-      if (!familyId) {
-        throw new Error('You must have a family to change this setting');
-      }
-
-      const { data, error } = await updateFamilyViewerSharing(familyId, enabled);
-      if (error) {
-        throw new Error(error.message);
-      }
-      if (!data) {
-        // RLS-allowed shape but zero rows matched -- the families UPDATE
-        // policy also requires billing_write_allowed_for_current_user, so a
-        // lapsed-subscription owner/manager cannot flip this toggle (same
-        // gate family rename is subject to).
-        throw new Error(
-          "Your family's subscription isn't active, so this setting can't be changed right now.",
-        );
-      }
-      return enabled;
-    },
-    onMutate: async (enabled: boolean) => {
-      await queryClient.cancelQueries({ queryKey: membershipsQueryKey });
-      const previous = queryClient.getQueryData<FamilyMembershipSummary[]>(membershipsQueryKey);
-
-      if (previous && familyId) {
-        queryClient.setQueryData<FamilyMembershipSummary[]>(
-          membershipsQueryKey,
-          previous.map((membership) =>
-            membership.familyId === familyId
-              ? { ...membership, viewerSharingEnabled: enabled }
-              : membership,
-          ),
-        );
-      }
-
-      setViewerSharingError('');
-      return { previous };
-    },
-    onError: (error, _enabled, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(membershipsQueryKey, context.previous);
-      }
-      setViewerSharingError(
-        error instanceof Error ? error.message : 'Could not update this setting',
-      );
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: familyMembershipsQueryKey });
-    },
-  });
-
-  useEffect(() => {
-    if (!isEditingName) {
-      setNameDraft(family?.name ?? '');
-    }
-  }, [family?.name, isEditingName]);
 
   if (!family || !familyId) {
     return null;
   }
-
-  const handleSaveName = async () => {
-    const trimmed = nameDraft.trim();
-    if (!trimmed) {
-      setNameError('Family name is required');
-      return;
-    }
-
-    setNameError('');
-    setIsSavingName(true);
-    try {
-      const { error } = await updateFamilyName(familyId, trimmed);
-      if (error) {
-        throw new Error(error.message);
-      }
-      await queryClient.invalidateQueries({ queryKey: familyMembershipsQueryKey });
-      setIsEditingName(false);
-    } catch (error) {
-      setNameError(error instanceof Error ? error.message : 'Could not update family name');
-    } finally {
-      setIsSavingName(false);
-    }
-  };
 
   const handleLeave = () => {
     Alert.alert(
@@ -246,6 +152,7 @@ function FamilySection() {
   };
 
   const handlePickFamily = async (nextFamilyId: string) => {
+    setIsSwitcherOpen(false);
     if (nextFamilyId === familyId) {
       return;
     }
@@ -256,189 +163,79 @@ function FamilySection() {
     }
   };
 
-  const handleToggleViewerSharing = async (value: boolean) => {
-    try {
-      await viewerSharingMutation.mutateAsync(value);
-    } catch {
-      // Surfaced via viewerSharingError, set in the mutation's onError.
-    }
+  const openFromSwitcher = (route: typeof sharingRedeemRoute) => {
+    setIsSwitcherOpen(false);
+    router.push(route);
   };
 
   const activeMemberCount = profiles.filter((profile) => profile.is_active_member).length;
-  // "Expired" pending invites (status stays 'pending' until read/redemption
-  // time -- see docs/features/family-sharing.md's invite-lifecycle section)
-  // shouldn't keep this row alive once there's nothing left to act on.
-  const hasActivePendingInvite = pendingInvites.some((invite) => isPendingInviteActive(invite.expires_at));
+  const waitingCount = canManage && !isInvitesLoading ? redeemedInvites.length : 0;
 
   return (
     <SettingsBlock title="Family">
-      {isEditingName ? (
-        <View style={[styles.row, styles.familyEditRow]}>
-          <View style={styles.familyEditForm}>
-            <AuthInput
-              autoCapitalize="words"
-              onChangeText={setNameDraft}
-              testID="settings-family-name-input"
-              value={nameDraft}
-            />
-            {nameError ? <Text style={styles.familyNameError}>{nameError}</Text> : null}
-            <View style={styles.familyEditActions}>
-              <Pressable
-                onPress={() => {
-                  setIsEditingName(false);
-                  setNameError('');
-                  setNameDraft(family.name);
-                }}
-                style={styles.familyEditCancel}
-                testID="settings-family-name-cancel"
-              >
-                <Text style={styles.familyEditCancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                disabled={isSavingName}
-                onPress={() => void handleSaveName()}
-                style={styles.familyEditSave}
-                testID="settings-family-name-save"
-              >
-                {isSavingName ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <Text style={styles.familyEditSaveText}>Save</Text>
-                )}
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      ) : (
-        <SettingsRow
-          first
-          label={family.name}
-          caption={roleLabel(role)}
-          right={
-            canEditName || memberships.length > 1 ? (
-              <View style={styles.familyNameActions}>
-                {canEditName && (
-                  <Pressable
-                    onPress={() => setIsEditingName(true)}
-                    testID="settings-family-name-edit"
-                  >
-                    <Text style={styles.familyEditTrigger}>Edit</Text>
-                  </Pressable>
-                )}
-                {memberships.length > 1 && (
-                  <Pressable
-                    onPress={() => familyPickerRef.current?.open()}
-                    testID="settings-family-switch"
-                  >
-                    <Text style={styles.familyEditTrigger}>Switch</Text>
-                  </Pressable>
-                )}
-              </View>
-            ) : undefined
-          }
-        />
-      )}
+      <SettingsRow
+        first
+        label={family.name}
+        caption={roleLabel(role)}
+        right={
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setIsSwitcherOpen(true)}
+            testID="settings-family-switch"
+          >
+            <Text style={styles.linkText}>{memberships.length > 1 ? 'Switch' : 'Families'}</Text>
+          </Pressable>
+        }
+      />
 
       <SettingsRow
         chevron
-        label="Family members"
+        label="Members"
+        caption={waitingCount > 0 ? `${waitingCount} waiting for approval` : undefined}
         onPress={() => router.push(sharingMembersRoute)}
         testID="settings-family-members"
         value={String(activeMemberCount)}
       />
 
-      {canEditName && (
+      {canManage && (
         <SettingsRow
           chevron
-          label="Invite a family member"
+          label="Invite someone"
           onPress={() => router.push(sharingInviteRoute)}
           testID="settings-invite-family-member"
         />
       )}
 
-      {/* While invite data is loading, simply don't render these -- no
-          flicker placeholder for a count that's about to settle. */}
-      {canEditName && !isInvitesLoading && hasActivePendingInvite && (
+      {canManage && (
         <SettingsRow
           chevron
-          label="Pending invites"
-          onPress={() => router.push(sharingPendingInvitesRoute)}
-          testID="settings-pending-invites"
-        />
-      )}
-
-      {canEditName && !isInvitesLoading && redeemedInvites.length > 0 && (
-        <SettingsRow
-          chevron
-          label="Approvals"
-          onPress={() => router.push(sharingApprovalsRoute)}
-          testID="settings-approvals"
-          value={String(redeemedInvites.length)}
-        />
-      )}
-
-      <SettingsRow
-        chevron
-        label="Join a family"
-        caption="Have an invite code from another family?"
-        onPress={() => router.push(sharingRedeemRoute)}
-        testID="settings-join-family"
-      />
-
-      <SettingsRow
-        chevron
-        label="Manage families"
-        caption="Create a new family journal or delete one you own."
-        onPress={() => router.push(sharingManageRoute)}
-        testID="settings-manage-families"
-      />
-
-      {canEditName && (
-        <SettingsRow
-          label="Viewers can share memories"
-          caption="Turn off to stop viewers from sharing memory cards outside the family."
-          right={
-            <Switch
-              disabled={viewerSharingMutation.isPending}
-              onValueChange={(value) => void handleToggleViewerSharing(value)}
-              testID="settings-viewer-sharing-toggle"
-              trackColor={{ false: colors.border, true: colors.primary }}
-              value={family.viewerSharingEnabled ?? true}
-            />
-          }
-        />
-      )}
-      {viewerSharingError ? <Text style={styles.familyNameError}>{viewerSharingError}</Text> : null}
-
-      {memberships.length > 1 && (
-        <SelectField
-          hideTrigger
-          onChange={(value) => void handlePickFamily(value)}
-          options={memberships.map((membership) => ({
-            value: membership.familyId,
-            label: membership.name,
-          }))}
-          ref={familyPickerRef}
-          testID="settings-family-picker"
-          value={familyId}
+          label="Family settings"
+          caption={isOwner ? 'Name, sharing, and photo captions' : 'Name and sharing'}
+          onPress={() => router.push(familySettingsRoute)}
+          testID="settings-family-settings"
         />
       )}
 
       {!isOwner && (
-        <View style={[styles.row, styles.rowBorder]}>
-          <Pressable
-            disabled={isLeaving}
-            onPress={handleLeave}
-            testID="settings-leave-family"
-          >
-            <Text style={styles.leaveFamilyText}>
-              {isLeaving ? 'Leaving…' : 'Leave family'}
-            </Text>
-          </Pressable>
-        </View>
+        <SettingsRow
+          destructive
+          label={isLeaving ? 'Leaving…' : 'Leave family'}
+          onPress={isLeaving ? undefined : handleLeave}
+          testID="settings-leave-family"
+        />
       )}
 
-      {leaveError ? <Text style={styles.familyNameError}>{leaveError}</Text> : null}
+      {leaveError ? <Text style={styles.errorText}>{leaveError}</Text> : null}
+
+      <FamilySwitcherSheet
+        activeFamilyId={familyId}
+        memberships={memberships}
+        onClose={() => setIsSwitcherOpen(false)}
+        onJoin={() => openFromSwitcher(sharingRedeemRoute)}
+        onManage={() => openFromSwitcher(sharingManageRoute)}
+        onSelect={(nextFamilyId) => void handlePickFamily(nextFamilyId)}
+        visible={isSwitcherOpen}
+      />
     </SettingsBlock>
   );
 }
@@ -447,8 +244,12 @@ export default function SettingsScreen() {
   const { user, signOut } = useAuth();
   const { familyId, role } = useFamily();
   const isViewer = isViewerRole(role);
+  const isOwner = isOwnerRole(role);
   const { status: billingStatus, isLoading: isBillingLoading } = useBilling();
   const [isExporting, setIsExporting] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [nameError, setNameError] = useState('');
   const {
     profile,
     updateProfile,
@@ -515,12 +316,26 @@ export default function SettingsScreen() {
     return true;
   };
 
-  const handleDisplayNameChange = async (name: string) => {
-    try {
-      await updateProfile({ name });
-    } catch (error) {
-      showMutationError('Could not update display name', error, 'Please try again.');
+  const handleSaveDisplayName = async () => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed) {
+      setNameError('Your name is required');
+      return;
     }
+
+    setNameError('');
+    try {
+      await updateProfile({ name: trimmed });
+      setIsEditingName(false);
+    } catch (error) {
+      setNameError(getErrorMessage(error, 'Could not update your name'));
+    }
+  };
+
+  const startEditingName = () => {
+    setNameDraft(profile?.name ?? '');
+    setNameError('');
+    setIsEditingName(true);
   };
 
   const handleToggleReminders = async (value: boolean) => {
@@ -667,6 +482,19 @@ export default function SettingsScreen() {
     );
   };
 
+  const isComplimentary = billingStatus?.access_reason === 'complimentary';
+  const subscriptionCaption = isBillingLoading
+    ? 'Checking access…'
+    : isComplimentary
+      ? 'Complimentary Momora Plus access'
+      : billingStatus?.has_write_access
+        ? billingStatus.access_reason === 'trial'
+          ? 'Momora Plus trial is active'
+          : 'Momora Plus is active'
+        : billingStatus?.has_ever_had_access
+          ? 'Your archive is safe. Resubscribe to capture more.'
+          : 'Start Momora Plus to unlock your journal.';
+
   return (
     <View style={styles.container}>
       <KeyboardAvoidingView
@@ -676,38 +504,118 @@ export default function SettingsScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <SafeAreaView>
             <View style={styles.header}>
-              <Text style={styles.eyebrow}>Account</Text>
               <Text style={styles.title}>Settings.</Text>
             </View>
           </SafeAreaView>
-  
-          {/* Identity card */}
-          <View style={styles.identityCard}>
-            <View style={styles.identityAvatar}>
-              <Text style={styles.identityInitial}>
-                {(profile?.name ?? user?.email ?? 'U').charAt(0).toUpperCase()}
-              </Text>
-            </View>
-            <View style={styles.identityContent}>
-              <Text style={styles.identityName}>{profile?.name ?? 'You'}</Text>
-              <Text style={styles.identityEmail}>{user?.email ?? ''}</Text>
-            </View>
-          </View>
-  
-          {/* Display name */}
-          <View style={styles.section}>
-            <AuthField label="Display name">
-              <AuthInput
-                autoCapitalize="words"
-                onChangeText={(name) => void handleDisplayNameChange(name)}
-                placeholder="Your name"
-                testID="settings-display-name"
-                value={profile?.name ?? ''}
-              />
-            </AuthField>
-          </View>
-  
+
           <View style={styles.sections}>
+            {/* Account deletion banner -- first, so it can't be missed. */}
+            {profile?.deleted_at ? (
+              <View style={styles.deletionBanner}>
+                <Text style={styles.deletionTitle}>Account scheduled for deletion</Text>
+                <Text style={styles.deletionBody}>
+                  Permanent deletion is scheduled for{' '}
+                  {profile.scheduled_hard_delete_at
+                    ? new Date(profile.scheduled_hard_delete_at).toLocaleDateString(undefined, {
+                        day: 'numeric',
+                        month: 'long',
+                        year: 'numeric',
+                      })
+                    : 'soon'}.
+                </Text>
+                <Pressable
+                  onPress={() => void handleCancelAccountDeletion()}
+                  disabled={isCancelingDeletion}
+                  style={styles.cancelDeletionBtn}
+                  testID="settings-cancel-deletion"
+                >
+                  <Text style={styles.cancelDeletionText}>
+                    {isCancelingDeletion ? 'Canceling…' : 'Cancel deletion'}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {/* Identity card: tap to edit your name; owners also see their plan here. */}
+            <View style={styles.identityCard}>
+              {isEditingName ? (
+                <View style={styles.identityEdit}>
+                  <AuthInput
+                    autoCapitalize="words"
+                    autoFocus
+                    onChangeText={setNameDraft}
+                    placeholder="Your name"
+                    testID="settings-display-name"
+                    value={nameDraft}
+                  />
+                  {nameError ? <Text style={styles.inlineErrorText}>{nameError}</Text> : null}
+                  <View style={styles.editActions}>
+                    <Pressable
+                      onPress={() => setIsEditingName(false)}
+                      style={styles.editCancel}
+                      testID="settings-display-name-cancel"
+                    >
+                      <Text style={styles.editCancelText}>Cancel</Text>
+                    </Pressable>
+                    <Pressable
+                      disabled={isUpdating}
+                      onPress={() => void handleSaveDisplayName()}
+                      style={styles.editSave}
+                      testID="settings-display-name-save"
+                    >
+                      {isUpdating ? (
+                        <ActivityIndicator color={colors.white} size="small" />
+                      ) : (
+                        <Text style={styles.editSaveText}>Save</Text>
+                      )}
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <Pressable
+                  accessibilityLabel="Edit your name"
+                  accessibilityRole="button"
+                  onPress={startEditingName}
+                  style={({ pressed }) => [styles.identityRow, pressed && styles.identityPressed]}
+                  testID="settings-profile-edit"
+                >
+                  <View style={styles.identityAvatar}>
+                    <Text style={styles.identityInitial}>
+                      {(profile?.name ?? user?.email ?? 'U').charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.identityContent}>
+                    <Text style={styles.identityName}>{profile?.name || 'You'}</Text>
+                    <Text style={styles.identityEmail}>{user?.email ?? ''}</Text>
+                  </View>
+                  <Text style={styles.linkText}>Edit</Text>
+                </Pressable>
+              )}
+              {isOwner ? (
+                <SettingsRow
+                  chevron={!isComplimentary}
+                  label="Subscription"
+                  caption={subscriptionCaption}
+                  onPress={isComplimentary ? undefined : () => void handleManageSubscription()}
+                  testID="settings-manage-subscription"
+                />
+              ) : null}
+            </View>
+
+            <FamilySection />
+
+            <SettingsBlock title="Your journal">
+              <GalleryImportSettingsRow first />
+              <SettingsRow
+                chevron
+                first={isViewer || !isGalleryImportFeatureEnabled}
+                label="Home-screen widget"
+                caption="Keep a private memory card on your phone."
+                onPress={() => router.push(widgetSetupRoute)}
+                testID="settings-home-screen-widget"
+              />
+            </SettingsBlock>
+
             <SettingsBlock title="Notifications">
               {!isViewer && (
                 <SettingsRow
@@ -738,6 +646,7 @@ export default function SettingsScreen() {
                 </View>
               )}
               <SettingsRow
+                first={isViewer}
                 label="New memory alerts"
                 caption="Get notified when a family member adds a memory."
                 right={
@@ -762,58 +671,7 @@ export default function SettingsScreen() {
                 }
               />
             </SettingsBlock>
-  
-            <FamilySection />
 
-            <GalleryImportSettingsBlock />
-
-            <SettingsBlock title="Personalise">
-              <SettingsRow
-                chevron
-                label="Home-screen widget"
-                caption="Keep a private memory card on your phone."
-                onPress={() => router.push(widgetSetupRoute)}
-                testID="settings-home-screen-widget"
-              />
-            </SettingsBlock>
-
-            {isOwnerRole(role) ? (
-              <SettingsBlock title="Subscription & archive">
-                <SettingsRow
-                  first
-                  chevron={billingStatus?.access_reason !== 'complimentary'}
-                  label="Subscription"
-                  caption={
-                    isBillingLoading
-                      ? 'Checking access…'
-                      : billingStatus?.access_reason === 'complimentary'
-                        ? 'Complimentary Momora Plus access'
-                        : billingStatus?.has_write_access
-                          ? billingStatus.access_reason === 'trial'
-                            ? 'Momora Plus trial is active'
-                            : 'Momora Plus is active'
-                          : billingStatus?.has_ever_had_access
-                            ? 'Your archive is safe. Resubscribe to capture more.'
-                            : 'Start Momora Plus to unlock your journal.'
-                  }
-                  onPress={
-                    billingStatus?.access_reason === 'complimentary'
-                      ? undefined
-                      : () => void handleManageSubscription()
-                  }
-                  testID="settings-manage-subscription"
-                />
-                <SettingsRow
-                  chevron={!isExporting}
-                  label="Export your memories"
-                  caption="We'll email you a download link"
-                  onPress={isExporting ? undefined : () => void handleExportMemories()}
-                  right={isExporting ? <ActivityIndicator color={colors.primary} size="small" /> : undefined}
-                  testID="settings-export-memories"
-                />
-              </SettingsBlock>
-            ) : null}
-  
             <SettingsBlock title="Help">
               <SettingsRow
                 first
@@ -821,6 +679,12 @@ export default function SettingsScreen() {
                 label="FAQ"
                 onPress={() => void openExternalUrl(FAQ_URL)}
                 testID="settings-faq"
+              />
+              <SettingsRow
+                chevron
+                label="Contact support"
+                onPress={() => void openExternalUrl(SUPPORT_EMAIL_URL)}
+                testID="settings-contact-support"
               />
               <SettingsRow
                 chevron
@@ -834,64 +698,36 @@ export default function SettingsScreen() {
                 onPress={() => void openExternalUrl(TERMS_OF_SERVICE_URL)}
                 testID="settings-terms-of-service"
               />
-              <SettingsRow
-                chevron
-                label="Contact support"
-                onPress={() => void openExternalUrl(SUPPORT_EMAIL_URL)}
-                testID="settings-contact-support"
-              />
             </SettingsBlock>
-  
-            {/* Account deletion banner */}
-            {profile?.deleted_at ? (
-              <View style={styles.deletionBanner}>
-                <Text style={styles.deletionTitle}>Account scheduled for deletion</Text>
-                <Text style={styles.deletionBody}>
-                  Permanent deletion is scheduled for{' '}
-                  {profile.scheduled_hard_delete_at
-                    ? new Date(profile.scheduled_hard_delete_at).toLocaleDateString(undefined, {
-                        day: 'numeric',
-                        month: 'long',
-                        year: 'numeric',
-                      })
-                    : 'soon'}.
-                </Text>
-                <Pressable
-                  onPress={() => void handleCancelAccountDeletion()}
-                  disabled={isCancelingDeletion}
-                  style={styles.cancelDeletionBtn}
-                  testID="settings-cancel-deletion"
-                >
-                  <Text style={styles.cancelDeletionText}>
-                    {isCancelingDeletion ? 'Canceling…' : 'Cancel deletion'}
-                  </Text>
-                </Pressable>
-              </View>
-            ) : null}
-  
-            {/* Actions */}
-            <View style={styles.actions}>
-              <Pressable
+
+            <SettingsBlock title="Account">
+              {isOwner ? (
+                <SettingsRow
+                  first
+                  chevron={!isExporting}
+                  label="Export your memories"
+                  caption="We'll email you a download link"
+                  onPress={isExporting ? undefined : () => void handleExportMemories()}
+                  right={isExporting ? <ActivityIndicator color={colors.primary} size="small" /> : undefined}
+                  testID="settings-export-memories"
+                />
+              ) : null}
+              <SettingsRow
+                first={!isOwner}
+                label="Sign out"
                 onPress={() => void handleSignOut()}
-                style={({ pressed }) => [styles.signOutBtn, pressed && { opacity: 0.8 }]}
                 testID="settings-sign-out-button"
-              >
-                <Text style={styles.signOutText}>Sign out</Text>
-              </Pressable>
-  
+              />
               {!profile?.deleted_at && (
-                <Pressable
-                  onPress={handleDeleteAccount}
-                  disabled={isDeletingAccount || isUpdating}
+                <SettingsRow
+                  destructive
+                  label={isDeletingAccount ? 'Scheduling deletion…' : 'Delete account'}
+                  onPress={isDeletingAccount || isUpdating ? undefined : handleDeleteAccount}
                   testID="settings-delete-account"
-                >
-                  <Text style={styles.deleteText}>
-                    {isDeletingAccount ? 'Scheduling deletion…' : 'Delete account'}
-                  </Text>
-                </Pressable>
+                />
               )}
-            </View>
-  
+            </SettingsBlock>
+
             <Text style={styles.version}>Momora · v{APP_VERSION}</Text>
           </View>
         </ScrollView>
@@ -911,32 +747,32 @@ const styles = StyleSheet.create({
   header: {
     paddingTop: 16,
     paddingHorizontal: spacing.lg,
-    gap: 6,
-  },
-  eyebrow: {
-    fontFamily: fonts.sansBold,
-    fontSize: 11,
-    letterSpacing: 0.14 * 11,
-    textTransform: 'uppercase',
-    color: colors.ink3,
   },
   title: {
     fontFamily: fonts.display,
     fontSize: 42,
     lineHeight: 42,
     color: colors.ink,
-    marginBottom: spacing.lg,
   },
   identityCard: {
-    marginHorizontal: spacing.md,
     backgroundColor: colors.white,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
+    overflow: 'hidden',
+  },
+  identityRow: {
     padding: 18,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
+  },
+  identityPressed: {
+    backgroundColor: colors.surface,
+  },
+  identityEdit: {
+    padding: 18,
+    gap: spacing.sm,
   },
   identityAvatar: {
     width: 56,
@@ -964,29 +800,10 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     color: colors.ink3,
   },
-  section: {
-    marginHorizontal: spacing.md,
-    marginTop: spacing.lg,
-  },
   sections: {
     marginHorizontal: spacing.md,
     marginTop: spacing.lg,
     gap: 24,
-  },
-  blockTitle: {
-    fontFamily: fonts.sansBold,
-    fontSize: 10,
-    letterSpacing: 0.14 * 10,
-    textTransform: 'uppercase',
-    color: colors.ink3,
-    marginBottom: 10,
-  },
-  block: {
-    backgroundColor: colors.white,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: 'hidden',
   },
   row: {
     flexDirection: 'row',
@@ -999,9 +816,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  rowPressed: {
-    backgroundColor: colors.surface,
-  },
   rowContent: {
     flex: 1,
   },
@@ -1010,55 +824,26 @@ const styles = StyleSheet.create({
     fontSize: 14.5,
     color: colors.ink,
   },
-  rowCaption: {
-    fontFamily: fonts.sans,
-    fontSize: 12,
-    color: colors.ink3,
-    marginTop: 3,
-  },
-  rowValue: {
-    fontFamily: fonts.sans,
-    fontSize: 13,
-    color: colors.ink3,
-  },
-  chevron: {
-    fontSize: 18,
-    color: colors.ink3,
-    fontWeight: '300',
-  },
-  familyEditTrigger: {
+  linkText: {
     fontFamily: fonts.sansBold,
     fontSize: 13,
     color: colors.primary,
   },
-  familyNameActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
-  familyEditRow: {
-    flexDirection: 'column',
-    alignItems: 'stretch',
-  },
-  familyEditForm: {
-    flex: 1,
-    gap: spacing.sm,
-  },
-  familyEditActions: {
+  editActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: spacing.sm,
   },
-  familyEditCancel: {
+  editCancel: {
     paddingVertical: 8,
     paddingHorizontal: 12,
   },
-  familyEditCancelText: {
+  editCancelText: {
     fontFamily: fonts.sansBold,
     fontSize: 13,
     color: colors.ink3,
   },
-  familyEditSave: {
+  editSave: {
     backgroundColor: colors.primary,
     borderRadius: radius.md,
     paddingVertical: 8,
@@ -1067,22 +852,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minWidth: 64,
   },
-  familyEditSaveText: {
+  editSaveText: {
     fontFamily: fonts.sansBold,
     fontSize: 13,
     color: colors.white,
   },
-  familyNameError: {
+  inlineErrorText: {
+    fontFamily: fonts.sans,
+    fontSize: 12,
+    color: colors.error,
+  },
+  errorText: {
     fontFamily: fonts.sans,
     fontSize: 12,
     color: colors.error,
     paddingHorizontal: 16,
     paddingBottom: 8,
-  },
-  leaveFamilyText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 13.5,
-    color: colors.error,
   },
   deletionBanner: {
     backgroundColor: colors.errorSoft,
@@ -1109,29 +894,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sansBold,
     fontSize: 13,
     color: colors.primary,
-  },
-  actions: {
-    gap: 10,
-    alignItems: 'flex-start',
-  },
-  signOutBtn: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  signOutText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 15,
-    color: colors.ink,
-  },
-  deleteText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 13,
-    color: colors.error,
-    paddingVertical: spacing.sm,
   },
   version: {
     fontFamily: 'SpaceMono',

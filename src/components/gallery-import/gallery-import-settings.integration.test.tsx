@@ -1,6 +1,6 @@
 import { fireEvent, render } from '@testing-library/react-native';
 
-import { GalleryImportSettingsBlock } from '@/components/gallery-import/gallery-import-settings';
+import { GalleryCaptionLanguageRow, GalleryImportSettingsRow } from '@/components/gallery-import/gallery-import-settings';
 import { galleryCaptionSettingsRoute } from '@/lib/routes';
 import { useGalleryCaptionSettings, useGalleryImportEntryStatus } from '@/hooks/useGalleryImport';
 import { useFamily } from '@/hooks/use-family';
@@ -32,7 +32,7 @@ function entryStatus(overrides: Record<string, unknown> = {}) {
   } as never;
 }
 
-describe('GalleryImportSettingsBlock', () => {
+describe('Gallery import settings rows', () => {
   beforeEach(() => {
     mockPush.mockClear();
     mockedFamily.mockReturnValue({ familyId: 'family-1', role: 'owner' } as never);
@@ -44,7 +44,7 @@ describe('GalleryImportSettingsBlock', () => {
   });
 
   it('shows the owner a human-readable language label, never a bare code', () => {
-    const screen = render(<GalleryImportSettingsBlock />);
+    const screen = render(<GalleryCaptionLanguageRow />);
     const row = screen.getByTestId('settings-gallery-caption');
     expect(row).toBeTruthy();
     // The raw BCP-47 tag must never stand alone as the row's caption.
@@ -53,30 +53,25 @@ describe('GalleryImportSettingsBlock', () => {
   });
 
   it('pushes the dedicated caption settings screen when an owner taps the row', () => {
-    const screen = render(<GalleryImportSettingsBlock />);
+    const screen = render(<GalleryCaptionLanguageRow />);
     fireEvent.press(screen.getByTestId('settings-gallery-caption'));
     expect(mockPush).toHaveBeenCalledWith(galleryCaptionSettingsRoute);
   });
 
-  it('gives a viewer only the disabled explanatory row, with no way to navigate or edit, and never calls the device-bound status hook', () => {
+  it('renders no Find memories row for a viewer and never calls the device-bound status hook', () => {
     mockedFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as never);
-    const screen = render(<GalleryImportSettingsBlock />);
-    expect(screen.getByTestId('settings-gallery-caption-viewer')).toBeTruthy();
-    expect(screen.getByText('Only the family owner can change this setting.')).toBeTruthy();
-    expect(screen.getByText('Only a family owner or manager can look through your photos for memories.')).toBeTruthy();
-    expect(screen.queryByTestId('settings-gallery-caption')).toBeNull();
-    expect(mockPush).not.toHaveBeenCalled();
-    // The "viewer caption bug" this rewrite fixes: a viewer's row must never
-    // read an active-sounding "Look through your camera roll..." caption
-    // driven by a status hook the viewer can never act on.
+    const screen = render(<GalleryImportSettingsRow />);
+    // Viewers get the trimmed Settings screen: no import entry point at all.
+    expect(screen.queryByTestId('settings-gallery-import')).toBeNull();
+    // The "viewer caption bug": a viewer must never drive a status hook they
+    // can never act on.
     expect(mockedEntryStatus).toHaveBeenCalledWith({ enabled: false });
-    fireEvent.press(screen.getByTestId('settings-gallery-import'));
     expect(mockPush).not.toHaveBeenCalled();
   });
 
   it('gives a non-owner manager the same disabled caption row, not the owner-editable one', () => {
     mockedFamily.mockReturnValue({ familyId: 'family-1', role: 'manager' } as never);
-    const screen = render(<GalleryImportSettingsBlock />);
+    const screen = render(<GalleryCaptionLanguageRow />);
     const row = screen.getByTestId('settings-gallery-caption');
     expect(screen.getByText('Only the family owner can change this setting.')).toBeTruthy();
     // A manager's row renders without a chevron/onPress at all -- SettingsRow
@@ -87,7 +82,7 @@ describe('GalleryImportSettingsBlock', () => {
   });
 
   it('shows "Look through your photos" and opens the entry screen when there is no run', () => {
-    const screen = render(<GalleryImportSettingsBlock />);
+    const screen = render(<GalleryImportSettingsRow />);
     expect(screen.getByText('Look through your photos')).toBeTruthy();
     fireEvent.press(screen.getByTestId('settings-gallery-import'));
     expect(mockPush).toHaveBeenCalledWith('/(app)/gallery-import');
@@ -99,7 +94,7 @@ describe('GalleryImportSettingsBlock', () => {
       readyCount: 12,
       checkpoint: { runId: 'run-1' },
     }));
-    const screen = render(<GalleryImportSettingsBlock />);
+    const screen = render(<GalleryImportSettingsRow />);
     expect(screen.getByText('12 suggestions ready to review')).toBeTruthy();
     fireEvent.press(screen.getByTestId('settings-gallery-import'));
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/review', params: { runId: 'run-1' } });
@@ -112,7 +107,7 @@ describe('GalleryImportSettingsBlock', () => {
       checkpoint: { runId: 'run-1' },
       driverState: { phase: 'sending', runId: 'run-1', pausedUntil: null, lastError: null, isActive: true },
     }));
-    const screen = render(<GalleryImportSettingsBlock />);
+    const screen = render(<GalleryImportSettingsRow />);
     expect(screen.getByText('Looking through your photos · 0 ready')).toBeTruthy();
     fireEvent.press(screen.getByTestId('settings-gallery-import'));
     expect(mockPush).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import/progress', params: { runId: 'run-1' } });
@@ -123,7 +118,7 @@ describe('GalleryImportSettingsBlock', () => {
       checkpoint: { runId: 'run-1' },
       driverState: { phase: 'paused_fair_use', runId: 'run-1', pausedUntil: '2026-08-24T00:00:00.000Z', lastError: null, isActive: false },
     }));
-    const screen = render(<GalleryImportSettingsBlock />);
+    const screen = render(<GalleryImportSettingsRow />);
     expect(screen.getByText('Momora will keep looking tomorrow')).toBeTruthy();
   });
 
@@ -133,7 +128,7 @@ describe('GalleryImportSettingsBlock', () => {
       attentionReason: 'waiting_for_wifi',
       checkpoint: { runId: 'run-1' },
     }));
-    const screen = render(<GalleryImportSettingsBlock />);
+    const screen = render(<GalleryImportSettingsRow />);
     expect(screen.getByText('Needs Wi-Fi to keep going')).toBeTruthy();
   });
 
@@ -144,7 +139,7 @@ describe('GalleryImportSettingsBlock', () => {
       readyCount: 5,
       checkpoint: { runId: 'run-1' },
     }));
-    const screen = render(<GalleryImportSettingsBlock />);
+    const screen = render(<GalleryImportSettingsRow />);
     // With something ready AND the countdown imminent, the row says both:
     // the warning matters most exactly when there is still something to review.
     expect(screen.getByText('5 suggestions ready · clear in 3 days')).toBeTruthy();

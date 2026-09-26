@@ -90,6 +90,9 @@ export function lookingBackPackageRoute(packageId: string): Href {
 // the family-sharing/household surface.
 export const familyRosterRoute = '/(app)/(tabs)/family' as Href;
 
+/** Owner/manager family-level settings (name, viewer sharing, caption language). */
+export const familySettingsRoute = '/(app)/family-settings' as Href;
+
 // Family sharing (household) routes -- deliberately under `sharing/`, not
 // `family/` (that group means the *children* roster; see plan §9 on the
 // children-vs-household naming hazard).

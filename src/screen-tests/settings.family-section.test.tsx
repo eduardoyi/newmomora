@@ -12,16 +12,15 @@ import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import {
-  sharingApprovalsRoute,
+  familySettingsRoute,
   sharingInviteRoute,
   sharingManageRoute,
   sharingMembersRoute,
-  sharingPendingInvitesRoute,
   sharingRedeemRoute,
 } from '@/lib/routes';
 import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { requestDataExport } from '@/services/export';
-import { leaveFamily, updateFamilyName, updateFamilyViewerSharing } from '@/services/family';
+import { leaveFamily } from '@/services/family';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -66,8 +65,6 @@ jest.mock('@/hooks/useNotifications', () => ({
 
 jest.mock('@/services/family', () => ({
   leaveFamily: jest.fn(),
-  updateFamilyName: jest.fn(),
-  updateFamilyViewerSharing: jest.fn(),
 }));
 
 jest.mock('@/services/export', () => ({
@@ -89,13 +86,46 @@ const mockedUseUserProfile = useUserProfile as jest.MockedFunction<typeof useUse
 const mockedRequestDataExport = requestDataExport as jest.MockedFunction<typeof requestDataExport>;
 const mockedLeaveFamily = leaveFamily as jest.MockedFunction<typeof leaveFamily>;
 const mockedClearPersistedQueryCache = clearPersistedQueryCache as jest.Mock;
-const mockedUpdateFamilyName = updateFamilyName as jest.MockedFunction<typeof updateFamilyName>;
-const mockedUpdateFamilyViewerSharing = updateFamilyViewerSharing as jest.MockedFunction<
-  typeof updateFamilyViewerSharing
->;
 
-const FUTURE_EXPIRY = '2030-01-01T00:00:00Z';
-const PAST_EXPIRY = '2020-01-01T00:00:00Z';
+const SECOND_FAMILY = { id: 'm2', familyId: 'family-2', role: 'viewer', name: 'Second family' };
+
+function setFamily(
+  role: string,
+  {
+    extraMemberships = [],
+    setActiveFamily = jest.fn(),
+    refetchMemberships = jest.fn(),
+  }: {
+    extraMemberships?: typeof SECOND_FAMILY[];
+    setActiveFamily?: jest.Mock;
+    refetchMemberships?: jest.Mock;
+  } = {},
+) {
+  mockedUseFamily.mockReturnValue({
+    family: { id: 'family-1', name: "Rosa's family" },
+    familyId: 'family-1',
+    role,
+    memberships: [{ id: 'm1', familyId: 'family-1', role, name: "Rosa's family" }, ...extraMemberships],
+    isLoading: false,
+    setActiveFamily,
+    refetchMemberships,
+    justLostAccess: false,
+  });
+}
+
+function setRedeemedInvites(count: number, isLoading = false) {
+  mockedUseFamilyInvites.mockReturnValue({
+    invites: [],
+    pendingInvites: [],
+    redeemedInvites: Array.from({ length: count }, (_, index) => ({ id: `invite-${index}`, status: 'redeemed' })),
+    isLoading,
+    isError: false,
+    error: null,
+    refetch: jest.fn(),
+    revokeInvite: jest.fn(),
+    isRevoking: false,
+  } as never);
+}
 
 function renderScreen() {
   const queryClient = new QueryClient({
@@ -192,123 +222,68 @@ describe('Settings Family section', () => {
     });
   });
 
-  it('shows the family name and role, with no edit affordance for a viewer', () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'viewer',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'viewer', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
+  it('shows the family name and role with a Families link for a single-family viewer', () => {
+    setFamily('viewer');
 
-    const { getByText, queryByTestId } = renderScreen();
+    const { getByText, getByTestId } = renderScreen();
 
     expect(getByText("Rosa's family")).toBeTruthy();
     expect(getByText('Viewer')).toBeTruthy();
-    expect(queryByTestId('settings-family-name-edit')).toBeNull();
+    expect(getByTestId('settings-family-switch')).toBeTruthy();
+    expect(getByText('Families')).toBeTruthy();
   });
 
-  it('lets a manager edit and save the family name', async () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'manager',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'manager', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-    mockedUpdateFamilyName.mockResolvedValue({
-      data: {
-        id: 'family-1',
-        owner_id: 'user-0',
-        name: 'The Rivera family',
-        illustration_style: 'default',
-        deleted_at: null,
-        created_at: '2026-05-28T00:00:00Z',
-        updated_at: '2026-05-28T00:00:00Z',
-      },
-      error: null,
-    });
+  it('gives a viewer the trimmed screen: members and leave, no management, journal import, or export', () => {
+    setFamily('viewer');
 
-    const { getByTestId, queryByTestId } = renderScreen();
+    const { queryByTestId } = renderScreen();
 
-    fireEvent.press(getByTestId('settings-family-name-edit'));
-    fireEvent.changeText(getByTestId('settings-family-name-input'), 'The Rivera family');
-    fireEvent.press(getByTestId('settings-family-name-save'));
-
-    await waitFor(() => {
-      expect(mockedUpdateFamilyName).toHaveBeenCalledWith('family-1', 'The Rivera family');
-    });
-    await waitFor(() => {
-      expect(queryByTestId('settings-family-name-input')).toBeNull();
-    });
-  });
-
-  it('hides the leave-family button for the owner and shows it for a manager', () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-
-    const { queryByTestId, rerender } = renderScreen();
-    expect(queryByTestId('settings-leave-family')).toBeNull();
-
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'manager',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'manager', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-
-    rerender(
-      <SafeAreaProvider
-        initialMetrics={{
-          frame: { height: 844, width: 390, x: 0, y: 0 },
-          insets: { bottom: 34, left: 0, right: 0, top: 47 },
-        }}
-      >
-        <QueryClientProvider
-          client={new QueryClient({
-            defaultOptions: {
-              queries: { gcTime: Infinity },
-              mutations: { gcTime: Infinity },
-            },
-          })}
-        >
-          <SettingsScreen />
-        </QueryClientProvider>
-      </SafeAreaProvider>,
-    );
-
+    expect(queryByTestId('settings-family-members')).toBeTruthy();
     expect(queryByTestId('settings-leave-family')).toBeTruthy();
+    expect(queryByTestId('settings-invite-family-member')).toBeNull();
+    expect(queryByTestId('settings-family-settings')).toBeNull();
+    expect(queryByTestId('settings-gallery-import')).toBeNull();
+    expect(queryByTestId('settings-daily-reminder-toggle')).toBeNull();
+    expect(queryByTestId('settings-manage-subscription')).toBeNull();
+    expect(queryByTestId('settings-export-memories')).toBeNull();
+    // A viewer role never fires the invites query -- RLS would deny it anyway.
+    expect(mockedUseFamilyInvites).toHaveBeenCalledWith('family-1', { enabled: false });
+  });
+
+  it('routes a manager to invite and family settings', () => {
+    const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
+    setFamily('manager');
+
+    const { getByTestId, getByText } = renderScreen();
+
+    fireEvent.press(getByTestId('settings-invite-family-member'));
+    expect(router.push).toHaveBeenCalledWith(sharingInviteRoute);
+
+    expect(getByText('Name and sharing')).toBeTruthy();
+    fireEvent.press(getByTestId('settings-family-settings'));
+    expect(router.push).toHaveBeenCalledWith(familySettingsRoute);
+  });
+
+  it('mentions photo captions in the owner family-settings caption', () => {
+    setFamily('owner');
+
+    const { getByText } = renderScreen();
+
+    expect(getByText('Name, sharing, and photo captions')).toBeTruthy();
+  });
+
+  it('hides Leave family for the owner and shows it for a manager', () => {
+    setFamily('owner');
+    const { queryByTestId, unmount } = renderScreen();
+    expect(queryByTestId('settings-leave-family')).toBeNull();
+    unmount();
+
+    setFamily('manager');
+    expect(renderScreen().queryByTestId('settings-leave-family')).toBeTruthy();
   });
 
   it('starts a private archive export from the owner settings', async () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
+    setFamily('owner');
 
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
     const { getByTestId } = renderScreen();
@@ -326,16 +301,7 @@ describe('Settings Family section', () => {
   });
 
   it('tells the owner when an export is already being prepared', async () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
+    setFamily('owner');
     mockedRequestDataExport.mockResolvedValue({
       data: { jobId: 'job-1', alreadyRunning: true, email: 'rosa@example.test' },
       error: null,
@@ -352,16 +318,7 @@ describe('Settings Family section', () => {
   });
 
   it('shows an error when the archive export cannot be created', async () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
+    setFamily('owner');
     mockedRequestDataExport.mockResolvedValue({
       data: null,
       error: { message: 'Export service unavailable', code: 'export_unavailable' },
@@ -378,18 +335,17 @@ describe('Settings Family section', () => {
     alertSpy.mockRestore();
   });
 
+  it('keeps export owner-only', () => {
+    setFamily('manager');
+
+    const { queryByTestId } = renderScreen();
+
+    expect(queryByTestId('settings-export-memories')).toBeNull();
+  });
+
   it('leaves the family after confirming the alert', async () => {
     const refetchMemberships = jest.fn().mockResolvedValue(undefined);
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'manager',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'manager', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships,
-      justLostAccess: false,
-    });
+    setFamily('manager', { refetchMemberships });
     mockedLeaveFamily.mockResolvedValue({ error: null });
 
     const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _msg, buttons) => {
@@ -418,41 +374,14 @@ describe('Settings Family section', () => {
     alertSpy.mockRestore();
   });
 
-  it('badges the Family members row with the active-member count and routes to the members screen', () => {
+  it('shows the active-member count on the Members row and routes to the members screen', () => {
     const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
+    setFamily('owner');
     mockedUseFamilyMemberProfiles.mockReturnValue({
       profiles: [
-        {
-          user_id: 'user-1',
-          name: 'Rosa',
-          role: 'owner',
-          is_active_member: true,
-          created_at: '2026-05-28T00:00:00Z',
-        },
-        {
-          user_id: 'user-2',
-          name: 'Dana',
-          role: 'manager',
-          is_active_member: true,
-          created_at: '2026-05-28T00:00:00Z',
-        },
-        {
-          user_id: 'user-3',
-          name: 'Former',
-          role: null,
-          is_active_member: false,
-          created_at: '2026-05-28T00:00:00Z',
-        },
+        { user_id: 'user-1', name: 'Rosa', role: 'owner', is_active_member: true, created_at: '2026-05-28T00:00:00Z' },
+        { user_id: 'user-2', name: 'Dana', role: 'manager', is_active_member: true, created_at: '2026-05-28T00:00:00Z' },
+        { user_id: 'user-3', name: 'Former', role: null, is_active_member: false, created_at: '2026-05-28T00:00:00Z' },
       ],
       isLoading: false,
       isError: false,
@@ -462,447 +391,116 @@ describe('Settings Family section', () => {
     const { getByTestId, getByText, queryByTestId } = renderScreen();
 
     // Only the two active members count, the former member does not.
-    expect(getByTestId('settings-family-members')).toBeTruthy();
     expect(getByText('2')).toBeTruthy();
-    // The member list itself no longer renders inline.
+    // The member list itself never renders inline.
     expect(queryByTestId('member-row-user-1')).toBeNull();
 
     fireEvent.press(getByTestId('settings-family-members'));
     expect(router.push).toHaveBeenCalledWith(sharingMembersRoute);
   });
 
-  it('shows manager sharing entry points and routes to each sharing screen', () => {
-    const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'manager',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'manager', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-    mockedUseFamilyInvites.mockReturnValue({
-      invites: [],
-      pendingInvites: [{ id: 'invite-1', status: 'pending', expires_at: FUTURE_EXPIRY }],
-      redeemedInvites: [{ id: 'invite-2', status: 'redeemed' }],
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: jest.fn(),
-      revokeInvite: jest.fn(),
-      isRevoking: false,
-    } as never);
+  it('surfaces waiting approvals on the Members row instead of a separate row', () => {
+    setFamily('owner');
+    setRedeemedInvites(2);
 
-    const { getByTestId } = renderScreen();
+    const { getByText, queryByTestId } = renderScreen();
 
-    fireEvent.press(getByTestId('settings-invite-family-member'));
-    expect(router.push).toHaveBeenCalledWith(sharingInviteRoute);
-
-    fireEvent.press(getByTestId('settings-pending-invites'));
-    expect(router.push).toHaveBeenCalledWith(sharingPendingInvitesRoute);
-
-    fireEvent.press(getByTestId('settings-approvals'));
-    expect(router.push).toHaveBeenCalledWith(sharingApprovalsRoute);
-
-    fireEvent.press(getByTestId('settings-join-family'));
-    expect(router.push).toHaveBeenCalledWith(sharingRedeemRoute);
-  });
-
-  it('hides viewer-restricted management rows but keeps member safety and Join a family', () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'viewer',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'viewer', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-
-    const { queryByTestId } = renderScreen();
-
-    expect(queryByTestId('settings-invite-family-member')).toBeNull();
-    expect(queryByTestId('settings-pending-invites')).toBeNull();
+    expect(getByText('2 waiting for approval')).toBeTruthy();
     expect(queryByTestId('settings-approvals')).toBeNull();
-    expect(queryByTestId('settings-join-family')).toBeTruthy();
-    expect(queryByTestId('settings-family-members')).toBeTruthy();
-    // A viewer role never fires the invites query -- RLS would deny it anyway.
-    expect(mockedUseFamilyInvites).toHaveBeenCalledWith('family-1', { enabled: false });
-  });
-
-  it('only shows Pending invites when there is at least one non-expired pending invite', () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-
-    // No invites at all -- hidden.
-    const { queryByTestId, rerender } = renderScreen();
     expect(queryByTestId('settings-pending-invites')).toBeNull();
-
-    // Only an expired pending invite -- still hidden.
-    mockedUseFamilyInvites.mockReturnValue({
-      invites: [],
-      pendingInvites: [{ id: 'invite-1', status: 'pending', expires_at: PAST_EXPIRY }],
-      redeemedInvites: [],
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: jest.fn(),
-      revokeInvite: jest.fn(),
-      isRevoking: false,
-    } as never);
-    rerender(
-      <SafeAreaProvider
-        initialMetrics={{
-          frame: { height: 844, width: 390, x: 0, y: 0 },
-          insets: { bottom: 34, left: 0, right: 0, top: 47 },
-        }}
-      >
-        <QueryClientProvider
-          client={new QueryClient({
-            defaultOptions: {
-              queries: { gcTime: Infinity },
-              mutations: { gcTime: Infinity },
-            },
-          })}
-        >
-          <SettingsScreen />
-        </QueryClientProvider>
-      </SafeAreaProvider>,
-    );
-    expect(queryByTestId('settings-pending-invites')).toBeNull();
-
-    // A non-expired pending invite -- shown.
-    mockedUseFamilyInvites.mockReturnValue({
-      invites: [],
-      pendingInvites: [{ id: 'invite-2', status: 'pending', expires_at: FUTURE_EXPIRY }],
-      redeemedInvites: [],
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: jest.fn(),
-      revokeInvite: jest.fn(),
-      isRevoking: false,
-    } as never);
-    rerender(
-      <SafeAreaProvider
-        initialMetrics={{
-          frame: { height: 844, width: 390, x: 0, y: 0 },
-          insets: { bottom: 34, left: 0, right: 0, top: 47 },
-        }}
-      >
-        <QueryClientProvider
-          client={new QueryClient({
-            defaultOptions: {
-              queries: { gcTime: Infinity },
-              mutations: { gcTime: Infinity },
-            },
-          })}
-        >
-          <SettingsScreen />
-        </QueryClientProvider>
-      </SafeAreaProvider>,
-    );
-    expect(queryByTestId('settings-pending-invites')).toBeTruthy();
   });
 
-  it('does not flicker Pending invites/Approvals placeholders while invite data is loading', () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-    mockedUseFamilyInvites.mockReturnValue({
-      invites: [],
-      pendingInvites: [],
-      redeemedInvites: [],
-      isLoading: true,
-      isError: false,
-      error: null,
-      refetch: jest.fn(),
-      revokeInvite: jest.fn(),
-      isRevoking: false,
-    } as never);
+  it('does not show a waiting count while invite data is loading', () => {
+    setFamily('owner');
+    setRedeemedInvites(2, true);
 
-    const { queryByTestId } = renderScreen();
+    const { queryByText } = renderScreen();
 
-    expect(queryByTestId('settings-pending-invites')).toBeNull();
-    expect(queryByTestId('settings-approvals')).toBeNull();
+    expect(queryByText('2 waiting for approval')).toBeNull();
   });
 
-  it('badges the approvals row with the redeemed-invite count', () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-    mockedUseFamilyInvites.mockReturnValue({
-      invites: [],
-      pendingInvites: [],
-      redeemedInvites: [{ id: 'invite-1' }, { id: 'invite-2' }],
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: jest.fn(),
-      revokeInvite: jest.fn(),
-      isRevoking: false,
-    } as never);
-
-    const { getByText } = renderScreen();
-
-    expect(getByText('2')).toBeTruthy();
-  });
-
-  it('never renders a standalone picker field — the modal opens only via the Switch link', () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [
-        { id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" },
-        { id: 'm2', familyId: 'family-2', role: 'owner', name: 'Second family' },
-      ],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-
-    const { queryByTestId, queryByText } = renderScreen();
-    // hideTrigger: even with multiple memberships there is no inline field
-    // trigger and no "Switch family" row -- only the Switch link.
-    expect(queryByTestId('settings-family-picker')).toBeNull();
-    expect(queryByText('Switch family')).toBeNull();
-  });
-
-  it('hides the Switch link next to the family name when there is only one membership', () => {
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
-
-    const { queryByTestId } = renderScreen();
-    expect(queryByTestId('settings-family-switch')).toBeNull();
-  });
-
-  it('shows a Switch link next to the family name that opens the family picker', async () => {
+  it('switches families from the switcher sheet', async () => {
     const setActiveFamily = jest.fn().mockResolvedValue(undefined);
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [
-        { id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" },
-        { id: 'm2', familyId: 'family-2', role: 'owner', name: 'Second family' },
-      ],
-      isLoading: false,
-      setActiveFamily,
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
+    setFamily('owner', { extraMemberships: [SECOND_FAMILY], setActiveFamily });
 
-    const { getByTestId } = renderScreen();
+    const { getByTestId, getByText } = renderScreen();
 
+    expect(getByText('Switch')).toBeTruthy();
     fireEvent.press(getByTestId('settings-family-switch'));
-    fireEvent.press(getByTestId('settings-family-picker-option-family-2'));
+    fireEvent.press(getByTestId('family-switcher-option-family-2'));
 
     await waitFor(() => {
       expect(setActiveFamily).toHaveBeenCalledWith('family-2');
     });
   });
 
-  it('routes to the manage-families screen', () => {
-    const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
-    mockedUseFamily.mockReturnValue({
-      family: { id: 'family-1', name: "Rosa's family" },
-      familyId: 'family-1',
-      role: 'owner',
-      memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-      isLoading: false,
-      setActiveFamily: jest.fn(),
-      refetchMemberships: jest.fn(),
-      justLostAccess: false,
-    });
+  it('does not re-activate the current family when it is picked again', () => {
+    const setActiveFamily = jest.fn().mockResolvedValue(undefined);
+    setFamily('owner', { extraMemberships: [SECOND_FAMILY], setActiveFamily });
 
     const { getByTestId } = renderScreen();
 
-    fireEvent.press(getByTestId('settings-manage-families'));
+    fireEvent.press(getByTestId('settings-family-switch'));
+    fireEvent.press(getByTestId('family-switcher-option-family-1'));
+
+    expect(setActiveFamily).not.toHaveBeenCalled();
+  });
+
+  it('routes to join and manage families from the switcher sheet, even with one family', () => {
+    const { router } = jest.requireMock('expo-router') as { router: { push: jest.Mock } };
+    setFamily('viewer');
+
+    const { getByTestId } = renderScreen();
+
+    fireEvent.press(getByTestId('settings-family-switch'));
+    fireEvent.press(getByTestId('family-switcher-join'));
+    expect(router.push).toHaveBeenCalledWith(sharingRedeemRoute);
+
+    fireEvent.press(getByTestId('settings-family-switch'));
+    fireEvent.press(getByTestId('family-switcher-manage'));
     expect(router.push).toHaveBeenCalledWith(sharingManageRoute);
   });
 
-  describe('viewer sharing toggle', () => {
-    it('shows the toggle for an owner, defaulting to on when viewerSharingEnabled is unset', () => {
-      mockedUseFamily.mockReturnValue({
-        family: { id: 'family-1', name: "Rosa's family" },
-        familyId: 'family-1',
-        role: 'owner',
-        memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-        isLoading: false,
-        setActiveFamily: jest.fn(),
-        refetchMemberships: jest.fn(),
-        justLostAccess: false,
-      });
+  it('edits the display name from the identity card and saves the trimmed value', async () => {
+    setFamily('owner');
+    const updateProfile = jest.fn().mockResolvedValue(undefined);
+    mockedUseUserProfile.mockReturnValue({
+      ...mockedUseUserProfile(),
+      updateProfile,
+    } as never);
 
-      const { getByTestId } = renderScreen();
+    const { getByTestId, queryByTestId } = renderScreen();
 
-      expect(getByTestId('settings-viewer-sharing-toggle').props.value).toBe(true);
+    // No always-open name field anymore.
+    expect(queryByTestId('settings-display-name')).toBeNull();
+
+    fireEvent.press(getByTestId('settings-profile-edit'));
+    fireEvent.changeText(getByTestId('settings-display-name'), '  Rosa R  ');
+    fireEvent.press(getByTestId('settings-display-name-save'));
+
+    await waitFor(() => {
+      expect(updateProfile).toHaveBeenCalledWith({ name: 'Rosa R' });
     });
-
-    it('reflects viewerSharingEnabled = false and hides the toggle for a viewer', () => {
-      mockedUseFamily.mockReturnValue({
-        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: false },
-        familyId: 'family-1',
-        role: 'manager',
-        memberships: [{ id: 'm1', familyId: 'family-1', role: 'manager', name: "Rosa's family" }],
-        isLoading: false,
-        setActiveFamily: jest.fn(),
-        refetchMemberships: jest.fn(),
-        justLostAccess: false,
-      });
-
-      const { getByTestId, rerender, queryByTestId } = renderScreen();
-      expect(getByTestId('settings-viewer-sharing-toggle').props.value).toBe(false);
-
-      mockedUseFamily.mockReturnValue({
-        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: false },
-        familyId: 'family-1',
-        role: 'viewer',
-        memberships: [{ id: 'm1', familyId: 'family-1', role: 'viewer', name: "Rosa's family" }],
-        isLoading: false,
-        setActiveFamily: jest.fn(),
-        refetchMemberships: jest.fn(),
-        justLostAccess: false,
-      });
-      rerender(
-        <SafeAreaProvider
-          initialMetrics={{
-            frame: { height: 844, width: 390, x: 0, y: 0 },
-            insets: { bottom: 34, left: 0, right: 0, top: 47 },
-          }}
-        >
-          <QueryClientProvider
-            client={new QueryClient({
-              defaultOptions: {
-                queries: { gcTime: Infinity },
-                mutations: { gcTime: Infinity },
-              },
-            })}
-          >
-            <SettingsScreen />
-          </QueryClientProvider>
-        </SafeAreaProvider>,
-      );
-
-      expect(queryByTestId('settings-viewer-sharing-toggle')).toBeNull();
+    await waitFor(() => {
+      expect(queryByTestId('settings-display-name')).toBeNull();
     });
+  });
 
-    it('flips the toggle and calls the service with the family id and new value', async () => {
-      mockedUseFamily.mockReturnValue({
-        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: true },
-        familyId: 'family-1',
-        role: 'owner',
-        memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-        isLoading: false,
-        setActiveFamily: jest.fn(),
-        refetchMemberships: jest.fn(),
-        justLostAccess: false,
-      });
-      mockedUpdateFamilyViewerSharing.mockResolvedValue({
-        data: {
-          id: 'family-1',
-          owner_id: 'user-0',
-          name: "Rosa's family",
-          illustration_style: 'default',
-          deleted_at: null,
-          viewer_sharing_enabled: false,
-          created_at: '2026-05-28T00:00:00Z',
-          updated_at: '2026-08-05T00:00:00Z',
-        } as never,
-        error: null,
-      });
+  it('refuses to save an empty display name', () => {
+    setFamily('owner');
+    const updateProfile = jest.fn().mockResolvedValue(undefined);
+    mockedUseUserProfile.mockReturnValue({
+      ...mockedUseUserProfile(),
+      updateProfile,
+    } as never);
 
-      const { getByTestId } = renderScreen();
+    const { getByTestId, getByText } = renderScreen();
 
-      fireEvent(getByTestId('settings-viewer-sharing-toggle'), 'valueChange', false);
+    fireEvent.press(getByTestId('settings-profile-edit'));
+    fireEvent.changeText(getByTestId('settings-display-name'), '   ');
+    fireEvent.press(getByTestId('settings-display-name-save'));
 
-      await waitFor(() => {
-        expect(mockedUpdateFamilyViewerSharing).toHaveBeenCalledWith('family-1', false);
-      });
-    });
-
-    it('shows a billing-lockout error when the update matches zero rows (lapsed subscription)', async () => {
-      mockedUseFamily.mockReturnValue({
-        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: true },
-        familyId: 'family-1',
-        role: 'owner',
-        memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-        isLoading: false,
-        setActiveFamily: jest.fn(),
-        refetchMemberships: jest.fn(),
-        justLostAccess: false,
-      });
-      mockedUpdateFamilyViewerSharing.mockResolvedValue({ data: null, error: null });
-
-      const { getByTestId, getByText } = renderScreen();
-
-      fireEvent(getByTestId('settings-viewer-sharing-toggle'), 'valueChange', false);
-
-      await waitFor(() => {
-        expect(
-          getByText("Your family's subscription isn't active, so this setting can't be changed right now."),
-        ).toBeTruthy();
-      });
-    });
-
-    it('shows a generic error message when the service call fails', async () => {
-      mockedUseFamily.mockReturnValue({
-        family: { id: 'family-1', name: "Rosa's family", viewerSharingEnabled: true },
-        familyId: 'family-1',
-        role: 'owner',
-        memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: "Rosa's family" }],
-        isLoading: false,
-        setActiveFamily: jest.fn(),
-        refetchMemberships: jest.fn(),
-        justLostAccess: false,
-      });
-      mockedUpdateFamilyViewerSharing.mockResolvedValue({
-        data: null,
-        error: { message: 'Network request failed' },
-      });
-
-      const { getByTestId, getByText } = renderScreen();
-
-      fireEvent(getByTestId('settings-viewer-sharing-toggle'), 'valueChange', false);
-
-      await waitFor(() => {
-        expect(getByText('Network request failed')).toBeTruthy();
-      });
-    });
+    expect(getByText('Your name is required')).toBeTruthy();
+    expect(updateProfile).not.toHaveBeenCalled();
   });
 });
