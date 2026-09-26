@@ -20,11 +20,11 @@ import { MemorySearchRow } from '@/components/memory-search-row';
 import { colors, emotionColors, fonts, radius, spacing, type EmotionName } from '@/constants/theme';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
-import { useMemorySearch } from '@/hooks/useMemories';
+import { useMemorySearch, useMemorySearchFacets } from '@/hooks/useMemories';
 import { useBatchedMediaUrls } from '@/hooks/useMediaUrls';
 import { memoryDetailRoute } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
-import type { MemorySearchHit } from '@/services/memories';
+import type { MemorySearchFacetCount, MemorySearchHit } from '@/services/memories';
 import { searchResultThumbnail } from '@/utils/memory-search';
 
 /** Typing settles for this long before a search runs. */
@@ -34,6 +34,25 @@ const FEELINGS = Object.keys(emotionColors) as EmotionName[];
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+interface ChipState {
+  visible: boolean;
+  disabled: boolean;
+  /** Matching count to show, once known. */
+  count: number | null;
+}
+
+/**
+ * How a chip should look given its counts (docs/features/memory-search.md):
+ * hidden when it has no memories at all, dimmed when choosing it now would
+ * give zero results. A selected chip always stays visible and tappable so
+ * it can be cleared. Before the first counts arrive every chip is shown.
+ */
+export function chipState(count: MemorySearchFacetCount | undefined, countsLoaded: boolean, selected: boolean): ChipState {
+  if (!countsLoaded) return { visible: true, disabled: false, count: null };
+  if (!count) return { visible: selected, disabled: false, count: selected ? 0 : null };
+  return { visible: true, disabled: !selected && count.matching === 0, count: count.matching };
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
@@ -46,8 +65,9 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 }
 
 /**
- * Timeline search (docs/features/memory-search.md): free text plus one
- * person chip and one feeling chip, all combined. Results are compact rows,
+ * Timeline search (docs/features/memory-search.md): free text plus any
+ * number of people (a memory must tag all of them) and one feeling, all
+ * combined; chips show counts, hide when empty, dim when they'd match nothing. Results are compact rows,
  * best match first, loaded a page at a time.
  *
  * Keyboard: the field is at the top so it is always visible; the results
@@ -60,13 +80,17 @@ export default function MemorySearchScreen() {
   const insets = useSafeAreaInsets();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
   const [text, setText] = useState('');
-  const [memberId, setMemberId] = useState<string | null>(null);
+  const [memberIds, setMemberIds] = useState<string[]>([]);
   const [emotion, setEmotion] = useState<EmotionName | null>(null);
   const query = useDebouncedValue(text, SEARCH_DEBOUNCE_MS);
 
   const { members } = useFamilyMembers();
   const contentSafety = useContentSafety();
-  const search = useMemorySearch({ query, memberId, emotion });
+  const search = useMemorySearch({ query, memberIds, emotion });
+  const { facets } = useMemorySearchFacets({ query, memberIds, emotion });
+  const toggleMember = useCallback((id: string) => {
+    setMemberIds((current) => (current.includes(id) ? current.filter((memberId) => memberId !== id) : [...current, id]));
+  }, []);
 
   useEffect(() => {
     trackEvent('memory_search_opened', { source: 'timeline' });
@@ -100,11 +124,11 @@ export default function MemorySearchScreen() {
       matched_in: hits[position]?.matchedIn ?? 'chip',
       position,
       has_text: query.trim().length > 0,
-      has_person: memberId !== null,
+      person_count: memberIds.length,
       has_feeling: emotion !== null,
     });
     router.push(memoryDetailRoute(memoryId));
-  }, [emotion, hits, memberId, query]);
+  }, [emotion, hits, memberIds, query]);
 
   const renderItem = useCallback(({ item }: ListRenderItemInfo<MemorySearchHit>) => {
     const thumbnail = thumbnails.get(item.memory.id) ?? { key: null, fallback: 'blank' as const };
@@ -120,9 +144,24 @@ export default function MemorySearchScreen() {
     );
   }, [handleOpen, query, thumbnailUrls, thumbnails]);
 
+  const visibleMembers = members
+    .map((member) => ({
+      member,
+      selected: memberIds.includes(member.id),
+      state: chipState(facets?.members[member.id], facets !== null, memberIds.includes(member.id)),
+    }))
+    .filter((entry) => entry.state.visible);
+  const visibleFeelings = FEELINGS
+    .map((feeling) => ({
+      feeling,
+      selected: emotion === feeling,
+      state: chipState(facets?.emotions[feeling], facets !== null, emotion === feeling),
+    }))
+    .filter((entry) => entry.state.visible);
+
   const chips = (
     <View style={styles.chips} testID="memory-search-chips">
-      {members.length > 0 ? (
+      {visibleMembers.length > 0 ? (
         <>
           <Text style={styles.chipsLabel}>People</Text>
           <ScrollView
@@ -131,50 +170,58 @@ export default function MemorySearchScreen() {
             keyboardShouldPersistTaps="handled"
             showsHorizontalScrollIndicator={false}
           >
-            {members.map((member) => {
-              const selected = memberId === member.id;
+            {visibleMembers.map(({ member, selected, state }) => (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected, disabled: state.disabled }}
+                disabled={state.disabled}
+                key={member.id}
+                onPress={() => toggleMember(member.id)}
+                style={[styles.chip, selected && styles.chipSelected, state.disabled && styles.chipDisabled]}
+                testID={`memory-search-person-${member.id}`}
+              >
+                <FamilyMemberAvatar member={member} size={22} />
+                <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{member.name}</Text>
+                {state.count !== null ? <Text style={styles.chipCount}>{state.count}</Text> : null}
+              </Pressable>
+            ))}
+          </ScrollView>
+        </>
+      ) : null}
+      {visibleFeelings.length > 0 ? (
+        <>
+          <Text style={styles.chipsLabel}>Feelings</Text>
+          <ScrollView
+            contentContainerStyle={styles.chipRow}
+            horizontal
+            keyboardShouldPersistTaps="handled"
+            showsHorizontalScrollIndicator={false}
+          >
+            {visibleFeelings.map(({ feeling, selected, state }) => {
+              const palette = emotionColors[feeling];
               return (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  key={member.id}
-                  onPress={() => setMemberId(selected ? null : member.id)}
-                  style={[styles.chip, selected && styles.chipSelected]}
-                  testID={`memory-search-person-${member.id}`}
+                  accessibilityState={{ selected, disabled: state.disabled }}
+                  disabled={state.disabled}
+                  key={feeling}
+                  onPress={() => setEmotion(selected ? null : feeling)}
+                  style={[
+                    styles.chip,
+                    selected && { backgroundColor: palette.soft, borderColor: palette.c },
+                    state.disabled && styles.chipDisabled,
+                  ]}
+                  testID={`memory-search-feeling-${feeling}`}
                 >
-                  <FamilyMemberAvatar member={member} size={22} />
-                  <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{member.name}</Text>
+                  <View style={[styles.feelingDot, { backgroundColor: palette.c }]} />
+                  <Text style={[styles.chipText, selected && { color: palette.ink }]}>{capitalize(feeling)}</Text>
+                  {state.count !== null ? <Text style={styles.chipCount}>{state.count}</Text> : null}
                 </Pressable>
               );
             })}
           </ScrollView>
         </>
       ) : null}
-      <Text style={styles.chipsLabel}>Feelings</Text>
-      <ScrollView
-        contentContainerStyle={styles.chipRow}
-        horizontal
-        keyboardShouldPersistTaps="handled"
-        showsHorizontalScrollIndicator={false}
-      >
-        {FEELINGS.map((feeling) => {
-          const selected = emotion === feeling;
-          const palette = emotionColors[feeling];
-          return (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ selected }}
-              key={feeling}
-              onPress={() => setEmotion(selected ? null : feeling)}
-              style={[styles.chip, selected && { backgroundColor: palette.soft, borderColor: palette.c }]}
-              testID={`memory-search-feeling-${feeling}`}
-            >
-              <View style={[styles.feelingDot, { backgroundColor: palette.c }]} />
-              <Text style={[styles.chipText, selected && { color: palette.ink }]}>{capitalize(feeling)}</Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
     </View>
   );
 
@@ -321,6 +368,10 @@ const styles = StyleSheet.create({
   chipSelected: { backgroundColor: colors.primaryTint, borderColor: colors.primary },
   chipText: { color: colors.ink2, fontFamily: fonts.sansMedium, fontSize: 13.5 },
   chipTextSelected: { color: colors.primaryDark },
+  // Choosing it now would give no results; kept in place (not hidden) so
+  // the row doesn't reshuffle while typing.
+  chipDisabled: { opacity: 0.38 },
+  chipCount: { color: colors.ink3, fontFamily: fonts.sansMedium, fontSize: 12 },
   feelingDot: { borderRadius: 5, height: 10, marginLeft: 6, width: 10 },
   hint: {
     color: colors.ink3,

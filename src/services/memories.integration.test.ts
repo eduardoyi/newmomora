@@ -15,6 +15,7 @@ import {
   retryMemoryIllustration,
   runMemoryIllustrationPipeline,
   runMediaPhotoEmotionAnalysis,
+  fetchMemorySearchFacets,
   searchMemories,
   updateMemory,
   MEMORIES_PAGE_SIZE,
@@ -2346,12 +2347,12 @@ describe('memories service integration', () => {
     it('calls search_memories scoped to the family with trimmed text, chips and paging', async () => {
       (supabase.rpc as jest.Mock).mockResolvedValue({ data: [], error: null });
 
-      await searchMemories({ familyId: 'family-1', query: '  cumple  ', memberId: 'member-1', emotion: 'joy', offset: 30 });
+      await searchMemories({ familyId: 'family-1', query: '  cumple  ', memberIds: ['member-1', 'member-2'], emotion: 'joy', offset: 30 });
 
       expect(supabase.rpc).toHaveBeenCalledWith('search_memories', {
         p_family_id: 'family-1',
         p_query: 'cumple',
-        p_member_id: 'member-1',
+        p_member_ids: ['member-1', 'member-2'],
         p_emotion: 'joy',
         p_limit: MEMORY_SEARCH_PAGE_SIZE,
         p_offset: 30,
@@ -2361,11 +2362,11 @@ describe('memories service integration', () => {
     it('runs a chip-only search with no text', async () => {
       (supabase.rpc as jest.Mock).mockResolvedValue({ data: [], error: null });
 
-      await searchMemories({ familyId: 'family-1', memberId: 'member-1' });
+      await searchMemories({ familyId: 'family-1', memberIds: ['member-1'] });
 
       expect(supabase.rpc).toHaveBeenCalledWith('search_memories', expect.objectContaining({
         p_query: undefined,
-        p_member_id: 'member-1',
+        p_member_ids: ['member-1'],
         p_emotion: undefined,
       }));
     });
@@ -2406,6 +2407,27 @@ describe('memories service integration', () => {
       const { data } = await searchMemories({ familyId: 'family-1', emotion: 'joy' });
 
       expect(data?.map((hit) => [hit.memory.id, hit.matchedIn])).toEqual([['memory-1', null]]);
+    });
+
+    it('reads chip counts into member and feeling maps', async () => {
+      (supabase.rpc as jest.Mock).mockResolvedValue({
+        data: [
+          { facet: 'emotion', value: 'joy', total_count: 5, matching_count: 2 },
+          { facet: 'member', value: 'member-1', total_count: 9, matching_count: 0 },
+        ],
+        error: null,
+      });
+
+      const { data, error } = await fetchMemorySearchFacets({ familyId: 'family-1', query: ' bath ', memberIds: [], emotion: null });
+
+      expect(error).toBeNull();
+      expect(supabase.rpc).toHaveBeenCalledWith('search_memory_facets', {
+        p_family_id: 'family-1', p_query: 'bath', p_member_ids: undefined, p_emotion: undefined,
+      });
+      expect(data).toEqual({
+        emotions: { joy: { total: 5, matching: 2 } },
+        members: { 'member-1': { total: 9, matching: 0 } },
+      });
     });
 
     it('surfaces RPC errors', async () => {

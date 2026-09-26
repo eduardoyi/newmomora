@@ -7,8 +7,8 @@
 ## Overview
 
 A search icon in the Timeline header opens a full-screen search over the
-active family's memories: free text plus one **person** chip and one
-**feeling** chip, all combined. Results are compact rows, best match first,
+active family's memories: free text plus any number of **people** and one
+**feeling**, all combined. Results are compact rows, best match first,
 loaded a page at a time. Timeline only (not Calendar).
 
 ## User-facing behavior
@@ -22,10 +22,17 @@ loaded a page at a time. Timeline only (not Calendar).
   description, labels, topics). Rows matched only through the transcript say
   "Matched what was said"; through the AI details, "Matched what's in the
   picture".
-- Person chips (family members, with avatars) and feeling chips (the emotion
-  palette) are single-select each, tap again to clear, and combine with text:
-  "Mara" + "bath" → bath memories tagged with Mara. A chip alone lists
-  everything tagged with that person/feeling, newest first.
+- Person chips (family members, with avatars) are **multi-select**: choosing
+  several finds memories where **all** of them are tagged. Feeling chips (the
+  emotion palette) are single-select. Tap again to clear. Chips combine with
+  text: "Mara" + "bath" → bath memories tagged with Mara. Chips alone list
+  everything matching, newest first.
+- Chips are **count-aware** (`search_memory_facets`): each shows how many
+  memories would match if chosen now; people/feelings with **no memories at
+  all are hidden**; chips that would give **zero results under the current
+  text + filters are dimmed and not tappable** (kept in place rather than
+  hidden so the row doesn't reshuffle while typing). A selected chip always
+  stays visible and tappable. Until the first counts arrive, every chip shows.
 - Rows: thumbnail (illustration → cover preview/video poster → photo →
   the drawer's quote/sound tile), date · tagged people, and two lines of
   text with the matched word prefixes highlighted (a deep match starts the
@@ -76,7 +83,8 @@ old per-column English FTS indexes.
 
 | RPC | Input | Output | Auth |
 |-----|-------|--------|------|
-| `search_memories` | `p_family_id`, `p_query?`, `p_member_id?`, `p_emotion?`, `p_limit` (≤ 50, default 30), `p_offset` | `(memory_id, matched_in 'text'\|'voice'\|'details'\|null, score)`, ranked | Authenticated family member |
+| `search_memories` | `p_family_id`, `p_query?`, `p_member_ids?` (all must be tagged), `p_emotion?`, `p_limit` (≤ 50, default 30), `p_offset`; `p_member_id?` deprecated (older builds) | `(memory_id, matched_in 'text'\|'voice'\|'details'\|null, score)`, ranked | Authenticated family member |
+| `search_memory_facets` | `p_family_id`, `p_query?`, `p_member_ids?`, `p_emotion?` | `(facet 'member'\|'emotion', value, total_count, matching_count)` for members/feelings with ≥1 memory | Authenticated family member |
 
 Contract details in [TECH_SPEC §4.25](../TECH_SPEC.md#425-timeline-search).
 
@@ -88,7 +96,7 @@ Contract details in [TECH_SPEC §4.25](../TECH_SPEC.md#425-timeline-search).
 | Entry | `src/components/timeline-search-button.tsx` | Header icon beside the activity bell |
 | Row | `src/components/memory-search-row.tsx` | Compact result row |
 | Tile | `src/components/memory-fallback-tile.tsx` (+ `src/utils/memory-fallback.ts`) | Quote/sound stand-in, shared with the activity drawer |
-| Hook | `useMemorySearch` in `src/hooks/useMemories.ts` | Infinite pages, own `memories-search` key |
+| Hooks | `useMemorySearch`, `useMemorySearchFacets` in `src/hooks/useMemories.ts` | Infinite result pages; chip counts (both under the `memories-search` key) |
 | Service | `searchMemories` in `src/services/memories.ts` | RPC + row/tag/media fetch in ranked order |
 | Utils | `src/utils/memory-search.ts` | Highlighting, row text, thumbnail choice |
 
@@ -103,7 +111,11 @@ text) — see [analytics.md](./analytics.md).
   (pick a weight) — the index must be recreated in the same migration, and
   `search_memories` repeats the exact expression so the planner keeps using
   it.
-- A date/year filter: add a param to `search_memories` and a chip row.
+- A date/year filter: add a param to `search_memories` **and**
+  `search_memory_facets` (plus a `year` facet) and a chip row.
+- Facet semantics: feeling counts ignore the current feeling (single-select
+  alternatives); person counts include the other selected people (AND).
+  Keep `search_memories` and `search_memory_facets` filters in lockstep.
 - Search on another screen: reuse `useMemorySearch` + `MemorySearchRow`.
 
 **Do not change without updating this doc**
@@ -140,3 +152,4 @@ text) — see [analytics.md](./analytics.md).
 | Date | Change |
 |------|--------|
 | 2026-09-27 | Shipped: search_memories RPC + search screen (replaces the unshipped English-only client search) |
+| 2026-09-27 | Multi-select people (AND), count-aware chips via search_memory_facets (hide empty, dim zero-match) |

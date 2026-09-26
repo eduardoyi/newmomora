@@ -2979,8 +2979,10 @@ control) — every DB/R2 operation goes through the signed bridge.
 ### 4.25 Timeline search
 
 `search_memories(p_family_id uuid, p_query text = null, p_member_id uuid =
-null, p_emotion text = null, p_limit int = 30, p_offset int = 0) returns table
-(memory_id uuid, matched_in text, score real)` — `security invoker`, granted to
+null, p_emotion text = null, p_limit int = 30, p_offset int = 0, p_member_ids
+uuid[] = null) returns table (memory_id uuid, matched_in text, score real)`
+(`p_member_id` is deprecated and folded into `p_member_ids`; every listed
+member must be tagged — `memory_tags_all_members()`) — `security invoker`, granted to
 `authenticated`; raises `42501` unless `auth.uid()` is a member of
 `p_family_id`. Returns nothing when there is no text and no chip. Text goes
 through `memory_search_query()` (words split on non-alphanumerics after
@@ -2995,7 +2997,17 @@ description, labels, topics)` (weights A/B/C, `simple` config, backed by
 description/labels/topics), `null` for chip-only. Order: `ts_rank_cd ×
 (1 + 0.5·exp(−age_days/365))` desc, then `memory_date desc, created_at desc,
 id`; chip-only scores are 0 (newest first). Limit clamped to 1–50.
-Migration `20260927100000_memory_search.sql`. The client
+Migrations `20260927100000_memory_search.sql`,
+`20260927140000_memory_search_facets.sql`.
+
+`search_memory_facets(p_family_id, p_query = null, p_member_ids = null,
+p_emotion = null) returns table (facet text, value text, total_count int,
+matching_count int)` — same auth and visibility (family, blocked accounts).
+One row per feeling / family member with ≥1 visible memory. `total_count`:
+memories overall. `matching_count`: feelings → text + all selected people
+(the current feeling ignored); members → text + feeling + all selected
+people + that member. The client hides chips absent from the result and dims
+chips with `matching_count = 0`. The client
 (`searchMemories`) then reads the rows with `select * … in (ids)` plus tags and
 media and preserves the RPC order. See
 [memory-search.md](./features/memory-search.md).

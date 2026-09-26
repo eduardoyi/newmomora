@@ -4,17 +4,17 @@ import { StyleSheet } from 'react-native';
 import { useKeyboardState } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import MemorySearchScreen, { SEARCH_DEBOUNCE_MS } from '../../app/(app)/search';
+import MemorySearchScreen, { chipState, SEARCH_DEBOUNCE_MS } from '../../app/(app)/search';
 import { spacing } from '@/constants/theme';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
-import { useMemorySearch } from '@/hooks/useMemories';
+import { useMemorySearch, useMemorySearchFacets } from '@/hooks/useMemories';
 import { useBatchedMediaUrls } from '@/hooks/useMediaUrls';
 import { trackEvent } from '@/services/analytics';
 import type { MemorySearchHit, MemoryWithTags } from '@/services/memories';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn(), back: jest.fn() } }));
 jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
-jest.mock('@/hooks/useMemories', () => ({ useMemorySearch: jest.fn() }));
+jest.mock('@/hooks/useMemories', () => ({ useMemorySearch: jest.fn(), useMemorySearchFacets: jest.fn() }));
 jest.mock('@/hooks/useMediaUrls', () => ({ useBatchedMediaUrls: jest.fn(() => ({})) }));
 jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/components/family-member-avatar', () => ({ FamilyMemberAvatar: () => null }));
@@ -31,6 +31,7 @@ jest.mock('@/hooks/useContentSafety', () => ({
 }));
 
 const mockedUseMemorySearch = useMemorySearch as jest.MockedFunction<typeof useMemorySearch>;
+const mockedUseMemorySearchFacets = useMemorySearchFacets as jest.MockedFunction<typeof useMemorySearchFacets>;
 const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof useFamilyMembers>;
 const mockedUseBatchedMediaUrls = useBatchedMediaUrls as jest.MockedFunction<typeof useBatchedMediaUrls>;
 const mockedUseKeyboardState = useKeyboardState as jest.Mock;
@@ -105,6 +106,7 @@ describe('Timeline search screen', () => {
       ],
     } as never);
     mockedUseMemorySearch.mockReturnValue(searchState());
+    mockedUseMemorySearchFacets.mockReturnValue({ facets: null });
   });
 
   it('opens with a focused field, people and feeling chips, and a hint', () => {
@@ -124,29 +126,58 @@ describe('Timeline search screen', () => {
       const { getByTestId } = renderScreen();
       fireEvent.changeText(getByTestId('memory-search-input'), 'cum');
       fireEvent.changeText(getByTestId('memory-search-input'), 'cumple');
-      expect(lastSearchArgs()).toEqual({ query: '', memberId: null, emotion: null });
+      expect(lastSearchArgs()).toEqual({ query: '', memberIds: [], emotion: null });
 
       act(() => { jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS); });
-      expect(lastSearchArgs()).toEqual({ query: 'cumple', memberId: null, emotion: null });
+      expect(lastSearchArgs()).toEqual({ query: 'cumple', memberIds: [], emotion: null });
     } finally {
       jest.useRealTimers();
     }
   });
 
-  it('toggles one person and one feeling chip, combined with the text', () => {
+  it('lets several people be chosen, plus one feeling', () => {
     const { getByTestId } = renderScreen();
 
     fireEvent.press(getByTestId('memory-search-person-member-mara'));
-    fireEvent.press(getByTestId('memory-search-feeling-joy'));
-    expect(lastSearchArgs()).toEqual({ query: '', memberId: 'member-mara', emotion: 'joy' });
-    expect(getByTestId('memory-search-person-member-mara').props.accessibilityState).toEqual({ selected: true });
-
-    fireEvent.press(getByTestId('memory-search-person-member-enzo'));
-    expect(lastSearchArgs()?.memberId).toBe('member-enzo');
-
     fireEvent.press(getByTestId('memory-search-person-member-enzo'));
     fireEvent.press(getByTestId('memory-search-feeling-joy'));
-    expect(lastSearchArgs()).toEqual({ query: '', memberId: null, emotion: null });
+    expect(lastSearchArgs()).toEqual({ query: '', memberIds: ['member-mara', 'member-enzo'], emotion: 'joy' });
+    expect(mockedUseMemorySearchFacets).toHaveBeenLastCalledWith({ query: '', memberIds: ['member-mara', 'member-enzo'], emotion: 'joy' });
+    expect(getByTestId('memory-search-person-member-mara').props.accessibilityState).toEqual({ selected: true, disabled: false });
+
+    fireEvent.press(getByTestId('memory-search-feeling-calm'));
+    expect(lastSearchArgs()?.emotion).toBe('calm');
+
+    fireEvent.press(getByTestId('memory-search-person-member-mara'));
+    fireEvent.press(getByTestId('memory-search-feeling-calm'));
+    expect(lastSearchArgs()).toEqual({ query: '', memberIds: ['member-enzo'], emotion: null });
+  });
+
+  it('hides chips with no memories, dims chips that would match nothing, and shows counts', () => {
+    mockedUseMemorySearchFacets.mockReturnValue({
+      facets: {
+        members: { 'member-mara': { total: 4, matching: 2 }, 'member-enzo': { total: 3, matching: 0 } },
+        emotions: { joy: { total: 5, matching: 2 }, sad: { total: 1, matching: 0 } },
+      },
+    });
+    const { getByTestId, queryByTestId } = renderScreen();
+
+    // No memories at all: hidden.
+    expect(queryByTestId('memory-search-feeling-calm')).toBeNull();
+    // Would match nothing right now: shown, dimmed, not tappable.
+    const enzo = getByTestId('memory-search-person-member-enzo');
+    expect(enzo.props.accessibilityState).toEqual({ selected: false, disabled: true });
+    fireEvent.press(enzo);
+    expect(lastSearchArgs()?.memberIds).toEqual([]);
+    expect(getByTestId('memory-search-feeling-sad').props.accessibilityState.disabled).toBe(true);
+    // Counts.
+    expect(within(getByTestId('memory-search-person-member-mara')).getByText('2')).toBeTruthy();
+    expect(within(getByTestId('memory-search-feeling-joy')).getByText('2')).toBeTruthy();
+  });
+
+  it('shows every chip until the first counts arrive', () => {
+    const { getByTestId } = renderScreen();
+    expect(getByTestId('memory-search-feeling-calm').props.accessibilityState).toEqual({ selected: false, disabled: false });
   });
 
   it('shows compact rows with highlights, why it matched, and the right thumbnail', () => {
@@ -204,7 +235,7 @@ describe('Timeline search screen', () => {
 
     expect(router.push).toHaveBeenCalledWith('/(app)/memory/memory-7');
     expect(trackEvent).toHaveBeenCalledWith('memory_search_result_opened', {
-      matched_in: 'text', position: 0, has_text: false, has_person: false, has_feeling: false,
+      matched_in: 'text', position: 0, has_text: false, person_count: 0, has_feeling: false,
     });
   });
 
@@ -248,6 +279,20 @@ describe('Timeline search screen', () => {
 
     fireEvent.press(getByTestId('memory-search-cancel'));
     expect(router.back).toHaveBeenCalled();
+  });
+
+  describe('chipState', () => {
+    it('keeps a selected chip visible and tappable even when it has no memories', () => {
+      expect(chipState(undefined, true, true)).toEqual({ visible: true, disabled: false, count: 0 });
+      expect(chipState({ total: 3, matching: 0 }, true, true)).toEqual({ visible: true, disabled: false, count: 0 });
+    });
+
+    it('hides empty chips and dims zero-match chips once counts are loaded', () => {
+      expect(chipState(undefined, true, false).visible).toBe(false);
+      expect(chipState({ total: 3, matching: 0 }, true, false)).toEqual({ visible: true, disabled: true, count: 0 });
+      expect(chipState({ total: 3, matching: 2 }, true, false)).toEqual({ visible: true, disabled: false, count: 2 });
+      expect(chipState(undefined, false, false)).toEqual({ visible: true, disabled: false, count: null });
+    });
   });
 
   describe('keyboard and safe area (docs/TESTING.md contract)', () => {

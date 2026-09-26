@@ -5,7 +5,7 @@ begin;
 -- Spanish text, AI details and hidden transcripts, matched_in, person and
 -- feeling chips (alone and combined with text), blocked-account exclusion,
 -- punctuation safety, paging, and membership enforcement.
-select plan(18);
+select plan(27);
 
 insert into auth.users (id, email, is_anonymous) values
   ('a5000000-0000-4000-8000-000000000001', 'search-owner@example.test', false),
@@ -146,6 +146,64 @@ select is(
   0,
   'an empty search with no chips returns nothing'
 );
+
+-- Several people: a memory must tag all of them.
+select set_eq(
+  $$select memory_id from public.search_memories('a6000000-0000-4000-8000-000000000001', p_member_ids => array['a7000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000002']::uuid[])$$,
+  $$values ('a8000000-0000-4000-8000-000000000001'::uuid)$$,
+  'several people match only memories tagging all of them'
+);
+
+select set_eq(
+  $$select memory_id from public.search_memories('a6000000-0000-4000-8000-000000000001', 'cumple', p_member_ids => array['a7000000-0000-4000-8000-000000000001', 'a7000000-0000-4000-8000-000000000002']::uuid[])$$,
+  $$select null::uuid where false$$,
+  'several people combine with text'
+);
+
+select set_eq(
+  $$select memory_id from public.search_memories('a6000000-0000-4000-8000-000000000001', null, 'a7000000-0000-4000-8000-000000000002')$$,
+  $$values ('a8000000-0000-4000-8000-000000000001'::uuid), ('a8000000-0000-4000-8000-000000000002'::uuid)$$,
+  'the deprecated single p_member_id still works for older app builds'
+);
+
+-- Chip counts.
+select results_eq(
+  $$select value, total_count, matching_count from public.search_memory_facets('a6000000-0000-4000-8000-000000000001') where facet = 'emotion' order by value$$,
+  $$values ('funny', 1, 1), ('joy', 2, 2), ('tender', 1, 1)$$,
+  'with no filters, feelings that have memories are listed with totals (sad etc. are absent)'
+);
+
+select results_eq(
+  $$select value, total_count, matching_count from public.search_memory_facets('a6000000-0000-4000-8000-000000000001') where facet = 'member' order by value$$,
+  $$values ('a7000000-0000-4000-8000-000000000001', 1, 1), ('a7000000-0000-4000-8000-000000000002', 2, 2)$$,
+  'with no filters, people are listed with how many memories tag them'
+);
+
+select results_eq(
+  $$select value, matching_count from public.search_memory_facets('a6000000-0000-4000-8000-000000000001', null, array['a7000000-0000-4000-8000-000000000002']::uuid[]) where facet = 'emotion' order by value$$,
+  $$values ('funny', 0), ('joy', 1), ('tender', 1)$$,
+  'with Mara selected, feelings not in any of her memories count 0'
+);
+
+select results_eq(
+  $$select value, matching_count from public.search_memory_facets('a6000000-0000-4000-8000-000000000001', null, array['a7000000-0000-4000-8000-000000000002']::uuid[], 'joy') where facet = 'member' order by value$$,
+  $$values ('a7000000-0000-4000-8000-000000000001', 0), ('a7000000-0000-4000-8000-000000000002', 1)$$,
+  'person counts respect the feeling and the other selected people'
+);
+
+select results_eq(
+  $$select value, matching_count from public.search_memory_facets('a6000000-0000-4000-8000-000000000001', 'parche') order by facet, value$$,
+  $$values ('funny', 0), ('joy', 0), ('tender', 1), ('a7000000-0000-4000-8000-000000000001', 1), ('a7000000-0000-4000-8000-000000000002', 1)$$,
+  'counts follow the typed text, while totals stay available for hiding empty chips'
+);
+
+select set_config('request.jwt.claim.sub', 'a5000000-0000-4000-8000-000000000003', true);
+select throws_ok(
+  $$select * from public.search_memory_facets('a6000000-0000-4000-8000-000000000001')$$,
+  '42501', 'Not authorized',
+  'non-members cannot read another family''s chip counts'
+);
+select set_config('request.jwt.claim.sub', 'a5000000-0000-4000-8000-000000000001', true);
 
 -- The owner blocks grandma in this family: her memories drop out.
 set local role postgres;

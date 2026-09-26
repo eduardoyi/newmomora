@@ -32,8 +32,10 @@ appId: com.memora.app
     timeout: 10000
 - assertVisible:
     id: memory-search-hint
+# Chips are count-aware (empty feelings are hidden), so only assert the
+# chip area itself.
 - assertVisible:
-    id: memory-search-feeling-joy
+    id: memory-search-chips
 - inputText: "zanahor"
 - extendedWaitUntil:
     visible: ".*Mateo probó la Zanahória.*"

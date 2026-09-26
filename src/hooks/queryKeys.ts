@@ -54,11 +54,23 @@ export function memoriesQueryKey(familyId: string | null | undefined) {
   return [memoriesQueryKeyBase, familyId] as const;
 }
 
-export function memoriesSearchQueryKey(
-  familyId: string | null | undefined,
-  search: { query: string; memberId: string | null; emotion: string | null },
-) {
-  return [memoriesSearchQueryKeyBase, familyId, search.query, search.memberId, search.emotion] as const;
+export interface MemorySearchKeyInput {
+  query: string;
+  memberIds: string[];
+  emotion: string | null;
+}
+
+function memberIdsKey(memberIds: string[]): string {
+  // Selection order doesn't change the result set.
+  return [...memberIds].sort().join(',');
+}
+
+export function memoriesSearchQueryKey(familyId: string | null | undefined, search: MemorySearchKeyInput) {
+  return [memoriesSearchQueryKeyBase, familyId, search.query, memberIdsKey(search.memberIds), search.emotion] as const;
+}
+
+export function memorySearchFacetsQueryKey(familyId: string | null | undefined, search: MemorySearchKeyInput) {
+  return [memoriesSearchQueryKeyBase, familyId, 'facets', search.query, memberIdsKey(search.memberIds), search.emotion] as const;
 }
 
 export function memoryDetailQueryKey(familyId: string | null | undefined, memoryId: string | undefined) {

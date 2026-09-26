@@ -126,7 +126,7 @@ export interface AnalyticsEventMap {
     matched_in: 'text' | 'voice' | 'details' | 'chip';
     position: number;
     has_text: boolean;
-    has_person: boolean;
+    person_count: number;
     has_feeling: boolean;
   };
   looking_back_package_opened: {

@@ -663,8 +663,8 @@ export interface MemorySearchParams {
   familyId: string;
   /** Free text; each word must match, the last one as a prefix. */
   query?: string;
-  /** Person chip: only memories tagging this family member. */
-  memberId?: string | null;
+  /** Person chips: only memories tagging ALL of these family members. */
+  memberIds?: string[];
   /** Feeling chip: only memories with this emotion. */
   emotion?: string | null;
   offset?: number;
@@ -692,19 +692,62 @@ function toSearchMatch(value: string | null): MemorySearchMatch | null {
  * with their tags and media for display, preserving the RPC's order.
  * Engagement counts aren't fetched -- result rows don't show them.
  */
+export interface MemorySearchFacetCount {
+  /** Memories overall -- 0 means the chip is pointless and is hidden. */
+  total: number;
+  /** Memories that would match if this chip were (also) chosen now. */
+  matching: number;
+}
+
+export interface MemorySearchFacets {
+  /** Keyed by family member id; members without tagged memories are absent. */
+  members: Record<string, MemorySearchFacetCount>;
+  /** Keyed by emotion; feelings without memories are absent. */
+  emotions: Record<string, MemorySearchFacetCount>;
+}
+
+/**
+ * Chip counts for the search screen (`search_memory_facets` RPC): lets the
+ * screen hide people/feelings with no memories and dim the ones that would
+ * give zero results under the current text and filters.
+ */
+export async function fetchMemorySearchFacets(
+  params: Omit<MemorySearchParams, 'offset'>,
+): Promise<{ data: MemorySearchFacets | null; error: ServiceError | null }> {
+  const query = params.query?.trim() ?? '';
+  const memberIds = params.memberIds ?? [];
+  const { data, error } = await supabase.rpc('search_memory_facets', {
+    p_family_id: params.familyId,
+    p_query: query || undefined,
+    p_member_ids: memberIds.length > 0 ? memberIds : undefined,
+    p_emotion: params.emotion ?? undefined,
+  });
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  const facets: MemorySearchFacets = { members: {}, emotions: {} };
+  for (const row of data ?? []) {
+    const bucket = row.facet === 'member' ? facets.members : row.facet === 'emotion' ? facets.emotions : null;
+    if (bucket) bucket[row.value] = { total: row.total_count, matching: row.matching_count };
+  }
+  return { data: facets, error: null };
+}
+
 export async function searchMemories(params: MemorySearchParams): Promise<{
   data: MemorySearchHit[] | null;
   error: ServiceError | null;
 }> {
   const query = params.query?.trim() ?? '';
-  if (!query && !params.memberId && !params.emotion) {
+  const memberIds = params.memberIds ?? [];
+  if (!query && memberIds.length === 0 && !params.emotion) {
     return { data: [], error: null };
   }
 
   const { data: rows, error } = await supabase.rpc('search_memories', {
     p_family_id: params.familyId,
     p_query: query || undefined,
-    p_member_id: params.memberId ?? undefined,
+    p_member_ids: memberIds.length > 0 ? memberIds : undefined,
     p_emotion: params.emotion ?? undefined,
     p_limit: MEMORY_SEARCH_PAGE_SIZE,
     p_offset: params.offset ?? 0,

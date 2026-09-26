@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/r
 import type { ReactNode } from 'react';
 import { AppState } from 'react-native';
 
-import { useMemberMemories, useMemories, useMemory, useMemoryMutations, useMemorySearch } from '@/hooks/useMemories';
+import { useMemberMemories, useMemories, useMemory, useMemoryMutations, useMemorySearch, useMemorySearchFacets } from '@/hooks/useMemories';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
@@ -19,6 +19,7 @@ import {
   retryMemoryIllustration,
   runMediaPhotoEmotionAnalysis,
   runTextOnlyEmotionAnalysis,
+  fetchMemorySearchFacets,
   searchMemories,
   updateMemory,
   type MemoriesPage,
@@ -52,6 +53,7 @@ jest.mock('@/services/memories', () => ({
   runMediaPhotoEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
   runTextOnlyEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
   searchMemories: jest.fn(),
+  fetchMemorySearchFacets: jest.fn(),
   updateMemory: jest.fn(),
   MEMORIES_PAGE_SIZE: 40,
   MEMORY_SEARCH_PAGE_SIZE: 2,
@@ -1483,7 +1485,7 @@ describe('useMemories integration', () => {
     }
 
     it('does not search without text or a chip', () => {
-      const { result } = renderHook(() => useMemorySearch({ query: '  ', memberId: null, emotion: null }), {
+      const { result } = renderHook(() => useMemorySearch({ query: '  ', memberIds: [], emotion: null }), {
         wrapper: createWrapper(),
       });
 
@@ -1497,13 +1499,13 @@ describe('useMemories integration', () => {
         .mockResolvedValueOnce({ data: [hit('a'), hit('b')], error: null })
         .mockResolvedValueOnce({ data: [hit('c')], error: null });
 
-      const { result } = renderHook(() => useMemorySearch({ query: ' mara ', memberId: 'member-1', emotion: 'joy' }), {
+      const { result } = renderHook(() => useMemorySearch({ query: ' mara ', memberIds: ['member-1', 'member-2'], emotion: 'joy' }), {
         wrapper: createWrapper(),
       });
 
       await waitFor(() => expect(result.current.hits.map((h) => h.memory.id)).toEqual(['a', 'b']));
       expect(mockedSearchMemories).toHaveBeenCalledWith({
-        familyId: 'family-1', query: 'mara', memberId: 'member-1', emotion: 'joy', offset: 0,
+        familyId: 'family-1', query: 'mara', memberIds: ['member-1', 'member-2'], emotion: 'joy', offset: 0,
       });
       expect(result.current.hasNextPage).toBe(true);
 
@@ -1514,15 +1516,27 @@ describe('useMemories integration', () => {
       expect(result.current.hasNextPage).toBe(false);
     });
 
+    it('loads chip counts for the same text and filters, even with nothing selected', async () => {
+      const facets = { members: { 'member-1': { total: 3, matching: 1 } }, emotions: {} };
+      (fetchMemorySearchFacets as jest.Mock).mockResolvedValue({ data: facets, error: null });
+
+      const { result } = renderHook(() => useMemorySearchFacets({ query: ' bath ', memberIds: [], emotion: null }), {
+        wrapper: createWrapper(),
+      });
+
+      await waitFor(() => expect(result.current.facets).toEqual(facets));
+      expect(fetchMemorySearchFacets).toHaveBeenCalledWith({ familyId: 'family-1', query: 'bath', memberIds: [], emotion: null });
+    });
+
     it('clears results when the text and chips are cleared', async () => {
       mockedSearchMemories.mockResolvedValue({ data: [hit('a')], error: null });
       const { result, rerender } = renderHook(
-        (search: { query: string; memberId: string | null; emotion: string | null }) => useMemorySearch(search),
-        { wrapper: createWrapper(), initialProps: { query: 'mara', memberId: null, emotion: null } },
+        (search: { query: string; memberIds: string[]; emotion: string | null }) => useMemorySearch(search),
+        { wrapper: createWrapper(), initialProps: { query: 'mara', memberIds: [] as string[], emotion: null as string | null } },
       );
       await waitFor(() => expect(result.current.hits).toHaveLength(1));
 
-      rerender({ query: '', memberId: null, emotion: null });
+      rerender({ query: '', memberIds: [], emotion: null });
 
       expect(result.current.hits).toEqual([]);
     });

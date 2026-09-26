@@ -4460,6 +4460,10 @@ export type Database = {
         Returns: unknown
       }
       memory_search_query: { Args: { p_text: string }; Returns: unknown }
+      memory_tags_all_members: {
+        Args: { p_member_ids: string[]; p_memory_id: string }
+        Returns: boolean
+      }
       owner_has_billing_access: {
         Args: { p_now?: string; p_owner_user_id: string }
         Returns: boolean
@@ -4850,6 +4854,7 @@ export type Database = {
           p_family_id: string
           p_limit?: number
           p_member_id?: string
+          p_member_ids?: string[]
           p_offset?: number
           p_query?: string
         }
@@ -4857,6 +4862,20 @@ export type Database = {
           matched_in: string
           memory_id: string
           score: number
+        }[]
+      }
+      search_memory_facets: {
+        Args: {
+          p_emotion?: string
+          p_family_id: string
+          p_member_ids?: string[]
+          p_query?: string
+        }
+        Returns: {
+          facet: string
+          matching_count: number
+          total_count: number
+          value: string
         }[]
       }
       search_normalize: { Args: { value: string }; Returns: string }

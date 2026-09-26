@@ -19,6 +19,8 @@ import {
   lookingBackQueryKeyBase,
   memoriesQueryKey,
   memoriesSearchQueryKey,
+  memorySearchFacetsQueryKey,
+  type MemorySearchKeyInput,
   memoryDetailQueryKey,
 } from '@/hooks/queryKeys';
 import { handleIllustrationReadyTransition } from '@/hooks/illustration-ready-transition';
@@ -44,6 +46,7 @@ import {
   runAudioEmotionAnalysis,
   runMediaPhotoEmotionAnalysis,
   runTextOnlyEmotionAnalysis,
+  fetchMemorySearchFacets,
   searchMemories,
   MEMORY_SEARCH_PAGE_SIZE,
   updateMemory,
@@ -739,20 +742,20 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
  * caches (own key prefix) so search pages never mix into timeline pages.
  * Runs only when there is text or a chip; callers debounce the text.
  */
-export function useMemorySearch(search: { query: string; memberId: string | null; emotion: string | null }) {
+export function useMemorySearch(search: MemorySearchKeyInput) {
   const { user } = useAuth();
   const { familyId } = useFamily();
   const query = search.query.trim();
-  const hasCriteria = Boolean(query || search.memberId || search.emotion);
+  const hasCriteria = Boolean(query || search.memberIds.length > 0 || search.emotion);
 
   const result = useInfiniteQuery({
-    queryKey: memoriesSearchQueryKey(familyId, { query, memberId: search.memberId, emotion: search.emotion }),
+    queryKey: memoriesSearchQueryKey(familyId, { query, memberIds: search.memberIds, emotion: search.emotion }),
     queryFn: async ({ pageParam }) => {
       if (!familyId) return [];
       const { data, error } = await searchMemories({
         familyId,
         query,
-        memberId: search.memberId,
+        memberIds: search.memberIds,
         emotion: search.emotion,
         offset: pageParam,
       });
@@ -786,6 +789,37 @@ export function useMemorySearch(search: { query: string; memberId: string | null
     hasNextPage: result.hasNextPage,
     isFetchingNextPage: result.isFetchingNextPage,
   };
+}
+
+/**
+ * Chip counts for the search screen, for the same text and filters as
+ * useMemorySearch. `facets` is null until the first response; the previous
+ * counts stay in place while a refined search's counts load, so chips
+ * don't flicker between states while typing.
+ */
+export function useMemorySearchFacets(search: MemorySearchKeyInput) {
+  const { user } = useAuth();
+  const { familyId } = useFamily();
+  const query = search.query.trim();
+
+  const result = useQuery({
+    queryKey: memorySearchFacetsQueryKey(familyId, { query, memberIds: search.memberIds, emotion: search.emotion }),
+    queryFn: async () => {
+      if (!familyId) return null;
+      const { data, error } = await fetchMemorySearchFacets({
+        familyId,
+        query,
+        memberIds: search.memberIds,
+        emotion: search.emotion,
+      });
+      if (error) throw toError(error, 'Could not load search filters');
+      return data;
+    },
+    enabled: Boolean(user && familyId),
+    placeholderData: (previous) => previous,
+  });
+
+  return { facets: result.data ?? null };
 }
 
 export function useMemory(memoryId: string | undefined) {
