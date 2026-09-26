@@ -1,0 +1,821 @@
+{
+  "note": "WP-D default render set. Headlines/support/disclosures are NEVER hand-typed here — each slide carries a copyRef that render.mjs resolves against store-assets/listing/registry.v2.json at render time (drift-checked if a field is also present here). Seven default frames, ids exactly as in registry.v2.json screenshots[].id.",
+  "slides": [
+    {
+      "id": "01-more-than-photos",
+      "template": "screenshot.html",
+      "sizes": [
+        "appstore",
+        "appstore-alt",
+        "appstore-65",
+        "ipad"
+      ],
+      "params": {
+        "copyRef": {
+          "list": "screenshots",
+          "id": "01-more-than-photos"
+        },
+        "layout": "reconstruction",
+        "wordmark": {
+          "position": "top"
+        },
+        "reconstruction": {
+          "kind": "timeline",
+          "sourceNote": "app/(app)/(tabs)/timeline.tsx + src/components/memory-card.tsx",
+          "title": "Your moments.",
+          "sections": [
+            {
+              "label": "Saturday, July 18",
+              "cards": [
+                {
+                  "type": "photo",
+                  "image": "../v2/assets/timeline-photo-card.png",
+                  "ratio": 52,
+                  "text": "They built a fort in the hallway, then argued about whether babies can be in a fort. Ari was admitted because he brought crackers.",
+                  "date": "18 JUL 2026",
+                  "emotion": "funny",
+                  "emotionSoft": "#FCDCC0",
+                  "emotionColor": "#F07E3A",
+                  "emotionInk": "#7a3d10"
+                },
+                {
+                  "type": "story",
+                  "text": "Maya had two stuffed animals, a cup and one sock in her arms and asked me to open the door because “all my hands are busy.”",
+                  "date": "18 JUL 2026",
+                  "emotion": "funny",
+                  "emotionSoft": "#FCDCC0",
+                  "emotionColor": "#F07E3A",
+                  "emotionInk": "#7a3d10"
+                }
+              ]
+            },
+            {
+              "label": "Friday, July 17",
+              "cards": [
+                {
+                  "type": "sound",
+                  "duration": "0:19",
+                  "text": "Ari saying “uh-oh” after dropping his spoon for the tenth time.",
+                  "date": "17 JUL 2026",
+                  "emotion": "tender",
+                  "emotionSoft": "#FBD6E1",
+                  "emotionColor": "#EC7FA1",
+                  "emotionInk": "#8a3f59"
+                },
+                {
+                  "type": "story",
+                  "text": "Woke Maya early and she opened one eye: “no. this morning is incorrect.”",
+                  "date": "17 JUL 2026",
+                  "emotion": "funny",
+                  "emotionSoft": "#FCDCC0",
+                  "emotionColor": "#F07E3A",
+                  "emotionInk": "#7a3d10"
+                },
+                {
+                  "type": "story",
+                  "text": "Theo pointed at the shadow on his book and asked me to take it off. Then cried because shadows don’t peel.",
+                  "date": "16 JUL 2026",
+                  "emotion": "wonder",
+                  "emotionSoft": "#CFE1F4",
+                  "emotionColor": "#4F8FCC",
+                  "emotionInk": "#27496b"
+                },
+                {
+                  "type": "story",
+                  "text": "Maya offered to buy me a coffee with her savings, then shouted “A COFFEE COSTS THAT MUCH?”",
+                  "date": "16 JUL 2026",
+                  "emotion": "joy",
+                  "emotionSoft": "#FFE7B0",
+                  "emotionColor": "#F5A623",
+                  "emotionInk": "#7a560f"
+                }
+              ]
+            }
+          ]
+        },
+        "overlays": [
+          {
+            "type": "note",
+            "text": "We’ve been practising “i love mama.” Today Theo looked right at me and said “i love… toast.”",
+            "date": "14 JUL 2026",
+            "emotion": "tender",
+            "emotionSoft": "#FBD6E1",
+            "emotionColor": "#EC7FA1",
+            "emotionInk": "#8a3f59",
+            "left_pct": 24,
+            "top_pct": 35,
+            "width_pct": 40,
+            "rotate": -6,
+            "size": 25,
+            "tablet": {
+              "left_pct": 22,
+              "top_pct": 33,
+              "width_pct": 30,
+              "size": 24
+            }
+          },
+          {
+            "type": "note",
+            "text": "Maya dropped a cracker, shrugged, and said the floor could keep that one.",
+            "date": "11 JUL 2026",
+            "emotion": "funny",
+            "emotionSoft": "#FCDCC0",
+            "emotionColor": "#F07E3A",
+            "emotionInk": "#7a3d10",
+            "left_pct": 73,
+            "top_pct": 57,
+            "width_pct": 38,
+            "rotate": 7,
+            "size": 25,
+            "tablet": {
+              "left_pct": 72,
+              "top_pct": 55,
+              "width_pct": 29,
+              "size": 24
+            }
+          },
+          {
+            "type": "note",
+            "text": "Told Theo I love him more than all the stars. He held my gaze and said “pancakes.”",
+            "date": "09 JUL 2026",
+            "emotion": "joy",
+            "emotionSoft": "#FFE7B0",
+            "emotionColor": "#F5A623",
+            "emotionInk": "#7a560f",
+            "left_pct": 31,
+            "top_pct": 84,
+            "width_pct": 41,
+            "rotate": 5,
+            "size": 25,
+            "tablet": {
+              "left_pct": 31,
+              "top_pct": 82,
+              "width_pct": 30,
+              "size": 24
+            }
+          },
+          {
+            "type": "heart",
+            "left_pct": 63,
+            "top_pct": 22,
+            "size": 44,
+            "rotate": 12
+          },
+          {
+            "type": "heart",
+            "left_pct": 6.5,
+            "top_pct": 52,
+            "size": 30,
+            "rotate": -14,
+            "opacity": 0.75
+          },
+          {
+            "type": "sparkle",
+            "left_pct": 94,
+            "top_pct": 40,
+            "size": 30,
+            "opacity": 0.9
+          },
+          {
+            "type": "sparkle",
+            "left_pct": 47,
+            "top_pct": 19,
+            "size": 22,
+            "opacity": 0.8
+          }
+        ]
+      }
+    },
+    {
+      "id": "02-existing-photos",
+      "template": "screenshot.html",
+      "sizes": [
+        "appstore",
+        "appstore-alt",
+        "appstore-65",
+        "ipad"
+      ],
+      "params": {
+        "copyRef": {
+          "list": "screenshots",
+          "id": "02-existing-photos"
+        },
+        "layout": "reconstruction",
+        "reconstruction": {
+          "kind": "gallery-import-deck",
+          "sourceNote": "src/components/gallery-import/gallery-import-deck-card.tsx (deck card) + gallery-import-review.tsx (DeckTopBar, Set-aside/Keep action row)",
+          "topBar": {
+            "close": "Close",
+            "asideLabel": "Set aside · 2"
+          },
+          "card": {
+            "heroImage": "../v2/assets/timeline-photo-card.png",
+            "dateStamp": "Jul 2026",
+            "chosenLabel": "1 photo chosen",
+            "date": "Saturday, July 18, 2026",
+            "caption": "They built a fort in the hallway, then argued about whether babies can be in a fort. Ari was admitted because he brought crackers."
+          },
+          "actions": {
+            "setAside": "Set aside",
+            "keep": "Keep this",
+            "note": "Small previews here. Kept photos save at full size."
+          }
+        },
+        "wordmark": {
+          "position": "top"
+        },
+        "overlays": [
+          {
+            "type": "pill",
+            "text": "Looking through your camera roll…",
+            "left_pct": 30,
+            "top_pct": 29,
+            "rotate": -4,
+            "size": 23,
+            "tablet": {
+              "left_pct": 28,
+              "top_pct": 27,
+              "size": 22
+            }
+          },
+          {
+            "type": "stat",
+            "value": "76",
+            "label": "MOMENTS FOUND",
+            "left_pct": 80,
+            "top_pct": 72,
+            "rotate": 6,
+            "size": 54,
+            "tablet": {
+              "left_pct": 78,
+              "top_pct": 70,
+              "size": 48
+            }
+          },
+          {
+            "type": "sparkle",
+            "left_pct": 88,
+            "top_pct": 34,
+            "size": 28,
+            "opacity": 0.9
+          },
+          {
+            "type": "heart",
+            "left_pct": 14,
+            "top_pct": 66,
+            "size": 32,
+            "rotate": -10,
+            "opacity": 0.8
+          }
+        ]
+      }
+    },
+    {
+      "id": "03-unphotographed-stories",
+      "template": "screenshot.html",
+      "sizes": [
+        "appstore",
+        "appstore-alt",
+        "appstore-65",
+        "ipad"
+      ],
+      "params": {
+        "copyRef": {
+          "list": "screenshots",
+          "id": "03-unphotographed-stories"
+        },
+        "layout": "reconstruction",
+        "wordmark": {
+          "position": "top"
+        },
+        "reconstruction": {
+          "kind": "memory-detail",
+          "sourceNote": "app/(app)/memory/[id]/index.tsx (MemoryDetailFramed) + src/components/memory-composer-form.tsx",
+          "image": "../v2/assets/demo/ladybug-artwork.png",
+          "text": "Maya found a ladybug on the windowsill and asked if it had a mommy who knew where it was.",
+          "tags": [
+            {
+              "label": "Maya, 5y",
+              "avatar": "../v2/assets/demo/maya-portrait-5y.jpg"
+            }
+          ],
+          "date": "10 JUL 2026",
+          "inputLabel": "What you typed",
+          "inputText": "Maya found a ladybug on the windowsill and asked if it had a mommy who knew where it was.",
+          "emotion": "wonder",
+          "emotionSoft": "#CFE1F4",
+          "emotionColor": "#4F8FCC",
+          "emotionInk": "#27496b",
+          "bridge": "Momora drew it"
+        },
+        "overlays": [
+          {
+            "type": "sparkle",
+            "left_pct": 87,
+            "top_pct": 34,
+            "size": 32,
+            "opacity": 0.95
+          },
+          {
+            "type": "sparkle",
+            "left_pct": 13,
+            "top_pct": 62,
+            "size": 24,
+            "opacity": 0.8
+          },
+          {
+            "type": "heart",
+            "left_pct": 90,
+            "top_pct": 74,
+            "size": 32,
+            "rotate": -10,
+            "opacity": 0.8
+          }
+        ]
+      }
+    },
+    {
+      "id": "04-little-voice",
+      "template": "screenshot.html",
+      "sizes": [
+        "appstore",
+        "appstore-alt",
+        "appstore-65",
+        "ipad"
+      ],
+      "params": {
+        "copyRef": {
+          "list": "screenshots",
+          "id": "04-little-voice"
+        },
+        "layout": "reconstruction",
+        "reconstruction": {
+          "kind": "sound-player",
+          "sourceNote": "app/(app)/memory/[id]/index.tsx (SoundStage, MemoryDetailSound, MemoryMetaFooter) + src/components/audio/sound-trace.tsx + src/components/audio/listen-seal.tsx",
+          "player": {
+            "progress": 0.37,
+            "elapsed": "0:07",
+            "total": "0:19",
+            "status": "paused",
+            "emotion": "funny",
+            "caption": "Ari saying \"uh-oh\" after dropping his spoon for the tenth time.",
+            "members": [
+              "Ari"
+            ],
+            "date": "Jul 13, 2026",
+            "attribution": "Added by Nora Kim"
+          },
+          "more": [
+            {
+              "text": "Maya explaining her management meeting at five.",
+              "duration": "0:34",
+              "emotion": "funny",
+              "emotionSoft": "#FCDCC0",
+              "emotionColor": "#F07E3A",
+              "emotionInk": "#7a3d10"
+            },
+            {
+              "text": "Theo singing the song he made up about the bins.",
+              "duration": "1:02",
+              "emotion": "joy",
+              "emotionSoft": "#FFE7B0",
+              "emotionColor": "#F5A623",
+              "emotionInk": "#7a560f"
+            },
+            {
+              "text": "Ari’s laugh when Nana sneezed.",
+              "duration": "0:12",
+              "emotion": "tender",
+              "emotionSoft": "#FBD6E1",
+              "emotionColor": "#EC7FA1",
+              "emotionInk": "#8a3f59"
+            },
+            {
+              "text": "Maya reading the bedtime book to Ari, mostly made up.",
+              "duration": "2:11",
+              "emotion": "wonder",
+              "emotionSoft": "#CFE1F4",
+              "emotionColor": "#4F8FCC",
+              "emotionInk": "#27496b"
+            }
+          ]
+        },
+        "wordmark": {
+          "position": "top"
+        },
+        "overlays": [
+          {
+            "type": "note",
+            "text": "Maya refused bedtime because the moon wasn’t out yet. “no moon means no dark. no dark means no bed.”",
+            "date": "02 JUL 2026",
+            "emotion": "wonder",
+            "emotionSoft": "#CFE1F4",
+            "emotionColor": "#4F8FCC",
+            "emotionInk": "#27496b",
+            "left_pct": 30,
+            "top_pct": 88,
+            "width_pct": 42,
+            "rotate": -4,
+            "size": 24,
+            "tablet": {
+              "left_pct": 26,
+              "top_pct": 86,
+              "width_pct": 30,
+              "size": 23
+            }
+          },
+          {
+            "type": "heart",
+            "left_pct": 86,
+            "top_pct": 26,
+            "size": 40,
+            "rotate": 10
+          },
+          {
+            "type": "sparkle",
+            "left_pct": 9,
+            "top_pct": 40,
+            "size": 26,
+            "opacity": 0.85
+          }
+        ]
+      }
+    },
+    {
+      "id": "05-optional-book",
+      "template": "screenshot.html",
+      "sizes": [
+        "appstore",
+        "appstore-alt",
+        "appstore-65",
+        "ipad"
+      ],
+      "params": {
+        "copyRef": {
+          "list": "screenshots",
+          "id": "05-optional-book"
+        },
+        "layout": "reconstruction",
+        "wordmark": {
+          "position": "top"
+        },
+        "reconstruction": {
+          "kind": "book-shelf",
+          "sourceNote": "app/(app)/family/[id]/memory-books.tsx (header, subtitle, YOUR BOOKS eyebrow + count, shelf tiles with cover + label + range, Create a book CTA)",
+          "title": "Memory Books",
+          "subtitle": "A year of Maya, printed and bound.",
+          "eyebrow": "Your books",
+          "count": "4 books",
+          "cta": "Create a book",
+          "books": [
+            {
+              "cover": "../v2/assets/demo/maya-photo-5y.jpg",
+              "childName": "Maya",
+              "years": "2025 – 2026",
+              "label": "Year Five",
+              "range": "Aug 2025 – Aug 2026"
+            },
+            {
+              "cover": "../v2/assets/timeline-photo-card.png",
+              "childName": "Maya",
+              "years": "2024 – 2025",
+              "label": "Year Four",
+              "range": "Aug 2024 – Aug 2025"
+            },
+            {
+              "cover": "../v2/assets/demo/maya-photo-3y.jpg",
+              "childName": "Maya",
+              "years": "2023 – 2024",
+              "label": "Year Three",
+              "range": "Aug 2023 – Aug 2024"
+            },
+            {
+              "cover": "../v2/assets/demo/maya-photo-1y.jpg",
+              "childName": "Maya",
+              "years": "2021 – 2022",
+              "label": "Year One",
+              "range": "Aug 2021 – Aug 2022"
+            }
+          ],
+          "bullets": [
+            {
+              "lead": "Layflat, 8.3×8.3 inches.",
+              "rest": "Thick pages that open completely, so a photo across the middle isn't lost in the fold."
+            },
+            {
+              "lead": "Chosen for you.",
+              "rest": "We pick the moments and photos that tell the year, then lay out every page."
+            }
+          ]
+        },
+        "overlays": [
+          {
+            "type": "photo",
+            "src": "../v2/assets/demo/maya-photo-3y.jpg",
+            "left_pct": 21,
+            "top_pct": 86,
+            "width_pct": 22,
+            "height_pct": 11,
+            "rotate": -7,
+            "tablet": {
+              "left_pct": 22,
+              "top_pct": 84,
+              "width_pct": 15,
+              "height_pct": 9
+            }
+          },
+          {
+            "type": "photo",
+            "src": "../v2/assets/demo/maya-photo-1y.jpg",
+            "left_pct": 44,
+            "top_pct": 90,
+            "width_pct": 22,
+            "height_pct": 11,
+            "rotate": 5,
+            "tablet": {
+              "left_pct": 40,
+              "top_pct": 88,
+              "width_pct": 15,
+              "height_pct": 9
+            }
+          },
+          {
+            "type": "photo",
+            "src": "../v2/assets/timeline-photo-card.png",
+            "left_pct": 70,
+            "top_pct": 86,
+            "width_pct": 24,
+            "height_pct": 11,
+            "rotate": -4,
+            "tablet": {
+              "left_pct": 60,
+              "top_pct": 84,
+              "width_pct": 16,
+              "height_pct": 9
+            }
+          },
+          {
+            "type": "sparkle",
+            "left_pct": 90,
+            "top_pct": 32,
+            "size": 28,
+            "opacity": 0.9
+          },
+          {
+            "type": "heart",
+            "left_pct": 9,
+            "top_pct": 44,
+            "size": 30,
+            "rotate": -10,
+            "opacity": 0.8
+          }
+        ]
+      }
+    },
+    {
+      "id": "06-private-family",
+      "template": "screenshot.html",
+      "sizes": [
+        "appstore",
+        "appstore-alt",
+        "appstore-65",
+        "ipad"
+      ],
+      "params": {
+        "copyRef": {
+          "list": "screenshots",
+          "id": "06-private-family"
+        },
+        "layout": "reconstruction",
+        "reconstruction": {
+          "kind": "family-feed",
+          "sourceNote": "app/(app)/memory/[id]/index.tsx + src/components/memory-engagement-bar.tsx + src/components/memory-comments-drawer.tsx",
+          "commentsTitle": "Comments",
+          "memory": {
+            "emotion": "funny",
+            "emotionSoft": "#FCDCC0",
+            "emotionColor": "#F07E3A",
+            "emotionInk": "#7a3d10",
+            "image": "../v2/assets/timeline-photo-card.png",
+            "text": "They built a fort in the hallway, then argued about whether babies can be in a fort.",
+            "likes": "4",
+            "comments": "4"
+          },
+          "comments": [
+            {
+              "author": "Eunji",
+              "when": "2h",
+              "tint": "#FBD6E1",
+              "text": "I love that Ari negotiated his way in with snacks."
+            },
+            {
+              "author": "Rafael",
+              "when": "5h",
+              "tint": "#CFE1F4",
+              "text": "Your mother built the exact same fort in 1994."
+            },
+            {
+              "author": "Lucía",
+              "when": "1d",
+              "tint": "#D6EDDE",
+              "text": "Tell Maya the rules committee approves."
+            },
+            {
+              "author": "Gabriel",
+              "when": "1d",
+              "tint": "#FCDCC0",
+              "text": "The crackers were non-negotiable, apparently."
+            }
+          ],
+          "inputPlaceholder": "Add a comment…"
+        },
+        "wordmark": {
+          "position": "top"
+        },
+        "overlays": [
+          {
+            "type": "bubble",
+            "author": "Nana",
+            "tint": "#FBD6E1",
+            "text": "I’ve played the uh-oh one four times today.",
+            "left_pct": 19.5,
+            "top_pct": 33,
+            "width_pct": 36,
+            "rotate": -6,
+            "size": 23,
+            "tablet": {
+              "left_pct": 18,
+              "top_pct": 31,
+              "width_pct": 27,
+              "size": 22
+            }
+          },
+          {
+            "type": "bubble",
+            "author": "Rafa",
+            "tint": "#CFE1F4",
+            "text": "Tell Theo shadows don’t peel. Grandpa confirms.",
+            "left_pct": 80.5,
+            "top_pct": 52,
+            "width_pct": 36,
+            "rotate": 6,
+            "size": 23,
+            "tablet": {
+              "left_pct": 82,
+              "top_pct": 50,
+              "width_pct": 27,
+              "size": 22
+            }
+          },
+          {
+            "type": "bubble",
+            "author": "Lucía",
+            "tint": "#D6EDDE",
+            "text": "“A COFFEE COSTS THAT MUCH” is my new ringtone.",
+            "left_pct": 24,
+            "top_pct": 83,
+            "width_pct": 35,
+            "rotate": 4,
+            "size": 23,
+            "tablet": {
+              "left_pct": 24,
+              "top_pct": 80,
+              "width_pct": 26,
+              "size": 22
+            }
+          },
+          {
+            "type": "heart",
+            "left_pct": 70,
+            "top_pct": 27,
+            "size": 46,
+            "rotate": 14
+          },
+          {
+            "type": "heart",
+            "left_pct": 90,
+            "top_pct": 72,
+            "size": 32,
+            "rotate": -8,
+            "opacity": 0.8
+          },
+          {
+            "type": "heart",
+            "left_pct": 9,
+            "top_pct": 58,
+            "size": 26,
+            "rotate": 10,
+            "opacity": 0.7
+          }
+        ]
+      }
+    },
+    {
+      "id": "07-look-back",
+      "template": "screenshot.html",
+      "sizes": [
+        "ipad"
+      ],
+      "params": {
+        "copyRef": {
+          "list": "screenshots",
+          "id": "07-look-back"
+        },
+        "layout": "reconstruction",
+        "wordmark": {
+          "position": "top"
+        },
+        "reconstruction": {
+          "kind": "portrait-timeline",
+          "sourceNote": "app/(app)/family/[id]/portraits.tsx + src/components/portrait-timeline.tsx (eyebrow, member name, paired photo|portrait slots, Current badge, date title, age)",
+          "eyebrow": "Through the years",
+          "name": "Maya",
+          "intro": "A portrait from every age, next to the photo it came from.",
+          "versions": [
+            {
+              "photo": "../v2/assets/demo/maya-photo-5y.jpg",
+              "portrait": "../v2/assets/demo/maya-portrait-5y.jpg",
+              "date": "August 2026",
+              "age": "5 years old"
+            },
+            {
+              "photo": "../v2/assets/demo/maya-photo-3y.jpg",
+              "portrait": "../v2/assets/demo/maya-portrait-3y.jpg",
+              "date": "August 2024",
+              "age": "3 years old"
+            },
+            {
+              "photo": "../v2/assets/demo/maya-photo-1y.jpg",
+              "portrait": "../v2/assets/demo/maya-portrait-1y.jpg",
+              "date": "August 2022",
+              "age": "1 year old"
+            }
+          ]
+        },
+        "overlays": [
+          {
+            "type": "sparkle",
+            "left_pct": 11,
+            "top_pct": 33,
+            "size": 30,
+            "opacity": 0.9
+          },
+          {
+            "type": "heart",
+            "left_pct": 89,
+            "top_pct": 64,
+            "size": 34,
+            "rotate": 9,
+            "opacity": 0.85
+          }
+        ]
+      }
+    },
+    {
+      "id": "07-look-back",
+      "template": "screenshot.html",
+      "sizes": [
+        "appstore",
+        "appstore-alt",
+        "appstore-65"
+      ],
+      "params": {
+        "copyRef": {
+          "list": "screenshots",
+          "id": "07-look-back"
+        },
+        "layout": "reconstruction",
+        "reconstruction": {
+          "kind": "portrait-timeline",
+          "sourceNote": "app/(app)/family/[id]/portraits.tsx + src/components/portrait-timeline.tsx (eyebrow, member name, paired photo|portrait slots, Current badge, date title, age)",
+          "eyebrow": "Through the years",
+          "name": "Maya",
+          "intro": "A portrait from every age, next to the photo it came from.",
+          "versions": [
+            {
+              "photo": "../v2/assets/demo/maya-photo-5y.jpg",
+              "portrait": "../v2/assets/demo/maya-portrait-5y.jpg",
+              "date": "August 2026",
+              "age": "5 years old"
+            },
+            {
+              "photo": "../v2/assets/demo/maya-photo-3y.jpg",
+              "portrait": "../v2/assets/demo/maya-portrait-3y.jpg",
+              "date": "August 2024",
+              "age": "3 years old"
+            },
+            {
+              "photo": "../v2/assets/demo/maya-photo-1y.jpg",
+              "portrait": "../v2/assets/demo/maya-portrait-1y.jpg",
+              "date": "August 2022",
+              "age": "1 year old"
+            }
+          ]
+        },
+        "wordmark": {
+          "position": "top"
+        }
+      }
+    }
+  ]
+}

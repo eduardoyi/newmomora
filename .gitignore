@@ -90,3 +90,10 @@ book-renderer/book-data/*
 
 # Marketing assets are local-only (GBs of media; never pushed)
 marketing/
+
+# Store listing renders / generated images (kept locally, not in git)
+store-assets/v2/**/*.png
+store-assets/archive/**/*.png
+store-assets/preview/
+momora-listing-handoff-v2/**/*.png
+book-renderer/book-data/sample/print/

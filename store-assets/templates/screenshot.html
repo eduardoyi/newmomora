@@ -447,6 +447,386 @@
   #art-slot.visible {
     display: block;
   }
+
+  /* ---- Disclosure line (small legal/subscription line under the support
+     copy, e.g. "Printed books sold separately. Shipping extra."). Must stay
+     legible — WP-D acceptance requirement for frame 05. ---- */
+  #disclosure {
+    display: none;
+    margin: 22px 0 0;
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 600;
+    font-size: 34px;
+    line-height: 1.4;
+    color: var(--color-ink2);
+  }
+
+  /* ---- Card layout (WP-D §1b/§1c) ----
+     A genuine UI crop is the dominant subject on the cream paper background,
+     instead of a whole screenshot inside a device frame. Cards/insets are
+     placed in a 1260-unit-wide authored space, same as everything else, so
+     one --scale transform handles every canvas size. */
+  .layout-card #device-wrap,
+  .layout-card #hero-art {
+    display: none;
+  }
+
+  #card-layer {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+  }
+  .layout-card #card-layer {
+    display: block;
+  }
+
+  .paper-card {
+    position: absolute;
+    border-radius: 40px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 50px 100px -28px rgba(44, 36, 24, 0.32), 0 16px 36px -12px rgba(44, 36, 24, 0.16);
+  }
+
+  .paper-card img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  /* Truthful labeled inset (spec §1c): a smaller secondary crop with a short
+     honest caption chip, e.g. "Saved sound", "In the app". */
+  .inset-card {
+    position: absolute;
+    border-radius: 28px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 34px 70px -20px rgba(44, 36, 24, 0.30), 0 10px 24px -8px rgba(44, 36, 24, 0.16);
+    border: 6px solid #fff;
+  }
+
+  .inset-card img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  .inset-card .inset-label {
+    position: absolute;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    background: rgba(20, 16, 12, 0.82);
+    color: #fff;
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 700;
+    font-size: 26px;
+    letter-spacing: 0.01em;
+    padding: 10px 22px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  /* A placeholder inset/panel used when NO genuine capture exists for that
+     part of the composition. Deliberately neutral (grey/dashed), never
+     styled to look like real product UI, per the standing "never draw
+     invented product functionality" rule — a missing capture is labeled,
+     not illustrated. */
+  .inset-placeholder {
+    position: absolute;
+    border-radius: 28px;
+    border: 4px dashed #9A8B79;
+    background: repeating-linear-gradient(
+      135deg,
+      rgba(154, 139, 121, 0.10),
+      rgba(154, 139, 121, 0.10) 22px,
+      rgba(154, 139, 121, 0.16) 22px,
+      rgba(154, 139, 121, 0.16) 44px
+    );
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 24px;
+  }
+
+  .inset-placeholder .inset-placeholder-label {
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 700;
+    font-size: 26px;
+    color: #6B5E4F;
+    line-height: 1.35;
+  }
+
+  /* ---- Blocked layout (WP-D fully-blocked frames, e.g. 02/04) ----
+     No genuine capture exists at all for this frame's product evidence.
+     Renders a plainly labeled empty proof area naming the exact missing
+     capture — never a drawn mock of the missing screen. */
+  #blocked-area {
+    display: none;
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    top: 34%;
+    bottom: 10%;
+    border-radius: 56px;
+    border: 5px dashed #9A8B79;
+    background: repeating-linear-gradient(
+      135deg,
+      rgba(154, 139, 121, 0.08),
+      rgba(154, 139, 121, 0.08) 30px,
+      rgba(154, 139, 121, 0.14) 30px,
+      rgba(154, 139, 121, 0.14) 60px
+    );
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 6%;
+    z-index: 2;
+  }
+  .layout-blocked #blocked-area {
+    display: flex;
+  }
+  .layout-blocked #device-wrap,
+  .layout-blocked #hero-art,
+  .layout-blocked #card-layer {
+    display: none;
+  }
+
+  #blocked-area .blocked-title {
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 700;
+    font-size: 44px;
+    color: #6B5E4F;
+    margin-bottom: 20px;
+  }
+
+  #blocked-area .blocked-route {
+    font-family: "Newsreader", serif;
+    font-style: italic;
+    font-size: 40px;
+    color: #2C2418;
+    background: rgba(255, 255, 255, 0.65);
+    border-radius: 16px;
+    padding: 14px 30px;
+    word-break: break-word;
+  }
+
+  /* ---- Reconstruction layout (WP-owner-directed faithful UI rebuilds) ----
+     HTML/CSS recreations of real screens/controls, built from the actual
+     component source (see each builder function below) and the real design
+     tokens mirrored at the top of this file. These render INSIDE the normal
+     device frame (#device-wrap/#device/#screen), replacing the raw
+     screenshot <img> with a live-built DOM tree, so the existing device
+     skin/status-bar/chip system is unchanged. A reconstruction is NOT a
+     native capture -- every asset built this way is provenance-classed
+     `ui-reconstruction` in store-assets/v2/ASSET-MANIFEST.json. Copy is
+     always supplied by the manifest's `reconstruction` param (never
+     hard-coded here) so wording stays editable without touching this file. */
+  .layout-reconstruction #hero-art,
+  .layout-reconstruction #card-layer,
+  .layout-reconstruction #blocked-area {
+    display: none;
+  }
+  .layout-reconstruction #screenshot {
+    display: none;
+  }
+  #recon-root {
+    display: none;
+    position: absolute;
+    inset: 0;
+    flex-direction: column;
+    background: var(--color-paper);
+  }
+  .layout-reconstruction #recon-root {
+    display: flex;
+  }
+  /* One genuine control, pulled out of the device and enlarged (the
+     Tinybeans-style "device + real UI + enlarged callout" technique the
+     owner asked for). Built from the SAME markup-building functions as the
+     in-device control, just at a larger scale -- never a redesigned or
+     idealized version of it. */
+
+  /* Owner round 2026-09-21: depth layer. Floating pieces of the journal that
+     break out of the phone frame so the set reads as full of life rather than
+     a flat product shot. Purely marketing chrome -- never product UI. */
+  #overlay-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    pointer-events: none;
+  }
+  #overlay-layer .ov {
+    position: absolute;
+    transform-origin: center center;
+  }
+  #overlay-layer .ov-note {
+    background: #fff;
+    border-radius: 24px;
+    box-shadow: 0 2px 4px rgba(44,36,24,0.06), 0 22px 46px rgba(44,36,24,0.16);
+    padding: 26px 28px;
+    font-family: 'Newsreader';
+    color: #2C2418;
+    line-height: 1.42;
+  }
+  #overlay-layer .ov-note .ov-meta {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 16px;
+  }
+  #overlay-layer .ov-date {
+    font-family: 'Plus Jakarta Sans'; font-weight: 700;
+    letter-spacing: 0.1em; color: #9A8B79;
+  }
+  #overlay-layer .ov-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    border-radius: 999px; padding: 7px 16px 7px 11px;
+    font-family: 'Plus Jakarta Sans'; font-weight: 700;
+  }
+  #overlay-layer .ov-chip i { width: 10px; height: 10px; border-radius: 999px; display: block; }
+  #overlay-layer .ov-pill {
+    display: inline-flex; align-items: center; gap: 14px;
+    background: #fff; border-radius: 999px;
+    box-shadow: 0 2px 4px rgba(44,36,24,0.06), 0 16px 36px rgba(44,36,24,0.16);
+    padding: 18px 28px;
+    font-family: 'Plus Jakarta Sans'; font-weight: 700; color: #2C2418;
+  }
+  #overlay-layer .ov-pill .spin {
+    width: 22px; height: 22px; border-radius: 999px;
+    border: 3px solid #FBD3E2; border-top-color: #D63E78;
+    transform: rotate(140deg);
+  }
+  #overlay-layer .ov-pill .tick {
+    width: 30px; height: 30px; border-radius: 999px; background: #D63E78;
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 17px;
+  }
+  #overlay-layer .ov-bubble {
+    background: #fff; border-radius: 26px;
+    box-shadow: 0 2px 4px rgba(44,36,24,0.06), 0 20px 40px rgba(44,36,24,0.16);
+    padding: 20px 24px; display: flex; gap: 14px; align-items: flex-start;
+  }
+  #overlay-layer .ov-bubble .av {
+    width: 44px; height: 44px; border-radius: 22px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Plus Jakarta Sans'; font-weight: 700; color: #2C2418;
+  }
+  #overlay-layer .ov-bubble .who {
+    font-family: 'Plus Jakarta Sans'; font-weight: 700; color: #2C2418;
+  }
+  #overlay-layer .ov-bubble .said {
+    font-family: 'Newsreader'; color: #2C2418; line-height: 1.38; margin-top: 4px;
+  }
+  #overlay-layer .ov-heart { color: #D63E78; line-height: 1; filter: drop-shadow(0 8px 18px rgba(214,62,120,0.30)); }
+  #overlay-layer .ov-sparkle { color: #F2B441; line-height: 1; }
+  #overlay-layer .ov-photo {
+    border-radius: 20px; overflow: hidden;
+    box-shadow: 0 2px 4px rgba(44,36,24,0.08), 0 22px 44px rgba(44,36,24,0.20);
+  }
+  #overlay-layer .ov-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #overlay-layer .ov-stat {
+    background: #D63E78; color: #fff; border-radius: 26px;
+    box-shadow: 0 2px 4px rgba(214,62,120,0.20), 0 20px 40px rgba(214,62,120,0.30);
+    padding: 22px 30px; text-align: center;
+  }
+  #overlay-layer .ov-stat b { display: block; font-family: 'Newsreader'; font-weight: 500; }
+  #overlay-layer .ov-stat span { font-family: 'Plus Jakarta Sans'; font-weight: 700; opacity: 0.92; }
+
+  #callout-layer {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+  }
+  .layout-reconstruction #callout-layer {
+    display: block;
+  }
+  .recon-callout {
+    position: absolute;
+    background: #fff;
+    border-radius: 36px;
+    box-shadow: 0 46px 100px -20px rgba(44, 36, 24, 0.36), 0 16px 34px -10px rgba(44, 36, 24, 0.18);
+    border: 1px solid var(--color-border);
+    padding: 30px;
+  }
+  .recon-callout-label {
+    position: absolute;
+    left: 50%;
+    bottom: -24px;
+    transform: translateX(-50%);
+    background: rgba(20, 16, 12, 0.86);
+    color: #fff;
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 700;
+    font-size: 24px;
+    letter-spacing: 0.01em;
+    padding: 9px 22px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  /* ---- Draft banner (WP-D §1d) — impossible to miss at thumbnail size,
+     in a colour that cannot be mistaken for product UI. A hazard-striped
+     frame around the whole canvas plus a bold rotated stamp band. ---- */
+  #draft-banner {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    pointer-events: none;
+  }
+  .is-draft #draft-banner {
+    display: block;
+  }
+
+  .draft-hazard {
+    position: absolute;
+    background: repeating-linear-gradient(45deg, #FFD400 0 26px, #14110D 26px 52px);
+  }
+  .draft-hazard.top { top: 0; left: 0; right: 0; height: 26px; }
+  .draft-hazard.bottom { bottom: 0; left: 0; right: 0; height: 26px; }
+  .draft-hazard.left { top: 0; bottom: 0; left: 0; width: 26px; }
+  .draft-hazard.right { top: 0; bottom: 0; right: 0; width: 26px; }
+
+  .draft-stamp {
+    position: absolute;
+    left: -6%;
+    width: 112%;
+    /* Vertical position is set from JS (positionDraftStamp): just below the
+       caption block's actual rendered bottom, so it sits in the blank-paper
+       gap and never covers the headline/support/disclosure text OR the
+       card/blocked-area content below it, regardless of how many lines the
+       copy wraps to on a given bucket. Fallback here only for a pre-JS/
+       no-script paint. */
+    top: 24%;
+    /* Angle must match STAMP_ANGLE_DEG in the JS positionDraftStamp tilt
+       compensation below (4deg, sign-independent since the compensation
+       uses sin() of the magnitude). */
+    transform: translateY(-50%) rotate(-4deg);
+    background: #D6193C;
+    color: #fff;
+    text-align: center;
+    padding: 28px 0;
+    box-shadow: 0 24px 60px -16px rgba(0, 0, 0, 0.45);
+  }
+
+  .draft-stamp .draft-title {
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 800;
+    font-size: 60px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    margin: 0 40px;
+  }
+
+  .draft-stamp .draft-reason {
+    font-family: "Plus Jakarta Sans", sans-serif;
+    font-weight: 500;
+    font-size: 32px;
+    margin: 14px 60px 0;
+    line-height: 1.35;
+  }
 </style>
 </head>
 <body>
@@ -454,6 +834,15 @@
     <div id="bg"></div>
 
     <div id="hero-art"><img id="hero-art-img" src="" alt="" /></div>
+
+    <div id="card-layer"></div>
+
+    <div id="callout-layer"></div>
+
+    <div id="blocked-area">
+      <div class="blocked-title">Capture not yet available</div>
+      <div class="blocked-route" id="blocked-route"></div>
+    </div>
 
     <div id="chips"></div>
 
@@ -465,13 +854,28 @@
       <h1 id="headline"></h1>
       <div id="script-accent"></div>
       <p id="subline"></p>
+      <p id="disclosure"></p>
     </div>
+
+    <div id="draft-banner">
+      <div class="draft-hazard top"></div>
+      <div class="draft-hazard bottom"></div>
+      <div class="draft-hazard left"></div>
+      <div class="draft-hazard right"></div>
+      <div class="draft-stamp">
+        <div class="draft-title">Draft — Not for upload</div>
+        <div class="draft-reason" id="draft-reason"></div>
+      </div>
+    </div>
+
+    <div id="overlay-layer"></div>
 
     <div id="device-wrap">
       <div id="device">
         <div id="dynamic-island"></div>
         <div id="screen">
           <img id="screenshot" src="" alt="" />
+          <div id="recon-root"></div>
           <div id="statusbar">
             <div class="time">9:41</div>
             <div class="glyphs">
@@ -531,6 +935,7 @@
     const SIZES = {
       appstore: { w: 1260, h: 2736 },
       "appstore-alt": { w: 1320, h: 2868 },
+      "appstore-65": { w: 1284, h: 2778 },
       play: { w: 1080, h: 1920 },
       ipad: { w: 2064, h: 2752 },
       "play-tablet7": { w: 1080, h: 1920 },
@@ -554,6 +959,728 @@
       document.body.style.height = target.h + "px";
     }
 
+    // ---------------------------------------------------------------------
+    // Reconstruction builders (owner-directed faithful UI rebuilds, PLAN.md
+    // §3a.2). Each function below is named for, and structured after, the
+    // ONE real component file it reconstructs -- see the comment at the top
+    // of each for the exact source path, so a reviewer can diff this markup
+    // against that file directly. Colors are hand-mirrored from
+    // src/constants/theme.ts (same practice this file already uses for its
+    // CSS custom properties above); every piece of COPY is read from the
+    // `recon` object the manifest supplies, never hard-coded here.
+    // ---------------------------------------------------------------------
+    const RECON_THEME = {
+      bg: "#FAFAFD",
+      ink: "#2C2418",
+      ink2: "#6B5E4F",
+      ink3: "#9A8B79",
+      border: "#EBE7F2",
+      borderStrong: "#CFC8E0",
+      surface: "#F4F3F8",
+      surface2: "#F2EFF8",
+      white: "#FFFFFF",
+      primary: "#D63E78",
+      primaryDark: "#B22A60",
+      primaryTint: "#FDEAF1",
+      seaSoft: "#C9ECE9",
+      seaInk: "#1f5a56",
+    };
+
+    // Mirrors src/constants/theme.ts's emotionColors -- only the entries this
+    // template actually uses. Kept minimal and hand-verified against that
+    // file rather than copying the whole table.
+    const RECON_EMOTION_COLORS = {
+      funny: { c: "#F07E3A", soft: "#FCDCC0", ink: "#8a4416" },
+      wonder: { c: "#4F8FCC", soft: "#CFE1F4", ink: "#3a5b7a" },
+      tender: { c: "#EC7FA1", soft: "#FBD6E1", ink: "#9c4f68" },
+    };
+
+    function reconEsc(value) {
+      return String(value == null ? "" : value).replace(/[&<>"']/g, (ch) => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
+      ));
+    }
+
+    // Shared "Set aside / Keep this" pill pair -- gallery-import-review.tsx
+    // styles.secondaryAction / styles.keepAction (the real accessible
+    // buttons that sit under the deck card; the card itself only shows
+    // these words as drag-intent stamps mid-swipe). `scale` lets the same
+    // markup serve both the in-device row and the enlarged callout.
+    function reconKeepAsideRow(recon, scale) {
+      const pad = Math.round(16 * scale);
+      const gap = Math.round(10 * scale);
+      const radius = 999;
+      const fontSize = Math.round(15 * scale);
+      const minH = Math.round(52 * scale);
+      const iconSize = Math.round(15 * scale);
+      return `
+        <div style="display:flex;align-items:center;gap:${gap}px;width:100%;">
+          <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:7px;min-height:${minH}px;padding:0 ${pad}px;white-space:nowrap;background:${RECON_THEME.white};border:1.5px solid ${RECON_THEME.borderStrong};border-radius:${radius}px;">
+            <span style="font-size:${iconSize}px;color:${RECON_THEME.ink2};line-height:1;">&#10005;</span>
+            <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:${fontSize}px;color:${RECON_THEME.ink2};white-space:nowrap;">${reconEsc(recon.actions.setAside)}</span>
+          </div>
+          <div style="flex:1.25;display:flex;align-items:center;justify-content:center;gap:7px;min-height:${minH}px;padding:0 ${pad}px;white-space:nowrap;background:${RECON_THEME.primary};border-radius:${radius}px;">
+            <span style="font-size:${iconSize}px;color:${RECON_THEME.white};line-height:1;">&#10003;</span>
+            <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:${fontSize}px;color:${RECON_THEME.white};white-space:nowrap;">${reconEsc(recon.actions.keep)}</span>
+          </div>
+        </div>`;
+    }
+
+    // src/components/gallery-import/gallery-import-deck-card.tsx (the deck
+    // card: hero photo + script date stamp + film-strip row + date + AI
+    // caption) plus gallery-import-review.tsx's DeckTopBar and the
+    // sticky Set-aside/Keep action row underneath it.
+    function reconGalleryImportDeck(root, recon, isTablet) {
+      // Coordinator fix (2026-09-20 review round 2): the deck card is
+      // `position:'absolute', top/left/right/bottom:0` inside a `flex:1`
+      // `deck` container in the real component (gallery-import-review.tsx
+      // styles.deck/styles.card) -- it fills essentially the ENTIRE space
+      // between the tick row and the sticky footer, not a fixed-height card
+      // floating in a mostly-empty screen. The card's own `hero` slot is
+      // likewise `flex:1, minHeight:160` (gallery-import-deck-card.tsx),
+      // so the photo grows to fill whatever room the fixed-height rows
+      // below it (film-strip/divider/date/caption) leave. Reproduced here
+      // with the same flex:1-in-flex:1 structure instead of a fixed height.
+      const tickCount = 7;
+      const doneTicks = 2;
+      const activeTick = 2;
+      const ticksHtml = Array.from({ length: tickCount }).map((_, i) => {
+        const bg = i < doneTicks ? RECON_THEME.primary : i === activeTick ? RECON_THEME.primaryTint : RECON_THEME.border;
+        return `<span style="flex:1;max-width:26px;height:3px;border-radius:999px;background:${bg};display:inline-block;"></span>`;
+      }).join("");
+      root.innerHTML = `
+        <div style="display:flex;align-items:center;padding:0 6px;flex-shrink:0;">
+          <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:30px;color:${RECON_THEME.primary};">${reconEsc(recon.topBar.close)}</span>
+          <span style="flex:1;"></span>
+          <span style="display:flex;align-items:center;gap:8px;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:999px;padding:11px 20px;font-family:'Plus Jakarta Sans';font-weight:700;font-size:21px;color:${RECON_THEME.ink2};">
+            <span style="font-size:16px;">&#8635;</span>${reconEsc(recon.topBar.asideLabel)}
+          </span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:16px 6px 0;flex-shrink:0;">
+          <span style="flex:1;display:flex;align-items:center;gap:6px;">${ticksHtml}</span>
+          <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+            <span style="width:8px;height:8px;border-radius:999px;background:${RECON_THEME.seaSoft};"></span>
+            <span style="font-family:'Plus Jakarta Sans';font-size:19px;color:${RECON_THEME.ink3};">${reconEsc(recon.topBar.comingLabel || "more coming")}</span>
+          </span>
+        </div>
+        <div style="flex:1;display:flex;min-height:0;padding:20px 6px;">
+          <div style="flex:1;display:flex;flex-direction:column;min-height:0;width:100%;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:44px;padding:22px;box-shadow:0 40px 90px -22px rgba(40,30,20,0.18);">
+            <div style="flex:1;min-height:120px;position:relative;border-radius:26px;overflow:hidden;background:${RECON_THEME.primaryTint};">
+              <img src="${recon.card.heroImage}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;" />
+              <span style="position:absolute;right:16px;bottom:12px;font-family:'Caveat';font-weight:700;font-size:32px;color:rgba(60,44,30,0.68);transform:rotate(-4deg);">${reconEsc(recon.card.dateStamp)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;min-height:64px;margin-top:16px;flex-shrink:0;">
+              <span style="flex:1;font-family:'Plus Jakarta Sans';font-weight:700;font-size:22px;color:${RECON_THEME.ink2};">${reconEsc(recon.card.chosenLabel)}</span>
+              <span style="font-family:'Newsreader';font-size:38px;color:${RECON_THEME.ink3};line-height:1;">&rsaquo;</span>
+            </div>
+            <div style="height:1px;background:${RECON_THEME.border};margin:18px 0;flex-shrink:0;"></div>
+            <div style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:17px;letter-spacing:0.09em;text-transform:uppercase;color:${RECON_THEME.ink3};flex-shrink:0;">${reconEsc(recon.card.date)}</div>
+            <div style="font-family:'Newsreader';font-size:33px;line-height:1.4;color:${RECON_THEME.ink};margin-top:12px;flex-shrink:0;">${reconEsc(recon.card.caption)}</div>
+          </div>
+        </div>
+        <div style="padding:0 6px ${isTablet ? 40 : 60}px;flex-shrink:0;">
+          ${reconKeepAsideRow(recon, 1.75)}
+          <div style="text-align:center;font-family:'Plus Jakarta Sans';font-size:19px;color:${RECON_THEME.ink3};margin-top:16px;">${reconEsc(recon.actions.note)}</div>
+        </div>`;
+    }
+
+    // src/components/audio/sound-trace.tsx's SoundTrace, reproduced as a
+    // real SVG polyline (not a photographic waveform -- the real component
+    // is a stylized deterministic line, never drawn from actual audio
+    // samples; see that file's own header comment). `ink` is the neutral
+    // graphite tone audio-emotion.ts falls back to before/without emotion
+    // analysis, matching this reconstruction's emotion-less demo clip.
+    function reconSoundTraceSvg(width, height, progress, scale, inkColor) {
+      const ink = inkColor || RECON_THEME.ink2;
+      const points = 40;
+      const seedish = [0.32, 0.58, 0.41, 0.72, 0.36, 0.5, 0.85, 0.29, 0.63, 0.44, 0.7, 0.33, 0.55, 0.9, 0.31, 0.48, 0.66, 0.38, 0.6, 0.8, 0.34, 0.52, 0.95, 0.3, 0.46, 0.68, 0.4, 0.57, 0.83, 0.35, 0.5, 0.62, 0.28, 0.45, 0.74, 0.37, 0.53, 0.65, 0.32, 0.42];
+      let d = "";
+      for (let i = 0; i < points; i++) {
+        const x = (i / (points - 1)) * width;
+        const amp = seedish[i % seedish.length];
+        const y = height / 2 + (i % 2 ? 1 : -1) * amp * (height / 2) * 0.9;
+        d += `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)} `;
+      }
+      const clipW = Math.max(0, Math.min(1, progress)) * width;
+      const stroke = 2.4 * scale;
+      return `
+        <svg width="100%" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+          <path d="${d}" fill="none" stroke="${ink}" stroke-opacity="0.42" stroke-width="${stroke}" stroke-linecap="round" />
+          <clipPath id="recon-trace-clip"><rect x="0" y="0" width="${clipW}" height="${height}" /></clipPath>
+          <path d="${d}" fill="none" stroke="${ink}" stroke-width="${stroke + 0.4}" stroke-linecap="round" clip-path="url(#recon-trace-clip)" />
+        </svg>`;
+    }
+
+    // The wax-seal listen/pause control -- src/components/audio/listen-seal.tsx.
+    // `fillColor` mirrors ListenSeal's `fill = color ?? e.main` (the seal's
+    // fill is the emotion's SATURATED `main` color, e.g. emotionColors.funny.c
+    // -- not the softer `ink` tone the trace/chip use).
+    function reconListenSeal(sizePx, fillColor) {
+      const fill = fillColor || RECON_THEME.ink2;
+      return `
+        <div style="position:relative;width:${sizePx}px;height:${sizePx}px;border-radius:50%;background:${fill};display:flex;align-items:center;justify-content:center;box-shadow:0 10px 20px -6px rgba(44,36,24,0.35);flex-shrink:0;">
+          <div style="position:absolute;inset:3px;border-radius:50%;border:2px dashed rgba(255,255,255,0.45);"></div>
+          <div style="width:0;height:0;margin-left:4px;border-top:${Math.round(sizePx * 0.19)}px solid transparent;border-bottom:${Math.round(sizePx * 0.19)}px solid transparent;border-left:${Math.round(sizePx * 0.3)}px solid #fff;"></div>
+        </div>`;
+    }
+
+    // The memory-detail SoundStage -- app/(app)/memory/[id]/index.tsx's
+    // SoundStage + MemoryDetailSound (framedCard/soundStage/soundStageTrace/
+    // soundStageControls/soundStageTimeRow styles), engagement bar, member
+    // pill and MemoryMetaFooter underneath it.
+    function reconSoundPlayer(root, recon, isTablet) {
+      // Coordinator fix (2026-09-20 review round 2), round 2 of this
+      // specific fix: the real card is TOP-anchored (framedCard's
+      // marginTop:12 only -- no vertical centering) and its image slot is
+      // `aspectRatio: 4/3` at the card's full width (styles.framedImage).
+      // An earlier attempt made the stage `flex:1` to force it to fill the
+      // device -- that structurally filled the space but only stretched the
+      // near-white `colors.surface` background around the same small,
+      // still-centered waveform/seal cluster, recreating the exact
+      // "small thing floating in a big blank box" problem one level down.
+      // Reverted to the real, BOUNDED 4:3 aspect ratio. Whatever the phone
+      // frame's fixed proportions leave below the card is answered by the
+      // real screen's own background: MemoryDetailFramed/MemoryDetailSound
+      // wrap the WHOLE screen in `getEmotionGradient(memory.emotion)`
+      // (src/constants/theme.ts:72-80; this file's own
+      // `styles.emotionGradient`, position:absolute/top:0/height:'60%').
+      //
+      // Round 3: the clip now carries a real emotion (`funny`, confirmed
+      // from source -- audio-emotion.ts's resolveAudioEmotionColors() reads
+      // the SAME emotionColors table every other memory type uses, and
+      // MemoryDetailSound feeds `memory.emotion` into the same
+      // getEmotionGradient()/MemoryMetaFooter emotion-chip calls
+      // MemoryDetailFramed does), so the seal/trace/chip now render in the
+      // emotion's real color instead of the neutral graphite fallback.
+      // NOTE the gradient's own math: emotionGradient's `locations` are
+      // [0, 0.45, 1] WITHIN a box that is only `height:'60%'` of the
+      // screen -- so the tint fades to flat colors.bg by 0.45*60% = 27% of
+      // the full screen, then stays flat colors.bg all the way down. Giving
+      // the clip a color therefore only tints the top ~27% (mostly hidden
+      // behind the opaque chrome buttons and the card's own top edge,
+      // exactly as it would in the real app, since the card is opaque
+      // there too) -- it does NOT recolor the lower-third whitespace below
+      // the card, which stays colors.bg regardless of emotion. This matches
+      // real behavior exactly; it is not a limitation of the reconstruction.
+      const emo = recon.player.emotion ? RECON_EMOTION_COLORS[recon.player.emotion] : null;
+      const sealFill = emo ? emo.c : RECON_THEME.ink2;
+      const traceInk = emo ? emo.ink : RECON_THEME.ink2;
+      const gradientStart = emo ? emo.soft : RECON_THEME.surface;
+      root.style.background = `linear-gradient(to bottom, ${gradientStart} 0%, ${RECON_THEME.bg} 27%, ${RECON_THEME.bg} 100%)`;
+      root.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 4px;flex-shrink:0;">
+          <span style="width:56px;height:56px;border-radius:28px;background:rgba(255,255,255,0.85);display:flex;align-items:center;justify-content:center;font-family:'Newsreader';font-size:34px;color:rgba(44,36,24,0.75);">&lsaquo;</span>
+          <span style="width:56px;height:56px;border-radius:28px;background:rgba(255,255,255,0.85);display:flex;align-items:center;justify-content:center;font-family:'Plus Jakarta Sans';font-weight:700;font-size:20px;color:rgba(44,36,24,0.75);">&bull;&bull;&bull;</span>
+        </div>
+        <div style="padding:16px 6px 0;">
+          <div style="width:100%;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:44px;box-shadow:0 40px 90px -22px rgba(40,30,20,0.18);overflow:hidden;">
+            <div style="width:100%;aspect-ratio:4/3;background:${RECON_THEME.surface};display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 34px;box-sizing:border-box;">
+              <div style="width:100%;">${reconSoundTraceSvg(300, 90, recon.player.progress, 2.1, traceInk)}</div>
+              <div style="margin-top:34px;">${reconListenSeal(104, sealFill)}</div>
+              <div style="display:flex;align-items:center;gap:14px;margin-top:30px;">
+                <span style="font-family:'Plus Jakarta Sans';font-weight:600;font-size:28px;color:${RECON_THEME.ink};">${reconEsc(recon.player.elapsed)}</span>
+                <span style="font-family:'Plus Jakarta Sans';font-weight:600;font-size:28px;color:${RECON_THEME.ink3};">/</span>
+                <span style="font-family:'Plus Jakarta Sans';font-weight:600;font-size:28px;color:${RECON_THEME.ink3};">${reconEsc(recon.player.total)}</span>
+                <span style="width:5px;height:5px;border-radius:999px;background:${RECON_THEME.ink3};margin:0 5px;"></span>
+                <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:20px;letter-spacing:0.1em;text-transform:uppercase;color:${RECON_THEME.ink3};">${reconEsc(recon.player.status)}</span>
+              </div>
+            </div>
+            <div style="flex-shrink:0;padding:30px 34px 36px;display:flex;flex-direction:column;gap:24px;">
+              <div style="display:flex;gap:24px;">
+                <span style="font-family:'Plus Jakarta Sans';font-size:30px;color:${RECON_THEME.ink2};">&hearts;</span>
+                <span style="font-family:'Plus Jakarta Sans';font-size:30px;color:${RECON_THEME.ink2};">&#9679;&#9679;&#9679;</span>
+              </div>
+              <div style="font-family:'Plus Jakarta Sans';font-size:29px;line-height:1.55;color:${RECON_THEME.ink};">${reconEsc(recon.player.caption)}</div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                ${recon.player.members.map((m) => `
+                  <span style="display:flex;align-items:center;gap:8px;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:999px;padding:9px 18px 9px 9px;">
+                    <span style="width:34px;height:34px;border-radius:999px;background:${RECON_THEME.primaryTint};color:${RECON_THEME.primaryDark};font-family:'Plus Jakarta Sans';font-weight:700;font-size:17px;display:flex;align-items:center;justify-content:center;">${reconEsc(m[0])}</span>
+                    <span style="font-family:'Plus Jakarta Sans';font-weight:600;font-size:22px;color:${RECON_THEME.ink};">${reconEsc(m)}</span>
+                  </span>`).join("")}
+              </div>
+              <!-- MemoryMetaFooter's real two-row structure: metaFooterTop
+                   (date + emotion chip, space-between) above attributionText
+                   alone -- NOT date+attribution side by side. -->
+              <div style="padding-top:8px;border-top:1px solid ${RECON_THEME.border};margin-top:4px;display:flex;flex-direction:column;gap:4px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                  <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:22px;letter-spacing:0.06em;text-transform:uppercase;color:${RECON_THEME.ink3};">${reconEsc(recon.player.date)}</span>
+                  ${emo ? `<span style="display:flex;align-items:center;gap:6px;background:${emo.soft};border-radius:999px;padding:6px 14px 6px 9px;">
+                      <span style="width:8px;height:8px;border-radius:999px;background:${emo.c};"></span>
+                      <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:17px;color:${emo.ink};">${reconEsc(recon.player.emotion)}</span>
+                    </span>` : ""}
+                </div>
+                <span style="font-family:'Plus Jakarta Sans';font-weight:600;font-size:22px;color:${RECON_THEME.ink3};">${reconEsc(recon.player.attribution)}</span>
+              </div>
+            </div>
+          </div>
+          ${recon.more && recon.more.length ? `
+            <div style="${RC.eyebrow}color:${RECON_THEME.ink3};margin-top:22px;flex-shrink:0;">${reconEsc(recon.moreLabel || "More of their voice")}</div>
+            <div style="display:flex;flex-direction:column;gap:14px;margin-top:14px;">
+              ${recon.more.map((m) => `
+                <div style="${RC.card}padding:18px 22px;display:flex;align-items:center;gap:16px;flex-shrink:0;">
+                  <span style="width:50px;height:50px;border-radius:25px;flex-shrink:0;background:${m.emotionSoft};display:flex;align-items:center;justify-content:center;"><span style="width:0;height:0;border-left:15px solid ${m.emotionColor};border-top:10px solid transparent;border-bottom:10px solid transparent;margin-left:4px;"></span></span>
+                  <span style="flex:1;min-width:0;${RC.serif}font-size:22px;line-height:1.36;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${reconEsc(m.text)}</span>
+                  <span style="${RC.sans}font-weight:700;font-size:17px;color:${RECON_THEME.ink3};flex-shrink:0;">${reconEsc(m.duration)}</span>
+                </div>`).join("")}
+            </div>` : ""}
+        </div>`;
+    }
+
+    // The enlarged callout for 04 -- the same SoundTrace + time row, scaled
+    // up (WP-D §3, "the real control, enlarged").
+    function reconSoundPlayerCallout(recon) {
+      const emo = recon.player.emotion ? RECON_EMOTION_COLORS[recon.player.emotion] : null;
+      const traceInk = emo ? emo.ink : RECON_THEME.ink2;
+      return `
+        <div style="display:flex;flex-direction:column;align-items:center;gap:18px;">
+          <div style="width:340px;">${reconSoundTraceSvg(300, 74, recon.player.progress, 2.2, traceInk)}</div>
+          <div style="display:flex;align-items:center;gap:14px;">
+            <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:34px;color:${RECON_THEME.ink};">${reconEsc(recon.player.elapsed)}</span>
+            <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:34px;color:${RECON_THEME.ink3};">/</span>
+            <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:34px;color:${RECON_THEME.ink3};">${reconEsc(recon.player.total)}</span>
+          </div>
+        </div>`;
+    }
+
+    // app/(app)/sharing/members.tsx's member rows (SettingsRow: label + role
+    // value) and app/(app)/sharing/invite.tsx's role-picker cards, plus
+    // pending-invites.tsx's code card (monospace code + role chip + status)
+    // for the actual 3-word dash-separated invite code.
+    function reconFamilyInvite(root, recon, isTablet) {
+      // Coordinator fixes (2026-09-20 review round 2):
+      // - FIX1: the roster now lists all 5 people the header claims, and the
+      //   invite panel gained the real "Invite a family member" title +
+      //   subtitle (invite.tsx's actual headerRow, previously dropped) and
+      //   the real "Create invite & share" button (styles.inviteButton) at
+      //   the end of the panel -- both are genuinely on that screen and
+      //   were left out, which is what created the fixable dead space.
+      // - FIX4: the invite-code card no longer prints "not a real code" into
+      //   the rendered pixels (that is not real product copy and read as an
+      //   unpolished placeholder); the code's fictional/non-functional
+      //   status is instead recorded only in ASSET-MANIFEST.json.
+      // The iPad frame is much SQUARER than the iPhone frame (its own real
+      // aspect ratio, not a stretched iPhone), so the same content needs
+      // less vertical footprint to stay fully on-canvas (never clipped --
+      // clipping would hide the real "Create invite & share" button, which
+      // is worse than a smaller reconstruction). `px()` scales every
+      // padding/margin/font value together so the composition's
+      // proportions stay identical between buckets.
+      const s = isTablet ? 0.66 : 1;
+      const px = (n) => Math.round(n * s) + "px";
+      root.innerHTML = `
+        <div style="padding:0 6px;flex-shrink:0;">
+          <div style="font-family:'Newsreader';font-size:${px(50)};color:${RECON_THEME.ink};">${reconEsc(recon.members.title)}</div>
+          <div style="font-family:'Plus Jakarta Sans';font-size:${px(23)};color:${RECON_THEME.ink3};margin-top:${px(8)};">${reconEsc(recon.members.subtitle)}</div>
+        </div>
+        <div style="flex:1;min-height:0;padding:${px(24)} 6px 0;display:flex;flex-direction:column;gap:${px(26)};">
+          <div style="background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:28px;overflow:hidden;flex-shrink:0;">
+            ${recon.members.rows.map((row, i) => `
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:${px(28)} ${px(28)};${i > 0 ? `border-top:1px solid ${RECON_THEME.border};` : ""}">
+                <span style="font-family:'Plus Jakarta Sans';font-weight:600;font-size:${px(26)};color:${RECON_THEME.ink};">${reconEsc(row.name)}</span>
+                <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:${px(21)};color:${RECON_THEME.ink3};">${reconEsc(row.role)}</span>
+              </div>`).join("")}
+          </div>
+          <div style="flex-shrink:0;display:flex;flex-direction:column;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:28px;padding:${px(34)};">
+            <div style="font-family:'Newsreader';font-size:${px(34)};color:${RECON_THEME.ink};flex-shrink:0;">${reconEsc(recon.invite.title)}</div>
+            <div style="font-family:'Plus Jakarta Sans';font-size:${px(21)};line-height:1.45;color:${RECON_THEME.ink3};margin-top:${px(10)};flex-shrink:0;">${reconEsc(recon.invite.subtitle)}</div>
+            <div style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:${px(19)};letter-spacing:0.08em;text-transform:uppercase;color:${RECON_THEME.ink3};margin-top:${px(30)};margin-bottom:${px(18)};flex-shrink:0;">${reconEsc(recon.invite.sectionLabel)}</div>
+            ${recon.invite.roles.map((r) => `
+              <div style="display:flex;flex-direction:column;gap:${px(8)};padding:${px(22)} ${px(24)};border-radius:20px;margin-bottom:${px(16)};flex-shrink:0;background:${r.selected ? RECON_THEME.primaryTint : RECON_THEME.white};border:1.5px solid ${r.selected ? RECON_THEME.primary : RECON_THEME.border};">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                  <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:${px(25)};color:${r.selected ? RECON_THEME.primaryDark : RECON_THEME.ink};">${reconEsc(r.label)}</span>
+                  <span style="width:${px(27)};height:${px(27)};border-radius:999px;border:2.5px solid ${r.selected ? RECON_THEME.primary : RECON_THEME.borderStrong};display:flex;align-items:center;justify-content:center;flex-shrink:0;">${r.selected ? `<span style=\"width:${px(14)};height:${px(14)};border-radius:999px;background:${RECON_THEME.primary};\"></span>` : ""}</span>
+                </div>
+                <span style="font-family:'Plus Jakarta Sans';font-size:${px(20)};line-height:1.45;color:${RECON_THEME.ink2};">${reconEsc(r.description)}</span>
+              </div>`).join("")}
+            <div style="margin-top:${px(6)};display:flex;align-items:center;justify-content:space-between;background:${RECON_THEME.surface2};border-radius:18px;padding:${px(24)} ${px(26)};flex-shrink:0;">
+              <span style="font-family:'SpaceMono', monospace;font-size:${px(26)};color:${RECON_THEME.ink};">${reconEsc(recon.invite.code)}</span>
+              <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:${px(17)};color:${RECON_THEME.ink2};background:${RECON_THEME.white};border-radius:999px;padding:${px(7)} ${px(18)};">${reconEsc(recon.invite.codeRoleLabel)}</span>
+            </div>
+            <div style="font-family:'Plus Jakarta Sans';font-size:${px(18)};color:${RECON_THEME.ink3};margin-top:${px(11)};flex-shrink:0;">${reconEsc(recon.invite.codeStatus)}</div>
+            <div style="margin-top:${px(24)};background:${RECON_THEME.primary};border-radius:16px;padding:${px(24)};text-align:center;flex-shrink:0;">
+              <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:${px(24)};color:${RECON_THEME.white};">${reconEsc(recon.invite.button)}</span>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // Enlarged callout for 06 -- the real Viewer/Manager role selector from
+    // invite.tsx, scaled up ("the role selector on 06" per WP-D §3).
+    function reconFamilyInviteCallout(recon) {
+      return recon.invite.roles.map((r) => `
+        <div style="display:flex;flex-direction:column;gap:8px;padding:22px 24px;border-radius:22px;margin-bottom:14px;background:${r.selected ? RECON_THEME.primaryTint : RECON_THEME.white};border:2px solid ${r.selected ? RECON_THEME.primary : RECON_THEME.border};min-width:340px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:30px;color:${r.selected ? RECON_THEME.primaryDark : RECON_THEME.ink};">${reconEsc(r.label)}</span>
+            <span style="width:32px;height:32px;border-radius:999px;border:3px solid ${r.selected ? RECON_THEME.primary : RECON_THEME.borderStrong};display:flex;align-items:center;justify-content:center;">${r.selected ? `<span style=\"width:17px;height:17px;border-radius:999px;background:${RECON_THEME.primary};\"></span>` : ""}</span>
+          </div>
+          <span style="font-family:'Plus Jakarta Sans';font-size:22px;line-height:1.4;color:${RECON_THEME.ink2};">${reconEsc(r.description)}</span>
+        </div>`).join("");
+    }
+
+    // Small in-card widgets used by frame 01's "saved sound" inset and
+    // frame 03's "composer input" inset -- these are NOT full reconstructed
+    // screens, just one real component's markup at inset scale.
+    // src/components/audio/stub-band.tsx (the timeline card's compact sound
+    // widget -- distinct from SoundStage above, which is the full detail
+    // player).
+    function reconStubBandHtml(recon) {
+      // StubBand's real background is a LinearGradient from the emotion's
+      // `soft` color fading to transparent (colors=[e.soft, e.soft+'00']),
+      // over the neutral surface tint when no emotion is set. Same clip as
+      // frame 04's reconstruction (see ASSET-MANIFEST) so it now carries
+      // the same `funny` emotion for internal consistency.
+      const emo = recon.emotion ? RECON_EMOTION_COLORS[recon.emotion] : null;
+      const soft = emo ? emo.soft : RECON_THEME.surface;
+      const sealFill = emo ? emo.c : RECON_THEME.ink2;
+      const traceInk = emo ? emo.ink : RECON_THEME.ink2;
+      return `
+        <div style="position:relative;overflow:hidden;background:linear-gradient(135deg, ${soft}, ${soft}00);border-radius:20px;padding:20px;display:flex;align-items:center;gap:16px;">
+          ${reconListenSeal(56, sealFill)}
+          <div style="flex:1;min-width:0;">
+            ${reconSoundTraceSvg(260, 34, recon.progress, 1.1, traceInk)}
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+              <span style="font-family:'Plus Jakarta Sans';font-weight:600;font-size:15px;color:${RECON_THEME.ink2};">${reconEsc(recon.elapsed)}</span>
+              <span style="font-family:'Plus Jakarta Sans';font-weight:600;font-size:15px;color:${RECON_THEME.ink3};">/</span>
+              <span style="font-family:'Plus Jakarta Sans';font-weight:600;font-size:15px;color:${RECON_THEME.ink3};">${reconEsc(recon.total)}</span>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // src/components/memory-composer-form.tsx's plain content TextInput
+    // (styles.textarea -- Newsreader, no box chrome) plus its word-count
+    // line underneath, reproduced at inset scale.
+    function reconComposerInputHtml(recon) {
+      return `
+        <div style="background:${RECON_THEME.white};border-radius:20px;padding:22px 24px 40px;">
+          <div style="font-family:'Newsreader';font-size:22px;line-height:1.4;color:${RECON_THEME.ink};">${reconEsc(recon.text)}</div>
+        </div>`;
+    }
+
+    // NEW (coordinator round 2) -- app/(app)/family/[id]/index.tsx's
+    // per-child collection: DetailChrome-style back/more circular buttons,
+    // CastCard (compact 120px portrait + name/age/nickname), the
+    // "Keepsakes -> Memory Books" SettingsRow, and the "Memories with
+    // {name}" list (MemoryThumb + date + content text + optional emotion
+    // chip per row). Used for frame 07 on the iPhone buckets only -- the
+    // ipad bucket keeps its already-genuine per-child-collection.png native
+    // capture (of Nora, an adult) and is untouched by this function.
+    function reconFamilyCollection(root, recon, isTablet) {
+      root.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 4px;flex-shrink:0;">
+          <span style="width:52px;height:52px;border-radius:26px;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};display:flex;align-items:center;justify-content:center;font-family:'Newsreader';font-size:30px;color:${RECON_THEME.ink2};">&lsaquo;</span>
+          <span style="width:52px;height:52px;border-radius:26px;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};display:flex;align-items:center;justify-content:center;font-family:'Plus Jakarta Sans';font-weight:700;font-size:18px;color:${RECON_THEME.ink2};">&bull;&bull;&bull;</span>
+        </div>
+        <div style="flex:1;min-height:0;padding:20px 6px 0;display:flex;flex-direction:column;gap:22px;overflow:hidden;">
+          <div style="flex-shrink:0;display:flex;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:20px;overflow:hidden;height:168px;">
+            <img src="${recon.child.portrait}" alt="" style="width:168px;height:168px;object-fit:cover;flex-shrink:0;" />
+            <div style="flex:1;padding:20px;display:flex;flex-direction:column;justify-content:center;gap:6px;">
+              <div style="font-family:'Newsreader';font-weight:500;font-size:28px;color:${RECON_THEME.ink};">${reconEsc(recon.child.name)}</div>
+              <div style="font-family:'Plus Jakarta Sans';font-size:19px;color:${RECON_THEME.ink3};">${reconEsc(recon.child.age)}</div>
+              <div style="font-family:'Caveat';font-size:24px;color:${RECON_THEME.ink2};">${reconEsc(recon.child.nickname)}</div>
+            </div>
+          </div>
+          <div style="flex-shrink:0;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:20px;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <div style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:22px;color:${RECON_THEME.ink};">${reconEsc(recon.keepsakes.label)}</div>
+              <div style="font-family:'Plus Jakarta Sans';font-size:17px;color:${RECON_THEME.ink3};margin-top:4px;">${reconEsc(recon.keepsakes.caption)}</div>
+            </div>
+            <span style="font-family:'Newsreader';font-size:32px;color:${RECON_THEME.ink3};flex-shrink:0;">&rsaquo;</span>
+          </div>
+          <div style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:18px;letter-spacing:0.08em;text-transform:uppercase;color:${RECON_THEME.ink3};flex-shrink:0;">${reconEsc(recon.eyebrow)}</div>
+          <div style="display:flex;flex-direction:column;gap:16px;overflow:hidden;">
+            ${recon.rows.map((row) => `
+              <div style="display:flex;align-items:center;gap:20px;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:20px;padding:20px;flex-shrink:0;">
+                ${row.thumbImage
+                  ? `<img src="${row.thumbImage}" alt="" style="width:92px;height:92px;border-radius:16px;object-fit:cover;flex-shrink:0;" />`
+                  : `<div style="width:92px;height:92px;border-radius:16px;flex-shrink:0;background:${row.emotionSoft || RECON_THEME.surface};display:flex;align-items:center;justify-content:center;"><span style="font-family:'Newsreader';font-size:54px;opacity:0.45;color:${row.emotionSoft ? RECON_THEME.ink : RECON_THEME.ink3};">&ldquo;</span></div>`}
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;">
+                  <span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:17px;letter-spacing:0.08em;text-transform:uppercase;color:${RECON_THEME.ink3};">${reconEsc(row.date)}</span>
+                  <span style="font-family:'Newsreader';font-size:23px;line-height:1.4;color:${RECON_THEME.ink};display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${reconEsc(row.text)}</span>
+                  ${row.emotion ? `<span style="display:inline-flex;align-items:center;gap:6px;align-self:flex-start;background:${row.emotionSoft};border-radius:999px;padding:5px 12px 5px 8px;margin-top:2px;"><span style="width:9px;height:9px;border-radius:999px;background:${row.emotionColor};"></span><span style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:15px;color:${row.emotionInk};">${reconEsc(row.emotion)}</span></span>` : ""}
+                </div>
+                <span style="font-family:'Newsreader';font-size:28px;color:${RECON_THEME.ink3};flex-shrink:0;">&rsaquo;</span>
+              </div>`).join("")}
+          </div>
+        </div>`;
+    }
+
+    // ---------------------------------------------------------------
+    // Owner round 2026-09-20: five additional screen reconstructions.
+    // Each is derived from the real component source named above it.
+    // Shared card chrome so every screen reads as one design system.
+    // ---------------------------------------------------------------
+    const RC = {
+      card: `background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};border-radius:26px;box-shadow:0 2px 3px rgba(44,36,24,0.04),0 12px 28px rgba(44,36,24,0.05);`,
+      eyebrow: `font-family:'Plus Jakarta Sans';font-weight:700;font-size:17px;letter-spacing:0.14em;text-transform:uppercase;`,
+      serif: `font-family:'Newsreader';color:${RECON_THEME.ink};`,
+      sans: `font-family:'Plus Jakarta Sans';`,
+    };
+
+    function reconChrome(leftGlyph, rightGlyph) {
+      return `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 4px;flex-shrink:0;">
+          <span style="width:52px;height:52px;border-radius:26px;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};display:flex;align-items:center;justify-content:center;font-family:'Newsreader';font-size:30px;color:${RECON_THEME.ink2};">${leftGlyph}</span>
+          <span style="width:52px;height:52px;border-radius:26px;background:${RECON_THEME.white};border:1px solid ${RECON_THEME.border};display:flex;align-items:center;justify-content:center;${RC.sans}font-weight:700;font-size:18px;color:${RECON_THEME.ink2};">${rightGlyph}</span>
+        </div>`;
+    }
+
+    function reconChip(row) {
+      if (!row.emotion) return "";
+      return `<span style="display:inline-flex;align-items:center;gap:7px;align-self:flex-start;background:${row.emotionSoft};border-radius:999px;padding:6px 14px 6px 10px;"><span style="width:10px;height:10px;border-radius:999px;background:${row.emotionColor};"></span><span style="${RC.sans}font-weight:700;font-size:16px;color:${row.emotionInk};">${reconEsc(row.emotion)}</span></span>`;
+    }
+
+    // Source: app/(app)/family/[id]/portraits.tsx + src/components/portrait-timeline.tsx
+    // (eyebrow "Through the years", member name, paired photo|portrait visual
+    // slots at aspectRatio 1 with a 2px gutter, "Current" badge, date title, age).
+    function reconPortraitTimeline(root, recon, isTablet) {
+      root.innerHTML = `
+        ${reconChrome("&lsaquo;", "+")}
+        <div style="flex:1;min-height:0;padding:10px 6px 0;display:flex;flex-direction:column;gap:16px;overflow:hidden;">
+          <div style="flex-shrink:0;">
+            <div style="${RC.eyebrow}color:${RECON_THEME.primary};">${reconEsc(recon.eyebrow)}</div>
+            <div style="${RC.serif}font-weight:500;font-size:38px;line-height:1.1;margin-top:6px;">${reconEsc(recon.name)}</div>
+            <div style="${RC.sans}font-size:20px;line-height:1.45;color:${RECON_THEME.ink2};margin-top:8px;">${reconEsc(recon.intro)}</div>
+          </div>
+          ${recon.versions.map((v, i) => `
+            <div style="${RC.card}overflow:hidden;flex-shrink:0;">
+              <div style="display:flex;gap:2px;background:${RECON_THEME.border};position:relative;">
+                <div style="flex:1;min-width:0;position:relative;padding-bottom:50%;">
+                  <img src="${v.photo}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;" />
+                </div>
+                <div style="flex:1;min-width:0;position:relative;padding-bottom:50%;">
+                  <img src="${v.portrait}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;" />
+                  ${i === 0 ? `<span style="position:absolute;right:12px;top:12px;display:inline-flex;align-items:center;gap:7px;background:${RECON_THEME.primary};border-radius:999px;padding:7px 14px;"><span style="width:7px;height:7px;border-radius:999px;background:#fff;"></span><span style="${RC.sans}font-weight:700;font-size:15px;color:#fff;">Current</span></span>` : ""}
+                </div>
+              </div>
+              <div style="padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:14px;">
+                <div>
+                  <div style="${RC.serif}font-weight:500;font-size:25px;">${reconEsc(v.date)}</div>
+                  <div style="${RC.sans}font-size:19px;color:${RECON_THEME.ink2};margin-top:8px;">${reconEsc(v.age)}</div>
+                </div>
+                <span style="width:46px;height:46px;border-radius:23px;border:1px solid ${RECON_THEME.border};display:flex;align-items:center;justify-content:center;${RC.sans}font-weight:700;font-size:15px;color:${RECON_THEME.ink3};flex-shrink:0;">&bull;&bull;&bull;</span>
+              </div>
+            </div>`).join("")}
+        </div>`;
+    }
+
+    // Source: app/(app)/family/[id]/memory-books.tsx (header "Memory Books",
+    // subtitle, "YOUR BOOKS" eyebrow + N books count, shelf tiles carrying the
+    // book's own cover with label + range line beneath, "Create a book" CTA).
+    function reconBookShelf(root, recon, isTablet) {
+      root.innerHTML = `
+        ${reconChrome("&lsaquo;", "&bull;&bull;&bull;")}
+        <div style="flex:1;min-height:0;padding:14px 6px 0;display:flex;flex-direction:column;gap:20px;overflow:hidden;">
+          <div style="flex-shrink:0;">
+            <div style="${RC.serif}font-weight:500;font-size:38px;line-height:1.1;">${reconEsc(recon.title)}</div>
+            <div style="${RC.sans}font-size:19px;line-height:1.45;color:${RECON_THEME.ink2};margin-top:7px;">${reconEsc(recon.subtitle)}</div>
+          </div>
+          <div style="display:flex;align-items:baseline;justify-content:space-between;flex-shrink:0;">
+            <span style="${RC.eyebrow}color:${RECON_THEME.ink3};">${reconEsc(recon.eyebrow)}</span>
+            <span style="${RC.sans}font-size:18px;color:${RECON_THEME.ink3};">${reconEsc(recon.count)}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:22px;flex-shrink:0;">
+            ${recon.books.map((b) => `
+              <div>
+                <div style="position:relative;width:100%;padding-bottom:100%;border-radius:12px;overflow:hidden;box-shadow:0 3px 5px rgba(44,36,24,0.10),0 14px 30px rgba(44,36,24,0.15);">
+                  <img src="${b.cover}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;" />
+                  <div style="position:absolute;left:0;right:0;bottom:0;height:58%;background:linear-gradient(to top, rgba(28,22,16,0.66), rgba(28,22,16,0));"></div>
+                  <div style="position:absolute;left:12px;bottom:11px;right:12px;">
+                    <div style="${RC.serif}color:#fff;font-size:34px;line-height:1;text-shadow:0 1px 10px rgba(0,0,0,0.3);">${reconEsc(b.childName)}</div>
+                    <div style="${RC.sans}color:rgba(255,255,255,0.86);font-size:14px;letter-spacing:0.15em;margin-top:6px;">${reconEsc(b.years)}</div>
+                  </div>
+                  <div style="position:absolute;left:0;top:0;bottom:0;width:9px;background:linear-gradient(to right, rgba(0,0,0,0.30), rgba(0,0,0,0.04));"></div>
+                  <div style="position:absolute;right:0;top:3%;bottom:3%;width:13px;background:repeating-linear-gradient(to right, #fdfcf9 0 2px, #e7e1d6 2px 3px);border-top-right-radius:3px;border-bottom-right-radius:3px;box-shadow:inset -2px 0 3px rgba(44,36,24,0.18);"></div>
+                  <div style="position:absolute;right:13px;top:0;bottom:0;width:10px;background:linear-gradient(to left, rgba(0,0,0,0.16), rgba(0,0,0,0));"></div>
+                </div>
+                <div style="${RC.sans}font-weight:700;font-size:21px;color:${RECON_THEME.ink};margin-top:13px;">${reconEsc(b.label)}</div>
+                <div style="${RC.sans}font-size:17px;color:${RECON_THEME.ink3};margin-top:4px;">${reconEsc(b.range)}</div>
+              </div>`).join("")}
+          </div>
+          <div style="${RC.card}padding:24px 26px;display:flex;flex-direction:column;gap:20px;flex-shrink:0;margin-top:2px;">
+            ${recon.bullets.map((b) => `
+              <div style="display:flex;gap:16px;align-items:flex-start;">
+                <span style="width:11px;height:11px;border-radius:3px;background:${RECON_THEME.primary};flex-shrink:0;margin-top:9px;"></span>
+                <div style="${RC.sans}font-size:20px;line-height:1.5;color:${RECON_THEME.ink2};"><span style="font-weight:700;color:${RECON_THEME.ink};">${reconEsc(b.lead)}</span> ${reconEsc(b.rest)}</div>
+              </div>`).join("")}
+          </div>
+          <div style="flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:12px;background:${RECON_THEME.primary};border-radius:999px;padding:22px;">
+            <span style="${RC.sans}font-weight:700;font-size:23px;color:#fff;">${reconEsc(recon.cta)}</span>
+          </div>
+        </div>`;
+    }
+
+    // Source: app/(app)/memory/[id]/index.tsx + src/components/memory-engagement-bar.tsx
+    // + src/components/memory-comments-drawer.tsx (title "Comments", count,
+    // initial-letter avatar, author, timestamp, comment body).
+    function reconFamilyFeed(root, recon, isTablet) {
+      root.innerHTML = `
+        ${reconChrome("&lsaquo;", "&bull;&bull;&bull;")}
+        <div style="flex:1;min-height:0;padding:22px 6px 0;display:flex;flex-direction:column;gap:20px;overflow:hidden;">
+          <div style="${RC.card}overflow:hidden;flex-shrink:0;">
+            <div style="position:relative;width:100%;padding-bottom:68%;"><img src="${recon.memory.image}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;" /></div>
+            <div style="padding:24px 26px 22px;display:flex;flex-direction:column;gap:16px;">
+              <div style="${RC.serif}font-size:27px;line-height:1.45;">${reconEsc(recon.memory.text)}</div>
+              <div style="display:flex;align-items:center;gap:26px;">
+                <span style="display:inline-flex;align-items:center;gap:10px;"><span style="font-size:27px;color:${RECON_THEME.primary};">&#9829;</span><span style="${RC.sans}font-weight:700;font-size:20px;color:${RECON_THEME.ink2};">${reconEsc(recon.memory.likes)}</span></span>
+                <span style="display:inline-flex;align-items:center;gap:10px;"><span style="font-size:25px;color:${RECON_THEME.ink2};">&#9737;</span><span style="${RC.sans}font-weight:700;font-size:20px;color:${RECON_THEME.ink2};">${reconEsc(recon.memory.comments)}</span></span>
+                <span style="margin-left:auto;">${reconChip(recon.memory)}</span>
+              </div>
+            </div>
+          </div>
+          <div style="${RC.card}padding:24px 26px;display:flex;flex-direction:column;gap:22px;flex-shrink:0;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span style="${RC.serif}font-weight:500;font-size:26px;">${reconEsc(recon.commentsTitle)}</span>
+              <span style="${RC.sans}font-weight:700;font-size:17px;color:${RECON_THEME.ink3};background:${RECON_THEME.surface};border-radius:999px;padding:4px 12px;">${reconEsc(recon.memory.comments)}</span>
+            </div>
+            ${recon.comments.map((c) => `
+              <div style="display:flex;gap:16px;align-items:flex-start;">
+                <span style="width:52px;height:52px;border-radius:26px;flex-shrink:0;background:${c.tint};display:flex;align-items:center;justify-content:center;${RC.sans}font-weight:700;font-size:22px;color:${RECON_THEME.ink};">${reconEsc(c.author.charAt(0))}</span>
+                <div style="flex:1;min-width:0;">
+                  <div style="display:flex;align-items:baseline;gap:10px;">
+                    <span style="${RC.sans}font-weight:700;font-size:20px;color:${RECON_THEME.ink};">${reconEsc(c.author)}</span>
+                    <span style="${RC.sans}font-size:16px;color:${RECON_THEME.ink3};">${reconEsc(c.when)}</span>
+                  </div>
+                  <div style="${RC.serif}font-size:23px;line-height:1.45;color:${RECON_THEME.ink};margin-top:6px;">${reconEsc(c.text)}</div>
+                </div>
+              </div>`).join("")}
+            <div style="display:flex;align-items:center;gap:14px;border:1px solid ${RECON_THEME.border};background:${RECON_THEME.surface};border-radius:999px;padding:16px 22px;margin-top:2px;">
+              <span style="${RC.sans}font-size:20px;color:${RECON_THEME.ink3};flex:1;">${reconEsc(recon.inputPlaceholder)}</span>
+              <span style="width:44px;height:44px;border-radius:22px;background:${RECON_THEME.primary};display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;flex-shrink:0;">&uarr;</span>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // Source: app/(app)/(tabs)/timeline.tsx + src/components/memory-card.tsx
+    // (screen title, date section headers, MediaCard / text-only card / SoundCard).
+    function reconTimelineCard(c) {
+      const meta = `<div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;">
+          <span style="${RC.sans}font-weight:700;font-size:16px;letter-spacing:0.1em;color:${RECON_THEME.ink3};">${reconEsc(c.date)}</span>
+          ${reconChip(c)}
+        </div>`;
+      if (c.type === "photo") {
+        return `<div style="${RC.card}overflow:hidden;flex-shrink:0;">
+          <div style="position:relative;width:100%;padding-bottom:${c.ratio || 58}%;"><img src="${c.image}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;" /></div>
+          <div style="padding:20px 24px 18px;"><div style="${RC.serif}font-size:24px;line-height:1.44;">${reconEsc(c.text)}</div>${meta}</div>
+        </div>`;
+      }
+      if (c.type === "sound") {
+        return `<div style="${RC.card}padding:22px 24px;flex-shrink:0;">
+          <div style="display:flex;align-items:center;gap:18px;">
+            <span style="width:58px;height:58px;border-radius:29px;flex-shrink:0;background:${c.emotionSoft};display:flex;align-items:center;justify-content:center;"><span style="width:0;height:0;border-left:18px solid ${c.emotionColor};border-top:12px solid transparent;border-bottom:12px solid transparent;margin-left:5px;"></span></span>
+            <span style="flex:1;min-width:0;display:block;">${reconSoundTraceSvg(380, 48, 0.42, 1, c.emotionColor)}</span>
+            <span style="${RC.sans}font-weight:700;font-size:18px;color:${RECON_THEME.ink2};flex-shrink:0;">${reconEsc(c.duration)}</span>
+          </div>
+          <div style="${RC.serif}font-size:24px;line-height:1.44;margin-top:16px;">${reconEsc(c.text)}</div>${meta}
+        </div>`;
+      }
+      return `<div style="${RC.card}padding:24px 26px 20px;flex-shrink:0;border-top:5px solid ${c.emotionSoft};">
+        <div style="font-family:'Newsreader';font-style:italic;font-size:25px;line-height:1.46;color:${RECON_THEME.ink};">${reconEsc(c.text)}</div>${meta}
+      </div>`;
+    }
+
+    function reconTimeline(root, recon, isTablet) {
+      root.innerHTML = `
+        ${reconChrome("&lsaquo;", "&bull;&bull;&bull;")}
+        <div style="flex:1;min-height:0;padding:16px 6px 0;display:flex;flex-direction:column;gap:16px;overflow:hidden;">
+          <div style="flex-shrink:0;">
+            <div style="${RC.serif}font-weight:500;font-size:38px;line-height:1.1;">${reconEsc(recon.title)}</div>
+          </div>
+          ${recon.sections.map((sec) => `
+            <div style="${RC.eyebrow}color:${RECON_THEME.ink3};flex-shrink:0;margin-top:2px;">${reconEsc(sec.label)}</div>
+            ${sec.cards.map(reconTimelineCard).join("")}
+          `).join("")}
+        </div>`;
+    }
+
+    // Source: app/(app)/memory/[id]/index.tsx (MemoryDetailFramed: full-bleed
+    // illustration, engagement row, caption, tagged-member pills, date + emotion).
+    function reconMemoryDetail(root, recon, isTablet) {
+      root.innerHTML = `
+        ${reconChrome("&lsaquo;", "&bull;&bull;&bull;")}
+        <div style="flex:1;min-height:0;padding:18px 6px 0;display:flex;flex-direction:column;gap:16px;overflow:hidden;">
+          <div style="${RC.card}padding:22px 26px;display:flex;align-items:flex-start;gap:18px;flex-shrink:0;">
+            <span style="width:54px;height:54px;border-radius:27px;background:${RECON_THEME.primaryTint};display:flex;align-items:center;justify-content:center;flex-shrink:0;"><span style="font-size:25px;">&#9998;</span></span>
+            <div style="flex:1;min-width:0;">
+              <div style="${RC.sans}font-weight:700;font-size:17px;color:${RECON_THEME.ink3};letter-spacing:0.08em;text-transform:uppercase;">${reconEsc(recon.inputLabel)}</div>
+              <div style="font-family:'Newsreader';font-style:italic;font-size:24px;line-height:1.42;color:${RECON_THEME.ink};margin-top:7px;">${reconEsc(recon.inputText)}</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px;flex-shrink:0;padding:0 4px;">
+            <span style="flex:1;height:1px;background:${RECON_THEME.border};"></span>
+            <span style="${RC.sans}font-weight:700;font-size:16px;letter-spacing:0.1em;text-transform:uppercase;color:${RECON_THEME.ink3};">${reconEsc(recon.bridge)}</span>
+            <span style="flex:1;height:1px;background:${RECON_THEME.border};"></span>
+          </div>
+          <div style="${RC.card}overflow:hidden;flex-shrink:0;">
+            <div style="position:relative;width:100%;padding-bottom:116%;"><img src="${recon.image}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;" /></div>
+            <div style="padding:24px 28px 24px;display:flex;flex-direction:column;gap:18px;">
+              <div style="display:flex;align-items:center;gap:26px;">
+                <span style="font-size:29px;color:${RECON_THEME.ink2};">&#9825;</span>
+                <span style="font-size:27px;color:${RECON_THEME.ink2};">&#9737;</span>
+              </div>
+              <div style="${RC.serif}font-size:29px;line-height:1.42;">${reconEsc(recon.text)}</div>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                ${recon.tags.map((t) => `<span style="display:inline-flex;align-items:center;gap:11px;border:1px solid ${RECON_THEME.border};border-radius:999px;padding:8px 18px 8px 8px;"><img src="${t.avatar}" alt="" style="width:40px;height:40px;border-radius:20px;object-fit:cover;" /><span style="${RC.sans}font-weight:700;font-size:19px;color:${RECON_THEME.ink};">${reconEsc(t.label)}</span></span>`).join("")}
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <span style="${RC.sans}font-weight:700;font-size:16px;letter-spacing:0.1em;color:${RECON_THEME.ink3};">${reconEsc(recon.date)}</span>
+                ${reconChip(recon)}
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // Floating overlay pieces (marketing chrome, never product UI).
+    function renderOverlays(overlays, isTablet) {
+      const layer = document.getElementById("overlay-layer");
+      if (!overlays || !overlays.length) { layer.innerHTML = ""; return; }
+      layer.innerHTML = overlays.map((o) => {
+        const key = isTablet && o.tablet ? Object.assign({}, o, o.tablet) : o;
+        const pos = `left:${key.left_pct}%;top:${key.top_pct}%;` +
+          (key.width_pct ? `width:${key.width_pct}%;` : "") +
+          (key.height_pct ? `height:${key.height_pct}%;` : "") +
+          `transform:translate(-50%,-50%) rotate(${key.rotate || 0}deg);`;
+        if (o.type === "note") {
+          return `<div class="ov ov-note" style="${pos}font-size:${key.size || 26}px;${o.italic ? "font-style:italic;" : ""}">
+            ${reconEsc(o.text)}
+            ${o.date || o.emotion ? `<div class="ov-meta">
+              <span class="ov-date" style="font-size:${(key.size || 26) * 0.6}px;">${reconEsc(o.date || "")}</span>
+              ${o.emotion ? `<span class="ov-chip" style="background:${o.emotionSoft};color:${o.emotionInk};font-size:${(key.size || 26) * 0.62}px;"><i style="background:${o.emotionColor};"></i>${reconEsc(o.emotion)}</span>` : ""}
+            </div>` : ""}
+          </div>`;
+        }
+        if (o.type === "pill") {
+          const lead = o.state === "done" ? `<span class="tick">&#10003;</span>` : `<span class="spin"></span>`;
+          return `<div class="ov ov-pill" style="${pos}font-size:${key.size || 24}px;">${lead}<span>${reconEsc(o.text)}</span></div>`;
+        }
+        if (o.type === "bubble") {
+          return `<div class="ov ov-bubble" style="${pos}">
+            <span class="av" style="background:${o.tint};font-size:${(key.size || 23) * 0.8}px;">${reconEsc(o.author.charAt(0))}</span>
+            <span><span class="who" style="font-size:${(key.size || 23) * 0.78}px;">${reconEsc(o.author)}</span>
+            <span class="said" style="display:block;font-size:${key.size || 23}px;">${reconEsc(o.text)}</span></span>
+          </div>`;
+        }
+        if (o.type === "heart") {
+          return `<div class="ov ov-heart" style="${pos}font-size:${key.size || 46}px;opacity:${o.opacity || 1};">&#10084;</div>`;
+        }
+        if (o.type === "sparkle") {
+          return `<div class="ov ov-sparkle" style="${pos}font-size:${key.size || 30}px;opacity:${o.opacity || 1};">&#10022;</div>`;
+        }
+        if (o.type === "photo") {
+          return `<div class="ov ov-photo" style="${pos}"><img src="${o.src}" alt="" /></div>`;
+        }
+        if (o.type === "stat") {
+          return `<div class="ov ov-stat" style="${pos}">
+            <b style="font-size:${key.size || 52}px;">${reconEsc(o.value)}</b>
+            <span style="font-size:${(key.size || 52) * 0.34}px;">${reconEsc(o.label)}</span>
+          </div>`;
+        }
+        return "";
+      }).join("");
+    }
+
     function render() {
       const data = getSlideData();
       const usp = new URLSearchParams(location.search);
@@ -562,6 +1689,7 @@
       applyScale(sizeKey);
 
       const stage = document.getElementById("stage");
+      renderOverlays(data.overlays, TABLET_SIZES.has(sizeKey));
       const headlineEl = document.getElementById("headline");
       const sublineEl = document.getElementById("subline");
       const scriptEl = document.getElementById("script-accent");
@@ -596,8 +1724,106 @@
         caption.style.top = data.caption_top + "%";
       }
 
-      // Layout: "device" (default) or "hero" (no frame, full-bleed art).
-      if (data.layout === "hero") {
+      const disclosureEl = document.getElementById("disclosure");
+      if (data.disclosure) {
+        disclosureEl.textContent = data.disclosure;
+        disclosureEl.style.display = "block";
+      }
+
+      // Resolve a param that may be a plain value or a per-size-bucket
+      // override map, e.g. { default: 46, ipad: 30 }. Mirrors the existing
+      // `top_pct_tablet` convention used by chips, generalized to any bucket
+      // key so card/inset placements can differ on the iPad bucket.
+      function resolveForSize(value) {
+        if (value != null && typeof value === "object" && !Array.isArray(value)) {
+          if (Object.prototype.hasOwnProperty.call(value, sizeKey)) return value[sizeKey];
+          if (Object.prototype.hasOwnProperty.call(value, "default")) return value.default;
+        }
+        return value;
+      }
+
+      const isTabletBucketGlobal = TABLET_SIZES.has(sizeKey);
+
+      // Layout: "device" (default), "hero" (no frame, full-bleed art),
+      // "card" (genuine UI crop(s) as the dominant subject), or "blocked"
+      // (no genuine capture exists — a plainly labeled empty proof area).
+      if (data.layout === "blocked") {
+        stage.classList.add("layout-blocked");
+        document.getElementById("blocked-route").textContent = data.blocked && data.blocked.route ? data.blocked.route : "";
+      } else if (data.layout === "card") {
+        stage.classList.add("layout-card");
+        const cardLayer = document.getElementById("card-layer");
+
+        const cardsSpec = (isTabletBucketGlobal && data.cards_tablet) || data.cards || [];
+        cardsSpec.forEach((card) => {
+          const wrap = document.createElement("div");
+          wrap.className = "paper-card";
+          const widthPct = resolveForSize(card.width_pct);
+          const topPct = resolveForSize(card.top_pct);
+          const leftPct = resolveForSize(card.left_pct);
+          if (widthPct != null) wrap.style.width = widthPct + "%";
+          if (topPct != null) wrap.style.top = topPct + "%";
+          if (leftPct != null) wrap.style.left = leftPct + "%";
+          if (card.rotate) wrap.style.transform = "rotate(" + card.rotate + "deg)";
+          if (card.shadow === false) wrap.style.boxShadow = "none";
+          const img = document.createElement("img");
+          img.src = card.src;
+          img.alt = "";
+          wrap.appendChild(img);
+          cardLayer.appendChild(wrap);
+        });
+
+        const insetsSpec = (isTabletBucketGlobal && data.insets_tablet) || data.insets || (data.inset ? [data.inset] : []);
+        insetsSpec.forEach((inset) => {
+          const widthPct = resolveForSize(inset.width_pct);
+          const topPct = resolveForSize(inset.top_pct);
+          const leftPct = resolveForSize(inset.left_pct);
+          if (inset.placeholder) {
+            const box = document.createElement("div");
+            box.className = "inset-placeholder";
+            if (widthPct != null) box.style.width = widthPct + "%";
+            if (topPct != null) box.style.top = topPct + "%";
+            if (leftPct != null) box.style.left = leftPct + "%";
+            if (inset.height_pct != null) box.style.height = resolveForSize(inset.height_pct) + "%";
+            if (inset.rotate) box.style.transform = "rotate(" + inset.rotate + "deg)";
+            const label = document.createElement("div");
+            label.className = "inset-placeholder-label";
+            label.textContent = inset.label || "Not yet captured";
+            box.appendChild(label);
+            cardLayer.appendChild(box);
+          } else {
+            const wrap = document.createElement("div");
+            wrap.className = "inset-card";
+            if (widthPct != null) wrap.style.width = widthPct + "%";
+            if (topPct != null) wrap.style.top = topPct + "%";
+            if (leftPct != null) wrap.style.left = leftPct + "%";
+            if (inset.rotate) wrap.style.transform = "rotate(" + inset.rotate + "deg)";
+            if (inset.reconstruction) {
+              // A small real-component widget (not a full screen) built the
+              // same data-driven way as the full reconstructions above --
+              // see reconStubBandHtml/reconComposerInputHtml.
+              const content = document.createElement("div");
+              content.innerHTML = inset.reconstruction.kind === "composer-input"
+                ? reconComposerInputHtml(inset.reconstruction)
+                : reconStubBandHtml(inset.reconstruction);
+              wrap.appendChild(content.firstElementChild);
+              wrap.style.background = RECON_THEME.white;
+            } else {
+              const img = document.createElement("img");
+              img.src = inset.src;
+              img.alt = "";
+              wrap.appendChild(img);
+            }
+            if (inset.label) {
+              const label = document.createElement("div");
+              label.className = "inset-label";
+              label.textContent = inset.label;
+              wrap.appendChild(label);
+            }
+            cardLayer.appendChild(wrap);
+          }
+        });
+      } else if (data.layout === "hero") {
         stage.classList.add("layout-hero");
         if (data.art && data.art.src) {
           heroArtImg.src = data.art.src;
@@ -628,7 +1854,9 @@
           // frame/aspect ratios). The iPad frame's height is aspect-ratio
           // driven rather than a fixed percent of stage height.
           deviceWrap.classList.add("device-ipad");
-          screenshotEl.src = data.screenshot_tablet || data.screenshot || "";
+          if (data.layout !== "reconstruction") {
+            screenshotEl.src = data.screenshot_tablet || data.screenshot || "";
+          }
           const tabletBg = data.statusbar_bg_tablet || data.statusbar_bg;
           if (tabletBg) {
             statusbarIpad.style.background = tabletBg;
@@ -676,7 +1904,7 @@
           positionTabletDevice();
           document.fonts.ready.then(positionTabletDevice);
         } else {
-          if (data.screenshot) {
+          if (data.screenshot && data.layout !== "reconstruction") {
             screenshotEl.src = data.screenshot;
           }
           if (data.bleed) {
@@ -688,6 +1916,118 @@
             statusbar.style.background = data.statusbar_bg;
           }
         }
+
+        // ---- Reconstruction content (WP-owner-directed faithful UI
+        // rebuilds) -- built INSIDE the normal device frame above, plus one
+        // genuine control pulled out and enlarged into #callout-layer. See
+        // the recon* builder functions above render() for the exact source
+        // file each one reconstructs. `recon.callout` positioning uses the
+        // same width_pct/top_pct/left_pct (optionally per-bucket-keyed)
+        // convention as `card`/`inset` placements elsewhere in this file.
+        if (data.layout === "reconstruction" && data.reconstruction) {
+          stage.classList.add("layout-reconstruction");
+          const recon = data.reconstruction;
+          const reconRoot = document.getElementById("recon-root");
+          reconRoot.style.paddingTop = (recon.kind === "portrait-timeline" ? (isTablet ? 40 : 62) : (recon.kind === "sound-player" ? (isTablet ? 50 : 86) : (isTablet ? 60 : 120))) + "px";
+          reconRoot.style.paddingLeft = "34px";
+          reconRoot.style.paddingRight = "34px";
+
+          if (recon.kind === "gallery-import-deck") {
+            reconGalleryImportDeck(reconRoot, recon, isTablet);
+          } else if (recon.kind === "sound-player") {
+            reconSoundPlayer(reconRoot, recon, isTablet);
+          } else if (recon.kind === "family-invite") {
+            reconFamilyInvite(reconRoot, recon, isTablet);
+          } else if (recon.kind === "family-collection") {
+            reconFamilyCollection(reconRoot, recon, isTablet);
+          } else if (recon.kind === "portrait-timeline") {
+            reconPortraitTimeline(reconRoot, recon, isTablet);
+          } else if (recon.kind === "book-shelf") {
+            reconBookShelf(reconRoot, recon, isTablet);
+          } else if (recon.kind === "family-feed") {
+            reconFamilyFeed(reconRoot, recon, isTablet);
+          } else if (recon.kind === "timeline") {
+            reconTimeline(reconRoot, recon, isTablet);
+          } else if (recon.kind === "memory-detail") {
+            reconMemoryDetail(reconRoot, recon, isTablet);
+          }
+
+          // The device frame must be FULLY on-canvas for a reconstruction
+          // (unlike a real screenshot, which can safely bleed/clip off the
+          // bottom edge since it is one continuous image) -- every control
+          // our synthetic content draws has to actually be visible. Anchor
+          // the frame's top to the caption's real rendered bottom (same
+          // technique the hero/tablet layouts already use above), then size
+          // it to land on a fixed bottom margin instead of a fixed height
+          // percentage: for the iPad frame (aspect-ratio driven) that means
+          // solving for the WIDTH that makes the derived height fit exactly;
+          // for the iPhone frame (fixed width, percentage height) it means
+          // deriving the height from the top/bottom instead of the
+          // otherwise-static 76.75%. Re-run once fonts load, since caption
+          // height (and so captionBottom) shifts once fallback metrics are
+          // replaced.
+          // Coordinator fix (2026-09-20 review round 2): the FIRST version of
+          // this function sized the device to fill every pixel between the
+          // caption and the bottom margin, which is correct for a
+          // photo-filled reconstruction (02's hero flex-fills whatever
+          // height it is given) but stretched 04/06 into an unnaturally
+          // tall, non-iPhone-shaped frame with real content nowhere near
+          // large enough to fill it -- the actual visible bug the
+          // coordinator flagged. Capping the device at its NORMAL size
+          // (the same 76.75%-of-stage-height / 81%-of-stage-width
+          // proportions the default, non-reconstruction "device"/"card"
+          // layouts already use elsewhere in this file) keeps every
+          // reconstruction phone-shaped and consistent with the rest of the
+          // deck; only a caption tall enough to need MORE clearance than
+          // that leaves the device slightly smaller than normal (never
+          // clipped, never stretched).
+          const positionReconstructionDevice = () => {
+            const target = SIZES[sizeKey] || SIZES.appstore;
+            const stageH = 1260 * (target.h / target.w);
+            const captionBottom = caption.offsetTop + caption.offsetHeight;
+            const gap = 0.02 * stageH;
+            const top = Math.round(captionBottom + gap);
+            const bottomMargin = Math.round(0.02 * stageH);
+            const availableHeight = Math.max(200, stageH - top - bottomMargin);
+            if (isTablet) {
+              const naturalWidth = 0.81 * 1260;
+              const naturalHeight = naturalWidth * (2752 / 2064);
+              const height = Math.min(naturalHeight, availableHeight);
+              const width = Math.round(height * (2064 / 2752));
+              deviceWrap.style.top = top + "px";
+              deviceWrap.style.bottom = "auto";
+              deviceWrap.style.width = width + "px";
+            } else {
+              const naturalHeight = 0.7675 * stageH;
+              const height = Math.min(naturalHeight, availableHeight);
+              deviceWrap.style.top = top + "px";
+              deviceWrap.style.height = Math.round(height) + "px";
+              deviceWrap.style.bottom = "auto";
+            }
+          };
+          positionReconstructionDevice();
+          document.fonts.ready.then(positionReconstructionDevice);
+
+          if (recon.callout) {
+            const calloutLayer = document.getElementById("callout-layer");
+            const box = document.createElement("div");
+            box.className = "recon-callout";
+            const widthPct = resolveForSize(recon.callout.width_pct);
+            const topPct = resolveForSize(recon.callout.top_pct);
+            const leftPct = resolveForSize(recon.callout.left_pct);
+            if (widthPct != null) box.style.width = widthPct + "%";
+            if (topPct != null) box.style.top = topPct + "%";
+            if (leftPct != null) box.style.left = leftPct + "%";
+            if (recon.callout.rotate) box.style.transform = "rotate(" + recon.callout.rotate + "deg)";
+            let inner = "";
+            if (recon.kind === "gallery-import-deck") inner = reconKeepAsideRow(recon, 1.9);
+            else if (recon.kind === "sound-player") inner = reconSoundPlayerCallout(recon);
+            else if (recon.kind === "family-invite") inner = reconFamilyInviteCallout(recon);
+            box.innerHTML = inner + (recon.callout.label ? `<div class="recon-callout-label">${reconEsc(recon.callout.label)}</div>` : "");
+            calloutLayer.appendChild(box);
+          }
+        }
+
         // Non-hero slides may still use the free-floating spot-art slot.
         if (data.art && data.art.src) {
           artSlot.src = data.art.src;
@@ -741,6 +2081,83 @@
           if (chip.rotate) el.style.transform = "rotate(" + chip.rotate + "deg)";
           chipsLayer.appendChild(el);
         });
+      }
+
+      // Draft banner (WP-D §1d, revised per coordinator review) —
+      // impossible-to-miss hazard frame + rotated stamp. Any slide with
+      // `draft` set is excluded from upload manifests downstream (PART 4).
+      //
+      // `draft.buckets` (optional array of size keys) makes the banner
+      // apply to ONLY those buckets on this slide — e.g. frame 07 is draft
+      // on the iPhone buckets (truncated rows, no per-child collection) but
+      // NOT on ipad (a genuine, complete per-child collection). Omitting
+      // `buckets` applies the draft to every bucket, as before.
+      const draftApplies =
+        data.draft && data.draft.reason && (!Array.isArray(data.draft.buckets) || data.draft.buckets.includes(sizeKey));
+      if (draftApplies) {
+        stage.classList.add("is-draft");
+        document.getElementById("draft-reason").textContent = data.draft.reason;
+        const stampEl = document.querySelector(".draft-stamp");
+        const STAMP_ANGLE_DEG = 4; // keep in sync with the CSS rotate() below
+        const positionDraftStamp = () => {
+          // Measure the BOTTOM of the last visible child of the caption
+          // block (headline / script-accent / subline / disclosure) —
+          // never just the support line — so a visible disclosure (e.g.
+          // "Subscription required to add memories.") is never the thing
+          // left uncleared.
+          let maxChildBottom = 0;
+          Array.from(caption.children).forEach((child) => {
+            if (window.getComputedStyle(child).display === "none") return;
+            const bottom = child.offsetTop + child.offsetHeight;
+            if (bottom > maxChildBottom) maxChildBottom = bottom;
+          });
+          const captionBottom = caption.offsetTop + maxChildBottom;
+
+          // `stampEl.style.top` becomes the box's vertical CENTER (the CSS
+          // rule also applies translateY(-50%)). Rotating a wide, short box
+          // by STAMP_ANGLE_DEG around that center means its axis-aligned
+          // bounding box extends farther above the center than half its own
+          // (unrotated) height — by halfWidth*sin(angle) + halfHeight*cos(angle)
+          // (standard rotated-rect AABB formula). Measure the stamp's own
+          // OFFSET (untransformed) width/height at runtime and compute that
+          // exact clearance, rather than a guessed constant, so this stays
+          // correct if the copy, angle, or stamp padding ever change.
+          const halfW = stampEl.offsetWidth / 2;
+          const halfH = stampEl.offsetHeight / 2;
+          const angleRad = (STAMP_ANGLE_DEG * Math.PI) / 180;
+          const aabbHalfHeight = halfW * Math.abs(Math.sin(angleRad)) + halfH * Math.abs(Math.cos(angleRad));
+          const buffer = 16;
+          const centerY = captionBottom + aabbHalfHeight + buffer;
+          stampEl.style.top = Math.round(centerY) + "px";
+
+          // The card/blocked content below was positioned with fixed
+          // top_pct values authored against a flat gap estimate. On the
+          // much shorter iPad stage (same local caption/stamp sizes, far
+          // less stageH to work with) a top_pct tuned for the iPhone
+          // buckets can land ABOVE the stamp's actual bottom edge. Rather
+          // than hand-tune top_pct per bucket per drafted slide, push the
+          // card/blocked content down (never up) just enough to clear the
+          // stamp, using the same local-unit coordinate space.
+          const stampBottom = centerY + aabbHalfHeight;
+          const contentBuffer = 24;
+          const minContentTop = stampBottom + contentBuffer;
+
+          if (data.layout === "card") {
+            const cardLayer = document.getElementById("card-layer");
+            const children = Array.from(cardLayer.children);
+            if (children.length) {
+              const minChildTop = Math.min(...children.map((el) => el.offsetTop));
+              cardLayer.style.transform = minChildTop < minContentTop ? `translateY(${Math.round(minContentTop - minChildTop)}px)` : "";
+            }
+          } else if (data.layout === "blocked") {
+            const blockedArea = document.getElementById("blocked-area");
+            if (blockedArea.offsetTop < minContentTop) {
+              blockedArea.style.top = Math.round(minContentTop) + "px";
+            }
+          }
+        };
+        positionDraftStamp();
+        document.fonts.ready.then(positionDraftStamp);
       }
 
       document.documentElement.setAttribute("data-ready", "true");

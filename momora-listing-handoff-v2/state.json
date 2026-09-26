@@ -1,0 +1,277 @@
+{
+  "brief_version": "2.0-memory-first",
+  "strategy": "memory-first",
+  "repository": "eduardoyi/newmomora",
+  "repository_check": {
+    "brief_states": "eduardoyi/newmomora",
+    "git_remote_origin_found": "https://github.com/eduardoyi/newmomora.git",
+    "discrepancy": false,
+    "note": "WP-A was asked to flag a discrepancy if the brief's stated repository differs from the checkout's real git remote. `git remote -v` on this checkout returns eduardoyi/newmomora for both fetch and push, which matches the brief exactly. No discrepancy was found; recorded here per instruction rather than inventing one."
+  },
+  "source_revision": "93620da9b66d08b9c36e4f6be625e81ed3cb9af3",
+  "source_revision_note": "git rev-parse HEAD on branch listing/v2-memory-first at the time WP-A ran (2026-09-20). Working tree also has two untracked paths at that time: docs/app-store-revamp/ and momora-listing-handoff-v2/ (this handoff itself, and its sibling evidence folder) — neither is committed.",
+  "locale": "en-US",
+  "project_paths": {
+    "handoff_root": "momora-listing-handoff-v2/",
+    "handoff_state": "momora-listing-handoff-v2/state.json",
+    "handoff_migration_report": "momora-listing-handoff-v2/MIGRATION-REPORT.md",
+    "evidence_root": "docs/app-store-revamp/",
+    "plan": "docs/app-store-revamp/PLAN.md",
+    "inventory": "docs/app-store-revamp/INVENTORY.md",
+    "claim_matrix": "docs/app-store-revamp/CLAIM-MATRIX.md",
+    "commercial_expectation_map": "docs/app-store-revamp/COMMERCIAL-EXPECTATION-MAP.md",
+    "asset_checklist": "docs/app-store-revamp/ASSET-CHECKLIST.md",
+    "device_locale_plan": "docs/app-store-revamp/DEVICE-LOCALE-PLAN.md",
+    "blockers": "docs/app-store-revamp/BLOCKERS.md",
+    "copy_changelog": "docs/app-store-revamp/COPY-CHANGELOG.md",
+    "qa_report": "docs/app-store-revamp/QA-REPORT.md",
+    "owner_signoff": "docs/app-store-revamp/OWNER-SIGNOFF.md",
+    "experiment_plan": "docs/app-store-revamp/EXPERIMENT-PLAN.md",
+    "review_notes": "docs/app-store-revamp/REVIEW-NOTES.md",
+    "upload_manifest": "docs/app-store-revamp/UPLOAD-MANIFEST.md",
+    "funnel_observations": "docs/app-store-revamp/FUNNEL-OBSERVATIONS.md",
+    "capture_requests": "docs/app-store-revamp/CAPTURE-REQUESTS.md",
+    "v2_registry": "momora-listing-handoff-v2/approved-listing-copy.json",
+    "v1_compositor_root": "store-assets/",
+    "v1_manifest": "store-assets/manifest.json",
+    "v2_manifest": "store-assets/manifest.v2.json",
+    "v2_manifest_challenger_photo": "store-assets/manifest.v2-challenger-photo.json",
+    "v2_manifest_challenger_voice": "store-assets/manifest.v2-challenger-voice.json",
+    "v1_render_script": "store-assets/render.mjs",
+    "v1_template": "store-assets/templates/screenshot.html",
+    "v1_fonts": "store-assets/fonts/",
+    "v1_source_captures": "store-assets/source/",
+    "v1_out": "store-assets/out/",
+    "listing_copy_registry": "store-assets/listing/registry.v2.json",
+    "listing_build_script": "store-assets/listing/build-copy.mjs",
+    "listing_validate_script": "store-assets/listing/validate-copy.mjs",
+    "listing_out": "store-assets/listing/out/en-US/",
+    "v2_assets": "store-assets/v2/assets/",
+    "v2_asset_manifest": "store-assets/v2/ASSET-MANIFEST.json",
+    "v2_out_defaults": "store-assets/out/v2/",
+    "v2_out_challenger_photo": "store-assets/out/v2-challenger-photo/",
+    "v2_out_challenger_voice": "store-assets/out/v2-challenger-voice/",
+    "v2_upload_candidates": "store-assets/out/v2/UPLOAD-CANDIDATES.json",
+    "v2_hashes": "store-assets/out/v2/HASHES.txt",
+    "v2_preview": "store-assets/preview/",
+    "v1_archive": "store-assets/archive/",
+    "book_renderer_root": "book-renderer/",
+    "book_renderer_index": "book-renderer/book-data/index.json",
+    "book_renderer_sample_cmd": "cd book-renderer && npm run book:pdf -- --slug sample --spine-mm <n>",
+    "demo_family_spec": "supabase/scripts/demo-family-spec.ts",
+    "design_tokens": "src/constants/theme.ts"
+  },
+  "required_device_families": [
+    {
+      "bucket": "appstore",
+      "width": 1260,
+      "height": 2736,
+      "platform": "ios",
+      "device_class": "iphone",
+      "requirement": "accepted (6.9-inch bucket already rendered by v1 pipeline)"
+    },
+    {
+      "bucket": "appstore-alt",
+      "width": 1320,
+      "height": 2868,
+      "platform": "ios",
+      "device_class": "iphone",
+      "requirement": "accepted (insurance size already rendered by v1 pipeline)"
+    },
+    {
+      "bucket": "appstore-65",
+      "width": 1284,
+      "height": 2778,
+      "platform": "ios",
+      "device_class": "iphone",
+      "requirement": "required (Apple 6.5-inch requirement); new bucket, not yet rendered anywhere in this checkout"
+    },
+    {
+      "bucket": "ipad",
+      "width": 2064,
+      "height": 2752,
+      "platform": "ios",
+      "device_class": "ipad",
+      "requirement": "required (Apple 13-inch iPad requirement); already rendered by v1 pipeline, genuine iPad captures on disk"
+    }
+  ],
+  "phases": {
+    "0": {
+      "status": "complete",
+      "label": "rebase/migration",
+      "evidence": [
+        "momora-listing-handoff-v2/MIGRATION-REPORT.md",
+        "Verified via `git log --all --diff-filter=A --name-only -- 'momora-listing-handoff*'` returning no results: no prior v1 handoff directory ever existed in this repository's git history.",
+        "Verified via `git status`/`git log` that momora-listing-handoff-v2/ is untracked and new this session.",
+        "Verified via `git show --stat 4381f0e` that store-assets/ (round-1 compositor + 6-slide storyboard + genuine captures) is pre-existing committed work from 2026-07-19, distinct from any listing-handoff folder."
+      ]
+    },
+    "1": {
+      "status": "complete",
+      "label": "ground truth and setup",
+      "evidence": [
+        "docs/app-store-revamp/INVENTORY.md",
+        "docs/app-store-revamp/CLAIM-MATRIX.md",
+        "docs/app-store-revamp/COMMERCIAL-EXPECTATION-MAP.md",
+        "docs/app-store-revamp/ASSET-CHECKLIST.md",
+        "docs/app-store-revamp/DEVICE-LOCALE-PLAN.md",
+        "docs/app-store-revamp/BLOCKERS.md",
+        "Every path in PLAN.md §1 was independently re-verified to exist in this checkout with `ls`/`sed -n` before being cited (see INVENTORY.md and CLAIM-MATRIX.md for the specific checks run)."
+      ]
+    },
+    "2": {
+      "status": "complete",
+      "label": "copy",
+      "evidence": [
+        "store-assets/listing/registry.v2.json, build-copy.mjs, validate-copy.mjs, out/en-US/*.txt",
+        "docs/app-store-revamp/COPY-CHANGELOG.md",
+        "Independently re-run in phase 5 (2026-09-20): `node build-copy.mjs && node validate-copy.mjs` both exit 0; field character/byte counts independently re-derived with a standalone script (name 23, subtitle 30, promo 132, description 2067/2087 bytes, keywords 66 bytes, whats_new 377 — all within limits); registry/export equality independently re-diffed field-by-field (all MATCH); public fields independently re-scanned for `$<digits>` and forbidden vocabulary (search/recap/widget/Looking Back) — zero hits in actual copy. See docs/app-store-revamp/QA-REPORT.md §1."
+      ]
+    },
+    "3": {
+      "status": "complete",
+      "label": "asset pack",
+      "evidence": [
+        "store-assets/v2/assets/*.png, store-assets/v2/ASSET-MANIFEST.json, store-assets/v2/raw/ (incl. raw/rejected/)",
+        "docs/app-store-revamp/CAPTURE-REQUESTS.md",
+        "Phase 5 independently confirmed: 6 native-capture assets and 1 renderer-export asset are prepared and in active use; 3 rejected placeholder/QR assets were correctly moved to raw/rejected/ and are not referenced by any rendered frame (independently verified no rendered PNG contains the fabricated QR/placeholder-dimension content). This phase produced material for only some of the 7 frames — most frames remain blocked on native captures per CAPTURE-REQUESTS.md; phase 3 itself (asset preparation from what exists) is complete, but it did not and could not manufacture the missing captures."
+      ]
+    },
+    "4": {
+      "status": "complete_with_drafts",
+      "label": "compositor and renders",
+      "evidence": [
+        "store-assets/manifest.v2.json, manifest.v2-challenger-photo.json, manifest.v2-challenger-voice.json",
+        "store-assets/out/v2/{appstore,appstore-alt,appstore-65,ipad}/*.png (28 files), out/v2-challenger-photo/ and out/v2-challenger-voice/ (24 files each incl. their own frame-1)",
+        "store-assets/out/v2/HASHES.txt, store-assets/out/v2/UPLOAD-CANDIDATES.json",
+        "Phase 5 independently re-verified (docs/app-store-revamp/QA-REPORT.md §2-3): all 76 PNGs are the correct dimensions for their bucket and are opaque RGB with no alpha channel (checked via a standalone PNG-IHDR parser, not sips); all 24 frame×bucket hashes claimed identical between default/photo-challenger/voice-challenger sets were independently recomputed and confirmed byte-identical; every frame was opened visually at reduced and/or full size. RESULT: only 1 of 28 default frame×bucket slots (07-look-back on ipad) is genuinely complete and carries no draft banner; the other 27 default slots and all opener-challenger frame-1 slots correctly carry a visible DRAFT banner and are excluded from UPLOAD-CANDIDATES.json's explicit allowlist. This phase is recorded as complete_with_drafts, not complete: the compositor, draft-banner, and allowlist machinery all work correctly and were exercised end-to-end, but the underlying product-evidence gap from phase 3 means most output is intentionally placeholder, not release-ready. One cosmetic defect confirmed (not repaired, out of this pass's scope): frame 05's draft-banner reason text overflows the canvas's right edge on all four buckets; it is on a draft-excluded frame only, see QA-REPORT.md §2 and §5.",
+        "The Playwright render pipeline itself was NOT re-executed in phase 5 (store-assets/ has no installed node_modules/browsers in this checkout, and installing them was outside this pass's scope); phase 5 verified the already-rendered output artifacts at the byte and pixel level instead of re-running render.mjs. Logged as unverified-by-re-execution in QA-REPORT.md §4 (final-acceptance test 9)."
+      ]
+    },
+    "5": {
+      "status": "complete",
+      "label": "independent QA and release pack",
+      "evidence": [
+        "docs/app-store-revamp/QA-REPORT.md, UPLOAD-MANIFEST.md, OWNER-SIGNOFF.md, EXPERIMENT-PLAN.md, REVIEW-NOTES.md, FUNNEL-OBSERVATIONS.md",
+        "All 10 of MASTER-BRIEF.md's final-acceptance tests were worked through with an explicit PASS/FAIL/PARTIAL/UNVERIFIED verdict and evidence in QA-REPORT.md §4; none were rounded up to PASS on insufficient evidence.",
+        "git status/diff independently re-read to confirm no app runtime, onboarding, paywall, pricing, app.json, or eas.json changes; the only tracked-file diffs are store-assets/.gitignore, render.mjs, and templates/screenshot.html, all listing-compositor-scoped.",
+        "Safety scan run over all new listing files for sk-/eyJ/service_role/email patterns; zero secrets found; one internal-only demo-account email address (the seeded demo account address (in supabase/scripts/, not repeated here), pre-existing in the repo's own seed scripts) flagged as appearing in two new documentation files (PLAN.md, CAPTURE-REQUESTS.md) — not removed, reported per instruction.",
+        "No repair was made to the compositor or renders in this pass beyond documenting the confirmed pre-flagged frame-05 draft-banner overflow; no re-render was performed."
+      ]
+    }
+  },
+  "migrated_from": null,
+  "migrated_from_note": "No prior momora-listing-handoff (v1) directory existed in this checkout at any point in git history or on disk before this session created momora-listing-handoff-v2/. Prompt 00's migration is therefore a documented no-op for the handoff folder itself. It is NOT a no-op for asset/copy provenance: substantial pre-existing listing work from commit 4381f0e (store-assets/ pipeline, 6-slide round-1 storyboard, genuine device captures) exists outside any handoff folder and is mapped to the v2 seven-image sequence in MIGRATION-REPORT.md, per REBASE-FROM-V1.md's instruction to reuse renderer/captures/tokens even when no prior handoff state exists.",
+  "needs_revalidation": [
+    {
+      "item": "store-assets/manifest.json six-slide copy (all headlines)",
+      "reason": "Effort-first / art-first positioning ('Say it. Watch it become art.', 'Everyone becomes a character.', etc.) superseded by the memory-first v2 registry. Copy must be regenerated from approved-listing-copy.json; do not reuse these headlines.",
+      "gate": "phase 2 (copy) and phase 4 (compositor/render)"
+    },
+    {
+      "item": "store-assets/source/IMG_0908.PNG, IMG_0909.PNG, IMG_0910.PNG, IMG_0912.PNG and store-assets/source/ipad/*.png",
+      "reason": "Genuine captures, freshness/rights not re-verified beyond confirming they are from the approved fictional Kim-Ortiz demo household (supabase/scripts/demo-family-spec.ts:4). Re-check they still reflect current UI before phase 3/4 use.",
+      "gate": "phase 3 (asset pack)"
+    },
+    {
+      "item": "store-assets/render.mjs and store-assets/templates/screenshot.html SIZES maps",
+      "reason": "Reusable renderer, but does not yet contain the appstore-65 (1284x2778) bucket. Both copies of SIZES must be extended together (duplication trap, PLAN.md §1.3).",
+      "gate": "phase 4 (compositor and renders)"
+    },
+    {
+      "item": "book-renderer/ sample + enzo-*/mara-* book PDFs",
+      "reason": "Renderer and committed cover PDFs exist and are offline/free to reuse, but page-by-page PNG conversion for slot 5 has not been produced yet, and enzo-*/mara-* use the owner's real family photos, which needs explicit owner approval before marketing use (PLAN.md §4 gate 4).",
+      "gate": "phase 3 (asset pack)"
+    },
+    {
+      "item": "marketing/assets/ugc/demo-cuts/*.mp4",
+      "reason": "Genuine UI-in-motion video, candidate source for honest cropped insets only; frame extraction and crop suitability not yet evaluated.",
+      "gate": "phase 3 (asset pack)"
+    }
+  ],
+  "blockers": [
+    "See docs/app-store-revamp/BLOCKERS.md for the full list with resolution owners. Summary: (1) book generation/online-review membership entitlement is unverified in the docs; (2) gallery-import server-side admission gate status in production is unverified from this checkout; (3) no runtime demo/fixture mode and no cached iOS build exist, so several frames (02 gallery-import deck, 03 composer-to-illustration pairing, 05 in-app book shelf, 06 roles/invite UI) have no genuine native capture on disk and require owner-run device captures; (4) exact localized pricing/SKU/trial/tax/shipping details are owner-only.",
+    "As of phase 5 (2026-09-20): only 1 of 28 required default frame×bucket slots is genuinely upload-ready (07-look-back on ipad); 0 of the opener-challenger frame-1 slots have any genuine capture. This is the single largest remaining blocker to release and is owner/device-capture-dependent, not resolvable from this checkout alone — see docs/app-store-revamp/CAPTURE-REQUESTS.md and UPLOAD-MANIFEST.md.",
+    "Cosmetic (non-blocking, since it only affects a draft-excluded frame): frame 05's draft-banner reason text overflows the canvas's right edge on all four buckets. Confirmed in phase 5, not repaired (would require a compositor edit + re-render, out of phase-5 scope). Fix before promoting frame 05 out of draft."
+  ],
+  "release_status": "blocked",
+  "release_status_justification": "Copy layer is locally validated (phase 5 independently re-verified). Visual-asset layer has only 1 of 28 default slots and 0 of the opener-challenger slots genuinely release-ready; a release cannot proceed to App Store Connect on one image. Not classified as 'awaiting owner and live checks' because the primary blocker is missing native device captures (a production/device-access dependency), not solely pending owner sign-off on already-complete assets. See docs/app-store-revamp/QA-REPORT.md's Release status determination.",
+  "migration_history": [
+    {
+      "date": "2026-09-20",
+      "actor": "WP-A implementer (Claude Sonnet 5)",
+      "action": "Ran prompt 00 (rebase check): confirmed no prior v1 momora-listing-handoff directory exists anywhere in git history; confirmed momora-listing-handoff-v2/ is new/untracked this session; confirmed store-assets/ round-1 pipeline (commit 4381f0e, 2026-07-19) is the only pre-existing listing work and lives outside any handoff folder.",
+      "artifacts_created": []
+    },
+    {
+      "date": "2026-09-20",
+      "actor": "WP-A implementer (Claude Sonnet 5)",
+      "action": "Wrote the v1→v2 migration mapping for the six round-1 slides against the v2 seven-frame sequence, ran and recorded the stale-v1-string scan, created v2 state.json.",
+      "artifacts_created": [
+        "momora-listing-handoff-v2/state.json",
+        "momora-listing-handoff-v2/MIGRATION-REPORT.md"
+      ]
+    },
+    {
+      "date": "2026-09-20",
+      "actor": "WP-A implementer (Claude Sonnet 5)",
+      "action": "Ran prompt 01 (ground truth and setup): re-verified every path cited in PLAN.md §1 exists, spot-checked cited line ranges for accuracy, and produced the phase-1 evidence files.",
+      "artifacts_created": [
+        "docs/app-store-revamp/INVENTORY.md",
+        "docs/app-store-revamp/CLAIM-MATRIX.md",
+        "docs/app-store-revamp/COMMERCIAL-EXPECTATION-MAP.md",
+        "docs/app-store-revamp/ASSET-CHECKLIST.md",
+        "docs/app-store-revamp/DEVICE-LOCALE-PLAN.md",
+        "docs/app-store-revamp/BLOCKERS.md"
+      ]
+    },
+    {
+      "date": "2026-09-20",
+      "actor": "WP-B implementer (Claude Sonnet 5)",
+      "action": "Ran prompt 02 (copy): built registry.v2.json, build-copy.mjs, validate-copy.mjs, generated out/en-US/*.txt, wrote COPY-CHANGELOG.md.",
+      "artifacts_created": [
+        "store-assets/listing/registry.v2.json",
+        "store-assets/listing/build-copy.mjs",
+        "store-assets/listing/validate-copy.mjs",
+        "store-assets/listing/out/en-US/*.txt",
+        "docs/app-store-revamp/COPY-CHANGELOG.md"
+      ]
+    },
+    {
+      "date": "2026-09-20",
+      "actor": "WP-C implementer (Claude Sonnet 5)",
+      "action": "Ran prompt 03 (asset pack): cropped genuine native captures, rendered the offline sample book PDF and rejected 3 placeholder/QR pages after visual review, extracted a video-frame inset, wrote ASSET-MANIFEST.json and CAPTURE-REQUESTS.md.",
+      "artifacts_created": [
+        "store-assets/v2/assets/*.png",
+        "store-assets/v2/raw/ (incl. raw/rejected/)",
+        "store-assets/v2/ASSET-MANIFEST.json",
+        "docs/app-store-revamp/CAPTURE-REQUESTS.md"
+      ]
+    },
+    {
+      "date": "2026-09-20",
+      "actor": "WP-D implementer (Claude Sonnet 5)",
+      "action": "Ran prompt 04 (compositor and renders): extended render.mjs/screenshot.html (appstore-65 bucket, card/inset/blocked/draft-banner layouts, copy-registry loader, alpha assertion), authored manifest.v2.json + two challenger manifests, rendered all 76 PNGs, produced HASHES.txt and UPLOAD-CANDIDATES.json.",
+      "artifacts_created": [
+        "store-assets/manifest.v2.json, manifest.v2-challenger-photo.json, manifest.v2-challenger-voice.json",
+        "store-assets/out/v2/, out/v2-challenger-photo/, out/v2-challenger-voice/",
+        "store-assets/out/v2/HASHES.txt, UPLOAD-CANDIDATES.json",
+        "store-assets/preview/"
+      ]
+    },
+    {
+      "date": "2026-09-20",
+      "actor": "WP-E / phase-5 independent reviewer (Claude Sonnet 5, fresh session, no memory of WP-A through WP-D)",
+      "action": "Ran prompt 05 (independent QA and release pack): re-ran and independently re-implemented the copy validation; opened every default rendered frame plus both opener-challenger frame-1s with an image viewer; independently re-verified PNG dimensions/alpha and cross-tree sha256 hashes with standalone scripts; worked through all 10 master-brief acceptance tests with explicit verdicts; re-read git status/diff to confirm no runtime/pricing changes; ran a safety scan for secrets/PII; updated this state file's stale *_not_yet_created path keys and phase statuses to reflect actually-completed work.",
+      "artifacts_created": [
+        "docs/app-store-revamp/QA-REPORT.md",
+        "docs/app-store-revamp/UPLOAD-MANIFEST.md",
+        "docs/app-store-revamp/OWNER-SIGNOFF.md",
+        "docs/app-store-revamp/EXPERIMENT-PLAN.md",
+        "docs/app-store-revamp/REVIEW-NOTES.md",
+        "docs/app-store-revamp/FUNNEL-OBSERVATIONS.md"
+      ]
+    }
+  ],
+  "note": "v2 state through phase 5 (independent QA). No secrets committed (one internal demo-account email address flagged, not a credential — see QA-REPORT.md §6). No production mutation, no build, no publish, no purchase, no upload, no commit performed while producing any file referenced by this state."
+}

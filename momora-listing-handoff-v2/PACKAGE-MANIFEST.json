@@ -1,0 +1,161 @@
+{
+  "brief_version": "2.0-memory-first",
+  "scope": "Revised handoff; not implemented app assets or live release",
+  "files": [
+    {
+      "path": "COMMERCIAL-CLARITY.md",
+      "bytes": 3455,
+      "sha256": "5b295f94469651cfe1713583792e621d442e00c8c05e752be7195c81e18ac810"
+    },
+    {
+      "path": "COPY-VALIDATION.json",
+      "bytes": 739,
+      "sha256": "f06d4cd06ebef72e31c7a85ff07333b787425d11942a2171e73344a8566e0c5c"
+    },
+    {
+      "path": "HANDOFF-QA.md",
+      "bytes": 1974,
+      "sha256": "2fb88eb10a4d558bbe7d3774b1d5d85eb52d3e7e726053e920571143f3ee72ec"
+    },
+    {
+      "path": "MASTER-BRIEF.md",
+      "bytes": 28410,
+      "sha256": "10a2f9d3d7551b8ae2c8a8908b17c8aeeb182db1fadd65db35551f3ef3568bc7"
+    },
+    {
+      "path": "README.md",
+      "bytes": 3430,
+      "sha256": "23c246b912411ec8e8a41e045b6d2a952f32b064dad798f981a0b5d67b138433"
+    },
+    {
+      "path": "REBASE-FROM-V1.md",
+      "bytes": 4003,
+      "sha256": "067855b071ba2fb4f1ad7b1aa43107c7ca319314da8bf937dd996d1dc4644aba"
+    },
+    {
+      "path": "approved-listing-copy.json",
+      "bytes": 10806,
+      "sha256": "96021db7ea90cdeaad82616f2c92d63d696d4926a2b550120b0111e5a6a9a319"
+    },
+    {
+      "path": "copy/en-US/description.txt",
+      "bytes": 2087,
+      "sha256": "17182b89960f84901a5a3835cf3e0f3c5f39bed3f0246b775a5d45f968867daa"
+    },
+    {
+      "path": "copy/en-US/keywords-candidate.txt",
+      "bytes": 66,
+      "sha256": "eaf303621d200884d9eafd017682a7d5fd09b76ce6676958aaff2ed122940001"
+    },
+    {
+      "path": "copy/en-US/name.txt",
+      "bytes": 23,
+      "sha256": "a33e69ce3bae8c9fd6b8938ce5e41a25eb4dda3d69a95ebcd8024b544caa903b"
+    },
+    {
+      "path": "copy/en-US/promotional-text.txt",
+      "bytes": 132,
+      "sha256": "3532394f991d46aa72c0b82414840336ff311f685b4d88280d885ffda5eb6345"
+    },
+    {
+      "path": "copy/en-US/subtitle.txt",
+      "bytes": 30,
+      "sha256": "6268fd3bd73a9cd9f05aef2887f61fbf912b99b1ad7d7a47360e128a67004881"
+    },
+    {
+      "path": "copy/en-US/whats-new-proposed.txt",
+      "bytes": 379,
+      "sha256": "74a16b4d4e6e4d9391a7b19c519c8b458c7756ea37ab99f869bd282ae8e93c23"
+    },
+    {
+      "path": "documents/momora-app-store-conversion-review-v2.docx",
+      "bytes": 350016,
+      "sha256": "dec067a7c3144f6d939e4fd78cb3af6a4d75f6933f084ac5be71f27556ceb17a"
+    },
+    {
+      "path": "documents/momora-listing-implementation-prompts-v2.md",
+      "bytes": 69325,
+      "sha256": "8e5199783625162923757490ca108d042c62ed386b0907b8c6650d45008071e0"
+    },
+    {
+      "path": "prompts/00-rebase-existing-work.md",
+      "bytes": 2953,
+      "sha256": "cadf41ecd5387812297485cf9606f8b334c7ccb0d672a51e35ab74e79fa425f4"
+    },
+    {
+      "path": "prompts/01-ground-truth-and-setup.md",
+      "bytes": 3187,
+      "sha256": "4650a7fe659672c80b482ca689d33b5691ecd2f0ca3ad29a4b695709ba2b15be"
+    },
+    {
+      "path": "prompts/02-listing-text-and-metadata.md",
+      "bytes": 3388,
+      "sha256": "85e95c9c95dacf31ad070b2de6fc03be18b4bc4e87cd749951a90ff2b485dd37"
+    },
+    {
+      "path": "prompts/03-capture-product-proof.md",
+      "bytes": 3520,
+      "sha256": "ef8e00c6830b277a1f5bda619fda2c0901d0a33866936fc5a22fdb5cac656dc5"
+    },
+    {
+      "path": "prompts/04-render-full-listing-and-variants.md",
+      "bytes": 3973,
+      "sha256": "db3997dc0a03956b498a7d86dc9518824bcdda27e274b35f0578e22aa38b941b"
+    },
+    {
+      "path": "prompts/05-independent-qa-and-release-pack.md",
+      "bytes": 4814,
+      "sha256": "04cdf540eeef9bec916f2e398597b3ab379960007fd65a5644827e03424323cc"
+    },
+    {
+      "path": "reference/current-screenshots/s1-hook.png",
+      "bytes": 3289782,
+      "sha256": "7d2a19c227e5f75634473a951adfa54bae9a766a5936456257a6d37607d2ee60"
+    },
+    {
+      "path": "reference/current-screenshots/s2-transformation.png",
+      "bytes": 1628879,
+      "sha256": "8cf41761074271cbb0bae99628c0d7cbb17024a692007ac79181325f3b1d3271"
+    },
+    {
+      "path": "reference/current-screenshots/s3-no-homework.png",
+      "bytes": 1266517,
+      "sha256": "3b2756b9854f8d983a49727d2bd9eefac01802275fbc82489d97e16018b0666f"
+    },
+    {
+      "path": "reference/current-screenshots/s4-family-cast.png",
+      "bytes": 949081,
+      "sha256": "9c20ef8ca731356e0b8b06287e03f31ce2ba4ffa3d3632615647faf8da7ffb50"
+    },
+    {
+      "path": "reference/current-screenshots/s5-look-back.png",
+      "bytes": 762148,
+      "sha256": "2c819d13f4584206e16b99f5d30f0bdf7e0e1c9e2df4fb93b491d1d297381e60"
+    },
+    {
+      "path": "reference/current-screenshots/s6-closing.png",
+      "bytes": 3427785,
+      "sha256": "8140acb594d956f21cb5984d0ab22836715d49e9329de6762006389daf44c5c5"
+    },
+    {
+      "path": "reference/momora-app-store-conversion-review.md",
+      "bytes": 44955,
+      "sha256": "cad52603a35d74fa7d1dd2e5199cb5cd9e8742450848717535ddc74dc064cba3"
+    },
+    {
+      "path": "reference/voice-of-customer.md",
+      "bytes": 26590,
+      "sha256": "b1ef261775b1b0233171127f85888cb0a2739da756b533fc22d0c393e154baa0"
+    },
+    {
+      "path": "state.example.json",
+      "bytes": 590,
+      "sha256": "7b26c2a92d97922ddb9a7e46bd930f883ef78664760b8fb59eb59cb1d4324125"
+    },
+    {
+      "path": "tools/validate_handoff.py",
+      "bytes": 6210,
+      "sha256": "3dfba02061ac24331f567f8622e708e5425d5b5636b24fafe14b43855b00eb5a"
+    }
+  ]
+}

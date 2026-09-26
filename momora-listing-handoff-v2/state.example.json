@@ -1,0 +1,21 @@
+{
+  "brief_version": "2.0-memory-first",
+  "strategy": "memory-first",
+  "repository": "eduardoyi/newmomora",
+  "source_revision": null,
+  "locale": "en-US",
+  "project_paths": {},
+  "required_device_families": [],
+  "phases": {
+    "0": "not_started",
+    "1": "not_started",
+    "2": "not_started",
+    "3": "not_started",
+    "4": "not_started",
+    "5": "not_started"
+  },
+  "migrated_from": null,
+  "needs_revalidation": [],
+  "blockers": [],
+  "note": "Example only. Do not overwrite existing state or mark phases complete without executing and checking their outputs. No secrets."
+}

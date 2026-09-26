@@ -1,0 +1,749 @@
+{
+  "$note_top_level": "PROVENANCE ONLY — nothing in this manifest is runtime, production, or App Store Review verification. Every entry is either a native device screenshot already on disk, a static crop of one, a local offline PDF->PNG renderer export, or a still frame pulled from a pre-recorded local demo video. No image generator was used for any UI, book page, or text in this manifest. No secrets, invite codes, or real email addresses appear in any prepared asset. Prepared by WP-C, docs/app-store-revamp/PLAN.md, 2026-09-20.",
+  "demoFamily": {
+    "name": "Kim-Ortiz family (fictional, approved demo household)",
+    "evidence": "supabase/scripts/demo-family-spec.ts — every person and visual in this household is fictional, per that script's own header",
+    "immediateFamily": [
+      "Maya (5y, \"May\")",
+      "Theo (3y5m, \"Teo\")",
+      "Ari (10mo)",
+      "Nora Kim (33y, \"Nori\")",
+      "Gabriel (36y)"
+    ],
+    "extendedFamilyInComments": [
+      "Lucia Ortiz",
+      "Rafael Ortiz",
+      "Gabe Ortiz",
+      "Eunji Kim"
+    ],
+    "note": "The extended-family names appearing in demo-family-feed.mp4's comment thread (Lucia/Rafael/Gabe Ortiz, Eunji Kim) are distinct from, and consistent with, the immediate Kim-Ortiz household shown in the phone/iPad captures — they read as invited relatives commenting on Maya's and Ari's memory, not a conflicting demo identity."
+  },
+  "sourceClasses": {
+    "native-capture": "Pixels come directly from a real device screenshot already committed in store-assets/source/, unmodified except for cropping.",
+    "renderer-export": "Pixels come from running this repo's own offline renderer (book-renderer's Puppeteer/PDF pipeline) against real book data, then converting the PDF to PNG.",
+    "video-frame": "A single frame extracted with ffmpeg from a pre-recorded local UGC demo video (marketing/assets/ugc/demo-cuts/*.mp4), then cropped.",
+    "presentation-mockup": "Not used in this manifest (no printed-sample photography exists to mock up against; see CAPTURE-REQUESTS.md #05).",
+    "draft-placeholder": "Pixels are genuine renderer output (no invented content), but the CONTENT itself is a placeholder mock — e.g. a colored SVG shape with a literal 'square 600x600'-style dimension label printed on it, standing in for a missing photo. This reads as a broken render, not product evidence, and must never be used as a frame's dominant subject or reach the upload manifest. Used for book-cover-sample.png and book-spread-sample.png after coordinator visual review (2026-09-20) — see each entry's sourceClassNote.",
+    "ui-reconstruction": "OWNER-DIRECTED, 2026-09-20 (PLAN.md §3a.2): a faithful HTML/CSS recreation of a real screen or control, built at render time by store-assets/templates/screenshot.html's recon* builder functions from the ACTUAL component source (styles, copy strings, layout) and the mirrored design tokens (src/constants/theme.ts) — never a native screenshot, never an image generator, never invented functionality. Every entry of this class lists the exact component files it was derived from and carries `requiresOwnerFidelitySignoff: true`; a reviewer should diff the rendered PNG against those files line by line. Used only for the three screens the owner explicitly approved reconstructing (gallery-import deck, saved-sound player, family members + invite) because no native capture of those populated screens exists on disk.",
+    "generated-demo-content": "AI-generated imagery standing in for the fictional Kim-Ortiz demo family's own photos and portraits. NOT a photograph of a real person and NOT product UI. Generated 2026-09-20 on the owner's explicit instruction, in the same spirit as supabase/scripts/demo-family-spec.ts, which states every person and visual in the demo family is fictional and must be generated from scratch. Used ONLY as photographic/illustrative CONTENT inside reconstructions; the surrounding UI is always built from the real component source, never generated."
+  },
+  "assets": [
+    {
+      "id": "timeline-story-card",
+      "file": "store-assets/v2/assets/timeline-story-card.png",
+      "source": "store-assets/source/IMG_0908.PNG",
+      "sourceClass": "native-capture",
+      "semanticPurpose": "Text-only story memory card (\"Maya packed three crackers…\", tag: funny) cropped tightly with breathing room, no app chrome.",
+      "feedsFrames": [
+        "01 (Keep more than the photos)"
+      ],
+      "routeOrRenderer": "app/(app)/(tabs)/timeline.tsx",
+      "device": "iPhone (native screenshot, 1170x2532 source)",
+      "nativeResolution": "1120x730 (crop, no upscaling)",
+      "fixtureStatus": "populated demo data, Kim-Ortiz family, production-pointed Supabase project",
+      "approvalBasis": "PLAN.md §1.3 — approved genuine capture on disk",
+      "sourceIds": [
+        "IMG_0908"
+      ],
+      "reuseDestinations": [
+        "frame 01 digital-collection composition; candidate story-path continuity anchor for frame 07"
+      ],
+      "knownLimitation": "The story text is genuinely TRUNCATED by the timeline card's own UI, ending mid-sentence: 'Theo ate the emergency crackers be…'. This is real product behavior (the card is a preview, not the full memory), but MASTER-BRIEF.md's frame 01/07 requirement is a COMPLETE short story — a page of truncated rows does not establish the value. This asset should NOT be relied on alone to satisfy that requirement; see CAPTURE-REQUESTS.md #01b for the matching full-text detail-view request, and see illustration-detail below for the one asset that already carries a complete story."
+    },
+    {
+      "id": "timeline-photo-card",
+      "file": "store-assets/v2/assets/timeline-photo-card.png",
+      "source": "store-assets/source/IMG_0908.PNG",
+      "sourceClass": "native-capture",
+      "semanticPurpose": "Photo memory card (blanket-fort photo of Maya and Theo) cropped from the top of the card down to just above the app's floating pink '+' FAB, so no UI chrome overlaps the photo.",
+      "feedsFrames": [
+        "01 (Keep more than the photos)"
+      ],
+      "routeOrRenderer": "app/(app)/(tabs)/timeline.tsx",
+      "device": "iPhone (native screenshot, 1170x2532 source)",
+      "nativeResolution": "1100x675 (crop, no upscaling; RE-CROPPED 2026-09-20, see knownLimitation)",
+      "fixtureStatus": "populated demo data, Kim-Ortiz family, production-pointed Supabase project",
+      "approvalBasis": "PLAN.md §1.3 — approved genuine capture on disk",
+      "sourceIds": [
+        "IMG_0908"
+      ],
+      "reuseDestinations": [
+        "frame 01 digital-collection composition; candidate photo-path continuity anchor for frames 02/07"
+      ],
+      "knownLimitation": "RE-CROPPED after coordinator visual review of the rendered frame 01: the original 1100x905 crop ended just above the floating TAB BAR but did not account for the app's floating pink '+' FAB, which sits higher (original-image y ~2088-2268) and was clipped into the card's bottom-right corner, reading as a stray pink blob on the photograph. This crop now ends at original-image y=2088 (just above the FAB) instead of y=2277. TRADE-OFF: the photo card's own metadata row (date/avatars/emotion chip) was never visible in this screenshot at all — it, like the rest of the photo, falls below the tab bar and off the bottom of the captured screen — so keeping it was never an option. The actual trade-off is photographic, not metadata: the baby (Ari), whose face appeared lower in the frame between roughly y=2210-2380, is now excluded along with the FAB, since his face and the FAB occupy overlapping vertical bands and the tab bar cuts the frame only ~20px below the FAB's bottom edge regardless. The crop now shows Maya and Theo only, not all three children."
+    },
+    {
+      "id": "illustration-detail",
+      "file": "store-assets/v2/assets/illustration-detail.png",
+      "source": "store-assets/source/IMG_0912.PNG",
+      "sourceClass": "native-capture",
+      "semanticPurpose": "Full memory-detail card: ladybug watercolor illustration + caption (\"Maya found a ladybug on the windowsill and asked if it had a mommy who knew where it was.\") + child/added-by tags + date + wonder emotion tag. Cropped with margin, no app chrome.",
+      "feedsFrames": [
+        "03 (For the things a photo missed)",
+        "optionally 01/07 as a supported illustration example"
+      ],
+      "routeOrRenderer": "app/(app)/memory/[id]/index.tsx",
+      "device": "iPhone (native screenshot, 1170x2532 source)",
+      "nativeResolution": "1080x1820 (crop, no upscaling)",
+      "fixtureStatus": "populated demo data, Kim-Ortiz family, production-pointed Supabase project",
+      "approvalBasis": "PLAN.md §1.3 — approved genuine capture on disk",
+      "sourceIds": [
+        "IMG_0912"
+      ],
+      "reuseDestinations": [
+        "frame 03 illustration output half; the caption text is the exact string to reuse verbatim as the frame 03 composer input for genuine input/output correspondence"
+      ],
+      "note": "This is currently the ONLY prepared asset that carries a genuinely COMPLETE short story (no truncation, no ellipsis) — contrast with timeline-story-card.png above, which is truncated by the timeline card's own UI. Prefer this asset wherever MASTER-BRIEF.md's 'complete short story' requirement (frames 01/07) must be satisfied until CAPTURE-REQUESTS.md #01b (a full-text memory-detail capture of the crackers story) is delivered."
+    },
+    {
+      "id": "family-roster",
+      "file": "store-assets/v2/assets/family-roster.png",
+      "source": "store-assets/source/IMG_0909.PNG",
+      "sourceClass": "native-capture",
+      "semanticPurpose": "\"Your people\" header plus 4 complete roster cards (Maya, Theo, Ari, Nora) with character portraits, ages, and nicknames. Cropped below the status bar, ends just above the floating tab bar (before it would clip the 5th card, Gabriel).",
+      "feedsFrames": [
+        "SUPERSEDED 2026-09-20 — frame 06 now uses the recon-family-invite reconstruction instead (see that entry), since this crop shows character-portrait roster cards but no role labels or invite controls, which the brief now requires frame 06 to show. Retained on disk and in this manifest as a genuine capture, just no longer wired into manifest.v2.json's 06-private-family slide."
+      ],
+      "routeOrRenderer": "app/(app)/(tabs)/family.tsx (verified by grep — the \"Your people\"/\"THE CAST\" header text lives only in this file)",
+      "device": "iPhone (native screenshot, 1170x2532 source)",
+      "nativeResolution": "1170x2160 (crop, no upscaling)",
+      "fixtureStatus": "populated demo data, Kim-Ortiz family, production-pointed Supabase project",
+      "approvalBasis": "PLAN.md §1.3 — approved genuine capture on disk",
+      "sourceIds": [
+        "IMG_0909"
+      ],
+      "reuseDestinations": [
+        "no longer used by any current manifest.v2.json slide as of 2026-09-20; see feedsFrames"
+      ]
+    },
+    {
+      "id": "day-list",
+      "file": "store-assets/v2/assets/day-list.png",
+      "source": "store-assets/source/IMG_0910.PNG",
+      "sourceClass": "native-capture",
+      "semanticPurpose": "\"Backwards.\" reverse-chronological day list: a full week (Sat 18 - Mon 13) with a text-story row (funny), 4 photo rows across joy/tender/funny emotions, and an empty day. Cropped below status bar, ends just above the floating tab bar/FAB.",
+      "feedsFrames": [
+        "SUPERSEDED 2026-09-20 (coordinator round 2) — frame 07's iPhone buckets now use the recon-family-collection reconstruction instead (day-list rows truncated and included an empty date, which the master brief rules out explicitly). Retained on disk and in this manifest as a genuine capture."
+      ],
+      "routeOrRenderer": "app/(app)/(tabs)/calendar.tsx",
+      "device": "iPhone (native screenshot, 1170x2532 source)",
+      "nativeResolution": "1170x1950 (crop, no upscaling)",
+      "fixtureStatus": "populated demo data, Kim-Ortiz family, production-pointed Supabase project",
+      "approvalBasis": "PLAN.md §1.3 — approved genuine capture on disk",
+      "sourceIds": [
+        "IMG_0910"
+      ],
+      "reuseDestinations": [
+        "no longer used by any current manifest.v2.json slide as of 2026-09-20; see feedsFrames"
+      ]
+    },
+    {
+      "id": "per-child-collection",
+      "file": "store-assets/v2/assets/per-child-collection.png",
+      "source": "store-assets/source/ipad/spare-person-detail.png",
+      "sourceClass": "native-capture",
+      "semanticPurpose": "\"Memories with Nora\" per-person collection: profile header + 10 chronological memory rows (text stories, photo rows, and illustrated-story rows) spanning Apr-Jul 2026, each with an emotion tag. Cropped below the iPad status bar, no other chrome.",
+      "feedsFrames": [
+        "07 (Here when you want to look back)"
+      ],
+      "routeOrRenderer": "app/(app)/family/[id]/index.tsx",
+      "device": "iPad Pro 13\" (native screenshot, 2064x2752 source)",
+      "nativeResolution": "2064x2550 (crop, no upscaling)",
+      "fixtureStatus": "populated demo data, Kim-Ortiz family, production-pointed Supabase project",
+      "approvalBasis": "PLAN.md §1.3 — approved genuine capture on disk",
+      "sourceIds": [
+        "spare-person-detail"
+      ],
+      "reuseDestinations": [
+        "frame 07 iPad evidence of revisiting; the JUL 10 row is the same ladybug memory as illustration-detail, again proving continuity"
+      ]
+    },
+    {
+      "id": "book-cover-sample",
+      "file": "store-assets/v2/raw/rejected/book-cover-sample.png",
+      "source": "book-renderer (npm run book:pdf -- --slug sample --spine-mm 12), book-data/sample/print/cover.pdf",
+      "sourceClass": "draft-placeholder",
+      "sourceClassNote": "RECLASSIFIED 2026-09-20 after coordinator visual review at full size, and MOVED OUT of store-assets/v2/assets/ into store-assets/v2/raw/rejected/ so it cannot be picked up downstream. Originally logged as renderer-export; the pixels genuinely do come from this repo's own offline renderer (that part is true and is why it is still useful evidence that the pipeline runs), but the CONTENT is a placeholder mock, not product evidence: the front cover shows a grey rounded rectangle reading 'Sample Child' over a pink circle, with the literal text 'cover photo 2400x1600' printed across the bottom. A page with a placeholder-dimension label printed on it reads as a broken render, not a book. Do not use this as a frame-05 dominant subject.",
+      "semanticPurpose": "Full wrap cover (back, spine, front) for the fictional \"Sample Child\" memory book, rendered by this repo's own offline print pipeline. IMPORTANT — this is SVG PLACEHOLDER art (colored circle/rectangle shapes and literal \"cover photo 2400x1600\" placeholder text baked into the sample book's own data, not a Momora bug and not edited by this task). It proves the automatic layout/cover-generation pipeline runs offline and produces a correctly-dimensioned physical cover file — that is its only legitimate use. It is NOT photographic, NOT presentable as a finished visual, and must NOT be used as frame 05's dominant subject.",
+      "feedsFrames": [
+        "NONE as product evidence — retained only as proof-the-renderer-runs documentation; see CAPTURE-REQUESTS.md #05/#05a for the real path to a usable frame-05 cover"
+      ],
+      "routeOrRenderer": "book-renderer/scripts/render-pdf.mts -> book-renderer/scripts/lib/renderBookPdfs.ts (127.0.0.1-only Puppeteer static server, no network calls)",
+      "device": "N/A — offline PDF render at 300dpi, 210x210mm trim page size doubled for wrap cover + 12mm spine",
+      "nativeResolution": "5104x2479 (full cover PDF page rasterized at 300dpi, no upscaling)",
+      "fixtureStatus": "the 'sample' book slug — fully fictional per book-renderer/book-data/index.json, uses SVG placeholder art throughout, never real customer/owner photos",
+      "approvalBasis": "PLAN.md §1.3/§6 — book:pdf --slug sample is the one render command this work package is authorized to run; command output and checksums recorded below",
+      "sourceIds": [
+        "sample"
+      ],
+      "reuseDestinations": [
+        "NONE for the public listing — draft/internal use only (demonstrates the render pipeline works). See CAPTURE-REQUESTS.md #05a for the enzo-year-one/mara-year-one real-photo alternative, which needs owner approval, or a cleared photograph of the physical printed sample."
+      ],
+      "renderCommand": "cd book-renderer && npm run book:pdf -- --slug sample --spine-mm 12",
+      "renderCommandOutput": "sample: 20 interior PDF pages, cover.pdf 1 page (spine 12mm, 432x210mm trim, no bleed); checksums interior sha256=4c68a153a38fa5fbd61cae6618a4024cb75f123be465504e5b8e3a92117e5c18, cover sha256=b461b125a34e2ba6fcc9286c0d3d372326234c9eae3a1502e292b192fa44fc5b; render wall time 13.9s"
+    },
+    {
+      "id": "book-spread-sample",
+      "file": "store-assets/v2/raw/rejected/book-spread-sample.png",
+      "source": "book-renderer (same render as above), book-data/sample/print/interior.pdf pages 10 (verso) and 11 (recto), composited side by side with a plain gutter — no content was altered, generated, or retouched, the two real page rasters were simply placed next to each other the way an open book would show them",
+      "sourceClass": "draft-placeholder",
+      "sourceClassNote": "RECLASSIFIED 2026-09-20 after coordinator visual review at full size, and MOVED OUT of store-assets/v2/assets/ into store-assets/v2/raw/rejected/. The right-hand page (page 11, the 'colander as a hat' story) is genuinely excellent, real, usable product evidence — but the left-hand page (page 10) is a large flat teal rectangle with the literal text 'portrait 480x600' printed in it, which reads as a broken render. Because the LEFT page of this specific spread fails inspection, the pairing as a whole is a placeholder and must not be used as frame 05's dominant subject. Page 11 alone is now prepared separately as book-page-text-sample.png below (a single page, not a spread — see that entry and CAPTURE-REQUESTS.md's #05 update for why a spread pairing was abandoned entirely).",
+      "semanticPurpose": "One open interior spread: left page is a placeholder photo block (\"portrait 480x600\", teal SVG placeholder — 'Feb 25 - Doing her silly walk again.'), right page is a full readable story paragraph ('February 20, 2024 — She insisted on wearing the colander as a hat all day...'). Demonstrates real page grouping/layout and genuinely readable words on the right page ONLY; the left page is placeholder art and undermines the spread as a whole.",
+      "feedsFrames": [
+        "NONE as product evidence — retained only as documentation that this specific spread (10/11) mixes one clean page with one placeholder page; use book-page-text-sample.png instead for frame 05"
+      ],
+      "routeOrRenderer": "book-renderer/scripts/render-pdf.mts -> book-renderer/scripts/lib/renderBookPdfs.ts, plus a local Python PIL side-by-side composite (no content generation, pure image placement) — store-assets/v2/raw/book-pages/hires-10.png and hires-11.png are the two untouched page rasters this was built from",
+      "device": "N/A — offline PDF render at 300dpi, 210x210mm trim per page",
+      "nativeResolution": "4970x2479 (two 2479x2479 page rasters plus a 12px gutter, no upscaling)",
+      "fixtureStatus": "the 'sample' book slug — fully fictional, SVG placeholder art on the photo page",
+      "approvalBasis": "PLAN.md §1.3/§6 — same book:pdf --slug sample render as book-cover-sample",
+      "sourceIds": [
+        "sample"
+      ],
+      "reuseDestinations": [
+        "NONE for the public listing — see book-page-text-sample.png"
+      ]
+    },
+    {
+      "id": "book-spread-text-sample",
+      "file": "store-assets/v2/raw/rejected/book-spread-text-sample.png",
+      "source": "book-renderer (same render as book-cover-sample, npm run book:pdf -- --slug sample --spine-mm 12), book-data/sample/print/interior.pdf pages 16 and 17, composited side by side with a plain gutter — no content altered, generated, or retouched",
+      "sourceClass": "draft-placeholder",
+      "sourceClassNote": "REJECTED AND RECLASSIFIED 2026-09-20 after coordinator visual review, and MOVED OUT of store-assets/v2/assets/ into store-assets/v2/raw/rejected/ so nothing downstream picks it up. This entry was previously (incorrectly) logged as renderer-export/usable, on the reasoning that page 16's QR-and-caption element ('listen to it', momora.co/e/MMAY) was 'a genuine product design element, not a missing-content placeholder.' That reasoning was WRONG on inspection at full size, for two independent reasons: (1) the short code 'MMAY' printed next to the QR is FABRICATED — book-renderer/src/model/fitter.ts:1180's placeholderShortCode() is documented as 'Fabricates a short, stable placeholder short code until phase 2 wires the real momora.co/e/<token> URL,' so this printed URL does not necessarily resolve to anything; a non-functional link must never appear in a store screenshot. (2) it implies the PRINTED BOOK plays audio, which MASTER-BRIEF.md's product-boundary table explicitly bans ('a physical book plays audio or contains audio QR codes') — see the audioQrFinding note at the top level of this manifest for the full nuance (the underlying feature is real when a live shareToken exists; the sample book's placeholder token makes this specific instance unusable regardless). Separately, pages 16/17 are also a weak dominant subject (mostly whitespace). Superseded entirely by the single-page book-page-text-sample.png (page 11), which has neither a QR/ScanMark element nor any placeholder-dimension text.",
+      "semanticPurpose": "One open interior spread: left page ('May 2024') carries a dated milestone plus a QR/ScanMark audio-note element with a FABRICATED placeholder short code; right page is a clean section-divider ('FIRSTS — Big and small victories this year', page 17). Retained only as documentation of why this specific spread was rejected.",
+      "feedsFrames": [
+        "NONE — rejected"
+      ],
+      "routeOrRenderer": "book-renderer/scripts/render-pdf.mts -> book-renderer/scripts/lib/renderBookPdfs.ts, plus a local Python PIL side-by-side composite (no content generation, pure image placement) — store-assets/v2/raw/book-pages/hires-16.png and hires-17.png are the two untouched page rasters this was built from",
+      "device": "N/A — offline PDF render at 300dpi, 210x210mm trim per page",
+      "nativeResolution": "4970x2479 (two 2479x2479 page rasters plus a 12px gutter, no upscaling)",
+      "fixtureStatus": "the 'sample' book slug — fully fictional per book-renderer/book-data/index.json; page 16 carries a fabricated placeholder QR short code (see sourceClassNote)",
+      "approvalBasis": "PLAN.md §1.3/§6 — same book:pdf --slug sample render already authorized and run for book-cover-sample; no new render was performed to produce this asset, only a different page selection from the existing PDF output",
+      "sourceIds": [
+        "sample"
+      ],
+      "reuseDestinations": [
+        "NONE — see book-page-text-sample.png"
+      ],
+      "pageSurveyMethod": "Rendered all 20 interior pages at 100dpi into a contact sheet and visually inspected every one for placeholder-dimension rectangles. This first pass MISSED that page 16 (and page 1, and page 15) carry a QR/ScanMark element, because a QR code is not a placeholder RECTANGLE and was not part of the original screening criterion. Corrected in the follow-up survey below (book-page-text-sample.png) which explicitly screens for ScanMark/QR elements too."
+    },
+    {
+      "id": "book-page-text-sample",
+      "file": "store-assets/v2/assets/book-page-text-sample.png",
+      "source": "book-renderer (same render as book-cover-sample, npm run book:pdf -- --slug sample --spine-mm 12), book-data/sample/print/interior.pdf page 11 only, converted to PNG with pdftoppm — no compositing, no other page involved",
+      "sourceClass": "renderer-export",
+      "semanticPurpose": "A single genuine interior page (page 11, dated 'FEBRUARY 20, 2024'): a complete, untruncated story in real Newsreader typography ('She insisted on wearing the colander as a hat all day, marched around declaring herself queen of the kitchen, and refused every other hat we owned for the rest of the week, negotiating fiercely each morning over the terms of the crown, until the colander finally lost a battle with the dog and we all agreed the reign had come to a dignified, slightly dented end.'), plus its printed page number. CONFIRMED ABSENT from this page by direct visual inspection at 300dpi, full page and a dedicated bottom-strip crop: no ScanMark/QR element of any kind, and no placeholder-dimension text (no 'square NxN', 'portrait NxN', 'panorama NxN', or 'video poster NxN' labels). This is a single page, not a spread — a two-page spread was abandoned for this frame after book-spread-text-sample.png's rejection (see that entry).",
+      "feedsFrames": [
+        "05 (And a book to hold, too) — interior-page half, the current best available renderer output for this frame"
+      ],
+      "routeOrRenderer": "book-renderer/scripts/render-pdf.mts -> book-renderer/scripts/lib/renderBookPdfs.ts, plus pdftoppm -r 300 -png -f 11 -l 11 (no compositing)",
+      "device": "N/A — offline PDF render at 300dpi, 210x210mm trim page",
+      "nativeResolution": "2479x2479 (single PDF page rasterized at 300dpi, no upscaling)",
+      "fixtureStatus": "the 'sample' book slug — fully fictional per book-renderer/book-data/index.json; this specific page contains no SVG placeholder art and no QR/ScanMark element",
+      "approvalBasis": "PLAN.md §1.3/§6 — same book:pdf --slug sample render already authorized and run; no new render was performed to produce this asset, only a different page selection and single-page (not spread) crop from the existing PDF output",
+      "sourceIds": [
+        "sample"
+      ],
+      "reuseDestinations": [
+        "SUPERSEDED 2026-09-20 — frame 05 now uses book-spread-enzo.png (real photographs, owner-approved enzo-year-three render) as its dominant asset, with book-cover-enzo.png for the cover half; both replace book-page-text-sample.png. This asset (page 11 of the fictional sample book) is retained only as documentation of the fallback path used before the real-photo book was approved, and remains a legitimate renderer-export in its own right (no placeholder content) if ever needed again."
+      ],
+      "pageSurveyMethod": "Re-surveyed every ODD interior page (1, 3, 5, 7, 9, 11, 13, 15, 17, 19 — the pages that could pair as a recto opposite a clean verso, and the pages most likely to stand alone as a single-page crop) specifically for ScanMark/QR elements as well as placeholder-dimension text, at 300dpi. Findings: page 1 has a ScanMark explainer icon + caption ('When you see a code like this, scan it...'); pages 3, 5, 9, 19 carry placeholder-dimension photo blocks; page 15 has a placeholder-dimension video-poster block WITH an embedded ScanMark; page 16 (even, paired with 17) has the fabricated-QR audio element already documented above. Pages 7, 11, 13, and 17 are the only fully clean text-only pages found across the whole 20-page book. Page 11 was selected over 7/13/17 because it alone carries a COMPLETE multi-sentence story (7 is a single short sentence; 13 and 17 are bare section-title pages, mostly whitespace)."
+    },
+    {
+      "id": "family-comments-inset",
+      "file": "store-assets/v2/assets/family-comments-inset.png",
+      "source": "marketing/assets/ugc/demo-cuts/demo-family-feed.mp4, frame at ~6.5s (family-feed-14.png in store-assets/v2/raw/video-frames/), cropped to the phone-screen region only",
+      "sourceClass": "video-frame",
+      "semanticPurpose": "A genuine Comments sheet on a shared memory, showing 4 distinct extended-family commenters (Lucia Ortiz, Rafael Ortiz, Gabe Ortiz, Eunji Kim) reacting to a memory about Maya and Ari (\"Captain Maya ran a tight ship.\" / \"Ari was an excellent passenger.\"). Demonstrates real multi-person family engagement on a shared memory.",
+      "feedsFrames": [
+        "SUPERSEDED 2026-09-20 — frame 06 was rebuilt around the recon-family-invite reconstruction (roster + role picker + invite code), which needed the whole frame's width; this comments inset was dropped from the composition rather than resized in. Retained on disk and in this manifest as a genuine video-frame capture."
+      ],
+      "routeOrRenderer": "unknown exact route (comments sheet reachable from a memory detail view); not one of the §1.2 routes explicitly listed, needs confirmation before final use",
+      "device": "iPhone, UGC demo recording, 720x1280 source (well below the 1260-2868-class master resolution used elsewhere)",
+      "nativeResolution": "560x900 (crop of the phone-screen region only, no upscaling)",
+      "fixtureStatus": "populated demo data from a pre-recorded UGC demo cut, Kim-Ortiz household",
+      "approvalBasis": "MASTER-BRIEF.md §06 — 'an optional separately captured shared memory if it clarifies the benefit'; PLAN.md §1.3/§6 — video frame extraction, used ONLY as a small honest inset, never as a full-bleed device fill",
+      "sourceIds": [
+        "demo-family-feed"
+      ],
+      "reuseDestinations": [
+        "no longer used by any current manifest.v2.json slide as of 2026-09-20; see feedsFrames"
+      ]
+    },
+    {
+      "id": "book-cover-enzo",
+      "file": "store-assets/v2/assets/book-cover-enzo.png",
+      "source": "book-renderer (cd book-renderer && npm run book:pdf -- --slug enzo-year-three --spine-mm 12, rendered to a scratch --out-dir so the committed book-data/enzo-year-three/print/cover.pdf was never touched/overwritten), fresh cover.pdf, front-cover panel only (right of the spine), converted with pdftoppm -r 200 -png then cropped to the front-cover pixel range (x=1748..3403 of the 3403x1653 full wrap render) — no compositing beyond that crop, no content altered",
+      "sourceClass": "renderer-export",
+      "semanticPurpose": "The REAL front cover of Enzo's printed Year Three book: a genuine multi-generation family photograph (grandparents, parents, aunt/uncle, Enzo, baby sibling), the child's name 'Enzo' and '2024 – 2025' in the book's real title typography, and the 'Momora.' wordmark on the facing/back panel of the same wrap render (cropped out of this asset, which is the front panel only). CONFIRMED ABSENT by direct visual inspection at full size: no ScanMark/QR element anywhere on the cover, no placeholder-dimension label ('cover photo 2400x1600' or similar) — unlike book-cover-sample.png (rejected), this cover has a real photo laid out in the real cover template, not SVG placeholder art.",
+      "feedsFrames": [
+        "05 (And a book to hold, too) — cover half, now real for the first time (previously blocked, see CAPTURE-REQUESTS.md #05a)"
+      ],
+      "routeOrRenderer": "book-renderer/scripts/render-pdf.mts -> book-renderer/scripts/lib/renderBookPdfs.ts (127.0.0.1-only Puppeteer static server, no network calls) — re-confirmed by reading renderBookPdfs.ts in full immediately before this render; nothing had changed since bookRenderVerification below",
+      "device": "N/A — offline PDF render at 200dpi, front-cover panel is 210mm wide x 210mm tall trim (full wrap cover before cropping was 432x210mm, spine 12mm)",
+      "nativeResolution": "1655x1653 (crop of the front-cover panel only from the 3403x1653 200dpi wrap-cover render, no upscaling)",
+      "fixtureStatus": "the 'enzo-year-three' book slug — contains REAL photographs of the owner's own family (Enzo and his relatives), not fictional/placeholder content",
+      "brandedContentScreen": "RE-SCREENED 2026-09-20 against the permanent 'no third-party IP' criterion added after coordinator/owner review (see book-spread-enzo-en.png's brandedContentScreen for the full criterion text and the book-wide findings). PASSES: every adult and child in this photo wears a plain solid-color top; no cartoon/branded characters, no visible logos or brand names, no screens, no readable packaging or signage anywhere in frame. Usable for marketing.",
+      "approvalBasis": "Owner approval granted 2026-09-20 for enzo-year-three specifically; this book contains real photographs of the owner's family. This approval does NOT extend to enzo-year-one, enzo-year-two, mara-year-one, or mara-year-two, which remain unapproved and were not opened, rendered, or used by this task (see rejectedSources).",
+      "sourceIds": [
+        "enzo-year-three"
+      ],
+      "reuseDestinations": [
+        "frame 05 cover half, paired with book-spread-enzo.png for the interior half. Frame 05 stays draft regardless — see the frame's draft-reason update for what remains uncaptured (in-app shelf, shop.usemomora.com browser review, and a photograph of the physical printed copy)."
+      ],
+      "renderCommand": "cd book-renderer && npm run book:pdf -- --slug enzo-year-three --spine-mm 12 --out-dir /tmp/enzo-y3-render",
+      "renderCommandOutput": "enzo-year-three: 122 interior PDF pages, cover.pdf 1 page (spine 12mm, 432x210mm trim, no bleed), 1.9MB; checksums interior sha256=68cd41a26bea053e7c8d017577cafa8bb9a6a58a961e4b94f00a8117a814e585, cover sha256=8c49b0d79a2f3dd9663770c00ae77b4d3499b742810d87786b399ed94744b991; render wall time 50.6s (122 interior pages + 1 cover, concurrency 4). Output written to a scratch --out-dir, NOT to book-data/enzo-year-three/print/ — the previously committed cover.pdf (md5 eb1a12299773ab9c2fb1a791ed8be9ef) was read-only backed up before this render and was never overwritten; this fresh render's cover.pdf differs from the committed one (different md5), most likely reflecting book-data content changes since the committed cover was built on 2026-08-29 — this task did not investigate the diff further since it was not asked to reconcile the two, only to avoid destroying the committed file, which it did not."
+    },
+    {
+      "id": "book-spread-enzo",
+      "file": "store-assets/v2/assets/book-spread-enzo.png",
+      "source": "same enzo-year-three render as book-cover-enzo.png, interior.pdf pages 56 (verso/left) and 57 (recto/right), each converted independently with pdftoppm -r 200 -png then placed side by side with no gutter — no content altered, generated, or retouched; this is exactly how the two pages face each other when the physical book is opened",
+      "sourceClass": "renderer-export",
+      "semanticPurpose": "The hero open-spread asset: page 56 (anchor-media template) shows a real photo of Enzo in front of his own artwork display plus a real photo of Enzo and his baby sibling on a chair, captioned '31 jul · Orgulloso con sus trabajos del primer año en la escuelita'; page 57 (anchor-media template) shows three real candid photos of Enzo and his sibling together, captioned '26 jul'. Both captions are complete, readable, genuine sentences in the book's real typography — not truncated, not placeholder text. Together the spread demonstrates real photographs, genuine automatic selection/grouping of multiple memories from the same days onto facing pages, and readable words, which is exactly what frame 05 needs to prove.",
+      "feedsFrames": [
+        "NONE as of 2026-09-20 — see sourceClassNote. Superseded for frame 05 by book-spread-enzo-en.png; retained as the canonical genuine record of the actual Spanish-language book text (matching the owner's physical printed copy)."
+      ],
+      "sourceClassNote": "SUPERSEDED for frame 05 use, 2026-09-20: the owner decided the store listing needs an English-language caption (this is a US-English listing), so frame 05 now uses book-spread-enzo-en.png — rendered from a translated derived copy of the book data (book-data/enzo-year-three-en/, language:'en') — instead of this asset. This asset is unchanged and still fully accurate: it is what the real enzo-year-three book actually says, in Spanish, matching the owner's physical printed copy exactly. See book-spread-enzo-en.png's entry for the full Spanish->English caption pairing and translation method.",
+      "routeOrRenderer": "book-renderer/scripts/render-pdf.mts -> book-renderer/scripts/lib/renderBookPdfs.ts, plus pdftoppm -r 200 -png -f 56 -l 57 and a local Python PIL side-by-side placement (no content generation, pure image placement, no gutter/border added)",
+      "device": "N/A — offline PDF render at 200dpi, 210x210mm trim per page",
+      "nativeResolution": "3306x1653 (two 1653x1653 page rasters placed side by side, no gutter, no upscaling)",
+      "fixtureStatus": "the 'enzo-year-three' book slug — contains REAL photographs of the owner's own family",
+      "approvalBasis": "Owner approval granted 2026-09-20 for enzo-year-three specifically; this book contains real photographs of the owner's family. This approval does NOT extend to enzo-year-one, enzo-year-two, mara-year-one, or mara-year-two, which remain unapproved and were not opened, rendered, or used by this task (see rejectedSources).",
+      "sourceIds": [
+        "enzo-year-three"
+      ],
+      "reuseDestinations": [
+        "NONE for frame 05 (superseded by book-spread-enzo-en.png) — retained only as the canonical Spanish-language record."
+      ],
+      "brandedContentScreen": "NOT USABLE FOR MARKETING (found 2026-09-20, after this asset was already prepared and in use). Page 56's top photo — the large photo of Enzo in front of his artwork wall — shows him wearing a t-shirt with a large, centred, unmistakable Pikachu print. This is clearly identifiable at full size AND at this spread's reduced on-canvas scale (re-confirmed by cropping the exact rendered region from a live frame-05 export and inspecting it directly — the yellow silhouette with the red cheeks and pointed ears reads clearly even shrunk). Per owner directive 2026-09-20 ('swap it, no branded stuff anywhere... small enough not to notice is not the standard'), this asset must NOT be used in any marketing composition, screenshot, or listing image, in either its Spanish or a hypothetical English form — it is flagged here specifically so a future implementer reaching for 'the real enzo-year-three spread' does not reuse it. It remains a legitimate, accurate record of the physical printed book, which does contain this shirt.",
+      "pageSurveyMethod": "Used fitBookForPrint's own page-fit output (dumped node-side, no Puppeteer needed) to map every one of the 122 interior physical page numbers to its template (anchor-media/full-bleed/panorama-spread/illustrated-story/illustrated-digest/spread-title/etc.) before rasterizing anything, to avoid converting all 122 pages to PNG. Screened, at 80-150dpi first and then 200dpi for the finalists: pages 1, 5, 20, 41, 47, 59 — REJECTED, each carries a visible ScanMark/QR code (the renderer's real per-memory audio-link feature; per audioQrFinding this book can carry REAL minted tokens, but the master brief bans implying the printed book plays audio regardless of whether the token is real, and this task did not verify the momora.co/e/<token> redirect is live in production, so no page with a visible QR was used). Pages 9, 15, 18, 26, 33, 40, 49, 58, 69, 95, 112, 120 — REJECTED as spread-title/month-header pages, mostly empty whitespace with only a one-line heading. No page anywhere in the 122-page interior showed placeholder-dimension text (e.g. 'portrait 480x600') — this book's manifest has real photos for every photo slot, unlike the sample book. Pages 22, 54-55, 62-65, 70-73 and most pages after ~68 are 'illustrated-story'/'illustrated-digest' templates (real AI illustrations paired with real caption text, not photographs) — not used for the hero spread since the requirement is REAL PHOTOGRAPHS, though they contain no QR/placeholder issues either. Pages 56/57 were selected as the best clean, real-photo, real-caption, QR-free, non-title spread found; pages 104/105 and 46/47 were runner-up real-photo candidates but 46/47 was rejected for the QR on page 47's facing side and 105 pairs a real photo (104) with an illustrated page (105) rather than two photo pages."
+    },
+    {
+      "id": "book-spread-enzo-en",
+      "file": "store-assets/v2/assets/book-spread-enzo-en.png",
+      "source": "A DERIVED, TRANSLATED copy of the book data — book-renderer/book-data/enzo-year-three-en/ (manifest.json + book.outline.json copied from the real enzo-year-three/ directory, assets/ symlinked to the same real photos, never modified) — with manifest.json's language field changed 'es'->'en' and exactly the 7 real photo-caption strings that exist anywhere in this book translated to natural English (see captionTranslations below, unchanged from the first version of this asset). Rendered with the SAME offline command as the Spanish asset: cd book-renderer && npm run book:pdf -- --slug enzo-year-three-en --spine-mm 12 --out-dir /tmp/enzo-y3-en. renderBookPdfs.ts was re-confirmed loopback-only/offline immediately before this render. Interior checksum sha256=f3a086eeac4d4c76c0d613844aa8503602c5ebe37a463d35facc8ec57f5b09a1, cover sha256=2ff3406dd5dea5a4bad6a133150b1d314a8cb938bf675a0695705258a1e90b2e, wall time 51.5s. CURRENT (third) version uses interior.pdf pages 12 (verso/left) and 13 (recto/right) — see revisionHistory and brandedContentScreen below for why pages 56/57 and then 34/35 were tried first and rejected. pdftoppm -r 200 -png each page, placed side by side with no gutter — no content altered beyond the upstream translated source text.",
+      "sourceClass": "renderer-export",
+      "translationDisclosure": "IMPORTANT — this is a genuine render of TRANSLATED book data, not a photograph or render of the physical printed copy. The book the owner actually printed and owns is in Spanish (see book-spread-enzo.png). This -en asset exists only for this US-English store listing; the printed book on the owner's shelf and this store image will not match word-for-word. This distinction must survive into the owner sign-off. (Pages 12/13, the current spread, carry no caption text at all — just bare date stamps 'Mar 16' — so there is nothing to mistranslate on this specific spread; the translated-caption record below documents the OTHER 7 captions in the book, all screened and translated regardless of which page ultimately shipped.)",
+      "revisionHistory": "v1 (pages 56/57): passed every check at the time (no QR, no placeholder art, complete readable caption) but was NOT screened for third-party IP, which did not yet exist as a criterion. v2 (pages 34/35): chosen after a coordinator review found v1's caption illegible and, separately, found a Pikachu shirt in v1's dominant photo; 34/35 initially looked clean (dad+child dessert scene, two ice cream photos, a grandma photo) but a SECOND, stricter owner-mandated pass ('no branded stuff anywhere... swap it') caught a Charmander (Pokémon) t-shirt worn by Enzo in page 35's THIRD photo (the one with his grandmother) — missed in the first pass because that photo sits lower on the page and was not individually zoomed into. v3 (CURRENT, pages 12/13): a single panoramic photo of Enzo peeking over the edge of a bathtub, split across the spread — plain white bathroom tile and tub only, no toys, no clothing graphics, no packaging, no screens, nothing to misidentify. Chosen specifically for reliability after v1 and v2 both turned out to contain branded content on inspection; verified clean twice (full-page review, then a targeted re-zoom of every element in frame).",
+      "brandedContentScreen": "PERMANENT CRITERION (add to every future book render's screening alongside the existing QR/ScanMark and placeholder-art checks): reject any page that shows, anywhere in frame — (a) a cartoon or licensed character on clothing, toys, bibs, or costumes; (b) a visible brand name or logo, including on shoes, packaging, appliances, storefronts, signage, ride/play equipment, or book covers/spines; (c) sports-team marks; (d) any third-party screen content (a TV, tablet, or phone showing visible video/app content — a screen that is off or blank is fine). 'Small enough not to notice' is NOT an exemption (owner directive, 2026-09-20) — if a human reviewer can identify it at full render size, it is rejected, and the compositor's own downscaling to a smaller on-canvas size is not a mitigation either, per the same directive (re-confirmed here: this book's most common violation, a Pikachu/Pokémon-family character shirt, remained identifiable even at reduced spread scale in v1). Applied to this asset by cropping/reconstructing each candidate spread from a live render and inspecting every sub-photo individually, not just the largest one on the page — the v2 miss above happened precisely because a smaller sub-photo was not individually inspected. PASSES for v3 (pages 12/13): re-verified twice, no violations of any kind.",
+      "captionTranslationsNote": "None of the 7 real photo captions in this 189-memory book appear on the CURRENT spread (pages 12/13, which carry only bare dates). The table below is retained because all 7 were translated up front (for reflow safety) and because book-callout-enzo-en.png reuses one of them (page 56's) at enlarged size, even though page 56 is no longer the dominant spread.",
+      "captionTranslations": [
+        {
+          "page": "56 (superscript 1, bare date only, no descriptive text)",
+          "spanish": "15 jul",
+          "english": "Jul 15",
+          "translationMethod": "date only — automatic, via manifest.language='en' (book-renderer/src/templates/common/formatDate.ts's formatIndexDate: 'D MMMabbr' es -> 'MMMabbr D' en, a deterministic fixed-table formatter, not a translation of free text)"
+        },
+        {
+          "page": "56 (superscript 2)",
+          "spanish": "31 jul · Orgulloso con sus trabajos del primer año en la escuelita",
+          "english": "Jul 31 · Proud of his work from his first year of preschool",
+          "translationMethod": "manual translation of the free-text caption (memory id 8c4c29eb-6729-5d64-886e-96bd8ac863a0); the leading date auto-localized as above. Faithful, plain register, no embellishment: 'trabajos' (schoolwork/projects, matching the artwork-covered wall visible in the same photo) -> 'work'; 'escuelita' (diminutive, affectionate 'little school') -> 'preschool' for natural English. Contains no quoted child speech — no judgement call about preserving a child's own words was needed for this caption."
+        },
+        {
+          "page": "57 (superscript 1,2, bare date only, covers all 3 photos on this page, no descriptive text)",
+          "spanish": "26 jul",
+          "english": "Jul 26",
+          "translationMethod": "date only — automatic, same formatIndexDate mechanism as above"
+        }
+      ],
+      "allSevenBookCaptions": "For completeness: (1) p16 'Hoy Enzo estaba comiendo dim sum con palitos.' -> 'Today Enzo was eating dim sum with chopsticks.' (2) p16 'POV: date con mi chiquilindo.' -> 'POV: date with my little cutie.' (3) p41 'Fuimos al Jumpyard y Enzo se divirtió muchísimo' -> 'We went to Jumpyard and Enzo had so much fun' (4) p47 'En el acto de fin de curso de la escuelita' -> 'At his end-of-year ceremony at preschool' (5) p56 and (6) — see captionTranslations above — (7) p59 'Bailando con mami' -> 'Dancing with mommy' (8) p104 'Enzo se cortó el pelo y se portó muy bien.' -> 'Enzo got his hair cut and behaved so well.' None of these 7 captions — the only 'media'-type memories with non-null caption text in the entire 189-memory manifest — contain a child's own quoted words (no quotation marks in any of them); this task did not have to make the quoted-speech judgement call the coordinator flagged as a risk. Had one existed, per instruction it would have been left in the original language or the page would have been avoided, never silently translated. SEPARATE PRODUCT OBSERVATION FOR THE OWNER: only 7 of this book's 189 memories carry any photo caption text at all (the other 182 are either bare-date photos or the 77 AI-illustrated 'text_illustration' stories, which are a different content type, not photo captions). This book is overwhelmingly photographs with no accompanying words — worth knowing both for how much 'story' content a real printed book of this kind actually contains, and for how honestly this frame can illustrate 'Momora selects the memories and lays out the pages': the automatic layout/grouping is genuine and demonstrable, but a caption-rich spread like the one first attempted here is the exception in this particular book, not the norm.",
+      "semanticPurpose": "The hero open-spread for frame 05: a real photograph (Enzo peeking over a bathtub edge, cropped by the book's own automatic layout into a two-page panorama) demonstrating a genuine automatic print-layout feature. Chosen for its zero-risk cleanliness after two earlier candidates (pages 56/57, then 34/35) were found to contain branded character content on closer inspection — see revisionHistory. Because this spread carries no caption of its own, the 'readable words' half of frame 05's requirement is carried entirely by book-callout-enzo-en.png (see that entry).",
+      "feedsFrames": [
+        "05 (And a book to hold, too) — dominant/hero asset (current, as of 2026-09-20)"
+      ],
+      "routeOrRenderer": "book-renderer/scripts/render-pdf.mts -> book-renderer/scripts/lib/renderBookPdfs.ts, plus pdftoppm -r 200 -png -f 12 -l 13 and a local Python PIL side-by-side placement (no content generation, pure image placement, no gutter/border added)",
+      "device": "N/A — offline PDF render at 200dpi, 210x210mm trim per page",
+      "nativeResolution": "3306x1653 (two 1653x1653 page rasters placed side by side, no gutter, no upscaling)",
+      "fixtureStatus": "the 'enzo-year-three-en' book slug — a derived copy of enzo-year-three with translated caption text and language:'en'; contains the SAME real photographs of the owner's family as enzo-year-three",
+      "approvalBasis": "Same owner approval as enzo-year-three (2026-09-20, enzo-year-three specifically) plus the owner's follow-up decisions (2026-09-20) to translate the store-listing caption to English via a re-render, and to apply a zero-tolerance third-party-IP screen to every candidate page. The derived slug uses only the same real family photos already approved; no new photo content was introduced.",
+      "sourceIds": [
+        "enzo-year-three-en"
+      ],
+      "reuseDestinations": [
+        "frame 05 dominant/hero asset (current, v3/pages 12-13). Superseding book-spread-enzo.png for this frame only; that Spanish asset remains the canonical record of the real printed book but is flagged not-for-marketing (see its entry)."
+      ]
+    },
+    {
+      "id": "book-callout-enzo-en",
+      "file": "store-assets/v2/assets/book-callout-enzo-en.png",
+      "source": "Two true crops from the SAME enzo-year-three-en render as book-spread-enzo-en.png, page 56 only, each rasterized independently at 1200dpi (6x the spread's 200dpi, purely to gain crop precision and native resolution headroom — see MASTER-BRIEF's enlarged-callout technique) via pdftoppm -x/-y/-W/-H pixel-exact crop flags (no upscaling, no re-render of anything already rendered): (1) a 3000x2700 crop of Enzo's face/torso/toy against his artwork wall (photo excerpt only, tightly framed, still literally the same pixels as the top photo in the spread above, just a smaller true crop of it), and (2) a 3150x250 crop of the page's real footer row containing the superscript '2' mark, the real Newsreader/Jakarta-Sans-rendered caption text 'Jul 31 · Proud of his work from his first year of preschool', and the real hairline rule above it — tightly bounded (measured programmatically: text pixel bbox, then +40-50px padding) but otherwise untouched, no retypesetting, no restyling, no recreated caption. The two crops were then placed on a single white canvas with the photo crop centered above the caption crop (both crops kept at their native pixel width, no resizing/upscaling of either — the narrower photo crop is centered with blank margin rather than stretched to match the caption crop's width) and a small gap between them — pure image placement, same 'true crop, placed not altered' methodology already used and documented for book-spread-enzo.png/book-spread-enzo-en.png, extended here to two crops from one page instead of two whole pages.",
+      "sourceClass": "renderer-export",
+      "translationDisclosure": "The caption text visible in this crop is the SAME translated English text as book-spread-enzo-en.png's page 56 captionTranslations entry (Spanish original + translation method there). Not a photograph of the physical (Spanish) printed book.",
+      "notFromTheSameSpreadDisclosure": "This callout is deliberately NOT from the same spread as the current dominant asset (book-spread-enzo-en.png, now pages 12/13) — it is 'a nearby qualifying page' in the book, reused because page 56 has the richest real caption in the entire 189-memory book (see book-spread-enzo-en.png's allSevenBookCaptions) and, once cropped tightly to exclude a Pikachu shirt visible elsewhere on that same source photo (see brandedContentScreen below), is otherwise completely clean. Pages 12/13 themselves carry no caption at all, so no single page in this book offers both a rich caption AND full-frame cleanliness — this is the honest trade-off made to satisfy both requirements at once.",
+      "brandedContentScreen": "RE-VERIFIED 2026-09-20 against the permanent no-third-party-IP criterion (see book-spread-enzo-en.png's brandedContentScreen for the full criterion). The SOURCE photo (page 56's top image) does contain a Pikachu shirt on Enzo's torso — this is why this callout's photo crop is deliberately framed from mid-chest up (face, hair, and the wall art behind him only): the shirt is entirely outside the crop's frame. Verified by re-inspecting the exact crop file pixel-by-pixel a second time (after the page-35 miss on the spread asset) for anything else that could read as third-party IP: the plush toy held near his shoulder is a generic, unbranded elephant/bunny design with no visible tag; the visible handwritten label reads 'Outono' with a date ('17/10/24', '2024/2025') — this is the preschool's own in-house craft-activity label (Portuguese for 'Autumn'), not a commercial brand; a second partial handwritten word ('...ARONES') is a classmate's name tag on a neighboring piece of student artwork, not a logo. PASSES.",
+      "semanticPurpose": "The enlarged-callout fix for frame 05's failed acceptance test (WP-D coordinator review, 2026-09-20): the spread above is legible for photos/grouping but its embedded caption text is only a few pixels tall at spread scale and was found illegible even at full canvas size. This callout pulls ONE real photo-plus-caption pair from elsewhere in the book (page 56, the richest caption available, tightly cropped to exclude branded clothing visible in the rest of that same photo — see notFromTheSameSpreadDisclosure) and enlarges it via a much larger width_pct in the frame's dead space below the spread, making real words genuinely readable. This is the same 'pull a genuine element out and enlarge it' pattern (Tinybeans-style callout) used elsewhere in this manifest for reconstructed frames (02/04/06), applied here to a REAL rendered crop instead of a synthetic reconstruction, per the coordinator's explicit instruction that this callout must be a true crop, never retypeset/restyled/recreated.",
+      "feedsFrames": [
+        "05 (And a book to hold, too) — enlarged-callout inset, addressing the 'readable words' acceptance-test failure"
+      ],
+      "routeOrRenderer": "book-renderer/scripts/render-pdf.mts -> book-renderer/scripts/lib/renderBookPdfs.ts, plus pdftoppm -r 1200 -x -y -W -H (pixel-exact crop rasterization, two separate crops) and a local Python PIL composite (pure placement on a white canvas, no resizing/upscaling of either source crop, no text/content generation)",
+      "device": "N/A — offline PDF render, page 56 cropped regions rasterized at 1200dpi",
+      "nativeResolution": "3150x3045 (photo crop 3000x2700 + caption crop 3150x250 + gap/padding, no upscaling of either source crop — the photo crop is centered on the wider 3150px canvas rather than stretched)",
+      "fixtureStatus": "the 'enzo-year-three-en' book slug — real photographs, translated caption text",
+      "approvalBasis": "Same as book-spread-enzo-en.png — 2026-09-20 owner approval for enzo-year-three's real photos, plus the owner's translate-and-re-render decision and explicit endorsement of the enlarged-callout technique for fixing frame 05's legibility failure.",
+      "sourceIds": [
+        "enzo-year-three-en"
+      ],
+      "reuseDestinations": [
+        "frame 05 enlarged callout, all four buckets (iPhone: width_pct 90 of canvas; iPad: width_pct 50 of canvas — iPad's squarer canvas aspect ratio leaves less vertical headroom below the spread, but both sizes render the caption clearly legible; see this task's report for the full before/after comparison)"
+      ],
+      "legibilityMeasurement": "Tight caption-text pixel bbox at 1200dpi measured 3017x134px (page 56) — i.e. the caption glyphs are only ~4.4% as tall as the caption's own text width. Because this ratio is fixed by the physical page/caption proportions (independent of source DPI), the achievable on-canvas text height is bounded by how much of the canvas WIDTH the callout is allowed to occupy: at width_pct 90 on the iPhone buckets (~1134px rendered width) the caption renders comfortably large; on the iPad bucket at width_pct 50 (~1032px rendered width) it renders slightly smaller but still clearly legible. Verified by direct visual inspection of the rendered PNGs, not by this estimate alone: full-size, the caption is clearly and comfortably legible on all four buckets, and remains legible at both a simulated 130px-wide (1x) and 260px-wide (2x/Retina) thumbnail. This is a substantial, honest improvement over the pre-callout spread-only caption (which measured only ~10-12px tall on the full canvas, i.e. illegible even before any thumbnail shrink) — see this task's report for the full before/after thumbnail comparison.",
+      "bookWidePageSurveyForThirdPartyIP": "Full honest accounting, 2026-09-20, for the owner: this book has 59 real-photo pages (anchor-media/full-bleed/panorama-spread templates; the other ~63 interior pages are AI-illustrated 'text_illustration' stories, spread-title/month-header pages, or front/back matter). Of the 59: 12 carry a ScanMark/QR code (pages 5, 20, 25, 30, 41, 44, 46, 47, 51, 59, 67, 68 — found via a programmatic search of the fitter's own per-photo 'qr' flag, which is more exhaustive than eyeballing; two of these, 25 and 30, were missed in this task's FIRST QR pass and only caught on this stricter re-check). Of the remaining 47 QR-free pages, this task individually inspected every one (every sub-photo on every page, not just the largest) for cartoon/branded characters, logos, brand names, sports marks, and screen content. AT LEAST 23 of the 47 contain clearly identifiable third-party IP: Pokémon-family characters (Pikachu/Charmander/Bulbasaur/etc.) alone appear on at least 7 different pages (16, 19, 28, 32, 35, 37, 50, 56 — this franchise is by far the most common violation, evidently a favorite of the child's), Dragon Ball on 2 more (38, 104), plus one each of Sonic the Hedgehog (90), Power Rangers costumes (4), a 'Blaze and the Monster Machines' toy truck (10), a LEGO-branded indoor play center with LEGO-branded signage (52) and loose LEGO bricks elsewhere (31), a carnival ride scene saturated with licensed characters — Barbie, Cars/Pixar, Spider-Man, The Incredibles, Madagascar all visible in one frame (42/43, by far the worst single page), a bike-share company logo ('Lime', page 27), a visible mineral-water bottle brand ('ALARÓ', page 16), and visible shoe-brand logos (Adidas on page 6/91, Skechers on page 74). A further several pages are borderline (a slogan/graphic tee, a partially-legible poster, ambiguous product boxes) and were treated conservatively as failing. Only a small remainder — at most 13-14 of the 47 — are unambiguously clean on their own, and of the FEW two-real-photo-page spreads this book actually has (most anchor-media pages pair with either a QR page or an AI-illustrated page, not another real photo), only ONE was confirmed fully clean on both sides after this exhaustive check: pages 12/13, a single panoramic photo (not two distinct memories) split across the spread. PLAIN ANSWER to 'can this book realistically supply marketing imagery': for a MULTI-photo grouped spread with zero branded content, effectively no — this task tried three different candidate spreads (56/57, then 34/35, then confirmed only 12/13) before finding one that survived a careful look at every sub-photo, and 12/13 succeeds only because it happens to be bathroom-tile-plain. A different book, or a photograph of the physical printed copy where the owner can choose/crop around branded items in person, is likely a more reliable path if more marketing imagery from a real book is wanted."
+    },
+    {
+      "id": "recon-gallery-import-deck",
+      "file": "store-assets/templates/screenshot.html (reconGalleryImportDeck / reconKeepAsideRow functions, rendered at manifest slide \"02-existing-photos\")",
+      "source": "src/components/gallery-import/gallery-import-deck-card.tsx (deck card: hero photo + script date stamp + film-strip row + date + caption) and src/components/gallery-import/gallery-import-review.tsx (DeckTopBar's \"Close\" link and \"Set aside · N\" pill; the sticky footer's \"Set aside\"/\"Keep this\" pill pair, styles.secondaryAction/styles.keepAction)",
+      "sourceClass": "ui-reconstruction",
+      "requiresOwnerFidelitySignoff": true,
+      "semanticPurpose": "Frame 02 dominant subject: the actual gallery-import suggestion deck a parent reviews mid-sweep, with the real Keep/Set aside controls, pulled out and enlarged as a callout per the owner's Tinybeans-style direction.",
+      "feedsFrames": [
+        "02 (Start with the photos you have)",
+        "existing-photo-first opener challenger frame 1 (identical reconstruction, see manifest.v2-challenger-photo.json)"
+      ],
+      "derivedExactly": [
+        "Copy strings 'Close', 'Set aside', 'Keep this' — read verbatim from gallery-import-review.tsx JSX (DeckTopBar, the footer actionRow).",
+        "Card structure and order (hero photo -> film-strip row -> hairline divider -> date -> caption) — matches gallery-import-deck-card.tsx's JSX order exactly.",
+        "Colors: card border colors.border (#EBE7F2), Set-aside pill border colors.borderStrong (#CFC8E0) with white fill and colors.ink2 text, Keep pill colors.primary (#D63E78) fill with white text — copied from that file's styles object and src/constants/theme.ts, not approximated.",
+        "The hero photo is the SAME real native-capture crop already used for frame 01 (timeline-photo-card.png, itself cropped from store-assets/source/IMG_0908.PNG) — reused per this task's brief so frame 02's source event visibly matches frames 01/07, not a new/different photo standing in.",
+        "The caption text ('They built a fort in the hallway, then argued about whether babies can be in a fort. Ari was admitted because he brought crackers.') is the REAL caption authored for this exact photo event in supabase/scripts/demo-family-spec.ts (slug hallway-fort-admission) — not invented for this task.",
+        "Date format ('Saturday, July 18, 2026', uppercased by CSS) reproduces formatFullDisplayDate() exactly — verified against src/utils/memories.ts, not the shorter formatDisplayDate() used elsewhere in the app.",
+        "The script-style date stamp on the photo itself ('Jul 2026') reproduces scriptDateStamp()'s exact output format (month-short + year, Caveat font) from gallery-import-deck-card.tsx.",
+        "The tick/progress row and 'more coming' indicator directly under the top bar (DeckTicks in gallery-import-review.tsx) are now reproduced too — added in coordinator round 2 specifically so the card could grow to fill the real component's `flex:1`/`position:absolute inset:0` sizing (styles.deck / styles.card) instead of floating as a fixed-height card with dead space above it."
+      ],
+      "chosenNotFromSource": [
+        "CROSS-FRAME DATE STANDARDIZATION (coordinator round 3): the blanket-fort event (hallway-fort-admission) had been dated inconsistently across this frame set — frame 02 said 'Saturday, July 18, 2026' while frame 07's per-child collection said 'Jul 17, 2026' for the SAME event, a contradiction a careful reviewer would notice comparing frames. The set now standardises on 18 JUL everywhere the event appears (frames 01 — no date is actually visible there, see timeline-photo-card.png's own entry — 02, 07, and both opener challengers), matching the ON-DISK CAPTURE (store-assets/source/IMG_0908.PNG's timeline screenshot, which groups both the crackers story AND the blanket-fort photo under one 'SATURDAY, JULY 18' day header) — the only genuine artifact of the three candidates (capture vs. two independently-authored reconstruction dates). supabase/scripts/demo-family-spec.ts's own memoryDate field for this event (hallway-fort-admission) says 2026-07-17, one day off from the capture; the owner should settle which is canonical before sign-off. Every other shared/repeated event in this frame set was re-checked for the same kind of contradiction after this fix (see cross-frame-consistency-check note at the end of this file) — none found.",
+        "'1 photo chosen' / no 'from N photos that day' sub-line — the component supports a poolCount sub-line but only when a day-pool count is known; this reconstruction has no real day-pool data to report, so it renders the same as the real component would with poolCount=null, rather than inventing a photo-pool count.",
+        "'Set aside · 2' in the top-right pill and the illustrative tick pattern (2 done, 1 active, 4 remaining) plus '· more coming' text — an illustrative in-session state, not sourced from any real run; the controls and their format are real, the specific numbers/positions are a plausible placeholder.",
+        "The film-strip thumbnail row is left empty (no additional small photos) rather than reusing crops of the SAME blanket-fort photo as fake 'other photos from that day' — showing zero strip thumbnails is a real, supported state of the component (stripUris can be empty) and was preferred over implying additional real photos that do not exist in the prepared asset set.",
+        "ROUND 2 CALLOUT REPOSITION: the enlarged Keep/Set-aside callout was moved off the real footer (round 1 had it overlapping/doubling the real 'Set aside' pill and clipping 'Keep this' off the right edge) to sit over the lower-right of the hero photo instead — fully on-canvas, and no longer covering the SAME controls it enlarges."
+      ]
+    },
+    {
+      "id": "recon-sound-player",
+      "file": "store-assets/templates/screenshot.html (reconSoundPlayer / reconSoundPlayerCallout / reconSoundTraceSvg / reconListenSeal functions, rendered at manifest slide \"04-little-voice\")",
+      "source": "app/(app)/memory/[id]/index.tsx (SoundStage, MemoryDetailSound, DetailChrome, MemoryMetaFooter), src/components/audio/sound-trace.tsx (SoundTrace/moEnv), src/components/audio/listen-seal.tsx (ListenSeal), src/components/audio/audio-emotion.ts (neutral/no-emotion color fallback)",
+      "sourceClass": "ui-reconstruction",
+      "requiresOwnerFidelitySignoff": true,
+      "semanticPurpose": "Frame 04 dominant subject: the real saved-sound detail player (SoundStage), proving the retained-audio feature (not dictation) with a visible elapsed/total duration, enlarged as a callout.",
+      "feedsFrames": [
+        "04 (Keep their little voice, too)"
+      ],
+      "derivedExactly": [
+        "Layout order and structure (trace -> seal -> elapsed/total/status row, then engagement icons -> caption -> member pills -> date/attribution footer) matches SoundStage + MemoryDetailSound's JSX exactly.",
+        "Time format uses the real formatClipTime() logic (m:ss, no leading zero on minutes) from src/components/audio/audio-emotion.ts.",
+        "Status label 'paused' with CSS uppercase transform reproduces styles.soundStageStatus (fontFamily sansBold, uppercase, letterSpacing) and the exact statusLabel ternary in SoundStage ('tap to listen' / 'listening' / 'paused' / 'getting the sound').",
+        "Caption text style (fonts.sans/Plus Jakarta Sans, not the Newsreader display font) matches styles.detailText exactly — verified against the component, not assumed.",
+        "Date format ('Jul 13, 2026', CSS-uppercased) reproduces formatDisplayDate() from src/utils/memories.ts exactly, including its comma — a DIFFERENT format from the gallery-import card's formatFullDisplayDate() used in recon-gallery-import-deck above; each was checked against its own real call site rather than reused across components.",
+        "'Added by Nora Kim' reproduces the exact attribution template string from MemoryMetaFooter.",
+        "The back/more chrome (circular chevron-left button, circular '···' button, rgba(255,255,255,0.85) fill, 38px/56px scaled) matches DetailChrome's styles.chromeBtn — no invented 'Back' text label, since the real control is icon-only.",
+        "The waveform is a genuine reproduction of the app's OWN stylized approach — an alternating-sign, seeded-amplitude envelope line (matching sound-trace.tsx's documented design: 'a deterministic, stylized waveform... never recomputed from real audio'), not a fabricated realistic audio waveform. It uses a fixed illustrative sample sequence rather than running moEnv's exact PRNG, so it will not byte-match a specific real clip's trace, but the visual grammar (idle vs. played ink, alternating loud/quiet contour) is the same.",
+        "The image slot's real aspect ratio (`aspectRatio: 4/3`, styles.framedImage, shared by SoundStage) is now reproduced with CSS `aspect-ratio:4/3` on the stage box instead of a guessed fixed pixel height, and the card is TOP-anchored (styles.framedCard's `marginTop:12`, no vertical centering) rather than centered in the available space — see chosenNotFromSource for why real whitespace remains below the card even after this fix."
+      ],
+      "chosenNotFromSource": [
+        "The clip's content — 'Ari saying \"uh-oh\" after dropping his spoon for the tenth time.', 0:19 total / 0:07 elapsed, tagged member Ari, dated 13 Jul 2026 — is NOT a memory that exists in supabase/scripts/demo-family-spec.ts (that fixture has no audio-memory example at all). This caption was authored fresh for this task, in the documented style of docs/features/audio-memories.md's own example ('Mia singing Twinkle Twinkle in the bath') and consistent with the Kim-Ortiz family's established personalities, but it is NOT grounded in any existing recorded fact and the owner should treat it as illustrative copy needing sign-off, same as any other reconstructed field.",
+        "ROUND 3 CHANGE: the clip now carries emotion 'funny' (round 2 had left it neutral/unset). Confirmed from source before making this change: src/components/audio/audio-emotion.ts's resolveAudioEmotionColors() reads emotion off the SAME emotionColors table (src/constants/theme.ts) every other memory type uses, keyed by whatever string `memory.emotion` holds — there is nothing audio-specific that would reject 'funny'. And MemoryDetailSound feeds that same `memory.emotion` into `getEmotionGradient(memory.emotion)` and into `MemoryMetaFooter`'s emotion chip, exactly like MemoryDetailFramed does — so a real audio memory with emotion='funny' WOULD render a funny-tinted gradient, a funny-colored seal/trace (ListenSeal's `fill = color ?? e.main`, SoundTrace's `stroke = e.ink`), and a 'funny' chip next to the date. All of that is now reproduced. IMPORTANT MATH NOTE for whoever reviews the render: `styles.emotionGradient` is `position:absolute, top:0, height:'60%'`, and its `locations` are `[0, 0.45, 1]` WITHIN that 60%-tall box -- so the tint fades to flat `colors.bg` by 0.45*60% = 27% of the FULL screen height, and stays flat `colors.bg` for the remaining 73%. Since this card is top-anchored right below the chrome, the visible tinted area is a thin margin around the card's top edge and behind the chrome buttons, not a wash over the lower two-thirds of the screen. This is not a shortfall of the reconstruction -- the real screen would look exactly the same, because the card is opaque and the gradient itself goes flat well before it reaches the card's midpoint. The lower-third whitespace this manifest already documented (see the round-2 finding above) is therefore UNCHANGED by this fix; the emotion change adds real, correct color near the top, it does not resolve the lower gap.",
+        "The tagged-member pill shows an initial-letter avatar ('A') rather than an illustrated character portrait, since embedding a real portrait asset at this inset scale was out of scope for this pass — the real MemberPill likely renders an actual portrait; this is a simplified stand-in, flagged for owner review.",
+        "PLAIN STATEMENT on the round-1 'dead space' finding, per the coordinator's explicit fallback ('if the real screen genuinely has that much whitespace, say so and show me the source line'): a first attempt made the stage `flex:1` to force it to fill the phone frame, which only stretched the near-white `colors.surface` background around the same small, still-centered waveform/seal cluster — the same problem one level down. Reverted to the real, bounded 4:3 aspect ratio. Whatever the standard iPhone-proportioned frame leaves below a short memory's card is answered by the REAL screen's own background: MemoryDetailFramed/MemoryDetailSound wrap the whole screen in `getEmotionGradient(memory.emotion)` (src/constants/theme.ts:72-80; this file's own `styles.emotionGradient`, `position:absolute/top:0/height:'60%'`) — for this clip's deliberately-unset emotion, that gradient is `[colors.surface, colors.bg, colors.bg]`, i.e. exactly the soft surface-to-paper fade now reproduced as #recon-root's own background. The remaining space below the card is real, source-backed screen background, not invented emptiness — but it IS still visually present, and the owner should look at the rendered frame and decide if that reads as acceptable or if a different demo clip (a longer caption, more tagged members) should be substituted to reduce it."
+      ]
+    },
+    {
+      "id": "recon-family-invite",
+      "file": "store-assets/templates/screenshot.html (reconFamilyInvite / reconFamilyInviteCallout functions, rendered at manifest slide \"06-private-family\")",
+      "source": "app/(app)/sharing/members.tsx (FamilyMembersScreen title/subtitle template, roleLabel() via src/utils/roles.ts), app/(app)/sharing/invite.tsx (ROLE_OPTIONS array verbatim, its exact label/description strings and radio-card layout), app/(app)/sharing/pending-invites.tsx (the invite code card: monospace code, role chip, status line)",
+      "sourceClass": "ui-reconstruction",
+      "requiresOwnerFidelitySignoff": true,
+      "semanticPurpose": "Frame 06 dominant subject: the real family roster showing five members across three genuinely different roles (owner/manager/viewer) plus the real invite screen (title, subtitle, role-picker, invite code, and Create-invite button), with the Viewer/Manager role selector enlarged as a callout.",
+      "feedsFrames": [
+        "06 (For your family. Not a public feed.)"
+      ],
+      "derivedExactly": [
+        "'Family members' title and the subtitle template '{n} people have access to {family}.' are read verbatim from FamilyMembersScreen's JSX.",
+        "Role labels 'Owner' / 'Manager' / 'Viewer' reproduce roleLabel() from src/utils/roles.ts exactly — these are the app's only three roles, no invented fourth state.",
+        "'Invite a family member' title and 'They get a 3-word code that works for 7 days. You approve them before they join.' subtitle — ADDED in coordinator round 2, copied verbatim from invite.tsx's own headerRow (title + subtitle), which round 1 had dropped entirely. This is real content that belongs on this screen, and adding it is what let the panel grow to its real size instead of needing an oversized invisible flex-filled gap.",
+        "'They can join as' section label and BOTH role option strings ('Viewer' / 'Can look through every memory, but not add or change anything.' and 'Manager' / 'Can add and edit memories, children, and invite other family members.') are copied verbatim from invite.tsx's ROLE_OPTIONS constant — not paraphrased.",
+        "'Create invite & share' button — ADDED in coordinator round 2, copied verbatim from invite.tsx's styles.inviteButton/handleInvite call site. This is the real, final action on that screen and round 1 had cut the composite off just before it.",
+        "The invite-code card layout (monospace code left, role chip right, status line beneath) matches pending-invites.tsx's card/cardHeader/code/roleChip/status styles, including the SpaceMono font family for the code.",
+        "The 3-word dash-separated code SHAPE matches src/utils/invites.ts's isValidInviteCodeShape() pattern (lowercase, three words, two dashes) exactly."
+      ],
+      "chosenNotFromSource": [
+        "The specific people-to-role assignments (Nora Kim = Owner, Gabriel Ortiz = Manager, Lucía Ortiz = Manager, Eunji Kim = Viewer, Rafael Ortiz = Viewer) are an illustrative pairing for this screenshot, not sourced from any family_memberships data (the demo-family-spec.ts fixture defines these five people as memory subjects/tagged family members — Nora, Gabriel, Eunji, Rafael and Lucía Ortiz are all real fictional people in that fixture — not as app accounts with assigned roles). Nora Kim as Owner matches the demo family's accountDisplayName in that spec file; the other four role assignments were chosen to satisfy the brief's 'genuinely different roles' requirement. ROUND 2 CHANGE: the roster now lists all 5 people the header's '5 people have access' line claims — round 1 listed only 3 of the 5, an internal factual inconsistency (an off-by-two) the coordinator flagged. The specific role pairings for Lucía and Rafael remain an illustrative choice, flagged here for explicit owner confirmation.",
+        "The invite code 'meadow-otter-lantern' is a deliberately invented, non-functional example — chosen to be obviously illustrative and never submitted to or checked against the live redeem-family-invite Edge Function. ROUND 2 CHANGE: the '· not a real code' disclaimer suffix was REMOVED from the rendered pixels per coordinator direction (it read as an unpolished placeholder/bug in a finished screenshot) — the code's fictional/non-functional status is recorded here instead, in this manifest, not in the visible copy. The code format itself (three real dictionary words, dash-separated, lowercase) is unremarkable and generic enough that displaying it without the disclaimer does not imply it is a real, currently-valid invite.",
+        "'Expires in 6 days' is an illustrative countdown consistent with the real 7-day invite lifetime (src/utils/invites.ts / family-sharing.md), not a specific timestamp calculation.",
+        "The Viewer role is shown pre-selected (radio filled) — an arbitrary illustrative choice; the real screen defaults to Viewer as well (see invite.tsx's useState('viewer')), so this matches the actual default state.",
+        "On the ipad bucket only, every font size/padding/margin in this reconstruction is scaled by 0.66x (see the `px()` helper in reconFamilyInvite) — the iPad frame's own aspect ratio is much squarer than the iPhone frame, and the full 5-member roster + complete invite panel (title through button) does not fit at iPhone-bucket sizing without clipping the real 'Create invite & share' button off the bottom of the device. The composition/order/content is identical between buckets; only the scale differs."
+      ]
+    },
+    {
+      "id": "recon-sound-stub-inset",
+      "file": "store-assets/templates/screenshot.html (reconStubBandHtml function, used as frame 01's 'Saved sound' inset)",
+      "source": "src/components/audio/stub-band.tsx (StubBand — the timeline card's compact sound widget: seal + trace + mono elapsed/total time), src/components/audio/listen-seal.tsx, src/components/audio/sound-trace.tsx",
+      "sourceClass": "ui-reconstruction",
+      "requiresOwnerFidelitySignoff": true,
+      "semanticPurpose": "A small, honestly-labeled supplementary inset on frame 01 showing the timeline's compact saved-sound widget (StubBand), distinct from the frame 04 full-screen SoundStage detail player, so frame 01 can honestly depict a saved-sound memory type without a native capture of one.",
+      "feedsFrames": [
+        "01 (Keep more than the photos)",
+        "voice-first opener challenger frame 1 (same reconstruction, enlarged to 55%/42% width -- see manifest.v2-challenger-voice.json)"
+      ],
+      "derivedExactly": [
+        "Same seal + trace + elapsed/total time layout as StubBand's real JSX/styles; not the SoundStage layout used for frame 04 — deliberately a different, smaller real component. ROUND 3: now colored with the same 'funny' emotion as frame 04's clip (StubBand's real background is a LinearGradient from the emotion's `soft` color fading to transparent, `colors.soft` over neutral when unset — reproduced here as an approximated CSS gradient) rather than the neutral graphite fallback, since this inset implies the same demo clip as frame 04 (see chosenNotFromSource) and that clip now carries a real emotion."
+      ],
+      "chosenNotFromSource": [
+        "The 0:07 / 0:19 duration and 0.35 progress are illustrative, matching the same duration used in the frame 04 reconstruction for internal consistency (same demo clip implied), not a separately-recorded fact."
+      ]
+    },
+    {
+      "id": "recon-composer-input-inset",
+      "file": "store-assets/templates/screenshot.html (reconComposerInputHtml function, used as frame 03's 'Composer input' inset)",
+      "source": "src/components/memory-composer-form.tsx (the plain content TextInput — styles.textarea: Newsreader font, no box chrome, transparent background)",
+      "sourceClass": "ui-reconstruction",
+      "requiresOwnerFidelitySignoff": true,
+      "semanticPurpose": "Shows the composer input that would have produced frame 03's real illustration output, so the frame's input and output visibly correspond, per this task's explicit instruction.",
+      "feedsFrames": [
+        "03 (For the things a photo missed)"
+      ],
+      "derivedExactly": [
+        "Font (Newsreader/fonts.display), size, and ink color match styles.textarea exactly.",
+        "The text is the EXACT caption string already used as illustration-detail.png's real caption ('Maya found a ladybug on the windowsill and asked if it had a mommy who knew where it was.') — reused verbatim per this task's instruction, not a new invented sentence, so the composer input and the illustrated output genuinely correspond to the same real memory."
+      ],
+      "chosenNotFromSource": [
+        "Rendered inside a small white rounded card as a labeled inset (matching this file's existing inset-card convention) rather than the composer's full-screen chrome (date field, toolbar, media grid), since only the text input itself was in scope for this small supplementary inset."
+      ]
+    },
+    {
+      "id": "maya-portrait-thumb",
+      "file": "store-assets/v2/assets/maya-portrait-thumb.png",
+      "source": "store-assets/source/IMG_0909.PNG, cropped to Maya's own character-portrait tile only (the same real capture family-roster.png above is cropped from)",
+      "sourceClass": "native-capture",
+      "semanticPurpose": "Maya's real illustrated character portrait, used as the header avatar in the new NEW-A per-child-collection reconstruction (recon-family-collection below) — a genuine crop, not an image-generator output.",
+      "feedsFrames": [
+        "07 (Here when you want to look back) — iPhone buckets only"
+      ],
+      "routeOrRenderer": "app/(app)/(tabs)/family.tsx (same screen family-roster.png is cropped from)",
+      "device": "iPhone (native screenshot, 1170x2532 source)",
+      "nativeResolution": "356x324 (crop, no upscaling)",
+      "fixtureStatus": "populated demo data, Kim-Ortiz family, production-pointed Supabase project",
+      "approvalBasis": "PLAN.md §1.3 — approved genuine capture on disk",
+      "sourceIds": [
+        "IMG_0909"
+      ],
+      "reuseDestinations": [
+        "frame 07 iPhone per-child-collection reconstruction header only"
+      ]
+    },
+    {
+      "id": "recon-family-collection",
+      "file": "store-assets/templates/screenshot.html (reconFamilyCollection function, rendered at manifest slide \"07-look-back\", iPhone-bucket entry only)",
+      "source": "app/(app)/family/[id]/index.tsx (DetailChrome-style back/more buttons, CastCard-compact header, the 'Keepsakes -> Memory Books' SettingsRow, and the MemoryThumb + memory-row list) + src/components/cast-card.tsx (styles.castCard/castPortraitSlot/castInfo/castName/castAge/castNicknames, the compact 120px-tall variant)",
+      "sourceClass": "ui-reconstruction",
+      "requiresOwnerFidelitySignoff": true,
+      "semanticPurpose": "NEW (coordinator round 2, 'NEW A'). Replaces the rejected day-list.png capture on frame 07's iPhone buckets (which the master brief rules out for truncated rows and an empty day) with the real per-child collection screen, for MAYA (a child) rather than Nora (an adult) so the frame matches its own support line ('Photos, stories and sounds, together for each child').",
+      "feedsFrames": [
+        "07 (Here when you want to look back) — appstore/appstore-alt/appstore-65 only; the ipad bucket is untouched and still uses the genuine per-child-collection.png capture of Nora"
+      ],
+      "derivedExactly": [
+        "Header chrome (circular chevron-left + circular '···' buttons) matches DetailChrome's real icon-only controls from the SAME file (memory/[id]/index.tsx) that frame 04's reconstruction also draws from.",
+        "The compact portrait+name+age+nickname header block matches CastCard's real 120px-tall layout exactly (styles.castCard maxHeight:120, castPortraitSlot 120x120, castName Newsreader-medium 20px, castAge sans 13px ink3, castNicknames Caveat script 16px ink2) — NOT the larger family-roster.png-style vertical card used elsewhere in this manifest, which is a different real screen (family.tsx, not this per-child detail screen).",
+        "'Memory Books' row with caption 'Turn memories into a premium keepsake book' is copied verbatim from the real SettingsRow in this file's 'Keepsakes' SettingsBlock.",
+        "'Memories with Maya' eyebrow reproduces the exact template string `Memories with {member.name}`.",
+        "Each row's thumb/date/text/emotion-chip layout matches MemoryThumb + the renderItem row exactly, including the text_only fallback (a large low-opacity Newsreader quote mark on an emotion-soft or neutral background), the emotion chip's conditional rendering (only when `getEmotionColors(m.emotion)` is non-null), AND — as of coordinator round 3 — the real `numberOfLines={2}` clamp on the caption text (`display:-webkit-box;-webkit-line-clamp:2` reproduces it exactly). Round 2 had shown full untruncated text on the coordinator's own instruction; round 3 corrected that instruction and asked for the real clamp to be honoured instead. See chosenNotFromSource for how that was reconciled without losing any content.",
+        "Maya's real portrait crop (maya-portrait-thumb.png, see its own entry above) is used for the header, and the SAME real timeline-photo-card.png / illustration-detail.png crops already used elsewhere in this manifest are reused (not new crops) for the two rows whose real images this task has on disk.",
+        "All 5 memory captions are the REAL, verbatim text from supabase/scripts/demo-family-spec.ts for memories genuinely tagged with maya-kim-ortiz (slugs: playground-emergency-crackers, hallway-fort-admission, ladybug-mommy, thinking-singing-rule, extra-sticker) — none invented. Emotion chips ('funny', 'wonder') are shown ONLY for the two rows where a real captured screenshot (IMG_0908.PNG, IMG_0912.PNG) confirms that exact emotion tag; the other three rows show no chip, since the spec file itself does not assign emotions (those are applied by a runtime AI classifier this task cannot run) — showing no chip for an unconfirmed emotion was preferred over guessing one.",
+        "Date format ('Jul 18, 2026' etc., CSS-uppercased) reproduces formatDisplayDate() from src/utils/memories.ts exactly, matching this file's own import of that same function. The hallway-fort-admission row now reads 'Jul 18, 2026' (was 'Jul 17, 2026' in round 2) — see the cross-frame date-standardization note on recon-gallery-import-deck above; this row and frame 02's card now assert the SAME date for the SAME event."
+      ],
+      "chosenNotFromSource": [
+        "ROUND 3 CORRECTION (no departure remains): round 2 showed full untruncated captions on the coordinator's own instruction, which on reflection misrepresented the UI (the real row genuinely clips to 2 lines). Round 3 re-applies the real clamp AND selects only memories whose complete text fits within 2 lines at this layout's size — verified by rendering and visually confirming no row's text is actually cut. This required dropping one memory that ran to 3 lines (pink-sky-bubbles, 'First warm evening in forever...') rather than truncating it, since no other Maya-tagged, asset-available memory was found to replace it inside the same effort budget (see below) — the row was removed rather than shown clipped, since showing the START of a truncated 3-line caption with no 'more' affordance would itself misrepresent what the real 2-line clamp does (it silently omits, it does not offer to expand). The set is now 5 rows, all complete AND genuinely clamped, with zero divergence from real behavior.",
+        "No 6th replacement row was added to fill remaining space. The only OTHER Maya-tagged memories in demo-family-spec.ts short enough to plausibly fit 2 lines are `media`-type (e.g. grandpa-sprinkler, lettuce-leaf-picnic) for which this task has no real photo asset on disk — using them would force the generic camera-icon fallback MemoryThumb shows for a photo memory with no loaded image, which is real UI but reads as a broken/missing thumbnail in a marketing screenshot rather than genuine product evidence. 5 complete, correctly-clamped, honestly-illustrated rows were preferred over a 6th row that would look broken.",
+        "No sound/audio row is included. The real component DOES support one (MemoryThumb renders a SoundTile for `memory_type === 'audio'`), but no real Maya-tagged audio memory exists anywhere in demo-family-spec.ts (that fixture has no audio-memory example for ANY family member — see the same gap noted in recon-sound-player above). Per the standing rule against inventing new family facts, this task chose to omit the row entirely rather than fabricate one or misattribute the illustrative Ari clip built for frame 04 to Maya.",
+        "Two of the five rows (hallway-fort-admission, ladybug-mommy) show real photo/illustration thumbnails reused from elsewhere in this manifest; the other three (all memoryType `text_only` in the spec) show the same quote-mark fallback tile the real MemoryThumb component renders for text-only memories with no photo — not a placeholder invented for this task.",
+        "Row order is newest-first by memory_date, matching every other list in this app (timeline, calendar day-list) — this task did not verify useMemberMemories' exact sort order against its query implementation, but this is the only ordering used anywhere else in the product."
+      ]
+    }
+  ],
+  "rejectedSources": [
+    {
+      "path": "back-on-timeline.png (repo root)",
+      "reason": "Shows the Looking Back carousel, an unreleased/unshipped feature per PLAN.md §1.1 and §1.4. Never used in any prepared asset."
+    },
+    {
+      "path": "composer2.png (repo root)",
+      "reason": "Composer captured in an error state; not representative of a working compose flow. Never used."
+    },
+    {
+      "path": ".media/** (repo root)",
+      "reason": "Contains exactly one asset, .media/images/image_001.jpg, documented in .media/index.md as 'momora-social-profile.jpg' — a social-profile image, not app UI. Never used."
+    },
+    {
+      "path": "marketing/assets/ugc/demo-cuts/demo-looking-back.mp4",
+      "reason": "Per its own README.md, this cut exists specifically to show the Looking Back resurfacing flow — an unreleased feature per PLAN.md §1.1/§1.4. Not opened for frame extraction, per this task's explicit instruction to never use it."
+    },
+    {
+      "path": "marketing/assets/ugc/demo-cuts/demo-illustrations-portraits.mp4",
+      "reason": "Out of this task's frame-extraction scope (only demo-voice-capture, demo-overview, demo-timeline-stories, and demo-family-feed were named). Not opened."
+    },
+    {
+      "path": "marketing/assets/ugc/demo-cuts/demo-timeline-stories.mp4 (LOOKING BACK frames only)",
+      "reason": "This cut is mostly usable ordinary timeline/story footage, but several of its frames (contact sheet row 3, cols 5-6 and row 4 in store-assets/v2/raw/video-frames/contact-timeline-stories.png) show an on-screen 'LOOKING BACK' banner/carousel. Those specific frames were excluded; no Looking Back frame from this cut was cropped into store-assets/v2/assets/."
+    },
+    {
+      "path": "marketing/assets/ugc/demo-cuts/demo-family-feed.mp4 (Then & now frames)",
+      "reason": "Several frames in this cut show a 'Then & now / Through the years' portrait-evolution feature for Maya. This is not one of the PLAN.md §1.2 named routes and is outside this task's scope (family roster + invite + optional shared-memory interaction only), so those frames were reviewed but not used."
+    },
+    {
+      "path": "book-renderer/book-data/mara-year-one/print/cover.pdf",
+      "reason": "Confirmed present on disk (0.6MB). A REAL cover built from the OWNER'S OWN FAMILY PHOTOS. Per PLAN.md §4, this remains an owner-approval gate — the owner's 2026-09-20 approval was explicitly for enzo-year-three ONLY. This file was not opened, rendered, converted, or used by this task."
+    },
+    {
+      "path": "book-renderer/book-data/{enzo-year-one,enzo-year-two,mara-year-two}/**",
+      "reason": "These slugs contain (or may contain) real photographs of the owner's family and remain unapproved for marketing use. The owner's 2026-09-20 approval (see the book-cover-enzo/book-spread-enzo asset entries above) was explicit that it covers enzo-year-three ONLY. None of these three slugs were rendered, opened, or used by this task."
+    }
+  ],
+  "audioQrFinding": {
+    "summary": "The memory-book renderer implements a REAL per-memory audio/video QR feature ('scan marks'), but the 'sample' book slug's own data has no real share token to encode, so any scan mark it renders is a fabricated placeholder. This is an important correction to MASTER-BRIEF.md's product-boundary table, and a potential future frame-05 asset once verified.",
+    "howItWorks": "book-renderer/src/templates/common/ScanMark.tsx: when the caller has a shareToken (resolved from the manifest's own ManifestMemory.shareToken, minted by the export pipeline for video/audio memories — an owner decision dated 2026-09-14), ScanMark renders an ACTUAL scannable QR encoding shareViewerUrl(shareToken) (book-renderer/src/model/qr.ts) — a real, revocable link. Deliberately takes a TOKEN, never the raw memory id, specifically for revocability (per that file's own header comment). Without a shareToken, it falls back to either a static pre-drawn brand-mark image (no encoded content at all) or, per book-renderer/src/model/fitter.ts:1180, a FABRICATED placeholder short code: 'Fabricates a short, stable placeholder \"short code\" until phase 2 wires the real momora.co/e/<token> URL.'",
+    "whyItMatteredHere": "store-assets/v2/raw/rejected/book-spread-text-sample.png (page 16 of the sample book) prints a QR-like mark captioned 'listen to it' with the URL momora.co/e/MMAY. Because the sample book's demo data carries no real shareToken, this is the fabricated-placeholder path, not the real-QR path — the printed URL does not necessarily resolve to anything. A non-functional link, and an implication that the PRINTED BOOK itself plays audio, cannot appear in App Store screenshot evidence. This asset was rejected for exactly that reason (see its manifest entry).",
+    "masterBriefCorrection": "MASTER-BRIEF.md's product-boundary table (Audio row) currently bans implying 'a physical book plays audio or contains audio QR codes' as an absolute rule. That rule is factually OUT OF DATE for this codebase: the audio/video QR feature is real and shipped in the renderer (real QR + real revocable token, owner-approved 2026-09-14). The accurate boundary is narrower: a book MAY link back to audio/video via a scan mark IF and only if (a) the underlying memory actually has a minted share token, (b) the momora.co/e/<token> redirect is verified live in production, and (c) the copy is careful to say the book links to the recording online, not that the paper itself plays sound.",
+    "ownerVerificationItems": [
+      "Is the momora.co/e/<token> redirect live and stable in production today, or still pending ('phase 2' per the fitter.ts comment)?",
+      "For real (non-sample) books like enzo-year-one/mara-year-one, do their manifests actually carry minted shareToken values today, or would a render right now still fall back to the placeholder/static path?",
+      "If the redirect is live and tokens are real: may marketing copy and a frame-05 asset claim 'scan the code to hear the recording' as a book benefit? This would need its own cleared example (a real book with a real token, verified to resolve) — not the sample book."
+    ],
+    "futureAssetPotential": "IF verified, a printed page whose scan mark genuinely resolves to a kept recording is a strong, differentiated benefit ('a book that links back to their little voice') and a natural fit for frame 05 or an additional frame. This task does not attempt that capture — it requires a real book with a real token and a live redirect, none of which exist in the sample data used here."
+  },
+  "bookRenderVerification": {
+    "claimChecked": "book-renderer's render pipeline makes no network calls and spends no money",
+    "method": "Read book-renderer/scripts/lib/renderBookPdfs.ts in full before running anything",
+    "finding": "Confirmed. The library starts its own loopback-only (127.0.0.1) static HTTP server (startServer()) serving a pre-built vite dist/ directory, and points Puppeteer at that same loopback server (baseUrl). No fetch/http calls to any non-127.0.0.1 host exist in the file. The only external-looking calls are the standard PDFDocument.load/save (pdf-lib, local, in-memory) and puppeteer.launch (local headless Chromium). Safe to run as instructed."
+  },
+  "thirdPartyIpScreeningCriterion": {
+    "status": "PERMANENT — added 2026-09-20 after a Pikachu shirt and, on a second stricter pass, a Charmander shirt slipped through this task's earlier screening. Apply this criterion to every future book-renderer page-survey, alongside the existing ScanMark/QR check and the placeholder-dimension-art check, from the first pass — do not wait for a coordinator to catch it.",
+    "criterion": "Reject any page where any of the following is visible ANYWHERE in frame, on any sub-photo (not just the largest/first one on the page): (a) a cartoon or licensed character on clothing, toys, bibs, costumes, or backpacks; (b) a visible brand name or logo, including on shoes, packaging/bottles, appliances, storefronts/signage, ride or play equipment, or book covers/spines; (c) sports-team marks; (d) third-party screen content (a TV/tablet/phone showing visible video or app content — off/blank screens are fine). 'Small enough not to notice' is explicitly NOT an exemption (owner directive, 2026-09-20) — if a reviewer can identify it at the render's own native size, it is rejected, and the fact that a compositor will later shrink the image onto a smaller canvas area is not a mitigation, because it can still be identifiable at that reduced scale (verified true for a shirt-sized character graphic in this task).",
+    "howThisTaskMissedItTheFirstTime": "The first pass (before this criterion existed) screened only for ScanMark/QR and placeholder-dimension text, per the ORIGINAL task brief, and judged 'grouping/quality' by looking at the page's most prominent photo. A follow-up coordinator review flagged a Pikachu shirt that WAS on the dominant photo and had simply not been checked for character content. This task then re-screened and picked a new spread (pages 34/35) that looked clean on first inspection — but a SECOND, owner-mandated stricter pass caught a Charmander shirt in that spread's THIRD, smaller sub-photo (the grandmother photo on page 35), which had not been individually zoomed into during the first re-screen. The lesson recorded here for future implementers: inspect EVERY sub-photo on a multi-photo page individually and at real resolution, not just the page's largest/first photo — the violation rate in this particular book (Pokémon-family characters alone appeared on at least 7 of 59 real-photo pages) is high enough that partial screening will miss things.",
+    "bookWideFindingSummary": "See book-spread-enzo-en.png's bookWidePageSurveyForThirdPartyIP field in this manifest's assets array for the full page-by-page accounting of this specific book (enzo-year-three / enzo-year-three-en): of 59 real-photo pages, 12 have a QR code and at least 23 of the remaining 47 contain identifiable third-party IP; only one confirmed-clean two-page spread (12/13, a single panorama, not a multi-photo grouping) was found after checking every sub-photo on every candidate."
+  },
+  "crossFrameConsistencyCheck": {
+    "trigger": "Coordinator round 3: a reviewer comparing frame 02 ('Saturday, July 18, 2026') against frame 07 ('Jul 17, 2026') would see the SAME blanket-fort event dated two different days. Fixed (see recon-gallery-import-deck's derivedExactly note) by standardising on 18 Jul everywhere. This entry records the sweep done afterward to check for any OTHER shared-event contradiction across the set.",
+    "sharedEventsChecked": [
+      {
+        "event": "blanket-fort / hallway-fort-admission",
+        "appearsIn": [
+          "01 (photo only -- timeline-photo-card.png's own crop excludes the metadata/date row entirely, per that asset's own knownLimitation note, so no date is actually visible there to contradict anything)",
+          "02 (reconstruction, date+caption)",
+          "07 (reconstruction, date+caption)",
+          "existing-photo-first challenger (identical reconstruction to 02)"
+        ],
+        "result": "MATCH after fix -- all three date-bearing surfaces now say 18 Jul 2026; caption text is byte-identical across 02 and 07 (both read the same string from demo-family-spec.ts's hallway-fort-admission.caption)."
+      },
+      {
+        "event": "playground-emergency-crackers ('crackers' story)",
+        "appearsIn": [
+          "01 (native capture, real pixels: '18 JUL 2026', tag 'funny')",
+          "07 (reconstruction row)"
+        ],
+        "result": "MATCH, no fix needed -- 07's row already read 'Jul 18, 2026' with a 'funny' chip, consistent with the real capture. Caption text matches (07's row is the full sentence; 01's native capture shows the same sentence truncated by the timeline card's own UI, which is expected/real card behavior, not a contradiction)."
+      },
+      {
+        "event": "ladybug-mommy",
+        "appearsIn": [
+          "03 (native capture illustration-detail.png, real pixels: '10 JUL 2026', tag 'wonder')",
+          "07 (reconstruction row)"
+        ],
+        "result": "MATCH, no fix needed -- 07's row already read 'Jul 10, 2026' with a 'wonder' chip, consistent with the real capture. Caption text is byte-identical (07's row reuses the exact same caption string frame 03's inset already uses)."
+      },
+      {
+        "event": "Ari's illustrative sound clip ('uh-oh' spoon)",
+        "appearsIn": [
+          "01 (StubBand inset, implied same clip per that asset's own chosenNotFromSource note)",
+          "04 (SoundStage reconstruction, dominant subject)",
+          "voice-first challenger (same StubBand inset as 01)"
+        ],
+        "result": "MATCH after round 3 -- duration (0:07/0:19) and emotion ('funny') are now identical across all three; this clip is illustrative (not from demo-family-spec.ts, see recon-sound-player's own chosenNotFromSource), so internal consistency across its own appearances is what matters here, not agreement with a spec file."
+      }
+    ],
+    "notChecked": "Frame 06's family-invite content (roster/roles/invite code) and frame 05's book content share no dates or facts with any other frame, so no cross-frame check applied to them."
+  },
+  "generatedDemoAssets": [
+    {
+      "id": "maya-photo-1y",
+      "file": "store-assets/v2/assets/demo/maya-photo-1y.jpg",
+      "sourceClass": "generated-demo-content",
+      "semanticPurpose": "Candid phone-style photo of fictional Maya at ~1 year. Feeds frame 07 (Through the years) and frame 05 (Year One cover).",
+      "sha256_16": "441f7b1b854b0791",
+      "approvalBasis": "Owner instruction 2026-09-20: use the fictional demo family and AI-generated imagery rather than the owner's real children.",
+      "requiresOwnerFidelitySignoff": true
+    },
+    {
+      "id": "maya-photo-3y",
+      "file": "store-assets/v2/assets/demo/maya-photo-3y.jpg",
+      "sourceClass": "generated-demo-content",
+      "semanticPurpose": "Candid phone-style photo of fictional Maya at ~3 years. Feeds frame 07 and frame 05 (Year Three cover).",
+      "sha256_16": "0fb73fa9169bc4db",
+      "approvalBasis": "Owner instruction 2026-09-20: use the fictional demo family and AI-generated imagery rather than the owner's real children.",
+      "requiresOwnerFidelitySignoff": true
+    },
+    {
+      "id": "maya-photo-5y",
+      "file": "store-assets/v2/assets/demo/maya-photo-5y.jpg",
+      "sourceClass": "generated-demo-content",
+      "semanticPurpose": "Candid phone-style photo of fictional Maya at ~5 years. Feeds frame 07 and frame 05 (Year Five cover).",
+      "sha256_16": "f67698ac69166f19",
+      "approvalBasis": "Owner instruction 2026-09-20: use the fictional demo family and AI-generated imagery rather than the owner's real children.",
+      "requiresOwnerFidelitySignoff": true
+    },
+    {
+      "id": "maya-portrait-1y",
+      "file": "store-assets/v2/assets/demo/maya-portrait-1y.jpg",
+      "sourceClass": "generated-demo-content",
+      "semanticPurpose": "Watercolour portrait of fictional Maya at ~1 year, in the app's illustration style. Feeds frame 07.",
+      "sha256_16": "5a65f237015d99b6",
+      "approvalBasis": "Owner instruction 2026-09-20: use the fictional demo family and AI-generated imagery rather than the owner's real children.",
+      "requiresOwnerFidelitySignoff": true
+    },
+    {
+      "id": "maya-portrait-3y",
+      "file": "store-assets/v2/assets/demo/maya-portrait-3y.jpg",
+      "sourceClass": "generated-demo-content",
+      "semanticPurpose": "Watercolour portrait of fictional Maya at ~3 years. Feeds frame 07.",
+      "sha256_16": "2c96ebd482ec8efc",
+      "approvalBasis": "Owner instruction 2026-09-20: use the fictional demo family and AI-generated imagery rather than the owner's real children.",
+      "requiresOwnerFidelitySignoff": true
+    },
+    {
+      "id": "maya-portrait-5y",
+      "file": "store-assets/v2/assets/demo/maya-portrait-5y.jpg",
+      "sourceClass": "generated-demo-content",
+      "semanticPurpose": "Watercolour portrait of fictional Maya at ~5 years. Feeds frame 07 and frame 03's tagged-member pill.",
+      "sha256_16": "178ce02e51fecc17",
+      "approvalBasis": "Owner instruction 2026-09-20: use the fictional demo family and AI-generated imagery rather than the owner's real children.",
+      "requiresOwnerFidelitySignoff": true
+    },
+    {
+      "id": "ladybug-artwork",
+      "file": "store-assets/v2/assets/demo/ladybug-artwork.png",
+      "sourceClass": "native-capture",
+      "semanticPurpose": "Illustration artwork cropped from the genuine ladybug memory-detail capture (IMG_0912.PNG). Feeds frame 03.",
+      "sha256_16": "d92fb91b8950a1cc"
+    }
+  ],
+  "ownerRound_2026_09_20": {
+    "summary": "Owner directed a full visual and copy rebuild. All seven frames are now device-framed reconstructions built from real component source, filled with the fictional demo family's content.",
+    "reconstructionsAdded": [
+      "timeline (01)",
+      "memory-detail (03)",
+      "book-shelf (05)",
+      "family-feed (06)",
+      "portrait-timeline (07)"
+    ],
+    "decisions": [
+      "Screenshot copy rewritten: plain-language benefit explanations, no telegraphic fragments.",
+      "Every 'Subscription required' disclosure removed from imagery; the description still carries subscription terms.",
+      "Duplicated enlarged callouts removed - they repeated controls already visible in the same frame.",
+      "Owner's real children (enzo-*/mara-*) are no longer used in any rendered frame; those assets remain as internal record only.",
+      "Book pages are never generated; the book shelf shows cover tiles inside the real in-app shelf UI."
+    ],
+    "openForOwner": [
+      "Fidelity check of all five new reconstructions against the running app.",
+      "Frame 05 shows the in-app shelf; a real printed-spread overlay is still an option if a brand-free, QR-free spread can be sourced."
+    ]
+  }
+}

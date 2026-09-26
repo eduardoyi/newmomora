@@ -1,0 +1,215 @@
+{
+  "schema_version": 2,
+  "registry_version": "2.0.0",
+  "brief_version": "2.0-memory-first",
+  "strategy": "memory-first",
+  "locale": "en-US",
+  "status": "proposed_copy_under_approved_direction_pending_product_and_release_checks",
+  "keywords_status": "relevance_hypothesis_no_volume_or_ranking_data",
+  "whats_new_status": "use_only_if_these_changes_belong_to_target_release",
+  "note": "Single source of truth for v2 App Store listing copy. These are proposed implementation inputs, not live metadata, individually approved wording, or proof of conversion performance. Regenerate store-assets/listing/out/en-US/*.txt from this file with build-copy.mjs; never hand-edit the generated files.",
+  "provenance": {
+    "derived_from": [
+      "momora-listing-handoff-v2/approved-listing-copy.json (schema_version 2, brief_version 2.0-memory-first)",
+      "momora-listing-handoff-v2/copy/en-US/*.txt (literal text exports of the same registry)",
+      "docs/app-store-revamp/PLAN.md §1 (verified ground truth) and §2 (corrections)"
+    ],
+    "restructured_by": "store-assets/listing/registry.v2.json (WP-B)",
+    "wording_changes_from_handoff": "None. Field text is carried through verbatim from momora-listing-handoff-v2/approved-listing-copy.json. See docs/app-store-revamp/COPY-CHANGELOG.md for the evidence review of each claim and for the v1→v2 migration.",
+    "date": "2026-09-20"
+  },
+  "public_fields": {
+    "name": "Momora: Family Memories",
+    "subtitle": "Photos, stories & their voices",
+    "promotional_text": "Start with the photos you have. Keep the stories and little sounds, too. Momora groups photos and drafts captions for you to review.",
+    "description": "The photos are on your phone. The little things are harder to keep.\n\nThe question from the back seat. The word they say their own way. What was happening just before everyone started laughing.\n\nMomora brings your photos, stories and recordings together, so there’s more to look back on than a camera roll.\n\nSTART WITH THE PHOTOS YOU HAVE\nYou don’t have to fill an empty journal from scratch. With your permission, Momora looks through your photos, groups them into suggested memories and drafts captions. Keep the ones you like, change a few words, or leave them out. Your camera roll stays as it is.\n\nFOR THE THINGS A PHOTO MISSED\nWrite a few words or say what happened while it’s still fresh. No need to make it sound special. “He packed crackers in case the playground got hungry” is already worth keeping.\n\nYou can turn a story into an AI illustration, too, using your family’s character portraits.\n\nKEEP THEIR LITTLE VOICE\nThe way they say “banana.” Their laugh. The song they keep making up. Save the recording itself and listen again—not just a transcript of the words.\n\nSOMETHING TO COME BACK TO\nKeep memories together for each child. Look back through the photos and stories, play a familiar recording, and invite family members to share in it. You choose who joins your family journal.\n\nAND A BOOK TO HOLD, TOO\nWhen you’d like a printed baby book, choose a child and a time period. Momora selects saved memories, groups related moments and lays out the pages with your photos and stories. Review the book online, make changes and order a printed copy delivered to your door. Printed books are optional and purchased separately, with shipping extra.\n\nYOUR MEMORIES STAY YOURS\nYour saved memories remain available to read after your subscription ends. The family owner can export the archive, too.\n\nStart with what you already have. Add the little things when you have a minute.\n\nAn active subscription is required to add memories and use AI features. A printed book is not included in the subscription. Book prices and shipping charges are shown at checkout.",
+    "keywords": "baby,book,album,journal,milestones,child,parenting,recording,print",
+    "whats_new": "Start with the photos already on your phone. Momora groups them into suggested memories and drafts captions for you to review and keep.\n\nYou can also turn saved memories into a baby book, with the photos and stories arranged for you. Review it online and order a printed copy when you’re ready.\n\nPrinted books are optional, purchased separately and subject to shipping charges."
+  },
+  "screenshots": [
+    {
+      "id": "01-more-than-photos",
+      "position": 1,
+      "headline": "Keep more than\nthe photos.",
+      "support": "The photos, the funny things they said, and their actual voice.",
+      "disclosure": null,
+      "job": "Make the digital experience valuable without a print purchase.",
+      "proof": "A genuine populated Momora timeline or collection with separate photo, story and sound memories; use truthful labeled insets when the real layout cannot show every type at once."
+    },
+    {
+      "id": "02-existing-photos",
+      "position": 2,
+      "headline": "Start with the\nphotos you have.",
+      "support": "Momora reads your camera roll and writes the first draft. You keep or skip.",
+      "disclosure": null,
+      "job": "Show an easier start and immediate value inside the app.",
+      "proof": "The actual gallery suggestion deck, a complete grounded draft caption and the current Keep / Set aside controls; a saved version appears in slide 01 or 07."
+    },
+    {
+      "id": "03-unphotographed-stories",
+      "position": 3,
+      "headline": "The best bits\naren't photos.",
+      "support": "Say it in one line. Momora draws the rest.",
+      "disclosure": null,
+      "job": "Demonstrate short capture and the illustrated-story difference.",
+      "proof": "An actual short composer input and its matching generated illustration. Do not imply gallery import creates illustrated photos."
+    },
+    {
+      "id": "04-little-voice",
+      "position": 4,
+      "headline": "Keep their voice,\nnot just the words.",
+      "support": "Not a transcript. The actual recording, saved.",
+      "disclosure": null,
+      "job": "Show a valuable digital outcome that a printed book cannot provide.",
+      "proof": "The real saved sound-memory player with a legitimate demo clip, duration and a short description."
+    },
+    {
+      "id": "05-optional-book",
+      "position": 5,
+      "headline": "And a real book,\nwhen you want one.",
+      "support": "Pick a child and a year. Momora lays out every page.",
+      "disclosure": null,
+      "job": "Give automatic book creation a substantial, clearly optional role.",
+      "proof": "A real generated spread/cover plus the actual in-app book entry; retain website context for online review and an accurate physical mockup or cleared print sample."
+    },
+    {
+      "id": "06-private-family",
+      "position": 6,
+      "headline": "The only people here\nare the ones you invited.",
+      "support": "No feed, no strangers. Just the people who love them.",
+      "disclosure": null,
+      "job": "Show connection and audience control inside the app.",
+      "proof": "Actual invitation/member controls and, when useful, a separately captured meaningful shared memory. Respect viewer/manager roles."
+    },
+    {
+      "id": "07-look-back",
+      "position": 7,
+      "headline": "Look how little\nthey were.",
+      "support": "Every age, side by side — the photo and the portrait.",
+      "disclosure": null,
+      "job": "End with returning to a useful digital collection, not buying something else.",
+      "proof": "A genuine per-child collection or complete saved-memory view. Show sound only in a supported view, not a fabricated filter or combined card."
+    }
+  ],
+  "opener_challengers": [
+    {
+      "id": "existing-photo-first",
+      "status": "prepare_isolated_first_image_challenger",
+      "replace_screen": "01-more-than-photos",
+      "headline": "Your camera roll,\nalready full of them.",
+      "support": "Momora turns the photos you've taken into memories worth keeping.",
+      "disclosure": null,
+      "proof": "Actual gallery suggestions connected to a saved digital memory; no printed object required.",
+      "unchanged_positions": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "id": "voice-first",
+      "status": "prepare_isolated_first_image_challenger",
+      "replace_screen": "01-more-than-photos",
+      "headline": "Their little voice.\nYours to hear again.",
+      "support": "The actual recording, kept with the photos from the same day.",
+      "disclosure": null,
+      "proof": "A genuine saved player with a real collection as supporting context; do not make Momora look like only a voice recorder.",
+      "unchanged_positions": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    }
+  ],
+  "optional_ownership_replacement": {
+    "id": "07-ownership-alternative",
+    "replace_screen": "07-look-back",
+    "headline": "Your memories\nstay yours.",
+    "support": "Everything you've saved stays readable if you stop subscribing, and the family owner can export the whole archive.",
+    "disclosure": null,
+    "status": "separate_optional_slot_test_if_verified",
+    "proof": "Actual owner export and post-lapse readable archive; not a promise of forever storage or ongoing free creation."
+  },
+  "deferred_tests": [
+    {
+      "id": "earlier-book-slot",
+      "status": "specification_only_not_default",
+      "sequence_positions": [
+        1,
+        2,
+        5,
+        3,
+        4,
+        6,
+        7
+      ],
+      "hypothesis": "A more visible optional print benefit may add value without changing the app-led opening.",
+      "requirements": "Reuse unchanged assets, retain separate purchase disclosure, measure subscription understanding; never bundle with an opener test."
+    },
+    {
+      "id": "book-first",
+      "status": "hypothesis_only_requires_owner_decision_before_production_or_testing",
+      "headline_candidate": "Your photos.\nTheir baby book.",
+      "requirements": "Explain that the app membership and physical book are separate purchases. Use the same actual localized offer in comparisons. Judge paid app value and misunderstanding, not just installs. Not required for the v2 package."
+    }
+  ],
+  "commercial_context": {
+    "source": "Owner statement in this conversation; not a live store or checkout verification",
+    "annual_app_membership_amount": 99,
+    "printed_book_amount": 99,
+    "currency_symbol_as_supplied": "$",
+    "currency_code_verified": false,
+    "shipping": "extra",
+    "print_optional": true,
+    "print_included_in_subscription": false,
+    "book_generation_and_online_review_entitlement": "verify_before_claiming_included_or_free",
+    "public_exact_prices": false,
+    "public_exact_prices_guard": "The owner reference amounts ($99/year membership, $99 print) must NEVER be emitted into any generated public field (name, subtitle, promotional_text, description, keywords, whats_new, or screenshot copy). validate-copy.mjs rejects any $<digits> pattern in those fields. Verify localized display prices, tax and print scope on the actual pricing/paywall/checkout surfaces instead.",
+    "price_changes_authorized": false
+  },
+  "superseded_active_strings": [
+    "Momora: Baby Book & Memories",
+    "From camera roll to real pages",
+    "A baby book from the photos you already have.",
+    "A baby book.\nNot another project.",
+    "A book for\neach of them."
+  ],
+  "superseded_2026_08_slide_headlines": [
+    "You don't have to remember it all.",
+    "Say it.\nWatch it become art.",
+    "No blank pages. No homework.",
+    "Everyone becomes a character.",
+    "Made for the 2 a.m. scroll.",
+    "Start where you are."
+  ],
+  "forbidden_public_vocabulary": [
+    "search",
+    "recap",
+    "widget",
+    "Looking Back"
+  ],
+  "counts": {
+    "name_characters": 23,
+    "subtitle_characters": 30,
+    "promotional_text_characters": 132,
+    "description_characters": 2067,
+    "keywords_utf8_bytes": 66,
+    "whats_new_characters": 377
+  },
+  "copy_revision": {
+    "revision": "owner-round-2026-09-21",
+    "by": "owner feedback",
+    "rules": [
+      "Support lines are short - one line, two at most.",
+      "Explain the mechanic as a benefit, in plain words.",
+      "No pricing, payment or subscription copy on any image; the description carries all commercial terms.",
+      "Headlines grounded and concrete, never slogans."
+    ]
+  }
+}

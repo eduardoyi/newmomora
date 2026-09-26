@@ -1,0 +1,20 @@
+{
+  "brief_version": "2.0-memory-first",
+  "scope": "Handoff consistency and literal copy limits only; NOT live product, pricing, image or release QA.",
+  "status": "pass",
+  "counts": {
+    "name_characters": 23,
+    "subtitle_characters": 30,
+    "promotional_text_characters": 132,
+    "description_characters": 2067,
+    "keywords_utf8_bytes": 66,
+    "whats_new_characters": 377
+  },
+  "errors": [],
+  "not_verified": [
+    "Live feature availability and screenshot capture provenance",
+    "Localized prices, book-preparation entitlement, shipping and legal links",
+    "Final store images, native device captures, rendering pipeline and experiments",
+    "Customer understanding, willingness to pay, conversion and retention"
+  ]
+}
