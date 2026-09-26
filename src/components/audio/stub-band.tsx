@@ -1,7 +1,7 @@
 // The tinted card-stock panel every sound surface's visual sits on -- ported
 // from the design prototype's `StubBand` (audio-kit.jsx): an emotion-soft
 // wash (graphite/neutral before analysis lands), the seal, the trace, and
-// the mono elapsed/total time, with an optional tap-to-seek on the trace.
+// the mono elapsed/total time, with optional tap-to-seek/drag-to-scrub.
 // NEW kit file (P3.1, docs/plans/audio-memories-v1.md) -- StubBand/StubTear
 // didn't exist in the ported kit yet. This is the timeline card's visual
 // slot (the "4:3 visual" a photo/illustration would otherwise occupy); the
@@ -9,7 +9,7 @@
 // (app/(app)/memory/[id]/index.tsx's SoundStage-equivalent), not this file.
 import { LinearGradient } from 'expo-linear-gradient';
 import { useState } from 'react';
-import { type GestureResponderEvent, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts } from '@/constants/theme';
 
@@ -27,8 +27,8 @@ export interface StubBandProps {
   progress: number;
   playing: boolean;
   onToggle: () => void;
-  /** Tap-to-seek on the trace -- omit to render the trace non-interactive. */
-  onSeek?: (fraction: number) => void;
+  /** Tap-to-seek and drag-to-scrub on the trace -- omit to render it non-interactive. */
+  onSeek?: (fraction: number) => void | Promise<void>;
   /**
    * Tapping the band outside the seal/trace opens the memory detail screen.
    * The seal and (when present) the trace each claim their own touch first,
@@ -58,17 +58,11 @@ export function StubBand({
   testID,
 }: StubBandProps) {
   const e = resolveAudioEmotionColors(emotion);
-  const [traceWidth, setTraceWidth] = useState(0);
-  const showElapsed = playing || positionSeconds > 0.05;
+  // While dragging, the time shows where the scrub would land.
+  const [scrubFraction, setScrubFraction] = useState<number | null>(null);
+  const shownSeconds = scrubFraction !== null ? scrubFraction * durationSeconds : positionSeconds;
+  const showElapsed = playing || scrubFraction !== null || positionSeconds > 0.05;
   const traceHeight = Math.max(28, height - padding * 2 - 20);
-
-  const handleSeekPress = (event: GestureResponderEvent) => {
-    if (!onSeek || !traceWidth) {
-      return;
-    }
-    const fraction = event.nativeEvent.locationX / traceWidth;
-    onSeek(Math.max(0, Math.min(1, fraction)));
-  };
 
   return (
     <Pressable
@@ -93,24 +87,22 @@ export function StubBand({
           testID={testID ? `${testID}-seal` : undefined}
         />
         <View style={styles.traceColumn}>
-          <Pressable
-            disabled={!onSeek}
-            onLayout={(event) => setTraceWidth(event.nativeEvent.layout.width)}
-            onPress={handleSeekPress}
+          <SoundTrace
+            durationSeconds={durationSeconds}
+            emotion={emotion}
+            height={traceHeight}
+            onScrubChange={setScrubFraction}
+            onSeek={onSeek}
+            playing={playing}
+            points={46}
+            progress={progress}
+            seed={seed}
+            stroke={2.2}
             testID={testID ? `${testID}-trace` : undefined}
-          >
-            <SoundTrace
-              emotion={emotion}
-              height={traceHeight}
-              points={46}
-              progress={progress}
-              seed={seed}
-              stroke={2.2}
-            />
-          </Pressable>
+          />
           <View style={styles.timeRow}>
             {showElapsed ? (
-              <Text style={[styles.time, styles.timeElapsed]}>{formatClipTime(positionSeconds)}</Text>
+              <Text style={[styles.time, styles.timeElapsed]}>{formatClipTime(shownSeconds)}</Text>
             ) : null}
             {showElapsed ? <Text style={[styles.time, styles.timeDim]}>/</Text> : null}
             <Text style={[styles.time, showElapsed ? styles.timeDim : styles.timeElapsed]}>

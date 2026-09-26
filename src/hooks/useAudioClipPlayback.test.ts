@@ -96,7 +96,11 @@ describe('useAudioClipPlayback -- player lifecycle', () => {
   it('creates the player with the initial source directly, and never redundantly replaces it on mount', () => {
     renderHook(() => useAudioClipPlayback('https://example.test/clip-1.m4a'));
 
-    expect(mockCreateAudioPlayer).toHaveBeenCalledWith({ uri: 'https://example.test/clip-1.m4a' });
+    expect(mockCreateAudioPlayer).toHaveBeenCalledWith(
+      { uri: 'https://example.test/clip-1.m4a' },
+      // Frequent enough for the time label; the trace glides in between.
+      { updateInterval: 250 },
+    );
     expect(createdPlayers[0].replace).not.toHaveBeenCalled();
   });
 

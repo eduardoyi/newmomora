@@ -100,6 +100,14 @@ jest.mock('react-native-reanimated', () => {
     withRepeat: (animation: unknown) => animation,
     withSpring: (toValue: unknown) => toValue,
     withTiming: jest.fn((toValue: unknown) => toValue),
+    withSequence: (...animations: unknown[]) => animations[animations.length - 1],
+    useAnimatedProps: (factory: () => unknown) => factory(),
+    Easing: {
+      linear: (t: number) => t,
+      quad: (t: number) => t * t,
+      out: (easing: (t: number) => number) => easing,
+      inOut: (easing: (t: number) => number) => easing,
+    },
   };
 });
 

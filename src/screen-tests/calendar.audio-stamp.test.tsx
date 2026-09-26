@@ -45,15 +45,9 @@ jest.mock('@/hooks/useVideoThumbnail', () => ({
 
 // The native Reanimated module cannot run in Jest -- same test double used
 // by floating-tab-bar.test.tsx for the Today button's fade-in.
-jest.mock('react-native-reanimated', () => {
-  const { View } = jest.requireActual<typeof import('react-native')>('react-native');
+// react-native-reanimated: the shared mock in jest.setup.ts (it also covers
+// the animated SVG pieces SoundTile's trace uses).
 
-  return {
-    __esModule: true,
-    default: { View },
-    FadeIn: { duration: () => ({}) },
-  };
-});
 
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseCalendarMemoriesInRange = useCalendarMemoriesInRange as jest.MockedFunction<

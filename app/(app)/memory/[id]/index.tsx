@@ -525,7 +525,8 @@ function SoundStage({
   seed: number;
   state: SoundPlaybackState;
 }) {
-  const [traceWidth, setTraceWidth] = useState(0);
+  // While dragging, the time shows where the scrub would land.
+  const [scrubFraction, setScrubFraction] = useState<number | null>(null);
   const listening = state === 'playing';
 
   if (state === 'unavailable') {
@@ -548,7 +549,8 @@ function SoundStage({
     );
   }
 
-  const showElapsed = listening || clip.position > 0.05;
+  const shownSeconds = scrubFraction !== null ? scrubFraction * durationSeconds : clip.position;
+  const showElapsed = listening || scrubFraction !== null || clip.position > 0.05;
   const statusLabel = state === 'loading'
     ? 'getting the sound'
     : listening
@@ -557,32 +559,25 @@ function SoundStage({
         ? 'paused'
         : 'tap to listen';
 
-  const handleSeekPress = (event: { nativeEvent: { locationX: number } }) => {
-    if (state === 'loading' || !traceWidth) {
-      return;
-    }
-    const fraction = event.nativeEvent.locationX / traceWidth;
-    void clip.seekTo(Math.max(0, Math.min(1, fraction)));
-  };
-
   return (
     <View style={[styles.framedImage, styles.soundStage]}>
-      <Pressable
-        disabled={state === 'loading'}
-        onLayout={(event) => setTraceWidth(event.nativeEvent.layout.width)}
-        onPress={handleSeekPress}
-        style={styles.soundStageTrace}
-        testID="memory-detail-sound-trace"
-      >
+      <View style={styles.soundStageTrace}>
         <SoundTrace
+          disabled={state === 'loading'}
+          // The player's own duration (once loaded) keeps the glide exact.
+          durationSeconds={clip.duration || durationSeconds}
           emotion={emotion}
           height={104}
+          onScrubChange={setScrubFraction}
+          onSeek={clip.seekTo}
+          playing={clip.playing}
           points={62}
           progress={clip.progress}
           seed={seed}
           stroke={2.6}
+          testID="memory-detail-sound-trace"
         />
-      </Pressable>
+      </View>
       <View style={styles.soundStageControls}>
         <ListenSeal
           busy={state === 'loading'}
@@ -597,7 +592,7 @@ function SoundStage({
         {state !== 'loading' ? (
           <>
             {showElapsed ? (
-              <Text style={styles.soundStageTime}>{formatClipTime(clip.position)}</Text>
+              <Text style={styles.soundStageTime}>{formatClipTime(shownSeconds)}</Text>
             ) : null}
             {showElapsed ? <Text style={styles.soundStageTimeDim}>/</Text> : null}
             <Text style={showElapsed ? styles.soundStageTimeDim : styles.soundStageTime}>

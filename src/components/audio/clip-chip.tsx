@@ -79,8 +79,10 @@ export function ClipChip({
       />
       <View style={styles.traceColumn}>
         <SoundTrace
+          durationSeconds={durationSeconds}
           emotion={emotion}
           height={slim ? 20 : 28}
+          playing={playing}
           points={38}
           progress={progress}
           seed={seed}

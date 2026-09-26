@@ -385,7 +385,7 @@ function SoundCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
   const handlePress = () => onPress(memory.id);
   const handleOpenComments = () => onOpenComments(memory.id);
   const handleToggle = () => void clip.toggle();
-  const handleSeek = (fraction: number) => void clip.seekTo(fraction);
+  const handleSeek = (fraction: number) => clip.seekTo(fraction);
 
   return (
     <View style={styles.card} testID={`memory-card-${memory.id}`}>
@@ -401,7 +401,7 @@ function SoundCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
         seed={seedFromKey(memory.id)}
         testID={`memory-card-${memory.id}-stub`}
       />
-      <StubTear cardColor={colors.white} />
+      <StubTear />
       <View style={styles.engagementWrap}>
         <MemoryEngagementBar
           memory={memory}

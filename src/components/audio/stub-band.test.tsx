@@ -1,4 +1,6 @@
 import { fireEvent, render } from '@testing-library/react-native';
+import { State } from 'react-native-gesture-handler';
+import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 
 import { StubBand } from './stub-band';
 
@@ -98,7 +100,11 @@ describe('StubBand', () => {
 
     const trace = getByTestId('stub-band-trace');
     fireEvent(trace, 'layout', { nativeEvent: { layout: { width: 200 } } });
-    fireEvent.press(trace, { nativeEvent: { locationX: 50 } });
+    fireGestureHandler(getByGestureTestId('stub-band-trace-tap'), [
+      { state: State.BEGAN, x: 50 },
+      { state: State.ACTIVE, x: 50 },
+      { state: State.END, x: 50 },
+    ]);
 
     expect(onSeek).toHaveBeenCalledWith(0.25);
   });

@@ -41,6 +41,10 @@ export interface UseAudioClipPlaybackResult {
 }
 
 const FINISHED_EPSILON_SECONDS = 0.05;
+// Status updates drive the elapsed-time label and re-sync the trace's
+// UI-thread progress animation (SoundTrace glides between updates), so they
+// needn't be frame-rate -- expo-audio's 500ms default made the ink step.
+const STATUS_UPDATE_INTERVAL_MS = 250;
 
 export function useAudioClipPlayback(source: string | null | undefined): UseAudioClipPlaybackResult {
   const clipId = useId();
@@ -60,7 +64,9 @@ export function useAudioClipPlayback(source: string | null | undefined): UseAudi
   // for the source the player was just created with.
   useEffect(() => {
     const initialSource = source ?? null;
-    const nextPlayer = createAudioPlayer(initialSource ? { uri: initialSource } : null);
+    const nextPlayer = createAudioPlayer(initialSource ? { uri: initialSource } : null, {
+      updateInterval: STATUS_UPDATE_INTERVAL_MS,
+    });
     loadedSourceRef.current = initialSource;
     playerRef.current = nextPlayer;
     setPlayer(nextPlayer);

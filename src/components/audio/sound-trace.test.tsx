@@ -1,4 +1,7 @@
-import { render } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
+import { State } from 'react-native-gesture-handler';
+import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 
 import { colors, emotionColors } from '@/constants/theme';
 
@@ -59,22 +62,26 @@ describe('moEnv', () => {
 });
 
 describe('SoundTrace', () => {
+  // Path order: [0] un-played pencil line, [1] played glow, [2] played ink.
   it('renders the neutral graphite ink when emotion is null', () => {
     const { toJSON } = render(<SoundTrace emotion={null} progress={0.5} seed={7} />);
     const paths = findByType(toJSON(), 'RNSVGPath');
-    expect(paths.length).toBeGreaterThanOrEqual(2);
-    for (const path of paths) {
-      expect(strokePayload(path)).toBe(argbIntFromHex(colors.ink2));
-    }
+    expect(paths).toHaveLength(3);
+    expect(strokePayload(paths[0])).toBe(argbIntFromHex(colors.ink2));
   });
 
-  it('renders the emotion ink tone once emotion is analyzed', () => {
+  it('renders the emotion ink tone once emotion is analyzed, with a glow in its main color', () => {
     const { toJSON } = render(<SoundTrace emotion="joy" progress={0.5} seed={7} />);
     const paths = findByType(toJSON(), 'RNSVGPath');
-    expect(paths.length).toBeGreaterThanOrEqual(2);
-    for (const path of paths) {
-      expect(strokePayload(path)).toBe(argbIntFromHex(emotionColors.joy.ink));
-    }
+    expect(strokePayload(paths[0])).toBe(argbIntFromHex(emotionColors.joy.ink));
+    expect(strokePayload(paths[1])).toBe(argbIntFromHex(emotionColors.joy.c));
+  });
+
+  it('keeps un-played ink faint and played ink bolder', () => {
+    const { toJSON } = render(<SoundTrace emotion="joy" progress={0.5} seed={7} stroke={2} />);
+    const [idle, , played] = findByType(toJSON(), 'RNSVGPath');
+    expect(idle.props.strokeOpacity).toBeLessThan(0.3);
+    expect(Number(played.props.strokeWidth)).toBeGreaterThan(Number(idle.props.strokeWidth));
   });
 
   it('falls back to neutral for an unrecognized emotion label', () => {
@@ -83,14 +90,74 @@ describe('SoundTrace', () => {
     expect(strokePayload(paths[0])).toBe(argbIntFromHex(colors.ink2));
   });
 
-  it('draws the mid-play tip line only strictly between 0 and 1 progress', () => {
-    const atStart = findByType(render(<SoundTrace emotion="joy" progress={0} seed={7} />).toJSON(), 'RNSVGLine');
-    const midPlay = findByType(render(<SoundTrace emotion="joy" progress={0.4} seed={7} />).toJSON(), 'RNSVGLine');
-    const finished = findByType(render(<SoundTrace emotion="joy" progress={1} seed={7} />).toJSON(), 'RNSVGLine');
+  it('draws the pen-nib playhead only strictly between 0 and 1 progress', () => {
+    const nibOpacity = (progress: number) => {
+      const { getByTestId } = render(<SoundTrace emotion="joy" progress={progress} seed={7} testID="trace" />);
+      return StyleSheet.flatten(getByTestId('trace-nib').props.style).opacity;
+    };
+    expect(nibOpacity(0)).toBe(0);
+    expect(nibOpacity(0.4)).toBe(1);
+    expect(nibOpacity(1)).toBe(0);
+  });
 
-    expect(atStart.length).toBe(0);
-    expect(midPlay.length).toBe(1);
-    expect(finished.length).toBe(0);
+  it('omits the nib on static thumbnails', () => {
+    const { queryByTestId } = render(<SoundTrace emotion="joy" progress={0.4} seed={7} showNib={false} testID="trace" />);
+    expect(queryByTestId('trace-nib')).toBeNull();
+  });
+
+  it('seeks to the tapped position when seeking is enabled', () => {
+    const onSeek = jest.fn();
+    const { getByTestId } = render(<SoundTrace emotion="joy" onSeek={onSeek} seed={7} testID="trace" />);
+    fireEvent(getByTestId('trace'), 'layout', { nativeEvent: { layout: { width: 200 } } });
+
+    fireGestureHandler(getByGestureTestId('trace-tap'), [
+      { state: State.BEGAN, x: 150 },
+      { state: State.ACTIVE, x: 150 },
+      { state: State.END, x: 150 },
+    ]);
+
+    expect(onSeek).toHaveBeenCalledWith(0.75);
+  });
+
+  it('scrubs with a horizontal drag, reporting the live position and seeking on release', () => {
+    const onSeek = jest.fn();
+    const onScrubChange = jest.fn();
+    const { getByTestId } = render(
+      <SoundTrace durationSeconds={20} emotion="joy" onScrubChange={onScrubChange} onSeek={onSeek} seed={7} testID="trace" />,
+    );
+    fireEvent(getByTestId('trace'), 'layout', { nativeEvent: { layout: { width: 200 } } });
+
+    fireGestureHandler(getByGestureTestId('trace-pan'), [
+      { state: State.BEGAN, x: 20 },
+      { state: State.ACTIVE, x: 20 },
+      { x: 100 },
+      { x: 160 },
+      { state: State.END, x: 160 },
+    ]);
+
+    expect(onScrubChange).toHaveBeenCalledWith(0.5);
+    expect(onScrubChange).toHaveBeenCalledWith(0.8);
+    expect(onScrubChange).toHaveBeenLastCalledWith(null);
+    expect(onSeek).toHaveBeenCalledTimes(1);
+    expect(onSeek).toHaveBeenCalledWith(0.8);
+  });
+
+  it('never hands the player a non-finite position', () => {
+    const onSeek = jest.fn();
+    const { getByTestId } = render(<SoundTrace emotion="joy" onSeek={onSeek} progress={Number.NaN} seed={7} testID="trace" />);
+    fireEvent(getByTestId('trace'), 'accessibilityAction', { nativeEvent: { actionName: 'increment' } });
+    expect(onSeek).not.toHaveBeenCalled();
+  });
+
+  it('is an adjustable control for screen readers, stepping 10%', () => {
+    const onSeek = jest.fn();
+    const { getByTestId } = render(<SoundTrace emotion="joy" onSeek={onSeek} progress={0.5} seed={7} testID="trace" />);
+    const trace = getByTestId('trace');
+    expect(trace.props.accessibilityRole).toBe('adjustable');
+    fireEvent(trace, 'accessibilityAction', { nativeEvent: { actionName: 'increment' } });
+    expect(onSeek).toHaveBeenLastCalledWith(0.6);
+    fireEvent(trace, 'accessibilityAction', { nativeEvent: { actionName: 'decrement' } });
+    expect(onSeek).toHaveBeenLastCalledWith(0.4);
   });
 
   it('produces the same path geometry across renders for the same seed (deterministic port)', () => {

@@ -58,6 +58,7 @@ export function SoundTile({
           points={34}
           progress={0}
           seed={seed}
+          showNib={false}
           stroke={1.8}
         />
       </View>
