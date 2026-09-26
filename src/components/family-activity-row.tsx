@@ -2,7 +2,6 @@ import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
-import { useMediaUrls } from '@/hooks/useMediaUrls';
 import type { FamilyActivityEvent, FamilyActivityGroup } from '@/services/family-activity';
 import { formatEngagementTimestamp } from '@/utils/engagement';
 import { buildFamilyActivityCopy, familyActivityCopyPlainText } from '@/utils/family-activity-copy';
@@ -11,11 +10,17 @@ import { mediaImageSource } from '@/utils/media-image-source';
 const THUMBNAIL_SIZE = 44;
 const MAX_THUMBNAILS = 3;
 
+// Illustration first, then the cover's list-sized preview (photo) or poster
+// (video), then the original -- but never a video original, which
+// expo-image can't render as a still.
 function resolveThumbnailKey(event: FamilyActivityEvent): string | null {
-  return event.memoryIllustrationKey ?? event.memoryMediaKey ?? null;
+  if (event.memoryIllustrationKey) return event.memoryIllustrationKey;
+  if (event.memoryMediaPreviewKey) return event.memoryMediaPreviewKey;
+  if (event.memoryMediaContentType?.startsWith('video/')) return null;
+  return event.memoryMediaKey ?? null;
 }
 
-function collectThumbnailKeys(events: FamilyActivityEvent[]): string[] {
+export function collectThumbnailKeys(events: FamilyActivityEvent[]): string[] {
   const seenMemoryIds = new Set<string>();
   const keys: string[] = [];
   for (const event of events) {
@@ -30,16 +35,18 @@ function collectThumbnailKeys(events: FamilyActivityEvent[]): string[] {
 
 interface FamilyActivityRowProps {
   group: FamilyActivityGroup;
+  /** Signed URLs for every row's thumbnails, fetched once by the sheet (see
+   * useBatchedMediaUrls) rather than one request per row. */
+  mediaUrls: Record<string, string>;
   onPress: () => void;
 }
 
-export function FamilyActivityRow({ group, onPress }: FamilyActivityRowProps) {
+export function FamilyActivityRow({ group, mediaUrls, onPress }: FamilyActivityRowProps) {
   const primaryEvent = group.events[0];
   const copy = buildFamilyActivityCopy(group);
   const label = familyActivityCopyPlainText(copy);
   const hasMemory = Boolean(primaryEvent.memoryId);
   const thumbnailKeys = collectThumbnailKeys(group.events);
-  const { data: mediaUrls } = useMediaUrls(thumbnailKeys);
   const mutedLine =
     primaryEvent.kind === 'memory_commented' ? primaryEvent.commentSnippet : primaryEvent.memoryExcerpt;
 
@@ -78,7 +85,7 @@ export function FamilyActivityRow({ group, onPress }: FamilyActivityRowProps) {
         <View style={styles.thumbnailStack}>
           {thumbnailKeys.length > 0 ? (
             thumbnailKeys.map((key, index) => {
-              const url = mediaUrls?.[key];
+              const url = mediaUrls[key];
               return url ? (
                 <Image
                   key={key}

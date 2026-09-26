@@ -5,6 +5,7 @@ import { FamilyActivitySheet, type FamilyActivitySheetProps } from './family-act
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyActivity, useMarkFamilyActivitySeen } from '@/hooks/useFamilyActivity';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
+import { useBatchedMediaUrls } from '@/hooks/useMediaUrls';
 import type { FamilyActivityEvent } from '@/services/family-activity';
 
 // src/services/family-activity.ts imports the real @/lib/supabase client,
@@ -28,12 +29,13 @@ jest.mock('@/hooks/useFamilyActivity', () => ({
   useMarkFamilyActivitySeen: jest.fn(),
 }));
 jest.mock('@/hooks/useFamilyMemberProfiles', () => ({ useFamilyMemberProfiles: jest.fn() }));
-jest.mock('@/hooks/useMediaUrls', () => ({ useMediaUrls: jest.fn(() => ({ data: {} })) }));
+jest.mock('@/hooks/useMediaUrls', () => ({ useBatchedMediaUrls: jest.fn(() => ({})) }));
 
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyActivity = useFamilyActivity as jest.MockedFunction<typeof useFamilyActivity>;
 const mockedUseMarkSeen = useMarkFamilyActivitySeen as jest.MockedFunction<typeof useMarkFamilyActivitySeen>;
 const mockedUseProfiles = useFamilyMemberProfiles as jest.MockedFunction<typeof useFamilyMemberProfiles>;
+const mockedUseBatchedMediaUrls = useBatchedMediaUrls as jest.MockedFunction<typeof useBatchedMediaUrls>;
 
 function makeEvent(overrides: Partial<FamilyActivityEvent> = {}): FamilyActivityEvent {
   return {
@@ -48,6 +50,7 @@ function makeEvent(overrides: Partial<FamilyActivityEvent> = {}): FamilyActivity
     memoryExcerpt: 'First swim',
     memoryIllustrationKey: null,
     memoryMediaKey: null,
+    memoryMediaPreviewKey: null,
     memoryMediaContentType: null,
     commentId: null,
     commentSnippet: null,
@@ -339,6 +342,45 @@ describe('FamilyActivitySheet', () => {
     rerenderVisible(false);
     // No route callback exists for member_joined -- nothing further to
     // assert beyond onClose having fired and nothing throwing.
+  });
+
+  it('requests every row\'s thumbnails in one batch, preferring previews and skipping video originals', () => {
+    mockedUseFamilyActivity.mockReturnValue({
+      events: [
+        makeEvent({ id: 'e1', memoryId: 'm1', memoryIllustrationKey: 'm1/illustration.webp', memoryMediaKey: 'm1/photo.jpg' }),
+        makeEvent({
+          id: 'e2',
+          kind: 'memory_liked',
+          memoryId: 'm2',
+          memoryMediaKey: 'm2/photo.jpg',
+          memoryMediaPreviewKey: 'm2/photo-preview.jpg',
+          memoryMediaContentType: 'image/jpeg',
+        }),
+        makeEvent({
+          id: 'e3',
+          kind: 'memory_commented',
+          memoryId: 'm3',
+          memoryMediaKey: 'm3/clip.mp4',
+          memoryMediaContentType: 'video/mp4',
+        }),
+        makeEvent({
+          id: 'e4',
+          kind: 'member_joined',
+          actorId: 'actor-2',
+          memoryId: null,
+        }),
+      ],
+      isLoading: false,
+      isRefetching: false,
+      isError: false,
+      error: null,
+      refetch,
+    });
+
+    renderSheet();
+
+    const keys = mockedUseBatchedMediaUrls.mock.calls.at(-1)?.[0] ?? [];
+    expect([...keys].sort()).toEqual(['m1/illustration.webp', 'm2/photo-preview.jpg']);
   });
 
   it('fires mark-seen on open', () => {

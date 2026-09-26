@@ -34,7 +34,13 @@ the bell shows there's something new since the viewer last opened it.
   **Luis** liked a memory"), a muted second line (the comment snippet for a
   comment row, otherwise a short excerpt of the memory), a timestamp, and — for
   memories — up to 3 stacked 44px thumbnails on the right (illustration first,
-  falling back to the raw media, falling back to a placeholder box).
+  then the cover asset's list-sized preview / video poster
+  (`memory_media_preview_key`), then the original image — never a video
+  original — falling back to a placeholder box). Thumbnail URLs are signed
+  once for the whole sheet by `useBatchedMediaUrls` (reusing any URL the
+  timeline already signed, batching the rest ≤50 keys per `get-media-url`
+  call) and passed to each row — rows must not call `useMediaUrls`
+  themselves, which would fire one request per row.
 - **`member_pending` rows** (someone redeemed an invite and is waiting for a
   decision) carry a small **Review** pill and only ever appear for
   owner/manager viewers — filtered server-side, not client-side.

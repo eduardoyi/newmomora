@@ -39,6 +39,7 @@ export type FamilyActivityRpcRow = Omit<
   | 'memory_illustration_key'
   | 'memory_media_key'
   | 'memory_media_content_type'
+  | 'memory_media_preview_key'
   | 'comment_id'
   | 'comment_snippet'
   | 'invite_id'
@@ -51,6 +52,9 @@ export type FamilyActivityRpcRow = Omit<
   memory_illustration_key: string | null;
   memory_media_key: string | null;
   memory_media_content_type: string | null;
+  // Cover asset's list-sized preview (photo) or poster (video) -- null for
+  // legacy rows without one.
+  memory_media_preview_key: string | null;
   comment_id: string | null;
   comment_snippet: string | null;
   invite_id: string | null;
@@ -69,6 +73,7 @@ export interface FamilyActivityEvent {
   memoryIllustrationKey: string | null;
   memoryMediaKey: string | null;
   memoryMediaContentType: string | null;
+  memoryMediaPreviewKey: string | null;
   commentId: string | null;
   commentSnippet: string | null;
   inviteId: string | null;
@@ -88,6 +93,7 @@ export function mapFamilyActivityRow(row: FamilyActivityRpcRow): FamilyActivityE
     memoryIllustrationKey: row.memory_illustration_key,
     memoryMediaKey: row.memory_media_key,
     memoryMediaContentType: row.memory_media_content_type,
+    memoryMediaPreviewKey: row.memory_media_preview_key ?? null,
     commentId: row.comment_id,
     commentSnippet: row.comment_snippet,
     inviteId: row.invite_id,

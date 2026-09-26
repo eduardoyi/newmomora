@@ -4212,6 +4212,7 @@ export type Database = {
           memory_illustration_key: string
           memory_media_content_type: string
           memory_media_key: string
+          memory_media_preview_key: string
         }[]
       }
       get_family_activity_unread: {

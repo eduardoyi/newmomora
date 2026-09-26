@@ -9,7 +9,7 @@ begin;
 -- retention (200-cap / 90-day), the no-direct-client-access grant posture
 -- on family_activity_events, and the memory_likes select-policy flip
 -- (household-read, insert/delete still self-only).
-select plan(36);
+select plan(37);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures. All base data is inserted as the connection's default (postgres)
@@ -311,6 +311,38 @@ select is(
   (select memory_excerpt from public.get_family_activity('92000000-0000-4000-8000-000000000001') where memory_id = '94000000-0000-4000-8000-000000000003'),
   'Grandma tells the best bedtime stories',
   'memory_excerpt falls back to audio_transcript when content is null'
+);
+
+set local role postgres;
+
+-- ---------------------------------------------------------------------------
+-- memory_media_preview_key: the cover (position 0) asset's list-sized
+-- preview, so sheet thumbnails don't download the original.
+-- ---------------------------------------------------------------------------
+
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, media_key, media_content_type, created_at)
+values (
+  '94000000-0000-4000-8000-000000000004', '92000000-0000-4000-8000-000000000001', '91000000-0000-4000-8000-000000000001',
+  'Beach day', 'media', 'none',
+  '91000000-0000-4000-8000-000000000001/memories/94000000-0000-4000-8000-000000000004/media/beach.jpg', 'image/jpeg', now()
+);
+
+insert into public.memory_media (memory_id, object_key, content_type, preview_object_key, position)
+values (
+  '94000000-0000-4000-8000-000000000004',
+  '91000000-0000-4000-8000-000000000001/memories/94000000-0000-4000-8000-000000000004/media/beach.jpg',
+  'image/jpeg',
+  '91000000-0000-4000-8000-000000000001/memories/94000000-0000-4000-8000-000000000004/media/beach-preview.jpg',
+  0
+);
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '91000000-0000-4000-8000-000000000003', true);
+
+select is(
+  (select memory_media_preview_key from public.get_family_activity('92000000-0000-4000-8000-000000000001') where memory_id = '94000000-0000-4000-8000-000000000004'),
+  '91000000-0000-4000-8000-000000000001/memories/94000000-0000-4000-8000-000000000004/media/beach-preview.jpg',
+  'memory_media_preview_key returns the cover asset''s preview key'
 );
 
 set local role postgres;

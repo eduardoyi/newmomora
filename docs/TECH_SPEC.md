@@ -1072,6 +1072,10 @@ deleted, allowing notification delivery to ignore stale/repeated writes.
   `memories`, and `memory_comments` at read time; `memory_excerpt` is
   `left(coalesce(nullif(btrim(content), ''), nullif(btrim(audio_transcript),
   '')), 80)` and `comment_snippet` is `left(content, 120)`.
+  `memory_media_preview_key` is the cover (`position = 0`) `memory_media`
+  row's `preview_object_key` (photo preview or video poster; null for legacy
+  rows) so the sheet's thumbnails load the list-sized variant
+  (20260926120000_family_activity_media_preview_key.sql).
 - `get_family_activity_unread(target_family_id uuid) returns boolean` —
   same guards, `member_pending` role filter, and blocked-actor exclusion;
   true when any qualifying event's `created_at` is after the caller's

@@ -4,11 +4,12 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { FamilyActivityRow } from '@/components/family-activity-row';
+import { collectThumbnailKeys, FamilyActivityRow } from '@/components/family-activity-row';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyActivity, useMarkFamilyActivitySeen } from '@/hooks/useFamilyActivity';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
+import { useBatchedMediaUrls } from '@/hooks/useMediaUrls';
 import type { GalleryImportDriverPhase } from '@/services/gallery-import-driver';
 import { groupFamilyActivity, type FamilyActivityGroup } from '@/services/family-activity';
 import { getBottomSheetBottomPadding, shouldDismissBottomSheet } from '@/utils/bottom-sheet-dismiss';
@@ -166,6 +167,13 @@ function FamilyActivitySheetBody({
   // single-component version did.
   const now = useMemo(() => new Date(), []);
   const sections = useMemo(() => groupFamilyActivity(events, { now }), [events, now]);
+  // Every row's thumbnails signed together (cached timeline URLs reused,
+  // the rest in one get-media-url call) instead of one request per row.
+  const thumbnailKeys = useMemo(
+    () => sections.flatMap((section) => section.data.flatMap((group) => collectThumbnailKeys(group.events))),
+    [sections],
+  );
+  const mediaUrls = useBatchedMediaUrls(thumbnailKeys);
   const activeMemberCount = useMemo(
     () => profiles.filter((profile) => profile.is_active_member).length,
     [profiles],
@@ -264,7 +272,7 @@ function FamilyActivitySheetBody({
       ListHeaderComponent={galleryImportRow}
       contentContainerStyle={styles.listContent}
       keyExtractor={(group) => group.id}
-      renderItem={({ item }) => <FamilyActivityRow group={item} onPress={() => handleRowPress(item)} />}
+      renderItem={({ item }) => <FamilyActivityRow group={item} mediaUrls={mediaUrls} onPress={() => handleRowPress(item)} />}
       renderSectionHeader={({ section }) => <Text style={styles.sectionHeader}>{section.title}</Text>}
       sections={sections}
       showsVerticalScrollIndicator={false}
