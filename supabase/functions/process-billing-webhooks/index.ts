@@ -1,6 +1,7 @@
 import { validateCronSecret } from '../_shared/cron.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const MAX_BILLING_WEBHOOK_ATTEMPTS = 5;
 
@@ -63,4 +64,4 @@ export async function handleProcessBillingWebhooks(req: Request): Promise<Respon
   return jsonResponse({ success: true, claimed: (claimed ?? []).length, processed, failed });
 }
 
-if (import.meta.main) Deno.serve(handleProcessBillingWebhooks);
+if (import.meta.main) serveWithSentry('process-billing-webhooks', handleProcessBillingWebhooks);

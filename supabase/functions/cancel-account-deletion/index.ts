@@ -2,6 +2,7 @@ import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface CancelAccountDeletionResponse {
   success: true;
@@ -39,5 +40,5 @@ export async function handleCancelAccountDeletion(req: Request): Promise<Respons
 }
 
 if (import.meta.main) {
-  Deno.serve(handleCancelAccountDeletion);
+  serveWithSentry('cancel-account-deletion', handleCancelAccountDeletion);
 }

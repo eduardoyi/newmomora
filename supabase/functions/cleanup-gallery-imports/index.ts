@@ -4,6 +4,7 @@ import { deleteObject } from '../_shared/r2.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { redispatchStaleGalleryChunks } from '../_shared/gallery-import.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 interface CleanupClaim { run_id: string; claim_token: string; }
 
@@ -79,4 +80,4 @@ export async function handleCleanupGalleryImports(
   return jsonResponse({ success: true, completed, redispatched: redispatch.redispatched });
 }
 
-if (import.meta.main) Deno.serve((req) => handleCleanupGalleryImports(req));
+if (import.meta.main) serveWithSentry('cleanup-gallery-imports', (req) => handleCleanupGalleryImports(req));

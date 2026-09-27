@@ -27,6 +27,11 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub','d1000000-0000-4000-8000-000000000001',true);
 create temporary table reviewing_run as
   select public.create_gallery_import_run('d2000000-0000-4000-8000-000000000001','44444444444444444444444444444444','v1','consent-v1','all') id;
+-- reviewing_run/reviewing_chunk are owned by the authenticated role that
+-- created them; the fixture below reads their ids as service_role
+-- (record_gallery_import_preview_upload is service-role-only), so grant
+-- select explicitly rather than relying on default temp-table access.
+grant select on reviewing_run to service_role;
 set local role postgres;
 -- scanning -> reviewing is itself a valid run transition (enforce_gallery_import_transitions);
 -- this simulates the first chunk of a larger manifest already completing.
@@ -37,6 +42,7 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub','d1000000-0000-4000-8000-000000000001',true);
 create temporary table reviewing_chunk as
   select public.register_gallery_import_chunk((select id from reviewing_run),'44444444444444444444444444444444',1,1,1) id;
+grant select on reviewing_chunk to service_role;
 select isnt((select id from reviewing_chunk),null,'a reviewing run still admits a new chunk manifest (the fixed race)');
 create temporary table reviewing_assets as
   select public.register_gallery_import_assets((select id from reviewing_run),(select id from reviewing_chunk),'44444444444444444444444444444444',

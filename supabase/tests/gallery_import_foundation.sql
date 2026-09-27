@@ -43,7 +43,17 @@ set local role postgres;
 select is((select limit_snapshot from public.gallery_import_runs where id=(select id from run_one)),(select limit_template from public.gallery_import_admission_settings where singleton),'run snapshots server-owned limits');
 set local role authenticated;
 select set_config('request.jwt.claim.sub','b1000000-0000-4000-8000-000000000001',true);
-select throws_ok($$select public.create_gallery_import_run('b2000000-0000-4000-8000-000000000001','99999999999999999999999999999999','v1','consent-v1','all')$$,'P0001','A gallery import is already active','family has only one active run');
+-- gallery_import_run_per_device.sql relaxed "one active run per family" to
+-- "at most 4 concurrent device-bound runs per family" (a run is device-
+-- bound, so a second phone in the household must not be locked out). Fill
+-- the remaining 3 slots before asserting the 5th is refused.
+create temporary table run_one_b as
+  select public.create_gallery_import_run('b2000000-0000-4000-8000-000000000001','11111111111111111111111111111112','v1','consent-v1','all') id;
+create temporary table run_one_c as
+  select public.create_gallery_import_run('b2000000-0000-4000-8000-000000000001','11111111111111111111111111111113','v1','consent-v1','all') id;
+create temporary table run_one_d as
+  select public.create_gallery_import_run('b2000000-0000-4000-8000-000000000001','11111111111111111111111111111114','v1','consent-v1','all') id;
+select throws_ok($$select public.create_gallery_import_run('b2000000-0000-4000-8000-000000000001','99999999999999999999999999999999','v1','consent-v1','all')$$,'P0001','A gallery import is already active','a family is capped at 4 concurrent active (device-bound) runs');
 create temporary table chunk_one as
   select public.register_gallery_import_chunk((select id from run_one),'11111111111111111111111111111111',0,1,1) id;
 create temporary table registered_one as
@@ -60,11 +70,25 @@ values ('b6000000-0000-4000-8000-000000000001',(select id from run_one),(select 
 -- A user-cleared draft caption ('' — never null at the candidate level)
 -- must still be an accepted row: finalize_gallery_import_candidate is what
 -- turns it into memories.content = null.
+-- selected_asset_tokens must reference the asset's OWN cluster_signature
+-- ('aaaa...', registered above at line 51) -- validate_gallery_import_
+-- candidate_assets() enforces this (23514 'Candidate token is not in this
+-- run cluster'), so this fixture cannot invent an unrelated cluster
+-- signature ('cccc...') for the same asset token.
+-- candidate_fingerprint is derived only from (run, cluster, selected asset
+-- tokens) and is unique per run -- reusing asset 001's own cluster/token
+-- would collide with the candidate inserted just above. Register a second,
+-- distinct asset (its own cluster) so this candidate has a fingerprint of
+-- its own; the point of this fixture is the empty-caption acceptance, not
+-- the cluster/token pairing.
+insert into public.gallery_import_assets (run_id,chunk_id,opaque_token,cluster_signature,capture_date,is_favorite,expires_at)
+values ((select id from run_one),(select id from chunk_one),'b5000000-0000-4000-8000-000000000005',
+  repeat('c',64),'2026-08-01',false,transaction_timestamp()+interval '30 days');
 select lives_ok(
-  $$insert into public.gallery_import_candidates (id,run_id,chunk_id,family_id,actor_id,cluster_signature,candidate_fingerprint,caption,memory_date,confidence,selected_asset_tokens,expires_at)
+  format($fmt$insert into public.gallery_import_candidates (id,run_id,chunk_id,family_id,actor_id,cluster_signature,candidate_fingerprint,caption,memory_date,confidence,selected_asset_tokens,expires_at)
     values ('b6000000-0000-4000-8000-000000000002',(select id from run_one),(select id from chunk_one),'b2000000-0000-4000-8000-000000000001','b1000000-0000-4000-8000-000000000001',
-      'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',encode(extensions.digest((select id::text from run_one)||':cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc:b5000000-0000-4000-8000-000000000001','sha256'),'hex'),
-      '',current_date,.8,array['b5000000-0000-4000-8000-000000000001'::uuid],transaction_timestamp()+interval '30 days')$$,
+      %L,encode(extensions.digest((select id::text from run_one)||':'||%L||':b5000000-0000-4000-8000-000000000005','sha256'),'hex'),
+      '',current_date,.8,array['b5000000-0000-4000-8000-000000000005'::uuid],transaction_timestamp()+interval '30 days')$fmt$, repeat('c',64), repeat('c',64)),
   'a user-cleared empty caption is an accepted candidate row'
 );
 

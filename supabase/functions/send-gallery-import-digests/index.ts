@@ -3,6 +3,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 interface DigestClaim { family_id: string; actor_id: string; claim_token: string; }
 
@@ -88,4 +89,4 @@ export async function handleSendGalleryImportDigests(
   return jsonResponse({ success: true, sent });
 }
 
-if (import.meta.main) Deno.serve((req) => handleSendGalleryImportDigests(req));
+if (import.meta.main) serveWithSentry('send-gallery-import-digests', (req) => handleSendGalleryImportDigests(req));

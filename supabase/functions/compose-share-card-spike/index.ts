@@ -44,6 +44,7 @@ import { NEWSREADER_REGULAR_B64 } from './assets/font-regular-b64.ts';
 import { NEWSREADER_MEDIUM_B64 } from './assets/font-medium-b64.ts';
 import { HERO_JPEG_B64 } from './assets/hero-b64.ts';
 import { PORTRAITS_B64 } from './assets/portraits-b64.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const satori = satoriImport as unknown as (
   tree: SatoriNode,
@@ -291,7 +292,7 @@ async function composeAndTime(kind: CaseName): Promise<TimingResult> {
   };
 }
 
-Deno.serve(async (req: Request) => {
+serveWithSentry('compose-share-card-spike', async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', {
       headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' },

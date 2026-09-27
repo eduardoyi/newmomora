@@ -1,5 +1,6 @@
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
 
@@ -548,4 +549,4 @@ export async function handleWorkflowIllustrationBridge(
   }
 }
 
-if (import.meta.main) Deno.serve((request) => handleWorkflowIllustrationBridge(request));
+if (import.meta.main) serveWithSentry('workflow-illustration-bridge', (request) => handleWorkflowIllustrationBridge(request));

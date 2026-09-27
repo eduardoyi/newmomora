@@ -9,6 +9,7 @@ import {
 } from '../_shared/family-access.ts';
 import { deleteObject } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface DeleteStorageObjectRequest {
   objectKey: string;
@@ -102,5 +103,5 @@ export async function handleDeleteStorageObject(req: Request): Promise<Response>
 }
 
 if (import.meta.main) {
-  Deno.serve(handleDeleteStorageObject);
+  serveWithSentry('delete-storage-object', handleDeleteStorageObject);
 }

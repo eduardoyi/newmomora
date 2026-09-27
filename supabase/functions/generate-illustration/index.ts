@@ -42,6 +42,7 @@ import {
 import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
 import { resolvePortraitVersionAtDate } from '../_shared/portrait-versions.ts';
 import { checkBillingAiGeneration } from '../_shared/billing.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface GenerateIllustrationRequest {
   memoryId: string;
@@ -1285,5 +1286,5 @@ export async function handleGenerateIllustration(
 }
 
 if (import.meta.main) {
-  Deno.serve((request) => handleGenerateIllustration(request));
+  serveWithSentry('generate-illustration', (request) => handleGenerateIllustration(request));
 }

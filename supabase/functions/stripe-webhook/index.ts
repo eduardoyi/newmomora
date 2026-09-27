@@ -38,6 +38,7 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { backfillOriginalFilesForBook } from '../_shared/memory-book-backfill.ts';
 import { verifyStripeSignature, type StripeEvent } from '../_shared/stripe.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const DEFAULT_ALERT_RECIPIENT = 'hello@usemomora.com';
 
@@ -401,5 +402,5 @@ export async function handleStripeWebhook(
 }
 
 if (import.meta.main) {
-  Deno.serve((request) => handleStripeWebhook(request));
+  serveWithSentry('stripe-webhook', (request) => handleStripeWebhook(request));
 }

@@ -1,4 +1,9 @@
+import * as Sentry from '@sentry/cloudflare';
+
+import { sentryOptions } from './sentry';
 export interface Env {
+  /** Optional: error reporting (src/sentry.ts) is off when unset. */
+  SENTRY_DSN?: string;
   ASSETS: Fetcher;
 }
 
@@ -22,7 +27,7 @@ export interface Env {
  * fallback logic here is simpler and more honest than renaming the entry
  * just to fit a convention that assumes a different filename.
  */
-export default {
+export default Sentry.withSentry(sentryOptions, {
   async fetch(request: Request, env: Env): Promise<Response> {
     const response = await env.ASSETS.fetch(request);
     if (response.status !== 404) {
@@ -32,4 +37,4 @@ export default {
     const fallbackUrl = new URL('/web.html', request.url);
     return env.ASSETS.fetch(new Request(fallbackUrl, request));
   },
-};
+});

@@ -24,6 +24,7 @@ import {
 } from '../_shared/bento.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -186,5 +187,5 @@ export async function handleSendExportEmail(req: Request, deps: Dependencies = {
 }
 
 if (import.meta.main) {
-  Deno.serve((req) => handleSendExportEmail(req));
+  serveWithSentry('send-export-email', (req) => handleSendExportEmail(req));
 }

@@ -3,6 +3,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface DeleteUserAccountResponse {
   success: true;
@@ -158,5 +159,5 @@ export async function handleDeleteUserAccount(req: Request): Promise<Response> {
 }
 
 if (import.meta.main) {
-  Deno.serve(handleDeleteUserAccount);
+  serveWithSentry('delete-user-account', handleDeleteUserAccount);
 }

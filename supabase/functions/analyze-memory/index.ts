@@ -17,7 +17,8 @@
 export { handleAnalyzeEmotion as handleAnalyzeMemory } from '../analyze-emotion/index.ts';
 
 import { handleAnalyzeEmotion } from '../analyze-emotion/index.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 if (import.meta.main) {
-  Deno.serve(handleAnalyzeEmotion);
+  serveWithSentry('analyze-memory', handleAnalyzeEmotion);
 }

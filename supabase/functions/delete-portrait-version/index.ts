@@ -5,6 +5,7 @@ import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts'
 import { deleteObject, listObjectKeys } from '../_shared/r2.ts';
 import { parseStorageKey } from '../_shared/storage-keys.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 interface DeletePortraitVersionRequest {
   portraitVersionId: string;
@@ -113,4 +114,4 @@ export async function handleDeletePortraitVersion(
   return jsonResponse({ success: true });
 }
 
-if (import.meta.main) Deno.serve((request) => handleDeletePortraitVersion(request));
+if (import.meta.main) serveWithSentry('delete-portrait-version', (request) => handleDeletePortraitVersion(request));

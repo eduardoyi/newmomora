@@ -2,6 +2,7 @@ import { sendTransactionalEmailWithOutcome } from '../_shared/bento.ts';
 import { validateCronSecret } from '../_shared/cron.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const DEFAULT_RECIPIENT = 'hello@usemomora.com';
 
@@ -120,4 +121,4 @@ export async function handleRunAiUsageAlerts(req: Request): Promise<Response> {
   return jsonResponse({ success: true, queued: (queued ?? []).length, sent, environment });
 }
 
-if (import.meta.main) Deno.serve(handleRunAiUsageAlerts);
+if (import.meta.main) serveWithSentry('run-ai-usage-alerts', handleRunAiUsageAlerts);

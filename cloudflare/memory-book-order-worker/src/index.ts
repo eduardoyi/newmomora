@@ -1,3 +1,6 @@
+import * as Sentry from '@sentry/cloudflare';
+
+import { sentryOptions } from './sentry';
 import { verifySignedBody } from './crypto';
 import { MemoryBookOrderWorkflow } from './workflow';
 import { WORKFLOW_ID_PATTERN, type Env, type WorkflowDispatchPayload } from './types';
@@ -63,7 +66,7 @@ async function handleDispatch(request: Request, env: Env): Promise<Response> {
   }
 }
 
-export default {
+export default Sentry.withSentry(sentryOptions, {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
@@ -77,6 +80,8 @@ export default {
 
     return response({ error: 'Not found', code: 'NOT_FOUND' }, 404);
   },
-};
+});
 
-export { MemoryBookOrderWorkflow };
+const InstrumentedMemoryBookOrderWorkflow = Sentry.instrumentWorkflowWithSentry(sentryOptions, MemoryBookOrderWorkflow);
+// Instrumented so errors inside Workflow steps reach Sentry too.
+export { InstrumentedMemoryBookOrderWorkflow as MemoryBookOrderWorkflow };

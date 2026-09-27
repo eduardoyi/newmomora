@@ -2,6 +2,7 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -194,4 +195,4 @@ export async function handleWorkflowGalleryImportBridge(
   return jsonResponse({ ok: data === true || data !== null });
 }
 
-if (import.meta.main) Deno.serve((req) => handleWorkflowGalleryImportBridge(req));
+if (import.meta.main) serveWithSentry('workflow-gallery-import-bridge', (req) => handleWorkflowGalleryImportBridge(req));

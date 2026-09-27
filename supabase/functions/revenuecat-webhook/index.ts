@@ -1,6 +1,7 @@
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 interface RevenueCatEvent {
   id?: string;
@@ -152,4 +153,4 @@ export async function handleRevenueCatWebhook(req: Request): Promise<Response> {
   return jsonResponse({ received: true, status: data?.status ?? 'queued' });
 }
 
-if (import.meta.main) Deno.serve(handleRevenueCatWebhook);
+if (import.meta.main) serveWithSentry('revenuecat-webhook', handleRevenueCatWebhook);

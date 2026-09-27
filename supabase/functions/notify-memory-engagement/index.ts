@@ -6,6 +6,7 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole } from '../_shared/family-access.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export type EngagementKind = 'like' | 'comment';
 
@@ -244,5 +245,5 @@ export async function handleNotifyMemoryEngagement(req: Request): Promise<Respon
 }
 
 if (import.meta.main) {
-  Deno.serve(handleNotifyMemoryEngagement);
+  serveWithSentry('notify-memory-engagement', handleNotifyMemoryEngagement);
 }

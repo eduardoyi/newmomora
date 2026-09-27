@@ -23,6 +23,7 @@ import {
 } from '../_shared/styles.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { checkBillingAiGeneration } from '../_shared/billing.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface GeneratePortraitRequest {
   portraitVersionId: string;
@@ -632,4 +633,4 @@ export async function handleGeneratePortraitIllustration(
   return jsonResponse({ success: true, queued: true } satisfies GeneratePortraitResponse);
 }
 
-if (import.meta.main) Deno.serve((request) => handleGeneratePortraitIllustration(request));
+if (import.meta.main) serveWithSentry('generate-portrait-illustration', (request) => handleGeneratePortraitIllustration(request));

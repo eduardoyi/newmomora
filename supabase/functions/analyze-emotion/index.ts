@@ -13,6 +13,7 @@ import {
 } from '../_shared/analyze-memory-core.ts';
 import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
 import { checkBillingFamilyWrite } from '../_shared/billing.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface AnalyzeEmotionRequest {
   memoryId: string;
@@ -352,5 +353,5 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
 }
 
 if (import.meta.main) {
-  Deno.serve(handleAnalyzeEmotion);
+  serveWithSentry('analyze-emotion', handleAnalyzeEmotion);
 }

@@ -47,6 +47,7 @@ import { getProdigiQuote, PRODIGI_CONFIRMED_SKU } from '../_shared/prodigi.ts';
 import { fitBookForQuote } from '../_shared/render-worker-client.ts';
 import { createCheckoutSession, createStripeCustomer } from '../_shared/stripe.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 // ── Shapes ───────────────────────────────────────────────────────────────
 
@@ -557,5 +558,5 @@ export async function handleMemoryBookOrders(
 }
 
 if (import.meta.main) {
-  Deno.serve((request) => handleMemoryBookOrders(request));
+  serveWithSentry('memory-book-orders', (request) => handleMemoryBookOrders(request));
 }

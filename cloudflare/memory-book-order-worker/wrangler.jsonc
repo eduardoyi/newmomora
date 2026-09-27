@@ -20,8 +20,7 @@
       "SUPABASE_BRIDGE_HMAC_SECRET",
       "RENDER_WORKER_URL",
       "RENDER_WORKER_HMAC_SECRET",
-      "PRODIGI_API_KEY"
-    ]
+      "PRODIGI_API_KEY", "SENTRY_DSN"]
   },
   // Deliberately NO r2_buckets binding (memory-book-5c plan, Design
   // Decision 4/blast-radius note): this Worker holds the Prodigi API key,
@@ -47,8 +46,7 @@
           "SUPABASE_BRIDGE_HMAC_SECRET",
           "RENDER_WORKER_URL",
           "RENDER_WORKER_HMAC_SECRET",
-          "PRODIGI_API_KEY"
-        ]
+          "PRODIGI_API_KEY", "SENTRY_DSN"]
       },
       "workflows": [
         { "binding": "MEMORY_BOOK_ORDER_WORKFLOW", "name": "momora-memory-book-order-staging", "class_name": "MemoryBookOrderWorkflow" }

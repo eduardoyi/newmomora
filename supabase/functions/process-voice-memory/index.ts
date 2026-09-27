@@ -16,6 +16,7 @@ import {
 } from '../_shared/prompts.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { checkBillingFamilyWrite } from '../_shared/billing.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const MAX_AUDIO_SECONDS = 120;
 
@@ -443,5 +444,5 @@ export async function handleProcessVoiceMemory(req: Request): Promise<Response> 
 }
 
 if (import.meta.main) {
-  Deno.serve(handleProcessVoiceMemory);
+  serveWithSentry('process-voice-memory', handleProcessVoiceMemory);
 }

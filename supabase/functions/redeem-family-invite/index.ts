@@ -14,6 +14,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface RedeemFamilyInviteRequest {
   code: string;
@@ -292,5 +293,5 @@ export async function handleRedeemFamilyInvite(req: Request): Promise<Response> 
 }
 
 if (import.meta.main) {
-  Deno.serve(handleRedeemFamilyInvite);
+  serveWithSentry('redeem-family-invite', handleRedeemFamilyInvite);
 }

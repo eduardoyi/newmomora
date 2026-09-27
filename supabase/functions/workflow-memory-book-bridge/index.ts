@@ -25,6 +25,7 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { pickCoverAssetKey } from '../_shared/memory-book-cover.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
 // Below this many non-empty in-window captions, the outline call also gets
@@ -542,4 +543,4 @@ export async function handleWorkflowMemoryBookBridge(
   }
 }
 
-if (import.meta.main) Deno.serve((request) => handleWorkflowMemoryBookBridge(request));
+if (import.meta.main) serveWithSentry('workflow-memory-book-bridge', (request) => handleWorkflowMemoryBookBridge(request));

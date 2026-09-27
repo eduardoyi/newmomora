@@ -5,6 +5,8 @@
 // actually touches, not the full @cloudflare/workers-types surface.
 
 interface Env {
+  /** Optional: error reporting (src/sentry.ts) is off when unset. */
+  SENTRY_DSN?: string;
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
   MEDIA: MemoryViewerR2Bucket;

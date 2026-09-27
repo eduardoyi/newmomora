@@ -51,6 +51,7 @@ import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts'
 import { pickCoverAssetKey } from '../_shared/memory-book-cover.ts';
 import { createPresignedGetUrls } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 // ── Edit shapes (Design Decision 6) ─────────────────────────────────────
 
@@ -1090,5 +1091,5 @@ export async function handleMemoryBookEdits(
 }
 
 if (import.meta.main) {
-  Deno.serve((request) => handleMemoryBookEdits(request));
+  serveWithSentry('memory-book-edits', (request) => handleMemoryBookEdits(request));
 }

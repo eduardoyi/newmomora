@@ -5,6 +5,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const REMINDER_MESSAGES = [
   'What made you smile with your family today?',
@@ -97,5 +98,5 @@ export async function handleSendDailyReminder(req: Request): Promise<Response> {
 }
 
 if (import.meta.main) {
-  Deno.serve(handleSendDailyReminder);
+  serveWithSentry('send-daily-reminder', handleSendDailyReminder);
 }

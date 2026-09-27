@@ -24,6 +24,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface GenerateMemoryBookRequest {
   memoryBookId: string;
@@ -252,4 +253,4 @@ export async function handleGenerateMemoryBook(
   );
 }
 
-if (import.meta.main) Deno.serve((request) => handleGenerateMemoryBook(request));
+if (import.meta.main) serveWithSentry('generate-memory-book', (request) => handleGenerateMemoryBook(request));

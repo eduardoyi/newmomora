@@ -68,6 +68,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getProdigiOrderStatus, ProdigiApiError, type ProdigiOrderStatus } from '../_shared/prodigi.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const DEFAULT_ALERT_RECIPIENT = 'hello@usemomora.com';
 const PAID_RECONCILE_GRACE_MS = 2 * 60_000;
@@ -462,4 +463,4 @@ export async function handleSweepMemoryBookOrders(
   });
 }
 
-if (import.meta.main) Deno.serve((request) => handleSweepMemoryBookOrders(request));
+if (import.meta.main) serveWithSentry('sweep-memory-book-orders', (request) => handleSweepMemoryBookOrders(request));

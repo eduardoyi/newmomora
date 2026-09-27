@@ -4,6 +4,7 @@ import {
   type PortraitMemoryRetriggerRequest,
 } from '../_shared/portrait-memory-retrigger.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
 const RETRIGGER_MIN_AGE_MS = 30_000;
@@ -581,4 +582,4 @@ export async function handleWorkflowPortraitBridge(
   }
 }
 
-if (import.meta.main) Deno.serve((request) => handleWorkflowPortraitBridge(request));
+if (import.meta.main) serveWithSentry('workflow-portrait-bridge', (request) => handleWorkflowPortraitBridge(request));

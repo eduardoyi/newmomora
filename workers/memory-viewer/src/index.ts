@@ -1,3 +1,6 @@
+import * as Sentry from '@sentry/cloudflare';
+
+import { sentryOptions } from './sentry';
 import {
   parseShareToken,
   classifyShareToken,
@@ -203,7 +206,7 @@ async function handlePosterBytes(env: Env, token: string): Promise<Response> {
   }
 }
 
-export default {
+export default Sentry.withSentry(sentryOptions, {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
@@ -228,4 +231,4 @@ export default {
 
     return notFoundPage();
   },
-};
+});

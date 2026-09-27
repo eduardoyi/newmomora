@@ -1,3 +1,6 @@
+import * as Sentry from '@sentry/cloudflare';
+
+import { sentryOptions } from './sentry';
 import { verifySignedBody } from './crypto';
 import { GalleryImportWorkflow } from './gallery-workflow';
 import { PortraitGenerationWorkflow } from './portrait-workflow';
@@ -122,9 +125,12 @@ async function handleGalleryDispatch(request: Request, target: GalleryDispatchTa
   }
 }
 
-export { GalleryImportWorkflow, MemoryIllustrationWorkflow, PortraitGenerationWorkflow };
-
-export default {
+const InstrumentedGalleryImportWorkflow = Sentry.instrumentWorkflowWithSentry(sentryOptions, GalleryImportWorkflow);
+const InstrumentedMemoryIllustrationWorkflow = Sentry.instrumentWorkflowWithSentry(sentryOptions, MemoryIllustrationWorkflow);
+const InstrumentedPortraitGenerationWorkflow = Sentry.instrumentWorkflowWithSentry(sentryOptions, PortraitGenerationWorkflow);
+// Instrumented so errors inside Workflow steps reach Sentry too.
+export { InstrumentedGalleryImportWorkflow as GalleryImportWorkflow, InstrumentedMemoryIllustrationWorkflow as MemoryIllustrationWorkflow, InstrumentedPortraitGenerationWorkflow as PortraitGenerationWorkflow };
+export default Sentry.withSentry(sentryOptions, {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === 'POST' && url.pathname === '/dispatch') {
@@ -150,4 +156,4 @@ export default {
     }
     return response({ error: 'Not found', code: 'NOT_FOUND' }, 404);
   },
-};
+});

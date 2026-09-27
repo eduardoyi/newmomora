@@ -82,13 +82,6 @@ jobs:
     timeout-minutes: 25
     env:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:64322/postgres
-      # Known-broken pgTAP files, excluded until fixed -- their fixtures
-      # predate constraints/grants added in the same gallery-import change
-      # (a833473) and have never passed. Remove each as it is fixed.
-      KNOWN_BROKEN_PGTAP: >-
-        gallery_import_continuous.sql
-        gallery_import_foundation.sql
-        gallery_import_streaming.sql
     steps:
       - uses: actions/checkout@v4
       - uses: supabase/setup-cli@v1
@@ -101,10 +94,6 @@ jobs:
           status=0
           for file in supabase/tests/*.sql; do
             name=$(basename "$file")
-            if [[ " $KNOWN_BROKEN_PGTAP " == *" $name "* ]]; then
-              echo "::warning file=$file::skipped (known broken, see KNOWN_BROKEN_PGTAP in ci.yml)"
-              continue
-            fi
             echo "::group::$name"
             supabase test db "$file" || status=1
             echo "::endgroup::"

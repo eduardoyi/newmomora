@@ -21,6 +21,7 @@ import { getAuthenticatedUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface PreviewFamilyInviteRequest {
   code: string;
@@ -219,5 +220,5 @@ export async function handlePreviewFamilyInvite(req: Request): Promise<Response>
 }
 
 if (import.meta.main) {
-  Deno.serve(handlePreviewFamilyInvite);
+  serveWithSentry('preview-family-invite', handlePreviewFamilyInvite);
 }

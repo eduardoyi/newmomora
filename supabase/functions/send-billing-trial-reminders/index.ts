@@ -3,6 +3,7 @@ import { validateCronSecret } from '../_shared/cron.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 interface ReminderRow {
   id: string;
@@ -122,4 +123,4 @@ export async function handleSendBillingTrialReminders(req: Request): Promise<Res
   return jsonResponse({ success: true, claimed: (rows ?? []).length, sent });
 }
 
-if (import.meta.main) Deno.serve(handleSendBillingTrialReminders);
+if (import.meta.main) serveWithSentry('send-billing-trial-reminders', handleSendBillingTrialReminders);

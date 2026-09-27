@@ -3,6 +3,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { handleSendDailyReminder } from '../send-daily-reminder/index.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface ScheduleDailyRemindersResponse {
   success: true;
@@ -110,5 +111,5 @@ export async function handleScheduleDailyReminders(req: Request): Promise<Respon
 }
 
 if (import.meta.main) {
-  Deno.serve(handleScheduleDailyReminders);
+  serveWithSentry('schedule-daily-reminders', handleScheduleDailyReminders);
 }

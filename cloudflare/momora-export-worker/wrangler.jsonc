@@ -13,7 +13,7 @@
     "EXPORT_EMAIL_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/send-export-email"
   },
   "secrets": {
-    "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "EXPORT_EMAIL_BRIDGE_SECRET"]
+    "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "EXPORT_EMAIL_BRIDGE_SECRET", "SENTRY_DSN"]
   },
   "r2_buckets": [
     {
@@ -34,7 +34,7 @@
         "EXPORT_EMAIL_BRIDGE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co/functions/v1/send-export-email"
       },
       "secrets": {
-        "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "EXPORT_EMAIL_BRIDGE_SECRET"]
+        "required": ["SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "EXPORT_EMAIL_BRIDGE_SECRET", "SENTRY_DSN"]
       },
       "r2_buckets": [
         {

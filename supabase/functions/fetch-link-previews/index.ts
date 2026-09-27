@@ -4,6 +4,7 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole } from '../_shared/family-access.ts';
 import { extractUrls, fetchPageTitle } from '../_shared/link-preview.ts';
 import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface FetchLinkPreviewsRequest {
   memoryId: string;
@@ -279,5 +280,5 @@ export async function handleFetchLinkPreviews(
 }
 
 if (import.meta.main) {
-  Deno.serve((req) => handleFetchLinkPreviews(req));
+  serveWithSentry('fetch-link-previews', (req) => handleFetchLinkPreviews(req));
 }

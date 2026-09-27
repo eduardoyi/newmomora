@@ -8,6 +8,7 @@ import {
 } from '../_shared/family-access.ts';
 import { createPresignedGetUrls, R2_URL_EXPIRY } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const MAX_KEYS = 50;
 // How many omitted key ids to log for debugging -- keys are opaque ids (not
@@ -164,5 +165,5 @@ export async function handleGetMediaUrl(
 }
 
 if (import.meta.main) {
-  Deno.serve((request) => handleGetMediaUrl(request));
+  serveWithSentry('get-media-url', (request) => handleGetMediaUrl(request));
 }

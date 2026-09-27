@@ -9,7 +9,7 @@
     "SUPABASE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co"
   },
   "secrets": {
-    "required": ["SUPABASE_SERVICE_ROLE_KEY"]
+    "required": ["SUPABASE_SERVICE_ROLE_KEY", "SENTRY_DSN"]
   },
   "r2_buckets": [
     {
@@ -36,7 +36,7 @@
         "SUPABASE_URL": "https://REPLACE_WITH_STAGING_PROJECT_REF.supabase.co"
       },
       "secrets": {
-        "required": ["SUPABASE_SERVICE_ROLE_KEY"]
+        "required": ["SUPABASE_SERVICE_ROLE_KEY", "SENTRY_DSN"]
       },
       "r2_buckets": [
         {

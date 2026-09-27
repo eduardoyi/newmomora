@@ -6,6 +6,7 @@ import { createPresignedPutUrl, R2_URL_EXPIRY } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { assertUserOwnedKey, getAllowedContentTypes, parseStorageKey } from '../_shared/storage-keys.ts';
 import { checkBillingMediaUpload } from '../_shared/billing.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface GetUploadUrlRequest {
   objectKey: string;
@@ -144,5 +145,5 @@ export async function handleGetUploadUrl(req: Request): Promise<Response> {
 }
 
 if (import.meta.main) {
-  Deno.serve(handleGetUploadUrl);
+  serveWithSentry('get-upload-url', handleGetUploadUrl);
 }

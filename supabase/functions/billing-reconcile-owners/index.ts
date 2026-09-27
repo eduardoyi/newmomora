@@ -2,6 +2,7 @@ import { validateCronSecret } from '../_shared/cron.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { reconcileOwnerBilling } from '../billing-reconcile/index.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export async function handleBillingReconcileOwners(req: Request): Promise<Response> {
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405, 'method_not_allowed');
@@ -36,4 +37,4 @@ export async function handleBillingReconcileOwners(req: Request): Promise<Respon
   return jsonResponse({ success: true, claimed: (owners ?? []).length, reconciled, failed });
 }
 
-if (import.meta.main) Deno.serve(handleBillingReconcileOwners);
+if (import.meta.main) serveWithSentry('billing-reconcile-owners', handleBillingReconcileOwners);

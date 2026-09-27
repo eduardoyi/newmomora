@@ -8,6 +8,7 @@ import { validateCronSecret } from '../_shared/cron.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 const DEFAULT_ALERT_RECIPIENT = 'hello@usemomora.com';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -256,5 +257,5 @@ export async function handleSendContentReportAlert(
 }
 
 if (import.meta.main) {
-  Deno.serve((req) => handleSendContentReportAlert(req));
+  serveWithSentry('send-content-report-alert', (req) => handleSendContentReportAlert(req));
 }

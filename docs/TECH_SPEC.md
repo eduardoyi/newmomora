@@ -3295,6 +3295,8 @@ per family, not per user). No style picker UI.
 | `OPENAI_API_KEY` | OpenAI API key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role for cron/admin functions |
 | `CRON_SECRET` | Shared secret for cron-triggered functions |
+| `SENTRY_DSN` | Optional. Sentry `momora-edge-functions` DSN; when set, `_shared/sentry.ts` reports uncaught errors and `console.error` calls ([observability.md](./features/observability.md)) |
+| `EXPORT_EMAIL_BRIDGE_SECRET` | HMAC secret shared with the export Worker for `send-export-email` |
 | `R2_ACCOUNT_ID` | Cloudflare account ID |
 | `R2_ACCESS_KEY_ID` | R2 S3 API access key |
 | `R2_SECRET_ACCESS_KEY` | R2 S3 API secret |
@@ -3354,6 +3356,9 @@ secret store. `EXPORT_EMAIL_BRIDGE_SECRET` must match the Supabase Edge
 Function secret of the same name used by `send-export-email`. Its public
 `workers.dev` URL is the value of `EXPO_PUBLIC_EXPORT_WORKER_URL`; the mobile
 bundle never receives the service-role key.
+
+Every Cloudflare Worker also has a `SENTRY_DSN` secret (the shared
+`momora-workers` Sentry project); see [observability.md](./features/observability.md).
 
 ### Database Vault secrets (read by pg_cron jobs)
 

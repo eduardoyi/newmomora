@@ -21,8 +21,7 @@
     "required": [
       "DISPATCH_SIGNING_SECRET",
       "SUPABASE_BRIDGE_HMAC_SECRET",
-      "OPENAI_API_KEY"
-    ]
+      "OPENAI_API_KEY", "SENTRY_DSN"]
   },
   "r2_buckets": [
     // Same physical bucket as every other Worker in this repo (see
@@ -49,8 +48,7 @@
         "required": [
           "DISPATCH_SIGNING_SECRET",
           "SUPABASE_BRIDGE_HMAC_SECRET",
-          "OPENAI_API_KEY"
-        ]
+          "OPENAI_API_KEY", "SENTRY_DSN"]
       },
       "r2_buckets": [
         { "binding": "MEMORY_BOOK_PREVIEWS", "bucket_name": "REPLACE_WITH_STAGING_MEMORY_ILLUSTRATIONS_BUCKET" }

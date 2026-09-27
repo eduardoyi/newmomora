@@ -12,6 +12,7 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface ResolveFamilyInviteRequest {
   inviteId: string;
@@ -265,5 +266,5 @@ export async function handleResolveFamilyInvite(req: Request): Promise<Response>
 }
 
 if (import.meta.main) {
-  Deno.serve(handleResolveFamilyInvite);
+  serveWithSentry('resolve-family-invite', handleResolveFamilyInvite);
 }

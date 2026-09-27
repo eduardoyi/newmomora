@@ -8,6 +8,8 @@
  */
 
 export interface Env {
+  /** Optional: error reporting (src/sentry.ts) is off when unset. */
+  SENTRY_DSN?: string;
   ENVIRONMENT: string;
   SUPABASE_BRIDGE_URL: string;
   DISPATCH_SIGNING_SECRET: string;

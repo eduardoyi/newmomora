@@ -21,8 +21,7 @@
       "PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET",
       "GALLERY_DISPATCH_SIGNING_SECRET",
       "GALLERY_SUPABASE_BRIDGE_HMAC_SECRET",
-      "OPENAI_API_KEY"
-    ]
+      "OPENAI_API_KEY", "SENTRY_DSN"]
   },
   "r2_buckets": [
     {
@@ -83,8 +82,7 @@
           "PORTRAIT_SUPABASE_BRIDGE_HMAC_SECRET",
           "GALLERY_DISPATCH_SIGNING_SECRET",
           "GALLERY_SUPABASE_BRIDGE_HMAC_SECRET",
-          "OPENAI_API_KEY"
-        ]
+          "OPENAI_API_KEY", "SENTRY_DSN"]
       },
       "r2_buckets": [
         {

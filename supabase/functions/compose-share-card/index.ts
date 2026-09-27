@@ -40,6 +40,7 @@ import {
 import { composeShareCardPng as composeShareCardPngImpl } from './render.ts';
 import { formatShareCardDateLabel, MAX_VISIBLE_MEMBERS, type ShareCardData, type ShareCardMemberPortrait } from './layout.ts';
 import { loadShareCardAssets as loadShareCardAssetsImpl, ShareCardAssetsUnavailableError } from './assets-loader.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 // NOTE: @jsquash/webp (npm module, JS glue code) is intentionally NOT
 // statically imported here -- see the "Real-WebP decode" section below
 // (loadWebpModule) for why: a static import puts the module in EVERY
@@ -1821,5 +1822,5 @@ export async function runShareCardCompose(
 }
 
 if (import.meta.main) {
-  Deno.serve((req) => handleComposeShareCard(req));
+  serveWithSentry('compose-share-card', (req) => handleComposeShareCard(req));
 }

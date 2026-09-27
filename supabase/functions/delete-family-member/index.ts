@@ -4,6 +4,7 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { deleteObject, listObjectKeys } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface DeleteFamilyMemberDependencies {
   getAuthenticatedUser: typeof getAuthenticatedUser;
@@ -136,4 +137,4 @@ export async function handleDeleteFamilyMember(
   return jsonResponse({ success: true });
 }
 
-if (import.meta.main) Deno.serve((request) => handleDeleteFamilyMember(request));
+if (import.meta.main) serveWithSentry('delete-family-member', (request) => handleDeleteFamilyMember(request));

@@ -1,6 +1,11 @@
+import * as Sentry from '@sentry/cloudflare';
+
+import { sentryOptions } from './sentry';
 import {Buffer} from 'node:buffer';
 import {candidates,digest,imageHtml,localDay,schedule,selectImages,type Asset,type Memory} from './core';
 export interface Env {
+  /** Optional: error reporting (src/sentry.ts) is off when unset. */
+  SENTRY_DSN?: string;
  MEDIA:R2Bucket; BROWSER:{quickAction(action:'screenshot',options:Record<string,unknown>):Promise<Response>};
  SUPABASE_URL:string;SUPABASE_SERVICE_ROLE_KEY:string;FRAME_OWNER_ID:string;FRAME_FAMILY_ID:string;FRAME_TOKEN_HASH:string;ADMIN_TOKEN_HASH:string;TIMEZONE:string;
 }
@@ -83,7 +88,7 @@ async function authorized(req:Request,hash:string):Promise<boolean>{
  return await digest(new TextEncoder().encode(h.slice(7)))===hash;
 }
 const response=(body:string,status=200,type='text/plain')=>new Response(body,{status,headers:{'Content-Type':type,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
-export default {
+export default Sentry.withSentry(sentryOptions, {
  async fetch(req:Request,e:Env):Promise<Response>{
   try {
    const url=new URL(req.url);
@@ -111,4 +116,4 @@ export default {
   } catch(err){return response(err instanceof Denied?'Access revoked':'Frame temporarily unavailable',err instanceof Denied?403:503);}
  },
  async scheduled(_event:ScheduledController,e:Env):Promise<void>{await prepare(e);}
-};
+});

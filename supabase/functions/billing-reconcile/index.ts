@@ -2,6 +2,7 @@ import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface RevenueCatSubscriber {
   entitlements?: Record<string, {
@@ -167,4 +168,4 @@ export async function handleBillingReconcile(req: Request): Promise<Response> {
   }
 }
 
-if (import.meta.main) Deno.serve(handleBillingReconcile);
+if (import.meta.main) serveWithSentry('billing-reconcile', handleBillingReconcile);

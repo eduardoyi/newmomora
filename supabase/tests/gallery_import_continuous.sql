@@ -21,7 +21,13 @@ insert into public.family_memberships (family_id,user_id,role) values
   ('e2000000-0000-4000-8000-000000000001','e1000000-0000-4000-8000-000000000001','owner');
 insert into public.owner_entitlements (owner_user_id,app_user_id,environment,store,product_id,entitlement_id,period_type,status,expires_at,will_renew)
 values ('e1000000-0000-4000-8000-000000000001','e1000000-0000-4000-8000-000000000001','production','app_store','momora_annual_v1','momora_plus','annual','active',transaction_timestamp()+interval '30 days',true);
-update public.gallery_import_admission_settings set enabled=true, daily_cluster_limit=2;
+-- daily_cluster_limit is now constrained to >=20 by the migration (it widened
+-- the admission limit template and added a floor so the fair-use cap cannot
+-- be configured absurdly low); the fixtures below pre-seed cluster_results
+-- rows directly (as postgres) to reach cap instead of registering 20+ real
+-- clusters through the RPCs, per the migration's own limit-check comment on
+-- register_gallery_import_chunk.
+update public.gallery_import_admission_settings set enabled=true, daily_cluster_limit=20;
 
 -- ---------------------------------------------------------------------
 -- The monthly/initial-window run caps are gone: three runs in the same
@@ -53,8 +59,20 @@ create temporary table registered_daily as
   select public.register_gallery_import_assets((select id from run_c),(select id from chunk_daily),'33333333333333333333333333333333',
     ('[{"opaqueToken":"e5000000-0000-4000-8000-000000000001","clusterSignature":"' || repeat('c',64) || '","captureDate":"2026-08-01","isFavorite":false},'
     || '{"opaqueToken":"e5000000-0000-4000-8000-000000000002","clusterSignature":"' || repeat('d',64) || '","captureDate":"2026-08-01","isFavorite":false}]')::jsonb) result;
-select is((select jsonb_array_length(result->'acceptedAssetTokens') from registered_daily),2,'daily-limit fixture registers two clusters (used=2, at the test cap of 2)');
+select is((select jsonb_array_length(result->'acceptedAssetTokens') from registered_daily),2,'daily-limit fixture registers two clusters via the real RPC path');
 
+-- Pre-seed the remaining 18 counted rows directly (as postgres), sharing
+-- chunk_daily's chunk_id (and therefore run_c's family), to reach the cap of
+-- 20 without registering 20 real clusters through the RPCs. Only chunk_id,
+-- cluster_signature and created_at (within the rolling 24h window) matter to
+-- the limit check in register_gallery_import_chunk.
+set local role postgres;
+insert into public.gallery_import_cluster_results (chunk_id, cluster_signature, created_at)
+select (select id from chunk_daily), repeat(lpad(to_hex(n),2,'0'),32), transaction_timestamp()
+from generate_series(1,18) n;
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub','e1000000-0000-4000-8000-000000000001',true);
 create temporary table daily_limit_result (caught boolean, hint text);
 do $probe$
 declare v_hint text;
@@ -81,6 +99,7 @@ select ok((select hint ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$' from daily_lim
 -- contaminated by chunk_daily's rows above.
 -- ---------------------------------------------------------------------
 
+set local role postgres;
 insert into auth.users (id,email,is_anonymous) values
   ('e1000000-0000-4000-8000-000000000002','gallery-continuous-fairuse-hint@example.test',false);
 insert into public.families (id,name,owner_id,created_at)
@@ -114,14 +133,27 @@ set local role postgres;
 update public.gallery_import_cluster_results set created_at=transaction_timestamp()-interval '3 hours' where chunk_id=(select id from chunk_kth) and cluster_signature=repeat('4',64);
 update public.gallery_import_cluster_results set created_at=transaction_timestamp()-interval '2 hours' where chunk_id=(select id from chunk_kth) and cluster_signature=repeat('5',64);
 update public.gallery_import_cluster_results set created_at=transaction_timestamp()-interval '1 hour' where chunk_id=(select id from chunk_kth) and cluster_signature=repeat('6',64);
--- Now lower the cap so the next registration attempt (below) is refused.
-update public.gallery_import_admission_settings set daily_cluster_limit=2;
+-- Pre-seed 18 more counted rows directly (as postgres), all dated "now" (the
+-- newest of the counted rows), so the family's rolling-24h used count is 21
+-- while the three distinctly-aged rows above remain the OLDEST three. This
+-- keeps the k-th-row offset landing on the same (-2h) row as the pre-
+-- migration fixture, since daily_cluster_limit's floor of 20 (the migration's
+-- own check constraint) means limit=2 is no longer reachable: used=21,
+-- +1 requested, limit=20 -> excess=2, matching used=3/+1/limit=2's excess=2
+-- exactly, and get_gallery_import_fair_use (below) independently derives the
+-- same excess=2 from used=21/limit=20 with its fixed "+1" formula.
+insert into public.gallery_import_cluster_results (chunk_id, cluster_signature, created_at)
+select (select id from chunk_kth), repeat(lpad(to_hex(n+16),2,'0'),32), transaction_timestamp()
+from generate_series(1,18) n;
 
--- used=3, +1 requested, limit=2 -> excess=2: the SECOND-oldest row (-2h)
+-- Now lower the cap so the next registration attempt (below) is refused.
+update public.gallery_import_admission_settings set daily_cluster_limit=20;
+
+-- used=21, +1 requested, limit=20 -> excess=2: the SECOND-oldest row (-2h)
 -- must age out, not the oldest (-3h) one.
-create temporary table kth_hint_result (caught boolean, hint text);
 set local role authenticated;
 select set_config('request.jwt.claim.sub','e1000000-0000-4000-8000-000000000002',true);
+create temporary table kth_hint_result (caught boolean, hint text);
 do $kth$
 declare v_hint text;
 begin
@@ -134,7 +166,7 @@ begin
   end;
 end;
 $kth$;
-select ok((select caught from kth_hint_result),'a request that would still exceed the cap after only the single oldest row ages out still raises P0002 (used=3, +1 requested, limit=2)');
+select ok((select caught from kth_hint_result),'a request that would still exceed the cap after only the single oldest row ages out still raises P0002 (used=21, +1 requested, limit=20)');
 select ok((select hint::timestamptz between transaction_timestamp() - interval '2 hours' + interval '24 hours' - interval '2 minutes'
                                         and transaction_timestamp() - interval '2 hours' + interval '24 hours' + interval '2 minutes'
            from kth_hint_result),
@@ -142,11 +174,11 @@ select ok((select hint::timestamptz between transaction_timestamp() - interval '
 
 set local role postgres;
 create temporary table kth_fair_use as select public.get_gallery_import_fair_use('e2000000-0000-4000-8000-000000000002') result;
-select is((select result->>'used' from kth_fair_use)::integer,3,'get_gallery_import_fair_use reports the live 24h count');
+select is((select result->>'used' from kth_fair_use)::integer,21,'get_gallery_import_fair_use reports the live 24h count');
 select ok((select (result->>'resets_at')::timestamptz between transaction_timestamp() - interval '2 hours' + interval '24 hours' - interval '2 minutes'
                                                             and transaction_timestamp() - interval '2 hours' + interval '24 hours' + interval '2 minutes'
            from kth_fair_use),
-  'get_gallery_import_fair_use.resets_at uses the same k-th-row precision (used=3 >= limit=2 -> excess=2 -> second-oldest row, not the single oldest)');
+  'get_gallery_import_fair_use.resets_at uses the same k-th-row precision (used=21 >= limit=20 -> excess=2 -> second-oldest row, not the single oldest)');
 
 -- Every remaining fixture below registers its own clusters against the same
 -- (first) family; raise the cap back out so it stops constraining them (its
@@ -294,6 +326,12 @@ create temporary table chunk_f as
 select public.register_gallery_import_assets((select id from run_f),(select id from chunk_f),'66666666666666666666666666666666',
   ('[{"opaqueToken":"e9000000-0000-4000-8000-000000000001","clusterSignature":"' || repeat('1',64) || '","captureDate":"2026-08-06","width":800,"height":600,"isFavorite":false}]')::jsonb);
 
+-- run_f/chunk_f are owned by the authenticated role that created them; the
+-- reserve_gallery_attempt fixture below needs to read their ids as
+-- service_role (record_gallery_import_preview_upload is service-role-only),
+-- so grant select explicitly rather than relying on default temp-table access.
+grant select on run_f to service_role;
+grant select on chunk_f to service_role;
 set local role service_role;
 select public.record_gallery_import_preview_upload((select id from run_f),'e9000000-0000-4000-8000-000000000001',
   'e1000000-0000-4000-8000-000000000001/gallery-import/'||(select id from run_f)::text||'/previews/e9000000-0000-4000-8000-000000000001.jpg','image/jpeg',512,384,120000,repeat('2',64));
@@ -329,6 +367,9 @@ create temporary table chunk_g as
 select public.register_gallery_import_assets((select id from run_g),(select id from chunk_g),'77777777777777777777777777777777',
   ('[{"opaqueToken":"ea000000-0000-4000-8000-000000000001","clusterSignature":"' || repeat('3',64) || '","captureDate":"2026-08-07","isFavorite":false}]')::jsonb);
 
+-- chunk_g is owned by authenticated; claim_stale_gallery_chunks below is
+-- service_role-only, and the assertions reference chunk_g's id from that role.
+grant select on chunk_g to service_role;
 set local role postgres;
 update public.gallery_import_chunks set status='dispatched', dispatched_at=transaction_timestamp()-interval '25 minutes', dispatch_attempts=1 where id=(select id from chunk_g);
 

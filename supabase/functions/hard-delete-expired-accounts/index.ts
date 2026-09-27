@@ -3,6 +3,7 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { deleteObject, listObjectKeys } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { serveWithSentry } from '../_shared/sentry.ts';
 
 export interface HardDeleteResponse {
   success: true;
@@ -586,5 +587,5 @@ export async function handleHardDeleteExpiredAccounts(
 }
 
 if (import.meta.main) {
-  Deno.serve((request) => handleHardDeleteExpiredAccounts(request));
+  serveWithSentry('hard-delete-expired-accounts', (request) => handleHardDeleteExpiredAccounts(request));
 }

@@ -1,9 +1,14 @@
+import * as Sentry from '@sentry/cloudflare';
+
 import { serveArchive, serveDownloadPage } from './download';
+import { sentryOptions } from './sentry';
 import { deleteExportPrefix } from './storage';
 import { authenticate, listJobsNeedingCleanup, listRows, startExportJob, updateExportJob } from './supabase';
 import type { ExportFamily, ExportWorkflowParams } from './types';
+import { ExportArchiveWorkflow as ExportArchiveWorkflowBase } from './workflow';
 
-export { ExportArchiveWorkflow } from './workflow';
+// Instrumented so errors inside Workflow steps reach Sentry too.
+export const ExportArchiveWorkflow = Sentry.instrumentWorkflowWithSentry(sentryOptions, ExportArchiveWorkflowBase);
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 function json(body: Record<string, unknown>, status = 200): Response {
@@ -91,7 +96,7 @@ export async function cleanupExports(env: Env, now = new Date()): Promise<number
   return cleaned;
 }
 
-export default {
+export default Sentry.withSentry(sentryOptions, {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true });
@@ -130,4 +135,4 @@ export default {
       if (count > 0) console.log('export cleanup', count);
     }));
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<Env>);
