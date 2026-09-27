@@ -55,13 +55,11 @@ Performance tracing, session replay, logs and profiling are **off**.
 | Edge Functions | `supabase/functions/_shared/sentry.ts` | every `index.ts` calls `serveWithSentry('<name>', handler)` instead of `Deno.serve(handler)`; inert without `SENTRY_DSN`; flushes via `EdgeRuntime.waitUntil` |
 | Workers | `<worker>/src/sentry.ts` (small per-Worker copy, repo convention) | `export default Sentry.withSentry(sentryOptions, handler)`; each Workflow class exported through `Sentry.instrumentWorkflowWithSentry(sentryOptions, Class)` |
 
-Deployed with Sentry: all Edge Functions; Workers `momora-export-worker`,
-`momora-memory-book-order-worker`, `momora-memory-book-web`,
-`momora-memory-book-worker`, `momora-memory-illustration-worker`.
-`momora-kindle-frame` and `momora-memory-viewer` have the code and the secret
-but were not redeployed on 2026-09-27 (their last commits postdate their last
-deploys, so a deploy would also ship unreviewed changes); they pick Sentry up
-on their next deploy.
+Deployed with Sentry (2026-09-27): all Edge Functions and every Worker —
+`momora-export-worker`, `momora-memory-book-order-worker`,
+`momora-memory-book-web`, `momora-memory-book-worker`,
+`momora-memory-illustration-worker`, `momora-kindle-frame`,
+`momora-memory-viewer`.
 
 ## Adding a new Edge Function or Worker
 
