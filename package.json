@@ -44,6 +44,9 @@
     "test:e2e:usage-limits:clean": "deno run --allow-env --allow-net supabase/scripts/usage-limits-e2e-fixture.ts --cleanup",
     "test:e2e:usage-limits": "npm run test:e2e:usage-limits:seed && (maestro test .maestro/flows/usage-limits/memory-limit.yaml; status=$?; npm run test:e2e:usage-limits:clean; exit $status)",
     "book:preview": "npm --prefix book-renderer run dev",
+    "eval:year-film-audit": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-audit.ts",
+    "eval:year-film-script": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-script.ts",
+    "eval:year-film-assets": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-assets.ts",
     "eval:memory-book-coverage": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-memory-book-coverage.ts",
     "import:printed-memory-book": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/import-printed-memory-book.ts"
   },

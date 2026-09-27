@@ -97,3 +97,9 @@ store-assets/archive/**/*.png
 store-assets/preview/
 momora-listing-handoff-v2/**/*.png
 book-renderer/book-data/sample/print/
+
+# Year Film real-family render data (docs/plans/year-film.md §10 F2) — own
+# account only, never committed. The synthetic sample fixture is.
+film-renderer/film-data/*
+!film-renderer/film-data/sample/
+!film-renderer/film-data/sample/**
