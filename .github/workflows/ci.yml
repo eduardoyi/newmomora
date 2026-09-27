@@ -1,0 +1,108 @@
+name: CI
+
+# Runs on every push to main and every pull request. Each job mirrors a
+# command you can run locally (see docs/TESTING.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: App (typecheck, lint, Jest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test -- --ci
+
+  edge-functions:
+    name: Edge Functions (Deno tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.x
+      # Same command as locally (package.json test:edge); it only runs Deno.
+      - run: npm run test:edge
+
+  workers:
+    name: Worker ${{ matrix.worker }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        worker:
+          - cloudflare/memory-book-order-worker
+          - cloudflare/memory-book-web
+          - cloudflare/memory-book-worker
+          - cloudflare/memory-illustration-worker
+          - cloudflare/momora-export-worker
+          - workers/kindle-frame
+          - workers/memory-viewer
+    defaults:
+      run:
+        working-directory: ${{ matrix.worker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.worker }}/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  database:
+    name: Database (migrations, pgTAP, select-column contract)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:64322/postgres
+      # Known-broken pgTAP files, excluded until fixed -- their fixtures
+      # predate constraints/grants added in the same gallery-import change
+      # (a833473) and have never passed. Remove each as it is fixed.
+      KNOWN_BROKEN_PGTAP: >-
+        gallery_import_continuous.sql
+        gallery_import_foundation.sql
+        gallery_import_streaming.sql
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.110.0
+      - name: Start Postgres and apply every migration
+        run: supabase db start
+      - name: pgTAP
+        run: |
+          status=0
+          for file in supabase/tests/*.sql; do
+            name=$(basename "$file")
+            if [[ " $KNOWN_BROKEN_PGTAP " == *" $name "* ]]; then
+              echo "::warning file=$file::skipped (known broken, see KNOWN_BROKEN_PGTAP in ci.yml)"
+              continue
+            fi
+            echo "::group::$name"
+            supabase test db "$file" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+      - name: Every selected column exists in the migrated schema
+        run: node scripts/check-select-columns.mjs

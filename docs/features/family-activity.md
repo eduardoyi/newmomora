@@ -45,6 +45,12 @@ the bell shows there's something new since the viewer last opened it.
   timeline already signed, batching the rest ≤50 keys per `get-media-url`
   call) and passed to each row — rows must not call `useMediaUrls`
   themselves, which would fire one request per row.
+- **Content safety** follows the timeline's rules (`useContentSafety`, passed
+  to rows as `safety`): a reported memory shows neither its excerpt nor its
+  media, a reported comment hides its snippet, and a reported illustration
+  (per generation, via `memory_illustration_generation_id`) falls back to the
+  photo/quote tile. While the viewer's reports are loading or failed to load,
+  the drawer fails closed — no excerpts, snippets or media.
 - **`member_pending` rows** (someone redeemed an invite and is waiting for a
   decision) carry a small **Review** pill and only ever appear for
   owner/manager viewers — filtered server-side, not client-side.

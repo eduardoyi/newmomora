@@ -339,7 +339,29 @@ leave an opaque `fsevents` handle after an otherwise-complete full run; this det
 shut down while still reporting JavaScript handles. Do not replace it with `--forceExit`:
 force-exiting would hide leaks. `npm run test:watch` intentionally stays plain Jest watch mode.
 
-Until CI exists, run `npm test` before marking work complete.
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request:
+
+| Job | Runs | Local equivalent |
+|-----|------|------------------|
+| App | `npm run typecheck`, `npm run lint`, `npm test -- --ci` | same commands (Node 20) |
+| Edge Functions | `npm run test:edge` | same |
+| Worker (matrix) | `npm run typecheck` + `npm test` in each `cloudflare/*` and `workers/*` package | same, inside the package (Node 22) |
+| Database | `supabase db start` (applies every migration), every `supabase/tests/*.sql` via `supabase test db`, then `node scripts/check-select-columns.mjs` | same, against `npx supabase start` |
+
+`scripts/check-select-columns.mjs` is a schema contract: it extracts every
+`.from('table')…select('cols')` chain and Worker `listRows(env, 'table',
+'cols')` call and fails if any column doesn't exist in the migrated schema.
+Unit tests mock Supabase, so this is what catches a select naming a
+nonexistent column (the bug that silently broke data export for two months).
+
+pgTAP files listed in `KNOWN_BROKEN_PGTAP` in the workflow are skipped with a
+warning; remove each one as it's fixed — never add a file to hide a new
+failure. Keep the suite green: a red CI that people learn to ignore is worse
+than none. Tests must not depend on the wall clock (pin `Date.now`/`now`
+options to the fixture date) — two suites broke that way when real time
+passed their fixture leases.
 
 ### Onboarding visual review captures
 

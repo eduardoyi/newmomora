@@ -25,6 +25,16 @@ jest.mock('@/lib/supabase', () => ({
 const mockedRpc = supabase.rpc as jest.Mock;
 
 describe('Looking Back service and pending-view outbox', () => {
+  // Fixtures are dated 2026-08-08; pin the clock near them so the outbox's
+  // 45-day prune window can't age them out as real time passes.
+  let nowSpy: jest.SpyInstance<number, []>;
+  beforeEach(() => {
+    nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-08T12:00:00.000Z'));
+  });
+  afterEach(() => {
+    nowSpy.mockRestore();
+  });
+
   beforeEach(async () => {
     jest.clearAllMocks();
     await AsyncStorage.clear();

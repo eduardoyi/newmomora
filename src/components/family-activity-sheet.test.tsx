@@ -30,6 +30,15 @@ jest.mock('@/hooks/useFamilyActivity', () => ({
 }));
 jest.mock('@/hooks/useFamilyMemberProfiles', () => ({ useFamilyMemberProfiles: jest.fn() }));
 jest.mock('@/hooks/useMediaUrls', () => ({ useBatchedMediaUrls: jest.fn(() => ({})) }));
+const mockSafetyState = { isLoading: false, isError: false, reported: new Set<string>() };
+jest.mock('@/hooks/useContentSafety', () => ({
+  useContentSafety: () => ({
+    isLoading: mockSafetyState.isLoading,
+    isError: mockSafetyState.isError,
+    isTargetReported: (type: string, id: string | null | undefined, version?: string | null) =>
+      mockSafetyState.reported.has(`${type}:${id}${version ? `:${version}` : ''}`),
+  }),
+}));
 
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyActivity = useFamilyActivity as jest.MockedFunction<typeof useFamilyActivity>;
@@ -53,6 +62,7 @@ function makeEvent(overrides: Partial<FamilyActivityEvent> = {}): FamilyActivity
     memoryMediaPreviewKey: null,
     memoryType: null,
     memoryEmotion: null,
+    memoryIllustrationGenerationId: null,
     memoryMediaContentType: null,
     commentId: null,
     commentSnippet: null,
@@ -411,6 +421,73 @@ describe('FamilyActivitySheet', () => {
     expect(getByTestId('family-activity-thumbnail-audio-memory-sound')).toBeTruthy();
     // The audio clip is never requested as an image.
     expect(mockedUseBatchedMediaUrls.mock.calls.at(-1)?.[0]).toEqual([]);
+  });
+
+  describe('content safety (same rules as the timeline)', () => {
+    afterEach(() => {
+      mockSafetyState.isLoading = false;
+      mockSafetyState.isError = false;
+      mockSafetyState.reported.clear();
+    });
+
+    function withEvents(events: FamilyActivityEvent[]) {
+      mockedUseFamilyActivity.mockReturnValue({
+        events, isLoading: false, isRefetching: false, isError: false, error: null, refetch,
+      });
+    }
+
+    it('hides a reported memory\'s excerpt and media', () => {
+      mockSafetyState.reported.add('memory:m1');
+      withEvents([makeEvent({ id: 'e1', memoryId: 'm1', memoryExcerpt: 'Secret words', memoryIllustrationKey: 'm1/i.webp' })]);
+
+      const { queryByText } = renderSheet();
+
+      expect(queryByText('Secret words')).toBeNull();
+      expect(mockedUseBatchedMediaUrls.mock.calls.at(-1)?.[0]).toEqual([]);
+    });
+
+    it('falls back from a reported illustration generation to the quote tile', () => {
+      mockSafetyState.reported.add('memory_illustration:m1:gen-1');
+      withEvents([makeEvent({
+        id: 'e1', memoryId: 'm1', memoryType: 'text_illustration',
+        memoryIllustrationKey: 'm1/i.webp', memoryIllustrationGenerationId: 'gen-1',
+      })]);
+
+      const { getByTestId } = renderSheet();
+
+      expect(mockedUseBatchedMediaUrls.mock.calls.at(-1)?.[0]).toEqual([]);
+      expect(getByTestId('family-activity-thumbnail-m1-quote')).toBeTruthy();
+    });
+
+    it('still shows a newer illustration once it has been regenerated', () => {
+      mockSafetyState.reported.add('memory_illustration:m1:gen-1');
+      withEvents([makeEvent({
+        id: 'e1', memoryId: 'm1', memoryIllustrationKey: 'm1/i2.webp', memoryIllustrationGenerationId: 'gen-2',
+      })]);
+
+      renderSheet();
+
+      expect(mockedUseBatchedMediaUrls.mock.calls.at(-1)?.[0]).toEqual(['m1/i2.webp']);
+    });
+
+    it('hides a reported comment\'s snippet', () => {
+      mockSafetyState.reported.add('comment:c1');
+      withEvents([makeEvent({ id: 'e1', kind: 'memory_commented', commentId: 'c1', commentSnippet: 'Rude comment' })]);
+
+      const { queryByText } = renderSheet();
+
+      expect(queryByText('Rude comment')).toBeNull();
+    });
+
+    it('fails closed while the reports are still loading', () => {
+      mockSafetyState.isLoading = true;
+      withEvents([makeEvent({ id: 'e1', memoryId: 'm1', memoryExcerpt: 'Beach', memoryIllustrationKey: 'm1/i.webp' })]);
+
+      const { queryByText } = renderSheet();
+
+      expect(queryByText('Beach')).toBeNull();
+      expect(mockedUseBatchedMediaUrls.mock.calls.at(-1)?.[0]).toEqual([]);
+    });
   });
 
   it('fires mark-seen on open', () => {

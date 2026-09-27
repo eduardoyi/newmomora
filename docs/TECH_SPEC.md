@@ -1077,7 +1077,10 @@ deleted, allowing notification delivery to ignore stale/repeated writes.
   (20260926120000_family_activity_media_preview_key.sql). `memory_type` and
   `memory_emotion` (`m.emotion`) let the sheet draw the quote/sound fallback
   tile for memories without an image
-  (20260926140000_family_activity_memory_type.sql).
+  (20260926140000_family_activity_memory_type.sql). `memory_illustration_generation_id`
+  (`m.illustration_generation_id`) lets the sheet apply per-generation
+  illustration reports like the timeline
+  (20260927180000_family_activity_illustration_generation.sql).
 - `get_family_activity_unread(target_family_id uuid) returns boolean` —
   same guards, `member_pending` role filter, and blocked-actor exclusion;
   true when any qualifying event's `created_at` is after the caller's

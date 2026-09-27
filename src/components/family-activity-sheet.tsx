@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { collectThumbnailKeys, FamilyActivityRow } from '@/components/family-activity-row';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import { useFamilyActivity, useMarkFamilyActivitySeen } from '@/hooks/useFamilyActivity';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useBatchedMediaUrls } from '@/hooks/useMediaUrls';
@@ -160,6 +161,11 @@ function FamilyActivitySheetBody({
   const { profiles } = useFamilyMemberProfiles(familyId);
   const { events, isLoading, isError, refetch } = useFamilyActivity(familyId);
   const markSeen = useMarkFamilyActivitySeen();
+  const contentSafety = useContentSafety();
+  const safety = useMemo(() => ({
+    ready: !contentSafety.isLoading && !contentSafety.isError,
+    isTargetReported: contentSafety.isTargetReported,
+  }), [contentSafety.isError, contentSafety.isLoading, contentSafety.isTargetReported]);
 
   // This component mounts fresh every time the sheet opens (see the class
   // comment above), so a mount-only computation is exactly "compute once per
@@ -170,8 +176,8 @@ function FamilyActivitySheetBody({
   // Every row's thumbnails signed together (cached timeline URLs reused,
   // the rest in one get-media-url call) instead of one request per row.
   const thumbnailKeys = useMemo(
-    () => sections.flatMap((section) => section.data.flatMap((group) => collectThumbnailKeys(group.events))),
-    [sections],
+    () => sections.flatMap((section) => section.data.flatMap((group) => collectThumbnailKeys(group.events, safety))),
+    [safety, sections],
   );
   const mediaUrls = useBatchedMediaUrls(thumbnailKeys);
   const activeMemberCount = useMemo(
@@ -272,7 +278,7 @@ function FamilyActivitySheetBody({
       ListHeaderComponent={galleryImportRow}
       contentContainerStyle={styles.listContent}
       keyExtractor={(group) => group.id}
-      renderItem={({ item }) => <FamilyActivityRow group={item} mediaUrls={mediaUrls} onPress={() => handleRowPress(item)} />}
+      renderItem={({ item }) => <FamilyActivityRow group={item} mediaUrls={mediaUrls} onPress={() => handleRowPress(item)} safety={safety} />}
       renderSectionHeader={({ section }) => <Text style={styles.sectionHeader}>{section.title}</Text>}
       sections={sections}
       showsVerticalScrollIndicator={false}

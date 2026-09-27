@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MemoryFallbackTile } from '@/components/memory-fallback-tile';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
+import type { ReportTargetType } from '@/services/content-safety';
 import type { FamilyActivityEvent, FamilyActivityGroup } from '@/services/family-activity';
 import { formatEngagementTimestamp } from '@/utils/engagement';
 import { buildFamilyActivityCopy, familyActivityCopyPlainText } from '@/utils/family-activity-copy';
@@ -12,11 +13,33 @@ import { memoryFallbackKind, type MemoryFallbackKind } from '@/utils/memory-fall
 const THUMBNAIL_SIZE = 44;
 const MAX_THUMBNAILS = 3;
 
-// Illustration first, then the cover's list-sized preview (photo) or poster
-// (video), then an image original -- never a video or audio original, which
-// expo-image can't render as a still.
-function resolveThumbnailKey(event: FamilyActivityEvent): string | null {
-  if (event.memoryIllustrationKey) return event.memoryIllustrationKey;
+/**
+ * The drawer follows the timeline's content-safety rules: a reported memory
+ * shows neither its excerpt nor its media, a reported comment hides its
+ * snippet, and a reported illustration falls back to the photo/quote tile.
+ * `ready` is false while the viewer's reports are loading or failed to load
+ * -- then everything that could be reported stays hidden (fail closed).
+ */
+export interface ActivityContentSafety {
+  ready: boolean;
+  isTargetReported: (type: ReportTargetType, id: string | null | undefined, versionId?: string | null) => boolean;
+}
+
+function isMemoryHidden(event: FamilyActivityEvent, safety: ActivityContentSafety): boolean {
+  return !safety.ready || safety.isTargetReported('memory', event.memoryId);
+}
+
+// Illustration first (unless reported), then the cover's list-sized preview
+// (photo) or poster (video), then an image original -- never a video or
+// audio original, which expo-image can't render as a still.
+function resolveThumbnailKey(event: FamilyActivityEvent, safety: ActivityContentSafety): string | null {
+  if (isMemoryHidden(event, safety)) return null;
+  const illustrationHidden = safety.isTargetReported(
+    'memory_illustration',
+    event.memoryId,
+    event.memoryIllustrationGenerationId,
+  );
+  if (event.memoryIllustrationKey && !illustrationHidden) return event.memoryIllustrationKey;
   if (event.memoryMediaPreviewKey) return event.memoryMediaPreviewKey;
   if (!event.memoryMediaContentType?.startsWith('image/')) return null;
   return event.memoryMediaKey ?? null;
@@ -32,13 +55,14 @@ interface ActivityThumbnail {
   emotion: string | null;
 }
 
-function resolveThumbnailFallback(event: FamilyActivityEvent): MemoryFallbackKind {
+function resolveThumbnailFallback(event: FamilyActivityEvent, safety: ActivityContentSafety): MemoryFallbackKind {
+  if (isMemoryHidden(event, safety)) return 'blank';
   // Older server without memory_type: a memory with no media at all is text.
   if (!event.memoryType && !event.memoryMediaKey) return 'quote';
   return memoryFallbackKind(event.memoryType, event.memoryMediaContentType);
 }
 
-function collectThumbnails(events: FamilyActivityEvent[]): ActivityThumbnail[] {
+function collectThumbnails(events: FamilyActivityEvent[], safety: ActivityContentSafety): ActivityThumbnail[] {
   const seenMemoryIds = new Set<string>();
   const thumbnails: ActivityThumbnail[] = [];
   for (const event of events) {
@@ -46,8 +70,8 @@ function collectThumbnails(events: FamilyActivityEvent[]): ActivityThumbnail[] {
     seenMemoryIds.add(event.memoryId);
     thumbnails.push({
       memoryId: event.memoryId,
-      key: resolveThumbnailKey(event),
-      fallback: resolveThumbnailFallback(event),
+      key: resolveThumbnailKey(event, safety),
+      fallback: resolveThumbnailFallback(event, safety),
       emotion: event.memoryEmotion,
     });
     if (thumbnails.length >= MAX_THUMBNAILS) break;
@@ -55,8 +79,8 @@ function collectThumbnails(events: FamilyActivityEvent[]): ActivityThumbnail[] {
   return thumbnails;
 }
 
-export function collectThumbnailKeys(events: FamilyActivityEvent[]): string[] {
-  return collectThumbnails(events).flatMap((thumbnail) => (thumbnail.key ? [thumbnail.key] : []));
+export function collectThumbnailKeys(events: FamilyActivityEvent[], safety: ActivityContentSafety): string[] {
+  return collectThumbnails(events, safety).flatMap((thumbnail) => (thumbnail.key ? [thumbnail.key] : []));
 }
 
 interface FamilyActivityRowProps {
@@ -64,16 +88,20 @@ interface FamilyActivityRowProps {
   /** Signed URLs for every row's thumbnails, fetched once by the sheet (see
    * useBatchedMediaUrls) rather than one request per row. */
   mediaUrls: Record<string, string>;
+  safety: ActivityContentSafety;
   onPress: () => void;
 }
 
-export function FamilyActivityRow({ group, mediaUrls, onPress }: FamilyActivityRowProps) {
+export function FamilyActivityRow({ group, mediaUrls, safety, onPress }: FamilyActivityRowProps) {
   const primaryEvent = group.events[0];
   const copy = buildFamilyActivityCopy(group);
   const label = familyActivityCopyPlainText(copy);
-  const thumbnails = collectThumbnails(group.events);
-  const mutedLine =
-    primaryEvent.kind === 'memory_commented' ? primaryEvent.commentSnippet : primaryEvent.memoryExcerpt;
+  const thumbnails = collectThumbnails(group.events, safety);
+  const mutedLine = isMemoryHidden(primaryEvent, safety)
+    ? null
+    : primaryEvent.kind === 'memory_commented'
+      ? (safety.isTargetReported('comment', primaryEvent.commentId) ? null : primaryEvent.commentSnippet)
+      : primaryEvent.memoryExcerpt;
 
   return (
     <Pressable

@@ -14,6 +14,9 @@ import {
 } from './widget-cache';
 
 const scope: WidgetCacheScope = { accountId: 'account-a', familyId: 'family-a' };
+// Fixtures are verified at this instant; pin the controller's clock to it so
+// the manifests' 7-day lease can't expire as real time passes.
+const FIXTURE_NOW = Date.parse('2026-09-15T12:00:00.000Z');
 
 function manifest(overrides: Partial<WidgetManifest> = {}): WidgetManifest {
   const verifiedAt = new Date('2026-09-15T12:00:00.000Z');
@@ -65,7 +68,7 @@ describe('widget cache manifest', () => {
 
   it('requires every referenced local image and rejects unreferenced files', async () => {
     const native = adapter();
-    const cache = new WidgetCacheController({ adapter: native });
+    const cache = new WidgetCacheController({ adapter: native, now: () => FIXTURE_NOW });
     const withImage = manifest({
       entries: [{ ...manifest().entries[0], imageFilename: 'memory-a.jpg' }],
     });
@@ -81,7 +84,7 @@ describe('widget cache manifest', () => {
 
   it('accepts 24 timeline entries while publishing at most seven unique images', async () => {
     const native = adapter();
-    const cache = new WidgetCacheController({ adapter: native });
+    const cache = new WidgetCacheController({ adapter: native, now: () => FIXTURE_NOW });
     const base = manifest().entries[0];
     const daytime = manifest({
       entries: Array.from({ length: WIDGET_MAX_ENTRIES }, (_, index) => ({
@@ -96,14 +99,14 @@ describe('widget cache manifest', () => {
       `file:///tmp/memory-${index}.jpg`,
     ]));
 
-    expect(validateWidgetManifest(daytime)).toEqual({ valid: true });
+    expect(validateWidgetManifest(daytime, FIXTURE_NOW)).toEqual({ valid: true });
     await expect(cache.publish(scope, daytime, files)).resolves.toBe(true);
     expect(native.publishManifest).toHaveBeenCalledWith(daytime, files);
   });
 
   it('rejects more than seven unique cached images before native publication', async () => {
     const native = adapter();
-    const cache = new WidgetCacheController({ adapter: native });
+    const cache = new WidgetCacheController({ adapter: native, now: () => FIXTURE_NOW });
     const base = manifest().entries[0];
     const tooManyImages = manifest({
       entries: Array.from({ length: 8 }, (_, index) => ({
@@ -129,7 +132,7 @@ describe('widget cache manifest', () => {
     const native = adapter({
       publishManifest: jest.fn(async () => publishStarted),
     });
-    const cache = new WidgetCacheController({ adapter: native });
+    const cache = new WidgetCacheController({ adapter: native, now: () => FIXTURE_NOW });
     const publishPromise = cache.publish(scope, manifest(), {});
 
     // Let the queued operation enter the adapter before invalidating it.
@@ -152,7 +155,7 @@ describe('widget cache manifest', () => {
     const native = adapter({
       publishManifest: jest.fn(async () => publishStarted),
     });
-    const cache = new WidgetCacheController({ adapter: native });
+    const cache = new WidgetCacheController({ adapter: native, now: () => FIXTURE_NOW });
     const publishPromise = cache.publish(scope, manifest(), {});
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));

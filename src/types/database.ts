@@ -4211,6 +4211,7 @@ export type Database = {
           memory_emotion: string
           memory_excerpt: string
           memory_id: string
+          memory_illustration_generation_id: string
           memory_illustration_key: string
           memory_media_content_type: string
           memory_media_key: string
