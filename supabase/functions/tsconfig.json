@@ -1,0 +1,16 @@
+{
+  // Edge Functions run on Deno (see deno.json); this file exists only so
+  // tooling that looks for the nearest tsconfig -- e.g. Vite/Vitest in the
+  // Cloudflare Worker packages, which import supabase/functions/_shared --
+  // doesn't climb to the app's root tsconfig, whose `extends` needs the app's
+  // node_modules installed.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true
+  }
+}

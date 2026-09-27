@@ -346,8 +346,8 @@ force-exiting would hide leaks. `npm run test:watch` intentionally stays plain J
 | Job | Runs | Local equivalent |
 |-----|------|------------------|
 | App | `npm run typecheck`, `npm run lint`, `npm test -- --ci` | same commands (Node 20) |
-| Edge Functions | `npm run test:edge` | same |
-| Worker (matrix) | `npm run typecheck` + `npm test` in each `cloudflare/*` and `workers/*` package | same, inside the package (Node 22) |
+| Edge Functions | `npm run test:edge` (includes `--allow-sys`: on Linux `sharp` probes the CPU at load) | same |
+| Package (matrix) | `npm run typecheck --if-present` + `npm test` in each `cloudflare/*` and `workers/*` package, `render/memory-book-renderer` (with `book-renderer` deps) and `book-renderer` | same, inside the package (Node 22) |
 | Database | `supabase db start` (applies every migration), every `supabase/tests/*.sql` via `supabase test db`, then `node scripts/check-select-columns.mjs` | same, against `npx supabase start` |
 
 `scripts/check-select-columns.mjs` is a schema contract: it extracts every

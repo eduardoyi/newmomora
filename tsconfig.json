@@ -21,6 +21,7 @@
     "supabase/functions/**",
     "supabase/scripts/**",
     "book-renderer/**",
+    "render/**",
     "cloudflare/**",
     "workers/**"
   ]

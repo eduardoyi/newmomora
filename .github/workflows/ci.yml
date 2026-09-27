@@ -42,7 +42,7 @@ jobs:
       - run: npm run test:edge
 
   workers:
-    name: Worker ${{ matrix.worker }}
+    name: Package ${{ matrix.worker }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -56,6 +56,8 @@ jobs:
           - cloudflare/momora-export-worker
           - workers/kindle-frame
           - workers/memory-viewer
+          - render/memory-book-renderer
+          - book-renderer
     defaults:
       run:
         working-directory: ${{ matrix.worker }}
@@ -67,7 +69,11 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ matrix.worker }}/package-lock.json
       - run: npm ci
-      - run: npm run typecheck
+      - name: Install book-renderer (imported by the render service)
+        if: matrix.worker == 'render/memory-book-renderer'
+        run: npm ci
+        working-directory: book-renderer
+      - run: npm run typecheck --if-present
       - run: npm test
 
   database:
