@@ -15,7 +15,7 @@ daily obligation" and "Tone rule: guilt-relief".
 
 ## 1. Outcome
 
-On each child's birthday, Momora hands the family a 30–45s vertical film of
+On each child's birthday, Momora hands the family a ~45–60s vertical film of
 that child's last year — kinetic type, beat-cut montage of their illustrations
 and photos, **their actual voice**, their people drawn as characters, and a
 then→now portrait close. In mid-December, the family gets one film of the
@@ -106,7 +106,9 @@ type — rebuilt as data-driven scene modules.
   purpose (owner, 2026-09-27): a year film built from a thin year is "meh",
   and curation needs a pool several times larger than the ~25 assets a film
   uses. F1 calibrates this floor by subsampling a rich year (§10).
-- **Length:** 30–45s depending on which scenes qualify.
+- **Length:** ~45–60s depending on which scenes qualify and how rich the year
+  is. Bursts run at the owner-approved pace (§5, F3 round 2) and the film is
+  capped at 60s — the length of a music bed — not the earlier 30–45s/50s aim.
 
 ### 4.2 Year-end family film — "Our 2026"
 
@@ -154,15 +156,25 @@ qualifies, so a film always degrades gracefully.
 | 2 | **Counters** | counts: moments, photos, sounds, drawings | ≥1 nonzero | Kinetic counters; zero-valued counts are omitted, never shown as 0 |
 | 3 | **The sound of the year** | one audio memory tagging the child; else a video clip with the child's voice | an audio memory with ≥2s of voice, or a video clip whose audio has voice (F2 checks with ffmpeg) | The emotional peak. Audio memory: ticket-stub trace from `src/components/audio/` + description caption. Video fallback: the clip plays full-bleed with its own sound. Music carves under either |
 | 4 | **The line of the year** | a verbatim quote from memory text | ≥1 verified quote | Caveat handwriting on card stock. Up to 3 candidates stored for the edit swap |
-| 5 | **Starring** | tagged people co-occurring with the child in ≥2 memories, portraits at scope end | ≥1 person besides the child | Lineup, stable neutral order (family creation order). No counts |
+| 5 | **Starring** | tagged people co-occurring with the child in ≥2 memories, portraits at scope end. The **6 most present** (most shared memories, then creation order) get a reveal with up to 3 **moments** each (memories of the child with them, spread over the year, just-the-two-of-them first, each person's own before shared ones) | ≥1 person besides the child | One reveal per person (3 beats: photo → drawing, name, moments fan out as cards), then everyone who qualifies together, up to 9 (2 beats). Shown in stable neutral order (family creation order), no counts — presence decides *who*, never the order on screen |
 | 6 | **Their world** | top topics (`memories.topics`, 61-tag vocabulary) | ≥3 topics each on ≥2 memories | Topic labels only; ~35% topic coverage means this often drops |
-| 7 | **Firsts** | non-dismissed `memory_milestones` for the child | ≥1 | Label + date, max 4. Warm wording, same style as the book's `firstsWarmNames` |
+| 7 | **Firsts** | non-dismissed `memory_milestones` for the child | ≥1 | Label + date, max 4, each with its milestone's own memory as a card (a clip plays in it). Warm wording, same style as the book's `firstsWarmNames` |
 | 8 | **Montage** | 8–14 best visuals: video clips (2–3s trims), illustrations, photos | always (threshold guarantees it) | Beat-cut; ≥1 frame per quarter where possible. Off-aspect media sits on a blurred fill of itself (Google's treatment), never letterbox bars |
 | 9 | **Close** | first vs last visual of the year, or portraits | always | "Happy 2nd birthday, Leo." / "Here's to 2027." |
-| — | **End card** | — | always | "made with Momora" + m. mark, ~1.5s. Baked into the MP4 |
+| — | **End card** | — | always | The year's tilted mosaic collapses into the m. mark + "made with Momora", ~3s. Baked into the MP4 |
 
 The **print CTA is not baked in** — it's a native button on the completion
 screen, so the shared file stays a gift, not an ad.
+
+**Burst pace (owner, F3 round 2 — "the length of the bursts is right now").**
+About **one beat per frame** on average (~0.51s at 118 BPM): clips first, up to
+1.5 beats; stills share the rest, never under half a beat. The **finale** runs
+at ~0.6 beat per frame, its second half at half beats, and cuts straight into
+the party (no closing grid). A titled burst adds one beat per title. Cuts sit
+on quarter beats. Implemented in `film-renderer/assemble.mjs` (`burst`) and
+mirrored in the builder's length estimate (`BURST_SECONDS_PER_FRAME`). The
+pace is the default even when the film runs longer; the 60s cap trims burst
+frames, never the pace.
 
 **Video clips are first-class (2026-09-27).** A video memory contributes a
 2–3s trim to the montage, chosen in F2 (loudness/motion peak, never the first
@@ -200,8 +212,11 @@ month → montage → outro. The year films keep the §5 table.
   boundaries snap to downbeats. Per-family music generation is out of scope.
 - **Bed choice:** deterministic default by the year's dominant emotion family
   (bright vs tender); swappable among 3 in edits.
-- **Voice clip:** trimmed in the renderer to ≤8s starting at the first voiced
-  onset (ffmpeg `silencedetect`), with a short fade. When the voice comes from
+- **Voice clip:** trimmed in F2 to its best ≤6s voiced window, then
+  loudness-normalized by the assembler to −14 LUFS (phone recordings sit far
+  below the bed: Enzo Y4 measured −33 LUFS vs the bed's −13). The bed ducks
+  to ~7% under it. The sound scene carries a "Sound on" / "Sube el volumen"
+  pill for muted social autoplay. When the voice comes from
   a video clip, the clip's picture plays with it.
 - **Montage video clips play muted** under the music bed; only the sound
   scene uses a clip's own audio. Carved under with
@@ -331,10 +346,8 @@ Render steps:
 2. **Assemble the composition** from the prebuilt `film-renderer/` scene
    modules baked into the image. The assembler computes each included scene's `data-start` /
    `data-duration` from the beat map and writes `index.html`. Text/asset values
-   are passed as HyperFrames variables (`--variables-file`,
-   `window.__hyperframes.getVariables()`). Whether conditional scenes are
-   better done by HTML assembly (like `marketing/video/momora-shorts/build.py`)
-   or by variables alone is answered in **F3** (§10).
+   are written into the generated HTML by `film-renderer/assemble.mjs` —
+   HTML assembly, not HyperFrames variables (answered in F3, §10).
 3. `hyperframes render` → 1080×1920, 30fps, H.264 + AAC, `--video-frame-format
    jpg` (PNG extraction filled the disk in marketing renders). Pin the
    HyperFrames version (currently 0.8.73) in the image.
@@ -786,7 +799,71 @@ also tagged with that sibling (frames now carry `tags`). Round 4 (F1 run
 tagged with both kids; the hooded photo stays. Report shows each removed
 photo/clip once (the end card reuses finale frames).
 
-**Status:** awaiting owner confirmation, then F3.
+**Status:** passed (owner approved; F3 started 2026-09-27).
+
+### F3 results (2026-09-27, `node film-renderer/assemble.mjs <slug>`)
+
+- **Workspace:** `film-renderer/composition/` is the HyperFrames project
+  (pinned `hyperframes@0.8.80`): `frame.md` (design spec), `STORYBOARD.md`
+  (the 12-frame template, owner-locked v2), `BRIEF.md`, vendored fonts and
+  the launch bed. `film-renderer/assemble.mjs` turns
+  `film-data/<slug>/film.json` into `index.html` (music bed with a volume
+  lane, the year strip) plus one sub-composition per scene under
+  `compositions/`, and copies the film's assets to `assets/film/`. All
+  generated files, Studio caches and snapshots are gitignored (family data).
+- **Open question answered:** conditional scenes are **HTML assembly**, not
+  HyperFrames variables — scenes drop in and out and bursts vary in length.
+- **Timing:** every scene is a whole number of beats on the bed's grid
+  (118 BPM, drop 8.146s lands inside the first burst).
+- **Checks:** `npx hyperframes check` passes (lint, runtime, layout, motion,
+  contrast 36/36 AA). Snapshots are written to a scratch folder with
+  `--describe false` (the describe step would send family frames to Gemini).
+- **Year strip:** only the span's two dates; a rose dot jumps to each
+  moment's real date, hides when a scene has no single date, and a seal
+  stamps the end at the party. The party label stays blank — the photos are
+  last year's party, so the strip doesn't claim a date for them.
+- **Finding:** the builder splits the year's halves by memory count, so the
+  "first half" burst of a journal that got dense in July reaches into
+  July–August. The renderer sorts each burst by date so the dot only moves
+  forward; revisit the split in the builder.
+
+### F3 owner review round 1 (2026-09-27)
+
+Owner: "it looks awesome." Changes: confetti showed before the party photos
+(GSAP `fromTo` renders its start state at once) → it now bursts from behind
+the photos as they land. The end card's 3×3 grid was awkward → the counters'
+mosaic, **tilted −8° and denser** (9 columns, 108 tiles; builder
+`BACKDROP_TILES` 48 → 108), opens the end card and collapses into the mark.
+Bursts felt too fast → about 30% more time per frame (47.8s → 53.9s).
+
+### F3 owner review round 2 (2026-09-27)
+
+- Burst pace approved as the default, even when films run longer (§5; cap
+  50s → 60s in builder and renderer).
+- **Starring** "needs more personality and emotion" → a reveal per person
+  with up to three moments of the child with them as cards, then everyone
+  together (§5 row 5; builder `starringMoments`, F2 prepares them as stills).
+- **Sound** too quiet → voice normalized to −14 LUFS, bed ducked to 7%, and a
+  sound-on pill (§6).
+- Finale grid removed — straight cut to the party.
+- Confetti faster, out from behind the photos, falling in front of them.
+- The builder's length estimate now mirrors the renderer's layout (a beat
+  per burst frame on average, ~0.6 in the finale, a beat per title, the
+  emotion burst's title + 4 cards, per-person starring). Its first version
+  over-counted clips and trimmed 6 burst frames from a film that fit.
+- Enzo Y4 runs ~59s.
+
+### F3 owner review round 3 (2026-09-27)
+
+- **"Why no memories with me?"** Starring took the first 6 qualifying people
+  in profile creation order, so four early relatives with 2–4 shared
+  memories each filled the slots and Eduardo (22 shared) never appeared. Now
+  the 6 most present people get reveals (still shown in creation order, no
+  counts) and the closing group shot holds everyone who qualifies, up to 9.
+- Firsts: the milestone's own memory is shown as a card above its stamped
+  label (4 beats per first with a card).
+- Confetti fell a fixed distance and stopped on screen → it now falls off
+  the bottom edge.
 
 ### Product build (after F4 passes)
 

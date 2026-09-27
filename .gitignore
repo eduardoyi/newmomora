@@ -103,3 +103,15 @@ book-renderer/book-data/sample/print/
 film-renderer/film-data/*
 !film-renderer/film-data/sample/
 !film-renderer/film-data/sample/**
+# Film storyboard sheets link real family photos (review artifacts, local only).
+film-renderer/composition/storyboard.html
+film-renderer/composition/.sketch/
+# Year Film generated composition (assemble.mjs output: real family data)
+film-renderer/composition/index.html
+film-renderer/composition/compositions/
+film-renderer/composition/assets/film/
+film-renderer/composition/renders/
+film-renderer/composition/snapshots/
+film-renderer/composition/.thumbnails/
+film-renderer/composition/.hyperframes/
+film-renderer/composition/.waveform-cache/

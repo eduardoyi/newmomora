@@ -105,8 +105,15 @@ export type BurstRole = 'first_half' | 'second_half' | 'finale' | 'month' | 'emo
 
 export type FilmScene =
   | { type: 'cold_open'; title: string; from: FrameRef | null; to: FrameRef }
-  | { type: 'title'; title: string; subtitle: string; cards: FrameRef[] }
-  | { type: 'counters'; counts: { key: string; label: string; value: number }[] }
+  | { type: 'title'; title: string; subtitle: string; kicker?: string; cards: FrameRef[] }
+  | {
+    type: 'counters';
+    kicker?: string;
+    counts: { key: string; label: string; value: number }[];
+    /** A muted mosaic of the scope's memories that fills in behind the
+     * numbers (owner, sketch v1: the counts alone carry no feeling). */
+    backdrop: FrameRef[];
+  }
   | {
     type: 'burst';
     role: BurstRole;
@@ -118,6 +125,7 @@ export type FilmScene =
   }
   | {
     type: 'sound';
+    kicker?: string;
     source: 'audio' | 'video';
     frame: FrameRef;
     caption: string | null;
@@ -125,9 +133,16 @@ export type FilmScene =
     needsVoiceCheck: boolean;
     alternates: FrameRef[];
   }
-  | { type: 'line'; quote: string; memoryId: string; speakerName: string; frame: FrameRef | null; alternates: string[] }
-  | { type: 'starring'; people: { memberId: string; name: string; portrait: FrameRef }[] }
-  | { type: 'firsts'; items: { milestoneId: string; label: string; date: string; memoryId: string }[] }
+  | { type: 'line'; kicker?: string; quote: string; memoryId: string; speakerName: string; frame: FrameRef | null; alternates: string[] }
+  | {
+    type: 'starring';
+    kicker?: string;
+    /** Personal reveals: the most present people, shown in creation order. */
+    people: { memberId: string; name: string; portrait: FrameRef; moments: FrameRef[] }[];
+    /** The closing group shot: everyone who qualifies, creation order. */
+    together?: { memberId: string; name: string; portrait: FrameRef }[];
+  }
+  | { type: 'firsts'; kicker?: string; items: { milestoneId: string; label: string; date: string; memoryId: string; frame?: FrameRef }[] }
   | {
     type: 'award';
     childId: string;
@@ -169,6 +184,11 @@ export interface FilmScript {
   };
   /** 'vision' when frame checks backed the claims, 'tags' when only tags did. */
   verification: 'vision' | 'tags';
+  /** The dates the timeline strip spans — its only labels. A dot sits at the
+   * real date of whatever is on screen (owner, sketch v1: month ticks
+   * implied frames came from months they didn't). Birthday: last birthday →
+   * this birthday. Monthly: first → last day of the month. */
+  span: { from: string; to: string };
   /** The children the film is about, with the real photo the frame check
    * compares against (F2 re-checks the frames it actually cuts). */
   subjects: { id: string; name: string; referenceKey: string | null }[];
@@ -193,9 +213,14 @@ const MONTHS_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio
  * main subject. Text-emotion awards (troublemaker, curious…) are gone. */
 type AwardKind = 'laugh' | 'smile' | 'star';
 
+/** Who the film speaks to: birthday films are written from the parent to
+ * the child ("tu"); family films in the family's voice ("nuestro"). */
+type Voice = 'child' | 'family';
+
 const STRINGS = {
   en: {
-    birthdayTitle: (name: string, n: number) => `${name}'s Year ${ORDINAL_EN[n] ?? n}`,
+    // Written from the parent to the child (owner, sketch v1).
+    birthdayTitle: (name: string, n: number) => `Memories of your ${ORDINAL_EN_LOWER[n] ?? `${n}th`} year, ${name}`,
     birthdayClose: (name: string, n: number) => `Happy ${ORDINAL_EN_LOWER[n] ?? `${n}th`} birthday, ${name}.`,
     monthTitle: (month: number) => MONTHS_EN[month - 1],
     counters: {
@@ -207,12 +232,20 @@ const STRINGS = {
     },
     award: { laugh: 'biggest laugh', smile: 'biggest smile', star: 'star of the month' } as Record<AwardKind, string>,
     /** Looking Back's emotion package titles. */
-    emotionTitle: { funny: 'The funny ones', mischief: 'Tiny troublemakers' } as Record<string, string>,
+    /** Looking Back's package titles for family films; the child's own for birthdays. */
+    emotionTitle: {
+      family: { funny: 'The funny ones', mischief: 'Tiny troublemakers' },
+      child: { funny: 'Your funniest moments', mischief: 'Your little mischief' },
+    } as Record<Voice, Record<string, string>>,
+    kicker: {
+      child: { counters: 'Your year in', starring: 'With your people', line: 'What you told us', sound: 'Your voice', firsts: 'Your milestones' },
+      family: { counters: 'Our month in', starring: 'Together', line: 'Line of the month', sound: 'The sound of', firsts: 'Milestones', title: 'Our' },
+    } as Record<Voice, Record<string, string>>,
     awardGoesTo: (award: string) => `and the ${award} award goes to`,
     awardNext: "and don't forget about…",
   },
   es: {
-    birthdayTitle: (name: string, n: number) => `El ${ORDINAL_ES[n] ?? `${n}º`} año de ${name}`,
+    birthdayTitle: (name: string, n: number) => `Recuerdos de tu ${ORDINAL_ES[n] ?? `${n}º`} año, ${name}`,
     birthdayClose: (name: string, _n: number) => `¡Feliz cumpleaños, ${name}!`,
     monthTitle: (month: number) => MONTHS_ES[month - 1],
     counters: {
@@ -223,7 +256,14 @@ const STRINGS = {
       sounds: ['sonido', 'sonidos'],
     },
     award: { laugh: 'la risa más grande', smile: 'la sonrisa más grande', star: 'la estrella del mes' } as Record<AwardKind, string>,
-    emotionTitle: { funny: 'Los momentos más graciosos', mischief: 'Pequeñas travesuras' } as Record<string, string>,
+    emotionTitle: {
+      family: { funny: 'Los momentos más graciosos', mischief: 'Pequeñas travesuras' },
+      child: { funny: 'Tus momentos más graciosos', mischief: 'Tus travesuras' },
+    } as Record<Voice, Record<string, string>>,
+    kicker: {
+      child: { counters: 'Tu año en', starring: 'Con tu gente', line: 'Lo que nos dijiste', sound: 'Tu voz', firsts: 'Tus logros' },
+      family: { counters: 'Nuestro mes en', starring: 'Juntos', line: 'La frase del mes', sound: 'Así sonó', firsts: 'Logros', title: 'Nuestro' },
+    } as Record<Voice, Record<string, string>>,
     awardGoesTo: (award: string) => `y el premio ${award.startsWith('el ') ? `al ${award.slice(3)}` : `a ${award}`} es para`,
     awardNext: 'y no nos olvidemos de…',
   },
@@ -241,8 +281,14 @@ export const BURST_MIX: Readonly<Record<'video' | 'photo' | 'illustration', numb
 };
 /** A multi-photo memory can contribute this many frames to a burst. */
 const BURST_ASSETS_PER_MEMORY = 3;
-const BURST_SECONDS_PER_FRAME = 0.35;
-const FINALE_SECONDS_PER_FRAME = 0.28;
+/** Burst pace (owner, F3 round 2 — "the length of the bursts is right now"):
+ * a still holds one beat (~0.51s at 118 BPM), a clip one and a half; the
+ * finale's second half runs at half beats (~0.6 beat per frame overall). The
+ * renderer lays the same rule on the music's beat grid
+ * (film-renderer/assemble.mjs); estimateSeconds mirrors its layout. */
+const BEAT_SECONDS = 60 / 118;
+const BURST_SECONDS_PER_FRAME = BEAT_SECONDS; // on average, clips included
+const FINALE_SECONDS_PER_FRAME = 0.6 * BEAT_SECONDS;
 
 /** Year films scale with the year (owner: "use as much as possible"):
  * ~35% of the pool's visuals across the three bursts, 36–72 frames, then
@@ -250,8 +296,9 @@ const FINALE_SECONDS_PER_FRAME = 0.28;
 const YEAR_BURST_SHARE = 0.35;
 const YEAR_BURST_MIN = 36;
 const YEAR_BURST_MAX = 72;
-/** Owner: aim for 30–45s; up to 50s is fine. */
-export const MAX_FILM_SECONDS = 50;
+/** Owner: bursts at the approved pace even if the film runs longer (F3
+ * round 2, was 50s); a music bed is ~60s. */
+export const MAX_FILM_SECONDS = 60;
 const MIN_BURST_FRAMES = 8;
 /** An emotion burst needs this many memories with the label (Looking Back's
  * package minimum). */
@@ -259,8 +306,12 @@ const EMOTION_BURST_MIN = 4;
 const EMOTION_BURST_FRAMES = 8;
 const MONTH_BURST_FRAMES = 26;
 const CELEBRATION_FRAMES = 5;
+const BACKDROP_TILES = 108; // fills the renderer's tilted 9×12 mosaic without repeats
 const MONTH_THEME_FRAMES = 12;
 const STARRING_MAX = 6;
+const STARRING_TOGETHER_MAX = 9;
+/** Memory cards shown with each person's reveal (owner, F3 round 2). */
+const STARRING_MOMENTS = 3;
 const FIRSTS_MAX = 3;
 const TITLE_CARDS = 8;
 const GRID_CARDS = 9;
@@ -608,7 +659,51 @@ function verifiedFor(
 
 // ── Scene builders ───────────────────────────────────────────────────────
 
-function countersScene(pool: FilmMemoryInput[], language: FilmLanguage): FilmScene | null {
+/** Up to BACKDROP_TILES memories spread over the scope, stills and drawings
+ * (video posters) — the counters' muted mosaic. Doesn't consume memories. */
+function backdropFrames(pool: FilmMemorySource[], scope: FilmScope, ctx: ScoreContext): FrameRef[] {
+  const scored = pool
+    .filter((m) => visualKind(m) !== null && usable(m, ctx))
+    .map((memory) => ({ memory, ...scoreMemory(memory, ctx) }));
+  return spreadMemories(scored, BACKDROP_TILES, scope, false).flatMap((item) => frameFor(item.memory, 'backdrop') ?? []);
+}
+
+/** Up to STARRING_MOMENTS memories of the child with one person, spread over
+ * the scope — the cards of that person's reveal. Just the two of them ranks
+ * first; a memory already on an earlier person's cards only fills in when
+ * this person has nothing else. Bursts may also show them. */
+function starringMoments(
+  pool: FilmMemorySource[],
+  personId: string,
+  scope: FilmScope,
+  ctx: ScoreContext,
+  given: Set<string>,
+): FrameRef[] {
+  const scored = pool
+    .filter((m) => m.taggedMemberIds.includes(personId) && visualKind(m) !== null && usable(m, ctx))
+    .map((memory) => {
+      const { score, why } = scoreMemory(memory, ctx);
+      const pair = memory.taggedMemberIds.length <= 2;
+      return { memory, score: score + (pair ? 0.5 : 0), why: `${pair ? 'just the two of them · ' : ''}${why}` };
+    });
+  const fresh = scored.filter((item) => !given.has(item.memory.id));
+  const picked = spreadMemories(fresh, STARRING_MOMENTS, scope, true);
+  if (picked.length < STARRING_MOMENTS) {
+    const fill = spreadMemories(scored.filter((item) => !picked.includes(item)), STARRING_MOMENTS - picked.length, scope, true);
+    picked.push(...fill.filter((item) => !picked.some((p) => p.memory.date === item.memory.date)));
+    picked.sort((a, b) => a.memory.date.localeCompare(b.memory.date) || a.memory.id.localeCompare(b.memory.id));
+  }
+  for (const item of picked) given.add(item.memory.id);
+  return picked.flatMap((item) => frameFor(item.memory, item.why) ?? []);
+}
+
+function countersScene(
+  pool: FilmMemorySource[],
+  language: FilmLanguage,
+  kicker: string,
+  scope: FilmScope,
+  ctx: ScoreContext,
+): FilmScene | null {
   const c = countPool(pool);
   const labels = STRINGS[language].counters;
   const label = (forms: readonly [string, string], n: number) => forms[n === 1 ? 0 : 1];
@@ -619,7 +714,7 @@ function countersScene(pool: FilmMemoryInput[], language: FilmLanguage): FilmSce
     { key: 'drawings', label: label(labels.drawings, c.drawings), value: c.drawings },
     { key: 'sounds', label: label(labels.sounds, c.sounds), value: c.sounds },
   ].filter((entry) => entry.value > 0); // zero counts are omitted, never shown (plan §5)
-  return counts.length > 0 ? { type: 'counters', counts } : null;
+  return counts.length > 0 ? { type: 'counters', kicker, counts, backdrop: backdropFrames(pool, scope, ctx) } : null;
 }
 
 /** Topics that set this scope apart from the family's usual life: lift over
@@ -750,33 +845,37 @@ function estimateSeconds(scenes: FilmScene[]): number {
   for (const scene of scenes) {
     switch (scene.type) {
       case 'cold_open':
+        seconds += 4;
+        break;
       case 'title':
       case 'line':
-      case 'starring':
         seconds += 3.5;
         break;
+      case 'starring':
+        seconds += 1.5 * scene.people.length + 1; // a reveal per person, then everyone
+        break;
       case 'close':
-        seconds += 3.5 + (scene.source === 'celebration' ? 0.5 * Math.max(0, scene.frames.length - 2) : 0);
+        seconds += 4 + (scene.source === 'celebration' ? 0.5 * Math.max(0, scene.frames.length - 2) : 0);
         break;
       case 'counters':
-        seconds += 3;
+        seconds += 2; // a quick beat over the mosaic (owner, sketch v1)
         break;
-      case 'burst': {
-        const clips = scene.frames.filter((f) => f.kind === 'video').length;
-        seconds += scene.secondsPerFrame * (scene.frames.length + clips); // clips hold ~2×
+      case 'burst':
+        seconds += scene.role === 'emotion'
+          ? BEAT_SECONDS * (1 + Math.min(4, scene.frames.length)) // a title beat, then up to 4 cards
+          : scene.secondsPerFrame * scene.frames.length + BEAT_SECONDS * scene.titles.length;
         break;
-      }
       case 'sound':
         seconds += Math.min(6, (scene.frame.durationMs ?? 6000) / 1000) + 1.5;
         break;
       case 'firsts':
-        seconds += 1.2 * scene.items.length;
+        seconds += scene.items.reduce((sum, item) => sum + (item.frame ? 2 : 1.5), 0); // 4 beats with a card, 3 without
         break;
       case 'award':
         seconds += 3;
         break;
       case 'end_card':
-        seconds += 2;
+        seconds += 3;
         break;
     }
   }
@@ -810,6 +909,7 @@ function finish(args: {
   vision: boolean;
   subjects: FilmPerson[];
   references: FilmPerson[];
+  span: { from: string; to: string };
 }): FilmScript {
   const counts = countPool(args.pool);
   const burstFramesAll = args.scenes.flatMap((s) => (s.type === 'burst' ? s.frames : []));
@@ -828,6 +928,7 @@ function finish(args: {
       mix: mixOf(burstFramesAll),
     },
     verification: args.vision ? 'vision' : 'tags',
+    span: args.span,
     subjects: args.subjects.map((p) => reference(p, args.scope)),
     references: args.references.map((p) => reference(p, args.scope)),
     scenes: args.scenes,
@@ -856,6 +957,7 @@ function emotionBurst(
   ctx: ScoreContext,
   used: Set<string>,
   language: FilmLanguage,
+  voice: Voice,
 ): Extract<FilmScene, { type: 'burst' }> | null {
   const count = (emotion: string) =>
     pool.filter((m) => m.emotion === emotion && visualKind(m) !== null && !used.has(m.id) && usable(m, ctx)).length;
@@ -867,7 +969,7 @@ function emotionBurst(
   return {
     type: 'burst',
     role: 'emotion',
-    titles: [STRINGS[language].emotionTitle[emotion]],
+    titles: [STRINGS[language].emotionTitle[voice][emotion]],
     frames,
     secondsPerFrame: BURST_SECONDS_PER_FRAME,
   };
@@ -975,7 +1077,8 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
   else dropped.push({ scene: 'cold_open', reason: 'no ready portrait' });
 
   // FOCUS — counters.
-  const counters = countersScene(pool, language);
+  const k = STRINGS[language].kicker.child;
+  const counters = countersScene(pool, language, k.counters, scope, ctx);
   if (counters) scenes.push(counters);
 
   // Claims first, so bursts don't spend their frames.
@@ -1029,22 +1132,36 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
   });
 
   // FOCUS — line of the year.
-  if (line) scenes.push(line);
+  if (line) scenes.push({ ...line, kicker: k.line } as FilmScene);
   else dropped.push({ scene: 'line', reason: 'no verified quote from the child' });
 
   // FOCUS — starring (portrait photo ↔ illustration), no counts (plan §3).
   const shared = new Map<string, number>();
   for (const m of pool) for (const id of m.taggedMemberIds) if (id !== child.id) shared.set(id, (shared.get(id) ?? 0) + 1);
-  const people = input.members
+  // Who gets a reveal is decided by how present they were in the child's year
+  // (the most shared memories, then family creation order) — never by
+  // profile creation order alone, which let four early profiles with 2–4
+  // shared memories crowd out a parent with 22 (owner, F3 round 3). What's
+  // shown stays neutral: creation order, no counts. Everyone who qualifies
+  // (up to STARRING_TOGETHER_MAX) is in the closing group shot.
+  const byCreation = (a: FilmPerson, b: FilmPerson) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+  const cast = input.members
     .filter((p) => (shared.get(p.id) ?? 0) >= STARRING_MIN_SHARED)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
     .flatMap((p) => {
       const version = resolvePortraitVersionAtDate(p.portraits, scope.endExclusive);
       const portrait = version ? portraitFrame(version, 'portrait at the birthday') : null;
-      return portrait ? [{ memberId: p.id, name: firstNameOf(p.name), portrait }] : [];
-    })
-    .slice(0, STARRING_MAX);
-  if (people.length > 0) scenes.push({ type: 'starring', people });
+      return portrait ? [{ person: p, portrait }] : [];
+    });
+  const presence = [...cast].sort((a, b) => (shared.get(b.person.id) ?? 0) - (shared.get(a.person.id) ?? 0) || byCreation(a.person, b.person));
+  const revealed = new Set(presence.slice(0, STARRING_MAX).map((c) => c.person.id));
+  const together = presence.slice(0, STARRING_TOGETHER_MAX).sort((a, b) => byCreation(a.person, b.person))
+    .map(({ person, portrait }) => ({ memberId: person.id, name: firstNameOf(person.name), portrait }));
+  const given = new Set<string>(); // each person's cards are their own moments first
+  const people = cast
+    .filter((c) => revealed.has(c.person.id))
+    .sort((a, b) => byCreation(a.person, b.person))
+    .map(({ person, portrait }) => ({ memberId: person.id, name: firstNameOf(person.name), portrait, moments: starringMoments(pool, person.id, scope, ctx, given) }));
+  if (people.length > 0) scenes.push({ type: 'starring', kicker: k.starring, people, together });
   else dropped.push({ scene: 'starring', reason: 'nobody else with a portrait shares ≥2 memories' });
 
   // BURST — second half, titled with the year's distinctive themes.
@@ -1058,7 +1175,7 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
   if (themes.length < 2) dropped.push({ scene: 'burst', reason: `no theme titles: only ${themes.length} topics on ≥${YEAR_THEME_MIN_MEMORIES} memories` });
 
   // FOCUS — sound of the year.
-  if (sound) scenes.push(sound);
+  if (sound) scenes.push({ ...sound, kicker: k.sound } as FilmScene);
   else dropped.push({ scene: 'sound', reason: 'no audio memory, and no video clip verified to show the child' });
 
   // FOCUS — firsts: celebration only, and only when certain (isCertainFirst).
@@ -1081,12 +1198,18 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
     .sort((a, b) => Number(b.confirmed) - Number(a.confirmed) || a.date.localeCompare(b.date))
     .slice(0, FIRSTS_MAX)
     .sort((a, b) => a.date.localeCompare(b.date))
-    .map(({ confirmed: _c, ...rest }) => rest);
-  if (firsts.length > 0) scenes.push({ type: 'firsts', items: firsts });
+    .map(({ confirmed: _c, ...rest }) => {
+      // The milestone's own memory as a small card beside its label (owner,
+      // F3 round 3), when it has a picture and is shareable.
+      const memory = pool.find((m) => m.id === rest.memoryId);
+      const frame = memory && visualKind(memory) !== null && usable(memory, ctx) ? frameFor(memory, 'the milestone\'s memory') : null;
+      return frame ? { ...rest, frame } : rest;
+    });
+  if (firsts.length > 0) scenes.push({ type: 'firsts', kicker: k.firsts, items: firsts });
   else dropped.push({ scene: 'firsts', reason: 'no certain firsts (parent-confirmed, or the text says "first" within the age band)' });
 
   // BURST — the funny ones / tiny troublemakers (Looking Back's packages).
-  const moods = emotionBurst(pool, scope, ctx, used, language);
+  const moods = emotionBurst(pool, scope, ctx, used, language, 'child');
   if (moods) scenes.push(moods);
   else dropped.push({ scene: 'burst', reason: `no emotion burst: fewer than ${EMOTION_BURST_MIN} funny or mischief moments left` });
 
@@ -1118,10 +1241,11 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
     dropped.push({ scene: 'close', reason: 'no birthday memories or verified then/now frames — portraits instead' });
   } else dropped.push({ scene: 'close', reason: 'no birthday memories, verified frames or portraits' });
 
-  fitLength(scenes, MAX_FILM_SECONDS - 2);
+  fitLength(scenes, MAX_FILM_SECONDS - 3); // the end card follows
   scenes.push({ type: 'end_card', grid: finale.slice(0, GRID_CARDS) });
 
-  return finish({ kind: 'birthday', language, title, scope, pool, scenes, dropped, vision: !!input.checks, subjects: [child], references: own });
+  return finish({ kind: 'birthday', language, title, scope, pool, scenes, dropped, vision: !!input.checks, subjects: [child], references: own,
+    span: { from: scope.start, to: addYears(child.dateOfBirth!, input.ageYear) } });
 }
 
 // ── Monthly family recap ─────────────────────────────────────────────────
@@ -1233,9 +1357,10 @@ export function buildMonthlyScript(input: MonthlyInput): FilmScript {
 
   // FOCUS — title over floating cards.
   const titleCards = pickBurst(pool, TITLE_CARDS, scope, ctx, new Set(used)).filter((f) => f.kind !== 'video').slice(0, TITLE_CARDS);
-  scenes.push({ type: 'title', title, subtitle: String(year), cards: titleCards });
+  const k = STRINGS[language].kicker.family;
+  scenes.push({ type: 'title', title, subtitle: String(year), kicker: k.title, cards: titleCards });
 
-  const counters = countersScene(pool, language);
+  const counters = countersScene(pool, language, k.counters, scope, ctx);
   if (counters) scenes.push(counters);
 
   // BURST — themes grid (optional; ~half of months qualify, F0).
@@ -1255,25 +1380,27 @@ export function buildMonthlyScript(input: MonthlyInput): FilmScript {
   scenes.push(...awards);
 
   // FOCUS — one voice beat.
-  if (voice) scenes.push(voice);
+  if (voice?.type === 'sound') scenes.push({ ...voice, kicker: `${k.sound} ${title}` });
+  if (voice?.type === 'line') scenes.push({ ...voice, kicker: k.line });
   if (voice?.type !== 'sound') dropped.push({ scene: 'sound', reason: 'no audio memory this month' });
   if (voice?.type !== 'line') {
     dropped.push({ scene: 'line', reason: line ? 'monthly keeps one voice beat; the sound won' : 'no verified quote from the kids this month' });
   }
 
   // BURST — the funny ones / tiny troublemakers, when the month has them.
-  const moods = emotionBurst(pool, scope, ctx, used, language);
+  const moods = emotionBurst(pool, scope, ctx, used, language, 'family');
   if (moods) scenes.push(moods);
 
   // BURST — the rest of the month, fast.
   const burst = pickBurst(pool, MONTH_BURST_FRAMES, scope, ctx, used);
   scenes.push({ type: 'burst', role: 'finale', titles: [], frames: burst, secondsPerFrame: FINALE_SECONDS_PER_FRAME });
 
-  fitLength(scenes, MAX_FILM_SECONDS - 2);
+  fitLength(scenes, MAX_FILM_SECONDS - 3); // the end card follows
   const awardFrames = awards.map((a) => a.frame);
   scenes.push({ type: 'end_card', grid: [...awardFrames, ...burst].slice(0, GRID_CARDS) });
 
-  return finish({ kind: 'family_month', language, title: `${title} ${year}`, scope, pool, scenes, dropped, vision: !!input.checks, subjects: kids, references: kids });
+  return finish({ kind: 'family_month', language, title: `${title} ${year}`, scope, pool, scenes, dropped, vision: !!input.checks, subjects: kids, references: kids,
+    span: { from: scope.start, to: addDays(scope.start, toJulianDayNumber(scope.endExclusive) - toJulianDayNumber(scope.start) - 1) } });
 }
 
 function dedupeFrames(frames: FrameRef[]): FrameRef[] {

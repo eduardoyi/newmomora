@@ -156,7 +156,7 @@ Deno.test('shareSensitiveIds: topics, milestones and es/en text, without false p
 
 Deno.test('birthday: cold open pairs each portrait illustration with its source photo', () => {
   const open = scene(birthday(yearOfMemories()), 'cold_open')!;
-  assertEquals(open.title, "Enzo's Year Four");
+  assertEquals(open.title, 'Memories of your fourth year, Enzo');
   assertEquals([open.from?.key, open.from?.pairKey], ['p-old-ill.png', 'p-old.jpg']);
   assertEquals([open.to.key, open.to.pairKey], ['p-new-ill.png', 'p-new.jpg']);
 });
@@ -289,18 +289,18 @@ Deno.test('birthday: the close shows the real birthday party when there is one',
 Deno.test('birthday: a funny-ones burst when there are enough funny moments', () => {
   const script = birthday(yearOfMemories()); // 6 funny photos in the year
   const moods = scenes(script, 'burst').find((b) => b.role === 'emotion');
-  assertEquals(moods?.titles, ['The funny ones']);
+  assertEquals(moods?.titles, ['Your funniest moments']);
   assert(moods!.frames.every((f) => f.emotion === 'funny'));
 });
 
-Deno.test('films stay within the 50s cap however rich the year', () => {
+Deno.test('films stay within the 60s cap however rich the year', () => {
   const rich = MONTHS.flatMap((month) =>
     Array.from({ length: 20 }, (_, i) =>
       i % 3 === 0 ? video({ date: `${month}-${String(i + 1).padStart(2, '0')}` }) : memory({ date: `${month}-${String(i + 1).padStart(2, '0')}` })
     )
   );
   const script = birthday([...yearOfMemories(), ...rich]);
-  assert(script.estimatedSeconds <= 50, `${script.estimatedSeconds}s`);
+  assert(script.estimatedSeconds <= 60, `${script.estimatedSeconds}s`);
   assert(script.stats.frames > 40, `${script.stats.frames} frames`);
 });
 
@@ -310,16 +310,56 @@ Deno.test('birthday: starring lists people by creation order, with photo/illustr
   assertEquals(starring.people[0].portrait.pairKey, 'pg.jpg');
 });
 
+Deno.test('birthday: each person brings up to 3 moments with the child, spread over the year', () => {
+  const year = yearOfMemories();
+  const starring = scene(birthday(year), 'starring')!;
+  const byId = new Map(year.map((m) => [m.id, m]));
+  for (const person of starring.people) {
+    assert(person.moments.length > 0 && person.moments.length <= 3, `${person.name}: ${person.moments.length}`);
+    for (const m of person.moments) assert(byId.get(m.memoryId!)!.taggedMemberIds.includes(person.memberId), m.memoryId!);
+    assertEquals(new Set(person.moments.map((m) => m.date!.slice(0, 7))).size, person.moments.length); // spread, not one month
+  }
+});
+
+Deno.test('birthday: reveals go to the most present people, not the oldest profiles; everyone joins the group shot', () => {
+  // Eight early relatives with 2 shared memories each, and Dad (created last) in 20.
+  const relatives = Array.from({ length: 8 }, (_, i) => person(`rel${i}`, '1960-01-01', `2023-0${i + 1}-01`, [portrait(`pr${i}`, `rel${i}`, null)]));
+  const dad = person('dad', '1985-01-01', '2026-05-28', [portrait('pd', 'dad', null)]);
+  const extra = [
+    ...relatives.flatMap((r, i) => [0, 1].map((k) => memory({ date: `${MONTHS[i]}-1${k}`, taggedMemberIds: [ENZO, r.id] }))),
+    ...MONTHS.flatMap((month) => [3, 4].map((d) => memory({ date: `${month}-0${d}`, taggedMemberIds: [ENZO, 'dad'] }))),
+  ];
+  const starring = scene(birthday([...yearOfMemories(), ...extra], { members: [...relatives, gran, enzo, mara, dad] }), 'starring')!;
+  const shown = starring.people.map((p) => p.memberId);
+  assertEquals(shown.length, 6);
+  assert(shown.includes('dad') && shown.includes(MARA) && shown.includes(GRAN), shown.join());
+  assertEquals(shown.at(-1), 'dad'); // displayed in creation order, never by count
+  assertEquals(starring.together!.length, 9);
+});
+
+Deno.test('birthday: people get their own moments before sharing one', () => {
+  // Each month has a memory with Gran and Mara together, plus one with each alone.
+  const year = MONTHS.flatMap((month) => [
+    memory({ date: `${month}-02`, taggedMemberIds: [ENZO, GRAN, MARA] }),
+    memory({ date: `${month}-09`, taggedMemberIds: [ENZO, GRAN] }),
+    memory({ date: `${month}-18`, taggedMemberIds: [ENZO, MARA] }),
+  ]);
+  const [granCards, maraCards] = scene(birthday([...yearOfMemories(), ...year]), 'starring')!.people.map((p) => p.moments.map((m) => m.memoryId));
+  assertEquals(granCards.filter((id) => maraCards.includes(id)), []);
+});
+
 Deno.test('birthday: Spanish titles and catalog labels', () => {
   const steps = memory({ id: 'bike', date: '2026-08-20', text: 'Primera vez en bici sin rueditas' });
   const script = birthday([...yearOfMemories(), steps], {
     language: 'es',
     milestones: [{ memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'bike-no-training-wheels', status: 'confirmed' }],
   });
-  assertEquals(script.title, 'El cuarto año de Enzo');
+  assertEquals(script.title, 'Recuerdos de tu cuarto año, Enzo');
+  assertEquals(scene(script, 'firsts')!.kicker, 'Tus logros');
   assertEquals(scene(script, 'close')!.line, '¡Feliz cumpleaños, Enzo!');
   assertEquals(scene(script, 'firsts')!.items[0].label, 'Bici sin rueditas');
-  assertEquals(scenes(script, 'burst').find((b) => b.role === 'emotion')?.titles, ['Los momentos más graciosos']);
+  assertEquals(scene(script, 'firsts')!.items[0].frame?.memoryId, 'bike'); // the milestone's own card
+  assertEquals(scenes(script, 'burst').find((b) => b.role === 'emotion')?.titles, ['Tus momentos más graciosos']);
 });
 
 Deno.test('distinctiveThemes prefers what sets the scope apart, in the film language', () => {
@@ -438,4 +478,15 @@ Deno.test('birthday film window runs through the birthday, so this year\'s party
   const close = scene(script, 'close')!;
   assertEquals([close.source, close.celebrationDate], ['celebration', '2026-10-23']);
   assertEquals(close.frames.map((f) => f.memoryId).sort(), ['cake-4', 'party-4']);
+});
+
+Deno.test('counters carry a backdrop mosaic; the film carries its timeline span', () => {
+  const script = birthday(yearOfMemories());
+  const counters = scene(script, 'counters')!;
+  assertEquals(counters.kicker, 'Your year in');
+  assert(counters.backdrop.length >= 24, `backdrop ${counters.backdrop.length}`);
+  assertEquals(script.span, { from: '2025-10-23', to: '2026-10-23' });
+  const august = buildMonthlyScript({ yearMonth: '2026-08', memories: yearOfMemories(), children: [enzo, mara], milestones: [], quotes: [], language: 'es' });
+  assertEquals(august.span, { from: '2026-08-01', to: '2026-08-31' });
+  assertEquals(scene(august, 'title')!.kicker, 'Nuestro');
 });

@@ -39,6 +39,20 @@
         "supabase/scripts/eval-output/year-film-script"
       ],
       "port": 5188
+    },
+    {
+      "name": "film-sheet",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5189",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "film-renderer"
+      ],
+      "port": 5189
     }
   ]
 }

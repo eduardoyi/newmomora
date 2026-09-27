@@ -268,14 +268,19 @@ function uses(scene: FilmScene): Use[] {
     case 'line':
       return scene.frame ? [motion(scene.frame, false, false)] : [];
     case 'starring':
-      return as(scene.people.map((p) => p.portrait), 'still', false);
+      return [
+        ...as(scene.people.map((p) => p.portrait), 'still', false),
+        ...as(scene.people.flatMap((p) => p.moments ?? []), 'still', false), // reveal cards
+        ...as((scene.together ?? []).map((t) => t.portrait), 'still', false), // the group shot
+      ];
     case 'award':
       return [motion(scene.frame, true, false)]; // verified in F1
     case 'close':
       return scene.frames.map((f) => motion(f, scene.source === 'then_now', scene.source === 'celebration'));
-    case 'firsts':
     case 'counters':
-      return [];
+      return as(scene.backdrop ?? [], 'still', false); // muted mosaic tiles
+    case 'firsts':
+      return scene.items.flatMap((item) => (item.frame ? [motion(item.frame, false, false)] : [])); // the milestone's card
   }
 }
 
