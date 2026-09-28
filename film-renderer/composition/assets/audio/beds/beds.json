@@ -1,0 +1,134 @@
+{
+  "beds": [
+    {
+      "id": "bells-and-claps",
+      "file": "assets/audio/beds/bells-and-claps.mp3",
+      "bpm": 118,
+      "drop": 4.068,
+      "dropBeat": 8,
+      "length": 67.17,
+      "use": [
+        "family_month"
+      ],
+      "requestedBpm": 118,
+      "fullEnergyAt": 8
+    },
+    {
+      "id": "bright-pop",
+      "file": "assets/audio/beds/bright-pop.mp3",
+      "bpm": 118,
+      "drop": 4.068,
+      "dropBeat": 8,
+      "length": 66.91,
+      "use": [
+        "birthday"
+      ],
+      "requestedBpm": 118,
+      "fullEnergyAt": 7
+    },
+    {
+      "id": "bubbly-synth",
+      "file": "assets/audio/beds/bubbly-synth.mp3",
+      "bpm": 120,
+      "drop": 4,
+      "dropBeat": 8,
+      "length": 66.02,
+      "use": [
+        "family_month"
+      ],
+      "requestedBpm": 120,
+      "fullEnergyAt": 0
+    },
+    {
+      "id": "celebration-pop",
+      "file": "assets/audio/beds/celebration-pop.mp3",
+      "bpm": 115.62,
+      "drop": 4.152,
+      "dropBeat": 8,
+      "length": 68.09,
+      "use": [
+        "family_year"
+      ],
+      "requestedBpm": 116,
+      "fullEnergyAt": 2
+    },
+    {
+      "id": "groovy-keys",
+      "file": "assets/audio/beds/groovy-keys.mp3",
+      "bpm": 110,
+      "drop": 4.364,
+      "dropBeat": 8,
+      "length": 71.78,
+      "use": [
+        "family_month"
+      ],
+      "requestedBpm": 110,
+      "fullEnergyAt": 0
+    },
+    {
+      "id": "pizzicato-bop",
+      "file": "assets/audio/beds/pizzicato-bop.mp3",
+      "bpm": 124.02,
+      "drop": 3.87,
+      "dropBeat": 8,
+      "length": 63.58,
+      "use": [
+        "family_month"
+      ],
+      "requestedBpm": 124,
+      "fullEnergyAt": 2.5
+    },
+    {
+      "id": "playful-marimba",
+      "file": "assets/audio/beds/playful-marimba.mp3",
+      "bpm": 122,
+      "drop": 3.934,
+      "dropBeat": 8,
+      "length": 64.95,
+      "use": [
+        "family_month"
+      ],
+      "requestedBpm": 122,
+      "fullEnergyAt": 0.5
+    },
+    {
+      "id": "playful-piano",
+      "file": "assets/audio/beds/playful-piano.mp3",
+      "bpm": 116,
+      "drop": 4.138,
+      "dropBeat": 8,
+      "length": 68.35,
+      "use": [
+        "family_month"
+      ],
+      "requestedBpm": 116,
+      "fullEnergyAt": 8
+    },
+    {
+      "id": "sparkle-pop",
+      "file": "assets/audio/beds/sparkle-pop.mp3",
+      "bpm": 120,
+      "drop": 4,
+      "dropBeat": 8,
+      "length": 65.76,
+      "use": [
+        "birthday"
+      ],
+      "requestedBpm": 120,
+      "fullEnergyAt": 7
+    },
+    {
+      "id": "tender-piano",
+      "file": "assets/audio/beds/tender-piano.mp3",
+      "bpm": 96,
+      "drop": 5,
+      "dropBeat": 8,
+      "length": 82.31,
+      "use": [
+        "tender"
+      ],
+      "requestedBpm": 96,
+      "fullEnergyAt": 14.5
+    }
+  ]
+}

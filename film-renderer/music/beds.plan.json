@@ -1,0 +1,246 @@
+{
+  "note": "Year Film music beds (docs/plans/year-film.md §6). ElevenLabs music_v1, instrumental, commercially cleared on the paid plan (as the launch bed). Section lengths are in beats at each bed's tempo; generate.mjs converts them to ms. Every bed opens with a 16-beat intro so its drop lands inside the first burst. Owner, 2026-09-28: liked bright-pop and playful-marimba; sunny-folk and warm-acoustic dropped (folk/acoustic out) and replaced in the liked style. Owner, 2026-09-28: the drop came 15–30s in (half a 60s film) → an 8-beat pickup and the full band from the first beat of Main; generate.mjs reports when each bed reaches full energy (target ≲ 6s). Owner, 2026-09-28: all fast-start beds approved; monthlies get more variety (six beds, rotated by calendar month) since they come out every month.",
+  "sections": [
+    {
+      "name": "Pickup",
+      "beats": 8,
+      "styles": [
+        "very short pickup",
+        "hook starts right away",
+        "quick drum fill into the full band"
+      ],
+      "avoid": [
+        "long intro",
+        "slow build-up",
+        "ambient",
+        "quiet"
+      ]
+    },
+    {
+      "name": "Main",
+      "beats": 56,
+      "styles": [
+        "full band and main hook from the very first beat",
+        "all instruments playing",
+        "high energy",
+        "catchy hook"
+      ],
+      "avoid": [
+        "build-up",
+        "quiet",
+        "sparse",
+        "intro"
+      ]
+    },
+    {
+      "name": "Breather",
+      "beats": 12,
+      "styles": [
+        "drums pull back briefly",
+        "hook on the lead instrument",
+        "keep the groove going"
+      ],
+      "avoid": [
+        "silence",
+        "long pause"
+      ]
+    },
+    {
+      "name": "Lift",
+      "beats": 48,
+      "styles": [
+        "full band returns",
+        "biggest energy",
+        "main hook",
+        "celebratory"
+      ],
+      "avoid": [
+        "quiet"
+      ]
+    },
+    {
+      "name": "Ending",
+      "beats": 8,
+      "styles": [
+        "final chord hit then ring out",
+        "clean button ending"
+      ],
+      "avoid": [
+        "fade out",
+        "new melody"
+      ]
+    }
+  ],
+  "beds": [
+    {
+      "id": "bright-pop",
+      "bpm": 118,
+      "use": [
+        "birthday"
+      ],
+      "styles": [
+        "upbeat indie pop",
+        "bright and joyful",
+        "hand claps",
+        "glockenspiel",
+        "warm piano",
+        "punchy kick",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "sparkle-pop",
+      "bpm": 120,
+      "use": [
+        "birthday"
+      ],
+      "styles": [
+        "upbeat indie pop",
+        "sparkly synth plucks",
+        "glockenspiel hook",
+        "hand claps",
+        "bouncy bass",
+        "punchy kick",
+        "bright and joyful",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "celebration-pop",
+      "bpm": 116,
+      "use": [
+        "family_year"
+      ],
+      "styles": [
+        "joyful celebratory pop",
+        "marimba and glockenspiel hook",
+        "hand claps",
+        "warm piano",
+        "bouncy bass",
+        "big uplifting lift",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "playful-marimba",
+      "bpm": 122,
+      "use": [
+        "family_month"
+      ],
+      "styles": [
+        "playful bouncy pop",
+        "marimba hook",
+        "pizzicato strings",
+        "light percussion",
+        "claps",
+        "cheerful",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "tender-piano",
+      "bpm": 96,
+      "use": [
+        "tender"
+      ],
+      "styles": [
+        "tender cinematic piano",
+        "soft strings",
+        "music box accents",
+        "gentle pulse",
+        "emotional and warm",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "playful-piano",
+      "bpm": 116,
+      "use": [
+        "family_month"
+      ],
+      "styles": [
+        "playful bouncy piano pop",
+        "staccato piano hook",
+        "pizzicato strings",
+        "hand claps",
+        "light bouncy percussion",
+        "cheerful and cheeky",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "bubbly-synth",
+      "bpm": 120,
+      "use": [
+        "family_month"
+      ],
+      "styles": [
+        "playful bubbly synth-pop",
+        "bouncy synth plucks",
+        "hand claps",
+        "punchy kick",
+        "cheerful hook",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "bells-and-claps",
+      "bpm": 118,
+      "use": [
+        "family_month"
+      ],
+      "styles": [
+        "bright playful pop",
+        "glockenspiel and celesta hook",
+        "hand claps",
+        "bouncy bass",
+        "warm piano chords",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "pizzicato-bop",
+      "bpm": 124,
+      "use": [
+        "family_month"
+      ],
+      "styles": [
+        "playful bouncy pop",
+        "pizzicato strings hook",
+        "staccato piano",
+        "hand claps",
+        "light percussion",
+        "cheeky and fun",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "groovy-keys",
+      "bpm": 110,
+      "use": [
+        "family_month"
+      ],
+      "styles": [
+        "feel-good funky pop",
+        "electric piano groove",
+        "slap bass",
+        "hand claps",
+        "tight drums",
+        "sunny and fun",
+        "instrumental"
+      ]
+    }
+  ],
+  "avoid": [
+    "vocals",
+    "singing",
+    "spoken word",
+    "sad",
+    "dark",
+    "dubstep",
+    "long fade out",
+    "long intro",
+    "slow build-up",
+    "gradual build"
+  ]
+}

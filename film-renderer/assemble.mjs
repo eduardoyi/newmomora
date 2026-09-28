@@ -28,11 +28,41 @@ const FILM_DIR = path.join(HERE, 'film-data', slug);
 const film = JSON.parse(fs.readFileSync(path.join(FILM_DIR, 'film.json'), 'utf8'));
 
 // ── Music & beat grid ────────────────────────────────────────────────────
-// First cut: the launch bed (118 BPM, drop at 8.146s). Dedicated beds with
-// beat maps come in a later F3 round (BRIEF.md).
-const BED = { file: 'assets/audio/bed-launch-v1.mp3', bpm: 118, drop: 8.146, length: 60 };
+// Dedicated beds with measured beat maps (music/generate.mjs → beds.json):
+// each trimmed so beat 0 is at 0s. A film's bed comes from its kind — two
+// birthday beds picked by the film's slug so siblings don't always share one,
+// six monthly beds rotated by calendar month — or from --bed <id>.
+const BEDS = JSON.parse(fs.readFileSync(path.join(PROJECT, 'assets', 'audio', 'beds', 'beds.json'), 'utf8')).beds;
+function pickBed() {
+  const forced = process.argv.includes('--bed') ? process.argv[process.argv.indexOf('--bed') + 1] : null;
+  if (forced) {
+    const bed = BEDS.find((b) => b.id === forced);
+    if (!bed) throw new Error(`no bed "${forced}" (have ${BEDS.map((b) => b.id).join(', ')})`);
+    return bed;
+  }
+  const options = BEDS.filter((b) => b.use.includes(film.kind)).sort((x, y) => x.id.localeCompare(y.id));
+  if (options.length === 0) throw new Error(`no bed for film kind ${film.kind}`);
+  // Monthlies come out every month: rotate by calendar month so consecutive
+  // months never share a bed and none repeats within options.length months
+  // (owner, 2026-09-28). P1 stores the chosen bed, so adding a bed later
+  // doesn't reshuffle films already made.
+  if (film.kind === 'family_month') {
+    const [y, m] = film.span.from.split('-').map(Number);
+    return options[(y * 12 + (m - 1)) % options.length];
+  }
+  let h = 0;
+  for (const ch of slug) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return options[h % options.length];
+}
+const BED = pickBed();
 const BEAT = 60 / BED.bpm;
 const beats = (n) => +(n * BEAT).toFixed(4);
+// Pacing is designed in beats at 118 BPM (the approved cut). On a faster or
+// slower bed a scene keeps its duration and snaps to the nearest whole beat,
+// so every film runs about the same length on any bed, still cut on the beat.
+const REF_BEAT = 60 / 118;
+const nb = (refBeats) => Math.max(1, Math.round((refBeats * REF_BEAT) / BEAT));
+const TEMPO = REF_BEAT / BEAT; // < 1 on a slower bed
 const W = 1080;
 const H = 1920;
 const MAX_SECONDS = 60; // plan §5: approved burst pace first, films up to the ~60s bed
@@ -205,7 +235,7 @@ const scenes = [];
 const bySceneType = (t, role) => film.scenes.find((s) => s.type === t && (role === undefined || s.role === role));
 
 function coldOpen(s, id) {
-  const n = 8;
+  const n = nb(8);
   const from = s.from;
   const to = s.to;
   subcomp(id, {
@@ -290,7 +320,7 @@ function mosaicHtml() {
 }
 
 function counters(s, id) {
-  const n = 4;
+  const n = nb(4);
   const cells = mosaicTiles();
   const r = rng(7);
   const order = cells.map((_, i) => [r(), i]).sort((x, y) => x[0] - y[0]).map((x) => x[1]);
@@ -334,13 +364,13 @@ function burst(s, id, { accelerate = false, bg = C.plum }) {
   // Budgets are in quarter beats so every cut lands on the grid.
   // Titles: a beat each; with a heading ("Lo que más te gustó este año") the
   // heading gets a beat to itself and each activity 1.5 — they're sentences.
-  const headingBeats = s.titles?.length && s.titlesKicker ? 1 : 0;
-  const perTitle = headingBeats ? 1.5 : 1;
+  const headingBeats = s.titles?.length && s.titlesKicker ? nb(1) : 0;
+  const perTitle = Math.round((headingBeats ? 1.5 : 1) * TEMPO * 4) / 4; // quarter-beat grid
   const titleBeats = s.titles?.length ? headingBeats + s.titles.length * perTitle : 0;
   const titleOffset = titleBeats * BEAT;
   const tail = (i) => accelerate && i >= Math.ceil(frames.length * 0.5);
   const units = frames.map(() => 2);
-  let spare = Math.max(0, Math.round(frames.length * (accelerate ? 0.6 : 1) * 4) - units.reduce((x, y) => x + y, 0));
+  let spare = Math.max(0, Math.round(frames.length * (accelerate ? 0.6 : 1) * 4 * TEMPO) - units.reduce((x, y) => x + y, 0));
   for (const [cap, test] of [[6, isClip], [4, (f) => !isClip(f)]]) {
     for (let moved = true; spare > 0 && moved; ) {
       moved = false;
@@ -388,7 +418,7 @@ cuts.forEach(function(c,i){
 }
 
 function line(s, id) {
-  const n = 7;
+  const n = nb(7);
   const ws = s.quote.split(/\s+/);
   const quoteHtml = ws.map((w, i) => `<span class="word${i === ws.length - 1 ? ' mark' : ''}">${esc(i === 0 ? `“${w}` : w)}${i === ws.length - 1 ? '”' : ''}</span>`).join(' ');
   subcomp(id, {
@@ -417,8 +447,8 @@ tl.fromTo(q('.by'),{opacity:0},{opacity:1,duration:.4},${(0.8 + Math.min(0.12, 1
 /** A reveal per person — their photo turns into their drawing, their name
  * lands, and up to three moments with the child fan out as cards (owner, F3
  * round 2: "more personality and emotion") — then everyone together. */
-const PERSON_BEATS = 3;
-const TOGETHER_BEATS = 2;
+const PERSON_BEATS = nb(3);
+const TOGETHER_BEATS = nb(2);
 function starring(s, id) {
   const people = s.people.slice(0, 6);
   const n = people.length * PERSON_BEATS + TOGETHER_BEATS;
@@ -600,7 +630,7 @@ function firsts(s, id) {
   let t = 0;
   for (const item of items) {
     const card = item.frame?.file ? item.frame : null;
-    const beatsHeld = card ? 4 : 3;
+    const beatsHeld = card ? nb(4) : nb(3);
     const box = card ? fitCard(card, { cx: 513, top: 500, maxW: 560, maxH: 600 }) : null;
     slots.push({ item, card, box, t: +t.toFixed(4), d: +(beatsHeld * BEAT).toFixed(4) });
     t += beatsHeld * BEAT;
@@ -642,7 +672,7 @@ slots.forEach(function(sl,i){
 
 function emotion(s, id) {
   const frames = s.frames.slice(0, 4);
-  const n = Math.max(4, 1 + frames.length);
+  const n = Math.max(nb(4), nb(1 + frames.length));
   const spots = [[130, 520, -6], [560, 600, 5], [160, 980, 4], [560, 1020, -5]];
   subcomp(id, {
     bg: C.lav,
@@ -657,7 +687,7 @@ q('.st').forEach(function(el,i){ tl.fromTo(el,{scale:0,rotation:0},{scale:1,rota
 }
 
 function close(s, id) {
-  const n = 8;
+  const n = nb(8);
   const frames = s.frames.slice(0, 2);
   const r = rng(11);
   const colors = [C.rose, '#F2B544', '#5B8DEF', '#EE8A4B'];
@@ -688,7 +718,7 @@ ${s.celebrationDate ? `tl.fromTo(q('.sub'),{opacity:0},{opacity:1,duration:.4},B
 }
 
 function endCard(s, id) {
-  const n = 6;
+  const n = nb(6);
   const cells = mosaicTiles();
   // Inner tiles fall in first, so the wall collapses toward the mark.
   const maxD = Math.max(...cells.map((c) => c.d));
@@ -716,7 +746,7 @@ tl.fromTo(q('.sig'),{opacity:0,y:20},{opacity:1,y:0,duration:.5},1.4);`,
 /** Monthly opener: "Nuestro" over a large month name and the year, while
  * the month's cards pop into a loose collage below. */
 function title(s, id) {
-  const n = 8;
+  const n = nb(8);
   const spots = [[110, 820, -7], [560, 780, 5], [330, 1010, 2], [96, 1170, 4], [580, 1150, -4]];
   const cards = (s.cards ?? []).filter((f) => f.file).slice(0, spots.length);
   // Newsreader averages ~0.5em per lowercase letter: "agosto" keeps 230px,
@@ -749,7 +779,7 @@ q('.tc').forEach(function(el,i){
  * or clip as a card, their name slams in, and a rose ribbon names the award
  * when the intro didn't already say it. */
 function award(s, id) {
-  const n = 6;
+  const n = nb(6);
   const f = s.frame;
   const portrait = f?.kind === 'portrait';
   const media = !f?.file ? '' : isClip(f)
@@ -783,7 +813,7 @@ ${ribbon ? `tl.fromTo(q('.rib'),{x:-40,opacity:0},{x:0,opacity:1,duration:.35,ea
  * child whatever their data (plan §3, the sibling trap). Their name and
  * portrait (photo → drawing), up to three verified moments fanned as cards,
  * and their line of the year when there is one. */
-const CHAPTER_BEATS = 10;
+const CHAPTER_BEATS = nb(10);
 function chapter(s, id) {
   const n = CHAPTER_BEATS;
   const frames = (s.frames ?? []).filter((f) => f.file).slice(0, 3);
@@ -857,6 +887,7 @@ for (const sc of scenes) {
 }
 const total = beats(t);
 if (total > MAX_SECONDS) console.warn(`film is ${total.toFixed(1)}s — over the ${MAX_SECONDS}s cap`);
+if (total > BED.length) console.warn(`film is ${total.toFixed(1)}s — longer than its bed "${BED.id}" (${BED.length}s)`);
 
 // ── Year strip events (global time) ─────────────────────────────────────
 const [ay, am, ad] = film.span.from.split('-').map(Number);
@@ -948,5 +979,5 @@ fs.mkdirSync(path.join(PROJECT, 'compositions'), { recursive: true });
 for (const f of files) fs.writeFileSync(path.join(PROJECT, 'compositions', `${f.id}.html`), f.text);
 fs.writeFileSync(path.join(PROJECT, 'index.html'), indexHtml);
 
-console.log(`${slug}: ${scenes.length} scenes, ${total.toFixed(2)}s (${t} beats)`);
+console.log(`${slug}: ${scenes.length} scenes, ${total.toFixed(2)}s (${t} beats) · bed ${BED.id} (${BED.bpm} BPM)`);
 for (const sc of scenes) console.log(`  ${sc.id} ${sc.type}${sc.role ? `/${sc.role}` : ''}  ${sc.start.toFixed(2)}–${(sc.start + sc.dur).toFixed(2)}s  (${sc.beats} beats)`);

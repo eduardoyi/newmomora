@@ -219,6 +219,32 @@ month → montage → outro. The year films keep the §5 table.
   boundaries snap to downbeats. Per-family music generation is out of scope.
 - **Bed choice:** deterministic default by the year's dominant emotion family
   (bright vs tender); swappable among 3 in edits.
+- **Built (F3, 2026-09-28):** five beds in `film-renderer/composition/assets/
+  audio/beds/` from `film-renderer/music/generate.mjs` (composition plans in
+  `beds.plan.json`: 16-beat intro, main, breather, lift, button ending;
+  ElevenLabs `music_v1`, instrumental). Each is measured (beat comb over the
+  whole track → exact BPM and phase), trimmed so beat 0 is at 0s, and brought
+  to −13.5 LUFS; `beds.json` is the beat map. Owner review: liked
+  bright-pop and playful-marimba, "hated" sunny-folk and warm-acoustic →
+  replaced in the liked style (upbeat pop, glockenspiel/marimba, claps; no
+  folk/acoustic). Library: bright-pop 118 / sparkle-pop 120 (birthday,
+  picked by slug), celebration-pop 116 (family year), playful-marimba 122
+  (monthly), tender-piano 96 (unassigned alternate); 65–82s long.
+  Second owner note: the beds took 15–30s to reach full energy — half a 60s
+  film. The plan now has an 8-beat pickup and the full band from the first
+  beat of Main, and `generate.mjs` reports when each bed reaches full energy:
+  bright-pop 7s, sparkle-pop 7s, celebration-pop 2s, playful-marimba 0.5s,
+  playful-piano 8s (new, unassigned), tender-piano 14.5s (gentle by design).
+  The first versions are kept in `film-renderer/music/raw/v1/` (gitignored).
+  Owner: "all of these sound great". Monthlies come out every month, so
+  they get six beds (playful-marimba, playful-piano, bubbly-synth,
+  bells-and-claps, pizzicato-bop, groovy-keys — all reach full energy within
+  8s) **rotated by calendar month**: consecutive months never share one and
+  none repeats within six months. P1 stores the chosen bed per film, so
+  adding a bed later doesn't reshuffle films already made.
+  Scenes are paced in seconds designed at 118 BPM and snapped to the bed's
+  beats (`nb()`), so a film runs about the same length on any bed.
+  `node film-renderer/assemble.mjs <slug> --bed <id>` overrides the default.
 - **Voice clip:** trimmed in F2 to its best ≤6s voiced window, then
   loudness-normalized by the assembler to −14 LUFS (phone recordings sit far
   below the bed: Enzo Y4 measured −33 LUFS vs the bed's −13). The bed ducks
