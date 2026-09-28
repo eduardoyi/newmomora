@@ -1001,6 +1001,53 @@ layout, family firsts signed with the child's name ("Mara · 27 oct 2025"),
 and the family close. Nuestro 2025 renders at 60.0s, Nuestro 2026 (so far)
 at 57.5s; both pass `hyperframes check`.
 
+### F5 results so far (2026-09-28)
+
+- **Image:** `render/year-film-renderer/` (Dockerfile, `build.sh`,
+  `bench.sh`, `fly.toml`, README). `build.sh` stages only files git tracks or
+  would track, so every family's `film-data/` (6.1GB here) can never enter
+  the Docker context — the first build hung transferring the whole 6.8GB
+  folder. Chrome for Testing 152.0.7977.30 is placed with curl + unzip in
+  HyperFrames' cache layout (`hyperframes browser ensure` hung after the
+  download under amd64 emulation). 1.27GB image; the synthetic sample
+  (`film-renderer/sample/make-sample.mjs`, every birthday scene and media
+  shape, no family data) is generated inside it.
+- **Container proof** (amd64 emulated on the M-series laptop, 2 workers):
+  the 63s sample renders end to end; ~2.3GB above baseline. Emulated
+  timing is not representative — Fly numbers pending.
+- **Two render fixes found by F5:**
+  1. HyperFrames warned every prepared clip had one keyframe per clip
+     ("seek failures and frame freezing") → F2 cuts and the sample now put
+     a keyframe every second (`-g 30`); the 130 existing clips were
+     re-encoded in place.
+  2. The composition never used HyperFrames' fast capture: CSS
+     `filter: blur` (blurred fills) and `clip-path` wipes (photo → drawing)
+     forced frame-by-frame screenshots. Blurred fills are now baked by
+     ffmpeg at assemble time and the wipe is transform-only (a sliding
+     window, same look). **Laptop render of the sample: 119s → 60s**, output
+     identical (PSNR 53 dB average, 41.9 dB worst frame).
+- **Fly runs** (owner approved, 2026-09-28; app `momora-year-film-renderer`,
+  one-off `--rm` machines, synthetic sample only, image
+  `registry.fly.io/momora-year-film-renderer:f5`), 63s sample, iad:
+
+  | Machine | Render | Peak memory | ≈ Cost/film* |
+  |---|---|---|---|
+  | performance-8x · 16GB | **93s** | 4.4GB | ≈ $0.007 |
+  | performance-4x · 8GB | 264s | 2.2GB | ≈ $0.009 |
+  | performance-2x · 4GB | fails (3/3) | — | — |
+
+  *≈ $0.25/h (8x) and $0.12/h (4x), Fly's published rates; confirm on the
+  invoice. No GPU → Chrome renders in software (SwiftShader). 8x is 2.8×
+  faster than 4x for 2× the CPUs and cheaper per film, and meets the
+  ≤3 min target with room for heavier films. **Use performance-8x.**
+  The Fly MP4 matches the laptop's frame for frame in layout, type, timing
+  and motion (only the synthetic gradients differ: the image generates its
+  sample with Debian's ffmpeg 5.1).
+- **performance-2x fails** before rendering with HyperFrames' "Missing
+  manifest" (its `existsSync` returns false on *any* stat error; the file
+  is in the image). Not reproduced locally at 2 CPUs/4GB. Moot at 8x;
+  noted in case a smaller size is ever considered.
+
 ### Product build (after F4 passes)
 
 | Stage | What | Gate |

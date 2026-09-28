@@ -1,0 +1,18 @@
+# The named build context of render/year-film-renderer/Dockerfile. Real
+# family data never enters the image: film-data/ holds every family's
+# prepared film (the sample is regenerated inside the image), and the
+# composition's generated files, renders and Studio caches carry family media.
+film-data/
+composition/index.html
+composition/compositions/
+composition/assets/film/
+composition/renders/
+composition/snapshots/
+composition/.thumbnails/
+composition/.hyperframes/
+composition/.waveform-cache/
+composition/.sketch/
+composition/storyboard.html
+music/raw/
+**/node_modules/
+**/.DS_Store

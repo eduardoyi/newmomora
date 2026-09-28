@@ -120,6 +120,19 @@ function poster(file) {
 const still = (f) => (!f?.file ? '' : f.file.endsWith('.mp4') ? poster(f.file) : asset(f.file));
 const isClip = (f) => !!f?.file?.endsWith('.mp4');
 
+/** A blurred, dimmed backdrop baked by ffmpeg (F5): CSS filter:blur kept
+ * HyperFrames off its fast capture path ("filter:blur detected"), so every
+ * frame of every film was screenshotted the slow way. Small on purpose —
+ * a heavy blur has no detail to lose — and scaled up by CSS. */
+function blurred(f, { dim = 0.62, sat = 1.1 } = {}) {
+  const src = path.join(PROJECT, still(f));
+  const out = path.join(OUT_ASSETS, `${path.basename(src, path.extname(src))}-bg${Math.round(dim * 100)}.jpg`);
+  if (!fs.existsSync(out)) {
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-vf', `scale=360:-2,gblur=sigma=14,eq=saturation=${sat},colorchannelmixer=rr=${dim}:gg=${dim}:bb=${dim}`, '-frames:v', '1', '-q:v', '5', out]);
+  }
+  return `assets/film/${path.basename(out)}`;
+}
+
 /** Loudness envelope of the voice excerpt → the trace's real shape. */
 function envelope(file, points = 120) {
   const out = execFileSync('ffmpeg', [
@@ -176,7 +189,7 @@ function mediaLayer(f, { cls = '', id, start, dur }) {
   const w = f.source?.width ?? 1080;
   const h = f.source?.height ?? 1920;
   const tall = h / w > 1.55;
-  const bg = still(f);
+  const bg = tall ? '' : blurred(f);
   const fg = isClip(f)
     ? `<video id="${id}-v" class="clip fg${tall ? ' cover' : ''}" src="${asset(f.file)}" data-start="${start}" data-duration="${dur}" data-media-start="0" data-hf-media-start-basis="local" data-track-index="2" muted playsinline></video>`
     : `<img class="fg${tall ? ' cover' : ''}" src="${asset(f.file)}">`;
@@ -191,10 +204,11 @@ const BASE_CSS = `${FONTS}
 .sc{position:absolute;inset:0;font-family:"Plus Jakarta Sans",sans-serif;color:${C.ink}}
 .sc .abs{position:absolute}
 .sc .layer{position:absolute;inset:0;overflow:hidden;opacity:0}
-.sc .layer .blur{position:absolute;left:-10%;top:-10%;width:120%;height:120%;background:center/cover no-repeat;filter:blur(48px) brightness(.62) saturate(1.1)}
+.sc .layer .blur{position:absolute;left:-10%;top:-10%;width:120%;height:120%;background:center/cover no-repeat}
 .sc .layer .push{position:absolute;inset:0}
 .sc .layer .fg{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .sc .layer .fg.cover{object-fit:cover}
+.sc .wipe{position:absolute;inset:0;overflow:hidden;display:block}
 .sc .card{position:absolute;background:${C.card};border-radius:40px;padding:16px;box-shadow:0 22px 48px rgba(44,36,24,.22)}
 .sc .card img{display:block;width:100%;height:100%;object-fit:cover;border-radius:28px}
 .sc .kicker{position:absolute;left:96px;font:500 40px/1 "Plus Jakarta Sans";letter-spacing:.12em;text-transform:uppercase;color:${C.ink2}}
@@ -247,18 +261,18 @@ function coldOpen(s, id) {
 .${id} .glow{position:absolute;left:190px;top:560px;width:760px;height:760px;border-radius:50%;background:radial-gradient(circle,rgba(214,62,120,.20),transparent 68%)}`,
     html: `
 <div class="glow"></div>
-${from ? `<div class="morph back" style="left:120px;top:420px;width:400px;height:400px"><img src="${asset(from.pairFile)}"><img class="drawn" src="${asset(from.file)}"><i class="sweep"></i></div>` : ''}
-<div class="morph front" style="left:230px;top:640px;width:660px;height:660px"><img src="${asset(to.pairFile)}"><img class="drawn" src="${asset(to.file)}"><i class="sweep"></i></div>
+${from ? `<div class="morph back" style="left:120px;top:420px;width:400px;height:400px"><img src="${asset(from.pairFile)}"><span class="wipe"><img class="drawn" src="${asset(from.file)}"></span><i class="sweep"></i></div>` : ''}
+<div class="morph front" style="left:230px;top:640px;width:660px;height:660px"><img src="${asset(to.pairFile)}"><span class="wipe"><img class="drawn" src="${asset(to.file)}"></span><i class="sweep"></i></div>
 <h1 class="title" style="top:1330px;font-size:118px">${words(s.title)}</h1>`,
     js: `
 var B=${BEAT};
 tl.fromTo(q('.glow'),{scale:.7,opacity:0},{scale:1,opacity:1,duration:2.2,ease:'sine.out'},0);
 ${from ? `
 tl.fromTo(q('.back'),{y:90,rotation:-12,opacity:0},{y:0,rotation:-7,opacity:1,duration:.55,ease:'power3.out'},.1);
-tl.fromTo(q('.back .drawn'),{clipPath:'inset(0 0 0 100%)'},{clipPath:'inset(0 0 0 0%)',duration:.7,ease:'power2.inOut'},B*1.5);
+tl.fromTo(q('.back .wipe'),{xPercent:100},{xPercent:0,duration:.7,ease:'power2.inOut'},B*1.5);tl.fromTo(q('.back .drawn'),{xPercent:-100},{xPercent:0,duration:.7,ease:'power2.inOut'},B*1.5);
 tl.fromTo(q('.back .sweep'),{xPercent:560},{xPercent:-120,duration:.7,ease:'power2.inOut'},B*1.5);` : ''}
 tl.fromTo(q('.front'),{y:260,scale:.86,opacity:0},{y:0,scale:1,opacity:1,duration:.7,ease:'power3.out'},B*2.5);
-tl.fromTo(q('.front .drawn'),{clipPath:'inset(0 0 0 100%)'},{clipPath:'inset(0 0 0 0%)',duration:.9,ease:'power2.inOut'},B*4);
+tl.fromTo(q('.front .wipe'),{xPercent:100},{xPercent:0,duration:.9,ease:'power2.inOut'},B*4);tl.fromTo(q('.front .drawn'),{xPercent:-100},{xPercent:0,duration:.9,ease:'power2.inOut'},B*4);
 tl.fromTo(q('.front .sweep'),{xPercent:560},{xPercent:-120,duration:.9,ease:'power2.inOut'},B*4);
 tl.fromTo(q('.front'),{rotation:0},{rotation:2.5,duration:B*4,ease:'sine.inOut'},B*4);
 tl.fromTo(q('.title .word'),{y:70,opacity:0},{y:0,opacity:1,duration:.5,ease:'power3.out',stagger:.07},B*4.5);`,
@@ -454,7 +468,7 @@ function starring(s, id) {
   const n = people.length * PERSON_BEATS + TOGETHER_BEATS;
   const fan = [[96, 830, -6], [352, 790, 3], [610, 845, -2]];
   const reveal = people.map((p, i) => `<div class="who p${i}">
-  <div class="big disc"><img src="${asset(p.portrait.pairFile)}"><img class="drawn" src="${asset(p.portrait.file)}"></div>
+  <div class="big disc"><img src="${asset(p.portrait.pairFile)}"><span class="wipe"><img class="drawn" src="${asset(p.portrait.file)}"></span></div>
   <h2 class="name">${esc(p.name)}</h2>
   ${(p.moments ?? []).filter((m) => m.file).slice(0, 3).map((m, k) => `<div class="card mo" style="${fitCard(m, { cx: fan[k][0] + 160, cy: fan[k][1] + 205, maxW: 320, maxH: 410, pad: 12 }).style}"><i style="background-image:url(${still(m)})"></i></div>`).join('')}
 </div>`).join('');
@@ -496,7 +510,7 @@ for (var i=0;i<k;i++){
   var t0=i*P, w=q('.p'+i)[0];
   tl.fromTo(w,{opacity:0,y:160},{opacity:1,y:0,duration:.35,ease:'power3.out'},t0);
   tl.fromTo(w.querySelector('.disc'),{scale:.6},{scale:1,duration:.5,ease:'back.out(1.8)'},t0);
-  tl.fromTo(w.querySelector('.drawn'),{clipPath:'inset(0 0 0 100%)'},{clipPath:'inset(0 0 0 0%)',duration:.55,ease:'power2.inOut'},t0+B*1.1);
+  tl.fromTo(w.querySelector('.wipe'),{xPercent:100},{xPercent:0,duration:.55,ease:'power2.inOut'},t0+B*1.1);tl.fromTo(w.querySelector('.drawn'),{xPercent:-100},{xPercent:0,duration:.55,ease:'power2.inOut'},t0+B*1.1);
   tl.fromTo(w.querySelector('.name'),{x:-40,opacity:0},{x:0,opacity:1,duration:.4,ease:'power3.out'},t0+.12);
   w.querySelectorAll('.mo').forEach(function(c,j){
     tl.fromTo(c,{y:120,scale:.7,rotation:0,opacity:0},{y:0,scale:1,rotation:rot[j],opacity:1,duration:.45,ease:'back.out(1.6)'},t0+.3+j*B*.5);
@@ -577,7 +591,7 @@ function sound(s, id) {
    blurred copy of itself — never cropped away (owner, F2 round 1). */
 .${id} .clipbox{position:relative;flex:1 1 auto;min-height:0;border-radius:32px;overflow:hidden}
 .${id} .stub,.${id} .son{flex-shrink:0}
-.${id} .clipbox .bf{position:absolute;inset:-10%;background:center/cover no-repeat;filter:blur(40px) brightness(.6)}
+.${id} .clipbox .bf{position:absolute;inset:-10%;background:center/cover no-repeat}
 .${id} .clipbox video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .${id} .son{align-self:center;display:flex;align-items:center;gap:18px;padding:22px 36px 22px 30px;border-radius:999px;background:rgba(247,241,234,.12);border:2px solid rgba(247,241,234,.35);color:${C.cream};font:700 40px "Plus Jakarta Sans";white-space:nowrap}
 .${id} .son svg{position:static;width:56px;height:56px;overflow:visible}
@@ -592,16 +606,16 @@ ${isVideo ? `
 .${id} .cap{padding:28px 40px;font-size:50px}` : ''}
 ${hero ? `
 .${id} .hero{position:absolute;inset:0;overflow:hidden}
-.${id} .hero .bf{position:absolute;inset:-10%;background:center/cover no-repeat;filter:blur(48px) brightness(.55)}
+.${id} .hero .bf{position:absolute;inset:-10%;background:center/cover no-repeat}
 .${id} .hero video{position:absolute;inset:0;width:100%;height:100%;object-fit:${dims.h / dims.w >= 1.6 ? 'cover' : 'contain'}}
 .${id} .hero .hs{position:absolute;inset:0;background:linear-gradient(180deg,rgba(42,34,48,.82) 0%,rgba(42,34,48,.7) 20%,rgba(42,34,48,0) 34%,rgba(42,34,48,0) 48%,rgba(42,34,48,.85) 100%)}
 .${id} .kicker.light{color:${C.cream}}
 .${id} .col{top:auto;bottom:430px;height:auto}
 .${id} .son{position:absolute;right:150px;top:272px;padding:16px 28px 16px 22px;font-size:34px;background:rgba(42,34,48,.55)}
 .${id} .son svg{width:46px;height:46px}` : ''}`,
-    html: `${hero ? `<div class="hero"><i class="bf" data-layout-allow-overflow style="background-image:url(${poster(clip.file)})"></i>${clipTag}<i class="hs"></i></div>` : ''}<p class="kicker light" style="top:${isVideo ? 300 : 440}px">${esc(s.kicker ?? '')}</p>
+    html: `${hero ? `<div class="hero"><i class="bf" data-layout-allow-overflow style="background-image:url(${blurred(clip, { dim: 0.55, sat: 1 })})"></i>${clipTag}<i class="hs"></i></div>` : ''}<p class="kicker light" style="top:${isVideo ? 300 : 440}px">${esc(s.kicker ?? '')}</p>
 <div class="col"><div class="stub"><div class="band"><i class="wax">m.</i><svg viewBox="0 0 800 120" preserveAspectRatio="none"><path d="${pts}"/></svg><i class="play"></i><b class="time">0:00</b></div>${s.caption ? `<div class="tear"><i class="perf"></i><i class="notch nl"></i><i class="notch nr"></i></div><p class="cap">${esc(ticketCaption(s.caption))}</p>` : ''}</div>
-${isVideo && !hero ? `<div class="clipbox"><i class="bf" data-layout-allow-overflow style="background-image:url(${poster(clip.file)})"></i>${clipTag}</div>` : ''}
+${isVideo && !hero ? `<div class="clipbox"><i class="bf" data-layout-allow-overflow style="background-image:url(${blurred(clip, { dim: 0.6, sat: 1 })})"></i>${clipTag}</div>` : ''}
 ${hero ? '' : soundOn}</div>${hero ? soundOn : ''}
 <audio id="${id}-voice" src="${voiceSrc}" data-start="${voiceStart}" data-duration="${dur.toFixed(3)}" data-hf-media-start-basis="local" data-track-index="11" data-volume="1"></audio>`,
     js: `
@@ -833,13 +847,13 @@ function chapter(s, id) {
 .${id} .cm{border-radius:30px}
 .${id} .cm i{display:block;width:100%;height:100%;border-radius:20px;background:center/cover no-repeat}
 .${id} .ln{position:absolute;left:96px;right:150px;top:1270px;font:700 84px/1.05 "Caveat";color:${C.ink}}`,
-    html: `${s.portrait?.file ? `<div class="disc"><img src="${asset(s.portrait.pairFile ?? s.portrait.file)}"><img class="drawn" src="${asset(s.portrait.file)}"></div>` : ''}
+    html: `${s.portrait?.file ? `<div class="disc"><img src="${asset(s.portrait.pairFile ?? s.portrait.file)}"><span class="wipe"><img class="drawn" src="${asset(s.portrait.file)}"></span></div>` : ''}
 <h2 class="nm">${esc(s.name)}</h2>${cards}
 ${hasLine ? `<p class="ln">${lineWords.map((w, i) => `<span class="word">${esc(i === 0 ? `“${w}` : w)}${i === lineWords.length - 1 ? '”' : ''}</span>`).join(' ')}</p>` : ''}`,
     js: `
 var B=${BEAT}, rot=${JSON.stringify(fan.map((f) => f[2]))};
 ${s.portrait?.file ? `tl.fromTo(q('.disc'),{scale:.5,opacity:0},{scale:1,opacity:1,duration:.5,ease:'back.out(1.8)'},0);
-tl.fromTo(q('.drawn'),{clipPath:'inset(0 0 0 100%)'},{clipPath:'inset(0 0 0 0%)',duration:.6,ease:'power2.inOut'},B*1.2);` : ''}
+tl.fromTo(q('.wipe'),{xPercent:100},{xPercent:0,duration:.6,ease:'power2.inOut'},B*1.2);tl.fromTo(q('.drawn'),{xPercent:-100},{xPercent:0,duration:.6,ease:'power2.inOut'},B*1.2);` : ''}
 tl.fromTo(q('.nm'),{x:-50,opacity:0},{x:0,opacity:1,duration:.45,ease:'power3.out'},.12);
 q('.cm').forEach(function(c,j){ tl.fromTo(c,{y:140,scale:.7,rotation:0,opacity:0},{y:0,scale:1,rotation:rot[j],opacity:1,duration:.5,ease:'back.out(1.6)'},B*2+j*B*.6); });
 ${hasLine ? `tl.fromTo(q('.ln .word'),{y:30,opacity:0},{y:0,opacity:1,duration:.35,ease:'power3.out',stagger:${Math.min(0.12, 1.4 / lineWords.length).toFixed(3)}},B*5);` : ''}`,

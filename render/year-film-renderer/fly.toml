@@ -1,0 +1,17 @@
+# Year Film render worker — Fly.io app config (docs/plans/year-film.md §7.4,
+# §10 F5). COMMITTED, NOT DEPLOYED: deploys and machine runs stay owner-run
+# (same rule as render/memory-book-renderer). F5 uses one-off machines
+# (`fly machine run … --rm`, see README.md) with the synthetic sample only;
+# the HTTP service (HMAC /render, R2 in/out) arrives in P1.
+app = "momora-year-film-renderer"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[[vm]]
+  # F5 (2026-09-28): 63s sample in 93s at ≈ $0.007/film — 2.8× faster than
+  # performance-4x and cheaper per film; performance-2x fails on Fly
+  # (HyperFrames "Missing manifest"). See docs/plans/year-film.md F5.
+  size = "performance-8x"
+  memory = "16gb"

@@ -199,7 +199,10 @@ async function cutVideo(src: string, dst: string, w: Window, keepAudio: boolean)
   const r = await run('ffmpeg', [
     '-v', 'error', '-y', '-ss', String(w.start), '-i', src, '-t', String(Math.max(0.1, w.end - w.start)),
     '-vf', "scale='if(gt(iw,ih),-2,min(1080,iw))':'if(gt(iw,ih),min(1080,ih),-2)',fps=30",
-    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
+    // A keyframe every second: HyperFrames seeks every captured frame, and
+    // x264's default (one per 250 frames — one per clip) warns of seek
+    // failures and frozen frames (F5, 2026-09-28).
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-g', '30', '-keyint_min', '30',
     ...(keepAudio ? ['-c:a', 'aac', '-b:a', '128k', '-af', `afade=t=in:d=0.12,afade=t=out:st=${Math.max(0, w.end - w.start - 0.2)}:d=0.2`] : ['-an']),
     '-movflags', '+faststart', dst,
   ]);
