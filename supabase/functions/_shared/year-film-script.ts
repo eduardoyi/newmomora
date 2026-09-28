@@ -66,6 +66,8 @@ export interface FilmPerson {
   id: string;
   name: string;
   dateOfBirth: string | null;
+  /** family_members.relationship (null = unsorted); drives isFilmChild. */
+  relationship?: string | null;
   createdAt: string;
   portraits: PortraitVersionCandidate[];
 }

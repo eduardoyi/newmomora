@@ -57,6 +57,10 @@ export interface ExportMember {
   illustrated_profile_status: string;
   additional_info: string | null;
   is_user_profile: boolean;
+  /** Family relationships (docs/features/family-relationships.md); optional for older fixtures. */
+  relationship?: string | null;
+  family_side?: string | null;
+  side_member_id?: string | null;
   created_at: string;
 }
 

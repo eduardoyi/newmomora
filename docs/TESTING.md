@@ -286,6 +286,7 @@ Examples:
 - `memories/create-media-memory.yaml` — photo/video memory
 - `memories/create-audio-memory.yaml`, `memories/voice-turn-into-text.yaml`, `memories/edit-audio-description.yaml`, `memories/delete-audio-memory.yaml` — audio memories (the post-recording "Turn into text" / "Keep the sound" fork); CI simulators record silence, which is the intended babble-fallback exercise for these flows
 - `sharing/01-owner-create-invite.yaml` … `04-second-account-sees-timeline.yaml` — numbered sub-flows for the two-account invite → redeem → approve loop (see `.maestro/flows/sharing/README.md` for why it's split and the required run command)
+- `family-relationships/edit-role.yaml` — set Grandparent + side in Edit person, assert the profile subtitle, then clear it again; `family-relationships/whos-who.yaml` — open the Who's who card/sheet when present (read-only; confirm logic is in `src/screen-tests/whos-who.integration.test.tsx`)
 - `sharing/viewer-readonly.yaml` — viewer sees timeline but no create FAB / no edit affordances
 
 ### Photo upload E2E (family profiles)

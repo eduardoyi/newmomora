@@ -361,6 +361,44 @@ Deno.test('family voice returns the AI description alongside cleanedText for usa
   });
 });
 
+Deno.test('family voice resolves "I/me" to the caller\'s linked member, falling back to is_user_profile', async () => {
+  const members = [
+    { id: 'canonical-sarah', name: 'Sarah' },
+    { id: 'legacy-self', name: 'Legacy', is_user_profile: true },
+    { id: 'linked-dad', name: 'Eduardo' },
+  ];
+  const cleanup = async <T>() => ({ cleanedText: 'I built a tower with Sarah', mentionedUserSelf: true } as T);
+  const lookups: Array<{ familyId: string; userId: string }> = [];
+
+  const linked = makeDependencies({
+    getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),
+    getCanonicalFamilyMembers: async () => members,
+    getSelfMemberId: async ({ familyId, userId }) => {
+      lookups.push({ familyId, userId });
+      return 'linked-dad';
+    },
+    chatJson: cleanup,
+  });
+  const linkedResponse = await handleProcessVoiceMemoryWithDependencies(
+    makeRequest({ audioBase64: 'AQID', familyId: FAMILY_ID }),
+    linked.dependencies,
+  );
+  assertEquals((await readBody(linkedResponse)).mentionedMemberIds, ['canonical-sarah', 'linked-dad']);
+  assertEquals(lookups, [{ familyId: FAMILY_ID, userId: USER_ID }]);
+
+  const unlinked = makeDependencies({
+    getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),
+    getCanonicalFamilyMembers: async () => members,
+    getSelfMemberId: async () => null,
+    chatJson: cleanup,
+  });
+  const unlinkedResponse = await handleProcessVoiceMemoryWithDependencies(
+    makeRequest({ audioBase64: 'AQID', familyId: FAMILY_ID }),
+    unlinked.dependencies,
+  );
+  assertEquals((await readBody(unlinkedResponse)).mentionedMemberIds, ['canonical-sarah', 'legacy-self']);
+});
+
 Deno.test('family voice returns an empty description for unusable speech, never an error', async () => {
   const { dependencies } = makeDependencies({
     getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),

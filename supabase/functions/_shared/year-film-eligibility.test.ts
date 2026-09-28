@@ -71,6 +71,19 @@ Deno.test('isFilmChild: children under 13 with a DOB only', () => {
   assertEquals(isFilmChild({ id: 'c', dateOfBirth: null }, '2026-09-26'), false);
 });
 
+Deno.test('isFilmChild: explicit role wins, teens stay out (family relationships)', () => {
+  const today = '2026-09-26';
+  // A niece under 13 marked as a cousin is not the family's own child.
+  assertEquals(isFilmChild({ id: 'niece', dateOfBirth: '2020-05-01', relationship: 'cousin' }, today), false);
+  // An own child marked explicitly counts; unsorted kids keep the DOB rule.
+  assertEquals(isFilmChild({ id: 'kid', dateOfBirth: '2022-10-23', relationship: 'child' }, today), true);
+  assertEquals(isFilmChild({ id: 'newborn', dateOfBirth: '2026-08-01', relationship: null }, today), true);
+  // An explicit 'child' aged 15 is still excluded (under-13 ceiling kept).
+  assertEquals(isFilmChild({ id: 'teen', dateOfBirth: '2011-01-01', relationship: 'child' }, today), false);
+  // No DOB: no film, even when marked.
+  assertEquals(isFilmChild({ id: 'nodob', dateOfBirth: null, relationship: 'child' }, today), false);
+});
+
 Deno.test('visualKind prefers illustration, then video clip, then photo; audio never', () => {
   assertEquals(visualKind(memory({ id: '1', illustrationReady: true })), 'illustration');
   assertEquals(visualKind(memory({ id: '2' })), 'photo');

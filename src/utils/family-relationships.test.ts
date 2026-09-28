@@ -1,0 +1,127 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+import {
+  FAMILY_SIDES,
+  groupByRelationship,
+  isLinkableMember,
+  RELATIONSHIP_LABELS,
+  RELATIONSHIPS,
+  relationshipSubtitle,
+  sideChoices,
+  sideKeyOf,
+  sideLabel,
+  SIDE_ROLES,
+} from './family-relationships';
+
+describe('family relationships parity', () => {
+  const shared = readFileSync(
+    join(__dirname, '../../supabase/functions/_shared/family-relationships.ts'),
+    'utf8',
+  );
+  const migration = readFileSync(
+    join(__dirname, '../../supabase/migrations/20260928120000_family_relationships.sql'),
+    'utf8',
+  );
+
+  function quotedList(source: string, anchor: string): string[] {
+    const start = source.indexOf(anchor);
+    const end = source.indexOf(']', start);
+    return [...source.slice(start, end).matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+  }
+
+  it('matches the Edge shared lists', () => {
+    expect(quotedList(shared, 'export const RELATIONSHIPS')).toEqual([...RELATIONSHIPS]);
+    expect(quotedList(shared, 'export const SIDE_ROLES')).toEqual([...SIDE_ROLES]);
+    expect(quotedList(shared, 'export const FAMILY_SIDES')).toEqual([...FAMILY_SIDES]);
+  });
+
+  it('matches the database check constraint', () => {
+    const start = migration.indexOf('family_members_relationship_check');
+    const end = migration.indexOf(')),', start);
+    const values = [...migration.slice(start, end).matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(values).toEqual([...RELATIONSHIPS]);
+  });
+
+  it('labels every role', () => {
+    expect(Object.keys(RELATIONSHIP_LABELS).sort()).toEqual([...RELATIONSHIPS].sort());
+  });
+});
+
+const dad = { id: 'dad', name: 'Eduardo Yi', relationship: 'parent' };
+const mom = { id: 'mom', name: 'Adriana', relationship: 'parent' };
+
+describe('sideLabel / relationshipSubtitle', () => {
+  it('uses the parent name while they are still a parent', () => {
+    const grandma = { id: 'g', name: 'Mirian', relationship: 'grandparent', side_member_id: 'dad' };
+    expect(sideLabel(grandma, [dad, grandma])).toBe("Eduardo's side");
+    expect(relationshipSubtitle(grandma, [dad, grandma])).toBe("Grandparent · Eduardo's side");
+    expect(relationshipSubtitle(grandma, [{ ...dad, relationship: 'other' }, grandma])).toBe('Grandparent');
+  });
+
+  it('falls back to generic sides and hides sides on non-side roles', () => {
+    expect(sideLabel({ id: 'a', name: 'Ana', relationship: 'aunt_uncle', family_side: 'maternal' }, [])).toBe("Mom's side");
+    expect(sideLabel({ id: 'a', name: 'Ana', relationship: 'cousin', family_side: 'both' }, [])).toBe('Both sides');
+    expect(sideLabel({ id: 'f', name: 'Jo', relationship: 'caregiver', family_side: 'both' }, [])).toBeNull();
+    expect(relationshipSubtitle({ id: 'k', name: 'Enzo', relationship: 'child' }, [])).toBe('Our child');
+    expect(relationshipSubtitle({ id: 'u', name: 'Unsorted', relationship: null }, [])).toBeNull();
+  });
+});
+
+describe('sideChoices', () => {
+  it('offers parents by name plus Both when parents are marked', () => {
+    expect(sideChoices([dad, mom, { id: 'g', name: 'Mirian', relationship: 'grandparent' }]).map((c) => c.label)).toEqual([
+      "Eduardo's side",
+      "Adriana's side",
+      'Both',
+    ]);
+    const choice = sideChoices([dad])[0];
+    expect(choice).toEqual({ key: 'member:dad', label: "Eduardo's side", familySide: null, sideMemberId: 'dad' });
+  });
+
+  it("offers Mom's / Dad's / Both otherwise", () => {
+    expect(sideChoices([]).map((c) => c.key)).toEqual(['maternal', 'paternal', 'both']);
+  });
+
+  it('never offers a person as their own side', () => {
+    expect(sideChoices([dad], 'dad').map((c) => c.key)).toEqual(['maternal', 'paternal', 'both']);
+  });
+
+  it('round-trips the side key', () => {
+    expect(sideKeyOf({ side_member_id: 'dad' })).toBe('member:dad');
+    expect(sideKeyOf({ family_side: 'paternal' })).toBe('paternal');
+    expect(sideKeyOf({})).toBeNull();
+  });
+});
+
+describe('isLinkableMember', () => {
+  const ref = new Date('2026-09-28T12:00:00');
+  it('excludes kids, pets and unsorted under-13s', () => {
+    expect(isLinkableMember({ id: '1', name: 'Enzo', relationship: 'child' }, ref)).toBe(false);
+    expect(isLinkableMember({ id: '2', name: 'Rex', relationship: 'pet' }, ref)).toBe(false);
+    expect(isLinkableMember({ id: '3', name: 'Mara', date_of_birth: '2024-11-08' }, ref)).toBe(false);
+  });
+
+  it('allows adults, unsorted adults and unknown ages', () => {
+    expect(isLinkableMember({ id: '4', name: 'Eduardo', relationship: 'parent' }, ref)).toBe(true);
+    expect(isLinkableMember({ id: '5', name: 'Mirian', date_of_birth: '1960-01-01' }, ref)).toBe(true);
+    expect(isLinkableMember({ id: '6', name: 'Someone', date_of_birth: null }, ref)).toBe(true);
+  });
+});
+
+describe('groupByRelationship', () => {
+  it('orders groups, keeps input order inside and drops empty groups', () => {
+    const members = [
+      { id: 'u1', relationship: null },
+      { id: 'g1', relationship: 'grandparent' },
+      { id: 'k1', relationship: 'child' },
+      { id: 'f1', relationship: 'caregiver' },
+      { id: 'k2', relationship: 'child' },
+      { id: 'f2', relationship: 'family_friend' },
+    ];
+    const groups = groupByRelationship(members);
+    expect(groups.map((g) => g.title)).toEqual(['Our kids', 'Grandparents', 'Friends & caregivers', 'Not sorted yet']);
+    expect(groups[0].members.map((m) => m.id)).toEqual(['k1', 'k2']);
+    expect(groups[2].members.map((m) => m.id)).toEqual(['f1', 'f2']);
+  });
+});

@@ -96,7 +96,7 @@ Service-role-only table (RLS enabled, no client policies), one row per external 
 | `id`, `created_at` | |
 | `attribution_scope` | `family` (default) or `onboarding` |
 | `family_id`, `onboarding_request_id`, `actor_user_id` | Exact attribution. Family events require a real `family_id` and no onboarding request. Onboarding events link to one server-issued opaque attempt request, have `family_id = null`, and actor attribution may become null after anonymous Auth cleanup. |
-| `operation` | `illustration` \| `portrait` \| `safety_chat` \| `emotion_chat` \| `emotion_vision` \| `transcription` \| `voice_cleanup` |
+| `operation` | `illustration` \| `portrait` \| `safety_chat` \| `emotion_chat` \| `emotion_vision` \| `transcription` \| `voice_cleanup` \| `relationship_chat` (telemetry only, not capped — see [family-relationships](../plans/family-relationships.md)) |
 | `usage_request_id`, `family_id`, `actor_user_id`, `operation`, `model`, `request_intent`, `provider` | durable attribution and request linkage |
 | `success` | boolean |
 | `provider_usage`, token/audio dimensions, `pricing_version`, `cost_basis`, `billing_status`, `cost_is_complete`, `estimated_cost_usd` | allowlisted provider data and immutable cost interpretation |

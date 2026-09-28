@@ -3,7 +3,7 @@ begin;
 -- RLS policies express row ownership; these assertions protect the separate
 -- PostgreSQL ACL layer. A fresh current Supabase bootstrap grants neither
 -- layer implicitly, so both are required for normal authenticated clients.
-select plan(18);
+select plan(22);
 
 select ok(has_table_privilege('authenticated', 'public.user_profiles', 'SELECT, UPDATE'), 'authenticated can read and update its RLS-scoped profile');
 select ok(has_table_privilege('authenticated', 'public.families', 'SELECT, UPDATE, DELETE'), 'authenticated has the family operations backed by RLS policies');
@@ -25,6 +25,13 @@ select ok(not has_table_privilege('authenticated', 'public.ai_image_generation_r
 select ok(not has_table_privilege('authenticated', 'public.ai_onboarding_voice_requests', 'SELECT, INSERT, UPDATE, DELETE'), 'authenticated cannot access onboarding voice reservations');
 select ok(not has_table_privilege('authenticated', 'public.memory_illustration_jobs', 'SELECT, INSERT, UPDATE, DELETE'), 'authenticated cannot access private illustration workflow jobs');
 select ok(not has_table_privilege('authenticated', 'public.portrait_generation_jobs', 'SELECT, INSERT, UPDATE, DELETE'), 'authenticated cannot access private portrait workflow jobs');
+
+-- Family relationships: suggestions are read-only for clients (owner/manager
+-- RLS), and the "this is me" link columns are written only by definer RPCs.
+select ok(has_table_privilege('authenticated', 'public.family_member_suggestions', 'SELECT'), 'authenticated can read RLS-scoped relationship suggestions');
+select ok(not has_table_privilege('authenticated', 'public.family_member_suggestions', 'INSERT, UPDATE, DELETE, TRUNCATE'), 'authenticated cannot write relationship suggestions directly');
+select ok(not has_table_privilege('anon', 'public.family_member_suggestions', 'SELECT, INSERT, UPDATE, DELETE'), 'anon has no direct relationship-suggestion access');
+select ok(not has_column_privilege('authenticated', 'public.family_memberships', 'family_member_id', 'UPDATE'), 'authenticated cannot write the "this is me" link column directly');
 
 select * from finish();
 rollback;

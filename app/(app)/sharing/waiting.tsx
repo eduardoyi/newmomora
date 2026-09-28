@@ -8,7 +8,8 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useRedeemedInviteStatus } from '@/hooks/useRedeemedInviteStatus';
 import { userProfileQueryKey } from '@/hooks/useUserProfile';
-import { noFamilyRoute, timelineRoute } from '@/lib/routes';
+import { noFamilyRoute, timelineRoute, whosWhoSelfRoute } from '@/lib/routes';
+import { familyHasLinkableMember } from '@/services/family-relationships';
 import { pickNewlyJoinedFamilyId } from '@/utils/invites';
 
 export default function WaitingForApprovalScreen() {
@@ -68,6 +69,12 @@ export default function WaitingForApprovalScreen() {
       // newFamilyId was found but the server-side update should still be
       // picked up.
       await queryClient.invalidateQueries({ queryKey: userProfileQueryKey });
+      // "Are you in the family?" (docs/features/family-relationships.md) when
+      // there is someone to pick; that screen says who they joined. Skippable.
+      if (newFamilyId && (await familyHasLinkableMember(newFamilyId))) {
+        router.replace(whosWhoSelfRoute('timeline'));
+        return;
+      }
       router.replace(timelineRoute);
       Alert.alert('Welcome!', `You've joined ${familyName}.`);
     })();

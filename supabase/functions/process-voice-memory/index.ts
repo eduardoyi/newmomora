@@ -104,6 +104,9 @@ export interface ProcessVoiceMemoryDependencies {
     familyId: string;
   }) => Promise<ProcessVoiceFamilyMember[]>;
   getFamilyRole: (supabase: unknown, familyId: string, userId: string) => Promise<unknown>;
+  /** The caller's "this is me" member (family_memberships.family_member_id),
+   * docs/features/family-relationships.md. Optional so older fakes keep working. */
+  getSelfMemberId?: (input: { supabase: unknown; familyId: string; userId: string }) => Promise<string | null>;
   transcribeAudio: (audioBase64: string, prompt: string, options: {
     usageContext: {
       attributionScope: 'family'; familyId: string; actorUserId: string; operation: 'transcription';
@@ -388,7 +391,13 @@ export async function handleProcessVoiceMemoryWithDependencies(
     const mentionedMemberIds = matchMemberIdsMentionedInText(cleanedText, familyMembers);
 
     if (cleanup.mentionedUserSelf) {
-      const selfMember = familyMembers.find((member) => member.is_user_profile);
+      // The speaker's own account link wins; the deprecated is_user_profile
+      // flag stays as a fallback (only demo seeds set it).
+      const linkedId = dependencies.getSelfMemberId
+        ? await dependencies.getSelfMemberId({ supabase, familyId, userId: user.id })
+        : null;
+      const selfMember = familyMembers.find((member) => member.id === linkedId)
+        ?? familyMembers.find((member) => member.is_user_profile);
       if (selfMember && !mentionedMemberIds.includes(selfMember.id)) {
         mentionedMemberIds.push(selfMember.id);
       }
@@ -438,6 +447,16 @@ export async function handleProcessVoiceMemory(req: Request): Promise<Response> 
     getFamilyRole: (supabase, familyId, userId) => getCallerFamilyRole(
       supabase as ReturnType<typeof createServiceClient>, familyId, userId,
     ),
+    getSelfMemberId: async ({ supabase, familyId, userId }) => {
+      const { data, error } = await (supabase as ReturnType<typeof createServiceClient>)
+        .from('family_memberships')
+        .select('family_member_id')
+        .eq('family_id', familyId)
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as { family_member_id: string | null } | null)?.family_member_id ?? null;
+    },
     transcribeAudio,
     chatJson,
   });

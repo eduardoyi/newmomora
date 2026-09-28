@@ -1047,6 +1047,7 @@ export type Database = {
           illustration_style: string
           name: string
           owner_id: string
+          relationship_suggested_at: string | null
           updated_at: string
           viewer_sharing_enabled: boolean
         }
@@ -1063,6 +1064,7 @@ export type Database = {
           illustration_style?: string
           name: string
           owner_id: string
+          relationship_suggested_at?: string | null
           updated_at?: string
           viewer_sharing_enabled?: boolean
         }
@@ -1079,6 +1081,7 @@ export type Database = {
           illustration_style?: string
           name?: string
           owner_id?: string
+          relationship_suggested_at?: string | null
           updated_at?: string
           viewer_sharing_enabled?: boolean
         }
@@ -1330,6 +1333,63 @@ export type Database = {
           },
         ]
       }
+      family_member_suggestions: {
+        Row: {
+          based_on: string | null
+          created_at: string
+          decided_at: string | null
+          decided_by: string | null
+          family_id: string
+          family_member_id: string
+          field: string
+          id: string
+          side_member_id: string | null
+          status: string
+          value: string
+        }
+        Insert: {
+          based_on?: string | null
+          created_at?: string
+          decided_at?: string | null
+          decided_by?: string | null
+          family_id: string
+          family_member_id: string
+          field: string
+          id?: string
+          side_member_id?: string | null
+          status?: string
+          value: string
+        }
+        Update: {
+          based_on?: string | null
+          created_at?: string
+          decided_at?: string | null
+          decided_by?: string | null
+          family_id?: string
+          family_member_id?: string
+          field?: string
+          id?: string
+          side_member_id?: string | null
+          status?: string
+          value?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "family_member_suggestions_member_fkey"
+            columns: ["family_member_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id", "family_id"]
+          },
+          {
+            foreignKeyName: "family_member_suggestions_side_member_fkey"
+            columns: ["side_member_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id", "family_id"]
+          },
+        ]
+      }
       family_members: {
         Row: {
           additional_info: string | null
@@ -1338,6 +1398,7 @@ export type Database = {
           deletion_fence_started_at: string | null
           deletion_fence_token: string | null
           family_id: string
+          family_side: string | null
           gender: string | null
           id: string
           illustrated_profile_key: string | null
@@ -1346,6 +1407,8 @@ export type Database = {
           name: string
           nicknames: string[] | null
           profile_picture_key: string | null
+          relationship: string | null
+          side_member_id: string | null
           updated_at: string
           user_id: string | null
         }
@@ -1356,6 +1419,7 @@ export type Database = {
           deletion_fence_started_at?: string | null
           deletion_fence_token?: string | null
           family_id: string
+          family_side?: string | null
           gender?: string | null
           id?: string
           illustrated_profile_key?: string | null
@@ -1364,6 +1428,8 @@ export type Database = {
           name: string
           nicknames?: string[] | null
           profile_picture_key?: string | null
+          relationship?: string | null
+          side_member_id?: string | null
           updated_at?: string
           user_id?: string | null
         }
@@ -1374,6 +1440,7 @@ export type Database = {
           deletion_fence_started_at?: string | null
           deletion_fence_token?: string | null
           family_id?: string
+          family_side?: string | null
           gender?: string | null
           id?: string
           illustrated_profile_key?: string | null
@@ -1382,6 +1449,8 @@ export type Database = {
           name?: string
           nicknames?: string[] | null
           profile_picture_key?: string | null
+          relationship?: string | null
+          side_member_id?: string | null
           updated_at?: string
           user_id?: string | null
         }
@@ -1393,6 +1462,13 @@ export type Database = {
             referencedRelation: "families"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "family_members_side_member_fkey"
+            columns: ["side_member_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id", "family_id"]
+          },
         ]
       }
       family_memberships: {
@@ -1400,7 +1476,9 @@ export type Database = {
           activity_seen_at: string | null
           created_at: string
           family_id: string
+          family_member_id: string | null
           id: string
+          not_in_list: boolean
           role: string
           updated_at: string
           user_id: string
@@ -1409,7 +1487,9 @@ export type Database = {
           activity_seen_at?: string | null
           created_at?: string
           family_id: string
+          family_member_id?: string | null
           id?: string
+          not_in_list?: boolean
           role: string
           updated_at?: string
           user_id: string
@@ -1418,7 +1498,9 @@ export type Database = {
           activity_seen_at?: string | null
           created_at?: string
           family_id?: string
+          family_member_id?: string | null
           id?: string
+          not_in_list?: boolean
           role?: string
           updated_at?: string
           user_id?: string
@@ -1430,6 +1512,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "families"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "family_memberships_family_member_fkey"
+            columns: ["family_member_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id", "family_id"]
           },
         ]
       }
@@ -3799,6 +3888,13 @@ export type Database = {
         }
         Returns: boolean
       }
+      claim_relationship_suggestion_run: {
+        Args: { p_family_id: string }
+        Returns: {
+          claimed: boolean
+          previous_suggested_at: string
+        }[]
+      }
       claim_stale_gallery_chunks: {
         Args: { p_limit?: number }
         Returns: {
@@ -3864,6 +3960,7 @@ export type Database = {
           illustration_style: string
           name: string
           owner_id: string
+          relationship_suggested_at: string | null
           updated_at: string
           viewer_sharing_enabled: boolean
         }
@@ -3975,6 +4072,7 @@ export type Database = {
           illustration_style: string
           name: string
           owner_id: string
+          relationship_suggested_at: string | null
           updated_at: string
           viewer_sharing_enabled: boolean
         }
@@ -4077,6 +4175,14 @@ export type Database = {
           output_key: string
           terminal_status: string
         }[]
+      }
+      fail_relationship_suggestion_run: {
+        Args: { p_family_id: string }
+        Returns: undefined
+      }
+      family_relationship_signals: {
+        Args: { p_family_id: string }
+        Returns: Json
       }
       finalize_gallery_import_candidate: {
         Args: { p_candidate_id: string; p_capability: string }
@@ -4386,6 +4492,10 @@ export type Database = {
       has_family_role: {
         Args: { fam: string; roles: string[] }
         Returns: boolean
+      }
+      insert_family_member_suggestions: {
+        Args: { p_family_id: string; p_rows: Json }
+        Returns: number
       }
       is_anonymous_user: { Args: never; Returns: boolean }
       is_family_member: { Args: { fam: string }; Returns: boolean }
@@ -4818,6 +4928,10 @@ export type Database = {
         Args: { p_attempt_number: number; p_job_id: string; p_provider: string }
         Returns: boolean
       }
+      resolve_family_member_suggestions: {
+        Args: { p_accept: string[]; p_dismiss: string[]; p_family_id: string }
+        Returns: Json
+      }
       return_looking_back_daily_set: {
         Args: { p_daily_set_id: string; p_user_id: string }
         Returns: {
@@ -4975,6 +5089,14 @@ export type Database = {
           liked: boolean
         }[]
       }
+      set_my_family_member: {
+        Args: {
+          p_family_id: string
+          p_member_id: string
+          p_not_in_list?: boolean
+        }
+        Returns: undefined
+      }
       start_export_job: {
         Args: {
           p_family_count: number
@@ -4997,6 +5119,10 @@ export type Database = {
       supersede_portrait_generation_workflow_jobs: {
         Args: { p_current_attempt_id: string; p_portrait_version_id: string }
         Returns: number
+      }
+      unlink_family_member_account: {
+        Args: { p_family_id: string; p_member_id: string }
+        Returns: undefined
       }
       update_family_member_portrait_version_date: {
         Args: { portrait_reference_date: string; target_version_id: string }

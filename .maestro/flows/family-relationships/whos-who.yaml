@@ -1,0 +1,40 @@
+appId: com.memora.app
+---
+# Family relationships (docs/features/family-relationships.md): the Family
+# tab's "Who's who" card and sheet. The card only shows when there are AI
+# suggestions or the account hasn't said which person it is, so each step is
+# conditional; the confirm/drop/override logic itself is covered by
+# src/screen-tests/whos-who.integration.test.tsx.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: tab-family
+- extendedWaitUntil:
+    visible:
+      id: "family-member-card-info-.*"
+    timeout: 15000
+- runFlow:
+    when:
+      visible:
+        id: family-whos-who-card
+    commands:
+      - tapOn:
+          id: family-whos-who-open
+      - extendedWaitUntil:
+          visible:
+            id: whos-who-screen
+          timeout: 15000
+      # Read-only on purpose: confirming would write the AI's suggestions to
+      # the test account. Either part (which one is you / suggestions) shows.
+      - assertVisible:
+          id: "whos-who-(confirm|not-listed|you-are|all-sorted)"
+      - runFlow:
+          when:
+            visible:
+              id: whos-who-close
+          commands:
+            - tapOn:
+                id: whos-who-close
+      - extendedWaitUntil:
+          visible:
+            id: "family-member-card-info-.*"
+          timeout: 15000

@@ -85,6 +85,7 @@ interface MemberRow {
   id: string;
   name: string;
   date_of_birth: string | null;
+  relationship: string | null;
 }
 
 interface MemoryRow {
@@ -225,7 +226,7 @@ function mediaKind(contentType: string): FilmMediaInput['kind'] | null {
 async function loadFamilyData(supabase: AuthedClient, family: FamilyRow): Promise<FamilyData> {
   const { data: members, error: membersError } = await supabase
     .from('family_members')
-    .select('id, name, date_of_birth')
+    .select('id, name, date_of_birth, relationship')
     .eq('family_id', family.id);
   if (membersError) throw new Error(`Failed to load family_members: ${membersError.message}`);
 
@@ -392,7 +393,7 @@ function evaluateFamily(
 ): { birthdays: BirthdayRow[]; familyFilms: FamilyFilmRow[]; monthly: MonthlyRow[] } {
   const children = data.members.filter(
     (m) =>
-      isFilmChild({ id: m.id, dateOfBirth: m.date_of_birth }, today) &&
+      isFilmChild({ id: m.id, dateOfBirth: m.date_of_birth, relationship: m.relationship }, today) &&
       (allowlist === null || allowlist.includes(firstName(m.name).toLowerCase())),
   );
   const birthdays: BirthdayRow[] = [];

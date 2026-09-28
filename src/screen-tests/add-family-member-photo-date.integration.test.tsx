@@ -68,6 +68,7 @@ describe('initial family member photo date', () => {
     jest.clearAllMocks();
     mockedUseFamily.mockReturnValue({ role: 'manager' } as ReturnType<typeof useFamily>);
     mockedUseFamilyMembers.mockReturnValue({
+      members: [],
       createMember: mockCreateMember,
       isCreating: false,
     } as ReturnType<typeof useFamilyMembers>);

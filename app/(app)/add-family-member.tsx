@@ -17,6 +17,7 @@ import { AuthErrorMessage, AuthField, AuthInput } from '@/components/auth-screen
 import { DatePickerField } from '@/components/date-picker-field';
 import { KeyboardAwareFormScreen } from '@/components/keyboard-aware-form-screen';
 import { NicknameInputRow } from '@/components/nickname-input-row';
+import { EMPTY_RELATIONSHIP, RelationshipPicker, type RelationshipValue } from '@/components/relationship-picker';
 import { SelectField } from '@/components/select-field';
 import { GENDER_OPTIONS } from '@/constants/gender-options';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
@@ -55,7 +56,7 @@ const PHOTO_DATE_SOURCE_LABELS: Record<Exclude<PortraitDateSource, 'legacy_unkno
 
 export default function AddFamilyMemberScreen() {
   const { role } = useFamily();
-  const { createMember, isCreating } = useFamilyMembers();
+  const { members, createMember, isCreating } = useFamilyMembers();
   const { updateProfile } = useUserProfile();
 
   // Guard on mount: viewers reaching this route directly get bounced back.
@@ -70,6 +71,7 @@ export default function AddFamilyMemberScreen() {
   const [additionalInfo, setAdditionalInfo] = useState('');
   const [nicknames, setNicknames] = useState<string[]>([]);
   const [nicknameInput, setNicknameInput] = useState('');
+  const [relationship, setRelationship] = useState<RelationshipValue>(EMPTY_RELATIONSHIP);
   const [photo, setPhoto] = useState<FamilyProfilePhotoSelection | null>(null);
   const [photoReferenceDate, setPhotoReferenceDate] = useState('');
   const [photoDateSource, setPhotoDateSource] = useState<Exclude<PortraitDateSource, 'legacy_unknown'>>('default_today');
@@ -212,6 +214,9 @@ export default function AddFamilyMemberScreen() {
         gender: gender.trim() || undefined,
         additionalInfo: additionalInfo.trim() || undefined,
         nicknames: nicknames.length > 0 ? nicknames : undefined,
+        relationship: relationship.relationship,
+        familySide: relationship.familySide,
+        sideMemberId: relationship.sideMemberId,
         photoUri: photo.uri,
         photoContentType: photo.contentType,
         photoReferenceDate,
@@ -287,6 +292,13 @@ export default function AddFamilyMemberScreen() {
             value={name}
           />
         </AuthField>
+
+        <RelationshipPicker
+          members={members}
+          onChange={setRelationship}
+          testIDPrefix="add-family-member"
+          value={relationship}
+        />
 
         <AuthField label="Date of birth">
           <DatePickerField

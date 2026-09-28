@@ -170,6 +170,7 @@ export default function AppLayout() {
           name="memory/[id]/edit"
           options={{ presentation: 'modal' }}
         />
+        <Stack.Screen name="whos-who" options={{ presentation: 'modal' }} />
         <Stack.Screen name="family/[id]" />
         <Stack.Screen name="family/[id]/portraits" />
         <Stack.Screen name="family/[id]/memory-books" />

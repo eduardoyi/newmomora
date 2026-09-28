@@ -13,6 +13,10 @@ export interface CreateFamilyMemberInput {
   gender?: string;
   additionalInfo?: string;
   nicknames?: string[] | null;
+  /** Who they are to the kids (docs/features/family-relationships.md). */
+  relationship?: string | null;
+  familySide?: string | null;
+  sideMemberId?: string | null;
 }
 
 export interface UpdateFamilyMemberInput {
@@ -21,6 +25,9 @@ export interface UpdateFamilyMemberInput {
   gender?: string | null;
   additionalInfo?: string | null;
   nicknames?: string[] | null;
+  relationship?: string | null;
+  familySide?: string | null;
+  sideMemberId?: string | null;
 }
 
 export function validateFamilyMemberName(name: string): string | null {

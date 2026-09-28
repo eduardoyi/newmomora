@@ -15,6 +15,23 @@ jest.mock('expo-router', () => ({
 }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
+jest.mock('@/hooks/useFamilyRelationships', () => ({
+  useFamilyRelationships: () => ({
+    canEdit: false,
+    suggestions: [],
+    isLoadingSuggestions: false,
+    myLink: null,
+    myMemberId: null,
+    claimedByOthers: new Set(),
+    isLoadingLinks: false,
+    resolve: jest.fn(),
+    isResolving: false,
+    linkMe: jest.fn(),
+    isLinking: false,
+    unlinkAccount: jest.fn(),
+    requestSuggestions: jest.fn(),
+  }),
+}));
 jest.mock('@/hooks/useMediaUrls', () => ({ useMediaUrl: jest.fn() }));
 jest.mock('@/hooks/useMemories', () => ({ useMemberMemories: jest.fn() }));
 jest.mock('@/hooks/usePortraitVersions', () => ({ usePortraitVersions: jest.fn() }));

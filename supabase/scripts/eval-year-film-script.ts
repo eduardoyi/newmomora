@@ -572,7 +572,7 @@ const data: EvalFamilyData = await loadFamilyData(supabase, families[0]);
 const children: FilmPerson[] = pickChildren(
   data.members,
   options.children,
-  (m) => isFilmChild({ id: m.id, dateOfBirth: m.dateOfBirth }, options.today),
+  (m) => isFilmChild({ id: m.id, dateOfBirth: m.dateOfBirth, relationship: m.relationship }, options.today),
 );
 const textById = new Map(data.memories.map((m) => [m.id, m.text]));
 // Share-sensitive memories never reach the quote picker (plan §3).

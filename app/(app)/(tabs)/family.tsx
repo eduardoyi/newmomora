@@ -1,6 +1,7 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { CastCard } from '@/components/cast-card';
@@ -8,8 +9,23 @@ import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useContentSafety } from '@/hooks/useContentSafety';
-import { addFamilyMemberRoute, editFamilyMemberRoute, familyMemberRoute } from '@/lib/routes';
+import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
+import { addFamilyMemberRoute, editFamilyMemberRoute, familyMemberRoute, whosWhoRoute } from '@/lib/routes';
 import { isFamilyMemberProfileIncomplete } from '@/utils/family-members';
+import {
+  groupByRelationship,
+  isLinkableMember,
+  relationshipLabel,
+  sideLabel,
+} from '@/utils/family-relationships';
+import {
+  EMPTY_WHOS_WHO_DISMISSAL,
+  getWhosWhoDismissal,
+  newestSuggestionAt,
+  setWhosWhoDismissal,
+  whosWhoCardKind,
+  type WhosWhoDismissal,
+} from '@/utils/whos-who-card';
 import { canEditFamilyContent } from '@/utils/roles';
 import type { FamilyMember } from '@/services/family-members';
 
@@ -28,11 +44,65 @@ function resolveMemberDestination(member: FamilyMember, canEdit: boolean) {
   return familyMemberRoute(member.id);
 }
 
+/**
+ * The card line under a name. Section headers already say the role, so only
+ * the side ("Eduardo's side") is added -- except in the mixed "Friends &
+ * caregivers" section, where the role itself is the useful bit.
+ */
+function memberSubtitle(member: FamilyMember, members: FamilyMember[]): string | null {
+  const side = sideLabel(member, members);
+  if (side) return side;
+  if (member.relationship === 'family_friend' || member.relationship === 'caregiver') {
+    return relationshipLabel(member.relationship);
+  }
+  return null;
+}
+
 export default function FamilyScreen() {
-  const { role } = useFamily();
+  const { role, familyId } = useFamily();
   const canEdit = canEditFamilyContent(role);
   const { members, isLoading, isRefetching, isError, refetch } = useFamilyMembers();
   const contentSafety = useContentSafety();
+  const relationships = useFamilyRelationships(members);
+  const { requestSuggestions } = relationships;
+  const [dismissal, setDismissal] = useState<WhosWhoDismissal>(EMPTY_WHOS_WHO_DISMISSAL);
+
+  useEffect(() => {
+    if (!familyId) return;
+    let isMounted = true;
+    void getWhosWhoDismissal(familyId).then((value) => {
+      if (isMounted) setDismissal(value);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [familyId]);
+
+  // Owner/manager opening the tab is the suggestion trigger; the server
+  // throttles (docs/features/family-relationships.md).
+  useFocusEffect(useCallback(() => {
+    requestSuggestions();
+  }, [requestSuggestions]));
+
+  const groups = useMemo(() => groupByRelationship(members), [members]);
+  const showSectionHeaders = groups.length >= 2;
+  const cardKind = whosWhoCardKind({
+    canEdit,
+    suggestions: relationships.suggestions,
+    isLinked: Boolean(relationships.myMemberId),
+    notInList: relationships.myLink?.notInList ?? false,
+    hasLinkableMember: !relationships.isLoadingLinks && members.some((m) => isLinkableMember(m)),
+    dismissal,
+  });
+
+  const dismissCard = () => {
+    if (!familyId) return;
+    const next: WhosWhoDismissal = cardKind === 'suggestions'
+      ? { ...dismissal, suggestionsSeenAt: newestSuggestionAt(relationships.suggestions) }
+      : { ...dismissal, selfPromptDismissed: true };
+    setDismissal(next);
+    void setWhosWhoDismissal(familyId, next);
+  };
 
   if (isLoading || contentSafety.isLoading) {
     return (
@@ -74,36 +144,71 @@ export default function FamilyScreen() {
         </SafeAreaView>
 
         <View style={styles.castList}>
-          {members.map((member) => {
-            const portraitId = member.resolvedPortraitVersion?.id ?? null;
-            const isProfileHidden = contentSafety.isTargetReported('family_member_profile', member.id);
-            const isPortraitHidden = contentSafety.isTargetReported('family_member_portrait', portraitId);
-            if (isProfileHidden) {
-              return (
-                <ContentHiddenNotice
-                  key={member.id}
-                  label="Reported family profile hidden"
-                  onShow={() => contentSafety.revealTarget('family_member_profile', member.id)}
-                  testID={`family-cast-card-${member.id}-hidden`}
-                />
-              );
-            }
-            const destination = resolveMemberDestination(member, canEdit);
-            return (
-              <View key={member.id} testID={`family-cast-card-${member.id}`}>
-                <CastCard
-                  canEdit={canEdit}
-                  isPortraitHidden={isPortraitHidden}
-                  member={member}
-                  onPress={() => router.push(destination)}
-                  onPortraitPress={() => router.push(destination)}
-                  onShowPortrait={portraitId
-                    ? () => contentSafety.revealTarget('family_member_portrait', portraitId)
-                    : undefined}
-                />
-              </View>
-            );
-          })}
+          {cardKind ? (
+            <View style={styles.whosWhoCard} testID="family-whos-who-card">
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push(whosWhoRoute)}
+                style={({ pressed }) => [styles.whosWhoBody, pressed && styles.addTilePressed]}
+                testID="family-whos-who-open"
+              >
+                <Text style={styles.whosWhoTitle}>Who’s who?</Text>
+                <Text style={styles.whosWhoText}>
+                  {cardKind === 'suggestions'
+                    ? 'We sorted your people — take a look.'
+                    : 'Tell us which one is you.'}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Hide for now"
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={dismissCard}
+                style={styles.whosWhoClose}
+                testID="family-whos-who-dismiss"
+              >
+                <Text style={styles.whosWhoCloseText}>×</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {groups.map((group) => (
+            <View key={group.key} style={styles.group} testID={`family-group-${group.key}`}>
+              {showSectionHeaders ? <Text style={styles.groupTitle}>{group.title}</Text> : null}
+              {group.members.map((member) => {
+                const portraitId = member.resolvedPortraitVersion?.id ?? null;
+                const isProfileHidden = contentSafety.isTargetReported('family_member_profile', member.id);
+                const isPortraitHidden = contentSafety.isTargetReported('family_member_portrait', portraitId);
+                if (isProfileHidden) {
+                  return (
+                    <ContentHiddenNotice
+                      key={member.id}
+                      label="Reported family profile hidden"
+                      onShow={() => contentSafety.revealTarget('family_member_profile', member.id)}
+                      testID={`family-cast-card-${member.id}-hidden`}
+                    />
+                  );
+                }
+                const destination = resolveMemberDestination(member, canEdit);
+                return (
+                  <View key={member.id} testID={`family-cast-card-${member.id}`}>
+                    <CastCard
+                      canEdit={canEdit}
+                      isMe={relationships.myMemberId === member.id}
+                      isPortraitHidden={isPortraitHidden}
+                      member={member}
+                      subtitle={memberSubtitle(member, members)}
+                      onPress={() => router.push(destination)}
+                      onPortraitPress={() => router.push(destination)}
+                      onShowPortrait={portraitId
+                        ? () => contentSafety.revealTarget('family_member_portrait', portraitId)
+                        : undefined}
+                    />
+                  </View>
+                );
+              })}
+            </View>
+          ))}
 
           {canEdit ? (
             <Pressable
@@ -184,6 +289,50 @@ const styles = StyleSheet.create({
   },
   castCardPressed: {
     opacity: 0.85,
+  },
+  group: {
+    gap: 16,
+  },
+  groupTitle: {
+    fontFamily: fonts.sansBold,
+    fontSize: 11,
+    letterSpacing: 0.14 * 11,
+    textTransform: 'uppercase',
+    color: colors.ink3,
+    marginTop: 4,
+    paddingHorizontal: 4,
+  },
+  whosWhoCard: {
+    backgroundColor: colors.primaryTint,
+    borderColor: colors.primarySoft,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  whosWhoBody: {
+    flex: 1,
+    gap: 4,
+    padding: 18,
+  },
+  whosWhoTitle: {
+    fontFamily: fonts.displayMedium,
+    fontSize: 20,
+    color: colors.ink,
+  },
+  whosWhoText: {
+    fontFamily: fonts.sans,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.ink2,
+  },
+  whosWhoClose: {
+    padding: 14,
+  },
+  whosWhoCloseText: {
+    color: colors.ink3,
+    fontSize: 20,
+    lineHeight: 22,
   },
   emptyViewerText: {
     fontFamily: fonts.sans,

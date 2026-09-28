@@ -18,6 +18,7 @@ import { DatePickerField } from '@/components/date-picker-field';
 import { FamilyProfilePortraitPhoto } from '@/components/family-profile-portrait-photo';
 import { KeyboardAwareFormScreen } from '@/components/keyboard-aware-form-screen';
 import { NicknameInputRow } from '@/components/nickname-input-row';
+import { EMPTY_RELATIONSHIP, RelationshipPicker, type RelationshipValue } from '@/components/relationship-picker';
 import { SelectField } from '@/components/select-field';
 import { GENDER_OPTIONS } from '@/constants/gender-options';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
@@ -25,6 +26,7 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { portraitTimelineRoute } from '@/lib/routes';
 import { parseIsoDate } from '@/utils/dates';
+import { isRelationship } from '@/utils/family-relationships';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
   getProfilePortraitPhotoKey,
@@ -70,6 +72,7 @@ export default function EditFamilyMemberScreen() {
   const [additionalInfo, setAdditionalInfo] = useState('');
   const [nicknames, setNicknames] = useState<string[]>([]);
   const [nicknameInput, setNicknameInput] = useState('');
+  const [relationship, setRelationship] = useState<RelationshipValue>(EMPTY_RELATIONSHIP);
   const [photo, setPhoto] = useState<FamilyProfilePhotoSelection | null>(null);
   const [photoReferenceDate, setPhotoReferenceDate] = useState('');
   const [photoDateSource, setPhotoDateSource] = useState<Exclude<PortraitDateSource, 'legacy_unknown'>>('default_today');
@@ -90,6 +93,11 @@ export default function EditFamilyMemberScreen() {
       setGender(member.gender ?? '');
       setAdditionalInfo(member.additional_info ?? '');
       setNicknames(member.nicknames ?? []);
+      setRelationship({
+        relationship: isRelationship(member.relationship) ? member.relationship : null,
+        familySide: member.family_side ?? null,
+        sideMemberId: member.side_member_id ?? null,
+      });
       setIsInitialized(true);
     }
   }, [member, isInitialized]);
@@ -206,6 +214,9 @@ export default function EditFamilyMemberScreen() {
         gender: gender.trim() || null,
         additionalInfo: additionalInfo.trim() || null,
         nicknames,
+        relationship: relationship.relationship,
+        familySide: relationship.familySide,
+        sideMemberId: relationship.sideMemberId,
         ...(photo ? {
           photoUri: photo.uri,
           photoContentType: photo.contentType,
@@ -370,6 +381,14 @@ export default function EditFamilyMemberScreen() {
             value={name}
           />
         </AuthField>
+
+        <RelationshipPicker
+          memberId={member?.id}
+          members={members}
+          onChange={setRelationship}
+          testIDPrefix="edit-family-member"
+          value={relationship}
+        />
 
         <AuthField label="Date of birth (optional)">
           <DatePickerField

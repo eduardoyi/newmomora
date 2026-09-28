@@ -117,6 +117,9 @@ export function useFamilyMembers() {
       gender?: string | null;
       additionalInfo?: string | null;
       nicknames?: string[];
+      relationship?: string | null;
+      familySide?: string | null;
+      sideMemberId?: string | null;
       photoUri?: string;
       photoContentType?: string;
       photoReferenceDate?: string;
@@ -140,6 +143,9 @@ export function useFamilyMembers() {
         gender: input.gender,
         additionalInfo: input.additionalInfo,
         nicknames: input.nicknames,
+        relationship: input.relationship,
+        familySide: input.familySide,
+        sideMemberId: input.sideMemberId,
         photoUri: input.photoUri,
         photoContentType: input.photoContentType,
         photoReferenceDate: input.photoReferenceDate,

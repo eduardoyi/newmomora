@@ -1,0 +1,66 @@
+appId: com.memora.app
+---
+# Family relationships (docs/features/family-relationships.md): set a
+# person's role + side in Edit person, see it on their profile, then clear it
+# again so the account's data is left as found. Assumes the logged-in owner's
+# family has at least one person.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: tab-family
+- extendedWaitUntil:
+    visible:
+      id: "family-member-card-info-.*"
+    timeout: 15000
+- tapOn:
+    id: "family-member-card-info-.*"
+# Complete profiles open the detail screen; incomplete ones open edit directly.
+- runFlow:
+    when:
+      visible:
+        id: view-member-edit
+    commands:
+      - tapOn:
+          id: view-member-edit
+- extendedWaitUntil:
+    visible:
+      id: edit-family-member-name
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      id: edit-family-member-role-grandparent
+    direction: DOWN
+- tapOn:
+    id: edit-family-member-role-grandparent
+- scrollUntilVisible:
+    element:
+      id: "edit-family-member-side-.*"
+    direction: DOWN
+- tapOn:
+    id: "edit-family-member-side-both"
+- scrollUntilVisible:
+    element:
+      id: edit-family-member-save
+    direction: DOWN
+- tapOn:
+    id: edit-family-member-save
+- extendedWaitUntil:
+    visible: "Grandparent · Both sides"
+    timeout: 15000
+# Restore: tapping the selected role again clears it.
+- tapOn:
+    id: view-member-edit
+- scrollUntilVisible:
+    element:
+      id: edit-family-member-role-grandparent
+    direction: DOWN
+- tapOn:
+    id: edit-family-member-role-grandparent
+- scrollUntilVisible:
+    element:
+      id: edit-family-member-save
+    direction: DOWN
+- tapOn:
+    id: edit-family-member-save
+- extendedWaitUntil:
+    notVisible: "Grandparent · Both sides"
+    timeout: 15000

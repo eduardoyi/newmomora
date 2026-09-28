@@ -27,7 +27,8 @@ import { useFamily } from '@/hooks/use-family';
 import { useRedeemedInviteStatus } from '@/hooks/useRedeemedInviteStatus';
 import { userProfileQueryKey } from '@/hooks/useUserProfile';
 import { onboardingJoinFoundRoute } from '@/lib/onboarding-routes';
-import { noFamilyRoute, timelineRoute } from '@/lib/routes';
+import { noFamilyRoute, timelineRoute, whosWhoSelfRoute } from '@/lib/routes';
+import { familyHasLinkableMember } from '@/services/family-relationships';
 import { getJoinDraft } from '@/services/onboarding-join';
 import { pickNewlyJoinedFamilyId } from '@/utils/invites';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
@@ -95,6 +96,12 @@ export default function JoinWaitingScreen() {
       }
 
       await queryClient.invalidateQueries({ queryKey: userProfileQueryKey });
+      // "Are you in the family?" (docs/features/family-relationships.md) when
+      // there is someone to pick; that screen says who they joined. Skippable.
+      if (newFamilyId && (await familyHasLinkableMember(newFamilyId))) {
+        router.replace(whosWhoSelfRoute('timeline'));
+        return;
+      }
       router.replace(timelineRoute);
       Alert.alert('Welcome!', `You've joined ${outcome.familyName ?? 'the family'}.`);
     })();

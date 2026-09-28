@@ -838,6 +838,116 @@ is.
   transition and identifier write happens through a service-role Edge
   Function or the order-workflow bridge (5c, not yet built).
 
+### 2.1g Family relationships
+
+Plan: [plans/family-relationships.md](./plans/family-relationships.md); migration
+`20260928120000_family_relationships.sql`. Every person in a family's list can
+carry who they are to the kids, every account can say "this is me", and an AI
+job proposes both as pending suggestions that only an owner/manager accepting
+them ever writes to `family_members`.
+
+**`family_members` (new columns).** `relationship text null` — one of `child`,
+`parent`, `grandparent`, `great_grandparent`, `aunt_uncle`, `cousin`,
+`family_friend`, `caregiver`, `pet`, `other` (null = not sorted yet; no
+backfill). Side roles are `grandparent`, `great_grandparent`, `aunt_uncle`,
+`cousin`; for those, exactly one of `family_side text null` (`maternal` |
+`paternal` | `both`) or `side_member_id uuid null` (the parent member whose side
+it is) may be set. Constraints: `family_members_relationship_check`,
+`family_members_family_side_check`, `family_members_one_side_check` (not both
+side fields), `family_members_side_requires_side_role_check` (side fields only
+on side roles), `family_members_side_member_not_self_check`, and the composite
+FK `family_members_side_member_fkey (side_member_id, family_id) →
+family_members (id, family_id) ON DELETE SET NULL (side_member_id)` (PG15+
+column list: deleting the parent nulls only `side_member_id`).
+`is_user_profile` is deprecated (superseded by the membership link below;
+readers keep it as a fallback).
+
+**Own-child rule** (shared by app, Edge Functions and SQL): explicit role wins —
+`relationship = 'child'` → child; any other non-null role → not a child; `null`
+→ DOB age < 13 (null DOB → not a child). `family_relationship_signals` and
+`set_my_family_member` implement it in SQL.
+
+**Triggers on `family_members`.**
+- `family_members_normalize_relationship` (BEFORE INSERT OR UPDATE): clears
+  `family_side`/`side_member_id` when the role is not a side role (so no writer
+  can trip the side-role check by changing the role); rejects a newly set
+  `side_member_id` whose member is not `relationship = 'parent'` in the same
+  family (`23514`, message `side_member_must_be_parent`).
+- `family_members_relationship_changed` (AFTER UPDATE OF relationship, only when
+  the value changed; security definer): when a member becomes `child` or `pet`,
+  nulls any `family_memberships.family_member_id` pointing at it (an account
+  can't be a kid/pet); dismisses that member's pending `relationship`
+  suggestions, and pending `family_side` suggestions when the new role is not a
+  side role.
+
+**`family_memberships` (new columns).** `family_member_id uuid null` — the
+"this is me" link, composite FK `(family_member_id, family_id) →
+family_members (id, family_id) ON DELETE SET NULL (family_member_id)`, unique
+partial index `family_memberships_family_member_id_key` (one account per
+person); `not_in_list boolean not null default false` ("I'm not in the list";
+check `family_memberships_not_in_list_no_link_check` — never set together with
+a link). The client column grant stays `update (role)` only: both new columns
+are written solely by the definer RPCs below (and the trigger above).
+
+**`families.relationship_suggested_at timestamptz null`** — throttle marker for
+`suggest-family-relationships`, service-role written only (clients have
+column-level UPDATE on `name`/`viewer_sharing_enabled` only).
+
+**`family_member_suggestions`** (AI proposals, pending until decided):
+
+```sql
+create table public.family_member_suggestions (
+  id uuid primary key default gen_random_uuid(),
+  family_id uuid not null,
+  family_member_id uuid not null,          -- composite FK -> family_members (id, family_id) on delete cascade
+  field text not null,                     -- 'relationship' | 'family_side' | 'nickname'
+  value text not null,                     -- role | maternal|paternal|both | 'member' (side_member_id set) | the nickname
+  side_member_id uuid,                     -- composite FK, on delete cascade; set exactly when value = 'member'
+  based_on text,                           -- field's value when suggested (compare-and-set on accept)
+  status text not null default 'pending',  -- 'pending' | 'accepted' | 'dismissed'
+  created_at timestamptz not null default now(),
+  decided_at timestamptz,                  -- non-null exactly when status <> 'pending'
+  decided_by uuid references auth.users on delete set null
+);
+```
+
+`based_on` encoding: `relationship` rows store the member's current role
+(null = unsorted); `family_side` rows store the current side as `maternal` |
+`paternal` | `both` | `member:<parent uuid>` (null = no side); `nickname` rows
+store null. A unique expression index
+`(family_member_id, field, lower(value), coalesce(side_member_id, zero-uuid))`
+means a value (any casing) is never re-proposed once proposed, dismissed or not;
+extra CHECKs pin `value` to the role list / side vocabulary and the
+`side_member_id` shape. RLS enabled; `revoke all … from anon, authenticated`
+then `grant select … to authenticated`; policies: select for
+`has_family_role(family_id, ['owner','manager'])`, plus a restrictive
+"deny anonymous" policy. No client insert/update/delete.
+
+**RPCs and functions** (all `security definer`, `set search_path = ''`, every
+one re-checks what RLS would have checked because definers bypass RLS):
+
+| Function | Caller | Behavior |
+|----------|--------|----------|
+| `set_my_family_member(p_family_id uuid, p_member_id uuid, p_not_in_list boolean default false) returns void` | `authenticated` (any role) | Updates only the caller's own `family_memberships` row: link, unlink (`p_member_id null`) or `p_not_in_list = true` with a null member (sets the flag, clears the link); every call resets `not_in_list` to the passed value. Errors: `42501` (anonymous, or no membership in the family); `22023` `not_in_list_with_member`, `member_not_in_family`, `member_not_linkable` (role `child`/`pet`, or unsorted and DOB age < 13); `23505` `member_already_linked` (message and hint). Not billing-gated (account metadata). |
+| `unlink_family_member_account(p_family_id uuid, p_member_id uuid) returns void` | `authenticated`, owner\|manager | Clears whichever membership points at that member (recovery from a wrong or contested claim). `42501` for anonymous / non-owner-manager. Not billing-gated. |
+| `resolve_family_member_suggestions(p_family_id uuid, p_accept uuid[], p_dismiss uuid[]) returns jsonb` | `authenticated`, owner\|manager | `42501` unless not anonymous, `has_family_role(owner,manager)` **and** `billing_write_allowed_for_current_user(p_family_id)` (same predicate as the `Family members: update` policy; message `Subscription required`). One transaction: dismisses `p_dismiss`, then applies `p_accept` in order relationship → family_side → nickname. Relationship/side rows are compare-and-set on `based_on` (a manual edit wins → row dismissed); side rows for a non-side role or a side parent that is no longer a parent are dismissed; nickname rows are appended if absent case-insensitively, accepted as a no-op if already present, and dismissed if equal to the member's own name or any other member's name/nickname. An id in both arrays is dismissed; non-pending or other-family ids are ignored. Returns `{"accepted": n, "dismissed": n}`. |
+| `insert_family_member_suggestions(p_family_id uuid, p_rows jsonb) returns integer` | `service_role` only | `p_rows` = array of `{family_member_id, field, value, side_member_id?, based_on?}`. Drops rows naming members outside `p_family_id`; `on conflict do nothing` against the dedupe index; returns rows inserted. |
+| `claim_relationship_suggestion_run(p_family_id uuid) returns table (claimed boolean, previous_suggested_at timestamptz)` | `service_role` only | Locks the family row and stamps `relationship_suggested_at = now()` only if it is null, older than 24h, or older than 1h **and** a `family_members` row was created after it. Returns whether it claimed and the previous value. |
+| `fail_relationship_suggestion_run(p_family_id uuid) returns void` | `service_role` only | Failure backoff: sets `relationship_suggested_at = now() - interval '23 hours'` (retry in ~1h; never restores the old value). |
+| `family_relationship_signals(p_family_id uuid) returns jsonb` | `service_role` only | Prompt input aggregated in SQL: `members` (`id, first_name, nicknames, age_years, gender, relationship, family_side, side_member_id, is_own_child`), `accounts` (linked accounts: `family_member_id, display_name, role`), `co_tags` (`member_id, child_id, memories` — memories where a member and an own-child member are both tagged), `snippets` (≤ 40, `text` ≤ 200 chars, `memory_date`, `author_member_id`, `member_ids`; ≤ 6 per member, newest first, from the newest 400 visible memories where a member is tagged or named). Memories hidden by an open/reviewing or upheld `content_reports` row are excluded; text is `content`, else `audio_transcript`, else `description`. |
+
+Grants: client RPCs `revoke all … from public, anon, authenticated` then
+`grant execute … to authenticated`; service-role functions grant execute to
+`service_role` only.
+
+**Other schema changes in the same migration.** `commit_onboarding` (unchanged
+signature and grants) now inserts onboarding kids with `relationship = 'child'`.
+`ai_usage_events_operation_check` also allows `'relationship_chat'`
+(re-added `not valid` then validated; forward-only — once such rows exist the
+old constraint cannot be restored). Tests: `supabase/tests/family_relationships.sql`
+(plus the new-table cases in `client_table_grants.sql` and
+`onboarding_anonymous_lockdown.sql`).
+
 ### 2.2 Indexes
 
 ```sql
@@ -1859,7 +1969,9 @@ Family mode:
    trimmed, clamped to 120 chars, `''` when speech is unusable (silence,
    babble, indistinct noise) — the model is instructed to never invent or
    guess one.
-6. If `mentionedUserSelf`, append the canonical user-profile member ID.
+6. If `mentionedUserSelf`, append the caller's own member: their
+   `family_memberships.family_member_id` ("this is me", §2.1g), falling back to
+   the deprecated `is_user_profile` row.
 7. Return result; audio is discarded and never stored by this function.
 
 Onboarding mode follows the same two-minute/audio validation and OpenAI
@@ -3014,6 +3126,57 @@ chips with `matching_count = 0`. The client
 (`searchMemories`) then reads the rows with `select * … in (ids)` plus tags and
 media and preserves the RPC order. See
 [memory-search.md](./features/memory-search.md).
+
+### 4.26 `suggest-family-relationships`
+
+Proposes who each person is to the kids (role), their family side, and
+nicknames the family already uses -- as **pending** rows in
+`family_member_suggestions` (§2.1g). It never writes `family_members`; an
+owner/manager accepts or dismisses each one in the app's Who's who sheet
+(`resolve_family_member_suggestions`). See
+[docs/features/family-relationships.md](features/family-relationships.md).
+
+**Request**
+
+```json
+{ "familyId": "uuid" }
+```
+
+**Response**
+
+```json
+{ "skipped": false, "suggested": 3 }
+```
+
+or `{ "skipped": true, "reason": "throttled" | "nothing_new" }`.
+
+**Flow:** owner|manager role check -> `checkBillingFamilyWrite`
+(`relationship_suggestions`) -> `claim_relationship_suggestion_run` (at most
+one run per family per 24h, or per 1h after a new member was added) ->
+`family_relationship_signals` (members, linked accounts, co-tag counts, <= 40
+short memory snippets; reported memories excluded) -> skip when every member
+is sorted and no memory arrived since the last run -> `chatJson`
+(gpt-4o-mini, usage operation `relationship_chat`; not capped -- chat is
+ledger telemetry, the claim is the bound) -> pure validation
+(`_shared/family-relationship-suggestions.ts`: enum values, the family's own
+member refs only, role/side only where none is set yet, confidence >= 0.6,
+side only at a parent, nicknames grounded in that person's snippets and never
+colliding with anyone's name/nickname) -> `insert_family_member_suggestions`
+(duplicates, including previously dismissed values in any casing, ignored).
+On any failure after the claim, `fail_relationship_suggestion_run` backs the
+marker off so the next attempt is ~1h later.
+
+**Auth:** JWT (permanent accounts only); owner or manager of `familyId`.
+No `config.toml` entry.
+
+**Privacy:** the prompt carries first names and short memory snippets (same
+posture as the other OpenAI features). Logs carry counts and error names only.
+
+**Errors:** `validation_error` / `invalid_json` (400), `unauthorized` (401),
+`forbidden` (403, viewer or non-member), `SUBSCRIPTION_REQUIRED` (403),
+`SUGGESTION_FAILED` (500)
+
+---
 
 ## 5. Client API Flow
 

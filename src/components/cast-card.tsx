@@ -59,6 +59,11 @@ interface CastCardProps {
    * screen for them.
    */
   canEdit?: boolean;
+  /** Short relationship context ("Eduardo's side", "Caregiver"), shown on
+   * the age line -- docs/features/family-relationships.md. */
+  subtitle?: string | null;
+  /** This person is the signed-in account ("this is me"). */
+  isMe?: boolean;
 }
 
 export function CastCard({
@@ -70,6 +75,8 @@ export function CastCard({
   onShowPortrait,
   onPress,
   canEdit = false,
+  subtitle = null,
+  isMe = false,
 }: CastCardProps) {
   const emo = emotionColors[memberTint(member)];
   const age = member.date_of_birth ? formatAgeFromDob(member.date_of_birth) : null;
@@ -80,6 +87,7 @@ export function CastCard({
   // asserts something actionable ("Tap to add..."), so that alone is gated
   // on whether tapping can actually get there.
   const showIncompletePrompt = isIncomplete && canEdit;
+  const meta = [subtitle, age].filter(Boolean).join(' · ');
   return (
     <View style={styles.castCard}>
       <View
@@ -138,14 +146,25 @@ export function CastCard({
         style={({ pressed }) => [styles.castInfo, pressed && styles.portraitPressed]}
         testID={`family-member-card-info-${member.id}`}
       >
-        <Text style={styles.castName}>{member.name}</Text>
+        <View style={styles.nameRow}>
+          <Text numberOfLines={1} style={styles.castName}>{member.name}</Text>
+          {isMe ? (
+            <View style={styles.meBadge} testID={`family-member-me-${member.id}`}>
+              <Text style={styles.meBadgeText}>You</Text>
+            </View>
+          ) : null}
+        </View>
         {showIncompletePrompt ? (
           <Text style={styles.incompletePrompt} testID={`family-member-incomplete-${member.id}`}>
             {incompleteProfilePrompt(member)}
           </Text>
         ) : (
           <>
-            {age && <Text style={styles.castAge}>{age}</Text>}
+            {meta ? (
+              <Text numberOfLines={1} style={styles.castAge} testID={`family-member-meta-${member.id}`}>
+                {meta}
+              </Text>
+            ) : null}
             {member.nicknames && member.nicknames.length > 0 && (
               <Text style={styles.castNicknames}>“{member.nicknames.join(', ')}”</Text>
             )}
@@ -202,11 +221,28 @@ const styles = StyleSheet.create({
     gap: 5,
     justifyContent: 'center',
   },
+  nameRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
   castName: {
+    flexShrink: 1,
     fontFamily: fonts.displayMedium,
     fontSize: 20,
     lineHeight: 22,
     color: colors.ink,
+  },
+  meBadge: {
+    backgroundColor: colors.primaryTint,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  meBadgeText: {
+    color: colors.primary,
+    fontFamily: fonts.sansBold,
+    fontSize: 11,
   },
   castAge: {
     fontFamily: fonts.sans,

@@ -12,9 +12,27 @@ import type { FamilyMember } from '@/services/family-members';
 
 jest.mock('expo-router', () => ({
   router: { push: jest.fn(), back: jest.fn() },
+  useFocusEffect: jest.fn(),
 }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
+jest.mock('@/hooks/useFamilyRelationships', () => ({
+  useFamilyRelationships: () => ({
+    canEdit: false,
+    suggestions: [],
+    isLoadingSuggestions: false,
+    myLink: null,
+    myMemberId: null,
+    claimedByOthers: new Set(),
+    isLoadingLinks: false,
+    resolve: jest.fn(),
+    isResolving: false,
+    linkMe: jest.fn(),
+    isLinking: false,
+    unlinkAccount: jest.fn(),
+    requestSuggestions: jest.fn(),
+  }),
+}));
 jest.mock('@/hooks/useContentSafety', () => ({ useContentSafety: jest.fn() }));
 jest.mock('@/components/family-profile-portrait-photo', () => ({
   FamilyProfilePortraitPhoto: 'FamilyProfilePortraitPhoto',

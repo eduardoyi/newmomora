@@ -80,6 +80,9 @@ export async function createFamilyMember(
       gender: input.gender?.trim() || null,
       additional_info: input.additionalInfo?.trim() || null,
       nicknames: input.nicknames ?? null,
+      relationship: input.relationship ?? null,
+      family_side: input.familySide ?? null,
+      side_member_id: input.sideMemberId ?? null,
     })
     .select('*')
     .single();
@@ -103,6 +106,16 @@ export async function updateFamilyMember(
       ...(input.gender !== undefined ? { gender: input.gender } : {}),
       ...(input.additionalInfo !== undefined ? { additional_info: input.additionalInfo } : {}),
       ...(input.nicknames !== undefined ? { nicknames: input.nicknames } : {}),
+      // Role and side travel together: the DB trigger clears side fields for
+      // non-side roles anyway, and sending all three keeps a stale side from
+      // surviving a role change made from this client.
+      ...(input.relationship !== undefined
+        ? {
+            relationship: input.relationship,
+            family_side: input.familySide ?? null,
+            side_member_id: input.sideMemberId ?? null,
+          }
+        : {}),
     })
     .eq('id', memberId)
     .select('*')
@@ -136,6 +149,9 @@ export interface UpdateFamilyMemberWithPhotoInput {
   gender?: string | null;
   additionalInfo?: string | null;
   nicknames?: string[] | null;
+  relationship?: string | null;
+  familySide?: string | null;
+  sideMemberId?: string | null;
   photoUri?: string;
   photoContentType?: string;
   photoReferenceDate?: string;
@@ -155,6 +171,9 @@ export async function updateFamilyMemberWithPhoto(
     gender: input.gender,
     additionalInfo: input.additionalInfo,
     nicknames: input.nicknames,
+    relationship: input.relationship,
+    familySide: input.familySide,
+    sideMemberId: input.sideMemberId,
   });
   if (updated.error || !updated.data) {
     return { data: null, portraitVersion: null, error: updated.error };

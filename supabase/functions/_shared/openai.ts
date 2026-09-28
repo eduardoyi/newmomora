@@ -12,7 +12,8 @@ export type AiUsageOperation =
   | 'emotion_chat'
   | 'emotion_vision'
   | 'transcription'
-  | 'voice_cleanup';
+  | 'voice_cleanup'
+  | 'relationship_chat';
 
 export interface FamilyAiUsageContext {
   attributionScope: 'family';

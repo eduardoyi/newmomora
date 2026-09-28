@@ -4,7 +4,7 @@ begin;
 -- (20260729130000_onboarding_anonymous_lockdown.sql) actually denies an
 -- anonymous Auth session everywhere a normal tenant operates, and does NOT
 -- regress a real signed-up user's access.
-select plan(56);
+select plan(63);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -59,6 +59,9 @@ values ('a5000000-0000-4000-8000-000000000001', 'a2000000-0000-4000-8000-0000000
 insert into public.family_invites (id, family_id, code, role, invited_by, status, redeemed_by, redeemed_at)
 values ('a6000000-0000-4000-8000-000000000001', 'a2000000-0000-4000-8000-000000000001', 'sunny-tiger-lockdown', 'viewer', 'a1000000-0000-4000-8000-000000000002', 'redeemed', 'a1000000-0000-4000-8000-000000000002', now());
 
+insert into public.family_member_suggestions (id, family_id, family_member_id, field, value)
+values ('a7000000-0000-4000-8000-000000000001', 'a2000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000001', 'nickname', 'Kidd');
+
 -- Adversarial setup: simulate a hypothetical breach where the anonymous
 -- user's id somehow ended up as a real 'manager' member of the fixture
 -- family (as postgres, bypassing every policy/RPC -- this is NOT reachable
@@ -103,6 +106,11 @@ select is(
   (select count(*)::text from public.memories where family_id = 'a2000000-0000-4000-8000-000000000001'),
   '0',
   'anonymous session cannot SELECT memories'
+);
+select is(
+  (select count(*)::text from public.family_member_suggestions where family_id = 'a2000000-0000-4000-8000-000000000001'),
+  '0',
+  'anonymous session cannot SELECT family_member_suggestions despite a simulated manager membership row'
 );
 select is(
   (select count(*)::text from public.family_invites where family_id = 'a2000000-0000-4000-8000-000000000001'),
@@ -222,6 +230,21 @@ select throws_ok(
   '42501', 'Not authorized',
   'get_family_member_profiles rejects an anonymous caller despite the simulated manager row'
 );
+select throws_ok(
+  $$select public.set_my_family_member('a2000000-0000-4000-8000-000000000001', null)$$,
+  '42501', 'Not authorized',
+  'set_my_family_member rejects an anonymous caller despite the simulated manager row'
+);
+select throws_ok(
+  $$select public.unlink_family_member_account('a2000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000001')$$,
+  '42501', 'Not authorized',
+  'unlink_family_member_account rejects an anonymous caller despite the simulated manager row'
+);
+select throws_ok(
+  $$select public.resolve_family_member_suggestions('a2000000-0000-4000-8000-000000000001', array['a7000000-0000-4000-8000-000000000001']::uuid[], '{}')$$,
+  '42501', 'Not authorized',
+  'resolve_family_member_suggestions rejects an anonymous caller despite the simulated manager row'
+);
 select is(
   (select count(*)::text from public.get_memory_engagement(array['a5000000-0000-4000-8000-000000000001']::uuid[])),
   '0',
@@ -283,6 +306,11 @@ select is(
   'a real owner can still read get_family_member_profiles'
 );
 select is(
+  (select count(*)::text from public.family_member_suggestions where family_id = 'a2000000-0000-4000-8000-000000000001'),
+  '1',
+  'a real owner can still SELECT their family''s relationship suggestions'
+);
+select is(
   (select count(*)::text from public.get_memory_engagement(array['a5000000-0000-4000-8000-000000000001']::uuid[])),
   '1',
   'a real owner can still read get_memory_engagement'
@@ -326,6 +354,14 @@ select ok(
 select ok(
   not has_function_privilege('anon', 'public.get_my_redeemed_invite_status()', 'EXECUTE'),
   'the anon role has no execute on get_my_redeemed_invite_status'
+);
+select ok(
+  not has_function_privilege('anon', 'public.set_my_family_member(uuid,uuid,boolean)', 'EXECUTE'),
+  'the anon role has no execute on set_my_family_member'
+);
+select ok(
+  not has_function_privilege('anon', 'public.resolve_family_member_suggestions(uuid,uuid[],uuid[])', 'EXECUTE'),
+  'the anon role has no execute on resolve_family_member_suggestions'
 );
 
 -- ---------------------------------------------------------------------------

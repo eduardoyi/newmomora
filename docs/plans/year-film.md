@@ -1059,7 +1059,7 @@ at 57.5s; both pass `hyperframes check`.
 
 | Stage | What | Gate |
 |---|---|---|
-| **P1 — Backend** | Migration + RLS + regenerated types + TECH_SPEC; the "own children" flag (§12 Q8); bridge; Workflow; Fly deploy; `schedule-year-films` cron (birthday, monthly, Dec 12 family); invalidation (§7.6); data-export inclusion; push route; `docs/features/year-film.md`. | Canary on production for Eduardo's family: a birthday film end-to-end, an edit re-render, a memory-deletion invalidation, and a **forced-scope** family film — each compared frame-for-frame against its F3 local render. |
+| **P1 — Backend** | Migration + RLS + regenerated types + TECH_SPEC; own children via `isFilmChild` (§12 Q8, resolved by family relationships); bridge; Workflow; Fly deploy; `schedule-year-films` cron (birthday, monthly, Dec 12 family); invalidation (§7.6); data-export inclusion; push route; `docs/features/year-film.md`. | Canary on production for Eduardo's family: a birthday film end-to-end, an edit re-render, a memory-deletion invalidation, and a **forced-scope** family film — each compared frame-for-frame against its F3 local render. |
 | **P2 — App** | Timeline card, viewer, share, edit sheet, Keepsakes Films section (+ upcoming-film cards), analytics. Unit + integration + Maestro (open → play → share sheet appears; edit → re-render state). | Device pass on iOS + Android (owner). |
 | **P3 — Launch** | EAS Update; enable the cron; watch the first real birthday films; the Dec 12 family-film render and Dec 15 surfacing. | Dec 12 renders complete for all eligible families; share rate per view tracked. |
 
@@ -1129,12 +1129,13 @@ films** (they arrive continuously, so they lose nothing by waiting).
 6. **Family film cut-off:** Dec 11 is proposed so renders finish before Dec 15.
    Confirm after F5 shows real render times — a later cut-off may be possible.
 7. ~~Voice for pre-audio years~~ — resolved 2026-09-27: yes, video clips.
-8. **How the product knows whose children are whose** (decided: own children
-   only; mechanism open for P1). Nothing in `family_members` records it
-   today. Proposal: a `family_members.is_family_child` flag — true for
-   children added during onboarding ("add your child first"), asked once in
-   the add-member flow for any later child ("Is Elena your child?"), and a
-   one-time confirmation for existing families before their first film.
+8. **How the product knows whose children are whose** — **resolved
+   2026-09-28** by family relationships
+   ([docs/features/family-relationships.md](../features/family-relationships.md)):
+   `family_members.relationship`, onboarding kids are `child`, AI-suggested
+   roles confirmed in "Who's who". `isFilmChild` = `isOwnChild` (explicit
+   role wins; unsorted → DOB < 13) **and** DOB present **and** under 13 — an
+   explicit "Our child" never unlocks teen films (owner decision).
 9. **Monthly surfacing time:** 19:00 family-local on the 1st (couch moment) vs
    morning. Check against Google's timing and our own analytics once live.
 10. **Past months:** should a family that backfills a year via gallery import

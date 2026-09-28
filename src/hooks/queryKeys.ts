@@ -16,6 +16,10 @@ export const memoriesSearchQueryKeyBase = 'memories-search' as const;
 export const calendarMemoriesQueryKeyBase = 'calendar-memories' as const;
 export const familyMembersQueryKeyBase = 'family-members' as const;
 export const familyMemberProfilesQueryKeyBase = 'family-member-profiles' as const;
+// Family relationships (docs/features/family-relationships.md): pending AI
+// suggestions (owner/manager only) and every account's "this is me" link.
+export const familySuggestionsQueryKeyBase = 'family-suggestions' as const;
+export const familyMembershipLinksQueryKeyBase = 'family-membership-links' as const;
 export const familyInvitesQueryKeyBase = 'family-invites' as const;
 export const memoryCommentsQueryKeyBase = 'memory-comments' as const;
 export const familyActivityQueryKeyBase = 'family-activity' as const;
@@ -83,6 +87,14 @@ export function calendarMemoriesQueryKey(familyId: string | null | undefined) {
 
 export function familyMembersQueryKey(familyId: string | null | undefined) {
   return [familyMembersQueryKeyBase, familyId] as const;
+}
+
+export function familySuggestionsQueryKey(familyId: string | null | undefined) {
+  return [familySuggestionsQueryKeyBase, familyId] as const;
+}
+
+export function familyMembershipLinksQueryKey(familyId: string | null | undefined) {
+  return [familyMembershipLinksQueryKeyBase, familyId] as const;
 }
 
 export function portraitVersionsQueryKey(familyId: string | null | undefined) {

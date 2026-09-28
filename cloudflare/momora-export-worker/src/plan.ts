@@ -90,7 +90,7 @@ export async function fetchExportRows(env: Env, ownerUserId: string): Promise<Ex
     };
   }
 
-  const familyMembers = await listRowsByIds<ExportMember>(env, 'family_members', 'id,family_id,user_id,name,nicknames,date_of_birth,gender,profile_picture_key,illustrated_profile_key,illustrated_profile_status,additional_info,is_user_profile,created_at', 'family_id', familyIds, { order: 'created_at.asc' });
+  const familyMembers = await listRowsByIds<ExportMember>(env, 'family_members', 'id,family_id,user_id,name,nicknames,date_of_birth,gender,profile_picture_key,illustrated_profile_key,illustrated_profile_status,additional_info,is_user_profile,relationship,family_side,side_member_id,created_at', 'family_id', familyIds, { order: 'created_at.asc' });
   const memories = await listRowsByIds<ExportMemory>(env, 'memories', 'id,family_id,user_id,memory_type,content,audio_transcript,link_previews,memory_date,emotion,illustration_key,illustration_status,media_key,media_content_type,created_at', 'family_id', familyIds, { order: 'memory_date.asc,created_at.asc' });
   const portraitVersions = await listRowsByIds<ExportPortraitVersion>(env, 'family_member_portrait_versions', 'id,family_id,family_member_id,user_id,reference_date,date_source,profile_picture_key,illustrated_profile_key,illustrated_profile_status,created_at', 'family_id', familyIds, { order: 'created_at.asc' });
 

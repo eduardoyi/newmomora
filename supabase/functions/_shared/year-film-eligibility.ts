@@ -10,6 +10,7 @@
 // return it. Everything returned is ids, dates, counts, and flags.
 import { addYears, classifyChildOrAdult } from './date-context.ts';
 import { getAgeInYearsAtDate } from './age.ts';
+import { isOwnChild } from './family-relationships.ts';
 import { type PortraitVersionCandidate, resolvePortraitVersionAtDate } from './portrait-versions.ts';
 
 // ── Thresholds (plan §4; tuned by F0) ───────────────────────────────────
@@ -97,6 +98,8 @@ export interface FilmMilestoneInput {
 export interface FilmMemberInput {
   id: string;
   dateOfBirth: string | null;
+  /** family_members.relationship; null/absent = unsorted (DOB rule). */
+  relationship?: string | null;
 }
 
 export interface FilmScope {
@@ -172,9 +175,14 @@ export function inScope(date: string, scope: FilmScope): boolean {
   return date >= scope.start && date < scope.endExclusive;
 }
 
-/** Children only (<13 at `today`, plan §4.1), with a DOB. */
+/** The family's own children (plan §4.1): own child by role (explicit
+ * 'child' wins, any other role excludes -- a niece marked 'cousin' is out;
+ * unsorted falls back to the DOB rule), with a DOB, and still under 13 at
+ * `today` -- an explicit 'child' role never unlocks films for teens
+ * (docs/plans/family-relationships.md §7.1). */
 export function isFilmChild(member: FilmMemberInput, today: string): boolean {
   if (!member.dateOfBirth) return false;
+  if (!isOwnChild(member, today)) return false;
   return classifyChildOrAdult(getAgeInYearsAtDate(member.dateOfBirth, today)) === 'child';
 }
 

@@ -143,6 +143,15 @@ export function editFamilyMemberRoute(memberId: string): Href {
   return `/(app)/family/${memberId}/edit` as Href;
 }
 
+// Family relationships "Who's who" sheet (docs/features/family-relationships.md).
+// `mode: 'self'` shows only "Which one is you?" (the join flow); `next:
+// 'timeline'` replaces to the timeline when done instead of going back.
+export const whosWhoRoute = '/(app)/whos-who' as Href;
+
+export function whosWhoSelfRoute(next: 'timeline' | 'back' = 'back'): Href {
+  return { pathname: '/(app)/whos-who', params: { mode: 'self', next } } as unknown as Href;
+}
+
 export function portraitTimelineRoute(memberId: string): Href {
   return `/(app)/family/${memberId}/portraits` as Href;
 }

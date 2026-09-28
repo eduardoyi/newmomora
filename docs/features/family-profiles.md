@@ -49,7 +49,7 @@ flowchart LR
 
 | Table / storage | Role |
 |-----------------|------|
-| `family_members` | Person identity/profile fields |
+| `family_members` | Person identity/profile fields; `relationship` / `family_side` / `side_member_id` belong to [family relationships](./family-relationships.md), which also deprecates `is_user_profile` in favor of the per-account "this is me" link |
 | `family_member_portrait_versions` | Dated source-photo/AI-portrait history and attempt state |
 | `portrait_generation_jobs` | Private durable job state, frozen prompt/reference keys, provider counters, cleanup keys, and terminal result; no client policies |
 | `portrait_generation_workflow_bridge_nonces` | Private timestamped-HMAC replay ledger |
@@ -213,6 +213,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
+| 2026-09-28 | Add/Edit person gained optional role + side chips; cards show side and a "You" badge — see [family-relationships.md](./family-relationships.md) |
 | 2026-07-31 | Added an inline "incomplete profile" state (name-only onboarding kids missing DOB and/or photo): a shared `isFamilyMemberProfileIncomplete` predicate, a dashed sketch-outline ring (shown to every role) plus a quiet Caveat-script prompt gated on a new `CastCard` `canEdit` prop (defaults `false`; only owners/managers see the actionable text, so a viewer is never told to do something their tap can't reach), edit-screen routing for owners/managers via `resolveMemberDestination` (viewers always land on the normal detail screen), and a much lighter dashed-avatar hint on the memory tag picker's chips (never disabled, shown to every role since tagging itself isn't role-gated) |
 | 2026-07-22 | Moved portrait execution to the existing Cloudflare Worker/Workflow with a Supabase publication bridge, 3:00/5:30 recovery, and signed dependent-memory retriggering |
 | 2026-07-20 | Portrait generation retriggers memory illustrations that deferred waiting on it (see memories.md "Illustration deferral") |

@@ -26,6 +26,7 @@ interface MemberRow {
   id: string;
   name: string;
   date_of_birth: string | null;
+  relationship: string | null;
   created_at: string;
 }
 
@@ -183,7 +184,7 @@ function mediaKind(contentType: string): FilmMediaInput['kind'] | null {
 export async function loadFamilyData(supabase: AuthedClient, family: FamilyRow): Promise<EvalFamilyData> {
   const { data: members, error: membersError } = await supabase
     .from('family_members')
-    .select('id, name, date_of_birth, created_at')
+    .select('id, name, date_of_birth, relationship, created_at')
     .eq('family_id', family.id);
   if (membersError) throw new Error(`Failed to load family_members: ${membersError.message}`);
   const memberRows = (members ?? []) as MemberRow[];
@@ -312,6 +313,7 @@ export async function loadFamilyData(supabase: AuthedClient, family: FamilyRow):
       id: m.id,
       name: m.name,
       dateOfBirth: m.date_of_birth,
+      relationship: m.relationship,
       createdAt: m.created_at,
       portraits: portraitsByMember.get(m.id) ?? [],
     })),

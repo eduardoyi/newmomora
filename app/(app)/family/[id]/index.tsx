@@ -24,6 +24,7 @@ import { ReportSheet } from '@/components/report-sheet';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useMemberMemories } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
@@ -36,6 +37,8 @@ import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
 import { mediaImageSource } from '@/utils/media-image-source';
 import { resolvePreferredCoverKey, resolveVideoPosterKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
+import { isLinkableMember, relationshipSubtitle } from '@/utils/family-relationships';
+import { isAlreadyLinkedError } from '@/services/family-relationships';
 import { formatDisplayDate } from '@/utils/memories';
 
 // ── Thumbnail for the memories list ──────────────────────────────────────────
@@ -173,6 +176,7 @@ export default function ViewFamilyMemberScreen() {
   const canEdit = canEditFamilyContent(role);
   const contentSafety = useContentSafety();
   const { members, isLoading, deleteMember, isDeleting } = useFamilyMembers();
+  const relationships = useFamilyRelationships(members);
   const { versions: portraitVersions } = usePortraitVersions(id);
   // Server-filtered to this member (Workstream A6) instead of paging in and
   // client-filtering the whole timeline.
@@ -202,6 +206,39 @@ export default function ViewFamilyMemberScreen() {
     portraitCacheVersion,
   );
   const portraitCount = portraitVersions.filter((version) => !version.deletion_token).length;
+
+  const handleLinkMe = async (memberId: string | null) => {
+    try {
+      await relationships.linkMe({ memberId });
+    } catch (error) {
+      Alert.alert(
+        isAlreadyLinkedError(error as { message: string; code?: string }) ? 'Already taken' : 'Could not save',
+        isAlreadyLinkedError(error as { message: string; code?: string })
+          ? 'Someone else already picked this person — ask a family manager.'
+          : 'Please try again.',
+      );
+    }
+  };
+
+  const handleUnlinkAccount = () => {
+    if (!member) return;
+    Alert.alert(
+      'Unlink account',
+      `Another account says they are ${member.name}. Unlink it so the right person can pick it?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlink',
+          style: 'destructive',
+          onPress: () => {
+            void relationships.unlinkAccount(member.id).catch(() => {
+              Alert.alert('Could not unlink', 'Please try again.');
+            });
+          },
+        },
+      ],
+    );
+  };
 
   const handleDelete = () => {
     if (!member) return;
@@ -340,8 +377,10 @@ export default function ViewFamilyMemberScreen() {
           />
         ) : (
           <CastCard
+            isMe={relationships.myMemberId === member.id}
             isPortraitHidden={isPortraitHidden}
             member={member}
+            subtitle={relationshipSubtitle(member, members)}
             onPortraitPress={portraitUrl && !isPortraitHidden ? () => setIsPortraitFullScreen(true) : undefined}
             onPortraitTimelinePress={() => router.push(portraitTimelineRoute(member.id))}
             onShowPortrait={currentPortraitId
@@ -368,6 +407,47 @@ export default function ViewFamilyMemberScreen() {
               caption="Turn memories into a premium keepsake book"
               onPress={() => router.push(memoryBooksRoute(member.id))}
               testID="family-member-memory-books-row"
+            />
+          </SettingsBlock>
+        ) : null}
+
+        {/* "This is me" (docs/features/family-relationships.md): claim this
+            person when unlinked, undo your own claim, or -- owner/manager --
+            clear another account's claim. */}
+        {!isProfileHidden && relationships.myMemberId === member.id ? (
+          <SettingsBlock title="You">
+            <SettingsRow
+              caption="Tap if this isn’t you"
+              first
+              label="This is you"
+              onPress={() => void handleLinkMe(null)}
+              testID="family-member-unlink-me"
+            />
+          </SettingsBlock>
+        ) : !isProfileHidden
+          && !relationships.isLoadingLinks
+          && !relationships.myMemberId
+          && !relationships.claimedByOthers.has(member.id)
+          && isLinkableMember(member) ? (
+          <SettingsBlock title="You">
+            <SettingsRow
+              caption="So your memories can say “me” and mean you"
+              first
+              label="This is me"
+              onPress={() => void handleLinkMe(member.id)}
+              testID="family-member-this-is-me"
+            />
+          </SettingsBlock>
+        ) : null}
+        {!isProfileHidden && canEdit && relationships.claimedByOthers.has(member.id) ? (
+          <SettingsBlock title="Account">
+            <SettingsRow
+              caption="Another account says this is them"
+              destructive
+              first
+              label="Unlink account"
+              onPress={handleUnlinkAccount}
+              testID="family-member-unlink-account"
             />
           </SettingsBlock>
         ) : null}
