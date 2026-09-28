@@ -4,20 +4,30 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import type { CalendarMonthOption } from '@/utils/calendar';
 
-export interface CalendarMonthPickerSheetProps {
+// `count` is optional: the Timeline passes per-month memory counts (shown on
+// each chip, and a month with none is disabled so a pick always lands in the
+// chosen month -- docs/plans/timeline-calendar-keepsakes.md A4); the Calendar
+// tab passes bare options and keeps its original behavior.
+export type MonthPickerOption = CalendarMonthOption & { count?: number };
+
+export interface CalendarMonthPickerSheetProps<T extends MonthPickerOption = MonthPickerOption> {
   visible: boolean;
-  options: CalendarMonthOption[];
-  onSelect: (option: CalendarMonthOption) => void;
+  options: T[];
+  onSelect: (option: T) => void;
   onClose: () => void;
 }
 
-interface MonthYearGroup {
+interface MonthYearGroup<T extends MonthPickerOption> {
   year: number;
-  options: CalendarMonthOption[];
+  options: T[];
 }
 
-function groupOptionsByYear(options: CalendarMonthOption[]): MonthYearGroup[] {
-  const groups: MonthYearGroup[] = [];
+function isOptionDisabled(option: MonthPickerOption): boolean {
+  return option.count === 0 && !option.isCurrent;
+}
+
+function groupOptionsByYear<T extends MonthPickerOption>(options: T[]): MonthYearGroup<T>[] {
+  const groups: MonthYearGroup<T>[] = [];
 
   for (const option of options) {
     const lastGroup = groups.at(-1);
@@ -39,12 +49,12 @@ function groupOptionsByYear(options: CalendarMonthOption[]): MonthYearGroup[] {
  * with no search or text input -- selecting a month closes the sheet
  * immediately, there's nothing to confirm.
  */
-export function CalendarMonthPickerSheet({
+export function CalendarMonthPickerSheet<T extends MonthPickerOption>({
   visible,
   options,
   onSelect,
   onClose,
-}: CalendarMonthPickerSheetProps) {
+}: CalendarMonthPickerSheetProps<T>) {
   const insets = useSafeAreaInsets();
   const groups = groupOptionsByYear(options);
 
@@ -83,28 +93,41 @@ export function CalendarMonthPickerSheet({
               <View key={group.year} style={styles.yearGroup}>
                 <Text style={styles.yearLabel}>{group.year}</Text>
                 <View style={styles.monthGrid}>
-                  {group.options.map((option) => (
-                    <Pressable
-                      accessibilityRole="button"
-                      key={option.iso}
-                      onPress={() => onSelect(option)}
-                      style={({ pressed }) => [
-                        styles.monthChip,
-                        option.isCurrent && styles.monthChipCurrent,
-                        pressed && styles.monthChipPressed,
-                      ]}
-                      testID={`month-picker-option-${option.iso}`}
-                    >
-                      <Text
-                        style={[
-                          styles.monthChipText,
-                          option.isCurrent && styles.monthChipTextCurrent,
+                  {group.options.map((option) => {
+                    const disabled = isOptionDisabled(option);
+                    const hasCount = typeof option.count === 'number';
+                    return (
+                      <Pressable
+                        accessibilityLabel={hasCount
+                          ? `${option.label} ${option.year}, ${option.count} ${option.count === 1 ? 'memory' : 'memories'}`
+                          : undefined}
+                        accessibilityRole="button"
+                        accessibilityState={{ disabled }}
+                        disabled={disabled}
+                        key={option.iso}
+                        onPress={() => onSelect(option)}
+                        style={({ pressed }) => [
+                          styles.monthChip,
+                          option.isCurrent && styles.monthChipCurrent,
+                          disabled && styles.monthChipDisabled,
+                          pressed && styles.monthChipPressed,
                         ]}
+                        testID={`month-picker-option-${option.iso}`}
                       >
-                        {option.label}
-                      </Text>
-                    </Pressable>
-                  ))}
+                        <Text
+                          style={[
+                            styles.monthChipText,
+                            option.isCurrent && styles.monthChipTextCurrent,
+                          ]}
+                        >
+                          {option.label}
+                          {hasCount && option.count! > 0 ? (
+                            <Text style={styles.monthChipCount}>{`  ${option.count}`}</Text>
+                          ) : null}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
                 </View>
               </View>
             ))}
@@ -195,6 +218,14 @@ const styles = StyleSheet.create({
   },
   monthChipPressed: {
     opacity: 0.75,
+  },
+  monthChipDisabled: {
+    opacity: 0.4,
+  },
+  monthChipCount: {
+    color: colors.ink3,
+    fontFamily: fonts.sansMedium,
+    fontSize: 12,
   },
   monthChipText: {
     color: colors.ink2,

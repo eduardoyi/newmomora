@@ -1,7 +1,7 @@
 # Feature: Memories & illustrations
 
 **Status:** `done`
-**Last updated:** 2026-07-22
+**Last updated:** 2026-09-28 (Timeline date anchor + pinned month header)
 **PRD reference:** §6.3 Memories, §6.4 Illustrations
 
 ## Overview
@@ -104,6 +104,63 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
     viewport height of the top. A foreground reconcile skipped this way isn't
     lost, just deferred to the next pull-to-refresh or the next
     foreground-while-near-top.
+- **Pinned header bar + jump to a month (2026-09-28,
+  [plan](../plans/timeline-calendar-keepsakes.md) Phase A):**
+  - `TimelineHeaderBar` (`src/components/timeline/timeline-header-bar.tsx`) is a
+    sibling ABOVE the list (never inside it), rendered in every Timeline state.
+    It owns the top safe-area inset and holds the month label (which is also
+    the "Jump to month" trigger), a contextual **Today** button, search and the
+    activity bell. The large "Your moments." title and streak dots still scroll
+    with the list.
+  - **Month label** = the month of the topmost card that's ≥15% visible, always
+    with the year. It's the second pair in `viewabilityConfigCallbackPairs`;
+    the first is the existing 60% video-autoplay pair. RN forbids swapping
+    `onViewableItemsChanged`/`viewabilityConfig` on a mounted list, so both
+    pairs are fixed at mount.
+  - **Picker:** the Calendar tab's `CalendarMonthPickerSheet`, fed
+    `getTimelineMonthOptions` (`src/utils/timeline-anchor.ts`) with per-month
+    counts from `useMemoryMonthCounts`. That hook runs one dates-only
+    `fetchMemoryMonthDates` query (paged past 1000 rows, blocked authors
+    filtered client-side) under its own `memory-month-counts` key. That key
+    is not persisted and is not under `calendar-memories`, whose readers
+    assume memory rows. `prependMemoryToListCaches`,
+    `removeMemoryFromListCaches` and date edits mark it stale, and opening the
+    picker refetches it if stale. Months with no memories are disabled, so a
+    pick always lands in the chosen month. Future-dated memories extend the
+    range forward.
+  - **Anchored mode:** a pick sets `anchorDate` = the month's last day (the
+    current month = the feed, `null`). `useMemories({ anchorDate })` then
+    queries `['memories', familyId, 'anchored', date]`. Its first page is the
+    newest rows on or before the date (`fetchAnchoredMemoriesPage`, with a
+    one-row check for newer rows). `fetchNextPage` pages older and
+    `fetchPreviousPage` pages newer (`fetchMemoriesPageNewer`: queries
+    ascending, fetches limit+1, returns rows newest-first).
+    - **Page params are tagged** (`{ dir: 'anchor' | 'older' | 'newer' }`),
+      and the queryFn dispatches on the tag. React-query refetches an infinite
+      query by replaying `pageParams[0]` and chaining `getNextPageParam`
+      forward. After a newer prepend, `pageParams[0]` is a newer cursor, so a
+      newer page's `nextCursor` is its oldest row, which keeps the forward
+      replay contiguous. An empty newer page continues inclusively from its
+      own cursor.
+    - Pull-to-refresh trims to the anchor page and refetches. The
+      foreground/reconnect reconcile is off while anchored.
+    - Recovery effects and the shared status poll run over the anchored rows,
+      since it's the same hook. Patches and removals reach the anchored key.
+      **New memories are never prepended into it** (`memoryBelongsToListKey`
+      rejects the shape), and `shouldDehydrateQuery` never persists it.
+  - **Screen:** the list remounts on anchor change (`key={anchorDate ?? 'feed'}`),
+    so every jump starts at offset 0 with no `scrollToIndex` or height model.
+    While anchored:
+    - it uses `maintainVisibleContentPosition` + `onStartReached` →
+      `fetchPreviousPage` to extend upward without a jump;
+    - the "now" sections (streak dots, Looking Back, Recently, import invite)
+      are hidden;
+    - Today is always shown.
+    The anchor clears (back to the feed) on Today, a re-press of the focused
+    Timeline tab, the FAB (the new memory will be prepended to the feed), or a
+    >30 min background. On the feed, Today appears once scrolled past one
+    screen and scrolls to the top.
+    - Analytics: `timeline_jumped { source, months_back }`.
 - **Realtime (2026-07-15, Workstream D):** `public.memories` is added to the
   `supabase_realtime` publication
   (`supabase/migrations/20260715150000_memories_realtime_publication.sql`,

@@ -18,7 +18,15 @@ import { useMemories } from '@/hooks/useMemories';
 
 jest.mock('expo-router', () => ({
   router: { push: jest.fn() },
+  useNavigation: () => ({ addListener: () => () => undefined, isFocused: () => true }),
 }));
+// Month-picker counts (docs/plans/timeline-calendar-keepsakes.md A4) -- its
+// service imports the real @/lib/supabase client. Picker behavior is covered
+// by timeline-month-jump.integration.test.tsx.
+jest.mock('@/hooks/useMemoryMonthCounts', () => ({
+  useMemoryMonthCounts: () => ({ counts: {}, isLoaded: true, refreshIfStale: jest.fn() }),
+}));
+jest.mock('@/components/calendar-month-picker-sheet', () => ({ CalendarMonthPickerSheet: () => null }));
 // The header glyph/drawer are gone (owner decision: the activity bell is the
 // one re-entry point) -- this flag defaults on here so the empty-state and
 // one-memory invite-card tests below can exercise TimelineGalleryImportInvite
@@ -263,11 +271,29 @@ describe('TimelineScreen', () => {
     // Starts at the top.
     expect(shouldReconcileOnForeground()).toBe(true);
 
-    list.props.onScroll(scrollEvent(5000));
+    fireEvent.scroll(list, scrollEvent(5000));
     expect(shouldReconcileOnForeground()).toBe(false);
 
-    list.props.onScroll(scrollEvent(0));
+    fireEvent.scroll(list, scrollEvent(0));
     expect(shouldReconcileOnForeground()).toBe(true);
+  });
+
+  it('shows the pinned Today button only once scrolled past the first screen', () => {
+    const { getByTestId, queryByTestId } = render(<TimelineScreen />);
+    const list = getByTestId('timeline-memory-list');
+    const scrollEvent = (y: number) => ({
+      nativeEvent: {
+        contentOffset: { x: 0, y },
+        contentSize: { height: 10000, width: 400 },
+        layoutMeasurement: { height: 800, width: 400 },
+      },
+    });
+
+    expect(queryByTestId('timeline-today-button')).toBeNull();
+    fireEvent.scroll(list, scrollEvent(5000));
+    expect(getByTestId('timeline-today-button')).toBeTruthy();
+    fireEvent.scroll(list, scrollEvent(0));
+    expect(queryByTestId('timeline-today-button')).toBeNull();
   });
 
   it('shows a footer spinner while fetching the next page', () => {

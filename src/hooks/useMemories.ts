@@ -15,6 +15,7 @@ import { clearMemoryWidgetForScope } from '@/hooks/useMemoryWidgetSync';
 import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
 import { useGenerationStatusPolling } from '@/hooks/useGenerationStatusPolling';
 import {
+  anchoredMemoriesQueryKey,
   familyMembersQueryKeyBase,
   lookingBackQueryKeyBase,
   memoriesQueryKey,
@@ -27,6 +28,7 @@ import { handleIllustrationReadyTransition } from '@/hooks/illustration-ready-tr
 import {
   findMemoryInListCache,
   invalidateMemoryQueries,
+  markMemoryMonthCountsStale,
   patchMemoryInCaches,
   prependMemoryToListCaches,
   removeMemoryFromListCaches,
@@ -38,8 +40,10 @@ import { fetchLinkPreviews } from '@/services/ai';
 import {
   createMemory,
   deleteMemory,
+  fetchAnchoredMemoriesPage,
   fetchMemoriesPage,
   fetchMemoriesPageForMember,
+  fetchMemoriesPageNewer,
   fetchMemoryById,
   regenerateMemoryIllustration,
   retryMemoryIllustration,
@@ -75,6 +79,14 @@ import {
 import {
   resolveMemoryTagPortraits,
 } from '@/utils/portrait-versions';
+import {
+  ANCHOR_PAGE_PARAM,
+  getAnchoredNextPageParam,
+  getAnchoredPreviousPageParam,
+  isAnchoredPageParam,
+  trimAnchoredPagesToAnchor,
+  type AnchoredPageParam,
+} from '@/utils/timeline-anchor';
 
 export type { MemoryMediaMutationAsset } from '@/services/memory-posting';
 
@@ -144,6 +156,30 @@ function fireLinkPreviewFetch(
     })
     .catch(() => {});
 }
+
+// One page of a date-anchored Timeline, dispatched on the page param's own
+// `dir` tag (see AnchoredPageParam) -- never on react-query's fetch
+// direction, which is 'forward' for every page of a refetch replay.
+async function fetchAnchoredTimelinePage(
+  familyId: string,
+  anchorDate: string,
+  param: AnchoredPageParam,
+): Promise<{ data: MemoriesPage | null; error: unknown }> {
+  switch (param.dir) {
+    case 'anchor':
+      return fetchAnchoredMemoriesPage(familyId, { anchorDate, limit: MEMORIES_PAGE_SIZE });
+    case 'newer':
+      return fetchMemoriesPageNewer(familyId, { cursor: param.cursor, limit: MEMORIES_PAGE_SIZE });
+    case 'older':
+      return fetchMemoriesPage(familyId, {
+        cursor: param.cursor,
+        inclusive: param.inclusive,
+        limit: MEMORIES_PAGE_SIZE,
+      });
+  }
+}
+
+type TimelinePageParam = MemoriesPageCursor | AnchoredPageParam | null;
 
 export interface CreateMemoryMutationInput {
   content?: string;
@@ -322,6 +358,9 @@ export function useMemoryMutations() {
       if (variables.taggedMemberIds !== undefined) {
         invalidateFamilyMemberTagOrdering(queryClient);
       }
+      if (variables.memoryDate !== undefined) {
+        markMemoryMonthCountsStale(queryClient);
+      }
 
       // Fire whenever content was part of the update -- not only when the
       // new content contains a URL. An edit that removes the last URL must
@@ -425,7 +464,20 @@ export function useMemoryMutations() {
 // scrolls. `memories` is the flattened, id-deduplicated set of every page
 // loaded so far (dedup guards against a row shifting pages between
 // fetches), not the whole library.
-export function useMemories(options?: { shouldReconcileOnForeground?: () => boolean }) {
+//
+// `anchorDate` (docs/plans/timeline-calendar-keepsakes.md A2) switches the
+// SAME hook to a date-anchored list: it starts at the newest memory on or
+// before that date and pages both ways (fetchNextPage = older,
+// fetchPreviousPage = newer). One hook rather than a parallel one so the
+// illustration/emotion recovery effects and the shared status poll keep
+// running over whichever list is on screen. While anchored, the
+// foreground/reconnect reconcile is off (it's a trim-to-page-1 of the feed)
+// and refetch trims to the anchor page instead.
+export function useMemories(options?: {
+  shouldReconcileOnForeground?: () => boolean;
+  anchorDate?: string | null;
+}) {
+  const anchorDate = options?.anchorDate ?? null;
   const { user } = useAuth();
   const { familyId, role } = useFamily();
   const queryClient = useQueryClient();
@@ -440,17 +492,33 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
   // which is what wakes it from idle. See useGenerationStatusPolling.ts.
   useGenerationStatusPolling();
 
-  const query = useInfiniteQuery({
-    queryKey: memoriesQueryKey(familyId),
+  const listQueryKey = anchorDate
+    ? anchoredMemoriesQueryKey(familyId, anchorDate)
+    : memoriesQueryKey(familyId);
+
+  const query = useInfiniteQuery<
+    MemoriesPage,
+    Error,
+    InfiniteData<MemoriesPage, TimelinePageParam>,
+    readonly unknown[],
+    TimelinePageParam
+  >({
+    queryKey: listQueryKey,
     queryFn: async ({ pageParam }) => {
       if (!familyId) {
         return { memories: [], nextCursor: null };
       }
 
-      const { data, error } = await fetchMemoriesPage(familyId, {
-        cursor: pageParam ?? undefined,
-        limit: MEMORIES_PAGE_SIZE,
-      });
+      const { data, error } = anchorDate
+        ? await fetchAnchoredTimelinePage(
+            familyId,
+            anchorDate,
+            isAnchoredPageParam(pageParam) ? pageParam : ANCHOR_PAGE_PARAM,
+          )
+        : await fetchMemoriesPage(familyId, {
+            cursor: isAnchoredPageParam(pageParam) ? undefined : pageParam ?? undefined,
+            limit: MEMORIES_PAGE_SIZE,
+          });
 
       if (error) {
         throw toError(error, 'Could not load memories');
@@ -458,8 +526,18 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
 
       return data ?? { memories: [], nextCursor: null };
     },
-    initialPageParam: null as MemoriesPageCursor | null,
-    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    initialPageParam: anchorDate ? ANCHOR_PAGE_PARAM : null,
+    getNextPageParam: (lastPage, _allPages, lastPageParam) =>
+      anchorDate
+        ? getAnchoredNextPageParam(
+            lastPage,
+            isAnchoredPageParam(lastPageParam) ? lastPageParam : ANCHOR_PAGE_PARAM,
+          )
+        : lastPage.nextCursor,
+    getPreviousPageParam: (firstPage) => (anchorDate ? getAnchoredPreviousPageParam(firstPage) : undefined),
+    // Anchors are cheap to recreate and each one is its own cache entry --
+    // don't let a session of month-hopping pile them up.
+    ...(anchorDate ? { gcTime: 60 * 1000 } : {}),
     enabled: Boolean(user && familyId),
     // Every mutation already patches or invalidates this query
     // (invalidateMemoryQueries) and per-memory illustration/emotion updates
@@ -489,9 +567,22 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
   // effect below.
   const shouldReconcileOnForegroundRef = useRef(options?.shouldReconcileOnForeground);
   shouldReconcileOnForegroundRef.current = options?.shouldReconcileOnForeground;
+  const isAnchoredRef = useRef(anchorDate !== null);
+  isAnchoredRef.current = anchorDate !== null;
   const refetchQuery = query.refetch;
 
   const refreshFirstPage = useCallback(async () => {
+    if (anchorDate) {
+      // Anchored: keep only the anchor page (param reset to { dir: 'anchor' })
+      // so the refresh is one page and re-derives from the anchor itself.
+      queryClient.setQueryData<InfiniteData<MemoriesPage, unknown>>(
+        anchoredMemoriesQueryKey(familyId, anchorDate),
+        (current) => trimAnchoredPagesToAnchor(current),
+      );
+      await refetchQuery();
+      return;
+    }
+
     // Do NOT use resetQueries (clears data and flips the query to
     // isLoading, swapping the pulled list for the full-screen spinner
     // branch mid-gesture) or react-query's maxPages (evicts from the FRONT
@@ -505,7 +596,7 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
     // refetch to a single page's enrichment cost.
     trimListCacheToFirstPage(queryClient, familyId);
     await refetchQuery();
-  }, [queryClient, familyId, refetchQuery]);
+  }, [anchorDate, queryClient, familyId, refetchQuery]);
 
   // A4a: refetchOnWindowFocus is off above, and tab screens never unmount
   // (so "next mount" never reconciles this query either) -- reconcile
@@ -530,6 +621,7 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
       const shouldReconcile = shouldReconcileOnForegroundRef.current;
       if (
         status === 'active' &&
+        !isAnchoredRef.current &&
         isStaleRef.current &&
         (shouldReconcile === undefined || shouldReconcile())
       ) {
@@ -558,7 +650,7 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
       const isOnline = onlineManager.isOnline();
       if (isOnline && !wasOnline) {
         const shouldReconcile = shouldReconcileOnForegroundRef.current;
-        if (isStaleRef.current && (shouldReconcile === undefined || shouldReconcile())) {
+        if (!isAnchoredRef.current && isStaleRef.current && (shouldReconcile === undefined || shouldReconcile())) {
           void refreshFirstPage();
         }
       }
@@ -732,6 +824,10 @@ export function useMemories(options?: { shouldReconcileOnForeground?: () => bool
     fetchNextPage: query.fetchNextPage,
     hasNextPage: query.hasNextPage,
     isFetchingNextPage: query.isFetchingNextPage,
+    // Anchored lists only (always false on the feed): newer pages above.
+    fetchPreviousPage: query.fetchPreviousPage,
+    hasPreviousPage: query.hasPreviousPage,
+    isFetchingPreviousPage: query.isFetchingPreviousPage,
     ...mutations,
   };
 }

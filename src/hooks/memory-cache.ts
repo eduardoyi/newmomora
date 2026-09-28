@@ -4,6 +4,7 @@ import {
   calendarMemoriesQueryKeyBase,
   memoriesQueryKeyBase,
   memoryDetailQueryKey,
+  memoryMonthCountsQueryKeyBase,
 } from '@/hooks/queryKeys';
 import type { MemoriesPage, MemoryWithTags } from '@/services/memories';
 
@@ -278,11 +279,20 @@ function insertMemorySorted(
 // memories are routinely backdated (EXIF capture-date prefill), and with no
 // reconciling refetch (see invalidateMemoryQueries above) a literal prepend
 // would misorder those rows until the next pull-to-refresh.
+// The Timeline month picker's counts only change when a memory is added,
+// removed, or re-dated -- mark them stale (no refetch; the picker refreshes
+// a stale entry when it opens).
+export function markMemoryMonthCountsStale(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: [memoryMonthCountsQueryKeyBase], refetchType: 'none' });
+}
+
 export function prependMemoryToListCaches(
   queryClient: QueryClient,
   familyId: string | null | undefined,
   memory: MemoryWithTags,
 ): void {
+  markMemoryMonthCountsStale(queryClient);
+
   const matches = queryClient.getQueryCache().findAll({
     predicate: (query) => isMemoriesListQueryKey(query.queryKey) && query.queryKey[1] === familyId,
   });
@@ -303,6 +313,8 @@ export function removeMemoryFromListCaches(
   familyId: string | null | undefined,
   memoryId: string,
 ): void {
+  markMemoryMonthCountsStale(queryClient);
+
   queryClient.setQueriesData<InfiniteData<MemoriesPage>>(
     {
       predicate: (query) =>

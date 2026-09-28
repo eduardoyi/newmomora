@@ -1,7 +1,8 @@
-import { router } from 'expo-router';
+import { router, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   FlatList,
   type ListRenderItemInfo,
   type NativeScrollEvent,
@@ -20,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { MemoryCard } from '@/components/memory-card';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
+import { CalendarMonthPickerSheet } from '@/components/calendar-month-picker-sheet';
 import { FamilyActivitySheet } from '@/components/family-activity-sheet';
 import { MemoryFab } from '@/components/memory-fab';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
@@ -28,10 +30,10 @@ import { ImportInviteCard } from '@/components/gallery-import/import-invite-card
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
-import { TimelineActivityBell } from '@/components/timeline-activity-bell';
-import { TimelineSearchButton } from '@/components/timeline-search-button';
+import { TimelineHeaderBar } from '@/components/timeline/timeline-header-bar';
 import { useFamilyActivityUnread } from '@/hooks/useFamilyActivity';
 import { useMemories } from '@/hooks/useMemories';
+import { useMemoryMonthCounts } from '@/hooks/useMemoryMonthCounts';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useGalleryImportEntryStatus } from '@/hooks/useGalleryImport';
 import { useLookingBackPackages } from '@/hooks/useLookingBackPackages';
@@ -58,12 +60,36 @@ import {
   dismissGalleryImportInvite,
   isGalleryImportInviteDismissed,
 } from '@/utils/gallery-import-invite-dismissal';
+import {
+  formatTimelineMonthLabel,
+  getMonthAnchorDate,
+  getTimelineMonthOptions,
+  toMonthKey,
+  type TimelineMonthOption,
+} from '@/utils/timeline-anchor';
 
 function toLocalDateString(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 const timelineViewabilityConfig: ViewabilityConfig = { viewAreaCoveragePercentThreshold: 60 };
+// The pinned month label's own viewability pair (the Calendar tab's value):
+// the topmost card that's at least 15% on screen names the month. It can't
+// share the 60% autoplay config above, and RN forbids swapping
+// onViewableItemsChanged/viewabilityConfig on the fly -- hence
+// viewabilityConfigCallbackPairs with both pairs fixed at mount.
+const monthLabelViewabilityConfig: ViewabilityConfig = { itemVisiblePercentThreshold: 15 };
+
+// An anchored (jumped-to-a-date) Timeline returns to today's feed once the
+// app has been backgrounded this long -- coming back hours later to March
+// 2024 would read as a bug.
+const ANCHOR_RESET_AFTER_BACKGROUND_MS = 30 * 60 * 1000;
+
+function monthsBetween(fromKey: string, toKey: string): number {
+  const [fromYear, fromMonth] = fromKey.split('-').map(Number) as [number, number];
+  const [toYear, toMonth] = toKey.split('-').map(Number) as [number, number];
+  return (fromYear - toYear) * 12 + (fromMonth - toMonth);
+}
 
 // A8: computed from whatever pages useMemories has loaded so far, not the
 // whole library -- page 1 (40 rows) covers the current week in practice, so
@@ -151,41 +177,33 @@ function TimelineGalleryImportInvite() {
   return <ImportInviteCard onDismiss={handleDismiss} onStart={handleStart} />;
 }
 
-interface ActivityBellSlotProps {
-  unread: boolean;
-  onPressBell: () => void;
-}
-
-function TimelineTitle({ unread, onPressBell }: ActivityBellSlotProps) {
-  const now = new Date();
-  const dayLabel = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-
+// Search, the activity bell and the month label live in the pinned
+// TimelineHeaderBar now (docs/plans/timeline-calendar-keepsakes.md A4) --
+// this is just the large scrolling title. The old day eyebrow ("MONDAY,
+// SEPTEMBER 28") was dropped: it read as a duplicate of the bar's month label
+// directly above it.
+function TimelineTitle() {
   return (
     <View style={styles.header} testID="timeline-title-section">
-      <View style={styles.headerTitleRow}>
-        <View>
-          <Text style={styles.eyebrow}>{dayLabel}</Text>
-          <Text style={styles.title}>Your moments.</Text>
-        </View>
-        <View style={styles.headerGlyphs}>
-          <TimelineSearchButton />
-          <TimelineActivityBell onPress={onPressBell} unread={unread} />
-        </View>
-      </View>
+      <Text style={styles.title}>Your moments.</Text>
     </View>
   );
 }
 
+// Streak dots are "this week" -- meaningless (and wrong) over an anchored
+// list that starts somewhere in the past, so anchored callers pass
+// showStreak={false}.
 function TimelineTitleWithStreak({
   memories,
-  unread,
-  onPressBell,
-}: ActivityBellSlotProps & { memories: MemoryWithTags[] }) {
+  showStreak,
+}: { memories: MemoryWithTags[]; showStreak: boolean }) {
   return <>
-    <TimelineTitle onPressBell={onPressBell} unread={unread} />
-    <View style={styles.streakWrap} testID="timeline-week-section">
-      <StreakDots memories={memories} />
-    </View>
+    <TimelineTitle />
+    {showStreak ? (
+      <View style={styles.streakWrap} testID="timeline-week-section">
+        <StreakDots memories={memories} />
+      </View>
+    ) : null}
   </>;
 }
 
@@ -269,9 +287,29 @@ export default function TimelineScreen() {
   // ref from shouldReconcileOnForeground below lets that reconcile skip
   // itself while scrolled deep instead of losing the user's place.
   const scrollOffsetRef = useRef(0);
+  // Drives the pinned bar's Today button on the feed (anchored lists always
+  // show it). State, not just the ref, but only written when it flips.
+  const [isScrolledDeep, setIsScrolledDeep] = useState(false);
+  const isScrolledDeepRef = useRef(false);
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
-  }, []);
+    const offset = event.nativeEvent.contentOffset.y;
+    scrollOffsetRef.current = offset;
+    const deep = offset > windowHeight;
+    if (deep !== isScrolledDeepRef.current) {
+      isScrolledDeepRef.current = deep;
+      setIsScrolledDeep(deep);
+    }
+  }, [windowHeight]);
+  // Date anchor (docs/plans/timeline-calendar-keepsakes.md A3): null is
+  // today's feed; an ISO date shows the list starting at the newest memory on
+  // or before it. Set by the month picker; cleared by Today, a Timeline tab
+  // re-press, starting a new memory from the FAB, or a long background.
+  const [anchorDate, setAnchorDate] = useState<string | null>(null);
+  const isAnchored = anchorDate !== null;
+  // Month of the topmost visible card -- the pinned bar's label.
+  const [topVisibleDate, setTopVisibleDate] = useState<string | null>(null);
+  const flatListRef = useRef<FlatList<MemoryWithTags>>(null);
+  const [isMonthPickerVisible, setIsMonthPickerVisible] = useState(false);
   const shouldReconcileOnForeground = useCallback(
     () => scrollOffsetRef.current <= windowHeight,
     [windowHeight],
@@ -292,7 +330,10 @@ export default function TimelineScreen() {
     refetch,
     fetchNextPage,
     isFetchingNextPage,
-  } = useMemories({ shouldReconcileOnForeground });
+    fetchPreviousPage,
+    hasPreviousPage,
+    isFetchingPreviousPage,
+  } = useMemories({ shouldReconcileOnForeground, anchorDate });
   const contentSafety = useContentSafety();
   const { isUserBlocked } = contentSafety;
   const lookingBack = useLookingBackPackages({ enabled: !isOnboardingLoading });
@@ -303,8 +344,6 @@ export default function TimelineScreen() {
   );
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
 
-  const viewabilityConfig = timelineViewabilityConfig;
-
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
     const firstVideo = viewableItems.find(
       (t) =>
@@ -313,6 +352,125 @@ export default function TimelineScreen() {
     );
     setActiveVideoId(firstVideo ? (firstVideo.item as MemoryWithTags).id : null);
   }, []);
+
+  const onMonthLabelViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    let top: ViewToken | null = null;
+    for (const token of viewableItems) {
+      if (token.isViewable && token.index !== null && (top === null || token.index < (top.index ?? Infinity))) {
+        top = token;
+      }
+    }
+    if (top) {
+      const date = (top.item as MemoryWithTags).memory_date;
+      setTopVisibleDate((previous) => (previous === date ? previous : date));
+    }
+  }, []);
+
+  // Fixed at mount -- RN throws if these change on a mounted list.
+  const [viewabilityConfigCallbackPairs] = useState(() => [
+    { viewabilityConfig: timelineViewabilityConfig, onViewableItemsChanged },
+    { viewabilityConfig: monthLabelViewabilityConfig, onViewableItemsChanged: onMonthLabelViewableItemsChanged },
+  ]);
+
+  // ── Month picker + anchor ────────────────────────────────────────────────
+  const monthCounts = useMemoryMonthCounts(isUserBlocked);
+  const monthOptions = useMemo(
+    () => getTimelineMonthOptions(new Date(), monthCounts.counts),
+    [monthCounts.counts],
+  );
+  const canJumpToMonth = monthOptions.some((option) => !option.isCurrent && option.count > 0);
+  const monthLabel = formatTimelineMonthLabel(topVisibleDate ?? anchorDate ?? new Date());
+  const showTodayButton = isAnchored || isScrolledDeep;
+
+  // Every anchor change (including back to the feed) remounts the list via its
+  // `key`, which starts it at offset 0 -- no scrollToIndex, no height model.
+  const applyAnchor = useCallback((next: string | null) => {
+    setTopVisibleDate(null);
+    setActiveVideoId(null);
+    scrollOffsetRef.current = 0;
+    isScrolledDeepRef.current = false;
+    setIsScrolledDeep(false);
+    setAnchorDate(next);
+  }, []);
+
+  const goToToday = useCallback(() => {
+    if (anchorDate !== null) {
+      applyAnchor(null);
+      return;
+    }
+    flatListRef.current?.scrollToOffset({ animated: true, offset: 0 });
+  }, [anchorDate, applyAnchor]);
+
+  const handlePressToday = useCallback(() => {
+    trackEvent('timeline_jumped', { source: 'today_button', months_back: 0 });
+    goToToday();
+  }, [goToToday]);
+
+  const handleOpenMonthPicker = useCallback(() => {
+    monthCounts.refreshIfStale();
+    setIsMonthPickerVisible(true);
+  }, [monthCounts]);
+
+  const handleSelectMonth = useCallback((option: TimelineMonthOption) => {
+    setIsMonthPickerVisible(false);
+    trackEvent('timeline_jumped', {
+      source: 'month_picker',
+      months_back: Math.max(0, monthsBetween(toMonthKey(new Date()), toMonthKey(option.iso))),
+    });
+    const next = getMonthAnchorDate(option);
+    if (next === anchorDate) {
+      flatListRef.current?.scrollToOffset({ animated: true, offset: 0 });
+      return;
+    }
+    applyAnchor(next);
+  }, [anchorDate, applyAnchor]);
+
+  // Re-pressing the focused Timeline tab goes home: back to today's feed, or
+  // to the top of it.
+  const navigation = useNavigation();
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('tabPress' as never, () => {
+      if (navigation.isFocused()) {
+        goToToday();
+      }
+    });
+    return unsubscribe;
+  }, [goToToday, navigation]);
+
+  // A long background drops the anchor (see ANCHOR_RESET_AFTER_BACKGROUND_MS).
+  const anchorDateRef = useRef(anchorDate);
+  anchorDateRef.current = anchorDate;
+  const backgroundedAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (status) => {
+      if (status === 'background') {
+        backgroundedAtRef.current = Date.now();
+        return;
+      }
+      if (status === 'active') {
+        const backgroundedAt = backgroundedAtRef.current;
+        backgroundedAtRef.current = null;
+        if (
+          anchorDateRef.current !== null &&
+          backgroundedAt !== null &&
+          Date.now() - backgroundedAt > ANCHOR_RESET_AFTER_BACKGROUND_MS
+        ) {
+          applyAnchor(null);
+        }
+      }
+    });
+    return () => subscription.remove();
+  }, [applyAnchor]);
+
+  // A new memory is prepended to the feed, never to an anchored list (see
+  // memoryBelongsToListKey) -- so starting one from the FAB returns to today
+  // first, and the user comes back to find it at the top.
+  const handlePressFab = useCallback(() => {
+    if (anchorDate !== null) {
+      applyAnchor(null);
+    }
+    router.push(newMemoryRoute('fab_timeline'));
+  }, [anchorDate, applyAnchor]);
 
   // B1: stable, id-based callbacks -- MemoryCard is memoized and the parent
   // FlatList re-renders on every list-affecting state change (new page,
@@ -383,24 +541,37 @@ export default function TimelineScreen() {
     [activeVideoId, contentSafety, handleCardPress, handleOpenComments],
   );
 
+  // The top inset belongs to the pinned TimelineHeaderBar now, so the list
+  // header is a plain View. Anchored lists drop the "now" sections (streak,
+  // Looking Back, Recently, the import invite) -- they start in the past.
   const listHeader = useMemo(
     () => (
-      <SafeAreaView edges={['top']} testID="timeline-top-sections">
-        <TimelineTitle onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
-        <View style={styles.streakWrap} testID="timeline-week-section">
-          <StreakDots memories={visibleMemories} />
-        </View>
-        <LookingBackPackageRail packages={lookingBack.packages} onOpen={handleOpenLookingBackPackage} />
-        <RecentlySection hasLookingBack={lookingBack.packages.length > 0} />
-        <PendingMemoryUploadsBanner />
-        {/* The invite renders as the first list item when there is exactly
-            one memory, matching its empty-state placement below --
-            visibleMemories.length <= 1 is the one condition both branches
-            share (docs/plans/gallery-import-continuous.md I4a step 1). */}
-        {canEdit && visibleMemories.length === 1 ? <TimelineGalleryImportInvite /> : null}
-      </SafeAreaView>
+      <View testID="timeline-top-sections">
+        {isAnchored ? (
+          <>
+            <TimelineTitle />
+            {isFetchingPreviousPage ? (
+              <View style={styles.listHeaderLoading} testID="timeline-newer-loading">
+                <ActivityIndicator color={colors.primary} />
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <TimelineTitleWithStreak memories={visibleMemories} showStreak />
+            <LookingBackPackageRail packages={lookingBack.packages} onOpen={handleOpenLookingBackPackage} />
+            <RecentlySection hasLookingBack={lookingBack.packages.length > 0} />
+            <PendingMemoryUploadsBanner />
+            {/* The invite renders as the first list item when there is exactly
+                one memory, matching its empty-state placement below --
+                visibleMemories.length <= 1 is the one condition both branches
+                share (docs/plans/gallery-import-continuous.md I4a step 1). */}
+            {canEdit && visibleMemories.length === 1 ? <TimelineGalleryImportInvite /> : null}
+          </>
+        )}
+      </View>
     ),
-    [canEdit, galleryBellUnread, handleOpenActivitySheet, handleOpenLookingBackPackage, hasUnreadActivity, lookingBack.packages, visibleMemories],
+    [canEdit, handleOpenLookingBackPackage, isAnchored, isFetchingPreviousPage, lookingBack.packages, visibleMemories],
   );
 
   // fetchNextPage's signature (FetchNextPageOptions) doesn't match FlatList's
@@ -408,6 +579,14 @@ export default function TimelineScreen() {
   const handleEndReached = useCallback(() => {
     void fetchNextPage();
   }, [fetchNextPage]);
+  // Anchored lists extend upward too; maintainVisibleContentPosition (set on
+  // the FlatList only while anchored) keeps the prepend from jumping the
+  // scroll.
+  const handleStartReached = useCallback(() => {
+    if (hasPreviousPage && !isFetchingPreviousPage) {
+      void fetchPreviousPage();
+    }
+  }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage]);
   const handleRefresh = useCallback(() => {
     void Promise.all([refetch(), lookingBack.refetch(), refetchActivityUnread()]);
   }, [lookingBack, refetch, refetchActivityUnread]);
@@ -462,38 +641,42 @@ export default function TimelineScreen() {
     );
   }
 
+  const bellUnread = hasUnreadActivity || galleryBellUnread;
+  const refreshControl = (
+    <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
+  );
+
   return (
     <View style={styles.container}>
+      <TimelineHeaderBar
+        bellUnread={bellUnread}
+        canJumpToMonth={canJumpToMonth}
+        monthLabel={monthLabel}
+        onPressBell={handleOpenActivitySheet}
+        onPressMonth={handleOpenMonthPicker}
+        onPressToday={handlePressToday}
+        showToday={showTodayButton}
+      />
       {isLoading ? (
         <>
-          <SafeAreaView>
-            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
-          </SafeAreaView>
+          <TimelineTitleWithStreak memories={memories} showStreak={!isAnchored} />
           <View style={styles.centeredInline}>
             <ActivityIndicator color={colors.primary} size="large" />
           </View>
         </>
       ) : isError ? (
-        <ScrollView
-          refreshControl={
-            <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
-          }
-        >
-          <SafeAreaView>
-            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
-          </SafeAreaView>
+        <ScrollView refreshControl={refreshControl}>
+          <TimelineTitleWithStreak memories={memories} showStreak={!isAnchored} />
           <Text style={styles.errorText}>Could not load memories</Text>
         </ScrollView>
       ) : memories.length > 0 && visibleMemories.length === 0 ? (
         <ScrollView
           contentContainerStyle={styles.hiddenOnlyWrap}
-          refreshControl={
-            <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
-          }
+          refreshControl={refreshControl}
           testID="timeline-hidden-content-state"
         >
-          <SafeAreaView>
-            <TimelineTitleWithStreak memories={memories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
+          <View>
+            <TimelineTitleWithStreak memories={memories} showStreak={!isAnchored} />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.hiddenOnlyTitle}>Blocked-account memories are hidden</Text>
@@ -507,18 +690,31 @@ export default function TimelineScreen() {
                 <Text style={styles.hiddenOnlyButtonText}>Manage blocked accounts</Text>
               </Pressable>
             </View>
-          </SafeAreaView>
+          </View>
+        </ScrollView>
+      ) : visibleMemories.length === 0 && isAnchored ? (
+        // Only reachable if the anchored range emptied out underneath us (the
+        // picker never offers an empty month) -- offer the way home.
+        <ScrollView style={styles.emptyWrap} refreshControl={refreshControl} testID="timeline-anchored-empty-state">
+          <TimelineTitle />
+          <Text style={styles.emptyBody}>No memories on or before this date.</Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={goToToday}
+            style={styles.hiddenOnlyButton}
+            testID="timeline-anchored-empty-today"
+          >
+            <Text style={styles.hiddenOnlyButtonText}>Back to today</Text>
+          </Pressable>
         </ScrollView>
       ) : visibleMemories.length === 0 ? (
         <ScrollView
           style={styles.emptyWrap}
-          refreshControl={
-            <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
-          }
+          refreshControl={refreshControl}
           testID="timeline-empty-state"
         >
-          <SafeAreaView>
-              <TimelineTitleWithStreak memories={visibleMemories} onPressBell={handleOpenActivitySheet} unread={hasUnreadActivity || galleryBellUnread} />
+          <View>
+            <TimelineTitleWithStreak memories={visibleMemories} showStreak />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.emptyScript}>nothing yet</Text>
@@ -528,34 +724,43 @@ export default function TimelineScreen() {
               Capture your first moment when you are ready — type, or just speak it.
             </Text>
             {canEdit ? <TimelineGalleryImportInvite /> : null}
-          </SafeAreaView>
+          </View>
         </ScrollView>
       ) : (
         <FlatList
           contentContainerStyle={styles.listContent}
           data={visibleMemories}
           initialNumToRender={6}
+          key={anchorDate ?? 'feed'}
           keyExtractor={keyExtractor}
           ListFooterComponent={listFooter}
           ListHeaderComponent={listHeader}
+          maintainVisibleContentPosition={isAnchored ? { minIndexForVisible: 0 } : undefined}
           maxToRenderPerBatch={6}
           onEndReached={handleEndReached}
           onEndReachedThreshold={0.5}
           onScroll={handleScroll}
-          onViewableItemsChanged={onViewableItemsChanged}
-          refreshControl={
-            <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
-          }
+          onStartReached={isAnchored ? handleStartReached : undefined}
+          onStartReachedThreshold={0.5}
+          ref={flatListRef}
+          refreshControl={refreshControl}
           removeClippedSubviews
           renderItem={renderItem}
           scrollEventThrottle={100}
           testID="timeline-memory-list"
-          viewabilityConfig={viewabilityConfig}
+          viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
           windowSize={7}
         />
       )}
 
-      {canEdit && <MemoryFab onPress={() => router.push(newMemoryRoute('fab_timeline'))} />}
+      {canEdit && <MemoryFab onPress={handlePressFab} />}
+
+      <CalendarMonthPickerSheet
+        onClose={() => setIsMonthPickerVisible(false)}
+        onSelect={handleSelectMonth}
+        options={monthOptions}
+        visible={isMonthPickerVisible}
+      />
 
       <FamilyActivitySheet
         galleryImport={showGalleryImportActivityRow ? {
@@ -597,27 +802,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: 0,
   },
-  headerTitleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  headerGlyphs: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
   streakWrap: { paddingHorizontal: spacing.lg },
-  eyebrow: {
-    fontFamily: fonts.sansBold,
-    fontSize: 11,
-    letterSpacing: 0.14 * 11,
-    textTransform: 'uppercase',
-    color: colors.ink3,
-  },
   title: {
     fontFamily: fonts.display,
     fontSize: 44,
     lineHeight: 44 * 0.98,
     letterSpacing: -0.018 * 44,
     color: colors.ink,
-    marginTop: 8,
   },
   streakRow: {
     flexDirection: 'row',
@@ -683,6 +874,9 @@ const styles = StyleSheet.create({
   },
   listFooterLoading: {
     paddingVertical: spacing.lg,
+  },
+  listHeaderLoading: {
+    paddingTop: spacing.md,
   },
   // Onboarding empty
   onboardingWrap: {

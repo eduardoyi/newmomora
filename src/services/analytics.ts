@@ -147,6 +147,12 @@ export interface AnalyticsEventMap {
     package_type: LookingBackPackageType;
     memory_count: number;
   };
+  // Timeline date jumps (docs/plans/timeline-calendar-keepsakes.md). No
+  // dates in the payload -- `months_back` is the only shape of "where".
+  timeline_jumped: {
+    source: 'month_picker' | 'today_button';
+    months_back: number;
+  };
   invite_created: {
     role: 'manager' | 'viewer';
     family_id: string;

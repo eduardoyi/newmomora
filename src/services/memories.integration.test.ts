@@ -3,9 +3,12 @@ import {
   createMediaMemory,
   createMemory,
   deleteMemory,
+  fetchAnchoredMemoriesPage,
   fetchMemoriesInDateRange,
   fetchMemoriesPage,
   fetchMemoriesPageForMember,
+  fetchMemoriesPageNewer,
+  fetchMemoryMonthDates,
   fetchMemoryById,
   fetchMemoriesByIds,
   fetchMemoryGenerationStatuses,
@@ -68,6 +71,7 @@ function createQueryBuilder(finalResult: QueryResult) {
   builder.lte = jest.fn(() => builder);
   builder.or = jest.fn(() => builder);
   builder.order = jest.fn(() => builder);
+  builder.range = jest.fn(() => builder);
   builder.textSearch = jest.fn(() => builder);
   builder.single = jest.fn(async () => finalResult);
   builder.maybeSingle = jest.fn(async () => finalResult);
@@ -2250,6 +2254,144 @@ describe('memories service integration', () => {
       const { data } = await fetchMemoriesPage('family-1', { limit: 40 });
 
       expect(data?.nextCursor).toBeNull();
+    });
+  });
+
+  // Date-anchored Timeline (docs/plans/timeline-calendar-keepsakes.md A1).
+  describe('anchored Timeline pages', () => {
+    function memoryRow(id: string, memoryDate: string, createdAt: string) {
+      return {
+        id,
+        user_id: 'user-1',
+        content: 'Hello',
+        memory_date: memoryDate,
+        memory_type: 'text_only',
+        emotion: null,
+        illustration_key: null,
+        illustration_status: 'none',
+        illustration_prompt: null,
+        media_key: null,
+        media_content_type: null,
+        created_at: createdAt,
+        updated_at: createdAt,
+      };
+    }
+
+    // Each supabase.from('memories') call gets the next builder in order;
+    // enrichment tables resolve empty.
+    function mockMemoriesBuilders(...builders: ReturnType<typeof createQueryBuilder>[]) {
+      const queue = [...builders];
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') {
+          const next = queue.shift();
+          if (!next) throw new Error('Unexpected extra memories query');
+          return next;
+        }
+        if (table === 'memory_family_members' || table === 'memory_media') {
+          return createQueryBuilder({ data: [], error: null });
+        }
+        throw new Error(`Unexpected table ${table}`);
+      });
+    }
+
+    it('fetchMemoriesPage bounds the first anchored page by startDate and supports an inclusive cursor', async () => {
+      const builder = createQueryBuilder({ data: [], error: null });
+      mockMemoriesBuilders(builder);
+
+      await fetchMemoriesPage('family-1', {
+        startDate: '2025-03-31',
+        cursor: { memoryDate: '2025-03-20', createdAt: '2025-03-20T08:00:00.000Z' },
+        inclusive: true,
+        limit: 40,
+      });
+
+      expect(builder.lte).toHaveBeenCalledWith('memory_date', '2025-03-31');
+      expect(builder.or).toHaveBeenCalledWith(
+        'memory_date.lt.2025-03-20,and(memory_date.eq.2025-03-20,created_at.lte.2025-03-20T08:00:00.000Z)',
+      );
+    });
+
+    it('fetchMemoriesPageNewer queries ascending past the cursor and returns rows newest-first', async () => {
+      const builder = createQueryBuilder({
+        data: [
+          memoryRow('a', '2025-04-01', '2025-04-01T01:00:00.000Z'),
+          memoryRow('b', '2025-04-02', '2025-04-02T01:00:00.000Z'),
+          memoryRow('c', '2025-04-03', '2025-04-03T01:00:00.000Z'),
+        ],
+        error: null,
+      });
+      mockMemoriesBuilders(builder);
+
+      const { data } = await fetchMemoriesPageNewer('family-1', {
+        cursor: { memoryDate: '2025-03-31', createdAt: '2025-03-31T09:00:00.000Z' },
+        limit: 2,
+      });
+
+      expect(builder.or).toHaveBeenCalledWith(
+        'memory_date.gt.2025-03-31,and(memory_date.eq.2025-03-31,created_at.gt.2025-03-31T09:00:00.000Z)',
+      );
+      expect(builder.order).toHaveBeenCalledWith('memory_date', { ascending: true });
+      // limit + 1 to learn whether anything newer remains.
+      expect(builder.limit).toHaveBeenCalledWith(3);
+      expect(data?.memories.map((m) => m.id)).toEqual(['b', 'a']);
+      // nextCursor chains down from the page's OLDEST row; prevCursor is its
+      // newest row because a third (newer) row exists.
+      expect(data?.nextCursor).toEqual({ memoryDate: '2025-04-01', createdAt: '2025-04-01T01:00:00.000Z' });
+      expect(data?.prevCursor).toEqual({ memoryDate: '2025-04-02', createdAt: '2025-04-02T01:00:00.000Z' });
+    });
+
+    it('fetchMemoriesPageNewer stops paging up when nothing newer remains', async () => {
+      mockMemoriesBuilders(createQueryBuilder({
+        data: [memoryRow('a', '2025-04-01', '2025-04-01T01:00:00.000Z')],
+        error: null,
+      }));
+
+      const { data } = await fetchMemoriesPageNewer('family-1', {
+        cursor: { memoryDate: '2025-03-31', createdAt: '2025-03-31T09:00:00.000Z' },
+        limit: 2,
+      });
+
+      expect(data?.prevCursor).toBeNull();
+    });
+
+    it('fetchAnchoredMemoriesPage sets prevCursor from its newest row only when something newer exists', async () => {
+      const page = createQueryBuilder({
+        data: [memoryRow('march', '2025-03-20', '2025-03-20T01:00:00.000Z')],
+        error: null,
+      });
+      const existence = createQueryBuilder({ data: [{ id: 'later' }], error: null });
+      mockMemoriesBuilders(page, existence);
+
+      const { data } = await fetchAnchoredMemoriesPage('family-1', { anchorDate: '2025-03-31', limit: 40 });
+
+      expect(page.lte).toHaveBeenCalledWith('memory_date', '2025-03-31');
+      expect(existence.or).toHaveBeenCalledWith(
+        'memory_date.gt.2025-03-20,and(memory_date.eq.2025-03-20,created_at.gt.2025-03-20T01:00:00.000Z)',
+      );
+      expect(existence.limit).toHaveBeenCalledWith(1);
+      expect(data?.prevCursor).toEqual({ memoryDate: '2025-03-20', createdAt: '2025-03-20T01:00:00.000Z' });
+
+      mockMemoriesBuilders(
+        createQueryBuilder({ data: [memoryRow('march', '2025-03-20', '2025-03-20T01:00:00.000Z')], error: null }),
+        createQueryBuilder({ data: [], error: null }),
+      );
+      const newest = await fetchAnchoredMemoriesPage('family-1', { anchorDate: '2025-03-31', limit: 40 });
+      expect(newest.data?.prevCursor).toBeNull();
+    });
+
+    it('fetchMemoryMonthDates pages past the 1000-row cap', async () => {
+      const fullBatch = Array.from({ length: 1000 }, () => ({ memory_date: '2025-01-01', user_id: 'u' }));
+      const first = createQueryBuilder({ data: fullBatch, error: null });
+      const second = createQueryBuilder({ data: [{ memory_date: '2024-12-01', user_id: 'u' }], error: null });
+      mockMemoriesBuilders(first, second);
+
+      const { data, error } = await fetchMemoryMonthDates('family-1');
+
+      expect(error).toBeNull();
+      expect(first.select).toHaveBeenCalledWith('memory_date, user_id');
+      expect(first.range).toHaveBeenCalledWith(0, 999);
+      expect(second.range).toHaveBeenCalledWith(1000, 1999);
+      expect(data).toHaveLength(1001);
     });
   });
 

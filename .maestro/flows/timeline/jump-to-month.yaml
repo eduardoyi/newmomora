@@ -1,0 +1,62 @@
+appId: com.memora.app
+---
+# Timeline date jump (docs/plans/timeline-calendar-keepsakes.md Phase A):
+# the pinned bar's month label opens the "Jump to month" picker; picking an
+# older month re-renders the list starting at that month, with a Today button
+# that returns to the feed.
+#
+# Data-dependent: the jump steps only run when the account has memories in a
+# month other than the current one (the trigger is disabled otherwise). The
+# picker lists the current month first (always enabled) and then only months
+# with memories are enabled, so the SECOND enabled option is the newest
+# older month that has memories.
+- runFlow: ../auth/login.yaml
+- extendedWaitUntil:
+    visible:
+      id: timeline-header-bar
+    timeout: 30000
+- assertVisible:
+    id: timeline-month-trigger
+- assertVisible:
+    id: timeline-search-button
+- assertVisible:
+    id: timeline-activity-bell
+
+- runFlow:
+    when:
+      visible:
+        id: timeline-month-trigger
+        enabled: true
+    commands:
+      - tapOn:
+          id: timeline-month-trigger
+      - extendedWaitUntil:
+          visible:
+            id: month-picker-sheet
+          timeout: 10000
+      - assertVisible: "Jump to month"
+      - tapOn:
+          id: "month-picker-option-.*"
+          enabled: true
+          index: 1
+      - extendedWaitUntil:
+          notVisible:
+            id: month-picker-sheet
+          timeout: 10000
+      - extendedWaitUntil:
+          visible:
+            id: timeline-memory-list
+          timeout: 30000
+      - assertVisible:
+          id: timeline-today-button
+      # "Now" sections are hidden on an anchored list.
+      - assertNotVisible:
+          id: timeline-week-section
+      - tapOn:
+          id: timeline-today-button
+      - extendedWaitUntil:
+          visible:
+            id: timeline-week-section
+          timeout: 15000
+      - assertNotVisible:
+          id: timeline-today-button

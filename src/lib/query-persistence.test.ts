@@ -60,6 +60,13 @@ describe('shouldDehydrateQuery (allow-list)', () => {
     expect(shouldDehydrateQuery(buildQuery([base, 'family-1']))).toBe(false);
   });
 
+  it('excludes a date-anchored Timeline list and the month-picker counts', () => {
+    expect(shouldDehydrateQuery(buildQuery([memoriesQueryKeyBase, 'family-1', 'anchored', '2025-03-31']))).toBe(false);
+    expect(shouldDehydrateQuery(buildQuery(['memory-month-counts', 'family-1']))).toBe(false);
+    // The member-filtered list under the same base still persists.
+    expect(shouldDehydrateQuery(buildQuery([memoriesQueryKeyBase, 'family-1', 'member', 'm1']))).toBe(true);
+  });
+
   it('excludes an allow-listed key that has not resolved yet', () => {
     expect(shouldDehydrateQuery(buildQuery([memoriesQueryKeyBase, 'family-1'], 'pending'))).toBe(false);
     expect(shouldDehydrateQuery(buildQuery([memoriesQueryKeyBase, 'family-1'], 'error'))).toBe(false);

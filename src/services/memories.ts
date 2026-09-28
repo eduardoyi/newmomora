@@ -365,17 +365,37 @@ export interface MemoriesPageCursor {
 export interface MemoriesPage {
   memories: MemoryWithTags[];
   nextCursor: MemoriesPageCursor | null;
+  // Only set on date-anchored Timeline pages (docs/plans/timeline-calendar-keepsakes.md
+  // A1): the key of this page's NEWEST row when rows newer than it exist, so
+  // the list can extend upward. Undefined on the forward-only feeds.
+  prevCursor?: MemoriesPageCursor | null;
 }
 
 // Matches the sort order (memory_date desc, created_at desc) and the
 // idx_memories_family_id_memory_date index: rows strictly before the cursor
 // date, or on the cursor date but strictly before the cursor's created_at.
-function buildKeysetOrFilter(cursor: MemoriesPageCursor): string {
+// `inclusive` also keeps the cursor row itself (created_at <=) -- used to
+// resume older paging from an empty newer page's own starting cursor.
+export function buildKeysetOrFilter(cursor: MemoriesPageCursor, inclusive = false): string {
   return (
     `memory_date.lt.${cursor.memoryDate},` +
-    `and(memory_date.eq.${cursor.memoryDate},created_at.lt.${cursor.createdAt})`
+    `and(memory_date.eq.${cursor.memoryDate},created_at.${inclusive ? 'lte' : 'lt'}.${cursor.createdAt})`
   );
 }
+
+// The mirror of buildKeysetOrFilter: rows strictly AFTER the cursor in
+// (memory_date, created_at) order.
+export function buildNewerKeysetOrFilter(cursor: MemoriesPageCursor): string {
+  return (
+    `memory_date.gt.${cursor.memoryDate},` +
+    `and(memory_date.eq.${cursor.memoryDate},created_at.gt.${cursor.createdAt})`
+  );
+}
+
+// Sorts after every real created_at on the same day, so a keyset "newer than
+// this cursor" check means "memory_date > date" -- used when an anchored first
+// page is empty and has no newest row to start from.
+const END_OF_DAY_CREATED_AT = '9999-12-31T23:59:59.999Z';
 
 async function enrichMemories(memories: Memory[]): Promise<MemoryWithTags[]> {
   const memoryIds = memories.map((memory) => memory.id);
@@ -459,6 +479,11 @@ export async function fetchMemoriesPage(
   familyId: string,
   opts: {
     cursor?: MemoriesPageCursor;
+    // Keep the cursor row itself (see buildKeysetOrFilter).
+    inclusive?: boolean;
+    // Inclusive upper bound on memory_date -- the first page of a
+    // date-anchored Timeline (docs/plans/timeline-calendar-keepsakes.md A1).
+    startDate?: string;
     limit?: number;
   },
 ): Promise<{ data: MemoriesPage | null; error: ServiceError | null }> {
@@ -472,8 +497,12 @@ export async function fetchMemoriesPage(
     .order('created_at', { ascending: false })
     .limit(limit);
 
+  if (opts.startDate) {
+    query = query.lte('memory_date', opts.startDate);
+  }
+
   if (opts.cursor) {
-    query = query.or(buildKeysetOrFilter(opts.cursor));
+    query = query.or(buildKeysetOrFilter(opts.cursor, opts.inclusive));
   }
 
   const { data, error } = await query;
@@ -488,6 +517,136 @@ export async function fetchMemoriesPage(
     data: { memories: await enrichMemories(memories), nextCursor: nextCursorFor(memories, limit) },
     error: null,
   };
+}
+
+/**
+ * The page of rows immediately NEWER than `cursor` (date-anchored Timeline,
+ * docs/plans/timeline-calendar-keepsakes.md A1). Queried ascending so the
+ * `limit` rows are the ones adjacent to the cursor, then returned descending
+ * like every other page. Fetches one extra row to know whether anything newer
+ * remains: `prevCursor` is this page's newest row only when it does.
+ * `nextCursor` is this page's OLDEST row whenever it has rows -- react-query
+ * refetches an infinite query by replaying pageParams[0] and chaining
+ * getNextPageParam forward, so a newer page at the top must chain
+ * contiguously into the page below it.
+ */
+export async function fetchMemoriesPageNewer(
+  familyId: string,
+  opts: {
+    cursor: MemoriesPageCursor;
+    limit?: number;
+  },
+): Promise<{ data: MemoriesPage | null; error: ServiceError | null }> {
+  const limit = opts.limit ?? MEMORIES_PAGE_SIZE;
+
+  const { data, error } = await supabase
+    .from('memories')
+    .select('*')
+    .eq('family_id', familyId)
+    .or(buildNewerKeysetOrFilter(opts.cursor))
+    .order('memory_date', { ascending: true })
+    .order('created_at', { ascending: true })
+    .limit(limit + 1);
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  const rows = data ?? [];
+  const hasMoreNewer = rows.length > limit;
+  const memories = rows.slice(0, limit).reverse();
+  const newest = memories[0];
+  const oldest = memories[memories.length - 1];
+
+  return {
+    data: {
+      memories: await enrichMemories(memories),
+      nextCursor: oldest ? { memoryDate: oldest.memory_date, createdAt: oldest.created_at } : null,
+      prevCursor: hasMoreNewer && newest ? { memoryDate: newest.memory_date, createdAt: newest.created_at } : null,
+    },
+    error: null,
+  };
+}
+
+/**
+ * First page of a date-anchored Timeline: the newest memories on or before
+ * `anchorDate`, plus `prevCursor` when anything newer exists (one-row
+ * existence check -- whether newer rows exist has nothing to do with this
+ * page being full).
+ */
+export async function fetchAnchoredMemoriesPage(
+  familyId: string,
+  opts: {
+    anchorDate: string;
+    limit?: number;
+  },
+): Promise<{ data: MemoriesPage | null; error: ServiceError | null }> {
+  const page = await fetchMemoriesPage(familyId, { startDate: opts.anchorDate, limit: opts.limit });
+
+  if (page.error || !page.data) {
+    return page;
+  }
+
+  const newest = page.data.memories[0];
+  const newestKey: MemoriesPageCursor = newest
+    ? { memoryDate: newest.memory_date, createdAt: newest.created_at }
+    : { memoryDate: opts.anchorDate, createdAt: END_OF_DAY_CREATED_AT };
+
+  const { data, error } = await supabase
+    .from('memories')
+    .select('id')
+    .eq('family_id', familyId)
+    .or(buildNewerKeysetOrFilter(newestKey))
+    .limit(1);
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+
+  return {
+    data: { ...page.data, prevCursor: (data ?? []).length > 0 ? newestKey : null },
+    error: null,
+  };
+}
+
+export interface MemoryMonthDateRow {
+  memory_date: string;
+  user_id: string;
+}
+
+const MEMORY_MONTH_DATES_PAGE_SIZE = 1000;
+
+/**
+ * Every memory's date (and author, so blocked accounts can be filtered
+ * client-side) for the family -- the Timeline month picker's per-month
+ * counts. Two narrow columns, paged past PostgREST's default 1000-row cap.
+ */
+export async function fetchMemoryMonthDates(familyId: string): Promise<{
+  data: MemoryMonthDateRow[] | null;
+  error: ServiceError | null;
+}> {
+  const rows: MemoryMonthDateRow[] = [];
+
+  for (let from = 0; ; from += MEMORY_MONTH_DATES_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('memories')
+      .select('memory_date, user_id')
+      .eq('family_id', familyId)
+      .order('memory_date', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, from + MEMORY_MONTH_DATES_PAGE_SIZE - 1);
+
+    if (error) {
+      return { data: null, error: mapSupabaseError(error) };
+    }
+
+    const batch = (data ?? []) as MemoryMonthDateRow[];
+    rows.push(...batch);
+
+    if (batch.length < MEMORY_MONTH_DATES_PAGE_SIZE) {
+      return { data: rows, error: null };
+    }
+  }
 }
 
 // Member-profile timeline (Workstream A6): same keyset shape as

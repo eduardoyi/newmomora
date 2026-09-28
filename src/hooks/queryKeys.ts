@@ -77,6 +77,27 @@ export function memorySearchFacetsQueryKey(familyId: string | null | undefined, 
   return [memoriesSearchQueryKeyBase, familyId, 'facets', search.query, memberIdsKey(search.memberIds), search.emotion] as const;
 }
 
+// Date-anchored Timeline (docs/plans/timeline-calendar-keepsakes.md A2).
+// Nested under the memories base on purpose: isMemoriesListQueryKey matches
+// it, so patchMemoryInCaches / removeMemoryFromListCaches / the generation
+// poll cover it with no extra wiring. memoryBelongsToListKey rejects it, so
+// new memories are NOT prepended into an anchored list, and
+// shouldDehydrateQuery excludes it, so an anchor never survives a restart.
+export const ANCHORED_MEMORIES_KEY_SEGMENT = 'anchored' as const;
+
+export function anchoredMemoriesQueryKey(familyId: string | null | undefined, anchorDate: string) {
+  return [memoriesQueryKeyBase, familyId, ANCHORED_MEMORIES_KEY_SEGMENT, anchorDate] as const;
+}
+
+// Timeline month picker's per-month counts. Its own base on purpose -- NOT
+// under calendar-memories, whose readers (patchMemoryInCaches, the generation
+// poll) treat every array under that base as memory rows. Not persisted.
+export const memoryMonthCountsQueryKeyBase = 'memory-month-counts' as const;
+
+export function memoryMonthCountsQueryKey(familyId: string | null | undefined) {
+  return [memoryMonthCountsQueryKeyBase, familyId] as const;
+}
+
 export function memoryDetailQueryKey(familyId: string | null | undefined, memoryId: string | undefined) {
   return [memoriesQueryKeyBase, familyId, 'detail', memoryId] as const;
 }

@@ -7,12 +7,15 @@ import { useMemberMemories, useMemories, useMemory, useMemoryMutations, useMemor
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyPortraitVersions } from '@/hooks/usePortraitVersions';
-import { memoriesQueryKey, memoryDetailQueryKey } from '@/hooks/queryKeys';
+import { anchoredMemoriesQueryKey, memoriesQueryKey, memoryDetailQueryKey, memoryMonthCountsQueryKey } from '@/hooks/queryKeys';
+import { patchMemoryInCaches, prependMemoryToListCaches, removeMemoryFromListCaches } from '@/hooks/memory-cache';
 import {
   createMemory,
   deleteMemory,
+  fetchAnchoredMemoriesPage,
   fetchMemoriesPage,
   fetchMemoriesPageForMember,
+  fetchMemoriesPageNewer,
   fetchMemoryById,
   fetchMemoryGenerationStatuses,
   regenerateMemoryIllustration,
@@ -44,8 +47,10 @@ jest.mock('@/services/memories', () => ({
   createMemory: jest.fn(),
   createMediaMemory: jest.fn(),
   deleteMemory: jest.fn(),
+  fetchAnchoredMemoriesPage: jest.fn(),
   fetchMemoriesPage: jest.fn(),
   fetchMemoriesPageForMember: jest.fn(),
+  fetchMemoriesPageNewer: jest.fn(),
   fetchMemoryById: jest.fn(),
   fetchMemoryGenerationStatuses: jest.fn(),
   regenerateMemoryIllustration: jest.fn(),
@@ -80,6 +85,10 @@ const mockedUseFamilyPortraitVersions = useFamilyPortraitVersions as jest.Mocked
   typeof useFamilyPortraitVersions
 >;
 const mockedFetchMemoriesPage = fetchMemoriesPage as jest.MockedFunction<typeof fetchMemoriesPage>;
+const mockedFetchAnchoredMemoriesPage = fetchAnchoredMemoriesPage as jest.MockedFunction<
+  typeof fetchAnchoredMemoriesPage
+>;
+const mockedFetchMemoriesPageNewer = fetchMemoriesPageNewer as jest.MockedFunction<typeof fetchMemoriesPageNewer>;
 const mockedFetchMemoriesPageForMember = fetchMemoriesPageForMember as jest.MockedFunction<
   typeof fetchMemoriesPageForMember
 >;
@@ -1539,6 +1548,167 @@ describe('useMemories integration', () => {
       rerender({ query: '', memberIds: [], emotion: null });
 
       expect(result.current.hits).toEqual([]);
+    });
+  });
+  // Date-anchored Timeline (docs/plans/timeline-calendar-keepsakes.md A2).
+  describe('anchored mode', () => {
+    function row(id: string, date: string, createdAt = `${date}T12:00:00Z`) {
+      return {
+        id,
+        memory_type: 'text_only',
+        memory_date: date,
+        created_at: createdAt,
+        emotion: 'joy',
+        illustration_status: 'none',
+        taggedMembers: [],
+        mediaAssets: [],
+      } as unknown as MemoryWithTags;
+    }
+    const march = row('march', '2025-03-20');
+    const feb = row('feb', '2025-02-10');
+    const april = row('april', '2025-04-02');
+    const may = row('may', '2025-05-05');
+    const cursorOf = (memory: MemoryWithTags) => ({ memoryDate: memory.memory_date, createdAt: memory.created_at });
+
+    function anchoredPage(
+      memories: MemoryWithTags[],
+      nextCursor: MemoriesPage['nextCursor'],
+      prevCursor: MemoriesPage['prevCursor'],
+    ): { data: MemoriesPage; error: null } {
+      return { data: { memories, nextCursor, prevCursor }, error: null };
+    }
+
+    async function renderAnchored(queryClient = createQueryClient()) {
+      mockedFetchAnchoredMemoriesPage.mockResolvedValue(anchoredPage([march], cursorOf(march), cursorOf(march)));
+      mockedFetchMemoriesPage.mockResolvedValue(pageResult([feb]));
+      mockedFetchMemoriesPageNewer.mockResolvedValue(anchoredPage([april], cursorOf(april), null));
+      const hook = renderHook(() => useMemories({ anchorDate: '2025-03-31' }), {
+        wrapper: createWrapperWithClient(queryClient),
+      });
+      await waitFor(() => expect(hook.result.current.memories.map((m) => m.id)).toEqual(['march']));
+      return { ...hook, queryClient };
+    }
+
+    it('starts at the anchor under its own key and pages both ways', async () => {
+      const { result, queryClient } = await renderAnchored();
+
+      expect(mockedFetchAnchoredMemoriesPage).toHaveBeenCalledWith('family-1', { anchorDate: '2025-03-31', limit: 40 });
+      expect(queryClient.getQueryData(memoriesQueryKey('family-1'))).toBeUndefined();
+      expect(result.current.hasPreviousPage).toBe(true);
+
+      await act(async () => {
+        await result.current.fetchNextPage();
+      });
+      expect(mockedFetchMemoriesPage).toHaveBeenLastCalledWith('family-1', {
+        cursor: cursorOf(march), inclusive: undefined, limit: 40,
+      });
+
+      await act(async () => {
+        await result.current.fetchPreviousPage();
+      });
+      expect(mockedFetchMemoriesPageNewer).toHaveBeenCalledWith('family-1', { cursor: cursorOf(march), limit: 40 });
+      await waitFor(() => expect(result.current.memories.map((m) => m.id)).toEqual(['april', 'march', 'feb']));
+      expect(result.current.hasPreviousPage).toBe(false);
+    });
+
+    it('replays a refetch after a newer prepend from the newer page, chaining older contiguously', async () => {
+      const { result, queryClient } = await renderAnchored();
+      await act(async () => {
+        await result.current.fetchPreviousPage();
+      });
+      await waitFor(() => expect(result.current.memories.map((m) => m.id)).toEqual(['april', 'march']));
+
+      // Something newer arrived above April meanwhile; the replay must treat
+      // pageParams[0] as a NEWER cursor (not an older one) and chain down.
+      mockedFetchMemoriesPageNewer.mockClear();
+      mockedFetchMemoriesPage.mockClear();
+      mockedFetchMemoriesPageNewer.mockResolvedValueOnce(anchoredPage([may, april], cursorOf(april), null));
+      mockedFetchMemoriesPage.mockResolvedValueOnce(pageResult([march]));
+
+      await act(async () => {
+        await queryClient.refetchQueries({ queryKey: anchoredMemoriesQueryKey('family-1', '2025-03-31') });
+      });
+
+      expect(mockedFetchMemoriesPageNewer).toHaveBeenCalledWith('family-1', { cursor: cursorOf(march), limit: 40 });
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledWith('family-1', {
+        cursor: cursorOf(april), inclusive: undefined, limit: 40,
+      });
+      await waitFor(() => expect(result.current.memories.map((m) => m.id)).toEqual(['may', 'april', 'march']));
+    });
+
+    it('refetch() trims back to the anchor page instead of replaying every page', async () => {
+      const { result, queryClient } = await renderAnchored();
+      await act(async () => {
+        await result.current.fetchPreviousPage();
+      });
+      await act(async () => {
+        await result.current.fetchNextPage();
+      });
+      await waitFor(() => expect(result.current.memories.map((m) => m.id)).toEqual(['april', 'march', 'feb']));
+      mockedFetchAnchoredMemoriesPage.mockClear();
+      mockedFetchMemoriesPageNewer.mockClear();
+
+      await act(async () => {
+        await result.current.refetch();
+      });
+
+      expect(mockedFetchAnchoredMemoriesPage).toHaveBeenCalledTimes(1);
+      expect(mockedFetchMemoriesPageNewer).not.toHaveBeenCalled();
+      const data = queryClient.getQueryData<InfiniteData<MemoriesPage>>(anchoredMemoriesQueryKey('family-1', '2025-03-31'));
+      expect(data?.pageParams).toEqual([{ dir: 'anchor' }]);
+      await waitFor(() => expect(result.current.memories.map((m) => m.id)).toEqual(['march']));
+    });
+
+    it('receives patches and removals, but never a prepended new memory', async () => {
+      const { result, queryClient } = await renderAnchored();
+
+      act(() => {
+        patchMemoryInCaches(queryClient, 'family-1', 'march', { emotion: 'calm' });
+      });
+      await waitFor(() => expect(result.current.memories[0]?.emotion).toBe('calm'));
+
+      act(() => {
+        prependMemoryToListCaches(queryClient, 'family-1', row('new-one', '2026-09-28'));
+      });
+      expect(result.current.memories.map((m) => m.id)).toEqual(['march']);
+
+      act(() => {
+        removeMemoryFromListCaches(queryClient, 'family-1', 'march');
+      });
+      await waitFor(() => expect(result.current.memories).toEqual([]));
+    });
+
+    it('marks the month-picker counts stale when a memory is added or removed', async () => {
+      const { queryClient } = await renderAnchored();
+      queryClient.setQueryData(memoryMonthCountsQueryKey('family-1'), []);
+      expect(queryClient.getQueryState(memoryMonthCountsQueryKey('family-1'))?.isInvalidated).toBe(false);
+
+      act(() => {
+        prependMemoryToListCaches(queryClient, 'family-1', row('new-one', '2026-09-28'));
+      });
+      expect(queryClient.getQueryState(memoryMonthCountsQueryKey('family-1'))?.isInvalidated).toBe(true);
+    });
+
+    it('skips the app-foreground reconcile while anchored', async () => {
+      let handleAppStateChange: ((status: 'active' | 'background') => void) | undefined;
+      jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => {
+        handleAppStateChange = listener as (status: 'active' | 'background') => void;
+        return { remove: jest.fn() };
+      });
+      const { queryClient } = await renderAnchored();
+      mockedFetchAnchoredMemoriesPage.mockClear();
+
+      await act(async () => {
+        queryClient.invalidateQueries({ queryKey: memoriesQueryKey('family-1'), refetchType: 'none' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        handleAppStateChange?.('active');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(mockedFetchAnchoredMemoriesPage).not.toHaveBeenCalled();
+      expect(mockedFetchMemoriesPage).not.toHaveBeenCalled();
     });
   });
 });

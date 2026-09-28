@@ -1,6 +1,6 @@
 # Timeline + Calendar merge, Keepsakes tab (Plan)
 
-**Status:** Plan — hardened (2 review rounds, 2026-09-28), not started
+**Status:** Phase A implemented 2026-09-28 (awaiting device verification); B and C not started. Plan hardened (2 review rounds).
 **Date:** 2026-09-28
 **Owner decisions:** 2026-09-28 discussion (see §2)
 **Feature docs to update in the same PRs:** `docs/features/calendar.md` (becomes the
@@ -224,6 +224,23 @@ clears on create,
 reconcile is skipped while anchored, the anchored key isn't dehydrated. Screen
 test: port `src/screen-tests/calendar.month-jump.test.tsx` to the Timeline
 (picker → anchored list → Today). Maestro `timeline/jump-to-month.yaml`.
+
+**A — as built (2026-09-28), deviations from the steps above:**
+- Anchor clearing on "create" is wired to the **FAB press** (clear, then open
+  the new-memory screen) rather than to create success. Other entry points
+  (share sheet, widget, notification) don't clear it, and their memory shows
+  once the user taps Today.
+- The month picker doesn't use `useOldestMemoryDate`. Its range comes from
+  the month counts (oldest month with a memory → max(current month, newest
+  month)), so future-dated memories are covered in Phase A already.
+- `fetchMemoriesPage` also takes `inclusive` (for resuming after an empty
+  newer page). The first anchored page is a separate
+  `fetchAnchoredMemoriesPage` (page + a one-row newer-exists check).
+- Analytics event added now (`timeline_jumped`); the Phase C events come
+  with C.
+- **Still to verify on device:** `maintainVisibleContentPosition` when newer
+  pages prepend (Android especially). The fallback "Load newer" row isn't
+  built.
 
 ### Phase B — Calendar view inside Timeline
 

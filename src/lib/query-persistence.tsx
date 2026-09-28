@@ -11,6 +11,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { colors } from '@/constants/theme';
 import { isMemoriesListQueryKey } from '@/hooks/memory-cache';
 import {
+  ANCHORED_MEMORIES_KEY_SEGMENT,
   calendarMemoriesQueryKeyBase,
   familyMembershipsQueryKeyBase,
   familyMembersQueryKeyBase,
@@ -89,7 +90,13 @@ function isPersistableQueryKey(queryKey: readonly unknown[]): boolean {
 // react-query's own `defaultShouldDehydrateQuery` (status === 'success')
 // AND narrows to the allow-list above.
 export function shouldDehydrateQuery(query: Query): boolean {
-  return query.state.status === 'success' && isPersistableQueryKey(query.queryKey);
+  return (
+    query.state.status === 'success' &&
+    isPersistableQueryKey(query.queryKey) &&
+    // A date-anchored Timeline list is a transient view, not the feed: restoring
+    // it on cold start would reopen the app somewhere in the past.
+    query.queryKey[2] !== ANCHORED_MEMORIES_KEY_SEGMENT
+  );
 }
 
 function isInfiniteData(value: unknown): value is InfiniteData<unknown> {

@@ -12,7 +12,17 @@ const mockUseGalleryImportEntryStatus = jest.fn();
 const mockIsUserBlocked = jest.fn(() => false);
 const mockIsTargetReported = jest.fn(() => false);
 
-jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
+jest.mock('expo-router', () => ({
+  router: { push: jest.fn() },
+  useNavigation: () => ({ addListener: () => () => undefined, isFocused: () => true }),
+}));
+// Month-picker counts (docs/plans/timeline-calendar-keepsakes.md A4) -- its
+// service imports the real @/lib/supabase client. Picker behavior is covered
+// by timeline-month-jump.integration.test.tsx.
+jest.mock('@/hooks/useMemoryMonthCounts', () => ({
+  useMemoryMonthCounts: () => ({ counts: {}, isLoaded: true, refreshIfStale: jest.fn() }),
+}));
+jest.mock('@/components/calendar-month-picker-sheet', () => ({ CalendarMonthPickerSheet: () => null }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: () => mockUseFamily() }));
 jest.mock('@/hooks/use-auth', () => ({ useAuth: () => mockUseAuth() }));
 // The continuous gallery-import sweep's device-bound status hook (docs/plans/
@@ -111,12 +121,12 @@ describe('Timeline Looking Back rail integration', () => {
     });
   });
 
-  it('orders date, title, This week, Looking back, and Recently before the feed', () => {
+  it('orders title, This week, Looking back, and Recently before the feed', () => {
     const screen = render(<TimelineScreen />);
-    // This SafeAreaView lives inside the scrolling list. Applying the bottom
-    // inset here creates a second Android navigation-bar-sized gap between
-    // the Recently label and the first memory card.
-    expect(screen.getByTestId('timeline-top-sections').props.edges).toEqual({
+    // The top inset belongs to the pinned header bar above the list (docs/
+    // plans/timeline-calendar-keepsakes.md A4). Top edge only: a bottom
+    // inset on it would open an Android navigation-bar-sized gap under it.
+    expect(screen.getByTestId('timeline-header-bar').props.edges).toEqual({
       bottom: 'off',
       left: 'off',
       right: 'off',
