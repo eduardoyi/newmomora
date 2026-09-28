@@ -107,9 +107,35 @@ function envelope(file, points = 120) {
   return out2;
 }
 
+function probeDims(file) {
+  const out = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', path.join(OUT_ASSETS, path.basename(file))], { encoding: 'utf8' });
+  const [w, h] = out.trim().split(',').map(Number);
+  return w && h ? { w, h } : null;
+}
+
 function probeDuration(file) {
   const out = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(OUT_ASSETS, path.basename(file))], { encoding: 'utf8' });
   return Number(out.trim()) || 0;
+}
+
+/** A card shaped like its photo (owner, F3: "try to not crop media"): the
+ * largest box with the media's aspect inside maxW×maxH (padding included),
+ * centered on (cx, cy) — or hung from `top` when given. */
+function fitCard(f, { cx, cy, top, maxW, maxH, pad = 14 }) {
+  const sw = f?.source?.width;
+  const sh = f?.source?.height;
+  const aspect = sw && sh ? sh / sw : f?.kind === 'portrait' || f?.kind === 'illustration' ? 1 : 4 / 3;
+  let cw = maxW - 2 * pad;
+  let ch = cw * aspect;
+  if (ch > maxH - 2 * pad) {
+    ch = maxH - 2 * pad;
+    cw = ch / aspect;
+  }
+  const w = Math.round(cw + 2 * pad);
+  const h = Math.round(ch + 2 * pad);
+  const left = Math.round(cx - w / 2);
+  const y = top ?? Math.round(cy - h / 2);
+  return { w, h, left, top: y, style: `left:${left}px;top:${y}px;width:${w}px;height:${h}px;padding:${pad}px` };
 }
 
 // ── Media blocks ─────────────────────────────────────────────────────────
@@ -215,11 +241,16 @@ tl.fromTo(q('.title .word'),{y:70,opacity:0},{y:0,opacity:1,duration:.5,ease:'po
 // counters' backdrop tiles first, then every other still the film uses.
 // Cycled to fill when the film has fewer stills than cells (a larger
 // backdrop in film.json removes the repeats).
+// Density follows the film: 9 columns (108 tiles) for a full year, as few as
+// 5 for a month, so a small month isn't the same few photos over and over.
 const MOSAIC = { cols: 9, gap: 8, tilt: -8, width: 1404 };
-MOSAIC.tileW = (MOSAIC.width - (MOSAIC.cols + 1) * MOSAIC.gap) / MOSAIC.cols;
-MOSAIC.tileH = MOSAIC.tileW * 4 / 3;
-MOSAIC.rows = Math.ceil(2380 / (MOSAIC.tileH + MOSAIC.gap));
-MOSAIC.height = MOSAIC.rows * (MOSAIC.tileH + MOSAIC.gap) + MOSAIC.gap;
+function sizeMosaic(uniqueStills) {
+  MOSAIC.cols = Math.max(5, Math.min(9, Math.round(Math.sqrt(uniqueStills / 1.33))));
+  MOSAIC.tileW = (MOSAIC.width - (MOSAIC.cols + 1) * MOSAIC.gap) / MOSAIC.cols;
+  MOSAIC.tileH = MOSAIC.tileW * 4 / 3;
+  MOSAIC.rows = Math.ceil(2380 / (MOSAIC.tileH + MOSAIC.gap));
+  MOSAIC.height = MOSAIC.rows * (MOSAIC.tileH + MOSAIC.gap) + MOSAIC.gap;
+}
 let mosaicCache = null;
 function mosaicTiles() {
   if (mosaicCache) return mosaicCache;
@@ -231,7 +262,8 @@ function mosaicTiles() {
     pool.push(still(f));
   };
   for (const sc of film.scenes) if (sc.type === 'counters') (sc.backdrop ?? []).forEach(add);
-  for (const sc of film.scenes) { (sc.frames ?? []).forEach(add); (sc.grid ?? []).forEach(add); add(sc.frame); }
+  for (const sc of film.scenes) { (sc.frames ?? []).forEach(add); (sc.grid ?? []).forEach(add); (sc.cards ?? []).forEach(add); add(sc.frame); }
+  sizeMosaic(pool.length);
   const r = rng(23);
   const shuffled = pool.map((src) => [r(), src]).sort((x, y) => x[0] - y[0]).map((x) => x[1]);
   const cells = [];
@@ -300,7 +332,11 @@ function burst(s, id, { accelerate = false, bg = C.plum }) {
   // stills sharing the rest, never under half a beat — and ~0.6 beat per frame
   // in the finale, whose second half runs at half beats into the party.
   // Budgets are in quarter beats so every cut lands on the grid.
-  const titleBeats = s.titles?.length ? s.titles.length : 0;
+  // Titles: a beat each; with a heading ("Lo que más te gustó este año") the
+  // heading gets a beat to itself and each activity 1.5 — they're sentences.
+  const headingBeats = s.titles?.length && s.titlesKicker ? 1 : 0;
+  const perTitle = headingBeats ? 1.5 : 1;
+  const titleBeats = s.titles?.length ? headingBeats + s.titles.length * perTitle : 0;
   const titleOffset = titleBeats * BEAT;
   const tail = (i) => accelerate && i >= Math.ceil(frames.length * 0.5);
   const units = frames.map(() => 2);
@@ -329,15 +365,17 @@ function burst(s, id, { accelerate = false, bg = C.plum }) {
 .${id} .diag i{display:block;width:100%;aspect-ratio:3/4;background:center/cover;border-radius:24px}
 .${id} .dwrap{position:absolute;inset:0;overflow:hidden}
 .${id} .scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(42,34,48,.55),rgba(42,34,48,.86) 30%,rgba(42,34,48,.86) 62%,rgba(42,34,48,.6))}
-.${id} .themes{position:absolute;left:96px;right:150px;top:620px}
-.${id} .themes span{display:block;font:500 118px/1.02 "Newsreader";letter-spacing:-.03em;color:${C.cream};opacity:0}`,
-    html: `${titleGrid ? `<div class="dwrap"><div class="diag">${titleGrid}</div><div class="scrim"></div><div class="themes">${s.titles.map((x) => `<span>${esc(x)}</span>`).join('')}</div></div>` : ''}
+.${id} .tk{position:absolute;left:96px;right:150px;top:560px;font:500 40px/1.2 "Plus Jakarta Sans";letter-spacing:.12em;text-transform:uppercase;color:rgba(247,241,234,.78)}
+.${id} .themes{position:absolute;left:96px;right:150px;top:${s.titlesKicker ? 660 : 620}px}
+.${id} .themes span{display:block;margin-bottom:18px;font:500 ${s.titlesKicker ? 100 : 118}px/1.02 "Newsreader";letter-spacing:-.03em;color:${C.cream};opacity:0;transform-origin:left center;text-shadow:0 2px 18px rgba(20,14,24,.55)}`,
+    html: `${titleGrid ? `<div class="dwrap"><div class="diag">${titleGrid}</div><div class="scrim"></div>${s.titlesKicker ? `<p class="tk">${esc(s.titlesKicker)}</p>` : ''}<div class="themes">${s.titles.map((x) => `<span>${esc(x)}</span>`).join('')}</div></div>` : ''}
 ${layers}`,
     js: `
 var B=${BEAT}, cuts=${JSON.stringify(cuts.map((c) => [c.t, c.d]))};
 ${titleGrid ? `
+${s.titlesKicker ? "tl.fromTo(q('.tk'),{y:24,opacity:0},{y:0,opacity:1,duration:.35,ease:'power3.out'},0);" : ''}
 tl.fromTo(q('.diag'),{rotation:-9,y:0},{rotation:-9,y:-260,duration:${(titleOffset + 0.4).toFixed(3)},ease:'none'},0);
-q('.themes span').forEach(function(el,i){ tl.fromTo(el,{scale:1.35,opacity:0},{scale:1,opacity:1,duration:.22,ease:'power4.out'},i*B); if(i>0) tl.to(q('.themes span')[i-1],{opacity:.45,duration:.2},i*B); });
+q('.themes span').forEach(function(el,i){ var at=(${headingBeats}+i*${perTitle})*B; tl.fromTo(el,{scale:1.35,opacity:0},{scale:1,opacity:1,duration:.22,ease:'power4.out'},at); ${headingBeats ? '' : "if(i>0) tl.to(q('.themes span')[i-1],{opacity:.45,duration:.2},at);"} });
 tl.to(q('.dwrap'),{opacity:0,duration:.15},${titleOffset.toFixed(3)});` : ''}
 cuts.forEach(function(c,i){
   var el=q('#${id}-f'+i)[0];
@@ -362,7 +400,7 @@ function line(s, id) {
 .${id} .under{position:absolute;left:0;right:0;bottom:6px;height:22px;background:rgba(214,62,120,.55);border-radius:8px;transform-origin:left center}
 .${id} .by{margin-top:44px;font:500 44px "Plus Jakarta Sans";color:${C.ink2}}`,
     html: `<p class="kicker" style="top:330px">${esc(s.kicker ?? '')}</p>
-${s.frame ? `<div class="card src" style="left:96px;top:420px;width:360px;height:360px"><img src="${still(s.frame)}"></div>` : ''}
+${s.frame ? `<div class="card src" style="${fitCard(s.frame, { cx: 276, cy: 600, maxW: 360, maxH: 360, pad: 16 }).style}"><img src="${still(s.frame)}"></div>` : ''}
 <div class="qwrap"><p class="quote">${quoteHtml}</p><p class="by">— ${esc(s.speakerName)}</p></div>`,
     js: `
 var B=${BEAT};
@@ -388,7 +426,7 @@ function starring(s, id) {
   const reveal = people.map((p, i) => `<div class="who p${i}">
   <div class="big disc"><img src="${asset(p.portrait.pairFile)}"><img class="drawn" src="${asset(p.portrait.file)}"></div>
   <h2 class="name">${esc(p.name)}</h2>
-  ${(p.moments ?? []).filter((m) => m.file).slice(0, 3).map((m, k) => `<div class="card mo" style="left:${fan[k][0]}px;top:${fan[k][1]}px;width:320px;height:410px;padding:12px"><i style="background-image:url(${still(m)})"></i></div>`).join('')}
+  ${(p.moments ?? []).filter((m) => m.file).slice(0, 3).map((m, k) => `<div class="card mo" style="${fitCard(m, { cx: fan[k][0] + 160, cy: fan[k][1] + 205, maxW: 320, maxH: 410, pad: 12 }).style}"><i style="background-image:url(${still(m)})"></i></div>`).join('')}
 </div>`).join('');
   // The group shot: everyone who qualifies (film.json `together`), up to 9.
   const revealedPortrait = new Map(people.map((p) => [p.memberId, p.portrait]));
@@ -453,6 +491,16 @@ function normalizedVoice(file) {
 }
 const SOUND_ON = { es: 'Sube el volumen', en: 'Sound on' };
 
+/** A ticket caption, not the memory's whole story: its first sentence, cut at
+ * a word near 90 characters (Enzo Y3's clip carried a 7-line paragraph). */
+function ticketCaption(text) {
+  if (!text) return '';
+  const first = String(text).trim().split(/(?<=[.!?…])\s+/u)[0].trim();
+  if (first.length <= 90) return first;
+  const cut = first.slice(0, 90);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 60)).replace(/[,;:]$/, '')}…`;
+}
+
 function sound(s, id) {
   const clip = s.frame;
   const dur = probeDuration(clip.file);
@@ -466,10 +514,20 @@ function sound(s, id) {
   }).join(' ');
   const isVideo = isClip(clip);
   const voiceStart = 0.4;
+  // A vertical clip is the scene (owner, F3: a small box with big gutters
+  // wasted it): it plays full-screen, the ticket goes compact over its foot.
+  const dims = isVideo ? probeDims(clip.file) : null;
+  const hero = !!dims && dims.h / dims.w > 1.3;
+  const soundOn = `<div class="son"><svg viewBox="0 0 56 56"><path class="cone" d="M6 21h10l13-11v36L16 35H6z"/><path class="w1" d="M36 20c3.5 4.5 3.5 11.5 0 16"/><path class="w2" d="M43 13c7 8.5 7 21.5 0 30"/></svg>${esc(SOUND_ON[film.language] ?? SOUND_ON.en)}</div>`;
+  const clipTag = `<video id="${id}-clip" class="clip" src="${asset(clip.file)}" data-start="${voiceStart}" data-duration="${dur.toFixed(3)}" data-media-start="0" data-hf-media-start-basis="local" data-track-index="2" muted playsinline></video>`;
   subcomp(id, {
     bg: C.plum,
     css: `
-.${id} .stub{position:absolute;left:96px;right:96px;top:560px;background:${C.cream};border-radius:40px;overflow:hidden}
+/* Ticket, clip and pill stack in one column so a caption can't push the
+   ticket into the clip; with a clip the column starts higher to stay clear
+   of the bottom keep-out. */
+.${id} .col{position:absolute;left:96px;right:96px;top:${isVideo ? 400 : 560}px;${isVideo ? 'height:1080px;' : ''}display:flex;flex-direction:column;gap:28px}
+.${id} .stub{position:relative;background:${C.cream};border-radius:40px;overflow:hidden}
 .${id} .band{position:relative;height:380px;background:#E6D7EE}
 .${id} .wax{position:absolute;left:44px;top:44px;width:116px;height:116px;border-radius:50%;background:${C.rose};color:#fff;display:flex;align-items:center;justify-content:center;font:500 58px "Newsreader"}
 .${id} svg{position:absolute;left:44px;top:190px;width:800px;height:120px;overflow:visible}
@@ -484,17 +542,37 @@ function sound(s, id) {
 .${id} .tear .notch{position:absolute;top:-24px;width:48px;height:48px;border-radius:50%;background:${C.plum}}
 .${id} .tear .nl{left:-24px}
 .${id} .tear .nr{right:-24px}
-.${id} .cap{padding:44px;font:italic 400 58px/1.15 "Newsreader";color:${C.ink}}
-.${id} .clipbox{position:absolute;left:96px;right:96px;top:1080px;height:360px;border-radius:32px;overflow:hidden}
-.${id} .clipbox video{width:100%;height:100%;object-fit:cover}
-.${id} .son{position:absolute;left:50%;top:${isVideo ? 1470 : 1250}px;display:flex;align-items:center;gap:18px;padding:22px 36px 22px 30px;border-radius:999px;background:rgba(247,241,234,.12);border:2px solid rgba(247,241,234,.35);color:${C.cream};font:700 40px "Plus Jakarta Sans";white-space:nowrap}
+.${id} .cap{padding:44px;font:italic 400 58px/1.15 "Newsreader";color:${C.ink};display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+/* The clip fills what the column has left and shows the whole frame on a
+   blurred copy of itself — never cropped away (owner, F2 round 1). */
+.${id} .clipbox{position:relative;flex:1 1 auto;min-height:0;border-radius:32px;overflow:hidden}
+.${id} .stub,.${id} .son{flex-shrink:0}
+.${id} .clipbox .bf{position:absolute;inset:-10%;background:center/cover no-repeat;filter:blur(40px) brightness(.6)}
+.${id} .clipbox video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.${id} .son{align-self:center;display:flex;align-items:center;gap:18px;padding:22px 36px 22px 30px;border-radius:999px;background:rgba(247,241,234,.12);border:2px solid rgba(247,241,234,.35);color:${C.cream};font:700 40px "Plus Jakarta Sans";white-space:nowrap}
 .${id} .son svg{position:static;width:56px;height:56px;overflow:visible}
 .${id} .son path{stroke:${C.cream};stroke-width:5}
-.${id} .son .cone{fill:${C.cream};stroke:none}`,
-    html: `<p class="kicker light" style="top:440px">${esc(s.kicker ?? '')}</p>
-<div class="stub"><div class="band"><i class="wax">m.</i><svg viewBox="0 0 800 120" preserveAspectRatio="none"><path d="${pts}"/></svg><i class="play"></i><b class="time">0:00</b></div><div class="tear"><i class="perf"></i><i class="notch nl"></i><i class="notch nr"></i></div>${s.caption ? `<p class="cap">${esc(s.caption)}</p>` : ''}</div>
-${isVideo ? `<div class="clipbox"><video id="${id}-clip" class="clip" src="${asset(clip.file)}" data-start="${voiceStart}" data-duration="${dur.toFixed(3)}" data-media-start="0" data-hf-media-start-basis="local" data-track-index="2" muted playsinline></video></div>` : ''}
-<div class="son"><svg viewBox="0 0 56 56"><path class="cone" d="M6 21h10l13-11v36L16 35H6z"/><path class="w1" d="M36 20c3.5 4.5 3.5 11.5 0 16"/><path class="w2" d="M43 13c7 8.5 7 21.5 0 30"/></svg>${esc(SOUND_ON[film.language] ?? SOUND_ON.en)}</div>
+.${id} .son .cone{fill:${C.cream};stroke:none}
+${isVideo ? `
+.${id} .band{height:250px}
+.${id} .wax{left:36px;top:30px;width:88px;height:88px;font-size:44px}
+.${id} .time{top:54px}
+.${id} .stub svg{top:128px;height:90px}
+.${id} .play{top:118px;height:110px}
+.${id} .cap{padding:28px 40px;font-size:50px}` : ''}
+${hero ? `
+.${id} .hero{position:absolute;inset:0;overflow:hidden}
+.${id} .hero .bf{position:absolute;inset:-10%;background:center/cover no-repeat;filter:blur(48px) brightness(.55)}
+.${id} .hero video{position:absolute;inset:0;width:100%;height:100%;object-fit:${dims.h / dims.w >= 1.6 ? 'cover' : 'contain'}}
+.${id} .hero .hs{position:absolute;inset:0;background:linear-gradient(180deg,rgba(42,34,48,.82) 0%,rgba(42,34,48,.7) 20%,rgba(42,34,48,0) 34%,rgba(42,34,48,0) 48%,rgba(42,34,48,.85) 100%)}
+.${id} .kicker.light{color:${C.cream}}
+.${id} .col{top:auto;bottom:430px;height:auto}
+.${id} .son{position:absolute;right:150px;top:272px;padding:16px 28px 16px 22px;font-size:34px;background:rgba(42,34,48,.55)}
+.${id} .son svg{width:46px;height:46px}` : ''}`,
+    html: `${hero ? `<div class="hero"><i class="bf" data-layout-allow-overflow style="background-image:url(${poster(clip.file)})"></i>${clipTag}<i class="hs"></i></div>` : ''}<p class="kicker light" style="top:${isVideo ? 300 : 440}px">${esc(s.kicker ?? '')}</p>
+<div class="col"><div class="stub"><div class="band"><i class="wax">m.</i><svg viewBox="0 0 800 120" preserveAspectRatio="none"><path d="${pts}"/></svg><i class="play"></i><b class="time">0:00</b></div>${s.caption ? `<div class="tear"><i class="perf"></i><i class="notch nl"></i><i class="notch nr"></i></div><p class="cap">${esc(ticketCaption(s.caption))}</p>` : ''}</div>
+${isVideo && !hero ? `<div class="clipbox"><i class="bf" data-layout-allow-overflow style="background-image:url(${poster(clip.file)})"></i>${clipTag}</div>` : ''}
+${hero ? '' : soundOn}</div>${hero ? soundOn : ''}
 <audio id="${id}-voice" src="${voiceSrc}" data-start="${voiceStart}" data-duration="${dur.toFixed(3)}" data-hf-media-start-basis="local" data-track-index="11" data-volume="1"></audio>`,
     js: `
 var B=${BEAT}, dur=${dur.toFixed(3)}, t0=${voiceStart};
@@ -506,7 +584,7 @@ tl.fromTo(q('.play'),{x:0},{x:800,duration:dur,ease:'none'},t0);
 tl.fromTo(o,{t:0},{t:dur,duration:dur,ease:'none',onUpdate:function(){var s=Math.floor(o.t);time.textContent='0:'+(s<10?'0':'')+s;}},t0);
 tl.fromTo(q('.wax'),{scale:1},{scale:1.06,duration:B*2,ease:'sine.inOut',yoyo:true,repeat:${Math.max(0, Math.floor((dur + 1) / (BEAT * 2)) - 1)}},t0);
 ${s.caption ? `tl.fromTo(q('.cap'),{opacity:0},{opacity:1,duration:.5},.5);` : ''}
-tl.fromTo(q('.son'),{xPercent:-50,y:40,opacity:0},{xPercent:-50,y:0,opacity:1,duration:.45,ease:'power3.out'},.25);
+tl.fromTo(q('.son'),{y:40,opacity:0},{y:0,opacity:1,duration:.45,ease:'power3.out'},.25);
 tl.fromTo(q('.son .w1'),{opacity:.25},{opacity:1,duration:B/2,ease:'sine.inOut',yoyo:true,repeat:${Math.max(1, Math.floor(dur / BEAT))}},.4);
 tl.fromTo(q('.son .w2'),{opacity:1},{opacity:.25,duration:B/2,ease:'sine.inOut',yoyo:true,repeat:${Math.max(1, Math.floor(dur / BEAT))}},.4);`,
   });
@@ -523,7 +601,8 @@ function firsts(s, id) {
   for (const item of items) {
     const card = item.frame?.file ? item.frame : null;
     const beatsHeld = card ? 4 : 3;
-    slots.push({ item, card, t: +t.toFixed(4), d: +(beatsHeld * BEAT).toFixed(4) });
+    const box = card ? fitCard(card, { cx: 513, top: 500, maxW: 560, maxH: 600 }) : null;
+    slots.push({ item, card, box, t: +t.toFixed(4), d: +(beatsHeld * BEAT).toFixed(4) });
     t += beatsHeld * BEAT;
   }
   const n = Math.max(3, Math.round(t / BEAT));
@@ -532,15 +611,15 @@ function firsts(s, id) {
       ? `<video id="${id}-c${i}" class="clip" src="${asset(sl.card.file)}" data-start="${sl.t}" data-duration="${sl.d}" data-media-start="0" data-hf-media-start-basis="local" data-track-index="2" muted playsinline></video>`
       : `<i style="background-image:url(${still(sl.card)})"></i>`;
     return `<div class="slot s${i}">
-  ${sl.card ? `<div class="card mc">${media}</div>` : ''}
-  <div class="first${sl.card ? ' under' : ''}"><b>${esc(sl.item.label)}</b><span>${esc(fdate(sl.item.date))}</span></div>
+  ${sl.card ? `<div class="card mc" style="${sl.box.style}">${media}</div>` : ''}
+  <div class="first${sl.card ? ' under' : ''}"${sl.card ? ` style="top:${sl.box.top + sl.box.h - 70}px"` : ''}><b>${esc(sl.item.label)}</b><span>${esc(fdate(sl.item.date))}</span></div>
 </div>`;
   }).join('');
   subcomp(id, {
     bg: C.cream,
     css: `
 .${id} .slot{position:absolute;inset:0;opacity:0}
-.${id} .mc{left:250px;top:500px;width:500px;height:580px;padding:14px}
+.${id} .mc{}
 .${id} .mc i,.${id} .mc video{display:block;width:100%;height:100%;border-radius:26px;object-fit:cover;background:center/cover no-repeat}
 .${id} .first{position:absolute;left:96px;right:150px;top:700px;border:6px solid ${C.rose};border-radius:30px;padding:30px 36px;background:${C.cream}}
 .${id} .first.under{top:1010px;box-shadow:0 14px 30px rgba(44,36,24,.14)}
@@ -568,7 +647,7 @@ function emotion(s, id) {
   subcomp(id, {
     bg: C.lav,
     css: `.${id} .slam{position:absolute;left:96px;right:150px;top:300px;font:500 110px/1 "Newsreader";letter-spacing:-.03em;color:${C.ink}}`,
-    html: `<h2 class="slam">${esc(s.titles[0] ?? '')}</h2>${frames.map((f, i) => `<div class="card st" style="left:${spots[i][0]}px;top:${spots[i][1]}px;width:390px;height:430px;padding:14px"><img src="${still(f)}"></div>`).join('')}`,
+    html: `<h2 class="slam">${esc(s.titles[0] ?? '')}</h2>${frames.map((f, i) => `<div class="card st" style="${fitCard(f, { cx: spots[i][0] + 195, cy: spots[i][1] + 215, maxW: 390, maxH: 430 }).style}"><img src="${still(f)}"></div>`).join('')}`,
     js: `
 var B=${BEAT}, rot=${JSON.stringify(spots.map((x) => x[2]))};
 tl.fromTo(q('.slam'),{scale:1.3,opacity:0},{scale:1,opacity:1,duration:.25,ease:'power4.out'},0);
@@ -593,7 +672,7 @@ function close(s, id) {
 .${id} .sub{position:absolute;left:96px;top:1300px;font:500 34px "Plus Jakarta Sans";color:${C.ink2}}`,
     html: `<h1 class="title" style="top:310px;font-size:128px">${words(s.line)}</h1>
 ${conf.map((c) => `<i class="conf" style="left:${c.x.toFixed(0)}px;top:${c.y.toFixed(0)}px;background:${c.c}"></i>`).join('')}
-${frames.map((f, i) => `<div class="card party" style="left:${i ? 520 : 130}px;top:700px;width:420px;height:540px"><img src="${still(f)}"></div>`).join('')}
+${frames.map((f, i) => `<div class="card party" style="${fitCard(f, { cx: i ? 730 : 340, cy: 970, maxW: 420, maxH: 540, pad: 16 }).style}"><img src="${still(f)}"></div>`).join('')}
 ${s.celebrationDate ? `<p class="sub">${esc(fdate(s.celebrationDate))}</p>` : ''}`,
     js: `
 var B=${BEAT}, land=${land.toFixed(3)}, conf=${JSON.stringify(conf.map((c) => [Math.round(c.dx), Math.round(c.dy), Math.round(c.rot), Math.round(H + 80 - c.y)]))};
@@ -634,6 +713,72 @@ tl.fromTo(q('.sig'),{opacity:0,y:20},{opacity:1,y:0,duration:.5},1.4);`,
   return { beats: n, events: [], hideStrip: true };
 }
 
+/** Monthly opener: "Nuestro" over a large month name and the year, while
+ * the month's cards pop into a loose collage below. */
+function title(s, id) {
+  const n = 8;
+  const spots = [[110, 820, -7], [560, 780, 5], [330, 1010, 2], [96, 1170, 4], [580, 1150, -4]];
+  const cards = (s.cards ?? []).filter((f) => f.file).slice(0, spots.length);
+  // Newsreader averages ~0.5em per lowercase letter: "agosto" keeps 230px,
+  // "septiembre" drops to ~165px so it fits the 834px safe width.
+  const titleSize = Math.min(230, Math.floor(834 / (0.52 * Math.max(1, String(s.title).length))));
+  subcomp(id, {
+    bg: C.lav,
+    css: `
+.${id} .pre{position:absolute;left:96px;top:300px;font:italic 400 96px/1 "Newsreader";color:${C.ink2}}
+.${id} .big{position:absolute;left:90px;right:150px;top:${400 + (230 - titleSize) * 0.6}px;font:500 ${titleSize}px/0.95 "Newsreader";letter-spacing:-.04em;color:${C.ink};white-space:nowrap}
+.${id} .yr{position:absolute;left:100px;top:650px;font:700 44px "Plus Jakarta Sans";letter-spacing:.12em;color:${C.rose}}
+.${id} .tc{}
+.${id} .tc i{display:block;width:100%;height:100%;border-radius:26px;background:center/cover no-repeat}`,
+    html: `${s.kicker ? `<p class="pre">${esc(s.kicker)}</p>` : ''}<h1 class="big">${esc(s.title)}</h1><p class="yr">${esc(s.subtitle ?? '')}</p>
+${cards.map((f, i) => `<div class="card tc" style="${fitCard(f, { cx: spots[i][0] + 185, cy: spots[i][1] + 225, maxW: 370, maxH: 450 }).style}"><i style="background-image:url(${still(f)})"></i></div>`).join('')}`,
+    js: `
+var B=${BEAT}, rot=${JSON.stringify(spots.map((x) => x[2]))};
+tl.fromTo(q('.pre'),{y:30,opacity:0},{y:0,opacity:1,duration:.45,ease:'power3.out'},0);
+tl.fromTo(q('.big'),{y:90,opacity:0},{y:0,opacity:1,duration:.6,ease:'power3.out'},.2);
+tl.fromTo(q('.yr'),{opacity:0},{opacity:1,duration:.4},.7);
+q('.tc').forEach(function(el,i){
+  tl.fromTo(el,{scale:0,rotation:0},{scale:1,rotation:rot[i],duration:.5,ease:'back.out(1.8)'},B*2+i*B*.5);
+  tl.fromTo(el,{y:0},{y:-40-i*12,duration:${(n * BEAT).toFixed(3)}-B*2-i*B*.5,ease:'none'},B*2+i*B*.5);
+});`,
+  });
+  return { beats: n, events: [{ t: 0, date: null }] };
+}
+
+/** One award per child (monthly): the intro line, the child's verified photo
+ * or clip as a card, their name slams in, and a rose ribbon names the award
+ * when the intro didn't already say it. */
+function award(s, id) {
+  const n = 6;
+  const f = s.frame;
+  const portrait = f?.kind === 'portrait';
+  const media = !f?.file ? '' : isClip(f)
+    ? `<video id="${id}-clip" class="clip" src="${asset(f.file)}" data-start="${(BEAT * 0.5).toFixed(4)}" data-duration="${(n * BEAT - BEAT * 0.5).toFixed(4)}" data-media-start="0" data-hf-media-start-basis="local" data-track-index="2" muted playsinline></video>`
+    : `<i style="background-image:url(${still(f)})"></i>`;
+  const ribbon = s.award && !String(s.intro ?? '').includes(s.award);
+  // Shaped like the photo; the name and ribbon follow its foot, above the keep-out.
+  const box = fitCard(f, { cx: 513, top: 470, maxW: 740, maxH: ribbon ? 640 : 760, pad: portrait ? 18 : 16 });
+  subcomp(id, {
+    bg: C.cream,
+    css: `
+.${id} .intro{position:absolute;left:96px;right:150px;top:300px;font:500 50px/1.2 "Plus Jakarta Sans";color:${C.ink2}}
+.${id} .ac{}
+.${id} .ac.round{border-radius:50%;padding:18px}
+.${id} .ac i,.${id} .ac video{display:block;width:100%;height:100%;border-radius:28px;object-fit:cover;background:center/cover no-repeat}
+.${id} .ac.round i{border-radius:50%}
+.${id} .who{position:absolute;left:96px;right:150px;top:${box.top + box.h + 40}px;font:500 150px/1 "Newsreader";letter-spacing:-.03em;color:${C.ink}}
+.${id} .rib{position:absolute;left:96px;top:${box.top + box.h + 215}px;padding:14px 28px;border-radius:999px;background:${C.rose};color:#fff;font:700 36px "Plus Jakarta Sans"}`,
+    html: `<p class="intro">${esc(s.intro ?? '')}</p><div class="card ac${portrait ? ' round' : ''}" style="${box.style}">${media}</div><h2 class="who">${esc(s.childName)}</h2>${ribbon ? `<p class="rib">${esc(s.award)}</p>` : ''}`,
+    js: `
+var B=${BEAT};
+tl.fromTo(q('.intro'),{y:30,opacity:0},{y:0,opacity:1,duration:.4,ease:'power3.out'},0);
+tl.fromTo(q('.ac'),{scale:.6,rotation:-6,opacity:0},{scale:1,rotation:-2,opacity:1,duration:.55,ease:'back.out(1.7)'},B*.5);
+tl.fromTo(q('.who'),{scale:1.4,opacity:0},{scale:1,opacity:1,duration:.3,ease:'power4.out'},B*2);
+${ribbon ? `tl.fromTo(q('.rib'),{x:-40,opacity:0},{x:0,opacity:1,duration:.35,ease:'power3.out'},B*2.6);` : ''}`,
+  });
+  return { beats: n, events: [{ t: 0, date: portrait ? null : f?.date ?? null }] };
+}
+
 // ── Assemble in film order ───────────────────────────────────────────────
 
 let i = 0;
@@ -653,6 +798,8 @@ for (const s of film.scenes) {
     case 'firsts': r = firsts(s, id); break;
     case 'close': r = close(s, id); break;
     case 'end_card': r = endCard(s, id); break;
+    case 'title': r = title(s, id); break;
+    case 'award': r = award(s, id); break;
     default:
       console.warn(`scene ${s.type} not implemented yet — skipped`);
       i--;
@@ -700,6 +847,10 @@ lane.push({ t: +(total - 1.8).toFixed(3), v: 0.9 }, { t: +total.toFixed(3), v: 0
 // ── index.html ───────────────────────────────────────────────────────────
 const [fy, fm] = film.span.from.split('-').map(Number);
 const [ty, tm] = film.span.to.split('-').map(Number);
+// A year strip reads "oct 2025 — oct 2026"; a month's reads "1 ago — 31 ago".
+const oneMonth = fy === ty && fm === tm;
+const dayMonth = (iso) => { const [, m, d] = iso.split('-').map(Number); return `${d} ${months[m - 1]}`; };
+const stripEnds = oneMonth ? [dayMonth(film.span.from), dayMonth(film.span.to)] : [`${months[fm - 1]} ${fy}`, `${months[tm - 1]} ${ty}`];
 const indexHtml = `<!doctype html>
 <html lang="${film.language}">
 <head>
@@ -713,6 +864,7 @@ html,body{width:${W}px;height:${H}px;overflow:hidden;background:${C.plum}}
 #strip{position:absolute;left:96px;right:150px;top:190px;z-index:20;opacity:0;color:${C.ink};font-family:"Plus Jakarta Sans",sans-serif}
 #strip .track{position:relative;height:4px;border-radius:9px;background:currentColor;opacity:.25}
 #strip .ends{display:flex;justify-content:space-between;margin-top:14px;font:500 26px/1 "Plus Jakarta Sans"}
+#strip,#strip-label{text-shadow:0 1px 8px var(--strip-shadow,rgba(0,0,0,0))}
 #strip-dot{position:absolute;left:96px;top:179px;width:26px;height:26px;margin-left:-13px;border-radius:50%;background:${C.rose};z-index:21;opacity:0}
 #strip-label{position:absolute;top:-44px;left:0;white-space:nowrap;font:700 24px "Plus Jakarta Sans";color:inherit}
 #strip-seal{position:absolute;left:${W - 150 - 17}px;top:175px;width:34px;height:34px;border-radius:50%;background:${C.rose};box-shadow:0 0 0 6px ${C.lav};z-index:22;opacity:0}
@@ -721,7 +873,7 @@ html,body{width:${W}px;height:${H}px;overflow:hidden;background:${C.plum}}
 <body>
 <div id="film" data-composition-id="film" data-start="0" data-width="${W}" data-height="${H}" data-duration="${total.toFixed(3)}">
 ${scenes.map((sc, k) => `  <div id="${sc.id}" class="clip" data-composition-id="${sc.id}" data-composition-src="compositions/${sc.id}.html" data-start="${sc.start}" data-duration="${sc.dur}" data-track-index="1" data-width="${W}" data-height="${H}"></div>`).join('\n')}
-  <div id="strip"><div class="track"></div><div class="ends"><span>${esc(`${months[fm - 1]} ${fy}`)}</span><span>${esc(`${months[tm - 1]} ${ty}`)}</span></div></div>
+  <div id="strip"><div class="track"></div><div class="ends"><span>${esc(stripEnds[0])}</span><span>${esc(stripEnds[1])}</span></div></div>
   <div id="strip-dot"><span id="strip-label" data-layout-allow-overflow></span></div>
   ${seal ? '<div id="strip-seal"></div>' : ''}
   <audio id="bed" src="${BED.file}" data-start="0" data-duration="${total.toFixed(3)}" data-track-index="10" data-volume="1" data-automation='${JSON.stringify({ version: 1, lanes: [{ target: 'volume', points: lane }] })}'></audio>
@@ -736,6 +888,7 @@ ${scenes.map((sc, k) => `  <div id="${sc.id}" class="clip" data-composition-id="
   ev.forEach(function(e){
     if (e.hide) { tl.set([strip, dot], { opacity: 0 }, e.t); ${seal ? "tl.set('#strip-seal', { opacity: 0 }, e.t);" : ''} return; }
     tl.set(strip, { color: e.dark ? '${C.cream}' : '${C.ink}', opacity: 1 }, e.t);
+    tl.set(strip.parentNode, { '--strip-shadow': e.dark ? 'rgba(20,14,24,.65)' : 'rgba(0,0,0,0)' }, e.t);
     tl.set(label, { color: e.dark ? '${C.cream}' : '${C.ink}' }, e.t);
     if (e.f === null) { tl.set(dot, { opacity: 0 }, e.t); return; }
     tl.set(dot, { opacity: 1 }, e.t);

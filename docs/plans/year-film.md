@@ -865,6 +865,80 @@ Bursts felt too fast → about 30% more time per frame (47.8s → 53.9s).
 - Confetti fell a fixed distance and stopped on screen → it now falls off
   the bottom edge.
 
+### F3 monthly films + split fix (2026-09-27)
+
+- **Draft render** of Enzo Y4 (`npx hyperframes render`, local M-series):
+  59.5s, 1080×1920/30fps H.264+AAC, 65MB, 1m51s. Clips decode frame-accurately
+  in capture; the sound scene measures −16 LUFS vs −14 for music-only
+  sections (the voice is no longer buried). Only render-visible issue: the
+  year strip's cream labels over bright clips → soft text shadow on dark
+  scenes.
+- **Split fix:** `pickBurst` now only takes memories inside its own window
+  (it used to top a thin half up with the year's best, which put July–August
+  frames in Enzo's "first half"). A half with <4 frames is folded into the
+  finale (`pushHalfBurst`), and the finale absorbs any shortfall so the film
+  keeps its burst length.
+- **Monthly scenes:** `title` ("Nuestro" + month name fitted to the width +
+  year, with the month's cards popping into a collage) and `award` (intro
+  line, the verified photo/clip as a card, the name, a rose ribbon when the
+  intro doesn't already name the award). One-month strips read "1 ago — 31
+  ago"; the mosaic sizes itself to the film (5–9 columns). Aug 2026: 36.1s,
+  Sep 2026: 31.5s.
+- **Owner review (monthlies):** "both monthlies look awesome"; the Enzo Y4
+  render "looks and sounds great". Nit: the second award read "y no nos
+  olvidemos de… Mara" plus a "la sonrisa más grande" chip → every award now
+  announces itself ("y el premio a la sonrisa más grande es para"); the
+  "don't forget" line is gone.
+
+### F3 all films (2026-09-27)
+
+- `node film-renderer/render.mjs <slug…> | --all` assembles, checks and
+  renders each film to `composition/renders/<slug>.mp4` (gitignored), one
+  at a time (they share the project folder). ~2.5 min per film locally.
+- **Mara Year Two** (59.5s): every scene but firsts (no certain first). Her
+  line is "de nada"; her voice beat is the first **video** sound (caption
+  "Má'?"); her party is last year's until this year's is logged (film
+  Nov 11). Fix: the ticket, clip and sound-on pill now stack in one column
+  (a caption pushed the ticket into the clip).
+- **Enzo Year Three** (60s): every scene but firsts. His voice clip has no
+  caption and is vertical → the clip now fills the column's remaining
+  height and shows whole on a blurred fill (it was cropped to his shirt);
+  no caption also hides the ticket's tear. Theme titles now scale from
+  their left edge (the slam briefly overflowed the margin).
+- Re-runs are only mostly stable: vision checks aren't deterministic, so a
+  re-run can pick a different verified award frame (Aug: Enzo's award photo
+  changed) or re-cut a clip window. Worth pinning checks per memory in P1
+  (store them) so a re-render doesn't reshuffle an approved film.
+
+### F3 owner review — all films (2026-09-28)
+
+Owner: "these are awesome." Fixes:
+
+- **Birthday close = the birthday the film celebrates.** A birthday film's
+  window starts on the previous birthday, so with this year's party not yet
+  logged the close fell back to *last* year's party (Mara Y2, and Enzo Y4
+  too). `birthdayCelebration` now takes the celebrated date; without that
+  party the close is then → now or portraits, never an older party.
+- **Themes read as things loved.** Bare topic titles ("Sobre ruedas") read
+  like random phrases → a heading in the film's voice ("Lo que más te gustó
+  este año" / "Lo que más nos gustó este mes") over activities ("moverte
+  sobre ruedas", "ir al parque"; `topicActivity`, `{te}` → te/nos by voice).
+  Topics that can't honestly be called loved (hard days, check-ups, newborn
+  care…) no longer become themes. The heading gets its own beat, each
+  activity 1.5.
+- **Vertical voice clips go full-screen**: the clip is the scene, a compact
+  ticket sits over its foot, the sound-on pill moves up beside the kicker
+  (a small box with big side gutters wasted it). Landscape clips keep the
+  column layout.
+- **No cropped cards.** Every card (award, milestone, party, funny ones,
+  people's moments, title collage, quote source) takes its media's shape
+  inside its max box (`fitCard`); text below a card follows its height.
+- Found while checking: a voice clip can carry the memory's whole story as
+  its caption (Enzo Y3: seven lines) → the ticket shows its first sentence,
+  cut near 90 characters, 3 lines max. With a clip the ticket is compact and
+  keeps its size; only the clip box yields space. The theme list keeps full
+  opacity (dimming earlier items failed contrast over the grid).
+
 ### Product build (after F4 passes)
 
 | Stage | What | Gate |

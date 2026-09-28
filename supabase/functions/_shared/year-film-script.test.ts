@@ -174,6 +174,32 @@ Deno.test('birthday: focus beats alternate with bursts that never repeat a memor
   assert(second.frames.every((f) => f.date! >= '2026-04-23'));
 });
 
+Deno.test('a half burst stays inside its half even when the journal gets dense later', () => {
+  // A few memories early in the year, many in the second half (a journal started mid-year).
+  const early = ['2025-11', '2025-12', '2026-01', '2026-02', '2026-03'].flatMap((month) => [
+    memory({ date: `${month}-05` }),
+    video({ date: `${month}-15` }),
+  ]);
+  const late = ['2026-06', '2026-07', '2026-08', '2026-09'].flatMap((month) =>
+    Array.from({ length: 12 }, (_, i) => (i % 3 === 0 ? video : memory)({ date: `${month}-${String(i + 1).padStart(2, '0')}` }))
+  );
+  const script = birthday([...early, ...late]);
+  const [first, second, ...rest] = scenes(script, 'burst').filter((b) => b.role !== 'emotion');
+  assertEquals(first.role, 'first_half');
+  assert(first.frames.every((f) => f.date! < '2026-04-23'), first.frames.map((f) => f.date).join());
+  assert(second.frames.every((f) => f.date! >= '2026-04-23'));
+  assert(rest[0].frames.length > 0);
+});
+
+Deno.test('a half with almost nothing is folded into the finale, not shown as a near-empty burst', () => {
+  const late = ['2026-06', '2026-07', '2026-08', '2026-09'].flatMap((month) =>
+    Array.from({ length: 12 }, (_, i) => memory({ date: `${month}-${String(i + 1).padStart(2, '0')}` }))
+  );
+  const script = birthday([memory({ date: '2025-12-01' }), ...late]);
+  assertEquals(scenes(script, 'burst').some((b) => b.role === 'first_half'), false);
+  assert(script.dropped.some((d) => d.reason.startsWith('first_half')));
+});
+
 Deno.test('bursts keep drawings near the target mix even when drawings dominate the pool', () => {
   // Plenty of every kind: drawings are the most captioned, yet capped by the mix.
   const extra = MONTHS.flatMap((month) => [
@@ -273,17 +299,30 @@ Deno.test('isCertainFirst: confirmed, or explicit "first" in the text within the
   assert(!isCertainFirst(row, 'Mi primo vino a jugar')); // "primo" is not "primer"
 });
 
-Deno.test('birthday: the close shows the real birthday party when there is one', () => {
-  const party = memory({ id: 'party', date: '2025-10-23', taggedMemberIds: [ENZO, GRAN] });
-  const nextDay = memory({ id: 'cake', date: '2025-10-24', taggedMemberIds: [ENZO] });
-  const unrelated = memory({ id: 'later', date: '2025-10-25', taggedMemberIds: [ENZO] });
-  const script = birthday([...yearOfMemories(), party, nextDay, unrelated], {
+Deno.test('birthday: the close shows the party of the birthday the film celebrates', () => {
+  const scope = birthdayFilmScope('2022-10-23', 4); // 2025-10-23 → 2026-10-26
+  const party = memory({ id: 'party', date: '2026-10-23', taggedMemberIds: [ENZO, GRAN] });
+  const nextDay = memory({ id: 'cake', date: '2026-10-24', taggedMemberIds: [ENZO] });
+  const unrelated = memory({ id: 'later', date: '2026-10-25', taggedMemberIds: [ENZO] });
+  const lastYear = memory({ id: 'third', date: '2025-10-23', taggedMemberIds: [ENZO] });
+  const script = birthday([...yearOfMemories(), lastYear, party, nextDay, unrelated], {
+    scope,
     milestones: [{ memoryId: 'cake', familyMemberId: ENZO, milestoneId: 'birthday', status: 'candidate' }],
   });
   const close = scene(script, 'close')!;
-  assertEquals([close.source, close.celebrationDate], ['celebration', '2025-10-23']);
+  assertEquals([close.source, close.celebrationDate], ['celebration', '2026-10-23']);
   assertEquals(close.frames.map((f) => f.memoryId).sort(), ['cake', 'party']);
-  assertEquals(birthdayCelebration([unrelated], [], enzo, SCOPE), null);
+  assertEquals(birthdayCelebration([unrelated], [], enzo, scope), null);
+});
+
+Deno.test("birthday: last year's party never closes this year's film", () => {
+  // Only the birthday the window starts on is logged (this year's party hasn't happened yet).
+  const scope = birthdayFilmScope('2022-10-23', 4);
+  const lastYear = memory({ id: 'third', date: '2025-10-23', taggedMemberIds: [ENZO] });
+  const close = scene(birthday([...yearOfMemories(), lastYear], { scope }), 'close')!;
+  // Falls back to then → now (the year's first photo may be that party, as "then"), never a party claim.
+  assert(close.source !== 'celebration', close.source);
+  assertEquals(close.celebrationDate, null);
 });
 
 Deno.test('birthday: a funny-ones burst when there are enough funny moments', () => {
@@ -373,6 +412,19 @@ Deno.test('distinctiveThemes prefers what sets the scope apart, in the film lang
   assertEquals(distinctiveThemes([memory({ topics: ['bath'] }), memory({ topics: ['bath'] })], [], 3), []);
 });
 
+Deno.test('themes in a voice read as things loved, and skip topics that are not', () => {
+  const pool = [
+    ...Array.from({ length: 3 }, () => memory({ topics: ['bikes-scooters'] })),
+    ...Array.from({ length: 3 }, () => memory({ topics: ['pretend-play'] })),
+    ...Array.from({ length: 4 }, () => memory({ topics: ['doctor-dentist'] })),
+  ];
+  const titles = (voice: 'child' | 'family', language: 'es' | 'en') =>
+    distinctiveThemes(pool, pool, 3, 2, language, voice).map((t) => t.title).sort();
+  assertEquals(titles('child', 'es'), ['disfrazarte y jugar a imaginar', 'moverte sobre ruedas']);
+  assertEquals(titles('family', 'es'), ['disfrazarnos y jugar a imaginar', 'movernos sobre ruedas']);
+  assertEquals(titles('child', 'en'), ['dress-up and pretend play', 'riding on wheels']);
+});
+
 function august(): FilmMemorySource[] {
   return [
     video({ id: 'enzo-laugh', date: '2026-08-02', taggedMemberIds: [ENZO] }),
@@ -408,7 +460,7 @@ Deno.test('monthly: awards come from vision-verified expressions, never from gro
     ['Mara', 'biggest smile', 'smiling', 'mara-smile'],
   ]);
   assertEquals(awards[0].intro, 'and the biggest laugh award goes to');
-  assertEquals(awards[1].intro, "and don't forget about…");
+  assertEquals(awards[1].intro, 'and the biggest smile award goes to'); // each award announces itself
 });
 
 Deno.test('monthly: without vision only "star of the month" from solo frames; else a portrait', () => {

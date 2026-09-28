@@ -18,7 +18,7 @@
 // Every on-screen string is a template from STRINGS, a verbatim quote, a
 // family member's name, a catalog label (year-film-i18n.ts) or a count.
 import { addYears, toJulianDayNumber } from './date-context.ts';
-import { type FilmLanguage, milestoneLabel, topicTitle } from './year-film-i18n.ts';
+import { type FilmLanguage, milestoneLabel, topicActivity, topicTitle } from './year-film-i18n.ts';
 import { getTopicById } from './memory-topics.ts';
 import { type PortraitVersionCandidate, resolvePortraitVersionAtDate } from './portrait-versions.ts';
 import {
@@ -119,6 +119,9 @@ export type FilmScene =
     role: BurstRole;
     /** Optional overlay titles (Google's "Playgrounds / Brick by brick"). */
     titles: string[];
+    /** The line the titles hang from — themes read as things loved
+     * ("Lo que más te gustó este año": "ir al parque", "moverte sobre ruedas"). */
+    titlesKicker?: string;
     frames: FrameRef[];
     /** Seconds each still stays on screen; clips hold ~2× this. */
     secondsPerFrame: number;
@@ -238,11 +241,10 @@ const STRINGS = {
       child: { funny: 'Your funniest moments', mischief: 'Your little mischief' },
     } as Record<Voice, Record<string, string>>,
     kicker: {
-      child: { counters: 'Your year in', starring: 'With your people', line: 'What you told us', sound: 'Your voice', firsts: 'Your milestones' },
-      family: { counters: 'Our month in', starring: 'Together', line: 'Line of the month', sound: 'The sound of', firsts: 'Milestones', title: 'Our' },
+      child: { counters: 'Your year in', starring: 'With your people', line: 'What you told us', sound: 'Your voice', firsts: 'Your milestones', themes: 'What you loved this year' },
+      family: { counters: 'Our month in', starring: 'Together', line: 'Line of the month', sound: 'The sound of', firsts: 'Milestones', title: 'Our', themes: 'What we loved this month' },
     } as Record<Voice, Record<string, string>>,
     awardGoesTo: (award: string) => `and the ${award} award goes to`,
-    awardNext: "and don't forget about…",
   },
   es: {
     birthdayTitle: (name: string, n: number) => `Recuerdos de tu ${ORDINAL_ES[n] ?? `${n}º`} año, ${name}`,
@@ -261,11 +263,10 @@ const STRINGS = {
       child: { funny: 'Tus momentos más graciosos', mischief: 'Tus travesuras' },
     } as Record<Voice, Record<string, string>>,
     kicker: {
-      child: { counters: 'Tu año en', starring: 'Con tu gente', line: 'Lo que nos dijiste', sound: 'Tu voz', firsts: 'Tus logros' },
-      family: { counters: 'Nuestro mes en', starring: 'Juntos', line: 'La frase del mes', sound: 'Así sonó', firsts: 'Logros', title: 'Nuestro' },
+      child: { counters: 'Tu año en', starring: 'Con tu gente', line: 'Lo que nos dijiste', sound: 'Tu voz', firsts: 'Tus logros', themes: 'Lo que más te gustó este año' },
+      family: { counters: 'Nuestro mes en', starring: 'Juntos', line: 'La frase del mes', sound: 'Así sonó', firsts: 'Logros', title: 'Nuestro', themes: 'Lo que más nos gustó este mes' },
     } as Record<Voice, Record<string, string>>,
     awardGoesTo: (award: string) => `y el premio ${award.startsWith('el ') ? `al ${award.slice(3)}` : `a ${award}`} es para`,
-    awardNext: 'y no nos olvidemos de…',
   },
 } as const;
 
@@ -300,6 +301,8 @@ const YEAR_BURST_MAX = 72;
  * round 2, was 50s); a music bed is ~60s. */
 export const MAX_FILM_SECONDS = 60;
 const MIN_BURST_FRAMES = 8;
+/** Fewer frames than this and a half-year burst is folded into the finale. */
+const HALF_BURST_MIN = 4;
 /** An emotion burst needs this many memories with the label (Looking Back's
  * package minimum). */
 const EMOTION_BURST_MIN = 4;
@@ -548,7 +551,11 @@ function pickBurst(
   ctx: ScoreContext,
   used: Set<string>,
 ): FrameRef[] {
-  const candidates = pool.filter((m) => visualKind(m) !== null && !used.has(m.id) && usable(m, ctx));
+  // Only memories inside the burst's own window: spreadMemories tops a thin
+  // window up with "the best of the rest", which let a first-half burst reach
+  // into July–August when the journal got dense mid-year (F3 round 1).
+  const inWindow = (m: FilmMemorySource) => m.date >= scope.start && m.date < scope.endExclusive;
+  const candidates = pool.filter((m) => inWindow(m) && visualKind(m) !== null && !used.has(m.id) && usable(m, ctx));
   const byKind = (k: 'video' | 'photo' | 'illustration') =>
     candidates.filter((m) => visualKind(m) === k).map((memory) => ({ memory, ...scoreMemory(memory, ctx) }));
 
@@ -726,6 +733,9 @@ export function distinctiveThemes(
   limit: number,
   minMemories = WORLD_MIN_MEMORIES_PER_TOPIC,
   language: FilmLanguage = 'en',
+  /** Given a voice, titles are activities in that voice ("moverte sobre
+   * ruedas") and topics that can't be called loved are skipped. */
+  voice?: Voice,
 ): { topicId: string; title: string; memories: number; lift: number }[] {
   const familyCounts = new Map<string, number>();
   for (const m of allMemories) for (const t of new Set(m.topics)) familyCounts.set(t, (familyCounts.get(t) ?? 0) + 1);
@@ -734,10 +744,12 @@ export function distinctiveThemes(
 
   return [...poolCounts.entries()]
     .filter(([id, n]) => n >= minMemories && !SHARE_SENSITIVE_TOPICS.has(id) && getTopicById(id))
+    .filter(([id]) => voice === undefined || topicActivity(id, language, voice) !== null)
     .map(([id, n]) => {
       const familyRate = (familyCounts.get(id) ?? n) / Math.max(1, allMemories.length);
       const lift = n / Math.max(1, pool.length) / Math.max(familyRate, 1e-6);
-      return { topicId: id, title: topicTitle(id, language)!, memories: n, lift: Math.round(lift * 100) / 100 };
+      const title = voice === undefined ? topicTitle(id, language)! : topicActivity(id, language, voice)!;
+      return { topicId: id, title, memories: n, lift: Math.round(lift * 100) / 100 };
     })
     .sort((a, b) => b.lift * Math.sqrt(b.memories) - a.lift * Math.sqrt(a.memories) || a.topicId.localeCompare(b.topicId))
     .slice(0, limit);
@@ -863,7 +875,8 @@ function estimateSeconds(scenes: FilmScene[]): number {
       case 'burst':
         seconds += scene.role === 'emotion'
           ? BEAT_SECONDS * (1 + Math.min(4, scene.frames.length)) // a title beat, then up to 4 cards
-          : scene.secondsPerFrame * scene.frames.length + BEAT_SECONDS * scene.titles.length;
+          : scene.secondsPerFrame * scene.frames.length +
+            BEAT_SECONDS * (scene.titlesKicker ? 1 + 1.5 * scene.titles.length : scene.titles.length); // heading beat + 1.5 per activity
         break;
       case 'sound':
         seconds += Math.min(6, (scene.frame.durationMs ?? 6000) / 1000) + 1.5;
@@ -937,6 +950,24 @@ function finish(args: {
   };
 }
 
+/** A half-year burst too thin to read as a burst (a journal that started
+ * mid-year) is dropped and its memories handed back to the finale. Returns
+ * the frames it kept. */
+function pushHalfBurst(
+  scenes: FilmScene[],
+  dropped: { scene: string; reason: string }[],
+  used: Set<string>,
+  burst: Extract<FilmScene, { type: 'burst' }>,
+): number {
+  if (burst.frames.length >= HALF_BURST_MIN) {
+    scenes.push(burst);
+    return burst.frames.length;
+  }
+  for (const f of burst.frames) if (f.memoryId) used.delete(f.memoryId);
+  dropped.push({ scene: 'burst', reason: `${burst.role}: only ${burst.frames.length} visual memories in that half — folded into the finale` });
+  return 0;
+}
+
 /** Trims bursts, largest first and from the middle (keeping each burst's
  * opening and closing frames), until the film fits `budget` seconds. */
 function fitLength(scenes: FilmScene[], budget: number): void {
@@ -991,6 +1022,10 @@ export function birthdayCelebration(
   child: FilmPerson,
   scope: FilmScope,
   sensitive: Set<string> = new Set(),
+  /** A birthday film celebrates one birthday — the one its window ends on.
+   * Its window also *starts* on the previous birthday, so without this a film
+   * whose party isn't logged yet closed on last year's party (owner, F3). */
+  celebrated?: string,
 ): { date: string; memories: FilmMemorySource[] } | null {
   if (!child.dateOfBirth) return null;
   const birthdayRows = new Set(
@@ -1002,6 +1037,7 @@ export function birthdayCelebration(
   for (let years = 0; years <= 21; years += 1) {
     const date = addYears(child.dateOfBirth, years);
     if (date < scope.start || date >= scope.endExclusive) continue;
+    if (celebrated !== undefined && date !== celebrated) continue;
     const memories = pool.filter(
       (m) =>
         m.taggedMemberIds.includes(child.id) && visualKind(m) !== null && !sensitive.has(m.id) &&
@@ -1087,7 +1123,7 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
   const line = lineScene(input.quotes, pool, new Map([[child.id, name]]), ctx);
   if (line && line.type === 'line') used.add(line.memoryId);
   // Close: the real birthday party when there is one (owner, round 2).
-  const celebration = birthdayCelebration(pool, input.milestones, child, scope, ctx.sensitive);
+  const celebration = birthdayCelebration(pool, input.milestones, child, scope, ctx.sensitive, addYears(child.dateOfBirth!, input.ageYear));
   const celebrationFrames = celebration
     ? celebration.memories
       .map((memory) => ({ memory, ...scoreMemory(memory, ctx) }))
@@ -1120,10 +1156,10 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
   const halfBurst = Math.round(burstTotal * 0.3);
 
   // Themes title the second burst (Google's titles-over-grid).
-  const themes = distinctiveThemes(pool, input.memories.filter((m) => !m.reported), 3, YEAR_THEME_MIN_MEMORIES, language);
+  const themes = distinctiveThemes(pool, input.memories.filter((m) => !m.reported), 3, YEAR_THEME_MIN_MEMORIES, language, 'child');
 
   // BURST — first half of the year.
-  scenes.push({
+  const firstHalfFrames = pushHalfBurst(scenes, dropped, used, {
     type: 'burst',
     role: 'first_half',
     titles: [],
@@ -1165,10 +1201,11 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
   else dropped.push({ scene: 'starring', reason: 'nobody else with a portrait shares ≥2 memories' });
 
   // BURST — second half, titled with the year's distinctive themes.
-  scenes.push({
+  const secondHalfFrames = pushHalfBurst(scenes, dropped, used, {
     type: 'burst',
     role: 'second_half',
     titles: themes.length >= 2 ? themes.map((t) => t.title) : [],
+    ...(themes.length >= 2 ? { titlesKicker: k.themes } : {}),
     frames: pickBurst(pool, halfBurst, secondHalf, ctx, used),
     secondsPerFrame: BURST_SECONDS_PER_FRAME,
   });
@@ -1213,8 +1250,9 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
   if (moods) scenes.push(moods);
   else dropped.push({ scene: 'burst', reason: `no emotion burst: fewer than ${EMOTION_BURST_MIN} funny or mischief moments left` });
 
-  // BURST — finale: the whole year, faster.
-  const finale = pickBurst(pool, burstTotal - 2 * halfBurst, scope, ctx, used);
+  // BURST — finale: the whole year, faster. It takes up whatever a thin half
+  // couldn't fill, so a year that started slow keeps its full burst length.
+  const finale = pickBurst(pool, burstTotal - firstHalfFrames - secondHalfFrames, scope, ctx, used);
   scenes.push({ type: 'burst', role: 'finale', titles: [], frames: finale, secondsPerFrame: FINALE_SECONDS_PER_FRAME });
 
   // FOCUS — close: the birthday party; else then → now (verified); else portraits.
@@ -1304,7 +1342,7 @@ export function buildMonthlyScript(input: MonthlyInput): FilmScript {
   // Claims first: one award per child, oldest first.
   const awards: Extract<FilmScene, { type: 'award' }>[] = [];
   const usedAwards = new Set<AwardKind>();
-  kids.forEach((kid, index) => {
+  kids.forEach((kid) => {
     const kidName = firstNameOf(kid.name);
     const candidates = childFrameCandidates(pool, kid.id, ctx, used).slice(0, VISION_CANDIDATES_PER_SLOT * 2);
     // Prefer moving clips for the beat, like Google's.
@@ -1324,7 +1362,9 @@ export function buildMonthlyScript(input: MonthlyInput): FilmScript {
     };
     const { kind, hit } = pick();
     const award = strings.award[kind];
-    const intro = index === 0 ? strings.awardGoesTo(award) : strings.awardNext;
+    // Every award announces itself — "and don't forget about…" followed by a
+    // chip read as a mixed message (owner, F3 monthly review).
+    const intro = strings.awardGoesTo(award);
     if (hit) {
       usedAwards.add(kind);
       used.add(hit.memory.id);
@@ -1364,13 +1404,14 @@ export function buildMonthlyScript(input: MonthlyInput): FilmScript {
   if (counters) scenes.push(counters);
 
   // BURST — themes grid (optional; ~half of months qualify, F0).
-  const themes = distinctiveThemes(pool, input.memories.filter((m) => !m.reported), 3, WORLD_MIN_MEMORIES_PER_TOPIC, language);
+  const themes = distinctiveThemes(pool, input.memories.filter((m) => !m.reported), 3, WORLD_MIN_MEMORIES_PER_TOPIC, language, 'family');
   if (themes.length >= 2) {
     const themed = pool.filter((m) => m.topics.some((t) => themes.some((th) => th.topicId === t)));
     scenes.push({
       type: 'burst',
       role: 'month',
       titles: themes.map((t) => t.title),
+      titlesKicker: k.themes,
       frames: pickBurst(themed, MONTH_THEME_FRAMES, scope, ctx, used),
       secondsPerFrame: BURST_SECONDS_PER_FRAME,
     });
