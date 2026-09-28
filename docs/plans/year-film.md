@@ -459,8 +459,15 @@ never count against the cap.
   `year-film` in both `supabase/functions/_shared/expo-push.ts` and
   `src/hooks/useNotifications.ts`. Gated on the existing `notify_new_memories`
   preference (decided 2026-09-26); no new setting.
-- **Child profile → "Films" row:** every past film for that child. Family
-  films (year-end and monthly) live under a Timeline overflow → "Films".
+- **Keepsakes tab** (replaces the Calendar tab; decided 2026-09-28, see
+  [timeline-calendar-keepsakes.md](timeline-calendar-keepsakes.md)): every past
+  film lives here, next to the Memory Books — family films (year-end and
+  monthly) and each child's birthday films. The Timeline card and push open the
+  film; Keepsakes is its permanent home. The child profile has no Films row; its
+  "See {name}'s keepsakes" link opens that child's keepsakes (books + birthday
+  films). *(Supersedes the earlier "child profile → Films row" and "Timeline
+  overflow → Films".)* Before any film exists, Keepsakes shows upcoming films
+  with their dates ("Mara's Year One arrives Nov 11") so the tab is never empty.
 - **Monthly recaps are lighter-weight in the UI:** a smaller Timeline card
   that expires after 7 days, and no print CTA on completion (there's no
   monthly book).
@@ -470,8 +477,8 @@ never count against the cap.
     `src/components/looking-back/story-progress.tsx`)
   - tap right/left = next/previous scene (seek); hold = pause; mute toggle
   - **completion screen:** Replay · **Share** · **Edit** · **Print this year**
-    (the last three for owners/managers only; Print opens the Memory Book scope
-    picker preset to this age-year; hidden for family films)
+    (the last three for owners/managers only; Print opens Keepsakes'
+    create-book flow preset to this child and age-year; hidden for family films)
   - screen readers: an accessible scene list (title, counts, quote, caption) with
     play/pause controls. Reduce Motion: the viewer shows a warning line on the
     intro ("This film has a lot of motion") and offers the scene list — the
@@ -1053,7 +1060,7 @@ at 57.5s; both pass `hyperframes check`.
 | Stage | What | Gate |
 |---|---|---|
 | **P1 — Backend** | Migration + RLS + regenerated types + TECH_SPEC; the "own children" flag (§12 Q8); bridge; Workflow; Fly deploy; `schedule-year-films` cron (birthday, monthly, Dec 12 family); invalidation (§7.6); data-export inclusion; push route; `docs/features/year-film.md`. | Canary on production for Eduardo's family: a birthday film end-to-end, an edit re-render, a memory-deletion invalidation, and a **forced-scope** family film — each compared frame-for-frame against its F3 local render. |
-| **P2 — App** | Timeline card, viewer, share, edit sheet, child-profile Films row, analytics. Unit + integration + Maestro (open → play → share sheet appears; edit → re-render state). | Device pass on iOS + Android (owner). |
+| **P2 — App** | Timeline card, viewer, share, edit sheet, Keepsakes Films section (+ upcoming-film cards), analytics. Unit + integration + Maestro (open → play → share sheet appears; edit → re-render state). | Device pass on iOS + Android (owner). |
 | **P3 — Launch** | EAS Update; enable the cron; watch the first real birthday films; the Dec 12 family-film render and Dec 15 surfacing. | Dec 12 renders complete for all eligible families; share rate per view tracked. |
 
 ### Timeline
