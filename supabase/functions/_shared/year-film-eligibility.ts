@@ -161,6 +161,13 @@ export function birthdayFilmScope(dateOfBirth: string, ageYear: number): FilmSco
   };
 }
 
+/** The year-end family film's window: Jan 1 → Dec 11 (it renders Dec 12 and
+ * surfaces Dec 15; memories after the cut-off never re-render it, plan §4.2). */
+export const FAMILY_FILM_CUTOFF = '12-12';
+export function familyYearScope(year: number): FilmScope {
+  return { start: `${year}-01-01`, endExclusive: `${year}-${FAMILY_FILM_CUTOFF}` };
+}
+
 export function inScope(date: string, scope: FilmScope): boolean {
   return date >= scope.start && date < scope.endExclusive;
 }

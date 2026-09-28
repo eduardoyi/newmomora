@@ -117,9 +117,16 @@ type — rebuilt as data-driven scene modules.
   is done.
 - **Chapters:** the family's own children (same rule as §4.1) who were born
   before the scope ends.
-- **Structure:** family lineup → counts → **one chapter per child, equal
-  duration** (portrait + 3 frames + their sound or line) → shared moments
-  (memories tagging ≥2 members) → close "Here's to 2027".
+- **Structure** (as built, F1 family 2026-09-28, `buildFamilyYearScript`):
+  title "Nuestro 2025" over the year's cards → counters "Nuestro año en" →
+  first-half burst → **one chapter per child, equal length** (10 beats:
+  portrait photo → drawing, up to 3 vision-verified moments spread over the
+  year, their line of the year when there is one) → second-half burst under
+  "Lo que más nos gustó este año" → "Así sonó 2025" (any child's audio
+  memory, else a verified clip with a child's voice) → "Juntos" (memories
+  tagging ≥3 family members) → firsts (every child's certain firsts, taken
+  in turn, with names) → the funny ones → finale → close "¡Por un 2026
+  juntos!" over the family's latest moments together (≥3 tagged) → end card.
 - A child with little data still gets a full-length chapter: longer holds and
   the portrait carry it. A child with **zero** eligible memories in the year
   still appears in the lineup and gets a portrait-only beat — never skipped.
@@ -938,6 +945,35 @@ Owner: "these are awesome." Fixes:
   cut near 90 characters, 3 lines max. With a clip the ticket is compact and
   keeps its size; only the clip box yields space. The theme list keeps full
   opacity (dimming earlier items failed contrast over the grid).
+
+### F3 past years (2026-09-28)
+
+Enzo Y1 (60.5s), Enzo Y2 (48.8s) and Mara Y1 (55.9s) all qualify and render.
+Old years have no drawings (never illustrated) and Enzo's have no quotes,
+so they drop the line and lean on photos and clips; all three close on the
+real party of the birthday they celebrate. Mara Y1 gets a line ("mamma")
+and two milestone cards. The builder's estimate ran 0.7s short on Enzo Y1
+(59.8 vs 60.5s), so its end card outlasts the 60s bed by half a second —
+dedicated, longer beds fix it; tighten the estimate if it recurs.
+
+### F1 year-end family film (2026-09-28, `--film family:YYYY`)
+
+Storyboards for **Nuestro 2025** (complete: 277 memories, 13 scenes,
+~59.5s) and **Nuestro 2026 so far** (Jan 1 → Sep 27: 170 memories, ~59.9s).
+Every scene qualifies in both. Chapters: Enzo and Mara each get a portrait,
+three verified moments spread over the year and a line when one exists
+(2025: "no hay, te puedo ofrecer helado de empanada" / "mamma"; 2026: Enzo's
+"papi, el mundo es un lugar mágico!", Mara none). 2025's sound is a video
+voice fallback (needs the F2 voice check); 2026's is the audio memory "Enzo
+contándole un cuento a Mara por la mañana". Before the cut-off the eval
+builds the year so far. Owner: "looks good".
+
+**F3 (same day):** the renderer's `chapter` scene (10 beats for every
+child: name + portrait photo → drawing, three verified moments as fitted
+cards, the line written on in Caveat), "Juntos" in the funny-ones card
+layout, family firsts signed with the child's name ("Mara · 27 oct 2025"),
+and the family close. Nuestro 2025 renders at 60.0s, Nuestro 2026 (so far)
+at 57.5s; both pass `hyperframes check`.
 
 ### Product build (after F4 passes)
 

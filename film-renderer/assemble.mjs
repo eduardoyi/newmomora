@@ -612,7 +612,7 @@ function firsts(s, id) {
       : `<i style="background-image:url(${still(sl.card)})"></i>`;
     return `<div class="slot s${i}">
   ${sl.card ? `<div class="card mc" style="${sl.box.style}">${media}</div>` : ''}
-  <div class="first${sl.card ? ' under' : ''}"${sl.card ? ` style="top:${sl.box.top + sl.box.h - 70}px"` : ''}><b>${esc(sl.item.label)}</b><span>${esc(fdate(sl.item.date))}</span></div>
+  <div class="first${sl.card ? ' under' : ''}"${sl.card ? ` style="top:${sl.box.top + sl.box.h - 70}px"` : ''}><b>${esc(sl.item.label)}</b><span>${sl.item.childName ? `${esc(sl.item.childName)} · ` : ''}${esc(fdate(sl.item.date))}</span></div>
 </div>`;
   }).join('');
   subcomp(id, {
@@ -779,6 +779,45 @@ ${ribbon ? `tl.fromTo(q('.rib'),{x:-40,opacity:0},{x:0,opacity:1,duration:.35,ea
   return { beats: n, events: [{ t: 0, date: portrait ? null : f?.date ?? null }] };
 }
 
+/** Year-end family film: one chapter per child, the same 10 beats for every
+ * child whatever their data (plan §3, the sibling trap). Their name and
+ * portrait (photo → drawing), up to three verified moments fanned as cards,
+ * and their line of the year when there is one. */
+const CHAPTER_BEATS = 10;
+function chapter(s, id) {
+  const n = CHAPTER_BEATS;
+  const frames = (s.frames ?? []).filter((f) => f.file).slice(0, 3);
+  const hasLine = !!s.line?.quote;
+  const fan = [[250, hasLine ? 990 : 1050, -6], [540, hasLine ? 940 : 1000, 3], [830, hasLine ? 1000 : 1060, -3]];
+  const cards = frames.map((f, k) => {
+    const box = fitCard(f, { cx: fan[k][0] - (k === 2 ? 60 : 0), cy: fan[k][1], maxW: 360, maxH: hasLine ? 460 : 540, pad: 12 });
+    return `<div class="card cm" style="${box.style}"><i style="background-image:url(${still(f)})"></i></div>`;
+  }).join('');
+  const lineWords = hasLine ? s.line.quote.split(/\s+/) : [];
+  subcomp(id, {
+    bg: C.cream,
+    css: `
+.${id} .nm{position:absolute;left:470px;right:150px;top:470px;font:500 150px/1 "Newsreader";letter-spacing:-.03em;color:${C.ink}}
+.${id} .disc{position:absolute;left:96px;top:380px;width:330px;height:330px;border-radius:50%;overflow:hidden;box-shadow:0 12px 30px rgba(44,36,24,.2);background:#fff}
+.${id} .disc img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.${id} .cm{border-radius:30px}
+.${id} .cm i{display:block;width:100%;height:100%;border-radius:20px;background:center/cover no-repeat}
+.${id} .ln{position:absolute;left:96px;right:150px;top:1270px;font:700 84px/1.05 "Caveat";color:${C.ink}}`,
+    html: `${s.portrait?.file ? `<div class="disc"><img src="${asset(s.portrait.pairFile ?? s.portrait.file)}"><img class="drawn" src="${asset(s.portrait.file)}"></div>` : ''}
+<h2 class="nm">${esc(s.name)}</h2>${cards}
+${hasLine ? `<p class="ln">${lineWords.map((w, i) => `<span class="word">${esc(i === 0 ? `“${w}` : w)}${i === lineWords.length - 1 ? '”' : ''}</span>`).join(' ')}</p>` : ''}`,
+    js: `
+var B=${BEAT}, rot=${JSON.stringify(fan.map((f) => f[2]))};
+${s.portrait?.file ? `tl.fromTo(q('.disc'),{scale:.5,opacity:0},{scale:1,opacity:1,duration:.5,ease:'back.out(1.8)'},0);
+tl.fromTo(q('.drawn'),{clipPath:'inset(0 0 0 100%)'},{clipPath:'inset(0 0 0 0%)',duration:.6,ease:'power2.inOut'},B*1.2);` : ''}
+tl.fromTo(q('.nm'),{x:-50,opacity:0},{x:0,opacity:1,duration:.45,ease:'power3.out'},.12);
+q('.cm').forEach(function(c,j){ tl.fromTo(c,{y:140,scale:.7,rotation:0,opacity:0},{y:0,scale:1,rotation:rot[j],opacity:1,duration:.5,ease:'back.out(1.6)'},B*2+j*B*.6); });
+${hasLine ? `tl.fromTo(q('.ln .word'),{y:30,opacity:0},{y:0,opacity:1,duration:.35,ease:'power3.out',stagger:${Math.min(0.12, 1.4 / lineWords.length).toFixed(3)}},B*5);` : ''}`,
+  });
+  const events = [{ t: 0, date: null }].concat(frames.map((f, j) => ({ t: BEAT * 2 + j * BEAT * 0.6, date: f.date ?? null })));
+  return { beats: n, events };
+}
+
 // ── Assemble in film order ───────────────────────────────────────────────
 
 let i = 0;
@@ -789,7 +828,7 @@ for (const s of film.scenes) {
     case 'cold_open': r = coldOpen(s, id); break;
     case 'counters': r = counters(s, id); break;
     case 'burst':
-      r = s.role === 'emotion' ? emotion(s, id)
+      r = s.role === 'emotion' || s.role === 'together' ? emotion(s, id)
         : burst(s, id, { accelerate: s.role === 'finale' });
       break;
     case 'line': r = line(s, id); break;
@@ -800,12 +839,13 @@ for (const s of film.scenes) {
     case 'end_card': r = endCard(s, id); break;
     case 'title': r = title(s, id); break;
     case 'award': r = award(s, id); break;
+    case 'chapter': r = chapter(s, id); break;
     default:
       console.warn(`scene ${s.type} not implemented yet — skipped`);
       i--;
       continue;
   }
-  const dark = (s.type === 'burst' && s.role !== 'emotion') || s.type === 'sound';
+  const dark = (s.type === 'burst' && s.role !== 'emotion' && s.role !== 'together') || s.type === 'sound';
   scenes.push({ id, type: s.type, role: s.role, dark, ...r });
 }
 

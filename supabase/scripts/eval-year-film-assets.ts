@@ -281,6 +281,8 @@ function uses(scene: FilmScene): Use[] {
       return as(scene.backdrop ?? [], 'still', false); // muted mosaic tiles
     case 'firsts':
       return scene.items.flatMap((item) => (item.frame ? [motion(item.frame, false, false)] : [])); // the milestone's card
+    case 'chapter': // verified in F1; shown as cards
+      return [...as(scene.portrait ? [scene.portrait] : [], 'still', false), ...as(scene.frames, 'still', false)];
   }
 }
 

@@ -21,7 +21,7 @@
  */
 import { getObjectBytesBatch } from '../functions/_shared/r2.ts';
 import { resolvePortraitVersionAtDate } from '../functions/_shared/portrait-versions.ts';
-import { birthdayFilmScope, birthdayPool, chapterChildren, familyPool, isFilmChild, monthScope } from '../functions/_shared/year-film-eligibility.ts';
+import { birthdayFilmScope, birthdayPool, chapterChildren, familyPool, familyYearScope, isFilmChild, monthScope } from '../functions/_shared/year-film-eligibility.ts';
 import { detectJournalLanguage, type FilmLanguage, resolveFilmLanguage } from '../functions/_shared/year-film-i18n.ts';
 import {
   buildQuotePrompt,
@@ -35,6 +35,7 @@ import {
   type BirthdayInput,
   birthdayVisionCandidates,
   buildBirthdayScript,
+  buildFamilyYearScript,
   buildMonthlyScript,
   checkKey,
   type FilmMemorySource,
@@ -43,6 +44,8 @@ import {
   type FilmScript,
   type FrameChecks,
   type FrameRef,
+  type FamilyYearInput,
+  familyYearVisionCandidates,
   type MonthlyInput,
   monthlyVisionCandidates,
   shareSensitiveIds,
@@ -60,7 +63,8 @@ import { createAuthedClient, type EvalFamilyData, firstName, loadFamilies, loadF
 
 type FilmRequest =
   | { kind: 'birthday'; childName: string; ageYear: number }
-  | { kind: 'month'; yearMonth: string };
+  | { kind: 'month'; yearMonth: string }
+  | { kind: 'family'; year: number };
 
 interface Options {
   children: string[] | null;
@@ -97,8 +101,10 @@ function parseArgs(args: string[]): Options {
           options.films.push({ kind: 'birthday', childName: parts[1].toLowerCase(), ageYear: Number(parts[2]) });
         } else if (parts[0] === 'month' && /^\d{4}-\d{2}$/.test(parts[1] ?? '')) {
           options.films.push({ kind: 'month', yearMonth: parts[1] });
+        } else if (parts[0] === 'family' && /^\d{4}$/.test(parts[1] ?? '')) {
+          options.films.push({ kind: 'family', year: Number(parts[1]) });
         } else {
-          throw new Error(`Bad --film "${next}". Use birthday:<Name>:<ageYear> or month:YYYY-MM`);
+          throw new Error(`Bad --film "${next}". Use birthday:<Name>:<ageYear>, month:YYYY-MM or family:YYYY`);
         }
         i += 1;
         break;
@@ -303,6 +309,13 @@ function allFrames(script: FilmScript): FrameRef[] {
       case 'award':
         out.push(scene.frame);
         break;
+      case 'chapter':
+        if (scene.portrait) out.push(scene.portrait);
+        out.push(...scene.frames);
+        break;
+      case 'firsts':
+        out.push(...scene.items.flatMap((i) => (i.frame ? [i.frame] : [])));
+        break;
       case 'close':
         out.push(...scene.frames);
         break;
@@ -432,10 +445,14 @@ function sceneBody(scene: FilmScene, ctx: Ctx): string {
       }${scene.frame ? grid([scene.frame]) : ''}`;
     case 'starring':
       return `<div class="pairs">${scene.people.map((p) => pair(p.portrait, p.name, ctx)).join('')}</div>`;
+    case 'chapter':
+      return `<p class="big">${esc(scene.name)}</p><div class="pairs">${scene.portrait ? pair(scene.portrait, 'portrait', ctx) : '<p class="warn">no portrait</p>'}</div>${
+        scene.frames.length ? grid(scene.frames) : '<p class="warn">no verified frames</p>'
+      }${scene.line ? `<p class="quote">“${esc(scene.line.quote)}”</p>` : '<p class="note">no line of the year for this child</p>'}<p class="note">Equal length for every child (10 beats).</p>`;
     case 'firsts':
       return `<ul>${
         scene.items.map((f) =>
-          `<li><b>${esc(f.label)}</b> — ${esc(f.date)}<div class="note">“${esc((ctx.textById.get(f.memoryId) ?? '').slice(0, 160))}”</div></li>`
+          `<li><b>${esc(f.label)}</b>${f.childName ? ` · ${esc(f.childName)}` : ''} — ${esc(f.date)}<div class="note">“${esc((ctx.textById.get(f.memoryId) ?? '').slice(0, 160))}”</div></li>`
         ).join('')
       }</ul>`;
     case 'award':
@@ -612,6 +629,28 @@ for (const film of options.films) {
         : `Birthday film · subsample ${n} of ${fullPool.length} (seed ${options.seed})`;
       await emit(slug, label, script, quotes, vision);
     }
+  } else if (film.kind === 'family') {
+    // Before the Dec 11 cut-off (dogfood), the film covers the year so far.
+    const full = familyYearScope(film.year);
+    const scope = full.endExclusive > options.today ? { start: full.start, endExclusive: options.today } : full;
+    const pool = familyPool(data.memories, scope);
+    const kids = chapterChildren(children.map((c) => ({ id: c.id, dateOfBirth: c.dateOfBirth })), scope)
+      .map((k) => children.find((c) => c.id === k.id)!);
+    const quotes = await pickQuotes(quotable(pool), kids.map((k) => ({ id: k.id, name: firstName(k.name) })), options);
+    const input: FamilyYearInput = {
+      year: film.year,
+      scope,
+      memories: data.memories,
+      children,
+      members: data.members,
+      milestones: data.milestones,
+      quotes: quotes.accepted,
+      language: languageFor(pool, quotes),
+    };
+    const vision = await checkFrames(familyYearVisionCandidates(input), kids, scope.endExclusive, options);
+    const script = buildFamilyYearScript({ ...input, checks: vision.checks });
+    const soFar = scope.endExclusive !== full.endExclusive;
+    await emit(`family-${film.year}`, `Year-end family film${soFar ? ` (so far: through ${scope.endExclusive})` : ''}`, script, quotes, vision);
   } else {
     const scope = monthScope(film.yearMonth);
     const pool = familyPool(data.memories, scope);

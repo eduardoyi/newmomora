@@ -2,6 +2,7 @@ import { assert, assertEquals } from 'jsr:@std/assert@1';
 import type { PortraitVersionCandidate } from './portrait-versions.ts';
 import {
   buildBirthdayScript,
+  buildFamilyYearScript,
   buildMonthlyScript,
   birthdayCelebration,
   checkKey,
@@ -16,7 +17,7 @@ import {
   shareSensitiveIds,
 } from './year-film-script.ts';
 import type { FrameCheck } from './year-film-vision.ts';
-import { birthdayFilmScope } from './year-film-eligibility.ts';
+import { birthdayFilmScope, familyYearScope } from './year-film-eligibility.ts';
 
 const ENZO = 'enzo';
 const MARA = 'mara';
@@ -541,4 +542,67 @@ Deno.test('counters carry a backdrop mosaic; the film carries its timeline span'
   const august = buildMonthlyScript({ yearMonth: '2026-08', memories: yearOfMemories(), children: [enzo, mara], milestones: [], quotes: [], language: 'es' });
   assertEquals(august.span, { from: '2026-08-01', to: '2026-08-31' });
   assertEquals(scene(august, 'title')!.kicker, 'Nuestro');
+});
+
+// ── Year-end family film ─────────────────────────────────────────────────
+
+/** 2026 with Enzo everywhere and Mara (born Nov 2024) in only a few memories. */
+function familyYear(): FilmMemorySource[] {
+  const out: FilmMemorySource[] = [];
+  ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11'].forEach((month, i) => {
+    out.push(memory({ date: `${month}-03`, topics: ['park-playground'], taggedMemberIds: [ENZO] }));
+    out.push(memory({ date: `${month}-09`, topics: ['beach'], taggedMemberIds: [ENZO, GRAN, MARA] }));
+    out.push(video({ date: `${month}-14`, taggedMemberIds: [ENZO] }));
+    out.push(drawing({ date: `${month}-20`, taggedMemberIds: [ENZO] }));
+    out.push(memory({ date: `${month}-25`, emotion: i % 2 ? 'funny' : 'joy', taggedMemberIds: [ENZO] }));
+    if (i % 4 === 0) out.push(memory({ date: `${month}-27`, taggedMemberIds: [MARA] }));
+  });
+  out.push(memory({ id: 'after-cutoff', date: '2026-12-20', taggedMemberIds: [ENZO, MARA, GRAN] }));
+  return out;
+}
+
+function family(memories: FilmMemorySource[], extra: Partial<Parameters<typeof buildFamilyYearScript>[0]> = {}) {
+  return buildFamilyYearScript({
+    year: 2026,
+    memories,
+    children: [enzo, mara],
+    members: [gran, enzo, mara],
+    milestones: [],
+    quotes: [],
+    language: 'es',
+    ...extra,
+  });
+}
+
+Deno.test('family year: Jan 1 → Dec 11, one chapter per child whatever the data', () => {
+  assertEquals(familyYearScope(2026), { start: '2026-01-01', endExclusive: '2026-12-12' });
+  const script = family(familyYear());
+  assertEquals(script.kind, 'family_year');
+  assertEquals(script.title, 'Nuestro 2026');
+  const chapters = scenes(script, 'chapter');
+  assertEquals(chapters.map((c) => c.name), ['Enzo', 'Mara']); // oldest first, the thin one included
+  assert(chapters.every((c) => c.portrait !== null));
+  const all = script.scenes.flatMap((sc) => ('frames' in sc ? sc.frames : []) as { memoryId: string | null }[]);
+  assert(!all.some((f) => f.memoryId === 'after-cutoff'), 'nothing after the Dec 11 cut-off');
+  assertEquals(scenes(script, 'close')[0].line, '¡Por un 2027 juntos!');
+  assertEquals(scenes(script, 'close')[0].source, 'family');
+  const themes = scenes(script, 'burst').find((b) => b.role === 'second_half');
+  assertEquals(themes?.titlesKicker, 'Lo que más nos gustó este año');
+  assert(script.estimatedSeconds <= 60, `${script.estimatedSeconds}s`);
+});
+
+Deno.test('family year: firsts take turns across children and carry their name', () => {
+  const memories = familyYear();
+  const enzoFirsts = ['bike', 'scooter', 'swim'].map((id, i) => memory({ id, date: `2026-0${i + 2}-11`, taggedMemberIds: [ENZO] }));
+  const maraFirst = memory({ id: 'steps', date: '2026-06-11', taggedMemberIds: [MARA] });
+  const milestones = [
+    { memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'bike-no-training-wheels', status: 'confirmed' as const },
+    { memoryId: 'scooter', familyMemberId: ENZO, milestoneId: 'rides-scooter', status: 'confirmed' as const },
+    { memoryId: 'swim', familyMemberId: ENZO, milestoneId: 'first-swim', status: 'confirmed' as const },
+    { memoryId: 'steps', familyMemberId: MARA, milestoneId: 'first-steps', status: 'confirmed' as const },
+  ];
+  const firsts = scenes(family([...memories, ...enzoFirsts, maraFirst], { milestones }), 'firsts')[0];
+  assert(firsts.items.some((f) => f.childName === 'Mara'), firsts.items.map((f) => f.childName).join());
+  assert(firsts.items.length <= 4);
+  assert(firsts.items.every((f) => f.childName === 'Enzo' || f.childName === 'Mara'));
 });
