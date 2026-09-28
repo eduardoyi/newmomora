@@ -10,7 +10,7 @@ import {
 } from '@expo-google-fonts/plus-jakarta-sans';
 import { Caveat_400Regular, Caveat_700Bold } from '@expo-google-fonts/caveat';
 import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
+import { ErrorBoundary as RouterErrorBoundary, Stack, type ErrorBoundaryProps } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
@@ -20,8 +20,18 @@ import 'react-native-reanimated';
 
 import { AppProviders } from '@/components/app-providers';
 import { IncomingShareRouter } from '@/components/incoming-share-router';
+import { captureException, initSentry } from '@/lib/sentry';
 
-export { ErrorBoundary } from 'expo-router';
+initSentry();
+
+// Render errors stop at this boundary, so the global handler never sees
+// them -- report explicitly, then show expo-router's recovery screen.
+export function ErrorBoundary(props: ErrorBoundaryProps) {
+  useEffect(() => {
+    captureException(props.error);
+  }, [props.error]);
+  return <RouterErrorBoundary {...props} />;
+}
 
 SplashScreen.preventAutoHideAsync();
 

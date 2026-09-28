@@ -2,7 +2,7 @@
   "expo": {
     "name": "Momora",
     "slug": "momora",
-    "version": "1.4.1",
+    "version": "1.4.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "momora",
@@ -160,7 +160,15 @@
         }
       ],
       "expo-localization",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "organization": "momora",
+          "project": "momora-app"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

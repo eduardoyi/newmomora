@@ -1,6 +1,6 @@
 # Feature: Observability (error reporting + CI)
 
-**Status:** server-side `done` · app crash reporting `planned (next native build)`
+**Status:** server-side `done` · app crash reporting `wired, ships in 1.4.2`
 **Last updated:** 2026-09-27
 
 ## Why
@@ -20,7 +20,7 @@ Organization `momora` (sentry.io, US region), team `#momora`:
 |---------|----------|--------|---------------------|
 | `momora-edge-functions` | Deno | All 61 Supabase Edge Functions | Supabase secret `SENTRY_DSN` |
 | `momora-workers` | Cloudflare | Every Cloudflare Worker + their Workflows (tag `worker` names which) | Worker secret `SENTRY_DSN` on each Worker |
-| `momora-app` | React Native | The Expo app | not wired yet — see below |
+| `momora-app` | React Native | The Expo app (store builds ≥ 1.4.2) | DSN is not secret — constant in `src/lib/sentry.ts` |
 
 What gets reported, everywhere:
 
@@ -70,11 +70,43 @@ Deployed with Sentry (2026-09-27): all Edge Functions and every Worker —
   `secrets.required` in `wrangler.jsonc` and `wrangler secret put SENTRY_DSN`
   (same DSN as the other Workers).
 
-## App crash reporting (next native build)
+## App crash reporting
 
-`@sentry/react-native` includes a native module, so it ships with a store
-build, not an OTA update. When wiring it: use the Expo config plugin, the
-`momora-app` DSN (safe as an `EXPO_PUBLIC_` value), `sendDefaultPii: false`,
-no replay/tracing, and **guard the import behind a native-module presence
-check** so OTA updates reaching older binaries without the module can't crash.
-Source maps need a Sentry auth token as an EAS secret.
+`@sentry/react-native` includes a native module, so it only exists in store
+builds from **1.4.2** on (1.4.1 iOS / 1.4.0 Android don't have it).
+
+| Piece | File |
+|-------|------|
+| Guarded init + scrubbing | `src/lib/sentry.ts` (`initSentry`, `captureException`) |
+| Called from | `app/_layout.tsx` — `initSentry()` at module scope; the exported `ErrorBoundary` reports render errors (they never reach the global handler), then renders expo-router's boundary |
+| Native config | `app.json` plugin `@sentry/react-native/expo` (org `momora`, project `momora-app`) |
+| Source-map debug IDs | `metro.config.js` → `getSentryExpoConfig` |
+
+Rules:
+
+- **Never import `@sentry/react-native` at module scope.** `initSentry()`
+  requires it only after `TurboModuleRegistry.get('RNSentry')` /
+  `NativeModules.RNSentry` confirms the native module, so OTA updates that
+  still reach older binaries stay a no-op instead of crashing. Also off in
+  `__DEV__` and on web.
+- The DSN is a constant in code (overridable by `EXPO_PUBLIC_SENTRY_DSN`) so
+  OTA bundles carry it; `environment` comes from `EXPO_PUBLIC_APP_ENV`.
+- Reported: native crashes, uncaught JS errors, unhandled rejections, render
+  errors caught by the root `ErrorBoundary`. Release health sessions are on
+  (crash-free rate). No console capture — the app doesn't use `console.error`
+  for handled failures.
+- Privacy: `sendDefaultPii: false`, no tracing/replay/profiling, no
+  screenshots or view hierarchy, `event.user` dropped. Breadcrumbs keep only
+  `navigation` and network (`fetch`/`xhr`/`http`) with URL, method and status —
+  **query strings stripped** (signed media URLs carry tokens); console and
+  touch breadcrumbs (accessibility labels can contain names) are dropped.
+
+Source maps: store builds upload them (and iOS dSYMs / Android mappings)
+during the EAS build using the EAS secret `SENTRY_AUTH_TOKEN` (a Sentry
+organization auth token) — **the build fails without it** (or set
+`SENTRY_DISABLE_AUTO_UPLOAD=true` to skip). After an `eas update`, upload that
+update's maps with:
+
+```bash
+SENTRY_AUTH_TOKEN=… npx sentry-expo-upload-sourcemaps dist
+```
