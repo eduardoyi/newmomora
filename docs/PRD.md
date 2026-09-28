@@ -406,7 +406,7 @@ Triggered after memory save.
 | View | Behavior |
 |------|----------|
 | **Timeline** | Reverse-chronological list. Card shows: date, text excerpt, illustration thumbnail, tagged member avatars, emotion chip |
-| **Calendar** | Month grid with daily tiles for days that have entries. Tile shows primary illustration for that day |
+| **Calendar** | A view of the Timeline (List/Calendar switcher): month grid with daily tiles for days that have entries. Tile shows primary illustration for that day |
 | **Search** | Full-text search on memory content |
 | **Filters** | Date range, family member, emotion — composable |
 | **Looking Back** | Optional family-level daily packages of 4–10 older memories; read-only immersive replay with personal viewed state |
@@ -416,7 +416,7 @@ Triggered after memory save.
 - Empty states with clear CTAs (e.g., "Add your first memory")
 - Memory detail screen: full text, illustration, date, tagged members, emotion, edit/delete actions
 - Filters composable (e.g., member + date range together)
-- Calendar navigates to day's memories or memory detail
+- Calendar navigates to day's memories (the Timeline list, opened at that day)
 - Looking Back appears only for worthwhile older packages; it never uses
   streaks, urgency, unread treatment, or a capture/paywall prompt
 
@@ -706,7 +706,8 @@ See [TECH_SPEC.md](./TECH_SPEC.md) for database schema, Edge Function contracts,
 | Onboarding — Portrait wait | Progress while first portrait generates |
 | Onboarding — First memory | Guided first journal entry |
 | Timeline | Primary memory feed |
-| Calendar | Monthly memory grid |
+| Calendar | Monthly memory grid (Timeline view) |
+| Keepsakes | Tab for Memory Books (and Year Films) made from the family's memories |
 | Memory detail | Full memory view with like action and comments drawer |
 | New memory (modal) | Create memory (text + voice) |
 | Edit memory (modal) | Edit existing memory |

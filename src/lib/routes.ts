@@ -156,8 +156,9 @@ export function portraitTimelineRoute(memberId: string): Href {
   return `/(app)/family/${memberId}/portraits` as Href;
 }
 
-// Memory Book in-app scope picker (docs/plans/memory-book.md §"5a.5") --
-// entry point on the child profile screen, near the portrait timeline row.
+// One child's Memory Books (docs/plans/timeline-calendar-keepsakes.md C5):
+// the child profile's "See {name}'s keepsakes" link and book-ready
+// notifications. The whole family's shelves live in the Keepsakes tab.
 export function memoryBooksRoute(memberId: string): Href {
-  return `/(app)/family/${memberId}/memory-books` as Href;
+  return `/(app)/keepsakes/${memberId}` as Href;
 }

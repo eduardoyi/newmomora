@@ -86,6 +86,8 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 | `looking_back_package_replayed` | `package_type`, `memory_count` | Looking Back completion replay |
 | `timeline_jumped` | `source` (`month_picker`/`today_button`/`calendar_day`), `months_back` (0 = current month) | Timeline pinned bar: month-picker pick or Today tap; Calendar view: day tile tap (never a date) |
 | `timeline_view_switched` | `view` (`list`/`calendar`) | Timeline pinned bar's List/Calendar switcher |
+| `keepsakes_opened` | — | Keepsakes tab focus |
+| `keepsakes_create_book_tapped` | `children_count` (shelves shown) | Keepsakes "Create a book" / "Go to Family" CTA |
 
 ### Gallery import (aggregate, content-free)
 

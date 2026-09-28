@@ -124,7 +124,7 @@ for one URL never throws or aborts the batch — it just yields `title: null`.
 | Layer | Files | Responsibility |
 |-------|-------|----------------|
 | Routes | `app/(app)/memory/[id]/index.tsx` | Detail screen — both layouts render `content` via `MemoryContentText` |
-| Routes | `app/(app)/(tabs)/calendar.tsx`, `app/(app)/family/[id]/index.tsx` | Raw preview rows — wrap `content` in `substituteLinkLabels(...)` (plain text, not tappable) |
+| Routes | `app/(app)/family/[id]/index.tsx` | Raw preview rows — wrap `content` in `substituteLinkLabels(...)` (plain text, not tappable). (The Calendar tab's ribbon, which also did this, was removed 2026-09-29; the Timeline month grid shows stamps only.) |
 | Hooks | `src/hooks/useMemories.ts` | create/update mutation `onSuccess` fires `fetchLinkPreviews` |
 | Hooks | `src/hooks/use-pending-memory-uploads.tsx` | `runUpload` fires `fetchLinkPreviews` when a media caption has a URL |
 | Services | `src/services/ai.ts` | `fetchLinkPreviews(memoryId)` — thin `invokeEdgeFunction` wrapper |

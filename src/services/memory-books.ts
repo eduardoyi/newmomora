@@ -66,6 +66,24 @@ export async function fetchMemoryBooksForChild(
   return { data: data as MemoryBookListRow[], error: null };
 }
 
+/** Every book ever requested in the family, newest first -- the Keepsakes
+ * tab's single query for all shelves (docs/plans/timeline-calendar-keepsakes.md
+ * C2), so shelf membership and shelf contents come from one cache. */
+export async function fetchMemoryBooksForFamily(
+  familyId: string,
+): Promise<{ data: MemoryBookListRow[] | null; error: ServiceError | null }> {
+  const { data, error } = await supabase
+    .from('memory_books')
+    .select(MEMORY_BOOK_LIST_COLUMNS)
+    .eq('family_id', familyId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    return { data: null, error: mapSupabaseError(error) };
+  }
+  return { data: data as MemoryBookListRow[], error: null };
+}
+
 export interface CreateMemoryBookInput {
   familyId: string;
   childId: string;

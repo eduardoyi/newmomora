@@ -156,6 +156,11 @@ export interface AnalyticsEventMap {
   timeline_view_switched: {
     view: 'list' | 'calendar';
   };
+  // Keepsakes tab (docs/plans/timeline-calendar-keepsakes.md C6).
+  keepsakes_opened: Record<string, never>;
+  keepsakes_create_book_tapped: {
+    children_count: number;
+  };
   invite_created: {
     role: 'manager' | 'viewer';
     family_id: string;

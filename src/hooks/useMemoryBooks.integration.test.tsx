@@ -2,7 +2,8 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
-import { useMemoryBooks } from '@/hooks/useMemoryBooks';
+import { useFamilyMemoryBooks, useMemoryBooks } from '@/hooks/useMemoryBooks';
+import { familyMemoryBooksQueryKey } from '@/hooks/queryKeys';
 import { useAuth } from '@/hooks/use-auth';
 import {
   countEligibleMemoriesForScope,
@@ -10,6 +11,7 @@ import {
   dispatchMemoryBookGeneration,
   fetchExampleCoverAssetKey,
   fetchMemoryBooksForChild,
+  fetchMemoryBooksForFamily,
   type MemoryBookListRow,
 } from '@/services/memory-books';
 
@@ -17,6 +19,7 @@ jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
 
 jest.mock('@/services/memory-books', () => ({
   fetchMemoryBooksForChild: jest.fn(),
+  fetchMemoryBooksForFamily: jest.fn(),
   createMemoryBook: jest.fn(),
   dispatchMemoryBookGeneration: jest.fn(),
   countEligibleMemoriesForScope: jest.fn(),
@@ -25,18 +28,18 @@ jest.mock('@/services/memory-books', () => ({
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedFetch = fetchMemoryBooksForChild as jest.MockedFunction<typeof fetchMemoryBooksForChild>;
+const mockedFetchFamily = fetchMemoryBooksForFamily as jest.MockedFunction<typeof fetchMemoryBooksForFamily>;
 const mockedCreate = createMemoryBook as jest.MockedFunction<typeof createMemoryBook>;
 const mockedDispatch = dispatchMemoryBookGeneration as jest.MockedFunction<typeof dispatchMemoryBookGeneration>;
 const mockedCount = countEligibleMemoriesForScope as jest.MockedFunction<typeof countEligibleMemoriesForScope>;
 const mockedExampleCover = fetchExampleCoverAssetKey as jest.MockedFunction<typeof fetchExampleCoverAssetKey>;
 
-function createWrapper() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { gcTime: Infinity, retry: false },
-      mutations: { gcTime: Infinity, retry: false },
-    },
-  });
+function createWrapper(queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { gcTime: Infinity, retry: false },
+    mutations: { gcTime: Infinity, retry: false },
+  },
+})) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   };
@@ -231,5 +234,81 @@ describe('useMemoryBooks', () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.exampleCoverAssetKey).toBeNull();
+  });
+});
+
+// Keepsakes (docs/plans/timeline-calendar-keepsakes.md C2).
+describe('useFamilyMemoryBooks', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } } as ReturnType<typeof useAuth>);
+  });
+
+  it('loads every book in the family once and groups them by child', async () => {
+    mockedFetchFamily.mockResolvedValue({
+      data: [
+        book({ id: 'a', child_id: 'child-1', status: 'ready' }),
+        book({ id: 'b', child_id: 'child-2', status: 'ready' }),
+        book({ id: 'c', child_id: 'child-1', status: 'failed' }),
+      ],
+      error: null,
+    });
+
+    const { result } = renderHook(() => useFamilyMemoryBooks({ familyId: 'family-1', isFocused: true }), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(mockedFetchFamily).toHaveBeenCalledTimes(1);
+    expect(result.current.booksByChild.get('child-1')?.map((b) => b.id)).toEqual(['a', 'c']);
+    expect(result.current.booksByChild.get('child-2')?.map((b) => b.id)).toEqual(['b']);
+  });
+
+  it('polls while a book is in progress only when focused', async () => {
+    jest.useFakeTimers();
+    try {
+      mockedFetchFamily.mockResolvedValue({ data: [book({ status: 'generating' })], error: null });
+      const { result, rerender } = renderHook(
+        ({ isFocused }: { isFocused: boolean }) => useFamilyMemoryBooks({ familyId: 'family-1', isFocused }),
+        { wrapper: createWrapper(), initialProps: { isFocused: false } },
+      );
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      expect(mockedFetchFamily).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        jest.advanceTimersByTime(9000);
+      });
+      expect(mockedFetchFamily).toHaveBeenCalledTimes(1);
+
+      rerender({ isFocused: true });
+      await act(async () => {
+        jest.advanceTimersByTime(4100);
+      });
+      await waitFor(() => expect(mockedFetchFamily.mock.calls.length).toBeGreaterThanOrEqual(2));
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('refreshes the family-wide books after useMemoryBooks starts a book', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity, retry: false } } });
+    const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
+    mockedFetch.mockResolvedValue({ data: [], error: null });
+    mockedCount.mockResolvedValue({ data: 40, error: null });
+    mockedExampleCover.mockResolvedValue({ data: null, error: null });
+    mockedCreate.mockResolvedValue({ data: book({ id: 'new' }), error: null, conflict: false } as never);
+    mockedDispatch.mockResolvedValue({ data: null, error: null } as never);
+
+    const { result } = renderHook(
+      () => useMemoryBooks({ familyId: 'family-1', childId: 'child-1', dateOfBirth: '2023-06-01', todayIso: '2026-09-29' }),
+      { wrapper: createWrapper(queryClient) },
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.generate(result.current.rows[0]!.option);
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: familyMemoryBooksQueryKey('family-1') });
   });
 });

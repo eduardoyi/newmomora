@@ -390,9 +390,10 @@ export default function ViewFamilyMemberScreen() {
           />
         )}
 
-        {/* Persistent Memory Books entry point, near the portrait timeline
-            -- docs/plans/memory-book.md §"5a.5" locked design. Not buried
-            in settings, not a transient feed card. Owner/manager only
+        {/* Link to this person's keepsakes (docs/plans/timeline-calendar-keepsakes.md
+            C5 -- the whole family's shelves live in the Keepsakes tab), near
+            the portrait timeline -- docs/plans/memory-book.md §"5a.5" locked
+            placement. Not buried in settings, not a transient feed card. Owner/manager only
             (owner decision 2026-09-15): viewers can't generate books, and
             a picker full of scopes they can't act on is window-shopping,
             not utility -- the ready-book VIEWING path for other members is
@@ -400,11 +401,11 @@ export default function ViewFamilyMemberScreen() {
         {!isProfileHidden && canEdit ? (
           <SettingsBlock title="Keepsakes">
             <SettingsRow
-              accessibilityLabel={`Memory Books for ${member.name}`}
+              accessibilityLabel={`See ${member.name}’s keepsakes`}
               chevron
               first
-              label="Memory Books"
-              caption="Turn memories into a premium keepsake book"
+              label={`See ${member.name}’s keepsakes`}
+              caption="Their Memory Books, printed and bound"
               onPress={() => router.push(memoryBooksRoute(member.id))}
               testID="family-member-memory-books-row"
             />

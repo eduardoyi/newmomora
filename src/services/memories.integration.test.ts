@@ -12,7 +12,6 @@ import {
   fetchMemoryById,
   fetchMemoriesByIds,
   fetchMemoryGenerationStatuses,
-  fetchOldestMemoryDate,
   patchAudioDescriptionIfEmpty,
   regenerateMemoryIllustration,
   retryMemoryIllustration,
@@ -2087,30 +2086,6 @@ describe('memories service integration', () => {
     ]);
   });
 
-
-  it('fetchOldestMemoryDate loads only the earliest memory date', async () => {
-    const memoriesBuilder = createQueryBuilder({
-      data: { memory_date: '2024-01-09' },
-      error: null,
-    });
-
-    (supabase.from as jest.Mock).mockImplementation((table: string) => {
-      if (table === 'memories') {
-        return memoriesBuilder;
-      }
-
-      throw new Error(`Unexpected table ${table}`);
-    });
-
-    const { data, error } = await fetchOldestMemoryDate('family-1');
-
-    expect(error).toBeNull();
-    expect(data).toBe('2024-01-09');
-    expect(memoriesBuilder.select).toHaveBeenCalledWith('memory_date');
-    expect(memoriesBuilder.eq).toHaveBeenCalledWith('family_id', 'family-1');
-    expect(memoriesBuilder.order).toHaveBeenCalledWith('memory_date', { ascending: true });
-    expect(memoriesBuilder.limit).toHaveBeenCalledWith(1);
-  });
 
   it('fetchMemoriesInDateRange bounds calendar preview rows by memory_date', async () => {
     const memoriesBuilder = createQueryBuilder({

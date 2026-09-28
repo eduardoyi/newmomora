@@ -173,7 +173,7 @@ export default function AppLayout() {
         <Stack.Screen name="whos-who" options={{ presentation: 'modal' }} />
         <Stack.Screen name="family/[id]" />
         <Stack.Screen name="family/[id]/portraits" />
-        <Stack.Screen name="family/[id]/memory-books" />
+        <Stack.Screen name="keepsakes/[memberId]" />
         <Stack.Screen
           name="family/[id]/edit"
           options={{ presentation: 'modal' }}

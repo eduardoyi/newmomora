@@ -101,9 +101,8 @@ export function patchMemoryInCaches(
     },
   );
 
-  // Calendar range caches hold the same memory rows in a plain array; the
-  // base key also matches the 'oldest-date' entry (a string), which the
-  // Array.isArray guard leaves untouched.
+  // Calendar range caches (the Timeline month grid) hold the same memory rows
+  // in a plain array; the Array.isArray guard skips anything else.
   queryClient.setQueriesData<MemoryWithTags[]>(
     { queryKey: [calendarMemoriesQueryKeyBase] },
     (current) => (Array.isArray(current) ? current.map(patchMemory) : current),

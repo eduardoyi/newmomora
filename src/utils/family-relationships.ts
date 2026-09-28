@@ -135,6 +135,24 @@ export function isLinkableMember(member: RelationshipMemberLike, referenceDate =
   return true;
 }
 
+/**
+ * Own-child rule (mirrors `isOwnChild` in
+ * supabase/functions/_shared/family-relationships.ts): an explicit role wins
+ * -- 'child' is a child, any other role is not; an unsorted member falls back
+ * to DOB < 13, so families that never sort anyone behave as before. Keepsakes
+ * uses it to pick whose book shelves to show.
+ */
+export function isOwnChild(
+  member: { relationship?: string | null; date_of_birth?: string | null },
+  referenceDate = new Date(),
+): boolean {
+  if (member.relationship === 'child') return true;
+  if (member.relationship) return false;
+  if (!member.date_of_birth) return false;
+  const age = getAgePartsFromDob(member.date_of_birth, referenceDate);
+  return age !== null && age.years < 13;
+}
+
 export interface RelationshipGroup<T> {
   key: string;
   title: string;

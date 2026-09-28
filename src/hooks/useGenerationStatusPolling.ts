@@ -61,7 +61,7 @@ function collectTrackedMemories(
 
   for (const [, data] of calendarEntries) {
     if (!Array.isArray(data)) {
-      // Guards the 'oldest-date' entry (a string), which shares the base key.
+      // Defensive: only array-shaped entries under this base hold memory rows.
       continue;
     }
     for (const memory of data) {

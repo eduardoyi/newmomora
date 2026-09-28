@@ -117,7 +117,7 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
     the first is the existing 60% video-autoplay pair. RN forbids swapping
     `onViewableItemsChanged`/`viewabilityConfig` on a mounted list, so both
     pairs are fixed at mount.
-  - **Picker:** the Calendar tab's `CalendarMonthPickerSheet`, fed
+  - **Picker:** `CalendarMonthPickerSheet` (originally the Calendar tab's), fed
     `getTimelineMonthOptions` (`src/utils/timeline-anchor.ts`) with per-month
     counts from `useMemoryMonthCounts`. That hook runs one dates-only
     `fetchMemoryMonthDates` query (paged past 1000 rows, blocked authors

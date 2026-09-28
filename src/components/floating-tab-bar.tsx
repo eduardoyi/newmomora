@@ -18,10 +18,10 @@ const TAB_META: Record<string, TabMeta> = {
     symbolActive:   { ios: 'clock.fill',    android: 'schedule' },
     symbolInactive: { ios: 'clock',         android: 'schedule' },
   },
-  calendar: {
-    label: 'Calendar',
-    symbolActive:   { ios: 'calendar',      android: 'calendar_today' },
-    symbolInactive: { ios: 'calendar',      android: 'calendar_today' },
+  keepsakes: {
+    label: 'Keepsakes',
+    symbolActive:   { ios: 'gift.fill',     android: 'redeem' },
+    symbolInactive: { ios: 'gift',          android: 'redeem' },
   },
   family: {
     label: 'Family',
@@ -71,7 +71,7 @@ function TabItem({
             fallback={
               <Text style={[styles.tabIconFallback, { color: iconColor }]}>
                 {route.name === 'timeline' ? '◷' :
-                 route.name === 'calendar' ? '⊟' :
+                 route.name === 'keepsakes' ? '❖' :
                  route.name === 'family'   ? '◈' : '✦'}
               </Text>
             }

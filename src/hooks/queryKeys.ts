@@ -182,10 +182,20 @@ export function memoryBooksQueryKey(familyId: string | null | undefined, childId
   return [memoryBooksQueryKeyBase, familyId, childId] as const;
 }
 
+// All of a family's books (Keepsakes). Nested under the same base as the
+// per-child key, so invalidating [memoryBooksQueryKeyBase, familyId] covers
+// both.
+export function familyMemoryBooksQueryKey(familyId: string | null | undefined) {
+  return [memoryBooksQueryKeyBase, familyId, 'family'] as const;
+}
+
 export function memoryBookEligibilityQueryKey(
   familyId: string | null | undefined,
   childId: string | undefined,
   dateOfBirth: string | null | undefined,
+  // Scope options (and so the counts) depend on "today" -- a tab left
+  // mounted across midnight must not reuse yesterday's counts.
+  todayIso?: string | null,
 ) {
-  return [memoryBookEligibilityQueryKeyBase, familyId, childId, dateOfBirth ?? null] as const;
+  return [memoryBookEligibilityQueryKeyBase, familyId, childId, dateOfBirth ?? null, todayIso ?? null] as const;
 }

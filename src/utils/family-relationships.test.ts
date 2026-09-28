@@ -5,6 +5,7 @@ import {
   FAMILY_SIDES,
   groupByRelationship,
   isLinkableMember,
+  isOwnChild,
   RELATIONSHIP_LABELS,
   RELATIONSHIPS,
   relationshipSubtitle,
@@ -123,5 +124,20 @@ describe('groupByRelationship', () => {
     expect(groups.map((g) => g.title)).toEqual(['Our kids', 'Grandparents', 'Friends & caregivers', 'Not sorted yet']);
     expect(groups[0].members.map((m) => m.id)).toEqual(['k1', 'k2']);
     expect(groups[2].members.map((m) => m.id)).toEqual(['f1', 'f2']);
+  });
+});
+
+describe('isOwnChild (app mirror of the Edge rule)', () => {
+  const today = new Date(2026, 8, 29);
+  it('lets an explicit role win over age', () => {
+    expect(isOwnChild({ relationship: 'child', date_of_birth: '1990-01-01' }, today)).toBe(true);
+    expect(isOwnChild({ relationship: 'cousin', date_of_birth: '2022-01-01' }, today)).toBe(false);
+    expect(isOwnChild({ relationship: 'child', date_of_birth: null }, today)).toBe(true);
+  });
+
+  it('falls back to under-13 for unsorted members', () => {
+    expect(isOwnChild({ relationship: null, date_of_birth: '2022-01-01' }, today)).toBe(true);
+    expect(isOwnChild({ relationship: null, date_of_birth: '2010-01-01' }, today)).toBe(false);
+    expect(isOwnChild({ relationship: null, date_of_birth: null }, today)).toBe(false);
   });
 });

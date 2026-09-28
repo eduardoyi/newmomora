@@ -1,6 +1,6 @@
 # Timeline + Calendar merge, Keepsakes tab (Plan)
 
-**Status:** Phase A shipped 2026-09-28 (5f70380); Phase B implemented 2026-09-29; C not started. Plan hardened (2 review rounds).
+**Status:** Phase A shipped 2026-09-28 (5f70380); Phases B and C implemented 2026-09-29 (awaiting device check). Plan hardened (2 review rounds).
 **Date:** 2026-09-28
 **Owner decisions:** 2026-09-28 discussion (see §2)
 **Feature docs to update in the same PRs:** `docs/features/calendar.md` (becomes the
@@ -415,6 +415,31 @@ superseded), new `docs/features/keepsakes.md`, `docs/features/README.md` index,
 `memory-book-generation.md` (entry point), `memories.md` (anchored mode),
 `app/AGENTS.md` L10 (tab list), root `AGENTS.md` (~L109, L267). PRD L409/L709
 already say "month grid". Only the "tab" wording changes.
+
+**C — as built (2026-09-29), deviations from the steps above:**
+- **Shelf rule** uses `isOwnChild` (ported to `src/utils/family-relationships.ts`
+  from the Edge helper) plus "has a book", not the interim DOB < 13 rule.
+  The family-relationships work landed first (da58fa4), and this is the swap
+  the rule anticipated.
+- **One family query, lazy per-child flow:** shelves use `useFamilyMemoryBooks`
+  with the shared pure `buildMemoryBookRows`. The existing `useMemoryBooks`
+  wasn't rewritten. It now runs only inside `MemoryBookFlowHost` (mounted when
+  a create/retry starts, for that child), takes `todayIso` from the caller
+  (part of the eligibility key), and invalidates the family key after every
+  write.
+- **One shared body** (`MemoryBooksBody`, variants `tab`/`stack`) instead of a
+  separate presentational `ChildBookShelf`. The tab and the one-child route
+  render the same component.
+- **Removed as dead code** with the tab: `useOldestMemoryDate` /
+  `fetchOldestMemoryDate` and all the ribbon helpers in `src/utils/calendar.ts`
+  (it keeps only two shared types).
+- **Viewer route:** the one-child route still shows existing books
+  read-only, as the old screen did (viewers can't reach it from the profile).
+  The tab hides books from viewers.
+- **Tab icon:** SF `gift` / `gift.fill`, Material `redeem`, fallback glyph ❖.
+  Still verify `redeem` renders on the production Android build.
+- **Not done:** removing `'fab_calendar'` from the analytics unions (kept for
+  historical data, as planned); the Films section (Year Film P2).
 
 ### Phase D — Year Film plan alignment (docs now, code in Film P2)
 

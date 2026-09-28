@@ -166,7 +166,7 @@ describe('family member portrait entry', () => {
     expect(mockPush).toHaveBeenCalledWith('/(app)/family/member-1/portraits');
   });
 
-  it('shows a persistent Memory Books row that opens the scope picker (docs/plans/memory-book.md §5a.5)', () => {
+  it('shows a persistent "See {name}\'s keepsakes" row that opens that child\'s keepsakes (docs/plans/timeline-calendar-keepsakes.md C5)', () => {
     const { getByTestId } = render(
       <SafeAreaProvider
         initialMetrics={{
@@ -179,7 +179,7 @@ describe('family member portrait entry', () => {
     );
 
     fireEvent.press(getByTestId('family-member-memory-books-row'));
-    expect(mockPush).toHaveBeenCalledWith('/(app)/family/member-1/memory-books');
+    expect(mockPush).toHaveBeenCalledWith('/(app)/keepsakes/member-1');
   });
 
   it('hides the Memory Books row from viewers — only owners/managers can generate books', () => {

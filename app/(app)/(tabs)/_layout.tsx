@@ -11,7 +11,7 @@ export default function TabLayout() {
       }}
     >
       <Tabs.Screen name="timeline" />
-      <Tabs.Screen name="calendar" />
+      <Tabs.Screen name="keepsakes" />
       <Tabs.Screen name="family" />
       <Tabs.Screen name="settings" />
     </Tabs>

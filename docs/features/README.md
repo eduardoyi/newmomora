@@ -42,7 +42,8 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Media memories (photo & video) | [media-memories.md](./media-memories.md) | done |
 | Gallery import (AI-staged camera-roll memories) | [gallery-import.md](./gallery-import.md) | done; production rollout gated |
 | Audio memories | [audio-memories.md](./audio-memories.md) | planned |
-| Calendar ribbon | [calendar.md](./calendar.md) | done |
+| Calendar view (Timeline month grid) | [calendar.md](./calendar.md) | done |
+| Keepsakes (books + films tab) | [keepsakes.md](./keepsakes.md) | in-progress |
 | Inline links in memory text | [inline-links.md](./inline-links.md) | done |
 | Likes & comments | [likes-and-comments.md](./likes-and-comments.md) | done |
 | Family activity | [family-activity.md](./family-activity.md) | done |

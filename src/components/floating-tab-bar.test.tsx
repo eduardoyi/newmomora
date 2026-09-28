@@ -20,7 +20,7 @@ jest.mock('react-native-reanimated', () => {
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { FloatingTabBar } = require('./floating-tab-bar') as typeof import('./floating-tab-bar');
 
-const routes = ['timeline', 'calendar', 'family', 'settings'].map((name) => ({
+const routes = ['timeline', 'keepsakes', 'family', 'settings'].map((name) => ({
   key: `${name}-key`,
   name,
 }));
@@ -48,7 +48,7 @@ describe('FloatingTabBar', () => {
     );
 
     expect(screen.getByText('Timeline')).toBeTruthy();
-    expect(screen.queryByText('Calendar')).toBeNull();
+    expect(screen.queryByText('Keepsakes')).toBeNull();
     expect(screen.getByTestId('tab-timeline').props.accessibilityState).toEqual({ selected: true });
     expect(StyleSheet.flatten(screen.getByTestId('tab-pill-timeline').props.style)).toMatchObject({
       borderRadius: 17,
@@ -62,13 +62,13 @@ describe('FloatingTabBar', () => {
     );
 
     expect(screen.queryByText('Timeline')).toBeNull();
-    expect(screen.getByText('Calendar')).toBeTruthy();
+    expect(screen.getByText('Keepsakes')).toBeTruthy();
     expect(screen.getByTestId('tab-timeline').props.accessibilityState).toEqual({ selected: false });
-    expect(screen.getByTestId('tab-calendar').props.accessibilityState).toEqual({ selected: true });
+    expect(screen.getByTestId('tab-keepsakes').props.accessibilityState).toEqual({ selected: true });
     expect(StyleSheet.flatten(screen.getByTestId('tab-pill-timeline').props.style)).toMatchObject({
       borderRadius: 0,
     });
-    expect(StyleSheet.flatten(screen.getByTestId('tab-pill-calendar').props.style)).toMatchObject({
+    expect(StyleSheet.flatten(screen.getByTestId('tab-pill-keepsakes').props.style)).toMatchObject({
       borderRadius: 17,
       overflow: 'hidden',
     });

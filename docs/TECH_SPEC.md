@@ -3538,7 +3538,7 @@ Every Cloudflare Worker also has a `SENTRY_DSN` secret (the shared
 Momora2/
 ├── app/                          # Expo Router screens
 │   ├── (auth)/                   # login, signup, verify-otp
-│   ├── (app)/                    # timeline, calendar, family (children), settings
+│   ├── (app)/                    # timeline (list + calendar view), keepsakes, family (children), settings
 │   │   └── sharing/               # household: invite, pending-invites, approvals, redeem, waiting
 │   ├── invite.tsx                 # universal-link entry point (outside auth/app groups)
 │   └── (modals)/                 # new-memory, edit-memory, add-family-member

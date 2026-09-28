@@ -112,7 +112,7 @@ Full request/response shapes and the widened schema live in [TECH_SPEC.md](../TE
 | Routes | `app/(app)/new-memory.tsx` | Post-recording fork state (`audioClip`/`audioClipRemoved`/`audioTranscript`), emergent `audio` composer, `handleSaveAudio` |
 | Routes | `app/(app)/memory/[id]/index.tsx` | `MemoryDetailSound`/`SoundStage` — playback-hero detail variant, "Not on this phone yet" unavailable state |
 | Routes | `app/(app)/memory/[id]/edit.tsx` | Recessed read-only clip well, description/tags/date-only edit, disabled re-record mic |
-| Routes | `app/(app)/(tabs)/calendar.tsx`, `app/(app)/family/[id]/index.tsx` | `SoundTile` day-stamp / member-thumb variants |
+| Routes / components | `src/components/memory-stamp.tsx` (Timeline calendar view tiles), `app/(app)/family/[id]/index.tsx` | `SoundTile` day-stamp / member-thumb variants |
 | Hooks | `src/hooks/useVoiceInput.ts` | Recording + immediate `kickTranscription`, stale-response guarding via `activeClipUriRef`, exposes `transcriptionPromise` for post-close awaiting |
 | Hooks | `src/hooks/useAudioClipPlayback.ts` | Per-clip `expo-audio` playback state (create-once + `replace()`, never `expo-av`) |
 | Hooks | `src/hooks/audio-playback-coordinator.ts` | Module-level "one sound plays app-wide" singleton (`useSyncExternalStore`); exports `pauseAllAudioPlayback`/`prepareAudioPlaybackMode` for future callers — recorder start and video autoplay are **not yet wired** to it (see Extension guide) |

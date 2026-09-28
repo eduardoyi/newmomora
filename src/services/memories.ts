@@ -721,25 +721,6 @@ export async function fetchMemoryGenerationStatuses(memoryIds: string[]): Promis
   return { data: (data ?? []) as MemoryGenerationStatusRow[], error: null };
 }
 
-export async function fetchOldestMemoryDate(familyId: string): Promise<{
-  data: string | null;
-  error: ServiceError | null;
-}> {
-  const { data, error } = await supabase
-    .from('memories')
-    .select('memory_date')
-    .eq('family_id', familyId)
-    .order('memory_date', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    return { data: null, error: mapSupabaseError(error) };
-  }
-
-  return { data: data?.memory_date ?? null, error: null };
-}
-
 const MEMORY_RANGE_PAGE_SIZE = 1000;
 
 export async function fetchMemoriesInDateRange(

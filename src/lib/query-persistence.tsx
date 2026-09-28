@@ -59,7 +59,7 @@ const PERSISTABLE_QUERY_KEY_BASES: readonly unknown[] = [
   // serialize below) AND memory detail (nested under the same base --
   // see memoryDetailQueryKey in queryKeys.ts).
   memoriesQueryKeyBase,
-  // Calendar ranges + the 'oldest-date' entry, both nested under this base.
+  // The Timeline Calendar view's month-range fetches, nested under this base.
   calendarMemoriesQueryKeyBase,
   familyMembersQueryKeyBase,
   portraitVersionsQueryKeyBase,

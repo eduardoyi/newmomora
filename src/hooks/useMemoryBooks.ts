@@ -2,16 +2,21 @@
 // decision 2026-09-07). See docs/features/memory-book-generation.md's
 // "Client integration" section for the contract this implements.
 import { useCallback, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useAuth } from '@/hooks/use-auth';
-import { memoryBookEligibilityQueryKey, memoryBooksQueryKey } from '@/hooks/queryKeys';
+import {
+  familyMemoryBooksQueryKey,
+  memoryBookEligibilityQueryKey,
+  memoryBooksQueryKey,
+} from '@/hooks/queryKeys';
 import {
   countEligibleMemoriesForScope,
   createMemoryBook,
   dispatchMemoryBookGeneration,
   fetchExampleCoverAssetKey,
   fetchMemoryBooksForChild,
+  fetchMemoryBooksForFamily,
   type MemoryBookListRow,
 } from '@/services/memory-books';
 import {
@@ -53,6 +58,15 @@ interface UseMemoryBooksParams {
   familyId: string | null | undefined;
   childId: string | undefined;
   dateOfBirth: string | null | undefined;
+  // Supplied by a caller that recomputes it (Keepsakes, on focus); otherwise
+  // frozen for this mount.
+  todayIso?: string;
+}
+
+const BOOK_POLL_INTERVAL_MS = 4000;
+
+function hasActiveBook(rows: readonly MemoryBookListRow[] | undefined): boolean {
+  return (rows ?? []).some((row) => row.status === 'queued' || row.status === 'generating');
 }
 
 /** Locked design point 4: an existing row (any non-failed status) always
@@ -61,7 +75,7 @@ interface UseMemoryBooksParams {
  * see docs/features/memory-book-generation.md), prefer an active
  * (queued/generating) one, then ready, then the most recent failed one --
  * so a long-past failure never outranks a book actually in flight or done. */
-function pickRelevantBook(matches: MemoryBookListRow[]): MemoryBookListRow | null {
+export function pickRelevantBook(matches: MemoryBookListRow[]): MemoryBookListRow | null {
   const active = matches.find((b) => b.status === 'queued' || b.status === 'generating');
   if (active) return active;
   const ready = matches.find((b) => b.status === 'ready');
@@ -69,12 +83,104 @@ function pickRelevantBook(matches: MemoryBookListRow[]): MemoryBookListRow | nul
   return matches.find((b) => b.status === 'failed') ?? null;
 }
 
-export function useMemoryBooks({ familyId, childId, dateOfBirth }: UseMemoryBooksParams) {
-  const { user } = useAuth();
+/**
+ * One status row per scope option for a child: the option, its most relevant
+ * existing book (if any), and the derived display status. Pure -- shared by
+ * useMemoryBooks (the create/retry flow) and the Keepsakes shelves, which
+ * derive rows from the family-wide books query.
+ */
+export function buildMemoryBookRows(
+  scopeOptions: readonly MemoryBookScopeOption[],
+  books: readonly MemoryBookListRow[],
+  eligibility: Record<string, number | null> = {},
+  dispatchErrors: Record<string, string> = {},
+  pendingKeys: Record<string, boolean> = {},
+): MemoryBookScopeRow[] {
+  return scopeOptions.map((option) => {
+    const key = memoryBookScopeKey(option);
+    const book = pickRelevantBook(books.filter((b) => memoryBookMatchesScope(b, option)));
+    const eligibleCount = eligibility[key] ?? null;
 
-  // Stable for the lifetime of the mounted picker -- re-evaluating "today"
-  // on every render would let scope options quietly grow mid-session.
-  const [todayIso] = useState(() => getLocalTodayIso());
+    let status: MemoryBookDisplayStatus;
+    let disabledReason: string | null = null;
+
+    if (book?.status === 'queued' || book?.status === 'generating') {
+      status = 'in_progress';
+    } else if (book?.status === 'ready') {
+      status = 'ready';
+    } else if (book?.status === 'failed') {
+      status = 'failed';
+    } else {
+      const reason = eligibleCount === null ? null : thinPeriodReason(eligibleCount);
+      status = reason ? 'thin' : 'available';
+      disabledReason = reason;
+    }
+
+    return {
+      key,
+      option,
+      book,
+      status,
+      eligibleCount,
+      disabledReason,
+      dispatchError: dispatchErrors[key] ?? null,
+      isPending: Boolean(pendingKeys[key]),
+    };
+  });
+}
+
+/**
+ * Every book in the family from ONE query (Keepsakes,
+ * docs/plans/timeline-calendar-keepsakes.md C2), grouped by child. Polls
+ * every 4s only while a book is queued/generating AND `isFocused` -- the tab
+ * never unmounts, so the focus gate is what stops a backgrounded tab polling.
+ */
+export function useFamilyMemoryBooks({
+  familyId,
+  isFocused,
+}: {
+  familyId: string | null | undefined;
+  isFocused: boolean;
+}) {
+  const query = useQuery({
+    queryKey: familyMemoryBooksQueryKey(familyId),
+    queryFn: async () => {
+      const { data, error } = await fetchMemoryBooksForFamily(familyId!);
+      if (error) throw new Error(error.message);
+      return data ?? [];
+    },
+    enabled: Boolean(familyId),
+    refetchInterval: (q) => (isFocused && hasActiveBook(q.state.data) ? BOOK_POLL_INTERVAL_MS : false),
+  });
+
+  const booksByChild = useMemo(() => {
+    const map = new Map<string, MemoryBookListRow[]>();
+    for (const book of query.data ?? []) {
+      if (!book.child_id) continue;
+      const list = map.get(book.child_id) ?? [];
+      list.push(book);
+      map.set(book.child_id, list);
+    }
+    return map;
+  }, [query.data]);
+
+  return {
+    booksByChild,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    refetch: query.refetch,
+  };
+}
+
+export function useMemoryBooks({ familyId, childId, dateOfBirth, todayIso: todayIsoParam }: UseMemoryBooksParams) {
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+
+  // Stable for the lifetime of the mounted picker unless the caller supplies
+  // it -- re-evaluating "today" on every render would let scope options
+  // quietly grow mid-session.
+  const [frozenTodayIso] = useState(() => getLocalTodayIso());
+  const todayIso = todayIsoParam ?? frozenTodayIso;
   const scopeOptions = useMemo(
     () => buildMemoryBookScopeOptions(dateOfBirth ?? null, todayIso),
     [dateOfBirth, todayIso],
@@ -92,19 +198,22 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth }: UseMemoryBook
     // visible". React Query stops calling refetchInterval once this query
     // has no observers (the picker screen unmounted), so no separate
     // visibility/focus wiring is needed here.
-    refetchInterval: (query) => {
-      const rows = query.state.data ?? [];
-      const hasActive = rows.some((row) => row.status === 'queued' || row.status === 'generating');
-      return hasActive ? 4000 : false;
-    },
+    refetchInterval: (query) => (hasActiveBook(query.state.data) ? BOOK_POLL_INTERVAL_MS : false),
   });
+
+  // Every write here also refreshes Keepsakes' family-wide books query, so a
+  // new/retried book shows on its shelf without waiting for a poll.
+  const refetchBooks = useCallback(async () => {
+    await booksQuery.refetch();
+    void queryClient.invalidateQueries({ queryKey: familyMemoryBooksQueryKey(familyId) });
+  }, [booksQuery, familyId, queryClient]);
 
   // Locked design point 3: "one cheap count query at picker-open" per
   // scope. Counted once (long staleTime) rather than kept live -- the
   // count is a coarse motivational signal, not the generation input itself
   // (the server re-derives eligibility fresh at generation time).
   const eligibilityQuery = useQuery({
-    queryKey: memoryBookEligibilityQueryKey(familyId, childId, dateOfBirth),
+    queryKey: memoryBookEligibilityQueryKey(familyId, childId, dateOfBirth, todayIso),
     queryFn: async () => {
       const entries = await Promise.all(scopeOptions.map(async (option) => {
         const { data } = await countEligibleMemoriesForScope(
@@ -164,8 +273,8 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth }: UseMemoryBook
   }, []);
 
   const refresh = useCallback(() => {
-    void booksQuery.refetch();
-  }, [booksQuery]);
+    void refetchBooks();
+  }, [refetchBooks]);
 
   /** Both the initial "Generate" tap AND the "Retry" tap on a `failed` row
    * (locked design point 5: retry creates a fresh queued row + dispatch;
@@ -192,7 +301,7 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth }: UseMemoryBook
           // Someone (or a double-tap) already claimed this exact scope --
           // refetch and let the existing row's own status render. Never an
           // error wall for this case (locked design point 5).
-          await booksQuery.refetch();
+          await refetchBooks();
           return;
         }
         setDispatchErrors((prev) => ({ ...prev, [key]: insertResult.error?.message ?? 'Could not start your book.' }));
@@ -201,17 +310,17 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth }: UseMemoryBook
 
       const bookId = insertResult.data.id;
       // Show the new queued row immediately, before waiting on dispatch.
-      await booksQuery.refetch();
+      await refetchBooks();
 
       const dispatchResult = await dispatchMemoryBookGeneration(bookId);
       if (dispatchResult.error) {
         setDispatchErrors((prev) => ({ ...prev, [key]: dispatchResult.error!.message }));
       }
-      await booksQuery.refetch();
+      await refetchBooks();
     } finally {
       setPending(key, false);
     }
-  }, [familyId, childId, user, booksQuery, clearError, setPending]);
+  }, [familyId, childId, user, refetchBooks, clearError, setPending]);
 
   /** Re-invokes generation for a row that is already `queued` in the DB
    * but whose dispatch call itself failed (network error or non-2xx --
@@ -226,48 +335,16 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth }: UseMemoryBook
       if (dispatchResult.error) {
         setDispatchErrors((prev) => ({ ...prev, [key]: dispatchResult.error!.message }));
       }
-      await booksQuery.refetch();
+      await refetchBooks();
     } finally {
       setPending(key, false);
     }
-  }, [booksQuery, clearError, setPending]);
+  }, [refetchBooks, clearError, setPending]);
 
-  const rows: MemoryBookScopeRow[] = useMemo(() => {
-    const books = booksQuery.data ?? [];
-    const eligibility = eligibilityQuery.data ?? {};
-
-    return scopeOptions.map((option) => {
-      const key = memoryBookScopeKey(option);
-      const book = pickRelevantBook(books.filter((b) => memoryBookMatchesScope(b, option)));
-      const eligibleCount = eligibility[key] ?? null;
-
-      let status: MemoryBookDisplayStatus;
-      let disabledReason: string | null = null;
-
-      if (book?.status === 'queued' || book?.status === 'generating') {
-        status = 'in_progress';
-      } else if (book?.status === 'ready') {
-        status = 'ready';
-      } else if (book?.status === 'failed') {
-        status = 'failed';
-      } else {
-        const reason = eligibleCount === null ? null : thinPeriodReason(eligibleCount);
-        status = reason ? 'thin' : 'available';
-        disabledReason = reason;
-      }
-
-      return {
-        key,
-        option,
-        book,
-        status,
-        eligibleCount,
-        disabledReason,
-        dispatchError: dispatchErrors[key] ?? null,
-        isPending: Boolean(pendingKeys[key]),
-      };
-    });
-  }, [scopeOptions, booksQuery.data, eligibilityQuery.data, dispatchErrors, pendingKeys]);
+  const rows: MemoryBookScopeRow[] = useMemo(
+    () => buildMemoryBookRows(scopeOptions, booksQuery.data ?? [], eligibilityQuery.data ?? {}, dispatchErrors, pendingKeys),
+    [scopeOptions, booksQuery.data, eligibilityQuery.data, dispatchErrors, pendingKeys],
+  );
 
   return {
     rows,

@@ -290,6 +290,7 @@ Examples:
 - `sharing/viewer-readonly.yaml` — viewer sees timeline but no create FAB / no edit affordances
 - `timeline/jump-to-month.yaml` — pinned month label → picker → older month → anchored list with Today → back to the feed (jump steps need memories in an earlier month)
 - `timeline/calendar-view.yaml` — List/Calendar switcher → month grid → tap a day with a memory → list opened at that day → back to List (ends on List; the view choice persists per device)
+- `keepsakes/open-keepsakes.yaml` — Keepsakes tab → shelves or the one family pitch → Create a book (→ "Whose book?" when several children) → create sheet opens (no book started)
 
 ### Photo upload E2E (family profiles)
 

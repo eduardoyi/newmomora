@@ -35,11 +35,11 @@ appId: com.memora.app
 # --- Timeline tab ---
 - takeScreenshot: timeline-tab
 
-# --- Calendar tab ---
+# --- Keepsakes tab ---
 - tapOn:
-    id: tab-calendar
+    id: tab-keepsakes
 - waitForAnimationToEnd
-- takeScreenshot: calendar-tab
+- takeScreenshot: keepsakes-tab
 
 # --- Family tab ---
 - tapOn:

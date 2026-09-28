@@ -2,10 +2,10 @@ import { renderHook, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
-import { useCalendarMemoriesInRange, useOldestMemoryDate } from '@/hooks/useCalendarMemories';
+import { useCalendarMemoriesInRange } from '@/hooks/useCalendarMemories';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
-import { fetchMemoriesInDateRange, fetchOldestMemoryDate } from '@/services/memories';
+import { fetchMemoriesInDateRange } from '@/services/memories';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -17,7 +17,6 @@ jest.mock('@/hooks/use-family', () => ({
 
 jest.mock('@/services/memories', () => ({
   fetchMemoriesInDateRange: jest.fn(),
-  fetchOldestMemoryDate: jest.fn(),
 }));
 
 // useCalendarMemoriesInRange mounts useGenerationStatusPolling, which (via
@@ -33,9 +32,6 @@ const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedFetchMemoriesInDateRange = fetchMemoriesInDateRange as jest.MockedFunction<
   typeof fetchMemoriesInDateRange
->;
-const mockedFetchOldestMemoryDate = fetchOldestMemoryDate as jest.MockedFunction<
-  typeof fetchOldestMemoryDate
 >;
 
 function createWrapper() {
@@ -76,22 +72,6 @@ describe('useCalendarMemories hooks', () => {
       refetchMemberships: jest.fn(),
       justLostAccess: false,
     });
-  });
-
-  it('loads the oldest memory date for calendar extent', async () => {
-    mockedFetchOldestMemoryDate.mockResolvedValue({
-      data: '2024-02-03',
-      error: null,
-    });
-
-    const { result } = renderHook(() => useOldestMemoryDate(), { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(result.current.data).toBe('2024-02-03');
-    });
-
-    expect(mockedFetchOldestMemoryDate).toHaveBeenCalledTimes(1);
-    expect(mockedFetchOldestMemoryDate).toHaveBeenCalledWith('family-1');
   });
 
   it('loads memories only for the requested calendar date range', async () => {

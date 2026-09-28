@@ -220,10 +220,14 @@ locked shelf-redesign brief verbatim except where noted under
 
 ### Entry point
 
-Unchanged: one persistent "Memory Books" row on each child's profile screen
-(`app/(app)/family/[id]/index.tsx`), routing to
-`app/(app)/family/[id]/memory-books.tsx` (`memoryBooksRoute(memberId)` in
-`src/lib/routes.ts`).
+**Changed 2026-09-29** ([keepsakes.md](./keepsakes.md)): the shelves live in
+the **Keepsakes tab**, one per child, and `app/(app)/family/[id]/memory-books.tsx`
+is gone. Each child's profile keeps a "See {name}'s keepsakes" row →
+`app/(app)/keepsakes/[memberId].tsx` (`memoryBooksRoute(memberId)`, also the
+book-push target). Shelves read one family-wide query (`useFamilyMemoryBooks`),
+and `useMemoryBooks` now runs only inside the create/retry flow. The shelf,
+sheet and toast behavior below is unchanged; it lives in
+`src/components/memory-books/memory-books-body.tsx`.
 
 ### Scope derivation
 
@@ -252,7 +256,7 @@ wants a slim book anyway shouldn't be stopped).
 
 ### Shelf
 
-`app/(app)/family/[id]/memory-books.tsx` (full rewrite) renders one of two
+`app/(app)/family/[id]/memory-books.tsx` (full rewrite; since 2026-09-29 `memory-books-body.tsx`, see Entry point) renders one of two
 top-level states from `useMemoryBooks`' `rows`:
 
 - **Shelf state** (any scope has a book): a 2-column grid of book-cover
@@ -363,7 +367,7 @@ keyed off `memberId`, not `bookId`, today.
    conditionally — this app has no live "earliest memory date" query to
    derive `first` from yet. Documented, not a silent gap; a future change
    adding that query can fill this in (`rangeLineForRow` in
-   `memory-books.tsx`).
+   `memory-books-body.tsx`).
 5. `BookToast`'s entrance animation uses Reanimated's `FadeIn`, not
    `FadeInDown` as the brief suggested — `jest.setup.ts`'s shared
    Reanimated mock (outside this change's file ownership) only exports

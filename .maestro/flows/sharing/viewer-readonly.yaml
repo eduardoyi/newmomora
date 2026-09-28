@@ -37,12 +37,29 @@ appId: com.memora.app
 - assertNotVisible:
     id: new-memory-fab
 
-# Calendar applies the same role gate; viewers can browse it but cannot open
-# the new-memory flow from its FAB.
+# The Timeline's Calendar view applies the same role gate: viewers can
+# browse the month grid but there's no create FAB. Switch back to List so
+# the saved view doesn't leak into later flows.
 - tapOn:
-    text: "Calendar"
+    id: timeline-view-calendar
+- extendedWaitUntil:
+    visible:
+      id: calendar-grid
+    timeout: 15000
 - assertNotVisible:
     id: new-memory-fab
+- tapOn:
+    id: timeline-view-list
+
+# Keepsakes: viewers never see books or the Create a book CTA.
+- tapOn:
+    id: tab-keepsakes
+- extendedWaitUntil:
+    visible:
+      id: keepsakes-viewer-empty
+    timeout: 15000
+- assertNotVisible:
+    id: memory-books-create
 
 # Viewers get the trimmed Settings screen: no journaling reminder, invites,
 # family settings, or photo import. Members stays (report/block safety).
