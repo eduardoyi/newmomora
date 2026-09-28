@@ -27,6 +27,7 @@ import {
   buildQuotePrompt,
   buildQuoteRequestBody,
   parseQuoteResponse,
+  QUOTE_MODEL,
   type QuoteRejection,
   type QuoteSubject,
   selectQuotePool,
@@ -53,11 +54,13 @@ import {
 } from '../functions/_shared/year-film-script.ts';
 import {
   buildFrameCheckRequestBody,
+  CLAIM_CHECK_MODEL,
   FRAME_CHECK_BATCH,
   parseFrameCheckResponse,
   type VisionImage,
 } from '../functions/_shared/year-film-vision.ts';
 import { createAuthedClient, type EvalFamilyData, firstName, loadFamilies, loadFamilyData, pickChildren } from './year-film-eval-data.ts';
+import { formatUsage, recordUsage, resetUsage, usageSummary } from './year-film-eval-usage.ts';
 
 // ── CLI ──────────────────────────────────────────────────────────────────
 
@@ -74,6 +77,7 @@ interface Options {
   llm: boolean;
   vision: boolean;
   model: string;
+  visionModel: string;
   today: string;
 }
 
@@ -85,7 +89,8 @@ function parseArgs(args: string[]): Options {
     seed: 1,
     llm: true,
     vision: true,
-    model: 'gpt-5.6-sol',
+    model: QUOTE_MODEL,
+    visionModel: CLAIM_CHECK_MODEL,
     today: new Date().toISOString().slice(0, 10),
   };
   for (let i = 0; i < args.length; i += 1) {
@@ -126,6 +131,10 @@ function parseArgs(args: string[]): Options {
         break;
       case '--model':
         options.model = next ?? options.model;
+        i += 1;
+        break;
+      case '--vision-model':
+        options.visionModel = next ?? options.visionModel;
         i += 1;
         break;
       case '--today':
@@ -184,6 +193,7 @@ async function chat(body: Record<string, unknown>): Promise<string | null> {
     return null;
   }
   const payload = await response.json();
+  recordUsage(String(body.model), payload.usage);
   return payload.choices?.[0]?.message?.content ?? null;
 }
 
@@ -271,7 +281,7 @@ async function checkFrames(
   for (let i = 0; i < sendable.length; i += FRAME_CHECK_BATCH) {
     const batch = sendable.slice(i, i + FRAME_CHECK_BATCH);
     const content = await chat(
-      buildFrameCheckRequestBody(names, references, batch.map((f) => images.get(checkKey(f))!), options.model),
+      buildFrameCheckRequestBody(names, references, batch.map((f) => images.get(checkKey(f))!), options.visionModel),
     );
     if (content === null) continue;
     for (const [index, check] of parseFrameCheckResponse(content, batch.length, idByName)) {
@@ -587,6 +597,11 @@ async function emit(slug: string, label: string, script: FilmScript, quotes: Quo
   const local = await downloadAssets([...stills, ...clips], new URL('assets/', dir));
   await Deno.writeTextFile(new URL('film-script.json', dir), JSON.stringify(script, null, 2));
   await Deno.writeTextFile(new URL('quotes.json', dir), JSON.stringify(quotes, null, 2));
+  // Vision verdicts per frame (model A/B comparisons) and this film's model cost.
+  await Deno.writeTextFile(new URL('vision-checks.json', dir), JSON.stringify({ model: options.visionModel, checks: Object.fromEntries(vision.checks ?? []) }, null, 2));
+  await Deno.writeTextFile(new URL('usage.json', dir), JSON.stringify(usageSummary(), null, 2));
+  console.log(formatUsage(`${slug} F1 models`));
+  resetUsage();
   await Deno.writeTextFile(new URL('storyboard.html', dir), renderStoryboard(script, label, quotes, vision, { local, textById }));
   index.push({ slug, title: script.title, label, seconds: script.estimatedSeconds, scenes: script.scenes.length, frames: script.stats.frames });
   const m = script.stats.mix;

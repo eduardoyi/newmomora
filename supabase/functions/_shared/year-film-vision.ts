@@ -58,6 +58,17 @@ export function buildFrameCheckSystemPrompt(childNames: string[]): string {
   ].join('\n');
 }
 
+/** Claim checks (F1): frames that back what the film says on screen — the
+ * award winner, each child's chapter moments, then/now, whose voice clip it
+ * is. GPT-6 Sol: on 85 frames Luna agreed with Sol on 88–91% of main
+ * subjects (Sol vs Sol: 95%) and swapped the siblings once (Sol: never). */
+export const CLAIM_CHECK_MODEL = 'gpt-6-sol';
+
+/** Burst frame checks (F2): keep/drop only, 25–65 frames per film. GPT-6
+ * Luna — 20× cheaper per token, and it matched Sol on every safety verdict
+ * (owner, 2026-09-28: split the vision work by what it decides). */
+export const FRAME_CHECK_MODEL = 'gpt-6-luna';
+
 export function buildFrameCheckRequestBody(
   childNames: string[],
   references: (VisionImage & { name: string })[],

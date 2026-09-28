@@ -49,11 +49,13 @@ import {
   buildFrameCheckRequestBody,
   describeCheck,
   FRAME_CHECK_BATCH,
+  FRAME_CHECK_MODEL,
   type FrameCheck,
   burstFrameVerdict,
   parseFrameCheckResponse,
   type VisionImage,
 } from '../functions/_shared/year-film-vision.ts';
+import { formatUsage, recordUsage, resetUsage, usageSummary } from './year-film-eval-usage.ts';
 import { buildVoiceCheckRequestBody, isVoiceVerified, parseVoiceCheck, type VoiceCheck } from '../functions/_shared/year-film-voice.ts';
 
 // ── CLI ──────────────────────────────────────────────────────────────────
@@ -67,7 +69,7 @@ const fromRun = argValue('--from');
 const onlyFilms = args.flatMap((a, i) => (a === '--film' && args[i + 1] ? [args[i + 1]] : []));
 const voiceChecks = !args.includes('--no-voice');
 const frameChecks = !args.includes('--no-frame-check');
-const VISION_MODEL = 'gpt-5.6-sol';
+const VISION_MODEL = argValue('--vision-model') ?? FRAME_CHECK_MODEL;
 if (!fromRun) throw new Error('Pass --from <F1 storyboard run id>');
 
 const SCRIPT_RUNS = new URL('./eval-output/year-film-script/', import.meta.url);
@@ -100,6 +102,7 @@ async function chat(body: Record<string, unknown>): Promise<string | null> {
     return null;
   }
   const payload = await response.json();
+  recordUsage(String(body.model), payload.usage);
   return payload.choices?.[0]?.message?.content ?? null;
 }
 
@@ -563,6 +566,9 @@ for (const slug of slugs) {
       `${count('voice')} voice excerpts · frame check ${checkedCount} checked, ${new Set(removals.map((r) => r.file)).size} removed · ` +
       `${warnings.length} warnings${soundNote ? ` · ${soundNote}` : ''}`,
   );
+  await Deno.writeTextFile(new URL('usage.json', filmDir), JSON.stringify(usageSummary(), null, 2));
+  console.log(formatUsage(`${slug} F2 models`));
+  resetUsage();
 }
 console.log(`\nDone. ${FILM_DATA.pathname}`);
 

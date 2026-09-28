@@ -1036,8 +1036,20 @@ films** (they arrive continuously, so they lose nothing by waiting).
 ## 11. Cost & load (to be replaced by F5 numbers)
 
 - **No new image generation.** Films reuse existing illustrations and portraits.
-- AI: one small quote-pick call per film (~cents, often skipped when a book
-  outline exists).
+- **AI per film (measured 2026-09-28, eval scripts log usage):** the quote pick
+  (`QUOTE_MODEL` gpt-6-sol), the claim checks at build time
+  (`CLAIM_CHECK_MODEL` gpt-6-sol — award, chapters, then/now, voice subject),
+  and the burst keep/drop checks at asset time (`FRAME_CHECK_MODEL`
+  gpt-6-luna), plus a few seconds of `gpt-audio-1.5` for voice checks
+  (unpriced). Build step: Enzo Y4 $0.030–0.045, August $0.027–0.030,
+  Nuestro 2025 $0.050–0.094; the asset step on Luna adds < $0.01. ≈ $0.03–0.10
+  per film, ≈ $0.5–1.5 per family per year (~16 films).
+- **Why the split** (owner, 2026-09-28): on 85 frames Luna matched Sol on
+  every safety verdict and 89–93% of smile calls (Sol vs Sol: 92%), but only
+  88–91% of main subjects (Sol vs Sol: 95%) and swapped the siblings once —
+  and the subject verdict backs what the film claims on screen. Luna-only
+  would be ≈ $0.004–0.011 per build step. Persisting checks (P1) keeps
+  re-renders from paying again.
 - Render: one per film plus edits. Expected order of magnitude: cents per film.
   Video clips raise decode cost per render; F5 measures it.
 - **Monthly volume:** up to 12 monthly + 1 year-end + one birthday per child
