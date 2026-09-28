@@ -84,7 +84,8 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 | `looking_back_package_completed` | `package_type`, `memory_count`, `frame_count` | Looking Back viewer completion |
 | `looking_back_memory_opened` | `package_type`, `memory_type` | Looking Back viewer → memory detail |
 | `looking_back_package_replayed` | `package_type`, `memory_count` | Looking Back completion replay |
-| `timeline_jumped` | `source` (`month_picker`/`today_button`), `months_back` (0 = current month) | Timeline pinned bar: month-picker pick or Today tap (never a date) |
+| `timeline_jumped` | `source` (`month_picker`/`today_button`/`calendar_day`), `months_back` (0 = current month) | Timeline pinned bar: month-picker pick or Today tap; Calendar view: day tile tap (never a date) |
+| `timeline_view_switched` | `view` (`list`/`calendar`) | Timeline pinned bar's List/Calendar switcher |
 
 ### Gallery import (aggregate, content-free)
 

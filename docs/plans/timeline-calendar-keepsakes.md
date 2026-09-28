@@ -1,6 +1,6 @@
 # Timeline + Calendar merge, Keepsakes tab (Plan)
 
-**Status:** Phase A implemented 2026-09-28 (awaiting device verification); B and C not started. Plan hardened (2 review rounds).
+**Status:** Phase A shipped 2026-09-28 (5f70380); Phase B implemented 2026-09-29; C not started. Plan hardened (2 review rounds).
 **Date:** 2026-09-28
 **Owner decisions:** 2026-09-28 discussion (see §2)
 **Feature docs to update in the same PRs:** `docs/features/calendar.md` (becomes the
@@ -299,6 +299,22 @@ across DST). Component: tile states (single/many/text/audio/hidden/blocked).
 Port `calendar.audio-stamp.test.tsx` → `memory-stamp` test and
 `calendar.role-gating.test.tsx` → grid role gating. Maestro
 `timeline/calendar-view.yaml`: switch → tap a day → that memory is first.
+
+**B — as built (2026-09-29), deviations from the steps above:**
+- The grid uses `fetchMemoriesInDateRange` itself, now paginated past 1000
+  rows, rather than a separate `fetchMemoryStampsInDateRange`. The existing
+  fetch was already light (`*` + media + preview tags, no engagement), so a
+  second fetcher would only have duplicated it. The Calendar tab benefits too.
+- The grid's month range comes from the month-picker options (month counts),
+  not `useOldestMemoryDate`.
+- The switcher is icon-only (List / CalendarDays from lucide, with
+  accessibility labels). Labels didn't fit a 375pt bar next to the month
+  label, Today, search and the bell.
+- Tapping a day switches to List for the session but doesn't overwrite the
+  saved view preference.
+- Tests: `calendar.audio-stamp` / `calendar.role-gating` stay in place until
+  C deletes the tab. Their grid equivalents live in `memory-stamp.test.tsx`
+  and `calendar-month-grid.test.tsx`.
 
 ### Phase C — Keepsakes tab, remove Calendar tab
 

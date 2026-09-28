@@ -740,6 +740,8 @@ export async function fetchOldestMemoryDate(familyId: string): Promise<{
   return { data: data?.memory_date ?? null, error: null };
 }
 
+const MEMORY_RANGE_PAGE_SIZE = 1000;
+
 export async function fetchMemoriesInDateRange(
   familyId: string,
   startDate: string,
@@ -768,20 +770,34 @@ export async function fetchMemoriesInDateRange(
     };
   }
 
-  const { data, error } = await supabase
-    .from('memories')
-    .select('*')
-    .eq('family_id', familyId)
-    .gte('memory_date', startDate)
-    .lte('memory_date', endDate)
-    .order('memory_date', { ascending: false })
-    .order('created_at', { ascending: false });
+  // Paged past PostgREST's default 1000-row cap: the Timeline month grid
+  // fetches three months at a time, which a heavy gallery-import family can
+  // exceed (docs/plans/timeline-calendar-keepsakes.md B2). `id` breaks
+  // same-timestamp ties so pages never overlap or skip.
+  const memories: Memory[] = [];
+  for (let from = 0; ; from += MEMORY_RANGE_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('memories')
+      .select('*')
+      .eq('family_id', familyId)
+      .gte('memory_date', startDate)
+      .lte('memory_date', endDate)
+      .order('memory_date', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(from, from + MEMORY_RANGE_PAGE_SIZE - 1);
 
-  if (error) {
-    return { data: null, error: mapSupabaseError(error) };
+    if (error) {
+      return { data: null, error: mapSupabaseError(error) };
+    }
+
+    const batch = data ?? [];
+    memories.push(...batch);
+    if (batch.length < MEMORY_RANGE_PAGE_SIZE) {
+      break;
+    }
   }
 
-  const memories = data ?? [];
   const memoryIds = memories.map((memory) => memory.id);
   const mediaMap = await fetchMediaForMemories(memoryIds);
 

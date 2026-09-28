@@ -2087,6 +2087,7 @@ describe('memories service integration', () => {
     ]);
   });
 
+
   it('fetchOldestMemoryDate loads only the earliest memory date', async () => {
     const memoriesBuilder = createQueryBuilder({
       data: { memory_date: '2024-01-09' },
@@ -2377,6 +2378,24 @@ describe('memories service integration', () => {
       );
       const newest = await fetchAnchoredMemoriesPage('family-1', { anchorDate: '2025-03-31', limit: 40 });
       expect(newest.data?.prevCursor).toBeNull();
+    });
+
+    it('fetchMemoriesInDateRange pages past the 1000-row cap (Timeline month grid)', async () => {
+      const fullBatch = Array.from({ length: 1000 }, (_, index) =>
+        memoryRow(`m${index}`, '2025-03-10', '2025-03-10T01:00:00.000Z'));
+      const first = createQueryBuilder({ data: fullBatch, error: null });
+      const second = createQueryBuilder({ data: [memoryRow('last', '2025-03-01', '2025-03-01T01:00:00.000Z')], error: null });
+      mockMemoriesBuilders(first, second);
+
+      const { data, error } = await fetchMemoriesInDateRange('family-1', '2025-02-01', '2025-04-30');
+
+      expect(error).toBeNull();
+      expect(first.range).toHaveBeenCalledWith(0, 999);
+      expect(second.range).toHaveBeenCalledWith(1000, 1999);
+      // Stable tie-break so pages never overlap or skip.
+      expect(first.order).toHaveBeenCalledWith('id', { ascending: true });
+      expect(data).toHaveLength(1001);
+      expect(data?.at(-1)?.id).toBe('last');
     });
 
     it('fetchMemoryMonthDates pages past the 1000-row cap', async () => {

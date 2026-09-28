@@ -59,5 +59,6 @@ export function useMemoryMonthCounts(isUserBlocked: (userId: string) => boolean)
     counts,
     isLoaded: query.data !== undefined,
     refreshIfStale,
+    refresh: refetch,
   };
 }

@@ -71,12 +71,39 @@ jest.mock('@/components/memory-fab', () => {
 jest.mock('@/components/pending-memory-uploads-banner', () => ({ PendingMemoryUploadsBanner: () => null }));
 jest.mock('@/components/looking-back/package-rail', () => ({ LookingBackPackageRail: () => null }));
 jest.mock('@/components/family-activity-sheet', () => ({ FamilyActivitySheet: () => null }));
+// The grid itself is covered by calendar-month-grid.test.tsx; here a stub
+// records its props and exposes the imperative scrollToMonth handle.
+const mockScrollToMonth = jest.fn();
+const mockGridProps = jest.fn();
+jest.mock('@/components/timeline/calendar-month-grid', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const React = require('react');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Pressable, View } = require('react-native');
+  return {
+    CalendarMonthGrid: (props: {
+      ref: unknown;
+      onDayPress: (iso: string) => void;
+      onTopMonthChange: (key: string) => void;
+    }) => {
+      mockGridProps(props);
+      React.useImperativeHandle(props.ref, () => ({ scrollToMonth: mockScrollToMonth }));
+      return React.createElement(View, { testID: 'calendar-grid' },
+        React.createElement(Pressable, { testID: 'stub-day-march', onPress: () => props.onDayPress('2025-03-20') }),
+        React.createElement(Pressable, { testID: 'stub-scroll-march', onPress: () => props.onTopMonthChange('2025-03') }),
+      );
+    },
+  };
+});
 
 // eslint-disable-next-line import/first
 import TimelineScreen from '../../app/(app)/(tabs)/timeline';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { router: mockRouter } = require('expo-router') as { router: { push: jest.Mock } };
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const asyncStorageModule = require('@react-native-async-storage/async-storage');
+const AsyncStorage = (asyncStorageModule.default ?? asyncStorageModule) as { getItem: jest.Mock; setItem: jest.Mock };
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { trackEvent: mockTrackEvent } = require('@/services/analytics') as { trackEvent: jest.Mock };
 
@@ -232,5 +259,87 @@ describe('Timeline month jump', () => {
     });
 
     expect(lastAnchorDate()).toBeNull();
+  });
+});
+
+// Calendar view (docs/plans/timeline-calendar-keepsakes.md Phase B).
+describe('Timeline Calendar view', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    AsyncStorage.getItem.mockResolvedValue(null);
+    mockMonthCounts.mockReturnValue({ [currentMonthKey]: 1, '2025-03': 4 });
+    mockUseMemories.mockImplementation((options: { anchorDate: string | null }) =>
+      hookResult(options.anchorDate ? [marchMemory] : [recentMemory]),
+    );
+  });
+
+  async function switchToCalendar(screen: ReturnType<typeof renderTimeline>) {
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('timeline-view-calendar'));
+    });
+  }
+
+  it('swaps the list for the grid, opening at the month the list shows, and remembers the choice', async () => {
+    const screen = renderTimeline();
+    expect(screen.getByTestId('timeline-memory-list')).toBeTruthy();
+
+    await switchToCalendar(screen);
+
+    expect(screen.getByTestId('calendar-grid')).toBeTruthy();
+    expect(screen.queryByTestId('timeline-memory-list')).toBeNull();
+    expect(mockGridProps).toHaveBeenLastCalledWith(expect.objectContaining({ initialMonthKey: currentMonthKey }));
+    expect(screen.getByTestId('timeline-view-calendar').props.accessibilityState).toMatchObject({ selected: true });
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith('timeline.view', 'calendar');
+    expect(mockTrackEvent).toHaveBeenCalledWith('timeline_view_switched', { view: 'calendar' });
+  });
+
+  it('opens in Calendar when that was the saved view', async () => {
+    AsyncStorage.getItem.mockResolvedValue('calendar');
+    const screen = renderTimeline();
+    expect(await screen.findByTestId('calendar-grid')).toBeTruthy();
+  });
+
+  it('opens the list at a tapped day without overwriting the saved view', async () => {
+    const screen = renderTimeline();
+    await switchToCalendar(screen);
+    AsyncStorage.setItem.mockClear();
+
+    fireEvent.press(screen.getByTestId('stub-day-march'));
+
+    expect(screen.getByTestId('timeline-memory-list')).toBeTruthy();
+    expect(lastAnchorDate()).toBe('2025-03-20');
+    expect(screen.getByTestId('timeline-today-button')).toBeTruthy();
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+    expect(mockTrackEvent).toHaveBeenCalledWith('timeline_jumped', {
+      source: 'calendar_day',
+      months_back: expect.any(Number),
+    });
+  });
+
+  it('tracks the grid\'s top month in the pinned label, with Today scrolling back to this month', async () => {
+    const screen = renderTimeline();
+    await switchToCalendar(screen);
+    expect(screen.queryByTestId('timeline-today-button')).toBeNull();
+
+    fireEvent.press(screen.getByTestId('stub-scroll-march'));
+    expect(screen.getByText('March 2025')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('timeline-today-button'));
+    expect(mockScrollToMonth).toHaveBeenCalledWith(currentMonthKey);
+  });
+
+  it('makes a month pick scroll the grid instead of anchoring the list', async () => {
+    const screen = renderTimeline();
+    await switchToCalendar(screen);
+    const anchorBefore = lastAnchorDate();
+
+    fireEvent.press(screen.getByTestId('timeline-month-trigger'));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('month-picker-option-2025-03-01'));
+    });
+
+    expect(mockScrollToMonth).toHaveBeenCalledWith('2025-03', false);
+    expect(lastAnchorDate()).toBe(anchorBefore);
+    expect(screen.getByTestId('calendar-grid')).toBeTruthy();
   });
 });

@@ -289,6 +289,7 @@ Examples:
 - `family-relationships/edit-role.yaml` — set Grandparent + side in Edit person, assert the profile subtitle, then clear it again; `family-relationships/whos-who.yaml` — open the Who's who card/sheet when present (read-only; confirm logic is in `src/screen-tests/whos-who.integration.test.tsx`)
 - `sharing/viewer-readonly.yaml` — viewer sees timeline but no create FAB / no edit affordances
 - `timeline/jump-to-month.yaml` — pinned month label → picker → older month → anchored list with Today → back to the feed (jump steps need memories in an earlier month)
+- `timeline/calendar-view.yaml` — List/Calendar switcher → month grid → tap a day with a memory → list opened at that day → back to List (ends on List; the view choice persists per device)
 
 ### Photo upload E2E (family profiles)
 

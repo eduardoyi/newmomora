@@ -161,6 +161,44 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
     >30 min background. On the feed, Today appears once scrolled past one
     screen and scrolls to the top.
     - Analytics: `timeline_jumped { source, months_back }`.
+- **Calendar view (2026-09-29, [plan](../plans/timeline-calendar-keepsakes.md)
+  Phase B):**
+  - **Switcher.** The pinned bar has an icon-only List/Calendar switcher
+    (`timeline-view-list`/`timeline-view-calendar`, labelled for screen
+    readers). The choice persists per device in AsyncStorage `timeline.view`
+    (`src/utils/timeline-view-preference.ts`, try/catch → List). A switch that
+    beats the stored read wins.
+  - **Only one view is mounted**, so the list query and the grid's range
+    query never both run.
+  - **Grid.** `CalendarMonthGrid` (`src/components/timeline/calendar-month-grid.tsx`)
+    shows months newest-first over the same range as the month picker
+    (`buildGridMonths(getTimelineMonthOptions(...))`), each a Monday-start
+    7-column grid.
+    - Months have exact heights (`src/utils/calendar-grid.ts`), so
+      `getItemLayout` is exact and jumps are a single `scrollToIndex`.
+    - Data: `useCalendarMemoriesInRange` over the visible months ± 1, the same
+      `calendar-memories` cache, patching and status polling as the Calendar
+      tab. `fetchMemoriesInDateRange` now pages past 1000 rows.
+  - **Tiles.**
+    - A day with memories shows its newest memory through the shared
+      `MemoryStamp` (`src/components/memory-stamp.tsx`), with a day-number chip
+      and "+N" for the other visible memories that day. Blocked authors are
+      excluded; reported memories count but show a blank tile.
+    - A reported illustration renders a plain tile, with no inline Show
+      button; the list it opens has the reveal.
+    - Empty days are plain cells, not buttons. Today is outlined and future
+      days are dimmed. There are no create affordances.
+  - **Navigation.**
+    - Tapping a day opens the list anchored at that day (today → the feed) and
+      switches to List for the session without overwriting the saved choice.
+    - Switching to Calendar opens the grid at the month the list is showing.
+      Switching back keeps the list's anchor.
+    - In Calendar view the pinned label follows the grid's top month. Today
+      appears once off the current month and scrolls back to it, and so does a
+      Timeline tab re-press. A month pick scrolls the grid without changing the
+      list's anchor.
+  - **Analytics:** `timeline_view_switched { view }`, and
+    `timeline_jumped { source: 'calendar_day' }`.
 - **Realtime (2026-07-15, Workstream D):** `public.memories` is added to the
   `supabase_realtime` publication
   (`supabase/migrations/20260715150000_memories_realtime_publication.sql`,

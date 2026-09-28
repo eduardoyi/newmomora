@@ -1,5 +1,7 @@
 # Calendar ribbon
 
+> **Being replaced.** The Timeline's Calendar view (a month grid, [memories.md](./memories.md) → "Calendar view", plan [timeline-calendar-keepsakes.md](../plans/timeline-calendar-keepsakes.md) Phase B) supersedes this tab; Phase C removes it. Until then both exist.
+
 Windowed, day-per-row vertical timeline of memories, scrolling backward from today, with a month/year picker to jump directly to any covered month.
 
 **Status:** `done`
@@ -76,7 +78,7 @@ No new tables, columns, or storage. The calendar is a read-oriented view over th
 |-------|-------|-----------------|
 | Route | `app/(app)/(tabs)/calendar.tsx` | Screen: week `FlatList`, header trigger + visible-month label, Today button, scroll-jump wiring |
 | Hooks | `src/hooks/useCalendarMemories.ts` (`useCalendarMemoriesInRange`, `useOldestMemoryDate`) | Windowed range fetch + oldest-memory-date bound |
-| Components | `src/components/calendar-month-picker-sheet.tsx` (`CalendarMonthPickerSheet`) | Month/year picker bottom sheet |
+| Components | `src/components/calendar-month-picker-sheet.tsx` (`CalendarMonthPickerSheet`), `src/components/memory-stamp.tsx` (`MemoryStamp`, shared with the Timeline month grid since 2026-09-29) | Month/year picker bottom sheet; day stamp |
 | Utils | `src/utils/calendar.ts` | Pure week-building, fetch-range, month-options, and jump-index math (all unit-tested, no React) |
 | Services | `src/services/memories.ts` (`fetchMemoriesInDateRange`, `fetchOldestMemoryDate`) | Supabase queries |
 
@@ -89,7 +91,8 @@ No new tables, columns, or storage. The calendar is a read-oriented view over th
 
 **Safe to extend**
 
-- Add new stamp types to `MemoryStamp` in `calendar.tsx` (mirrors `memory_type`/media-kind branching already there).
+- Add new stamp types to `MemoryStamp` in `src/components/memory-stamp.tsx` (mirrors `memory_type`/media-kind branching already there). It also renders the Timeline's Calendar-view tiles, so check both surfaces.
+- `fetchMemoriesInDateRange` pages past PostgREST's 1000-row cap (`.range()` with an `id` tie-break) because the Timeline month grid fetches three months at a time. Keep that loop if you change the query.
 - Add new picker entry points by reusing `getMonthJumpWeekIndex(referenceDate, year, month)` for the target week index and the `handleSelectMonth` shape: `setVisibleWeekRange` (reset the fetch window) → `armJumpCorrection(targetIndex, estimatedOffset)` (pixel-anchored settle-and-correct) → `scrollToIndex`. Jumps to the exact top should instead follow `handleScrollToToday`: `scrollToOffset(0)` with no correction pass.
 - Adjust the Today button's visibility threshold (`TODAY_BUTTON_VISIBLE_THRESHOLD` in `calendar.tsx`, currently `0`) if product wants it to appear later, e.g. only once fully off "last week" too (`> 1`).
 

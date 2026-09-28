@@ -1,4 +1,3 @@
-import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -17,22 +16,17 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { seedFromKey } from '@/components/audio/audio-seed';
-import { SoundTile } from '@/components/audio/sound-tile';
 import { CalendarMonthPickerSheet } from '@/components/calendar-month-picker-sheet';
 import { MemoryFab } from '@/components/memory-fab';
+import { MemoryStamp } from '@/components/memory-stamp';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
 import { useCalendarMemoriesInRange, useOldestMemoryDate } from '@/hooks/useCalendarMemories';
 import { useFamily } from '@/hooks/use-family';
 import { useContentSafety } from '@/hooks/useContentSafety';
-import { useMediaUrl } from '@/hooks/useMediaUrls';
-import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
 import { memoryDetailRoute, newMemoryRoute } from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
-import { mediaImageSource } from '@/utils/media-image-source';
-import { resolvePreferredCoverKey, resolveVideoPosterKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
   buildCalendarWeekOffsets,
@@ -74,139 +68,6 @@ const TODAY_BUTTON_ENTERING = FadeIn.duration(160);
 type RibbonCalendarDay = CalendarDay & {
   memory: MemoryWithTags | undefined;
 };
-
-function MemoryStamp({
-  memory,
-  isIllustrationHidden,
-  onShowIllustration,
-}: {
-  memory: MemoryWithTags;
-  isIllustrationHidden: boolean;
-  onShowIllustration: () => void;
-}) {
-  const emo = getEmotionColors(memory.emotion);
-  const isMedia = memory.memory_type === 'media';
-  const coverAsset = memory.mediaAssets[0];
-  const isVideo = coverAsset ? coverAsset.content_type.startsWith('video/') : isMedia && memory.media_content_type?.startsWith('video/');
-
-  const { url: illustrationUrl } = useMediaUrl(
-    memory.memory_type === 'text_illustration' && !isIllustrationHidden
-      ? (memory.illustration_key ?? null)
-      : null,
-    memory.updated_at,
-  );
-  // Prefers the derived preview key (Workstream C6); falls back to the
-  // original when absent (legacy row, no-upscale guard, failed upload).
-  // Named so the same key that drove the fetch also drives the expo-image
-  // cacheKey below (Workstream O5) -- keying on anything else would pin the
-  // cache to a key that isn't actually what's rendered.
-  const photoMediaKey = isMedia && !isVideo ? resolvePreferredCoverKey(coverAsset, memory.media_key) : null;
-  const { url: mediaUrl } = useMediaUrl(photoMediaKey, memory.updated_at);
-  const posterKey = isVideo ? resolveVideoPosterKey(coverAsset) : null;
-  const { url: posterUrl } = useMediaUrl(posterKey, memory.updated_at);
-  const { url: videoUrl } = useMediaUrl(
-    // Only fetch the actual video file when there's no stored poster --
-    // avoids a full ranged fetch + native decode purely to render a
-    // paused-state thumbnail.
-    isVideo && !posterKey ? (coverAsset?.object_key ?? memory.media_key ?? null) : null,
-    memory.updated_at,
-  );
-  const runtimeVideoThumbnail = useVideoThumbnail(videoUrl);
-  const videoThumbnail = posterUrl ?? runtimeVideoThumbnail;
-
-  if (memory.memory_type === 'text_illustration' && isIllustrationHidden) {
-    return (
-      <Pressable
-        accessibilityLabel="Show reported AI illustration"
-        accessibilityRole="button"
-        onPress={(event) => {
-          event.stopPropagation();
-          onShowIllustration();
-        }}
-        style={[styles.stamp, styles.hiddenStamp]}
-        testID={`calendar-memory-${memory.id}-illustration-show`}
-      >
-        <Text style={styles.hiddenStampText}>Show</Text>
-      </Pressable>
-    );
-  }
-
-  if (memory.memory_type === 'text_illustration' && illustrationUrl) {
-    return (
-      <Image
-        source={mediaImageSource(illustrationUrl, memory.illustration_key)}
-        style={styles.stamp}
-        contentFit="cover"
-      />
-    );
-  }
-
-  if (memory.memory_type === 'text_only') {
-    return (
-      <View style={[styles.stamp, { backgroundColor: emo?.soft ?? colors.surface }]}>
-        <Text style={[styles.stampQuote, { color: emo?.ink ?? colors.ink3 }]}>“</Text>
-      </View>
-    );
-  }
-
-  if (memory.memory_type === 'audio') {
-    return (
-      <SoundTile
-        durationSeconds={(memory.mediaAssets[0]?.duration_ms ?? 0) / 1000}
-        emotion={memory.emotion}
-        seed={seedFromKey(memory.id)}
-        size={56}
-        testID={`calendar-memory-${memory.id}-sound`}
-      />
-    );
-  }
-
-  const displayUri = isVideo ? videoThumbnail : mediaUrl;
-  // A video without a stored poster falls back to `runtimeVideoThumbnail`, a
-  // locally-decoded frame with no R2 object identity -- only pin a cacheKey
-  // when the display bytes actually came from an R2 key (posterKey or the
-  // photo's own display key).
-  const displayKey = isVideo ? posterKey : photoMediaKey;
-  if (isMedia && displayUri) {
-    return (
-      <View style={styles.stamp}>
-        <Image source={mediaImageSource(displayUri, displayKey)} style={styles.stamp} contentFit="cover" />
-        {isVideo && (
-          <View style={styles.stampPlayOverlay}>
-            <SymbolView
-              name={{ ios: 'play.fill', android: 'play_arrow' }}
-              size={14}
-              tintColor={colors.white}
-              fallback={<Text style={{ fontSize: 12, color: colors.white }}>▶</Text>}
-            />
-          </View>
-        )}
-        {memory.mediaAssets.length > 1 && (
-          <View style={styles.stampCountBadge}>
-            <Text style={styles.stampCountText}>{memory.mediaAssets.length}</Text>
-          </View>
-        )}
-      </View>
-    );
-  }
-
-  // fallback: illustration pending or media not yet loaded
-  const isTextIllustration = memory.memory_type === 'text_illustration';
-  return (
-    <View style={[styles.stamp, { backgroundColor: isTextIllustration ? (emo?.soft ?? colors.surface) : '#ddc9a8', alignItems: 'center', justifyContent: 'center' }]}>
-      {isTextIllustration ? (
-        <Text style={styles.stampIcon}>✦</Text>
-      ) : (
-        <SymbolView
-          name={{ ios: isVideo ? 'video' : 'camera', android: isVideo ? 'videocam' : 'photo_camera' }}
-          size={20}
-          tintColor={colors.ink3}
-          fallback={<Text style={styles.stampIcon}>{isVideo ? '▶' : '📷'}</Text>}
-        />
-      )}
-    </View>
-  );
-}
 
 function RibbonDay({
   day,
@@ -930,51 +791,6 @@ const styles = StyleSheet.create({
   ribbonDateToday: {
     color: colors.primary,
   },
-  stamp: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.md,
-    flexShrink: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  stampPlayOverlay: {
-    position: 'absolute',
-    inset: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.30)',
-  },
-  stampCountBadge: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 9,
-    height: 18,
-    justifyContent: 'center',
-    position: 'absolute',
-    right: 4,
-    top: 4,
-    minWidth: 18,
-  },
-  stampCountText: {
-    color: colors.white,
-    fontFamily: fonts.sansBold,
-    fontSize: 10,
-    paddingHorizontal: 5,
-  },
-  stampIcon: {
-    fontSize: 20,
-    color: colors.ink3,
-  },
-  stampQuote: {
-    fontFamily: fonts.display,
-    fontSize: 30,
-    lineHeight: 34,
-    opacity: 0.45,
-  },
-  hiddenStamp: { backgroundColor: colors.surface },
-  hiddenStampText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 10 },
   hiddenMemoryRow: { flex: 1, justifyContent: 'center', minHeight: 56 },
   hiddenMemoryText: { color: colors.ink3, fontFamily: fonts.sansMedium, fontSize: 13 },
   ribbonText: {

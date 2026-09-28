@@ -30,6 +30,7 @@ import { ImportInviteCard } from '@/components/gallery-import/import-invite-card
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
+import { CalendarMonthGrid, type CalendarMonthGridHandle } from '@/components/timeline/calendar-month-grid';
 import { TimelineHeaderBar } from '@/components/timeline/timeline-header-bar';
 import { useFamilyActivityUnread } from '@/hooks/useFamilyActivity';
 import { useMemories } from '@/hooks/useMemories';
@@ -60,6 +61,9 @@ import {
   dismissGalleryImportInvite,
   isGalleryImportInviteDismissed,
 } from '@/utils/gallery-import-invite-dismissal';
+import { buildGridMonths } from '@/utils/calendar-grid';
+import { toIsoDate } from '@/utils/dates';
+import { loadTimelineView, saveTimelineView, type TimelineView } from '@/utils/timeline-view-preference';
 import {
   formatTimelineMonthLabel,
   getMonthAnchorDate,
@@ -379,8 +383,38 @@ export default function TimelineScreen() {
     [monthCounts.counts],
   );
   const canJumpToMonth = monthOptions.some((option) => !option.isCurrent && option.count > 0);
-  const monthLabel = formatTimelineMonthLabel(topVisibleDate ?? anchorDate ?? new Date());
-  const showTodayButton = isAnchored || isScrolledDeep;
+
+  // ── List / Calendar view (docs/plans/timeline-calendar-keepsakes.md B1) ──
+  // Only the active view is mounted, so the list query and the grid's range
+  // query never run side by side. The choice persists per device; tapping a
+  // day switches to List for this session without overwriting it.
+  const [view, setView] = useState<TimelineView>('list');
+  // A switch (or day tap) that beats the stored-preference read wins -- the
+  // late read must not flip the view back underneath the user.
+  const hasChosenViewRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    void loadTimelineView().then((saved) => {
+      if (!cancelled && !hasChosenViewRef.current) setView(saved);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const gridRef = useRef<CalendarMonthGridHandle>(null);
+  const todayIso = toIsoDate(new Date());
+  const currentMonthKey = toMonthKey(todayIso);
+  // Month the grid opens at (captured when switching in) and the month its
+  // topmost visible row is showing (drives the pinned label).
+  const [gridInitialMonthKey, setGridInitialMonthKey] = useState<string>(currentMonthKey);
+  const [gridTopMonthKey, setGridTopMonthKey] = useState<string>(currentMonthKey);
+  const gridMonths = useMemo(() => buildGridMonths(monthOptions, todayIso), [monthOptions, todayIso]);
+
+  const listMonthLabel = formatTimelineMonthLabel(topVisibleDate ?? anchorDate ?? new Date());
+  const monthLabel = view === 'calendar' ? formatTimelineMonthLabel(`${gridTopMonthKey}-01`) : listMonthLabel;
+  const showTodayButton = view === 'calendar'
+    ? gridTopMonthKey !== currentMonthKey
+    : isAnchored || isScrolledDeep;
 
   // Every anchor change (including back to the feed) remounts the list via its
   // `key`, which starts it at offset 0 -- no scrollToIndex, no height model.
@@ -394,12 +428,16 @@ export default function TimelineScreen() {
   }, []);
 
   const goToToday = useCallback(() => {
+    if (view === 'calendar') {
+      gridRef.current?.scrollToMonth(currentMonthKey);
+      return;
+    }
     if (anchorDate !== null) {
       applyAnchor(null);
       return;
     }
     flatListRef.current?.scrollToOffset({ animated: true, offset: 0 });
-  }, [anchorDate, applyAnchor]);
+  }, [anchorDate, applyAnchor, currentMonthKey, view]);
 
   const handlePressToday = useCallback(() => {
     trackEvent('timeline_jumped', { source: 'today_button', months_back: 0 });
@@ -417,13 +455,50 @@ export default function TimelineScreen() {
       source: 'month_picker',
       months_back: Math.max(0, monthsBetween(toMonthKey(new Date()), toMonthKey(option.iso))),
     });
+    if (view === 'calendar') {
+      // In the grid a pick scrolls to that month; the list's anchor is
+      // untouched.
+      gridRef.current?.scrollToMonth(toMonthKey(option.iso), false);
+      return;
+    }
     const next = getMonthAnchorDate(option);
     if (next === anchorDate) {
       flatListRef.current?.scrollToOffset({ animated: true, offset: 0 });
       return;
     }
     applyAnchor(next);
-  }, [anchorDate, applyAnchor]);
+  }, [anchorDate, applyAnchor, view]);
+
+  const handleChangeView = useCallback((next: TimelineView) => {
+    hasChosenViewRef.current = true;
+    trackEvent('timeline_view_switched', { view: next });
+    if (next === 'calendar') {
+      // Open the grid at the month the list is showing.
+      const monthKey = toMonthKey(topVisibleDate ?? anchorDate ?? todayIso);
+      setGridInitialMonthKey(monthKey);
+      setGridTopMonthKey(monthKey);
+    } else {
+      setTopVisibleDate(null);
+    }
+    setActiveVideoId(null);
+    setView(next);
+    void saveTimelineView(next);
+  }, [anchorDate, todayIso, topVisibleDate]);
+
+  // A day tile opens the list at that day (today = the feed itself).
+  const handleGridDayPress = useCallback((iso: string) => {
+    trackEvent('timeline_jumped', {
+      source: 'calendar_day',
+      months_back: Math.max(0, monthsBetween(currentMonthKey, toMonthKey(iso))),
+    });
+    applyAnchor(iso === todayIso ? null : iso);
+    hasChosenViewRef.current = true;
+    setView('list');
+  }, [applyAnchor, currentMonthKey, todayIso]);
+
+  const handleGridTopMonthChange = useCallback((monthKey: string) => {
+    setGridTopMonthKey((previous) => (previous === monthKey ? previous : monthKey));
+  }, []);
 
   // Re-pressing the focused Timeline tab goes home: back to today's feed, or
   // to the top of it.
@@ -649,6 +724,8 @@ export default function TimelineScreen() {
   return (
     <View style={styles.container}>
       <TimelineHeaderBar
+        onChangeView={handleChangeView}
+        view={view}
         bellUnread={bellUnread}
         canJumpToMonth={canJumpToMonth}
         monthLabel={monthLabel}
@@ -657,7 +734,16 @@ export default function TimelineScreen() {
         onPressToday={handlePressToday}
         showToday={showTodayButton}
       />
-      {isLoading ? (
+      {view === 'calendar' ? (
+        <CalendarMonthGrid
+          initialMonthKey={gridInitialMonthKey}
+          months={gridMonths}
+          onDayPress={handleGridDayPress}
+          onRefresh={() => Promise.all([monthCounts.refresh(), refetchActivityUnread()])}
+          onTopMonthChange={handleGridTopMonthChange}
+          ref={gridRef}
+        />
+      ) : isLoading ? (
         <>
           <TimelineTitleWithStreak memories={memories} showStreak={!isAnchored} />
           <View style={styles.centeredInline}>

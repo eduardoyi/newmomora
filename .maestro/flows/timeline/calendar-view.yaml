@@ -1,0 +1,47 @@
+appId: com.memora.app
+---
+# Timeline Calendar view (docs/plans/timeline-calendar-keepsakes.md Phase B):
+# switch to the month grid, tap a day that has a memory, land on the list
+# opened at that day, then switch back.
+#
+# Creates a memory first so the current month has at least one stamped day.
+# Tiles with memories are buttons labelled "<Month> <day>, <n> memory|memories";
+# empty days are labelled "... no memories" and aren't buttons, so the regex
+# below only matches a day with a memory.
+#
+# The view choice persists per device -- this flow always ends back on List
+# so later flows that expect timeline-memory-list aren't affected.
+- runFlow: ../memories/create-memory.yaml
+- tapOn:
+    id: timeline-view-calendar
+- extendedWaitUntil:
+    visible:
+      id: calendar-grid
+    timeout: 15000
+- assertVisible:
+    id: calendar-grid-weekdays
+- assertNotVisible:
+    id: timeline-memory-list
+- tapOn:
+    text: "^[A-Z][a-z]+ \\d+, \\d+ memor(y|ies)$"
+    index: 0
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
+- assertNotVisible:
+    id: calendar-grid
+
+# Back to the grid, then List again -- persisting List for later flows.
+- tapOn:
+    id: timeline-view-calendar
+- extendedWaitUntil:
+    visible:
+      id: calendar-grid
+    timeout: 15000
+- tapOn:
+    id: timeline-view-list
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
