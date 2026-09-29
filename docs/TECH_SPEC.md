@@ -948,6 +948,66 @@ old constraint cannot be restored). Tests: `supabase/tests/family_relationships.
 (plus the new-table cases in `client_table_grants.sql` and
 `onboarding_anonymous_lockdown.sql`).
 
+### 2.1h Year Films (P1)
+
+Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
+[docs/plans/year-film.md](plans/year-film.md) · feature doc
+[docs/features/year-film.md](features/year-film.md). Migration
+`20260929120000_year_films.sql` (+ cron `20260929120100_schedule_year_films_cron.sql`).
+
+**`year_films`** — one row per scheduled film key forever (unique
+`(family_id, kind, coalesce(family_member_id, zero), scope_start_date)` where
+`not forced`); forced (operator/canary) rows live outside the key.
+
+| Column | Notes |
+|---|---|
+| `kind` | `birthday` (needs `family_member_id` + `age_year` 1–12) · `family_month` · `family_year` |
+| `scope_start_date`, `scope_end_exclusive` | frozen at insert; same convention as the TS scopes |
+| `status` | `queued → curating → preparing → rendering → ready`; terminal `skipped`, `failed` |
+| `blocked` / `stale` | never serve the current video / a re-render is wanted (current video OK) |
+| `film_script`, `quote_candidates`, `ai_checks`, `edits`, `edits_version`, `music_bed_id`, `language`, `pool_cutoff_at` | curation state; quotes, language and pool cut-off are sticky after the first curate |
+| `referenced_memory_ids`, `referenced_asset_keys`, `referenced_member_ids`, `referenced_portrait_version_ids`, `quoted_memory_text_hashes` | stamped at curate (GIN) for invalidation and the publish check |
+| `content_epoch`, `curated_epoch` | invalidation clock; publish requires them equal |
+| `attempt_id`, `attempt_count`, `next_attempt_at`, `heartbeat_at`, `render_slot_at`, `machine_ids`, `requeue_after`, `cleanup_needed`, `last_failure_code` | attempt state (service role only) |
+| `video_key`, `poster_key`, `scenes_key`, `duration_ms`, `surface_at`, `notified_at`, `ready_at` | output under `{ownerId}/year-films/{filmId}/{attemptId}/` |
+
+Client access: column-level `select` on safe columns only (never scripts,
+checks, quotes, keys or attempt fields); RLS = family member, video present,
+not `blocked`, and `surface_at <= now()` (owners/managers may preview
+earlier). No client writes. Also `year_film_views` (own rows),
+`year_film_render_requests` (fair use), `year_film_settings` (rollout flag
+`off | canary | all`, `canary_family_ids`, `launch_date`,
+`max_concurrent_renders`; service role), `year_film_bridge_nonces`.
+
+**Invalidation** (definer triggers, bump `content_epoch`, set `blocked` +
+`stale`, debounce `requeue_after` 15 min): memories deleted (statement,
+transition table); quoted memory text edited (`year_film_text_hash` ≠
+stamped hash); `memory_media` deleted — a deferred constraint trigger that
+fires only when the key is truly gone (media saves delete and re-insert);
+`content_reports` inserted (`memory`, `memory_illustration`,
+`family_member_profile`, `family_member_portrait`); portrait versions and
+family members deleted; an owner/manager blocking an account
+(`blocked_family_accounts`) — that account's memories are excluded at curate
+time too (`year_film_parent_blocked_users`); viewer blocks stay personal.
+
+**RPCs.** Client: `save_year_film_edits(film, edits)` (owner/manager +
+billing + anonymous guard; `removedMemoryIds` ⊆ referenced, quote ∈
+candidates, `musicBedId` ∈ `year_film_bed_ids()`; 5 edits/film/day, 20/family;
+removal blocks until re-render). Service role (scheduler): `year_film_due`,
+`year_film_due_families`, `year_film_promote_requeues`,
+`year_film_recheck_skipped`, `claim_year_film_dispatch`, `year_film_recover`,
+`year_film_notifications_due`, `year_films_needing_cleanup`,
+`mark_year_film_cleaned`, `queue_year_film_forced`,
+`year_film_member_prefixes`. Service role (bridge): `year_film_heartbeat`
+(ok / superseded / epoch_changed / disabled), `year_film_save_curation`,
+`year_film_save_checks`, `year_film_set_status`, `year_film_record_machine`,
+`year_film_claim_render_slot`, `publish_year_film` (CAS + re-verification),
+`year_film_end_cycle`, `record_year_film_bridge_nonce`. Helpers:
+`year_film_family_enabled`, `year_film_is_own_child`, `year_film_text_hash`,
+`year_film_invalidate`. `claim_family_deletion_fence` also waits for
+in-flight films. `ai_usage_events.operation` adds `year_film_quote`,
+`year_film_vision`, `year_film_audio`.
+
 ### 2.2 Indexes
 
 ```sql
@@ -3175,6 +3235,41 @@ posture as the other OpenAI features). Logs carry counts and error names only.
 **Errors:** `validation_error` / `invalid_json` (400), `unauthorized` (401),
 `forbidden` (403, viewer or non-member), `SUBSCRIPTION_REQUIRED` (403),
 `SUGGESTION_FAILED` (500)
+
+---
+
+### 4.27 `schedule-year-films`
+
+Hourly (pg_cron minute 5, `x-cron-secret`, `verify_jwt = false`). Inserts due
+films (`year_film_due`: owner-local ≥ 00:30 on the due date, 3-day catch-up,
+`launch_date`, rollout, billing), promotes debounced requeues / spaced retries
+/ skipped re-checks, claims up to 20 queued films and POSTs each to the
+Worker `/dispatch` (`{ filmId, attemptId }`, HMAC `x-dispatch-*` with
+`CLOUDFLARE_YEAR_FILM_WORKFLOW_SECRET`; failure → `end_cycle aborted`, no
+attempt burned), recovers stale heartbeats, sweeps non-current attempt
+directories, and sends the surfacing push once (`route: 'year-film'`,
+`filmId`; gated on `notify_new_memories`). Response: counts only.
+
+### 4.28 `workflow-year-film-bridge`
+
+Called only by `cloudflare/year-film-worker` (HMAC over
+`timestamp.nonce.body` with `CLOUDFLARE_YEAR_FILM_BRIDGE_SECRET`, nonce ledger,
+`verify_jwt = false`). Body `{ operation, filmId, attemptId, … }`. Operations:
+`load_film_context` (film row + family rows in scope: members, memories,
+media, tags, milestones, portrait versions, family-wide open/reviewing
+reports), `save_curation`, `save_checks`, `record_usage` (ledger, actor = the
+family owner), `heartbeat`, `set_status`, `record_machine`,
+`claim_render_slot`, `publish` (keys must sit under the attempt prefix),
+`end_cycle`, `reconcile`. Work operations run the heartbeat first and answer
+`409 { state }` when the attempt is superseded, the epoch moved, or the
+rollout is off. Logs: ids and codes only.
+
+### 4.29 `get-year-film-url`
+
+JWT (permanent accounts). Body `{ filmId }` → `{ videoUrl, posterUrl,
+scenesUrl, durationMs, expiresIn: 900 }`. Any family member once surfaced;
+owners/managers earlier. 404 for missing or not-a-member (no oracle), 409
+`film_unavailable` for blocked or unpublished films.
 
 ---
 

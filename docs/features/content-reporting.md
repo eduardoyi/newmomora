@@ -19,6 +19,7 @@ The controls live in existing overflow/action sheets so the journal remains visu
 - A profile report hides the read-only profile presentation. A portrait report hides only that portrait version; the portrait history remains reachable.
 - A comment report hides only its body. Blocking its author also neutralizes the author and suppresses the authored comment.
 - **Block account** is explicitly labelled and family-scoped. It does not delete content, remove membership, notify the blocked account, or apply in another family.
+- Year Films are one video for the whole family: a block by an **owner or manager** removes the blocked account's memories from every film of that family (and re-makes films already showing them); a viewer's block only affects that viewer's own feed ([year-film.md](./year-film.md)).
 - Loading and report/block lookup failures fail closed. Target media keys are not presigned while the safety state is unknown or hidden.
 - Editor/tag-picker selection surfaces are intentionally outside reporter-local display filtering: they are authoring controls, not read-only publication surfaces. Read-only timeline, calendar, detail, profile, avatar, comments, and member surfaces are filtered.
 

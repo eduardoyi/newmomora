@@ -54,9 +54,11 @@ jobs:
           - cloudflare/memory-book-worker
           - cloudflare/memory-illustration-worker
           - cloudflare/momora-export-worker
+          - cloudflare/year-film-worker
           - workers/kindle-frame
           - workers/memory-viewer
           - render/memory-book-renderer
+          - render/year-film-renderer
           - book-renderer
     defaults:
       run:

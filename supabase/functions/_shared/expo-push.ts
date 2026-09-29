@@ -18,17 +18,21 @@
  *   (notify-family-activity's new-memory push)
  * - 'memory-book': open the memory book at `bookId`
  *   (workflow-memory-book-bridge's "your book is ready" push)
+ * - 'year-film': open the Year Film at `filmId` (schedule-year-films'
+ *   surfacing push; the app handler lands in Year Film P2 — older apps
+ *   treat an unknown route as a no-op)
  * `familyId` is required for 'memory' so the client can reconcile the
  * recipient's active family before navigating; it's otherwise informational.
  * `memberId` (the book's `child_id`, when the book is scoped to one child)
  * and `bookId` are carried only by the 'memory-book' route.
  */
 export interface PushRouteData {
-  route: 'timeline' | 'approvals' | 'new-memory' | 'memory' | 'memory-book';
+  route: 'timeline' | 'approvals' | 'new-memory' | 'memory' | 'memory-book' | 'year-film';
   familyId?: string;
   memoryId?: string;
   memberId?: string;
   bookId?: string;
+  filmId?: string;
 }
 
 export async function sendExpoPushNotification(

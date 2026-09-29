@@ -37,6 +37,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Family sharing | [family-sharing.md](./family-sharing.md) | done |
 | Family profiles | [family-profiles.md](./family-profiles.md) | done |
 | Family relationships | [family-relationships.md](./family-relationships.md) | in-progress |
+| Year Film | [year-film.md](./year-film.md) | in-progress |
 | Portrait timeline | [portrait-timeline.md](./portrait-timeline.md) | done |
 | Memories & illustrations | [memories.md](./memories.md) | done |
 | Media memories (photo & video) | [media-memories.md](./media-memories.md) | done |

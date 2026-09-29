@@ -3,7 +3,7 @@ begin;
 -- RLS policies express row ownership; these assertions protect the separate
 -- PostgreSQL ACL layer. A fresh current Supabase bootstrap grants neither
 -- layer implicitly, so both are required for normal authenticated clients.
-select plan(22);
+select plan(27);
 
 select ok(has_table_privilege('authenticated', 'public.user_profiles', 'SELECT, UPDATE'), 'authenticated can read and update its RLS-scoped profile');
 select ok(has_table_privilege('authenticated', 'public.families', 'SELECT, UPDATE, DELETE'), 'authenticated has the family operations backed by RLS policies');
@@ -31,6 +31,11 @@ select ok(not has_table_privilege('authenticated', 'public.portrait_generation_j
 select ok(has_table_privilege('authenticated', 'public.family_member_suggestions', 'SELECT'), 'authenticated can read RLS-scoped relationship suggestions');
 select ok(not has_table_privilege('authenticated', 'public.family_member_suggestions', 'INSERT, UPDATE, DELETE, TRUNCATE'), 'authenticated cannot write relationship suggestions directly');
 select ok(not has_table_privilege('anon', 'public.family_member_suggestions', 'SELECT, INSERT, UPDATE, DELETE'), 'anon has no direct relationship-suggestion access');
+select ok(has_column_privilege('authenticated', 'public.year_films', 'status', 'SELECT'), 'authenticated can read safe year film columns');
+select ok(not has_column_privilege('authenticated', 'public.year_films', 'film_script', 'SELECT'), 'authenticated cannot read year film scripts');
+select ok(not has_table_privilege('authenticated', 'public.year_films', 'INSERT, UPDATE, DELETE, TRUNCATE'), 'authenticated cannot write year films');
+select ok(not has_table_privilege('anon', 'public.year_films', 'SELECT, INSERT, UPDATE, DELETE'), 'anon has no year film access');
+select ok(not has_table_privilege('authenticated', 'public.year_film_settings', 'SELECT, INSERT, UPDATE, DELETE'), 'the rollout flag is service-role only');
 select ok(not has_column_privilege('authenticated', 'public.family_memberships', 'family_member_id', 'UPDATE'), 'authenticated cannot write the "this is me" link column directly');
 
 select * from finish();

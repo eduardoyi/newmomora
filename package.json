@@ -14,7 +14,7 @@
     "test:db": "supabase test db --local supabase/tests",
     "test": "jest --detectOpenHandles",
     "test:watch": "jest --watch",
-    "test:edge": "deno test --allow-env --allow-net --allow-ffi --allow-sys --allow-read=supabase/functions,supabase/scripts,src/utils,docs/plans,book-renderer/src,book-renderer/book-data --node-modules-dir=none --sloppy-imports supabase/functions/ supabase/scripts/",
+    "test:edge": "deno test --allow-env --allow-net --allow-ffi --allow-sys --allow-read=supabase/functions,supabase/scripts,supabase/migrations,src/utils,docs/plans,book-renderer/src,book-renderer/book-data,film-renderer/composition/assets/audio/beds --node-modules-dir=none --sloppy-imports supabase/functions/ supabase/scripts/",
     "eval:portrait": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-portrait.ts",
     "eval:illustration": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-illustration.ts",
     "eval:image-cost": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-image-cost.ts",
@@ -47,6 +47,7 @@
     "eval:year-film-audit": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-audit.ts",
     "eval:year-film-script": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-script.ts",
     "eval:year-film-assets": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-assets.ts",
+    "year-film:queue": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/queue-year-film.ts",
     "eval:memory-book-coverage": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-memory-book-coverage.ts",
     "import:printed-memory-book": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/import-printed-memory-book.ts"
   },

@@ -24,6 +24,10 @@ function matches(row: Row, params: URLSearchParams): boolean {
       if (!filter.slice(4, -1).split(',').includes(String(value))) return false;
     } else if (filter === 'is.null') {
       if (value !== null && value !== undefined) return false;
+    } else if (filter === 'not.is.null') {
+      if (value === null || value === undefined) return false;
+    } else if (filter === 'is.false') {
+      if (value !== false) return false;
     }
   }
   return true;
@@ -37,7 +41,7 @@ export class FakeSupabase {
   users = new Map<string, { id: string; email: string | null }>();
   tables: Record<string, Row[]> = {
     families: [], family_members: [], memories: [], memory_family_members: [], memory_media: [],
-    memory_comments: [], family_member_portrait_versions: [], user_profiles: [], export_jobs: [],
+    memory_comments: [], family_member_portrait_versions: [], user_profiles: [], export_jobs: [], year_films: [],
   };
   emails: Array<Record<string, unknown>> = [];
   failTable: string | null = null;

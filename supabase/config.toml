@@ -398,6 +398,16 @@ verify_jwt = false
 [functions.send-content-report-alert]
 verify_jwt = false
 
+# Year Film P1 (docs/plans/year-film-p1.md): the hourly scheduler
+# authenticates with x-cron-secret; the Workflow bridge with an HMAC
+# signature (CLOUDFLARE_YEAR_FILM_BRIDGE_SECRET) + nonce ledger. Neither has
+# a user JWT.
+[functions.schedule-year-films]
+verify_jwt = false
+
+[functions.workflow-year-film-bridge]
+verify_jwt = false
+
 # Called only by the export Worker's Workflow (cloudflare/momora-export-worker),
 # authenticated with an HMAC signature (EXPORT_EMAIL_BRIDGE_SECRET), not a JWT.
 [functions.send-export-email]

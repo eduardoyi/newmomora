@@ -26,6 +26,7 @@ function dependencies(
     freshGeneration?: boolean;
     storageError?: boolean;
     fenceCalls?: Array<{ name: string; args: Record<string, unknown> }>;
+    filmPrefixes?: string[];
   } = {},
 ) {
   const member = {
@@ -40,6 +41,9 @@ function dependencies(
       calls.push(`rpc:${name}`);
       if (name === 'claim_family_member_deletion_fence' && options.freshGeneration) {
         return { data: null, error: { message: 'Fresh portrait generation is still active' } };
+      }
+      if (name === 'year_film_member_prefixes') {
+        return { data: options.filmPrefixes ?? [], error: null };
       }
       return { data: true, error: null };
     },
@@ -113,6 +117,7 @@ Deno.test('delete-family-member removes legacy and every version-prefix object b
   assertEquals(response.status, 200);
   assertEquals(calls, [
     'rpc:claim_family_member_deletion_fence',
+    'rpc:year_film_member_prefixes',
     `list:${prefix}`,
     `delete:${LEGACY_PHOTO}`,
     `delete:${LEGACY_PORTRAIT}`,
@@ -160,19 +165,31 @@ Deno.test('delete-family-member releases the exact fence when R2 cleanup fails',
   assertEquals(response.status, 500);
   assertEquals(calls, [
     'rpc:claim_family_member_deletion_fence',
+    'rpc:year_film_member_prefixes',
     `list:${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/`,
     'rpc:release_family_member_deletion_fence',
   ]);
   assertEquals(fenceCalls.map((call) => call.name), [
     'claim_family_member_deletion_fence',
+    'year_film_member_prefixes',
     'release_family_member_deletion_fence',
   ]);
   assertEquals(
-    fenceCalls[1].args.p_delete_token,
+    fenceCalls[2].args.p_delete_token,
     fenceCalls[0].args.p_delete_token,
   );
 });
 
 Deno.test('WP-SEC: the real default wiring uses the anonymous-rejecting auth chokepoint, not the permissive one', () => {
   assertStrictEquals(DEFAULT_DEPENDENCIES.getAuthenticatedUser, getAuthenticatedNonAnonymousUser);
+});
+
+Deno.test('delete-family-member removes a child\'s birthday film objects before the row', async () => {
+  const calls: string[] = [];
+  const filmPrefix = `${USER_ID}/year-films/66666666-6666-4666-8666-666666666666/`;
+  const response = await handleDeleteFamilyMember(request(), dependencies('manager', calls, { filmPrefixes: [filmPrefix, 'not-a-film/'] }));
+  assertEquals(response.status, 200);
+  assertEquals(calls.includes(`list:${filmPrefix}`), true);
+  assertEquals(calls.includes('list:not-a-film/'), false);
+  assertEquals(calls.indexOf(`list:${filmPrefix}`) < calls.indexOf('delete-row'), true);
 });

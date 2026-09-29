@@ -1,8 +1,8 @@
-# Year Film render worker — Fly.io app config (docs/plans/year-film.md §7.4,
-# §10 F5). COMMITTED, NOT DEPLOYED: deploys and machine runs stay owner-run
-# (same rule as render/memory-book-renderer). F5 uses one-off machines
-# (`fly machine run … --rm`, see README.md) with the synthetic sample only;
-# the HTTP service (HMAC /render, R2 in/out) arrives in P1.
+# Year Film render worker — Fly.io app config (docs/plans/year-film-p1.md
+# Decision 2). No HTTP service: cloudflare/year-film-worker creates one-off
+# machines per job through the Machines API (sizes chosen there:
+# performance-8x/16GB for renders, 4x fallback). This file names the app and
+# records the F5 sizing; deploys stay owner-run (README.md "Deploy").
 app = "momora-year-film-renderer"
 primary_region = "iad"
 

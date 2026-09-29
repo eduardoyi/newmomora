@@ -110,7 +110,20 @@ export async function handleDeleteFamilyMember(
   const keys = [member.profile_picture_key, member.illustrated_profile_key].filter(
     (key): key is string => Boolean(key),
   );
+  // A child's birthday films (Year Film P1): their rows cascade with the
+  // member, so their R2 objects go first.
+  const { data: filmPrefixes, error: filmError } = await supabase.rpc('year_film_member_prefixes', {
+    p_member_id: member.id,
+  });
+  if (filmError) {
+    console.error('delete-family-member film lookup failed', member.id);
+    await releaseFence();
+    return errorResponse('Failed to load films', 500, 'internal_error');
+  }
   try {
+    for (const prefix of Array.isArray(filmPrefixes) ? filmPrefixes : []) {
+      if (typeof prefix === 'string' && prefix.includes('/year-films/')) keys.push(...(await dependencies.listObjectKeys(prefix)));
+    }
     for (const version of versions ?? []) {
       if (version.illustrated_profile_key) keys.push(version.illustrated_profile_key);
       if (version.generation_output_key) keys.push(version.generation_output_key);

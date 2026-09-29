@@ -34,7 +34,9 @@ const film = JSON.parse(fs.readFileSync(path.join(FILM_DIR, 'film.json'), 'utf8'
 // six monthly beds rotated by calendar month — or from --bed <id>.
 const BEDS = JSON.parse(fs.readFileSync(path.join(PROJECT, 'assets', 'audio', 'beds', 'beds.json'), 'utf8')).beds;
 function pickBed() {
-  const forced = process.argv.includes('--bed') ? process.argv[process.argv.indexOf('--bed') + 1] : null;
+  // Production films name their bed in film.json (chosen and stored at
+  // curate time, docs/plans/year-film-p1.md Step 2); --bed overrides locally.
+  const forced = process.argv.includes('--bed') ? process.argv[process.argv.indexOf('--bed') + 1] : film.bed ?? null;
   if (forced) {
     const bed = BEDS.find((b) => b.id === forced);
     if (!bed) throw new Error(`no bed "${forced}" (have ${BEDS.map((b) => b.id).join(', ')})`);
@@ -992,6 +994,13 @@ fs.rmSync(path.join(PROJECT, 'compositions'), { recursive: true, force: true });
 fs.mkdirSync(path.join(PROJECT, 'compositions'), { recursive: true });
 for (const f of files) fs.writeFileSync(path.join(PROJECT, 'compositions', `${f.id}.html`), f.text);
 fs.writeFileSync(path.join(PROJECT, 'index.html'), indexHtml);
+// The render job (render/year-film-renderer/src/job.mjs) turns this into the
+// viewer's scenes.json and picks the poster frame from the close scene.
+fs.writeFileSync(path.join(PROJECT, 'timeline.json'), JSON.stringify({
+  total: +total.toFixed(3),
+  bed: BED.id,
+  scenes: scenes.map((sc) => ({ id: sc.id, type: sc.type, role: sc.role ?? null, start: sc.start, duration: sc.dur })),
+}));
 
 console.log(`${slug}: ${scenes.length} scenes, ${total.toFixed(2)}s (${t} beats) · bed ${BED.id} (${BED.bpm} BPM)`);
 for (const sc of scenes) console.log(`  ${sc.id} ${sc.type}${sc.role ? `/${sc.role}` : ''}  ${sc.start.toFixed(2)}–${(sc.start + sc.dur).toFixed(2)}s  (${sc.beats} beats)`);

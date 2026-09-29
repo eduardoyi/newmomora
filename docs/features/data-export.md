@@ -95,7 +95,7 @@ flowchart LR
 | Table / bucket | Role in this feature |
 |----------------|----------------------|
 | `export_jobs` | Job lifecycle `queued → building → ready → expired` (or `failed`), `archives`, `total_bytes`, `download_token_hash`, timestamps, `failure_code`, `files_deleted_at` |
-| `families`, `family_members`, `memories`, `memory_family_members`, `memory_media`, `memory_comments`, `family_member_portrait_versions`, `user_profiles` | Read (service role) to build the archive |
+| `families`, `family_members`, `memories`, `memory_family_members`, `memory_media`, `memory_comments`, `family_member_portrait_versions`, `user_profiles`, `year_films` | Read (service role) to build the archive — each ready, non-blocked Year Film's MP4 goes to `Films/` in the Family & portraits archive |
 | R2 `momora-prod` → `exports/<job id>/` | `work/plan.json`, `work/group-<i>.json`, `archives/<group>-<part>.zip` |
 
 `export_jobs` has owner-only select RLS; only the Worker's service role writes

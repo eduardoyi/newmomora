@@ -4,7 +4,7 @@ begin;
 -- (20260729130000_onboarding_anonymous_lockdown.sql) actually denies an
 -- anonymous Auth session everywhere a normal tenant operates, and does NOT
 -- regress a real signed-up user's access.
-select plan(63);
+select plan(67);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures
@@ -62,6 +62,10 @@ values ('a6000000-0000-4000-8000-000000000001', 'a2000000-0000-4000-8000-0000000
 insert into public.family_member_suggestions (id, family_id, family_member_id, field, value)
 values ('a7000000-0000-4000-8000-000000000001', 'a2000000-0000-4000-8000-000000000001', 'a4000000-0000-4000-8000-000000000001', 'nickname', 'Kidd');
 
+insert into public.year_films (id, family_id, kind, scope_start_date, scope_end_exclusive, surface_at, status, video_key, poster_key)
+values ('a8000000-0000-4000-8000-000000000001', 'a2000000-0000-4000-8000-000000000001', 'family_month',
+        '2026-08-01', '2026-09-01', now() - interval '1 day', 'ready', 'k/film.mp4', 'k/poster.jpg');
+
 -- Adversarial setup: simulate a hypothetical breach where the anonymous
 -- user's id somehow ended up as a real 'manager' member of the fixture
 -- family (as postgres, bypassing every policy/RPC -- this is NOT reachable
@@ -111,6 +115,11 @@ select is(
   (select count(*)::text from public.family_member_suggestions where family_id = 'a2000000-0000-4000-8000-000000000001'),
   '0',
   'anonymous session cannot SELECT family_member_suggestions despite a simulated manager membership row'
+);
+select is(
+  (select count(*)::text from public.year_films where family_id = 'a2000000-0000-4000-8000-000000000001'),
+  '0',
+  'anonymous session cannot SELECT year_films despite a simulated manager membership row'
 );
 select is(
   (select count(*)::text from public.family_invites where family_id = 'a2000000-0000-4000-8000-000000000001'),
@@ -245,6 +254,11 @@ select throws_ok(
   '42501', 'Not authorized',
   'resolve_family_member_suggestions rejects an anonymous caller despite the simulated manager row'
 );
+select throws_ok(
+  $$select public.save_year_film_edits('a8000000-0000-4000-8000-000000000001', '{}')$$,
+  '42501', 'Not authorized',
+  'save_year_film_edits rejects an anonymous caller despite the simulated manager row'
+);
 select is(
   (select count(*)::text from public.get_memory_engagement(array['a5000000-0000-4000-8000-000000000001']::uuid[])),
   '0',
@@ -362,6 +376,14 @@ select ok(
 select ok(
   not has_function_privilege('anon', 'public.resolve_family_member_suggestions(uuid,uuid[],uuid[])', 'EXECUTE'),
   'the anon role has no execute on resolve_family_member_suggestions'
+);
+select ok(
+  not has_function_privilege('anon', 'public.save_year_film_edits(uuid,jsonb)', 'EXECUTE'),
+  'the anon role has no execute on save_year_film_edits'
+);
+select ok(
+  not has_function_privilege('authenticated', 'public.publish_year_film(uuid,uuid,integer,text,text,text,integer)', 'EXECUTE'),
+  'clients cannot call the service-role film publish'
 );
 
 -- ---------------------------------------------------------------------------

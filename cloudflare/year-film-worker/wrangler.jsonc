@@ -1,0 +1,43 @@
+{
+  // Year Film Worker (docs/plans/year-film-p1.md Step 5): /dispatch starts a
+  // YearFilmWorkflow per attempt; the Workflow reads/writes film rows only
+  // through workflow-year-film-bridge, runs the model checks, and drives
+  // one-off Fly machines (thumbs → prepare → render) of
+  // render/year-film-renderer. Deploys are owner-run.
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "momora-year-film-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-21",
+  "compatibility_flags": ["nodejs_compat"],
+  // Checks base64-encode prepared JPEG/WAV artifacts; generous CPU like the
+  // memory-book Worker after its CPU-limit incident.
+  "limits": { "cpu_ms": 300000 },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ENVIRONMENT": "production",
+    "SUPABASE_BRIDGE_URL": "https://uglhonlaqkqvxcqudwlk.supabase.co/functions/v1/workflow-year-film-bridge",
+    "FLY_APP": "momora-year-film-renderer",
+    // Pinned by git sha (render/year-film-renderer/build.sh); set at deploy.
+    "FILM_RENDERER_IMAGE": "registry.fly.io/momora-year-film-renderer:REPLACE_WITH_GIT_SHA",
+    "FLY_REGIONS": "iad,ord,ewr",
+    "CF_ACCOUNT_ID": "REPLACE_WITH_CLOUDFLARE_ACCOUNT_ID",
+    "R2_BUCKET_NAME": "momora-prod"
+  },
+  "secrets": {
+    "required": [
+      "DISPATCH_SIGNING_SECRET",
+      "SUPABASE_BRIDGE_HMAC_SECRET",
+      "OPENAI_API_KEY",
+      "FLY_API_TOKEN",
+      "SENTRY_DSN"
+    ]
+  },
+  "r2_buckets": [
+    { "binding": "FILM_BUCKET", "bucket_name": "momora-prod" }
+  ],
+  "workflows": [
+    { "binding": "YEAR_FILM_WORKFLOW", "name": "momora-year-film", "class_name": "YearFilmWorkflow" }
+  ]
+}

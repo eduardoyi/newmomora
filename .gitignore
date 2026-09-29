@@ -108,6 +108,7 @@ film-renderer/composition/storyboard.html
 film-renderer/composition/.sketch/
 # Year Film generated composition (assemble.mjs output: real family data)
 film-renderer/composition/index.html
+film-renderer/composition/timeline.json
 film-renderer/composition/compositions/
 film-renderer/composition/assets/film/
 film-renderer/composition/renders/

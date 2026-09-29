@@ -11,8 +11,9 @@
  */
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import type { PortraitVersionCandidate } from '../functions/_shared/portrait-versions.ts';
-import type { FilmAssetRef, FilmMemorySource, FilmPerson } from '../functions/_shared/year-film-script.ts';
-import type { FilmMediaInput, FilmMilestoneInput } from '../functions/_shared/year-film-eligibility.ts';
+import type { FilmMemorySource, FilmPerson } from '../functions/_shared/year-film-script.ts';
+import type { FilmMilestoneInput } from '../functions/_shared/year-film-eligibility.ts';
+import { mapFamilyRows } from '../functions/_shared/year-film-context.ts';
 
 // ── Row shapes (hand-typed -- matches src/types/database.ts) ───────────────
 
@@ -174,13 +175,6 @@ export async function loadFamilies(supabase: AuthedClient): Promise<FamilyRow[]>
   return (data ?? []) as FamilyRow[];
 }
 
-function mediaKind(contentType: string): FilmMediaInput['kind'] | null {
-  if (contentType.startsWith('image/')) return 'image';
-  if (contentType.startsWith('video/')) return 'video';
-  if (contentType.startsWith('audio/')) return 'audio';
-  return null;
-}
-
 export async function loadFamilyData(supabase: AuthedClient, family: FamilyRow): Promise<EvalFamilyData> {
   const { data: members, error: membersError } = await supabase
     .from('family_members')
@@ -236,10 +230,6 @@ export async function loadFamilyData(supabase: AuthedClient, family: FamilyRow):
   });
   if (reportsError) throw new Error(`Failed to load content reports: ${reportsError.message}`);
   const reportRows = (reports ?? []) as ReportRow[];
-  const reportedMemories = new Set(reportRows.filter((r) => r.target_type === 'memory').map((r) => r.target_id));
-  const reportedIllustrations = new Set(
-    reportRows.filter((r) => r.target_type === 'memory_illustration').map((r) => r.target_id),
-  );
 
   const memberIds = memberRows.map((m) => m.id);
   const portraitRows = memberIds.length === 0 ? [] : await fetchAllRows<PortraitVersionCandidate>(
@@ -255,77 +245,17 @@ export async function loadFamilyData(supabase: AuthedClient, family: FamilyRow):
     'family_member_portrait_versions',
   );
 
-  const group = <T, K>(rows: T[], key: (row: T) => K) => {
-    const map = new Map<K, T[]>();
-    for (const row of rows) map.set(key(row), [...(map.get(key(row)) ?? []), row]);
-    return map;
-  };
-  const mediaByMemory = group(media, (m) => m.memory_id);
-  const tagsByMemory = group(tags, (t) => t.memory_id);
-  const portraitsByMember = group(portraitRows, (p) => p.family_member_id);
-
-  const memories: FilmMemorySource[] = saved.map((row) => {
-    const rows = [...(mediaByMemory.get(row.id) ?? [])].sort((a, b) => a.position - b.position);
-    let assets: FilmAssetRef[] = rows.flatMap((m) => {
-      const kind = mediaKind(m.content_type);
-      return kind
-        ? [{
-          kind,
-          key: m.object_key,
-          previewKey: m.preview_object_key,
-          durationMs: m.duration_ms,
-          aspectRatio: m.aspect_ratio,
-        }]
-        : [];
-    });
-    // Legacy single-asset memories predate memory_media rows.
-    if (assets.length === 0 && row.media_key && row.media_content_type) {
-      const kind = mediaKind(row.media_content_type);
-      if (kind) assets = [{ kind, key: row.media_key, previewKey: null, durationMs: null, aspectRatio: null }];
-    }
-    const illustrationReady = row.illustration_status === 'ready' && !!row.illustration_key &&
-      !reportedIllustrations.has(row.id);
-    return {
-      id: row.id,
-      date: row.memory_date,
-      type: row.memory_type,
-      text: row.content,
-      emotion: row.emotion,
-      topics: row.topics ?? [],
-      taggedMemberIds: (tagsByMemory.get(row.id) ?? []).map((t) => t.family_member_id),
-      illustrationReady,
-      illustrationKey: illustrationReady ? row.illustration_key : null,
-      media: assets.map((a) => ({
-        kind: a.kind,
-        durationMs: a.durationMs,
-        hasPreview: !!a.previewKey || a.kind === 'image',
-      })),
-      assets,
-      reported: reportedMemories.has(row.id),
-    };
+  const mapped = mapFamilyRows({
+    family,
+    members: memberRows,
+    memories: saved,
+    media,
+    tags,
+    milestones: milestoneRows,
+    portraits: portraitRows as (PortraitVersionCandidate & { family_member_id: string })[],
+    reports: reportRows,
   });
-
-  return {
-    familyId: family.id,
-    familyName: family.name,
-    language: family.gallery_caption_language,
-    members: memberRows.map((m) => ({
-      id: m.id,
-      name: m.name,
-      dateOfBirth: m.date_of_birth,
-      relationship: m.relationship,
-      createdAt: m.created_at,
-      portraits: portraitsByMember.get(m.id) ?? [],
-    })),
-    memories,
-    milestones: milestoneRows.map((row) => ({
-      memoryId: row.memory_id,
-      familyMemberId: row.family_member_id,
-      milestoneId: row.milestone_id,
-      status: row.status,
-      outOfBand: row.out_of_band,
-    })),
-  };
+  return mapped;
 }
 
 export function firstName(name: string): string {

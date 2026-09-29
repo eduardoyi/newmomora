@@ -1,19 +1,20 @@
 # syntax=docker/dockerfile:1.7
 #
-# Year Film render worker — F5 benchmark image (docs/plans/year-film.md §7.4,
-# §10 F5). The §7.4 service shell (HMAC /render, R2 in/out, status) comes in
-# P1; this image is what it will wrap: Node 22, headless Chrome, ffmpeg, the
-# pinned HyperFrames CLI, and film-renderer/ (assembler, composition
-# template, fonts, music beds).
+# Year Film render worker (docs/plans/year-film-p1.md Step 6): one-off Fly
+# machines started by cloudflare/year-film-worker run src/job.mjs in one of
+# three modes (thumbs | prepare | render). Node 22, headless Chrome, ffmpeg,
+# ImageMagick + libheif (upright stills, HEIC), the pinned HyperFrames CLI,
+# film-renderer/ (assembler, composition template, fonts, music beds), and
+# the job with the one shared TS module it needs (year-film-trim.ts).
+# bench.sh (F5) still runs with an explicit command: `/app/bench.sh sample`.
 #
 # ── film-renderer as a SEPARATE, PII-excluded build context ───────────────
 # Same mechanism as render/memory-book-renderer: film-renderer/ is brought in
 # as a named build context, and film-renderer/.dockerignore excludes every
 # family's film-data/, renders and Studio caches at the Docker layer.
 #
-#   docker build --build-context filmrenderer=../../film-renderer -t year-film-renderer .
-#
-# (run from render/year-film-renderer/).
+# Always build with ./build.sh: it stages only git-tracked files into the
+# `filmrenderer` and `job` contexts (never film-data/) and tags by git sha.
 #
 # ── linux/amd64 ───────────────────────────────────────────────────────────
 # Fly Machines are x86_64 and Chrome for Testing has no linux/arm64 build
@@ -25,6 +26,8 @@ FROM --platform=linux/amd64 node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     ffmpeg \
+    imagemagick \
+    libheif-examples \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -86,5 +89,13 @@ RUN node sample/make-sample.mjs
 COPY bench.sh /app/bench.sh
 RUN chmod +x /app/bench.sh
 
-ENTRYPOINT ["/app/bench.sh"]
-CMD ["sample"]
+# The job + its shared module, at their repo-relative paths so the same
+# imports work in the repo and in the image.
+COPY --from=job . /app/
+RUN cd /app/render/year-film-renderer && npm ci --omit=dev --no-audit --no-fund
+
+ENV FILM_RENDERER_DIR=/app/film-renderer
+WORKDIR /app/render/year-film-renderer
+# Machines pass the mode as init.cmd (thumbs | prepare | render).
+ENTRYPOINT ["node", "--experimental-strip-types", "--no-warnings", "src/job.mjs"]
+CMD ["render"]

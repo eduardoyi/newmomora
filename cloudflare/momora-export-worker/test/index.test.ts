@@ -45,6 +45,13 @@ function seedFamily(): void {
     { id: 'mem-b', family_id: 'fam-1', user_id: OWNER, memory_type: 'text_only', content: 'First word', audio_transcript: null, link_previews: null, memory_date: '2025-02-01', emotion: null, illustration_key: 'o/gone.webp', illustration_status: 'completed', media_key: null, media_content_type: null, created_at: '2025-02-01T00:00:00Z' },
   );
   supabase.tables.memory_media.push({ id: 'mm-1', memory_id: 'mem-a', object_key: 'o/beach.jpg', content_type: 'image/jpeg', duration_ms: null, position: 0, created_at: '' });
+  supabase.tables.year_films.push(
+    { id: 'film-1', family_id: 'fam-1', kind: 'birthday', scope_start_date: '2025-10-23', scope_label: 'Year Four', video_key: 'o/year-films/f/a/film.mp4', blocked: false, ready_at: '2026-10-26T05:00:00Z' },
+    // Blocked (removed content) and unpublished films are never exported.
+    { id: 'film-2', family_id: 'fam-1', kind: 'family_month', scope_start_date: '2026-09-01', scope_label: 'September', video_key: 'o/year-films/g/a/film.mp4', blocked: true, ready_at: null },
+    { id: 'film-3', family_id: 'fam-1', kind: 'family_month', scope_start_date: '2026-08-01', scope_label: null, video_key: null, blocked: false, ready_at: null },
+  );
+  bucket.seed('o/year-films/f/a/film.mp4', 'film-bytes');
   bucket.seed('o/beach.jpg', 'beach-bytes');
   bucket.seed('o/enzo.jpg', 'enzo-bytes');
   // o/gone.webp is deliberately absent: it must be reported, not fatal.
@@ -153,9 +160,11 @@ describe('export workflow + download link', () => {
     expect(entries.map((entry) => entry.name)).toEqual([
       'Momora - Los Yi/README.txt',
       'Momora - Los Yi/Family/Enzo/profile-photo.jpg',
+      'Momora - Los Yi/Films/2025-10-23 Year Four.mp4',
       'Momora - Los Yi/manifest.json',
     ]);
-    const manifest = JSON.parse(new TextDecoder().decode(entries[2].data));
+    expect(new TextDecoder().decode(entries[2].data)).toBe('film-bytes');
+    const manifest = JSON.parse(new TextDecoder().decode(entries[3].data));
     expect(manifest.missingFiles).toEqual(['Momora - Los Yi/2025/2025-02-01 - First word/illustration.webp']);
     expect(manifest.memories.map((memory: { folder: string }) => memory.folder)).toEqual([
       'Momora - Los Yi/2025/2025-02-01 - First word',

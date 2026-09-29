@@ -3483,6 +3483,284 @@ export type Database = {
           },
         ]
       }
+      year_film_bridge_nonces: {
+        Row: {
+          created_at: string
+          nonce: string
+        }
+        Insert: {
+          created_at?: string
+          nonce: string
+        }
+        Update: {
+          created_at?: string
+          nonce?: string
+        }
+        Relationships: []
+      }
+      year_film_render_requests: {
+        Row: {
+          created_at: string
+          family_id: string
+          film_id: string
+          id: string
+          requested_by: string | null
+        }
+        Insert: {
+          created_at?: string
+          family_id: string
+          film_id: string
+          id?: string
+          requested_by?: string | null
+        }
+        Update: {
+          created_at?: string
+          family_id?: string
+          film_id?: string
+          id?: string
+          requested_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "year_film_render_requests_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "year_film_render_requests_film_id_fkey"
+            columns: ["film_id"]
+            isOneToOne: false
+            referencedRelation: "year_films"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      year_film_settings: {
+        Row: {
+          canary_family_ids: string[]
+          id: boolean
+          launch_date: string | null
+          max_concurrent_renders: number
+          mode: string
+          updated_at: string
+        }
+        Insert: {
+          canary_family_ids?: string[]
+          id?: boolean
+          launch_date?: string | null
+          max_concurrent_renders?: number
+          mode?: string
+          updated_at?: string
+        }
+        Update: {
+          canary_family_ids?: string[]
+          id?: boolean
+          launch_date?: string | null
+          max_concurrent_renders?: number
+          mode?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      year_film_views: {
+        Row: {
+          completed_at: string | null
+          film_id: string
+          first_viewed_at: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          film_id: string
+          first_viewed_at?: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          film_id?: string
+          first_viewed_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "year_film_views_film_id_fkey"
+            columns: ["film_id"]
+            isOneToOne: false
+            referencedRelation: "year_films"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      year_films: {
+        Row: {
+          age_year: number | null
+          ai_checks: Json
+          attempt_count: number
+          attempt_id: string | null
+          blocked: boolean
+          cleanup_needed: boolean
+          content_epoch: number
+          created_at: string
+          curated_epoch: number | null
+          duration_ms: number | null
+          edits: Json
+          edits_version: number
+          family_id: string
+          family_member_id: string | null
+          film_script: Json | null
+          forced: boolean
+          generation_started_at: string | null
+          heartbeat_at: string | null
+          id: string
+          kind: string
+          language: string | null
+          last_failure_code: string | null
+          machine_ids: Json
+          music_bed_id: string | null
+          next_attempt_at: string | null
+          notified_at: string | null
+          pool_cutoff_at: string | null
+          poster_key: string | null
+          quote_candidates: Json | null
+          quoted_memory_text_hashes: Json
+          ready_at: string | null
+          referenced_asset_keys: string[]
+          referenced_member_ids: string[]
+          referenced_memory_ids: string[]
+          referenced_portrait_version_ids: string[]
+          render_slot_at: string | null
+          requeue_after: string | null
+          scenes_key: string | null
+          scope_end_exclusive: string
+          scope_label: string | null
+          scope_start_date: string
+          skip_reason: string | null
+          stale: boolean
+          status: string
+          surface_at: string
+          updated_at: string
+          video_key: string | null
+          workflow_instance_id: string | null
+        }
+        Insert: {
+          age_year?: number | null
+          ai_checks?: Json
+          attempt_count?: number
+          attempt_id?: string | null
+          blocked?: boolean
+          cleanup_needed?: boolean
+          content_epoch?: number
+          created_at?: string
+          curated_epoch?: number | null
+          duration_ms?: number | null
+          edits?: Json
+          edits_version?: number
+          family_id: string
+          family_member_id?: string | null
+          film_script?: Json | null
+          forced?: boolean
+          generation_started_at?: string | null
+          heartbeat_at?: string | null
+          id?: string
+          kind: string
+          language?: string | null
+          last_failure_code?: string | null
+          machine_ids?: Json
+          music_bed_id?: string | null
+          next_attempt_at?: string | null
+          notified_at?: string | null
+          pool_cutoff_at?: string | null
+          poster_key?: string | null
+          quote_candidates?: Json | null
+          quoted_memory_text_hashes?: Json
+          ready_at?: string | null
+          referenced_asset_keys?: string[]
+          referenced_member_ids?: string[]
+          referenced_memory_ids?: string[]
+          referenced_portrait_version_ids?: string[]
+          render_slot_at?: string | null
+          requeue_after?: string | null
+          scenes_key?: string | null
+          scope_end_exclusive: string
+          scope_label?: string | null
+          scope_start_date: string
+          skip_reason?: string | null
+          stale?: boolean
+          status?: string
+          surface_at: string
+          updated_at?: string
+          video_key?: string | null
+          workflow_instance_id?: string | null
+        }
+        Update: {
+          age_year?: number | null
+          ai_checks?: Json
+          attempt_count?: number
+          attempt_id?: string | null
+          blocked?: boolean
+          cleanup_needed?: boolean
+          content_epoch?: number
+          created_at?: string
+          curated_epoch?: number | null
+          duration_ms?: number | null
+          edits?: Json
+          edits_version?: number
+          family_id?: string
+          family_member_id?: string | null
+          film_script?: Json | null
+          forced?: boolean
+          generation_started_at?: string | null
+          heartbeat_at?: string | null
+          id?: string
+          kind?: string
+          language?: string | null
+          last_failure_code?: string | null
+          machine_ids?: Json
+          music_bed_id?: string | null
+          next_attempt_at?: string | null
+          notified_at?: string | null
+          pool_cutoff_at?: string | null
+          poster_key?: string | null
+          quote_candidates?: Json | null
+          quoted_memory_text_hashes?: Json
+          ready_at?: string | null
+          referenced_asset_keys?: string[]
+          referenced_member_ids?: string[]
+          referenced_memory_ids?: string[]
+          referenced_portrait_version_ids?: string[]
+          render_slot_at?: string | null
+          requeue_after?: string | null
+          scenes_key?: string | null
+          scope_end_exclusive?: string
+          scope_label?: string | null
+          scope_start_date?: string
+          skip_reason?: string | null
+          stale?: boolean
+          status?: string
+          surface_at?: string
+          updated_at?: string
+          video_key?: string | null
+          workflow_instance_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "year_films_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "year_films_member_fkey"
+            columns: ["family_member_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id", "family_id"]
+          },
+        ]
+      }
     }
     Views: {
       ai_usage_observability_gaps: {
@@ -3901,6 +4179,14 @@ export type Database = {
           chunk_id: string
           dispatch_attempts: number
           run_id: string
+        }[]
+      }
+      claim_year_film_dispatch: {
+        Args: { p_limit: number; p_now?: string }
+        Returns: {
+          attempt_id: string
+          family_id: string
+          film_id: string
         }[]
       }
       cleanup_gallery_import_workflow_bridge_nonces: {
@@ -4560,6 +4846,10 @@ export type Database = {
         Args: { p_actor_user_id: string; p_request_id: string }
         Returns: boolean
       }
+      mark_year_film_cleaned: {
+        Args: { p_film_id: string; p_video_key: string }
+        Returns: boolean
+      }
       memory_search_document: {
         Args: {
           p_audio_transcript: string
@@ -4628,6 +4918,18 @@ export type Database = {
           published: boolean
         }[]
       }
+      publish_year_film: {
+        Args: {
+          p_attempt_id: string
+          p_duration_ms: number
+          p_edits_version: number
+          p_film_id: string
+          p_poster_key: string
+          p_scenes_key: string
+          p_video_key: string
+        }
+        Returns: Json
+      }
       purge_expired_ai_usage_data: {
         Args: { p_now?: string }
         Returns: {
@@ -4658,6 +4960,18 @@ export type Database = {
           p_will_renew: boolean
         }
         Returns: Json
+      }
+      queue_year_film_forced: {
+        Args: {
+          p_age_year: number
+          p_family_id: string
+          p_kind: string
+          p_member_id: string
+          p_scope_end_exclusive: string
+          p_scope_start: string
+          p_surface_at: string
+        }
+        Returns: string
       }
       reconcile_billing_snapshot: {
         Args: {
@@ -4781,6 +5095,10 @@ export type Database = {
       }
       record_portrait_generation_workflow_upload_complete: {
         Args: { p_job_id: string; p_output_key: string; p_upload_token: string }
+        Returns: boolean
+      }
+      record_year_film_bridge_nonce: {
+        Args: { p_nonce: string }
         Returns: boolean
       }
       refresh_account_hard_deletion_claim: {
@@ -4953,6 +5271,10 @@ export type Database = {
           subject_family_member_id: string
           tint: string
         }[]
+      }
+      save_year_film_edits: {
+        Args: { p_edits: Json; p_film_id: string }
+        Returns: Json
       }
       schedule_account_deletion: {
         Args: {
@@ -5204,6 +5526,109 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      year_film_bed_ids: { Args: never; Returns: string[] }
+      year_film_claim_render_slot: {
+        Args: { p_attempt_id: string; p_film_id: string }
+        Returns: string
+      }
+      year_film_due: { Args: { p_now?: string }; Returns: number }
+      year_film_due_families: {
+        Args: { p_now: string }
+        Returns: {
+          family_id: string
+          local_now: string
+          tz: string
+        }[]
+      }
+      year_film_end_cycle: {
+        Args: {
+          p_attempt_id: string
+          p_code: string
+          p_film_id: string
+          p_outcome: string
+        }
+        Returns: Json
+      }
+      year_film_family_enabled: {
+        Args: { p_family_id: string }
+        Returns: boolean
+      }
+      year_film_finish_cycle: {
+        Args: {
+          p_code: string
+          p_film: Database["public"]["Tables"]["year_films"]["Row"]
+          p_outcome: string
+        }
+        Returns: Json
+      }
+      year_film_heartbeat: {
+        Args: { p_attempt_id: string; p_epoch: number; p_film_id: string }
+        Returns: string
+      }
+      year_film_invalidate: {
+        Args: { p_block: boolean; p_film_ids: string[] }
+        Returns: number
+      }
+      year_film_is_own_child: {
+        Args: { p_dob: string; p_on: string; p_relationship: string }
+        Returns: boolean
+      }
+      year_film_member_prefixes: {
+        Args: { p_member_id: string }
+        Returns: string[]
+      }
+      year_film_notifications_due: {
+        Args: { p_now?: string }
+        Returns: {
+          age_year: number
+          family_id: string
+          family_member_id: string
+          film_id: string
+          kind: string
+          language: string
+          scope_start_date: string
+        }[]
+      }
+      year_film_parent_blocked_users: {
+        Args: { p_family_id: string }
+        Returns: string[]
+      }
+      year_film_promote_requeues: { Args: { p_now?: string }; Returns: number }
+      year_film_recheck_skipped: { Args: { p_now?: string }; Returns: number }
+      year_film_record_machine: {
+        Args: {
+          p_attempt_id: string
+          p_film_id: string
+          p_machine_id: string
+          p_mode: string
+        }
+        Returns: string
+      }
+      year_film_recover: { Args: { p_now?: string }; Returns: Json }
+      year_film_save_checks: {
+        Args: { p_attempt_id: string; p_checks: Json; p_film_id: string }
+        Returns: string
+      }
+      year_film_save_curation: {
+        Args: { p_attempt_id: string; p_film_id: string; p_payload: Json }
+        Returns: string
+      }
+      year_film_set_status: {
+        Args: { p_attempt_id: string; p_film_id: string; p_status: string }
+        Returns: string
+      }
+      year_film_text_hash: {
+        Args: { p_content: string; p_description: string; p_transcript: string }
+        Returns: string
+      }
+      year_films_needing_cleanup: {
+        Args: { p_limit: number }
+        Returns: {
+          film_id: string
+          owner_id: string
+          video_key: string
+        }[]
       }
     }
     Enums: {

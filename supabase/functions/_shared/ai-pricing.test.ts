@@ -68,3 +68,29 @@ Deno.test('prices Flare from measured usage without guessing cached modality', (
   assertEquals(priceOpenAiUsage('gpt-image-2.5-flare', dimensions).estimatedCostUsd, 0.00036);
   assertEquals(priceOpenAiUsage('gpt-image-2.5-flare', { ...dimensions, cached_input_tokens: 3 }).costIsComplete, false);
 });
+
+Deno.test('gpt-6 chat usage is priced under its own pricing version (Year Film)', () => {
+  const sol = priceOpenAiUsage('gpt-6-sol', { input_text_tokens: 10_000, output_text_tokens: 1_000 });
+  assertEquals(sol.pricingVersion, 'openai-2026-09-28');
+  assertEquals(sol.costIsComplete, true);
+  assertEquals(Math.round((sol.estimatedCostUsd ?? 0) * 1e6), 30_000); // 10k*2 + 1k*10 per million = $0.03
+  const luna = priceOpenAiUsage('gpt-6-luna', { input_text_tokens: 10_000, output_text_tokens: 1_000 });
+  assertEquals(Math.round((luna.estimatedCostUsd ?? 0) * 1e6), 1_500);
+  assertEquals(priceOpenAiUsage('gpt-audio-1.5', { audio_seconds: 6 }).costBasis, 'unpriced'); // no token counts
+});
+
+Deno.test('gpt-audio voice checks price audio and text tokens separately', async () => {
+  const { openAiAudioTokens } = await import('./ai-pricing.ts');
+  const usage = { prompt_tokens: 260, completion_tokens: 40, prompt_tokens_details: { audio_tokens: 60 } };
+  const audio = openAiAudioTokens(usage);
+  assertEquals(audio, { input: 60, output: 0 });
+  const priced = priceOpenAiUsage('gpt-audio-1.5', { input_text_tokens: 200, output_text_tokens: 40, audio_seconds: 6 }, {
+    audioInputTokens: audio.input, audioOutputTokens: audio.output,
+  });
+  // 60×$32 + 200×$2.5 + 40×$10 per million = $0.00282
+  assertEquals(Math.round((priced.estimatedCostUsd ?? 0) * 1e6), 2820);
+  assertEquals(priced.costIsComplete, true);
+  assertEquals(priced.pricingVersion, 'openai-2026-09-29');
+  const mini = priceOpenAiUsage('gpt-audio-mini', { input_text_tokens: 200, output_text_tokens: 40 }, { audioInputTokens: 60 });
+  assertEquals(Math.round((mini.estimatedCostUsd ?? 0) * 1e6), 816);
+});

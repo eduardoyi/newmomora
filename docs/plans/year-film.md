@@ -1055,11 +1055,54 @@ at 57.5s; both pass `hyperframes check`.
   is in the image). Not reproduced locally at 2 CPUs/4GB. Moot at 8x;
   noted in case a smaller size is ever considered.
 
+### P1 build results (2026-09-29, not deployed)
+
+Built per the hardened [year-film-p1.md](year-film-p1.md); everything local
+and uncommitted until the owner reviews. Verification: pgTAP 28/28 files
+(`year_films.sql` 68 assertions), Deno `test:edge` 1728 passed, Worker vitest
+12, render job 3, export worker 27, app tsc clean, Jest green (one known
+timing flake in `useMemories.integration.test.tsx` passes alone).
+
+Deviations from the plan (all small):
+- Edits: exclusions are applied when mapping rows
+  (`mapFamilyRows({ excludeMemoryIds })`) and the chosen quote is moved
+  first (`stickyQuotes`) — the builders needed no new inputs.
+- The quote pick is cached in `ai_checks` as `kind: 'quote'`.
+- The eval script `eval-year-film-assets.ts` still carries its own copy of
+  the asset-step logic; the production copy (`_shared/year-film-assets.ts`)
+  is covered by golden tests. Converging them is a follow-up (the dogfood
+  tool stays stable for Enzo's film on Oct 26).
+- `eval-year-film-script --from-film` (storyboard of a production row) and a
+  `--parity` flag were not built: parity uses `bench.sh sample` locally vs
+  on Fly + ffmpeg `psnr` (render/year-film-renderer/README.md).
+- Container end-to-end (`render/year-film-renderer/e2e.ts`, 2026-09-29):
+  the image's thumbs → prepare → render modes against an S3-compatible
+  store, synthetic media (photos, a HEIC, clips with sound, an audio memory),
+  a real FilmScript from the monthly builder — all pass: 12 thumbnails,
+  16 prepared assets (HEIC decoded, ranked clip cuts + check frames, voice
+  cuts + WAVs), a 22s 1080×1920 MP4 with audio, poster and scenes.json
+  (render 131s under amd64 emulation). Found and fixed: path-style S3
+  addressing, prepared files must land in `<film>/assets/` (the
+  assembler's layout), step-named failure codes, `applyPrepared` now drops
+  scenes/frames that couldn't be prepared (a sound scene with no passing
+  candidate crashed the assembler), and the poster falls back to the title
+  scene for films without a close (monthlies).
+
+Owner steps to reach the P1 gate: push the migration (mode stays `off`),
+deploy `schedule-year-films`, `workflow-year-film-bridge`,
+`get-year-film-url`, `delete-family-member`; `./build.sh` + push the image;
+Fly app secrets (R2); Worker secrets (`DISPATCH_SIGNING_SECRET`,
+`SUPABASE_BRIDGE_HMAC_SECRET`, `OPENAI_API_KEY`, `FLY_API_TOKEN`,
+`SENTRY_DSN`, optional `CF_API_TOKEN` + `R2_PARENT_ACCESS_KEY_ID`) and
+Supabase secrets (`CLOUDFLARE_YEAR_FILM_WORKFLOW_URL`,
+`CLOUDFLARE_YEAR_FILM_WORKFLOW_SECRET`, `CLOUDFLARE_YEAR_FILM_BRIDGE_SECRET`);
+then `year_film_settings` → `canary` for Eduardo's family with `launch_date`.
+
 ### Product build (after F4 passes)
 
 | Stage | What | Gate |
 |---|---|---|
-| **P1 — Backend** | Migration + RLS + regenerated types + TECH_SPEC; own children via `isFilmChild` (§12 Q8, resolved by family relationships); bridge; Workflow; Fly deploy; `schedule-year-films` cron (birthday, monthly, Dec 12 family); invalidation (§7.6); data-export inclusion; push route; `docs/features/year-film.md`. | Canary on production for Eduardo's family: a birthday film end-to-end, an edit re-render, a memory-deletion invalidation, and a **forced-scope** family film — each compared frame-for-frame against its F3 local render. |
+| **P1 — Backend** | Hardened plan: [year-film-p1.md](year-film-p1.md). Migration + RLS + regenerated types + TECH_SPEC; own children via `isFilmChild` (§12 Q8, resolved by family relationships); bridge; Workflow; Fly deploy; `schedule-year-films` cron (birthday, monthly, Dec 12 family); invalidation (§7.6); data-export inclusion; push route; `docs/features/year-film.md`. | Canary on production for Eduardo's family: a birthday film end-to-end, an edit re-render, a memory-deletion invalidation, and a **forced-scope** family film — each compared frame-for-frame against its F3 local render. |
 | **P2 — App** | Timeline card, viewer, share, edit sheet, Keepsakes Films section (+ upcoming-film cards), analytics. Unit + integration + Maestro (open → play → share sheet appears; edit → re-render state). | Device pass on iOS + Android (owner). |
 | **P3 — Launch** | EAS Update; enable the cron; watch the first real birthday films; the Dec 12 family-film render and Dec 15 surfacing. | Dec 12 renders complete for all eligible families; share rate per view tracked. |
 

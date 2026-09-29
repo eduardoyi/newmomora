@@ -22,6 +22,7 @@ import type {
   ExportPortraitVersion,
   ExportProfile,
   ExportTag,
+  ExportYearFilm,
   PlannedEntry,
 } from './types';
 
@@ -37,6 +38,8 @@ export interface ExportRows {
   memoryMedia: ExportMedia[];
   memoryComments: ExportComment[];
   portraitVersions: ExportPortraitVersion[];
+  /** Ready, non-blocked Year Films (optional so older fixtures still type). */
+  yearFilms?: ExportYearFilm[];
   /** user id -> display name, for "Added by" and comment authors. */
   userNames: Record<string, string>;
 }
@@ -92,6 +95,11 @@ export async function fetchExportRows(env: Env, ownerUserId: string): Promise<Ex
 
   const familyMembers = await listRowsByIds<ExportMember>(env, 'family_members', 'id,family_id,user_id,name,nicknames,date_of_birth,gender,profile_picture_key,illustrated_profile_key,illustrated_profile_status,additional_info,is_user_profile,relationship,family_side,side_member_id,created_at', 'family_id', familyIds, { order: 'created_at.asc' });
   const memories = await listRowsByIds<ExportMemory>(env, 'memories', 'id,family_id,user_id,memory_type,content,audio_transcript,link_previews,memory_date,emotion,illustration_key,illustration_status,media_key,media_content_type,created_at', 'family_id', familyIds, { order: 'memory_date.asc,created_at.asc' });
+  const yearFilms = await listRowsByIds<ExportYearFilm>(env, 'year_films', 'id,family_id,kind,scope_start_date,scope_label,video_key,ready_at', 'family_id', familyIds, {
+    video_key: 'not.is.null',
+    blocked: 'is.false',
+    order: 'scope_start_date.asc',
+  });
   const portraitVersions = await listRowsByIds<ExportPortraitVersion>(env, 'family_member_portrait_versions', 'id,family_id,family_member_id,user_id,reference_date,date_source,profile_picture_key,illustrated_profile_key,illustrated_profile_status,created_at', 'family_id', familyIds, { order: 'created_at.asc' });
 
   const memoryIds = memories.map((memory) => memory.id);
@@ -122,6 +130,7 @@ export async function fetchExportRows(env: Env, ownerUserId: string): Promise<Ex
     memoryMedia,
     memoryComments,
     portraitVersions,
+    yearFilms,
     userNames: Object.fromEntries(profiles.map((profile) => [profile.id, profile.name])),
   };
 }
@@ -300,6 +309,20 @@ export function buildExportPlan(jobId: string, ownerUserId: string, rows: Export
         add(version.profile_picture_key, 'photo', 'image/jpeg');
         add(version.illustrated_profile_key, 'portrait', 'image/webp');
       }
+    }
+    const usedFilmNames = new Set<string>();
+    for (const film of (rows.yearFilms ?? []).filter((f) => f.family_id === family.id)) {
+      if (seenKeys.has(film.video_key)) continue;
+      seenKeys.add(film.video_key);
+      const label = film.scope_label ?? (film.kind === 'family_month' ? film.scope_start_date.slice(0, 7) : film.scope_start_date.slice(0, 4));
+      familyEntries.push({
+        type: 'object',
+        path: `${root}/Films/${uniqueName(sanitizeSegment(`${film.scope_start_date} ${label}`, 'Film'), usedFilmNames)}.mp4`,
+        objectKey: film.video_key,
+        kind: 'year_film',
+        modifiedAt: film.ready_at ?? `${film.scope_start_date}T12:00:00.000Z`,
+        yearFilmId: film.id,
+      });
     }
     groups.push({
       id: `${family.id}:family`,

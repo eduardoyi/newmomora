@@ -133,7 +133,20 @@ export type ExportAssetKind =
   | 'family_photo'
   | 'family_portrait'
   | 'portrait_photo'
-  | 'portrait_illustration';
+  | 'portrait_illustration'
+  | 'year_film';
+
+/** A published Year Film (docs/plans/year-film-p1.md Step 8): the archive is
+ * never hostage — each servable film's MP4 is exported. */
+export interface ExportYearFilm {
+  id: string;
+  family_id: string;
+  kind: 'birthday' | 'family_month' | 'family_year';
+  scope_start_date: string;
+  scope_label: string | null;
+  video_key: string;
+  ready_at: string | null;
+}
 
 /** One entry to write into an archive, in order. */
 export type PlannedEntry =
@@ -147,6 +160,7 @@ export type PlannedEntry =
     memoryId?: string;
     familyMemberId?: string;
     portraitVersionId?: string;
+    yearFilmId?: string;
   };
 
 /** One logical archive ("Family & portraits" or one year); may split into parts. */

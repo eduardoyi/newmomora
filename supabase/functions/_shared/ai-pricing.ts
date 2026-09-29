@@ -23,7 +23,7 @@ export interface PricedAiUsage {
 
 const LEGACY_PRICING_VERSION = 'openai-2026-07-27';
 
-type KnownModel = 'gpt-4o-mini' | 'gpt-4o-mini-transcribe' | 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5';
+type KnownModel = 'gpt-4o-mini' | 'gpt-4o-mini-transcribe' | 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5' | 'gpt-6-sol' | 'gpt-6-luna';
 
 const PER_MILLION_USD: Record<Exclude<KnownModel, 'gpt-4o-mini-transcribe'>, {
   inputText: number;
@@ -38,6 +38,9 @@ const PER_MILLION_USD: Record<Exclude<KnownModel, 'gpt-4o-mini-transcribe'>, {
   'gpt-image-2': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 30, outputImage: 30 },
   'gpt-image-2.5-flare': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 0, outputImage: 30 },
   'gpt-image-1.5': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 10, outputImage: 32 },
+  // Year Film quote pick / claim + frame checks (pricing version openai-2026-09-28).
+  'gpt-6-sol': { inputText: 2, inputImage: 2, cachedInput: 0.2, outputText: 10, outputImage: 10 },
+  'gpt-6-luna': { inputText: 0.1, inputImage: 0.1, cachedInput: 0.01, outputText: 0.5, outputImage: 0.5 },
 };
 
 const TRANSCRIBE_USD_PER_AUDIO_SECOND = 0.003 / 60;
@@ -75,12 +78,51 @@ function hasValue(dimensions: AiUsageDimensions, key: keyof AiUsageDimensions): 
   return dimensions[key] !== undefined;
 }
 
+/** Audio tokens from a Chat Completions usage payload (they are included in
+ * prompt_tokens / completion_tokens, so callers subtract them from the text
+ * counts before pricing). */
+export function openAiAudioTokens(value: unknown): { input: number; output: number } {
+  const usage = object(value);
+  return {
+    input: nonNegativeNumber(object(usage.prompt_tokens_details).audio_tokens) ?? 0,
+    output: nonNegativeNumber(object(usage.completion_tokens_details).audio_tokens) ?? 0,
+  };
+}
+
+// gpt-audio chat models (Year Film voice check), per 1M tokens — OpenAI
+// pricing page, read 2026-09-29. Versioned with the result: add, don't edit.
+const AUDIO_CHAT_PRICING_VERSION = 'openai-2026-09-29';
+const AUDIO_CHAT_USD_PER_MILLION: Record<string, { audioIn: number; audioOut: number; textIn: number; textOut: number }> = {
+  'gpt-audio-1.5': { audioIn: 32, audioOut: 64, textIn: 2.5, textOut: 10 },
+  'gpt-audio': { audioIn: 32, audioOut: 64, textIn: 2.5, textOut: 10 },
+  'gpt-audio-mini': { audioIn: 10, audioOut: 20, textIn: 0.6, textOut: 2.4 },
+};
+
 export function priceOpenAiUsage(
   model: string,
   dimensions: AiUsageDimensions,
-  options: { audioDurationIsEstimate?: boolean } = {},
+  options: { audioDurationIsEstimate?: boolean; audioInputTokens?: number; audioOutputTokens?: number } = {},
 ): PricedAiUsage {
-  const pricingVersion = model === 'gpt-image-2.5-flare' ? 'openai-2026-09-08' : LEGACY_PRICING_VERSION;
+  const audioRates = AUDIO_CHAT_USD_PER_MILLION[model];
+  if (audioRates) {
+    // Text counts here must already exclude the audio tokens.
+    if (!hasValue(dimensions, 'input_text_tokens') || !hasValue(dimensions, 'output_text_tokens')) {
+      return { dimensions, billingStatus: 'unknown', pricingVersion: AUDIO_CHAT_PRICING_VERSION, costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null };
+    }
+    const estimatedCostUsd = (
+      (options.audioInputTokens ?? 0) * audioRates.audioIn +
+      (options.audioOutputTokens ?? 0) * audioRates.audioOut +
+      (dimensions.input_text_tokens ?? 0) * audioRates.textIn +
+      (dimensions.output_text_tokens ?? 0) * audioRates.textOut
+    ) / 1_000_000;
+    return { dimensions, billingStatus: 'known', pricingVersion: AUDIO_CHAT_PRICING_VERSION, costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd };
+  }
+
+  const pricingVersion = model === 'gpt-image-2.5-flare'
+    ? 'openai-2026-09-08'
+    : model === 'gpt-6-sol' || model === 'gpt-6-luna'
+    ? 'openai-2026-09-28'
+    : LEGACY_PRICING_VERSION;
   const hasDimensions = Object.keys(dimensions).length > 0;
   if (model === 'gpt-4o-mini-transcribe') {
     const hasBillableDimension = hasValue(dimensions, 'audio_seconds') ||
