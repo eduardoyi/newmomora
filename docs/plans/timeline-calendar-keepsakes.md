@@ -441,6 +441,17 @@ already say "month grid". Only the "tab" wording changes.
 - **Not done:** removing `'fab_calendar'` from the analytics unions (kept for
   historical data, as planned); the Films section (Year Film P2).
 
+**Follow-up — sticky control row (2026-09-29, owner request after device test):**
+the pinned top bar (A4/B1) is replaced by one sticky row where "Recently" was:
+the month label (the picker trigger), Today, and the List/Calendar switcher,
+plus the weekday letters in Calendar view.
+- Everything above the row (the title with search + bell, This week, Looking
+  Back) scrolls away in both views. Only what's below the row switches.
+- A jump (picker or day tap) hides the top content; Today brings it back.
+- Implemented as one FlatList: `[control row, ...memories | ...months]`, with
+  `stickyHeaderIndices` and the measured header feeding Calendar's
+  `getItemLayout`. See memories.md, "Sticky control row + jump to a month".
+
 ### Phase D — Year Film plan alignment (docs now, code in Film P2)
 
 Update `docs/plans/year-film.md` §8 (done in this change): films live in

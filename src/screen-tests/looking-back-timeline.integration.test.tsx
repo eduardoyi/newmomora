@@ -23,6 +23,10 @@ jest.mock('@/hooks/useMemoryMonthCounts', () => ({
   useMemoryMonthCounts: () => ({ counts: {}, isLoaded: true, refreshIfStale: jest.fn() }),
 }));
 jest.mock('@/components/calendar-month-picker-sheet', () => ({ CalendarMonthPickerSheet: () => null }));
+// The Calendar view's range query -- covered by timeline-month-jump.integration.test.tsx.
+jest.mock('@/hooks/useCalendarMemories', () => ({
+  useCalendarMemoriesInRange: () => ({ data: [], refetch: jest.fn() }),
+}));
 jest.mock('@/hooks/use-family', () => ({ useFamily: () => mockUseFamily() }));
 jest.mock('@/hooks/use-auth', () => ({ useAuth: () => mockUseAuth() }));
 // The continuous gallery-import sweep's device-bound status hook (docs/plans/
@@ -121,12 +125,12 @@ describe('Timeline Looking Back rail integration', () => {
     });
   });
 
-  it('orders title, This week, Looking back, and Recently before the feed', () => {
+  it('orders title, This week, Looking back, then the sticky control row before the feed', () => {
     const screen = render(<TimelineScreen />);
-    // The top inset belongs to the pinned header bar above the list (docs/
-    // plans/timeline-calendar-keepsakes.md A4). Top edge only: a bottom
-    // inset on it would open an Android navigation-bar-sized gap under it.
-    expect(screen.getByTestId('timeline-header-bar').props.edges).toEqual({
+    // The screen owns the top inset (the sticky control row pins below the
+    // status bar). Top edge only: a bottom inset here would open an Android
+    // navigation-bar-sized gap above the tab bar.
+    expect(screen.getByTestId('timeline-screen').props.edges).toEqual({
       bottom: 'off',
       left: 'off',
       right: 'off',
@@ -136,7 +140,6 @@ describe('Timeline Looking Back rail integration', () => {
       'timeline-title-section',
       'timeline-week-section',
       'looking-back-rail',
-      'timeline-recently-section',
     ]);
     const orderedSections = screen.getByTestId('timeline-top-sections')
       .findAll((node) => expectedSectionIds.has(node.props.testID))
@@ -146,8 +149,13 @@ describe('Timeline Looking Back rail integration', () => {
       'timeline-title-section',
       'timeline-week-section',
       'looking-back-rail',
-      'timeline-recently-section',
     ]);
+    // "Recently" is gone -- the month label + switcher row replaces it, as the
+    // list's first (sticky) row, outside the top sections.
+    expect(screen.queryByText('Recently')).toBeNull();
+    const list = screen.getByTestId('timeline-memory-list');
+    expect(list.findAll((node) => node.props.testID === 'timeline-control-row').length).toBeGreaterThan(0);
+    expect(list.props.stickyHeaderIndices).toEqual([1]);
     expect(screen.getByTestId('looking-back-rail')).toBeTruthy();
     expect(screen.getByText('Revisited today')).toBeTruthy();
   });

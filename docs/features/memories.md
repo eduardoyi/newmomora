@@ -1,7 +1,7 @@
 # Feature: Memories & illustrations
 
 **Status:** `done`
-**Last updated:** 2026-09-28 (Timeline date anchor + pinned month header)
+**Last updated:** 2026-09-29 (Timeline sticky control row: month label + switcher replace "Recently")
 **PRD reference:** §6.3 Memories, §6.4 Illustrations
 
 ## Overview
@@ -104,14 +104,22 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
     viewport height of the top. A foreground reconcile skipped this way isn't
     lost, just deferred to the next pull-to-refresh or the next
     foreground-while-near-top.
-- **Pinned header bar + jump to a month (2026-09-28,
-  [plan](../plans/timeline-calendar-keepsakes.md) Phase A):**
-  - `TimelineHeaderBar` (`src/components/timeline/timeline-header-bar.tsx`) is a
-    sibling ABOVE the list (never inside it), rendered in every Timeline state.
-    It owns the top safe-area inset and holds the month label (which is also
-    the "Jump to month" trigger), a contextual **Today** button, search and the
-    activity bell. The large "Your moments." title and streak dots still scroll
-    with the list.
+- **Sticky control row + jump to a month (Phase A 2026-09-28; row redesign
+  2026-09-29, [plan](../plans/timeline-calendar-keepsakes.md)):**
+  - **Layout.** The Timeline is ONE `FlatList` for both views:
+    - Rows are `[control row, ...memories | ...months]`.
+    - The `ListHeaderComponent` is the top content: the "Your moments." title
+      with search and the bell beside it, This week, Looking Back, the pending
+      uploads banner and the import invite. It scrolls away normally.
+    - `TimelineControlRow` (`src/components/timeline/timeline-control-row.tsx`)
+      replaced the old "Recently" separator: the month label (also the
+      "Jump to month" trigger), a rule, a contextual **Today**, and the
+      List/Calendar switcher. It is the list's only sticky element.
+    - The screen's `SafeAreaView edges={['top']}` owns the inset, so the row
+      pins below the status bar.
+    - `stickyHeaderIndices` count the list header as child 0, so the row is
+      `[1]` below the top content and `[0]` when a jump hides it.
+    - The earlier pinned `TimelineHeaderBar` (2026-09-28) is gone.
   - **Month label** = the month of the topmost card that's ≥15% visible, always
     with the year. It's the second pair in `viewabilityConfigCallbackPairs`;
     the first is the existing 60% video-autoplay pair. RN forbids swapping
@@ -148,13 +156,16 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
       since it's the same hook. Patches and removals reach the anchored key.
       **New memories are never prepended into it** (`memoryBelongsToListKey`
       rejects the shape), and `shouldDehydrateQuery` never persists it.
-  - **Screen:** the list remounts on anchor change (`key={anchorDate ?? 'feed'}`),
-    so every jump starts at offset 0 with no `scrollToIndex` or height model.
+  - **Screen:** the list remounts on anchor or view change (its `key`), so
+    every jump starts at offset 0 with no `scrollToIndex` or height model.
     While anchored:
-    - it uses `maintainVisibleContentPosition` + `onStartReached` →
-      `fetchPreviousPage` to extend upward without a jump;
-    - the "now" sections (streak dots, Looking Back, Recently, import invite)
-      are hidden;
+    - **the top content is hidden** (no `ListHeaderComponent`), so the list
+      starts at the control row;
+    - it uses `maintainVisibleContentPosition` (`minIndexForVisible: 1`, the
+      first memory, never the sticky row, which doesn't move when newer rows
+      insert below it) + `onStartReached` → `fetchPreviousPage` to extend
+      upward without a jump. There's no "loading newer" row, which would
+      become that anchor and then vanish;
     - Today is always shown.
     The anchor clears (back to the feed) on Today, a re-press of the focused
     Timeline tab, the FAB (the new memory will be prepended to the feed), or a
@@ -163,19 +174,27 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
     - Analytics: `timeline_jumped { source, months_back }`.
 - **Calendar view (2026-09-29, [plan](../plans/timeline-calendar-keepsakes.md)
   Phase B):**
-  - **Switcher.** The pinned bar has an icon-only List/Calendar switcher
+  - **Switcher.** The control row has an icon-only List/Calendar switcher
     (`timeline-view-list`/`timeline-view-calendar`, labelled for screen
     readers). The choice persists per device in AsyncStorage `timeline.view`
     (`src/utils/timeline-view-preference.ts`, try/catch → List). A switch that
     beats the stored read wins.
-  - **Only one view is mounted**, so the list query and the grid's range
-    query never both run.
-  - **Grid.** `CalendarMonthGrid` (`src/components/timeline/calendar-month-grid.tsx`)
-    shows months newest-first over the same range as the month picker
-    (`buildGridMonths(getTimelineMonthOptions(...))`), each a Monday-start
-    7-column grid.
-    - Months have exact heights (`src/utils/calendar-grid.ts`), so
-      `getItemLayout` is exact and jumps are a single `scrollToIndex`.
+  - **Only what's below the control row switches.** The top content stays the
+    same, and in Calendar view the row also carries the M–S weekday letters
+    (`calendar-grid-weekdays`). The grid's range query runs only in Calendar
+    view.
+  - **Grid.** Months are rows of the same list (`CalendarGridMonth`,
+    `src/components/timeline/calendar-month-grid.tsx`), newest-first over the
+    same range as the month picker (`buildGridMonths(getTimelineMonthOptions(...))`),
+    each a Monday-start 7-column grid.
+    - Every Calendar-view row has a known height: the control row
+      (`getControlRowHeight`) and months pinned to `getGridMonthHeight`
+      (`src/utils/calendar-grid.ts`). The top content is measured with
+      `onLayout`, so `getItemLayout` is exact and a month jump is one
+      `scrollToOffset`: the measured header plus the month's offset, which
+      lands the month right under the pinned row. The list's
+      `contentContainerStyle` has no `gap` in this view, to keep offsets
+      exact.
     - Data: `useCalendarMemoriesInRange` over the visible months ± 1, the same
       `calendar-memories` cache, patching and status polling as the Calendar
       tab. `fetchMemoriesInDateRange` now pages past 1000 rows.
@@ -191,10 +210,11 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
   - **Navigation.**
     - Tapping a day opens the list anchored at that day (today → the feed) and
       switches to List for the session without overwriting the saved choice.
-    - Switching to Calendar opens the grid at the month the list is showing.
-      Switching back keeps the list's anchor.
-    - In Calendar view the pinned label follows the grid's top month. Today
-      appears once off the current month and scrolls back to it, and so does a
+    - Switching to Calendar opens the grid at the month the list was showing,
+      or at the top if the list was at the top of today's feed. Switching back
+      keeps the list's anchor.
+    - In Calendar view the row's label follows the grid's top month. Today
+      appears once scrolled away and scrolls back to the top, and so does a
       Timeline tab re-press. A month pick scrolls the grid without changing the
       list's anchor.
   - **Analytics:** `timeline_view_switched { view }`, and

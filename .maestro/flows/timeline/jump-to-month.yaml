@@ -1,7 +1,7 @@
 appId: com.memora.app
 ---
 # Timeline date jump (docs/plans/timeline-calendar-keepsakes.md Phase A):
-# the pinned bar's month label opens the "Jump to month" picker; picking an
+# the control row's month label (sticky, where "Recently" was) opens the "Jump to month" picker; picking an
 # older month re-renders the list starting at that month, with a Today button
 # that returns to the feed.
 #
@@ -13,7 +13,7 @@ appId: com.memora.app
 - runFlow: ../auth/login.yaml
 - extendedWaitUntil:
     visible:
-      id: timeline-header-bar
+      id: timeline-control-row
     timeout: 30000
 - assertVisible:
     id: timeline-month-trigger

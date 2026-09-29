@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   AppState,
   FlatList,
+  type LayoutChangeEvent,
   type ListRenderItemInfo,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -30,8 +31,11 @@ import { ImportInviteCard } from '@/components/gallery-import/import-invite-card
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
-import { CalendarMonthGrid, type CalendarMonthGridHandle } from '@/components/timeline/calendar-month-grid';
-import { TimelineHeaderBar } from '@/components/timeline/timeline-header-bar';
+import { CalendarGridMonth } from '@/components/timeline/calendar-month-grid';
+import { getControlRowHeight, TimelineControlRow } from '@/components/timeline/timeline-control-row';
+import { TimelineActivityBell } from '@/components/timeline-activity-bell';
+import { TimelineSearchButton } from '@/components/timeline-search-button';
+import { useCalendarMemoriesInRange } from '@/hooks/useCalendarMemories';
 import { useFamilyActivityUnread } from '@/hooks/useFamilyActivity';
 import { useMemories } from '@/hooks/useMemories';
 import { useMemoryMonthCounts } from '@/hooks/useMemoryMonthCounts';
@@ -61,7 +65,15 @@ import {
   dismissGalleryImportInvite,
   isGalleryImportInviteDismissed,
 } from '@/utils/gallery-import-invite-dismissal';
-import { buildGridMonths } from '@/utils/calendar-grid';
+import {
+  buildGridMonthOffsets,
+  buildGridMonths,
+  getGridFetchRange,
+  getGridMonthHeight,
+  getGridTileSize,
+  summarizeGridDays,
+  type GridMonth,
+} from '@/utils/calendar-grid';
 import { toIsoDate } from '@/utils/dates';
 import { loadTimelineView, saveTimelineView, type TimelineView } from '@/utils/timeline-view-preference';
 import {
@@ -83,6 +95,20 @@ const timelineViewabilityConfig: ViewabilityConfig = { viewAreaCoveragePercentTh
 // onViewableItemsChanged/viewabilityConfig on the fly -- hence
 // viewabilityConfigCallbackPairs with both pairs fixed at mount.
 const monthLabelViewabilityConfig: ViewabilityConfig = { itemVisiblePercentThreshold: 15 };
+
+// The Timeline is one FlatList for both views
+// (docs/plans/timeline-calendar-keepsakes.md, sticky control row redesign):
+// the control row first (sticky), then memories (List) or months (Calendar).
+type ControlsRow = { kind: 'controls' };
+type MemoryRow = { kind: 'memory'; memory: MemoryWithTags };
+type MonthRow = { kind: 'month'; month: GridMonth; monthIndex: number };
+type TimelineRow = ControlsRow | MemoryRow | MonthRow;
+const CONTROL_ROW: ControlsRow = { kind: 'controls' };
+// stickyHeaderIndices count the ListHeaderComponent as child 0, so the
+// control row (data index 0) is child 1 below the top content, child 0
+// without it (an anchored list).
+const STICKY_BELOW_HEADER = [1];
+const STICKY_WITHOUT_HEADER = [0];
 
 // An anchored (jumped-to-a-date) Timeline returns to today's feed once the
 // app has been backgrounded this long -- coming back hours later to March
@@ -181,15 +207,25 @@ function TimelineGalleryImportInvite() {
   return <ImportInviteCard onDismiss={handleDismiss} onStart={handleStart} />;
 }
 
-// Search, the activity bell and the month label live in the pinned
-// TimelineHeaderBar now (docs/plans/timeline-calendar-keepsakes.md A4) --
-// this is just the large scrolling title. The old day eyebrow ("MONDAY,
-// SEPTEMBER 28") was dropped: it read as a duplicate of the bar's month label
-// directly above it.
-function TimelineTitle() {
+interface ActivityBellSlotProps {
+  bellUnread: boolean;
+  onPressBell: () => void;
+}
+
+// The large scrolling title, with search and the activity bell beside it --
+// they scroll away with it (owner decision 2026-09-29; the month label and
+// Today live in the sticky control row). No date eyebrow: dropped
+// 2026-09-28 as redundant with the month label.
+function TimelineTitle({ bellUnread, onPressBell }: ActivityBellSlotProps) {
   return (
     <View style={styles.header} testID="timeline-title-section">
-      <Text style={styles.title}>Your moments.</Text>
+      <View style={styles.headerTitleRow}>
+        <Text style={styles.title}>Your moments.</Text>
+        <View style={styles.headerGlyphs}>
+          <TimelineSearchButton />
+          <TimelineActivityBell onPress={onPressBell} unread={bellUnread} />
+        </View>
+      </View>
     </View>
   );
 }
@@ -200,22 +236,16 @@ function TimelineTitle() {
 function TimelineTitleWithStreak({
   memories,
   showStreak,
-}: { memories: MemoryWithTags[]; showStreak: boolean }) {
+  ...titleProps
+}: ActivityBellSlotProps & { memories: MemoryWithTags[]; showStreak: boolean }) {
   return <>
-    <TimelineTitle />
+    <TimelineTitle {...titleProps} />
     {showStreak ? (
       <View style={styles.streakWrap} testID="timeline-week-section">
         <StreakDots memories={memories} />
       </View>
     ) : null}
   </>;
-}
-
-function RecentlySection({ hasLookingBack }: { hasLookingBack: boolean }) {
-  return <View style={[styles.recentlyRow, !hasLookingBack && styles.recentlyRowWithoutRail]} testID="timeline-recently-section">
-    <Text style={styles.sectionLabel}>Recently</Text>
-    <View style={styles.sectionRule} />
-  </View>;
 }
 
 export default function TimelineScreen() {
@@ -312,7 +342,7 @@ export default function TimelineScreen() {
   const isAnchored = anchorDate !== null;
   // Month of the topmost visible card -- the pinned bar's label.
   const [topVisibleDate, setTopVisibleDate] = useState<string | null>(null);
-  const flatListRef = useRef<FlatList<MemoryWithTags>>(null);
+  const flatListRef = useRef<FlatList<TimelineRow>>(null);
   const [isMonthPickerVisible, setIsMonthPickerVisible] = useState(false);
   const shouldReconcileOnForeground = useCallback(
     () => scrollOffsetRef.current <= windowHeight,
@@ -348,46 +378,11 @@ export default function TimelineScreen() {
   );
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
 
-  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
-    const firstVideo = viewableItems.find(
-      (t) =>
-        t.isViewable &&
-        (t.item as MemoryWithTags).mediaAssets.some((asset) => isVideoContentType(asset.content_type)),
-    );
-    setActiveVideoId(firstVideo ? (firstVideo.item as MemoryWithTags).id : null);
-  }, []);
-
-  const onMonthLabelViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
-    let top: ViewToken | null = null;
-    for (const token of viewableItems) {
-      if (token.isViewable && token.index !== null && (top === null || token.index < (top.index ?? Infinity))) {
-        top = token;
-      }
-    }
-    if (top) {
-      const date = (top.item as MemoryWithTags).memory_date;
-      setTopVisibleDate((previous) => (previous === date ? previous : date));
-    }
-  }, []);
-
-  // Fixed at mount -- RN throws if these change on a mounted list.
-  const [viewabilityConfigCallbackPairs] = useState(() => [
-    { viewabilityConfig: timelineViewabilityConfig, onViewableItemsChanged },
-    { viewabilityConfig: monthLabelViewabilityConfig, onViewableItemsChanged: onMonthLabelViewableItemsChanged },
-  ]);
-
-  // ── Month picker + anchor ────────────────────────────────────────────────
-  const monthCounts = useMemoryMonthCounts(isUserBlocked);
-  const monthOptions = useMemo(
-    () => getTimelineMonthOptions(new Date(), monthCounts.counts),
-    [monthCounts.counts],
-  );
-  const canJumpToMonth = monthOptions.some((option) => !option.isCurrent && option.count > 0);
-
   // ── List / Calendar view (docs/plans/timeline-calendar-keepsakes.md B1) ──
-  // Only the active view is mounted, so the list query and the grid's range
-  // query never run side by side. The choice persists per device; tapping a
-  // day switches to List for this session without overwriting it.
+  // Both views are one FlatList: [sticky control row, ...memories | ...months]
+  // under the same top content, so switching only changes what's below the
+  // control row. The choice persists per device; tapping a day switches to
+  // List for this session without overwriting it.
   const [view, setView] = useState<TimelineView>('list');
   // A switch (or day tap) that beats the stored-preference read wins -- the
   // late read must not flip the view back underneath the user.
@@ -401,20 +396,118 @@ export default function TimelineScreen() {
       cancelled = true;
     };
   }, []);
-  const gridRef = useRef<CalendarMonthGridHandle>(null);
+
+  const { width: windowWidth } = useWindowDimensions();
+  const tileSize = getGridTileSize(windowWidth);
   const todayIso = toIsoDate(new Date());
   const currentMonthKey = toMonthKey(todayIso);
-  // Month the grid opens at (captured when switching in) and the month its
-  // topmost visible row is showing (drives the pinned label).
-  const [gridInitialMonthKey, setGridInitialMonthKey] = useState<string>(currentMonthKey);
-  const [gridTopMonthKey, setGridTopMonthKey] = useState<string>(currentMonthKey);
-  const gridMonths = useMemo(() => buildGridMonths(monthOptions, todayIso), [monthOptions, todayIso]);
 
-  const listMonthLabel = formatTimelineMonthLabel(topVisibleDate ?? anchorDate ?? new Date());
-  const monthLabel = view === 'calendar' ? formatTimelineMonthLabel(`${gridTopMonthKey}-01`) : listMonthLabel;
+  // ── Month picker + counts ────────────────────────────────────────────────
+  const monthCounts = useMemoryMonthCounts(isUserBlocked);
+  const monthOptions = useMemo(
+    () => getTimelineMonthOptions(new Date(), monthCounts.counts),
+    [monthCounts.counts],
+  );
+  const canJumpToMonth = monthOptions.some((option) => !option.isCurrent && option.count > 0);
+
+  // ── Calendar grid data ───────────────────────────────────────────────────
+  const gridMonths = useMemo(() => buildGridMonths(monthOptions, todayIso), [monthOptions, todayIso]);
+  const gridMonthOffsets = useMemo(() => buildGridMonthOffsets(gridMonths, tileSize), [gridMonths, tileSize]);
+  // Month the grid's top row is showing (the control row's label in Calendar
+  // view) and the visible month range (drives the range fetch, ± 1 month).
+  const [gridTopMonthKey, setGridTopMonthKey] = useState<string>(currentMonthKey);
+  const [gridVisibleRange, setGridVisibleRange] = useState({ first: 0, last: 0 });
+  const gridFetchRange = useMemo(
+    () => (view === 'calendar' ? getGridFetchRange(gridMonths, gridVisibleRange.first, gridVisibleRange.last) : null),
+    [gridMonths, gridVisibleRange.first, gridVisibleRange.last, view],
+  );
+  const { data: gridMemories = [], refetch: refetchGridMemories } = useCalendarMemoriesInRange(gridFetchRange);
+  const gridSummaries = useMemo(() => summarizeGridDays(gridMemories, isUserBlocked), [gridMemories, isUserBlocked]);
+
+  // ── Top content height ───────────────────────────────────────────────────
+  // Measured (not estimated): Calendar view's getItemLayout offsets start
+  // below it, and month jumps scroll to exact offsets from it. Kept in a ref
+  // too so a view switch can scroll before the new list re-measures.
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const headerHeightRef = useRef(0);
+  const handleHeaderLayout = useCallback((event: LayoutChangeEvent) => {
+    const height = Math.round(event.nativeEvent.layout.height);
+    headerHeightRef.current = height;
+    setHeaderHeight((previous) => (previous === height ? previous : height));
+  }, []);
+
+  const monthLabel = view === 'calendar'
+    ? formatTimelineMonthLabel(`${gridTopMonthKey}-01`)
+    : formatTimelineMonthLabel(topVisibleDate ?? anchorDate ?? new Date());
   const showTodayButton = view === 'calendar'
-    ? gridTopMonthKey !== currentMonthKey
+    ? gridTopMonthKey !== currentMonthKey || isScrolledDeep
     : isAnchored || isScrolledDeep;
+
+  // ── Viewability (fixed at mount -- RN throws if these change) ────────────
+  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    const firstVideo = viewableItems.find((token) => {
+      const row = token.item as TimelineRow;
+      return token.isViewable && row.kind === 'memory'
+        && row.memory.mediaAssets.some((asset) => isVideoContentType(asset.content_type));
+    });
+    setActiveVideoId(firstVideo ? (firstVideo.item as MemoryRow).memory.id : null);
+  }, []);
+
+  // The topmost content row (memory or month) names the control row's month;
+  // in Calendar view the visible months also set the grid's fetch range.
+  const onMonthLabelViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    let topMemory: MemoryRow | null = null;
+    let topMemoryIndex = Infinity;
+    let firstMonthIndex = Infinity;
+    let lastMonthIndex = -1;
+    let topMonth: MonthRow | null = null;
+    for (const token of viewableItems) {
+      if (!token.isViewable || token.index === null) continue;
+      const row = token.item as TimelineRow;
+      if (row.kind === 'memory' && token.index < topMemoryIndex) {
+        topMemoryIndex = token.index;
+        topMemory = row;
+      } else if (row.kind === 'month') {
+        if (row.monthIndex < firstMonthIndex) {
+          firstMonthIndex = row.monthIndex;
+          topMonth = row;
+        }
+        lastMonthIndex = Math.max(lastMonthIndex, row.monthIndex);
+      }
+    }
+    if (topMemory) {
+      const date = topMemory.memory.memory_date;
+      setTopVisibleDate((previous) => (previous === date ? previous : date));
+    }
+    if (topMonth) {
+      const key = topMonth.month.key;
+      const first = firstMonthIndex;
+      const last = lastMonthIndex;
+      setGridTopMonthKey((previous) => (previous === key ? previous : key));
+      setGridVisibleRange((previous) => (previous.first === first && previous.last === last ? previous : { first, last }));
+    }
+  }, []);
+
+  const [viewabilityConfigCallbackPairs] = useState(() => [
+    { viewabilityConfig: timelineViewabilityConfig, onViewableItemsChanged },
+    { viewabilityConfig: monthLabelViewabilityConfig, onViewableItemsChanged: onMonthLabelViewableItemsChanged },
+  ]);
+
+  // ── Scrolling helpers ────────────────────────────────────────────────────
+  const scrollToTop = useCallback((animated = true) => {
+    flatListRef.current?.scrollToOffset({ animated, offset: 0 });
+  }, []);
+
+  // Calendar view: put `monthKey` right under the pinned control row -- the
+  // top content scrolls off above it.
+  const scrollGridToMonth = useCallback((monthKey: string, animated: boolean) => {
+    const index = gridMonths.findIndex((month) => month.key === monthKey);
+    if (index < 0) return;
+    setGridTopMonthKey(monthKey);
+    setGridVisibleRange({ first: index, last: index });
+    const offset = index === 0 ? 0 : headerHeightRef.current + (gridMonthOffsets[index] ?? 0);
+    flatListRef.current?.scrollToOffset({ animated, offset });
+  }, [gridMonthOffsets, gridMonths]);
 
   // Every anchor change (including back to the feed) remounts the list via its
   // `key`, which starts it at offset 0 -- no scrollToIndex, no height model.
@@ -428,16 +521,13 @@ export default function TimelineScreen() {
   }, []);
 
   const goToToday = useCallback(() => {
-    if (view === 'calendar') {
-      gridRef.current?.scrollToMonth(currentMonthKey);
-      return;
-    }
-    if (anchorDate !== null) {
+    if (view === 'list' && anchorDate !== null) {
       applyAnchor(null);
       return;
     }
-    flatListRef.current?.scrollToOffset({ animated: true, offset: 0 });
-  }, [anchorDate, applyAnchor, currentMonthKey, view]);
+    setGridTopMonthKey(currentMonthKey);
+    scrollToTop();
+  }, [anchorDate, applyAnchor, currentMonthKey, scrollToTop, view]);
 
   const handlePressToday = useCallback(() => {
     trackEvent('timeline_jumped', { source: 'today_button', months_back: 0 });
@@ -458,32 +548,50 @@ export default function TimelineScreen() {
     if (view === 'calendar') {
       // In the grid a pick scrolls to that month; the list's anchor is
       // untouched.
-      gridRef.current?.scrollToMonth(toMonthKey(option.iso), false);
+      scrollGridToMonth(toMonthKey(option.iso), false);
       return;
     }
     const next = getMonthAnchorDate(option);
     if (next === anchorDate) {
-      flatListRef.current?.scrollToOffset({ animated: true, offset: 0 });
+      scrollToTop();
       return;
     }
     applyAnchor(next);
-  }, [anchorDate, applyAnchor, view]);
+  }, [anchorDate, applyAnchor, scrollGridToMonth, scrollToTop, view]);
 
+  // Switching to Calendar opens the grid at the month the list was showing
+  // (at the very top when the list was at the top of today's feed).
+  const pendingGridMonthRef = useRef<string | null>(null);
   const handleChangeView = useCallback((next: TimelineView) => {
     hasChosenViewRef.current = true;
     trackEvent('timeline_view_switched', { view: next });
     if (next === 'calendar') {
-      // Open the grid at the month the list is showing.
       const monthKey = toMonthKey(topVisibleDate ?? anchorDate ?? todayIso);
-      setGridInitialMonthKey(monthKey);
-      setGridTopMonthKey(monthKey);
+      const atTop = anchorDate === null && scrollOffsetRef.current <= headerHeightRef.current;
+      pendingGridMonthRef.current = atTop ? null : monthKey;
+      setGridTopMonthKey(atTop ? currentMonthKey : monthKey);
+      const index = Math.max(0, gridMonths.findIndex((month) => month.key === monthKey));
+      setGridVisibleRange({ first: atTop ? 0 : index, last: atTop ? 0 : index });
     } else {
       setTopVisibleDate(null);
     }
+    scrollOffsetRef.current = 0;
+    isScrolledDeepRef.current = false;
+    setIsScrolledDeep(false);
     setActiveVideoId(null);
     setView(next);
     void saveTimelineView(next);
-  }, [anchorDate, todayIso, topVisibleDate]);
+  }, [anchorDate, currentMonthKey, gridMonths, todayIso, topVisibleDate]);
+
+  // The Calendar list mounts at offset 0; land it on the pending month once
+  // it has laid out (exact offsets: getItemLayout + the measured header).
+  useEffect(() => {
+    if (view !== 'calendar' || !pendingGridMonthRef.current) return;
+    const monthKey = pendingGridMonthRef.current;
+    pendingGridMonthRef.current = null;
+    const frame = requestAnimationFrame(() => scrollGridToMonth(monthKey, false));
+    return () => cancelAnimationFrame(frame);
+  }, [scrollGridToMonth, view]);
 
   // A day tile opens the list at that day (today = the feed itself).
   const handleGridDayPress = useCallback((iso: string) => {
@@ -495,10 +603,6 @@ export default function TimelineScreen() {
     hasChosenViewRef.current = true;
     setView('list');
   }, [applyAnchor, currentMonthKey, todayIso]);
-
-  const handleGridTopMonthChange = useCallback((monthKey: string) => {
-    setGridTopMonthKey((previous) => (previous === monthKey ? previous : monthKey));
-  }, []);
 
   // Re-pressing the focused Timeline tab goes home: back to today's feed, or
   // to the top of it.
@@ -572,26 +676,92 @@ export default function TimelineScreen() {
     router.push(lookingBackPackageRoute(item.id));
   }, [clearCheckpoint, lookingBack.packages, savePackageSnapshot]);
 
-  // B3: stable renderItem/keyExtractor so FlatList doesn't treat every render
-  // as a brand-new render function, and a memoized header element so
-  // unrelated state changes (e.g. activeVideoId) don't recreate it.
-  const keyExtractor = useCallback((item: MemoryWithTags) => item.id, []);
+  const bellUnread = hasUnreadActivity || galleryBellUnread;
+
+  // ── Rows ─────────────────────────────────────────────────────────────────
+  // Anchored lists (a jump) start at the control row: the top content (title,
+  // search, bell, This week, Looking Back) is hidden until Today.
+  const showTopContent = view === 'calendar' || !isAnchored;
+  const rows = useMemo<TimelineRow[]>(() => {
+    const content: TimelineRow[] = view === 'calendar'
+      ? gridMonths.map((month, monthIndex) => ({ kind: 'month', month, monthIndex }))
+      : visibleMemories.map((memory) => ({ kind: 'memory', memory }));
+    // No "loading newer" row: newer pages land above the viewport, and an
+    // extra row at index 1 would become maintainVisibleContentPosition's
+    // anchor and then vanish.
+    return [CONTROL_ROW, ...content];
+  }, [gridMonths, view, visibleMemories]);
+
+  const controlRowHeight = getControlRowHeight(view);
+  // Calendar view only: every row's height is known (control row, months),
+  // offset by the measured top content.
+  const getGridItemLayout = useCallback(
+    (_data: ArrayLike<TimelineRow> | null | undefined, index: number) => {
+      if (index === 0) {
+        return { index, length: controlRowHeight, offset: headerHeight };
+      }
+      const month = gridMonths[index - 1];
+      return {
+        index,
+        length: month ? getGridMonthHeight(month, tileSize) : 0,
+        offset: headerHeight + controlRowHeight + (gridMonthOffsets[index - 1] ?? 0),
+      };
+    },
+    [controlRowHeight, gridMonthOffsets, gridMonths, headerHeight, tileSize],
+  );
+
+  const keyExtractor = useCallback((row: TimelineRow) => {
+    switch (row.kind) {
+      case 'memory':
+        return row.memory.id;
+      case 'month':
+        return `month-${row.month.key}`;
+      default:
+        return row.kind;
+    }
+  }, []);
 
   const renderItem = useCallback(
-    ({ item }: ListRenderItemInfo<MemoryWithTags>) => {
-      const isMemoryReported = contentSafety.isTargetReported('memory', item.id);
+    ({ item }: ListRenderItemInfo<TimelineRow>) => {
+      if (item.kind === 'controls') {
+        return (
+          <TimelineControlRow
+            canJumpToMonth={canJumpToMonth}
+            monthLabel={monthLabel}
+            onChangeView={handleChangeView}
+            onPressMonth={handleOpenMonthPicker}
+            onPressToday={handlePressToday}
+            showToday={showTodayButton}
+            tileSize={tileSize}
+            view={view}
+          />
+        );
+      }
+      if (item.kind === 'month') {
+        return (
+          <CalendarGridMonth
+            isTargetReported={contentSafety.isTargetReported}
+            month={item.month}
+            onDayPress={handleGridDayPress}
+            summaries={gridSummaries}
+            tileSize={tileSize}
+          />
+        );
+      }
+      const memory = item.memory;
+      const isMemoryReported = contentSafety.isTargetReported('memory', memory.id);
       const isIllustrationReported = contentSafety.isTargetReported(
         'memory_illustration',
-        item.id,
-        item.illustration_generation_id,
+        memory.id,
+        memory.illustration_generation_id,
       );
       if (isMemoryReported) {
         return (
           <View style={styles.cardItem}>
             <ContentHiddenNotice
               label="Reported memory hidden"
-              onShow={() => contentSafety.revealTarget('memory', item.id)}
-              testID={`timeline-memory-${item.id}-hidden`}
+              onShow={() => contentSafety.revealTarget('memory', memory.id)}
+              testID={`timeline-memory-${memory.id}-hidden`}
             />
           </View>
         );
@@ -599,54 +769,51 @@ export default function TimelineScreen() {
       return (
         <View style={styles.cardItem}>
           <MemoryCard
-            memory={item}
+            memory={memory}
             onPress={handleCardPress}
             onOpenComments={handleOpenComments}
-            isVideoActive={item.id === activeVideoId}
+            isVideoActive={memory.id === activeVideoId}
             isIllustrationHidden={isIllustrationReported}
             onShowIllustration={() => contentSafety.revealTarget(
               'memory_illustration',
-              item.id,
-              item.illustration_generation_id,
+              memory.id,
+              memory.illustration_generation_id,
             )}
           />
         </View>
       );
     },
-    [activeVideoId, contentSafety, handleCardPress, handleOpenComments],
+    [
+      activeVideoId, canJumpToMonth, contentSafety, gridSummaries, handleCardPress, handleChangeView,
+      handleGridDayPress, handleOpenComments, handleOpenMonthPicker, handlePressToday, monthLabel,
+      showTodayButton, tileSize, view,
+    ],
   );
 
-  // The top inset belongs to the pinned TimelineHeaderBar now, so the list
-  // header is a plain View. Anchored lists drop the "now" sections (streak,
-  // Looking Back, Recently, the import invite) -- they start in the past.
+  // Top content above the control row. Scrolls away; hidden while anchored.
   const listHeader = useMemo(
-    () => (
-      <View testID="timeline-top-sections">
-        {isAnchored ? (
-          <>
-            <TimelineTitle />
-            {isFetchingPreviousPage ? (
-              <View style={styles.listHeaderLoading} testID="timeline-newer-loading">
-                <ActivityIndicator color={colors.primary} />
-              </View>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <TimelineTitleWithStreak memories={visibleMemories} showStreak />
-            <LookingBackPackageRail packages={lookingBack.packages} onOpen={handleOpenLookingBackPackage} />
-            <RecentlySection hasLookingBack={lookingBack.packages.length > 0} />
-            <PendingMemoryUploadsBanner />
-            {/* The invite renders as the first list item when there is exactly
-                one memory, matching its empty-state placement below --
-                visibleMemories.length <= 1 is the one condition both branches
-                share (docs/plans/gallery-import-continuous.md I4a step 1). */}
-            {canEdit && visibleMemories.length === 1 ? <TimelineGalleryImportInvite /> : null}
-          </>
-        )}
+    () => (showTopContent ? (
+      <View onLayout={handleHeaderLayout} testID="timeline-top-sections">
+        <TimelineTitleWithStreak
+          bellUnread={bellUnread}
+          memories={visibleMemories}
+          onPressBell={handleOpenActivitySheet}
+          showStreak
+        />
+        <LookingBackPackageRail packages={lookingBack.packages} onOpen={handleOpenLookingBackPackage} />
+        <PendingMemoryUploadsBanner />
+        {/* The invite renders above the first memory when there is exactly
+            one memory, matching its empty-state placement below --
+            visibleMemories.length <= 1 is the one condition both branches
+            share (docs/plans/gallery-import-continuous.md I4a step 1). */}
+        {canEdit && view === 'list' && visibleMemories.length === 1 ? <TimelineGalleryImportInvite /> : null}
+        <View style={lookingBack.packages.length > 0 ? styles.controlRowGap : styles.controlRowGapWithoutRail} />
       </View>
-    ),
-    [canEdit, handleOpenLookingBackPackage, isAnchored, isFetchingPreviousPage, lookingBack.packages, visibleMemories],
+    ) : null),
+    [
+      bellUnread, canEdit, handleHeaderLayout, handleOpenActivitySheet, handleOpenLookingBackPackage,
+      lookingBack.packages, showTopContent, view, visibleMemories,
+    ],
   );
 
   // fetchNextPage's signature (FetchNextPageOptions) doesn't match FlatList's
@@ -663,10 +830,14 @@ export default function TimelineScreen() {
     }
   }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage]);
   const handleRefresh = useCallback(() => {
-    void Promise.all([refetch(), lookingBack.refetch(), refetchActivityUnread()]);
-  }, [lookingBack, refetch, refetchActivityUnread]);
+    void Promise.all([
+      view === 'calendar' ? Promise.all([refetchGridMemories(), monthCounts.refresh()]) : refetch(),
+      lookingBack.refetch(),
+      refetchActivityUnread(),
+    ]);
+  }, [lookingBack, monthCounts, refetch, refetchActivityUnread, refetchGridMemories, view]);
 
-  const listFooter = isFetchingNextPage ? (
+  const listFooter = view === 'list' && isFetchingNextPage ? (
     <View style={styles.listFooterLoading}>
       <ActivityIndicator color={colors.primary} />
     </View>
@@ -716,53 +887,35 @@ export default function TimelineScreen() {
     );
   }
 
-  const bellUnread = hasUnreadActivity || galleryBellUnread;
   const refreshControl = (
     <RefreshControl refreshing={isRefetching || lookingBack.isRefetching} onRefresh={handleRefresh} tintColor={colors.primary} />
   );
+  const titleProps = { bellUnread, onPressBell: handleOpenActivitySheet };
 
   return (
-    <View style={styles.container}>
-      <TimelineHeaderBar
-        onChangeView={handleChangeView}
-        view={view}
-        bellUnread={bellUnread}
-        canJumpToMonth={canJumpToMonth}
-        monthLabel={monthLabel}
-        onPressBell={handleOpenActivitySheet}
-        onPressMonth={handleOpenMonthPicker}
-        onPressToday={handlePressToday}
-        showToday={showTodayButton}
-      />
-      {view === 'calendar' ? (
-        <CalendarMonthGrid
-          initialMonthKey={gridInitialMonthKey}
-          months={gridMonths}
-          onDayPress={handleGridDayPress}
-          onRefresh={() => Promise.all([monthCounts.refresh(), refetchActivityUnread()])}
-          onTopMonthChange={handleGridTopMonthChange}
-          ref={gridRef}
-        />
-      ) : isLoading ? (
+    // The screen owns the top inset, so the sticky control row pins below the
+    // status bar and the title scrolls under a solid strip.
+    <SafeAreaView edges={['top']} style={styles.container} testID="timeline-screen">
+      {view === 'list' && isLoading ? (
         <>
-          <TimelineTitleWithStreak memories={memories} showStreak={!isAnchored} />
+          <TimelineTitleWithStreak {...titleProps} memories={memories} showStreak={!isAnchored} />
           <View style={styles.centeredInline}>
             <ActivityIndicator color={colors.primary} size="large" />
           </View>
         </>
-      ) : isError ? (
+      ) : view === 'list' && isError ? (
         <ScrollView refreshControl={refreshControl}>
-          <TimelineTitleWithStreak memories={memories} showStreak={!isAnchored} />
+          <TimelineTitleWithStreak {...titleProps} memories={memories} showStreak={!isAnchored} />
           <Text style={styles.errorText}>Could not load memories</Text>
         </ScrollView>
-      ) : memories.length > 0 && visibleMemories.length === 0 ? (
+      ) : view === 'list' && memories.length > 0 && visibleMemories.length === 0 ? (
         <ScrollView
           contentContainerStyle={styles.hiddenOnlyWrap}
           refreshControl={refreshControl}
           testID="timeline-hidden-content-state"
         >
           <View>
-            <TimelineTitleWithStreak memories={memories} showStreak={!isAnchored} />
+            <TimelineTitleWithStreak {...titleProps} memories={memories} showStreak={!isAnchored} />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.hiddenOnlyTitle}>Blocked-account memories are hidden</Text>
@@ -778,11 +931,11 @@ export default function TimelineScreen() {
             </View>
           </View>
         </ScrollView>
-      ) : visibleMemories.length === 0 && isAnchored ? (
+      ) : view === 'list' && visibleMemories.length === 0 && isAnchored ? (
         // Only reachable if the anchored range emptied out underneath us (the
         // picker never offers an empty month) -- offer the way home.
         <ScrollView style={styles.emptyWrap} refreshControl={refreshControl} testID="timeline-anchored-empty-state">
-          <TimelineTitle />
+          <TimelineTitle {...titleProps} />
           <Text style={styles.emptyBody}>No memories on or before this date.</Text>
           <Pressable
             accessibilityRole="button"
@@ -793,14 +946,14 @@ export default function TimelineScreen() {
             <Text style={styles.hiddenOnlyButtonText}>Back to today</Text>
           </Pressable>
         </ScrollView>
-      ) : visibleMemories.length === 0 ? (
+      ) : view === 'list' && visibleMemories.length === 0 ? (
         <ScrollView
           style={styles.emptyWrap}
           refreshControl={refreshControl}
           testID="timeline-empty-state"
         >
           <View>
-            <TimelineTitleWithStreak memories={visibleMemories} showStreak />
+            <TimelineTitleWithStreak {...titleProps} memories={visibleMemories} showStreak />
             <PendingMemoryUploadsBanner />
             <View style={styles.emptyCard}>
               <Text style={styles.emptyScript}>nothing yet</Text>
@@ -814,26 +967,33 @@ export default function TimelineScreen() {
         </ScrollView>
       ) : (
         <FlatList
-          contentContainerStyle={styles.listContent}
-          data={visibleMemories}
-          initialNumToRender={6}
-          key={anchorDate ?? 'feed'}
+          contentContainerStyle={view === 'calendar' ? styles.gridContent : styles.listContent}
+          data={rows}
+          getItemLayout={view === 'calendar' ? getGridItemLayout : undefined}
+          initialNumToRender={view === 'calendar' ? 4 : 6}
+          key={`${view}:${view === 'list' ? anchorDate ?? 'feed' : 'grid'}`}
           keyExtractor={keyExtractor}
           ListFooterComponent={listFooter}
           ListHeaderComponent={listHeader}
-          maintainVisibleContentPosition={isAnchored ? { minIndexForVisible: 0 } : undefined}
-          maxToRenderPerBatch={6}
-          onEndReached={handleEndReached}
+          // Index 1: the first memory -- never the sticky control row, whose
+          // position doesn't move when newer pages are inserted below it.
+          maintainVisibleContentPosition={view === 'list' && isAnchored ? { minIndexForVisible: 1 } : undefined}
+          maxToRenderPerBatch={view === 'calendar' ? 3 : 6}
+          onEndReached={view === 'list' ? handleEndReached : undefined}
           onEndReachedThreshold={0.5}
           onScroll={handleScroll}
-          onStartReached={isAnchored ? handleStartReached : undefined}
+          onStartReached={view === 'list' && isAnchored ? handleStartReached : undefined}
           onStartReachedThreshold={0.5}
           ref={flatListRef}
           refreshControl={refreshControl}
-          removeClippedSubviews
+          // Off: on Android, clipping a sticky header by its ORIGINAL frame
+          // makes the pinned control row vanish once that frame scrolls far
+          // off screen. Virtualization (windowSize) still bounds the work.
+          removeClippedSubviews={false}
           renderItem={renderItem}
           scrollEventThrottle={100}
-          testID="timeline-memory-list"
+          stickyHeaderIndices={showTopContent ? STICKY_BELOW_HEADER : STICKY_WITHOUT_HEADER}
+          testID={view === 'calendar' ? 'calendar-grid' : 'timeline-memory-list'}
           viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
           windowSize={7}
         />
@@ -863,7 +1023,7 @@ export default function TimelineScreen() {
         onOpenMemory={handleActivityOpenMemory}
         visible={isActivitySheetVisible}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -888,6 +1048,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: 0,
   },
+  headerTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  headerGlyphs: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
   streakWrap: { paddingHorizontal: spacing.lg },
   title: {
     fontFamily: fonts.display,
@@ -929,40 +1095,22 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
     borderWidth: 1.5,
   },
-  recentlyRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 9,
-    paddingHorizontal: spacing.lg,
-    paddingTop: 14,
-  },
-  recentlyRowWithoutRail: {
-    paddingTop: 26,
-  },
-  sectionLabel: {
-    color: colors.ink3,
-    fontFamily: fonts.sansBold,
-    fontSize: 10.5,
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
-  },
-  sectionRule: {
-    backgroundColor: colors.border,
-    flex: 1,
-    height: 1,
-  },
   listContent: {
     gap: 14,
     paddingBottom: 130,
   },
+  // No gap: Calendar view's getItemLayout offsets assume rows sit flush.
+  gridContent: {
+    paddingBottom: 130,
+  },
+  // Space above the control row (the old "Recently" separator's padding).
+  controlRowGap: { height: 2 },
+  controlRowGapWithoutRail: { height: 14 },
   cardItem: {
     paddingHorizontal: spacing.md,
   },
   listFooterLoading: {
     paddingVertical: spacing.lg,
-  },
-  listHeaderLoading: {
-    paddingTop: spacing.md,
   },
   // Onboarding empty
   onboardingWrap: {

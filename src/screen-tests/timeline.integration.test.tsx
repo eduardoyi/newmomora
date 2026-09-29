@@ -27,6 +27,10 @@ jest.mock('@/hooks/useMemoryMonthCounts', () => ({
   useMemoryMonthCounts: () => ({ counts: {}, isLoaded: true, refreshIfStale: jest.fn() }),
 }));
 jest.mock('@/components/calendar-month-picker-sheet', () => ({ CalendarMonthPickerSheet: () => null }));
+// The Calendar view's range query -- covered by timeline-month-jump.integration.test.tsx.
+jest.mock('@/hooks/useCalendarMemories', () => ({
+  useCalendarMemoriesInRange: () => ({ data: [], refetch: jest.fn() }),
+}));
 // The header glyph/drawer are gone (owner decision: the activity bell is the
 // one re-entry point) -- this flag defaults on here so the empty-state and
 // one-memory invite-card tests below can exercise TimelineGalleryImportInvite
