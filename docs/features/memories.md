@@ -175,17 +175,24 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
   - **Screen:** the list remounts on anchor or view change (its `key`), so
     every jump starts at offset 0 with no `scrollToIndex` or height model.
     While anchored:
-    - **the top content is hidden** (no `ListHeaderComponent`), so the list
-      starts at the control row. Once the list has loaded up to the newest
-      memory (`!hasPreviousPage`), the top content comes back above the row
-      (`maintainVisibleContentPosition` keeps the on-screen card still) and
-      Today hides, so scrolling up reaches the title again;
+    - **the top content is hidden.** The list is headed by a fixed 48pt
+      "Loading newer memories" strip instead, then the control row. Once the
+      list has loaded up to the newest memory (`!hasPreviousPage`), the strip
+      is replaced by the top content (`maintainVisibleContentPosition` keeps
+      the on-screen card still) and Today hides, so scrolling up reaches the
+      title again. The List view **always** has a header, so the swap is a
+      height change of child 0; adding or removing a header would shift every
+      child index under `maintainVisibleContentPosition`;
     - newer pages start loading 5 screens before the top
       (`onStartReachedThreshold`), so a quick scroll up doesn't hit the
       not-yet-loaded top;
     - **no pull-to-refresh until the newest memory has loaded.** Pulling
       re-fetched the anchor and threw the user back to the jumped-to month
-      mid-scroll;
+      mid-scroll. The `RefreshControl` is **disabled (`enabled={false}`, no-op
+      handler), never removed**: adding or removing it re-creates Android's
+      native ScrollView (it's wrapped in a SwipeRefreshLayout), which snaps
+      the list to offset 0 without a scroll event. That caused a jump that
+      "flashed" back to today, and the row stuck pinned over the title;
     - it uses `maintainVisibleContentPosition` (`minIndexForVisible: 1`, the
       first memory, never the sticky row, which doesn't move when newer rows
       insert below it) + `onStartReached` → `fetchPreviousPage` to extend

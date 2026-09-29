@@ -218,11 +218,14 @@ describe('Timeline month jump', () => {
     await jumpToMarch2025(screen);
 
     const list = screen.getByTestId('timeline-memory-list');
-    // The first memory (index 1), never the control row's slot.
-    expect(list.props.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 1 });
-    // No pull-to-refresh until the newest memory has loaded: it would re-fetch
-    // the anchor mid-scroll.
-    expect(list.props.refreshControl).toBeUndefined();
+    // The first memory, never the control row's slot: FlatList's
+    // minIndexForVisible 1, which the host ScrollView sees as 2 because the
+    // list always has a header (the "Loading newer memories" strip here).
+    expect(list.props.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 2 });
+    // Pull-to-refresh is DISABLED (never removed -- removing it re-creates
+    // Android's ScrollView at offset 0) until the newest memory has loaded.
+    expect(list.props.refreshControl.props.enabled).toBe(false);
+    expect(screen.getByTestId('timeline-newer-header')).toBeTruthy();
     act(() => {
       list.props.onStartReached({ distanceFromStart: 0 });
     });
@@ -405,9 +408,9 @@ describe('Timeline control row geometry', () => {
     const screen = renderTimeline();
     jumpToMarch(screen);
 
-    // Anchored: no top content, so the row's slot is [0, 64) (52 + 12 gap).
-    // May occupies [64, 364), April [364, 664).
-    for (const [id, y] of [['may', 64], ['april', 364]] as const) {
+    // Anchored: the 48pt "Loading newer memories" strip, then the row's slot
+    // [48, 112) (52 + 12 gap). May occupies [112, 412), April [412, 712).
+    for (const [id, y] of [['may', 112], ['april', 412]] as const) {
       fireEvent(screen.getByTestId(`timeline-cell-${id}`), 'layout', {
         nativeEvent: { layout: { x: 0, y, width: 390, height: 300 } },
       });
@@ -416,9 +419,9 @@ describe('Timeline control row geometry', () => {
     scrollTo(screen, 250); // line just under the pinned row: 315 -> May
     expect(screen.getByText('May 2025')).toBeTruthy();
 
-    // May's last 44pt are still on screen but under the row -- April is the
-    // card the reader sees first.
-    scrollTo(screen, 320); // line 385 -> April
+    // May's last 52pt are still on screen but under the pinned row -- April
+    // is the card the reader sees first.
+    scrollTo(screen, 360); // line 425 -> April
     expect(screen.getByText('April 2025')).toBeTruthy();
   });
 
@@ -433,7 +436,8 @@ describe('Timeline control row geometry', () => {
     // Nothing newer left to load: the list is back at today's top.
     expect(screen.getByTestId('timeline-title-section')).toBeTruthy();
     expect(screen.queryByTestId('timeline-today-button')).toBeNull();
-    expect(screen.getByTestId('timeline-memory-list').props.refreshControl).toBeTruthy();
+    expect(screen.getByTestId('timeline-memory-list').props.refreshControl.props.enabled).toBe(true);
+    expect(screen.queryByTestId('timeline-newer-header')).toBeNull();
   });
 
   it('keeps the control row outside the list, so it stays tappable when pinned', () => {
@@ -442,5 +446,45 @@ describe('Timeline control row geometry', () => {
     expect(list.findAll((node) => node.props.testID === 'timeline-control-row')).toHaveLength(0);
     expect(list.props.stickyHeaderIndices ?? []).toEqual([]);
     expect(screen.getByTestId('timeline-control-row')).toBeTruthy();
+  });
+});
+
+describe('Timeline list stays mounted across a jump', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    AsyncStorage.getItem.mockResolvedValue(null);
+    mockMonthCounts.mockReturnValue({ [currentMonthKey]: 1, '2025-03': 4 });
+  });
+
+  it('keeps the same RefreshControl element type whether or not pull-to-refresh is allowed', () => {
+    // Regression: swapping refreshControl in/out re-creates Android's native
+    // ScrollView at offset 0 without a scroll event (jump "flashes" back to
+    // today; row stuck pinned over the title).
+    let hasPreviousPage = true;
+    mockUseMemories.mockImplementation((options: { anchorDate: string | null }) =>
+      hookResult([marchMemory], options.anchorDate ? { hasPreviousPage } : {}),
+    );
+    const screen = renderTimeline();
+    fireEvent.press(screen.getByTestId('timeline-month-trigger'));
+    act(() => {
+      fireEvent.press(screen.getByTestId('month-picker-option-2025-03-01'));
+    });
+    const before = screen.getByTestId('timeline-memory-list').props.refreshControl;
+    expect(before.props.enabled).toBe(false);
+
+    hasPreviousPage = false;
+    screen.rerender(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <TimelineScreen />
+      </SafeAreaProvider>,
+    );
+    const after = screen.getByTestId('timeline-memory-list').props.refreshControl;
+    expect(after.type).toBe(before.type);
+    expect(after.props.enabled).toBe(true);
   });
 });

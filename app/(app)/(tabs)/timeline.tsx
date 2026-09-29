@@ -103,6 +103,9 @@ const CONTROL_ROW: ControlsRow = { kind: 'controls' };
 // An anchored list starts loading newer pages this many screens before the
 // top, so a quick scroll up doesn't hit the (not-yet-loaded) top first.
 const NEWER_PAGE_THRESHOLD_SCREENS = 5;
+// Fixed height of the "Loading newer memories" strip that heads an anchored
+// list until it reaches the newest memory (its control row slot sits below it).
+const NEWER_HEADER_HEIGHT = 48;
 
 // Where each rendered memory cell sits in the list's content (reported by
 // MeasuredCell), so the control row's month label can read the card right
@@ -142,6 +145,8 @@ function MeasuredCell({ children, item, onLayout, style }: CellRendererProps<Tim
 // app has been backgrounded this long -- coming back hours later to March
 // 2024 would read as a bug.
 const ANCHOR_RESET_AFTER_BACKGROUND_MS = 30 * 60 * 1000;
+
+function noop() {}
 
 function monthsBetween(fromKey: string, toKey: string): number {
   const [fromYear, fromMonth] = fromKey.split('-').map(Number) as [number, number];
@@ -483,7 +488,10 @@ export default function TimelineScreen() {
   const showTopContent = view === 'calendar' || !isAnchored || reachedNewest;
   const controlRowHeight = getControlRowHeight(view);
   // Content offset of the control row's slot in the list.
-  const rowTop = showTopContent ? headerHeight : 0;
+  // An anchored list (not yet at the newest memory) is headed by the fixed
+  // "Loading newer memories" strip instead of the top content.
+  const showNewerHeader = view === 'list' && !showTopContent;
+  const rowTop = showTopContent ? headerHeight : NEWER_HEADER_HEIGHT;
 
   const monthLabel = view === 'calendar'
     ? formatTimelineMonthLabel(`${gridTopMonthKey}-01`)
@@ -848,8 +856,21 @@ export default function TimelineScreen() {
   );
 
   // Top content above the control row. Scrolls away; hidden while anchored.
+  // The list ALWAYS has a header in List view (top content, or the newer
+  // strip while anchored): swapping one for the other is a height change of
+  // child 0, which maintainVisibleContentPosition absorbs. Adding/removing a
+  // header would shift every child index instead.
+  const newerHeader = useMemo(
+    () => (
+      <View style={styles.newerHeader} testID="timeline-newer-header">
+        <ActivityIndicator color={colors.ink3} size="small" />
+        <Text style={styles.newerHeaderText}>Loading newer memories</Text>
+      </View>
+    ),
+    [],
+  );
   const listHeader = useMemo(
-    () => (showTopContent ? (
+    () => (showNewerHeader ? newerHeader : showTopContent ? (
       <View onLayout={handleHeaderLayout} testID="timeline-top-sections">
         <TimelineTitleWithStreak
           bellUnread={bellUnread}
@@ -869,7 +890,7 @@ export default function TimelineScreen() {
     ) : null),
     [
       bellUnread, canEdit, handleHeaderLayout, handleOpenActivitySheet, handleOpenLookingBackPackage,
-      lookingBack.packages, showTopContent, view, visibleMemories,
+      lookingBack.packages, newerHeader, showNewerHeader, showTopContent, view, visibleMemories,
     ],
   );
 
@@ -977,7 +998,20 @@ export default function TimelineScreen() {
   // An anchored list's top isn't today's top until the newest memory has
   // loaded: pulling there would re-fetch the anchor and throw the user back
   // to the jumped-to month mid-scroll. No pull-to-refresh until then.
-  const listRefreshControl = view === 'list' && isAnchored && !reachedNewest ? undefined : refreshControl;
+  //
+  // DISABLED, never removed: adding or removing a RefreshControl re-creates
+  // Android's native ScrollView (it wraps it in a SwipeRefreshLayout), which
+  // snaps the list to offset 0 without a scroll event -- the "jump flashes
+  // and lands back on today" and "row pinned over the title" states.
+  const isPullToRefreshDisabled = view === 'list' && isAnchored && !reachedNewest;
+  const listRefreshControl = (
+    <RefreshControl
+      enabled={!isPullToRefreshDisabled}
+      onRefresh={isPullToRefreshDisabled ? noop : handleRefresh}
+      refreshing={!isPullToRefreshDisabled && (isRefetching || lookingBack.isRefetching)}
+      tintColor={colors.primary}
+    />
+  );
   const titleProps = { bellUnread, onPressBell: handleOpenActivitySheet };
 
   return (
@@ -1214,6 +1248,18 @@ const styles = StyleSheet.create({
   },
   listFrame: {
     flex: 1,
+  },
+  newerHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    height: NEWER_HEADER_HEIGHT,
+    justifyContent: 'center',
+  },
+  newerHeaderText: {
+    color: colors.ink3,
+    fontFamily: fonts.sans,
+    fontSize: 12.5,
   },
   controlRowOverlay: {
     left: 0,
