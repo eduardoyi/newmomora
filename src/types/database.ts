@@ -1089,10 +1089,11 @@ export type Database = {
       }
       family_activity_events: {
         Row: {
-          actor_id: string
+          actor_id: string | null
           comment_id: string | null
           created_at: string
           family_id: string
+          film_id: string | null
           id: string
           invite_id: string | null
           kind: string
@@ -1100,10 +1101,11 @@ export type Database = {
           memory_id: string | null
         }
         Insert: {
-          actor_id: string
+          actor_id?: string | null
           comment_id?: string | null
           created_at?: string
           family_id: string
+          film_id?: string | null
           id?: string
           invite_id?: string | null
           kind: string
@@ -1111,10 +1113,11 @@ export type Database = {
           memory_id?: string | null
         }
         Update: {
-          actor_id?: string
+          actor_id?: string | null
           comment_id?: string | null
           created_at?: string
           family_id?: string
+          film_id?: string | null
           id?: string
           invite_id?: string | null
           kind?: string
@@ -1134,6 +1137,13 @@ export type Database = {
             columns: ["family_id"]
             isOneToOne: false
             referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "family_activity_events_film_id_fkey"
+            columns: ["film_id"]
+            isOneToOne: false
+            referencedRelation: "year_films"
             referencedColumns: ["id"]
           },
           {
@@ -3621,6 +3631,7 @@ export type Database = {
           music_bed_id: string | null
           next_attempt_at: string | null
           notified_at: string | null
+          placement_date: string | null
           pool_cutoff_at: string | null
           poster_key: string | null
           quote_candidates: Json | null
@@ -3671,6 +3682,7 @@ export type Database = {
           music_bed_id?: string | null
           next_attempt_at?: string | null
           notified_at?: string | null
+          placement_date?: string | null
           pool_cutoff_at?: string | null
           poster_key?: string | null
           quote_candidates?: Json | null
@@ -3721,6 +3733,7 @@ export type Database = {
           music_bed_id?: string | null
           next_attempt_at?: string | null
           notified_at?: string | null
+          placement_date?: string | null
           pool_cutoff_at?: string | null
           poster_key?: string | null
           quote_candidates?: Json | null
@@ -4615,6 +4628,39 @@ export type Database = {
         Args: { target_family_id: string }
         Returns: boolean
       }
+      get_family_activity_unread_v2: {
+        Args: { target_family_id: string }
+        Returns: boolean
+      }
+      get_family_activity_v2: {
+        Args: { target_family_id: string }
+        Returns: {
+          actor_id: string
+          actor_is_former: boolean
+          actor_name: string
+          comment_id: string
+          comment_snippet: string
+          created_at: string
+          film_age_year: number
+          film_id: string
+          film_kind: string
+          film_member_id: string
+          film_scope_start: string
+          id: string
+          invite_id: string
+          kind: string
+          memory_creation_source: string
+          memory_emotion: string
+          memory_excerpt: string
+          memory_id: string
+          memory_illustration_generation_id: string
+          memory_illustration_key: string
+          memory_media_content_type: string
+          memory_media_key: string
+          memory_media_preview_key: string
+          memory_type: string
+        }[]
+      }
       get_family_billing_status: {
         Args: { p_family_id: string }
         Returns: Json
@@ -4960,6 +5006,23 @@ export type Database = {
           p_will_renew: boolean
         }
         Returns: Json
+      }
+      queue_year_film_backfill: {
+        Args: {
+          p_dry_run?: boolean
+          p_family_id: string
+          p_only_kind?: string
+          p_only_scope_start?: string
+          p_through: string
+        }
+        Returns: {
+          age_year: number
+          due_date: string
+          family_member_id: string
+          inserted: boolean
+          kind: string
+          scope_start_date: string
+        }[]
       }
       queue_year_film_forced: {
         Args: {
@@ -5528,6 +5591,18 @@ export type Database = {
         }
       }
       year_film_bed_ids: { Args: never; Returns: string[] }
+      year_film_candidate_rows: {
+        Args: { p_family_id: string; p_from: string; p_to: string }
+        Returns: {
+          age_year: number
+          due_date: string
+          family_member_id: string
+          kind: string
+          scope_end_exclusive: string
+          scope_start_date: string
+          surface_at: string
+        }[]
+      }
       year_film_claim_render_slot: {
         Args: { p_attempt_id: string; p_film_id: string }
         Returns: string
@@ -5539,6 +5614,12 @@ export type Database = {
           family_id: string
           local_now: string
           tz: string
+        }[]
+      }
+      year_film_enabled_families: {
+        Args: never
+        Returns: {
+          family_id: string
         }[]
       }
       year_film_end_cycle: {
@@ -5590,9 +5671,14 @@ export type Database = {
           scope_start_date: string
         }[]
       }
+      year_film_owner_tz: { Args: { p_family_id: string }; Returns: string }
       year_film_parent_blocked_users: {
         Args: { p_family_id: string }
         Returns: string[]
+      }
+      year_film_poster_thumb_key: {
+        Args: { p_poster_key: string }
+        Returns: string
       }
       year_film_promote_requeues: { Args: { p_now?: string }; Returns: number }
       year_film_recheck_skipped: { Args: { p_now?: string }; Returns: number }
@@ -5622,6 +5708,7 @@ export type Database = {
         Args: { p_content: string; p_description: string; p_transcript: string }
         Returns: string
       }
+      year_films_enabled: { Args: { p_family_id: string }; Returns: boolean }
       year_films_needing_cleanup: {
         Args: { p_limit: number }
         Returns: {

@@ -114,8 +114,24 @@ migration, `supabase/migrations/20260822100000_family_activity.sql`).
 
 | Table / column | Role in this feature |
 |---|---|
-| `family_activity_events` | One row per event (`memory_added`, `memory_commented`, `memory_liked`, `member_joined`, `member_pending`). Ids only (`memory_id`, `comment_id`, `like_user_id`, `invite_id`) — content is joined at read time by the RPC, never duplicated here. No client RLS policies. |
+| `family_activity_events` | One row per event (`memory_added`, `memory_commented`, `memory_liked`, `member_joined`, `member_pending`, and the actor-less `film_ready` — see below). Ids only (`memory_id`, `comment_id`, `like_user_id`, `invite_id`) — content is joined at read time by the RPC, never duplicated here. No client RLS policies. |
 | `family_memberships.activity_seen_at` | Nullable timestamp; null means "never opened the sheet" (everything unread). Set by `mark_family_activity_seen`. |
+
+**`film_ready` (Year Film P2, `20260930120000_year_films_p2.sql`).** A ready
+Year Film adds one event with **no actor** (`actor_id is null`; the table check
+ties `kind = 'film_ready'` to a null actor) and a `film_id`
+(`year_films`, cascade). It is written by `year_film_notifications_due` in the
+same statement that marks the film notified, so the entry appears exactly when
+the push is sent. Rules the RPCs enforce: every member sees it (there is no
+actor to filter out, and a member who blocked someone still sees it); it counts only while the film is servable (video present, not
+blocked, not forced, surfaced) — a blocked or deleted film leaves the list and
+the unread dot; history backfills write none. **New clients call
+`get_family_activity_v2` / `get_family_activity_unread_v2`**, which add the
+output columns `film_id, film_kind, film_member_id, film_age_year,
+film_scope_start` (ids and dates only; the client builds the title and signs
+the cover). The **v1 RPCs stay for old builds and exclude `film_ready`
+explicitly**, so an old client never lists an unknown kind or shows a dot it
+cannot clear — do not remove that filter.
 
 The DB layer (table, triggers, RPCs, retention/pruning, the `memory_likes`
 select-policy flip) is owned by the concurrent DB migration and documented
@@ -127,6 +143,8 @@ in TECH_SPEC.md — this doc covers client behavior and integration.
 |---|---|---|---|
 | `get_family_activity` RPC | `target_family_id` | up to 100 rows, newest first (id, kind, timestamps, actor, memory/comment/invite fields — see TECH_SPEC.md) | JWT; active member of `target_family_id`; excludes the caller's own events; excludes events whose actor the caller has blocked (`blocked_family_accounts`, matching the [content-reporting.md](./content-reporting.md) push-delivery rule); excludes `member_pending` unless caller is owner/manager |
 | `get_family_activity_unread` RPC | `target_family_id` | `boolean` | JWT; same membership/role/blocked-actor rules as above |
+| `get_family_activity_v2` RPC | `target_family_id` | as v1 plus `film_id, film_kind, film_member_id, film_age_year, film_scope_start` | JWT; same rules as v1 except: the caller filter is `actor_id is distinct from auth.uid()`, `actor_is_former` is false for a null actor, and `film_ready` rows appear only for servable films |
+| `get_family_activity_unread_v2` RPC | `target_family_id` | `boolean` | JWT; same as v2 (includes `film_ready`) |
 | `mark_family_activity_seen` RPC | `target_family_id` | `void` | JWT; sets the caller's own membership's `activity_seen_at` |
 
 No Edge Function changes. `notify-family-activity` and
@@ -237,6 +255,9 @@ always the **newest** member's timestamp.
 
 **Common extension patterns**
 
+- A kind with **no actor** (like `film_ready`) must go through the v2 RPCs and
+  the `is distinct from` filters — the v1 `actor_id <> auth.uid()` silently
+  drops NULL actors — and v1 must exclude it explicitly for old builds.
 - New event kind → DB trigger + RPC column (DB side) + a `FamilyActivityKind`
   variant + a `buildFamilyActivityCopy` case (TypeScript's exhaustiveness
   check will fail the build if you forget the case) + a grouping rule if it
@@ -369,3 +390,4 @@ maestro test .maestro/flows/engagement/family-activity.yaml
 |------|--------|
 | 2026-08-21 | Initial implementation: bell + unread dot, bottom sheet with sectioned/grouped feed, RPC-backed service and hooks, client-side grouping and copy rules. |
 | 2026-08-23 | Continuous gallery-import sweep re-entry (docs/plans/gallery-import-continuous.md I4a): the bell's dot also lights for an unseen ready batch, and the sheet gains a non-persisted, non-grouped pinned row above the sections/empty state pointing at the review deck or progress screen. Not a new event kind — see Extension guide. |
+| 2026-09-30 | Year Film P2 backend: actor-less `film_ready` kind (`actor_id` nullable + `film_id`), `get_family_activity_v2` / `get_family_activity_unread_v2`, v1 RPCs exclude `film_ready`; `year_film_notifications_due` writes the event with the push. Client wiring (Step 8 of docs/plans/year-film-p2.md) lands separately. |

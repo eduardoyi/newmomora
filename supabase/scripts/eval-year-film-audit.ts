@@ -24,7 +24,7 @@
  *
  * Examples:
  *   npm run eval:year-film-audit -- --children Enzo,Mara
- *   npm run eval:year-film-audit -- --children Enzo,Mara --today 2026-12-11
+ *   npm run eval:year-film-audit -- --children Enzo,Mara --today 2026-12-27
  *
  * `--children` lists the family's own children by first name (plan §4.2:
  * nieces/cousins with profiles don't get films or chapters). Without it,
@@ -41,6 +41,7 @@ import {
   evaluateBirthdayFilm,
   evaluateFamilyFilm,
   evaluateMonthlyFilm,
+  FAMILY_FILM_CUTOFF,
   FAMILY_MIN_POOL,
   FAMILY_MIN_VISUALS,
   type FamilyEvaluation,
@@ -425,9 +426,9 @@ function evaluateFamily(
 
   const year = Number(today.slice(0, 4));
   const familyFilms: FamilyFilmRow[] = [];
-  // Plan §4.2: scope Jan 1 → Dec 11. This year's is capped at today.
+  // Plan §4.2: scope Jan 1 → Dec 27 (FAMILY_FILM_CUTOFF). This year's is capped at today.
   for (const [label, filmYear] of [[`${year - 1}`, year - 1], [`${year} so far`, year]] as const) {
-    const cutoffExclusive = `${filmYear}-12-12`;
+    const cutoffExclusive = `${filmYear}-${FAMILY_FILM_CUTOFF}`;
     const tomorrowish = today >= cutoffExclusive ? cutoffExclusive : nextDayString(today);
     const scope = { start: `${filmYear}-01-01`, endExclusive: filmYear < year ? cutoffExclusive : tomorrowish };
     familyFilms.push({

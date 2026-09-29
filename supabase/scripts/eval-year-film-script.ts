@@ -616,7 +616,7 @@ for (const film of options.films) {
   if (film.kind === 'birthday') {
     const child = children.find((c) => firstName(c.name).toLowerCase() === film.childName);
     if (!child?.dateOfBirth) throw new Error(`No child "${film.childName}" in --children`);
-    // The film window: the age-year through a couple of days after the
+    // The film window: the age-year through the day after the
     // birthday, so this year's party closes the film (owner, 2026-09-27).
     const scope = birthdayFilmScope(child.dateOfBirth, film.ageYear);
     const fullPool = birthdayPool(data.memories, child.id, scope, 'exclude');
@@ -645,7 +645,7 @@ for (const film of options.films) {
       await emit(slug, label, script, quotes, vision);
     }
   } else if (film.kind === 'family') {
-    // Before the Dec 11 cut-off (dogfood), the film covers the year so far.
+    // Before the Dec 28 cut-off (dogfood), the film covers the year so far.
     const full = familyYearScope(film.year);
     const scope = full.endExclusive > options.today ? { start: full.start, endExclusive: options.today } : full;
     const pool = familyPool(data.memories, scope);

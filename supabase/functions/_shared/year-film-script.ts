@@ -1558,7 +1558,7 @@ export function familyYearVisionCandidates(input: FamilyYearInput): FrameRef[] {
 }
 
 /** "Nuestro 2025" (plan §4.2): the family's year, with one equal chapter per
- * child. Scope Jan 1 → Dec 11; renders Dec 12, surfaces Dec 15. */
+ * child. Scope Jan 1 → Dec 27; renders Dec 28, surfaces Dec 30. */
 export function buildFamilyYearScript(input: FamilyYearInput): FilmScript {
   const { language, year } = input;
   const strings = STRINGS[language];

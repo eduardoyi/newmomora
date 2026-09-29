@@ -6,7 +6,7 @@ begin;
 -- CAS, invalidation triggers (incl. delete during an attempt and the
 -- delete+reinsert media save), cycle-end rules, edits RPC, client access,
 -- notifications, recovery, the deletion fence and ledger operations.
-select plan(73);
+select plan(128);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (postgres role; assertions switch to authenticated where needed)
@@ -72,16 +72,16 @@ set mode = 'canary',
 -- 1. Scheduling
 -- ---------------------------------------------------------------------------
 
--- Enzo turns 4 on Oct 23 → due Oct 26 00:30 New York (04:30 UTC).
-select is(public.year_film_due('2026-10-26 04:20:00+00'), 0, 'birthday: nothing before 00:30 owner-local');
-select is(public.year_film_due('2026-10-26 04:40:00+00'), 1, 'birthday: due at 00:30 owner-local (only the own child)');
+-- Enzo turns 4 on Oct 23 → due Oct 25 (birthday + 2) 00:30 New York (04:30 UTC).
+select is(public.year_film_due('2026-10-25 04:20:00+00'), 0, 'birthday: nothing before 00:30 owner-local');
+select is(public.year_film_due('2026-10-25 04:40:00+00'), 1, 'birthday: due at 00:30 owner-local (only the own child)');
 
 select results_eq(
   $$select kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at
     from public.year_films where family_id = 'f8100000-0000-4000-8000-000000000001' and kind = 'birthday'$$,
-  $$values ('birthday'::text, 'f8200000-0000-4000-8000-000000000001'::uuid, 4, date '2025-10-23', date '2026-10-26',
-            timestamptz '2026-10-26 13:00:00+00')$$,
-  'birthday: scope = age-year + 2 days after, surfaces 09:00 local'
+  $$values ('birthday'::text, 'f8200000-0000-4000-8000-000000000001'::uuid, 4, date '2025-10-23', date '2026-10-25',
+            timestamptz '2026-10-25 13:00:00+00')$$,
+  'birthday: due birthday + 2 (scope ends the day after the birthday), surfaces 09:00 local'
 );
 select ok(not exists (select 1 from public.year_films where family_member_id = 'f8200000-0000-4000-8000-000000000002'),
   'a niece marked cousin never gets a birthday film');
@@ -89,14 +89,14 @@ select ok(not exists (select 1 from public.year_films where family_member_id = '
   'an explicit child turning 14 gets no film (under-13 ceiling)');
 select ok(not exists (select 1 from public.year_films where family_id = 'f8100000-0000-4000-8000-000000000002'),
   'a billing-blocked family gets nothing');
-select is(public.year_film_due('2026-10-27 04:40:00+00'), 0, 'idempotent: a second run inside the window inserts nothing');
+select is(public.year_film_due('2026-10-26 04:40:00+00'), 0, 'idempotent: a second run inside the window inserts nothing');
 
--- Baby (unsorted, 2025-03-10): first birthday due 2026-03-13; a run a week later is outside the catch-up window.
+-- Baby (unsorted, 2025-03-10): first birthday due 2026-03-12; a run a week later is outside the catch-up window.
 select is(public.year_film_due('2026-03-20 12:00:00+00'), 0, 'catch-up window is 3 days');
 select is(public.year_film_due('2026-03-14 12:00:00+00'), 1, 'inside the catch-up window: an unsorted under-13 kid counts');
 
 update public.year_film_settings set launch_date = date '2027-01-01';
-select is(public.year_film_due('2026-10-26 05:00:00+00') + public.year_film_due('2026-10-01 05:00:00+00'), 0,
+select is(public.year_film_due('2026-10-25 05:00:00+00') + public.year_film_due('2026-10-01 05:00:00+00'), 0,
   'nothing is scheduled before launch_date (no backfill)');
 update public.year_film_settings set launch_date = date '2026-01-01';
 
@@ -109,17 +109,18 @@ select results_eq(
   'monthly: previous month, surfaces 19:00 local'
 );
 
--- A forced canary family film must not take the real Dec 12 slot.
+-- A forced canary family film must not take the real Dec 28 slot.
 select isnt(
   public.queue_year_film_forced('f8100000-0000-4000-8000-000000000001', 'family_year', null, null,
     date '2026-01-01', date '2026-09-29', '2026-09-29 12:00:00+00'),
   null, 'operator can queue a forced film'
 );
-select is(public.year_film_due('2026-12-12 06:00:00+00'), 1, 'family film is still scheduled next to a forced one');
+select is(public.year_film_due('2026-12-28 04:40:00+00'), 0, 'family film: nothing before 00:30 owner-local on Dec 28');
+select is(public.year_film_due('2026-12-28 06:00:00+00'), 1, 'family film is still scheduled next to a forced one');
 select results_eq(
   $$select scope_start_date, scope_end_exclusive, surface_at from public.year_films where kind = 'family_year' and not forced$$,
-  $$values (date '2026-01-01', date '2026-12-12', timestamptz '2026-12-15 14:00:00+00')$$,
-  'family film: Jan 1 – Dec 11, surfaces Dec 15 09:00 local (EST)'
+  $$values (date '2026-01-01', date '2026-12-28', timestamptz '2026-12-30 14:00:00+00')$$,
+  'family film: Jan 1 – Dec 27, surfaces Dec 30 09:00 local (EST)'
 );
 
 update public.year_film_settings set mode = 'off';
@@ -364,11 +365,11 @@ set status = 'rendering', attempt_id = 'f8900000-0000-4000-8000-000000000004', a
 where id = (select id from fy);
 select is(
   public.year_film_end_cycle((select id from fy), 'f8900000-0000-4000-8000-000000000004', 'failed', 'RENDER_FAILED') -> 'delete_keys',
-  '["o/old.mp4", "o/old.jpg"]'::jsonb, 'a blocked film that fails deletes its old video'
+  '["o/old.mp4", "o/old.jpg", "o/poster_thumb.jpg"]'::jsonb, 'a blocked film that fails deletes its old video and its poster thumb'
 );
 select ok((select status = 'failed' and video_key is null from public.year_films where id = (select id from fy)),
   'and ends failed');
-select is(public.year_film_due('2026-12-13 06:00:00+00'), 0, 'a failed film is never re-inserted by the scheduler');
+select is(public.year_film_due('2026-12-29 06:00:00+00'), 0, 'a failed film is never re-inserted by the scheduler');
 
 update public.year_films
 set status = 'preparing', attempt_id = 'f8900000-0000-4000-8000-000000000005', attempt_count = 1,
@@ -446,6 +447,420 @@ select is(
     'o/c.mp4', 'o/c.jpg', 'o/c.json', 1000) ->> 'reason',
   'content_changed', 'publish refuses a film with a parent-blocked author'
 );
+
+-- ===========================================================================
+-- P2 (docs/plans/year-film-p2.md Step 1): placement_date, forced films are
+-- operator-only, film_ready on notification, poster thumb delete keys,
+-- year_films_enabled, candidate-row parity with year_film_due, and the silent
+-- history backfill.
+-- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- 9. placement_date, forced films, notification event, thumb keys
+-- ---------------------------------------------------------------------------
+
+select is((select placement_date from public.year_films where id = (select id from enzo)), date '2026-10-23',
+  'placement_date: a birthday film sits on the birthday (scope_end_exclusive - 2)');
+select ok(not exists (
+    select 1 from public.year_films y
+    join public.family_members m on m.id = y.family_member_id
+    where y.kind = 'birthday'
+      and y.placement_date is distinct from (m.date_of_birth + make_interval(years => y.age_year))::date
+  ),
+  'placement_date: every birthday film sits on the actual birthday (coupled to BIRTHDAY_FILM_DAYS_AFTER = 1)');
+select is((select placement_date from public.year_films where id = (select id from fy)), date '2026-12-31',
+  'placement_date: the year-end film sits on Dec 31');
+
+insert into public.year_films (id, family_id, kind, forced, scope_start_date, scope_end_exclusive, surface_at, status,
+                               video_key, poster_key, scenes_key)
+values
+  ('f8400000-0000-4000-8000-000000000002', 'f8100000-0000-4000-8000-000000000001', 'family_month', true,
+   '2025-05-01', '2025-06-01', now() - interval '1 hour', 'ready', 'o/f2.mp4', 'o/f2.jpg', 'o/f2.json'),
+  ('f8400000-0000-4000-8000-000000000003', 'f8100000-0000-4000-8000-000000000001', 'family_month', false,
+   '2025-06-01', '2025-07-01', now() - interval '1 hour', 'ready', 'o/f3.mp4', 'o/f3.jpg', 'o/f3.json');
+select is((select placement_date from public.year_films where id = 'f8400000-0000-4000-8000-000000000003'), date '2025-06-30',
+  'placement_date: a monthly recap sits on the last day of its month');
+select ok(has_column_privilege('authenticated', 'public.year_films', 'placement_date', 'SELECT'),
+  'placement_date is granted to clients');
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000003', true);
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000003'), 1,
+  'a viewer sees a surfaced, non-forced film');
+select is((select placement_date from public.year_films where id = 'f8400000-0000-4000-8000-000000000003'), date '2025-06-30',
+  'a client can read placement_date');
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000002'), 0,
+  'a forced film is invisible to a viewer');
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000002', true);
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000002'), 0,
+  'a forced film is invisible to a manager');
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000001', true);
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000002'), 0,
+  'a forced film is invisible to the owner');
+set local role postgres;
+
+-- Notification: the returned row and exactly one film_ready event per film.
+create temp table nd on commit drop as
+select * from public.year_film_notifications_due(now());
+select is((select count(*)::int from nd where film_id = 'f8400000-0000-4000-8000-000000000003'), 1,
+  'notifications_due returns the surfaced film');
+select results_eq(
+  $$select kind, family_member_id, age_year, scope_start_date, family_id from nd where film_id = 'f8400000-0000-4000-8000-000000000003'$$,
+  $$values ('family_month'::text, null::uuid, null::integer, date '2025-06-01', 'f8100000-0000-4000-8000-000000000001'::uuid)$$,
+  'notifications_due keeps its returned columns'
+);
+select is((select count(*)::int from nd where film_id = 'f8400000-0000-4000-8000-000000000002'), 0,
+  'a forced film is never announced');
+select is((select count(*)::int from public.family_activity_events
+           where film_id = 'f8400000-0000-4000-8000-000000000003' and kind = 'film_ready' and actor_id is null), 1,
+  'the notification writes exactly one film_ready event');
+select is((select count(*)::int from public.year_film_notifications_due(now()) where film_id = 'f8400000-0000-4000-8000-000000000003'), 0,
+  'a second notifications_due run returns nothing');
+select is((select count(*)::int from public.family_activity_events where film_id = 'f8400000-0000-4000-8000-000000000003'), 1,
+  'and writes no second event');
+select is((select count(*)::int from public.family_activity_events where film_id = 'f8400000-0000-4000-8000-000000000002'), 0,
+  'a forced film gets no event');
+
+-- Poster thumbs travel with the poster in every delete list.
+insert into public.year_films (id, family_id, kind, scope_start_date, scope_end_exclusive, surface_at, status,
+                               attempt_id, curated_epoch, video_key, poster_key, scenes_key)
+values ('f8400000-0000-4000-8000-000000000004', 'f8100000-0000-4000-8000-000000000001', 'family_month',
+        '2025-07-01', '2025-08-01', now(), 'rendering', 'f8900000-0000-4000-8000-000000000401', 0,
+        'o/old2/film.mp4', 'o/old2/poster.jpg', 'o/old2/scenes.json');
+select is(
+  public.publish_year_film('f8400000-0000-4000-8000-000000000004', 'f8900000-0000-4000-8000-000000000401', 0,
+    'o/new/film.mp4', 'o/new/poster.jpg', 'o/new/scenes.json', 1000) -> 'delete_keys',
+  '["o/old2/film.mp4", "o/old2/poster.jpg", "o/old2/poster_thumb.jpg", "o/old2/scenes.json"]'::jsonb,
+  'publish returns the replaced version''s poster_thumb.jpg for deletion too'
+);
+select is(public.year_film_poster_thumb_key(null), null, 'no poster, no thumb key');
+
+-- ---------------------------------------------------------------------------
+-- 10. year_films_enabled (member RPC for the upcoming-recap card)
+-- ---------------------------------------------------------------------------
+
+-- The lapsed family's owner (04) gets an entitlement and a clean current
+-- month. (The main film family already has September memories.)
+update public.year_film_settings
+set mode = 'canary',
+    canary_family_ids = array['f8100000-0000-4000-8000-000000000001', 'f8100000-0000-4000-8000-000000000002']::uuid[],
+    launch_date = date '2026-01-01';
+update public.user_profiles set timezone = 'America/New_York' where id = 'f8000000-0000-4000-8000-000000000004';
+insert into public.owner_entitlements (
+  owner_user_id, app_user_id, environment, store, product_id, entitlement_id,
+  period_type, status, expires_at, will_renew
+) values (
+  'f8000000-0000-4000-8000-000000000004', 'f8000000-0000-4000-8000-000000000004',
+  'production', 'app_store', 'momora_annual_v1', 'momora_plus', 'annual', 'active',
+  transaction_timestamp() + interval '400 days', true
+);
+
+create temp table cur on commit drop as
+select date_trunc('month', now() at time zone 'America/New_York')::date as month_start,
+       (date_trunc('month', now() at time zone 'America/New_York') + interval '1 month')::date as next_first;
+
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, memory_date)
+select ('f8300000-0000-4000-8000-0000000005' || lpad(g::text, 2, '0'))::uuid,
+       'f8100000-0000-4000-8000-000000000002', 'f8000000-0000-4000-8000-000000000004',
+       'Lapsed this month ' || g, 'text_only', 'none', (select month_start from cur) + g
+from generate_series(1, 9) g;
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select is(public.year_films_enabled('f8100000-0000-4000-8000-000000000002'), false,
+  'year_films_enabled: false while the current month is below the 10-memory floor');
+set local role postgres;
+
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, memory_date)
+values ('f8300000-0000-4000-8000-000000000510', 'f8100000-0000-4000-8000-000000000002', 'f8000000-0000-4000-8000-000000000004',
+        'Lapsed this month 10', 'text_only', 'none', (select month_start from cur) + 10);
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select is(public.year_films_enabled('f8100000-0000-4000-8000-000000000002'), true,
+  'year_films_enabled: true with rollout, launch_date, billing, an own child and 10 memories this month');
+set local role postgres;
+
+update public.year_film_settings set launch_date = (select next_first + 1 from cur);
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select is(public.year_films_enabled('f8100000-0000-4000-8000-000000000002'), false,
+  'year_films_enabled: false while launch_date is after the next 1st');
+set local role postgres;
+
+update public.year_film_settings set launch_date = (select next_first from cur);
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select is(public.year_films_enabled('f8100000-0000-4000-8000-000000000002'), true,
+  'year_films_enabled: true when launch_date is exactly the next 1st');
+set local role postgres;
+
+update public.year_film_settings set launch_date = null;
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select is(public.year_films_enabled('f8100000-0000-4000-8000-000000000002'), false,
+  'year_films_enabled: false without a launch_date');
+set local role postgres;
+
+update public.year_film_settings
+set launch_date = date '2026-01-01', canary_family_ids = array['f8100000-0000-4000-8000-000000000001']::uuid[];
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select is(public.year_films_enabled('f8100000-0000-4000-8000-000000000002'), false,
+  'year_films_enabled: false when the rollout does not include the family');
+set local role postgres;
+update public.year_film_settings
+set canary_family_ids = array['f8100000-0000-4000-8000-000000000001', 'f8100000-0000-4000-8000-000000000002']::uuid[];
+
+update public.family_members set relationship = 'cousin' where id = 'f8200000-0000-4000-8000-000000000101';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select is(public.year_films_enabled('f8100000-0000-4000-8000-000000000002'), false,
+  'year_films_enabled: false without an own child');
+set local role postgres;
+update public.family_members set relationship = 'child' where id = 'f8200000-0000-4000-8000-000000000101';
+
+delete from public.owner_entitlements where owner_user_id = 'f8000000-0000-4000-8000-000000000004';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select is(public.year_films_enabled('f8100000-0000-4000-8000-000000000002'), false,
+  'year_films_enabled: false when billing does not allow');
+set local role postgres;
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000003', true);
+select throws_ok(
+  $$select public.year_films_enabled('f8100000-0000-4000-8000-000000000002')$$,
+  '42501', 'Not authorized', 'year_films_enabled: a non-member is rejected'
+);
+set local role postgres;
+
+select ok(not has_function_privilege('anon', 'public.year_films_enabled(uuid)', 'execute')
+          and has_function_privilege('authenticated', 'public.year_films_enabled(uuid)', 'execute'),
+  'year_films_enabled is executable by authenticated only');
+
+-- ---------------------------------------------------------------------------
+-- 11. Parity: year_film_candidate_rows == what year_film_due inserts
+-- ---------------------------------------------------------------------------
+
+insert into auth.users (id, email, is_anonymous) values
+  ('f9000000-0000-4000-8000-000000000001', 'yf-parity@example.test', false),
+  ('f9000000-0000-4000-8000-000000000002', 'yf-backfill@example.test', false);
+
+insert into public.families (id, name, owner_id) values
+  ('f9100000-0000-4000-8000-000000000001', 'Parity family', 'f9000000-0000-4000-8000-000000000001'),
+  ('f9100000-0000-4000-8000-000000000002', 'Backfill family', 'f9000000-0000-4000-8000-000000000002');
+insert into public.family_memberships (family_id, user_id, role) values
+  ('f9100000-0000-4000-8000-000000000001', 'f9000000-0000-4000-8000-000000000001', 'owner'),
+  ('f9100000-0000-4000-8000-000000000002', 'f9000000-0000-4000-8000-000000000002', 'owner');
+insert into public.owner_entitlements (
+  owner_user_id, app_user_id, environment, store, product_id, entitlement_id,
+  period_type, status, expires_at, will_renew
+)
+select u, u, 'production', 'app_store', 'momora_annual_v1', 'momora_plus', 'annual', 'active',
+       transaction_timestamp() + interval '400 days', true
+from unnest(array['f9000000-0000-4000-8000-000000000001', 'f9000000-0000-4000-8000-000000000002']::uuid[]) as u;
+update public.user_profiles set timezone = 'UTC' where id = 'f9000000-0000-4000-8000-000000000002';
+
+-- Parity family: a Feb 29 child, a Dec 30 child (film due Jan 1, next year),
+-- a plain Oct child, an unsorted kid (DOB rule), a cousin (never), and a
+-- parent. 12 memories in every month of 2025-12..2028-03 except two thin ones.
+insert into public.family_members (id, family_id, name, date_of_birth, relationship) values
+  ('f9200000-0000-4000-8000-000000000001', 'f9100000-0000-4000-8000-000000000001', 'A', '2022-10-23', 'child'),
+  ('f9200000-0000-4000-8000-000000000002', 'f9100000-0000-4000-8000-000000000001', 'B', '2024-02-29', 'child'),
+  ('f9200000-0000-4000-8000-000000000003', 'f9100000-0000-4000-8000-000000000001', 'C', '2023-12-30', 'child'),
+  ('f9200000-0000-4000-8000-000000000004', 'f9100000-0000-4000-8000-000000000001', 'D', '2020-03-01', 'child'),
+  ('f9200000-0000-4000-8000-000000000005', 'f9100000-0000-4000-8000-000000000001', 'E', '2015-05-05', 'cousin'),
+  ('f9200000-0000-4000-8000-000000000006', 'f9100000-0000-4000-8000-000000000001', 'F', '2013-12-29', null),
+  ('f9200000-0000-4000-8000-000000000007', 'f9100000-0000-4000-8000-000000000001', 'G', '1985-01-01', 'parent');
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, memory_date)
+select gen_random_uuid(), 'f9100000-0000-4000-8000-000000000001', 'f9000000-0000-4000-8000-000000000001',
+       'Parity memory', 'text_only', 'none', (m.month_start::date + (g - 1))
+from generate_series(timestamp '2025-12-01', timestamp '2028-03-01', interval '1 month') as m(month_start)
+cross join generate_series(1, 12) as g
+where not (m.month_start::date in (date '2026-04-01', date '2026-11-01') and g > 3);
+
+update public.year_film_settings
+set mode = 'canary', canary_family_ids = array['f9100000-0000-4000-8000-000000000001']::uuid[],
+    launch_date = date '2020-01-01';
+
+create temp table parity_probe (
+  tz text, probe_date date, extra integer, missing integer, total integer, birthdays integer, months integer, years integer
+) on commit drop;
+
+do $parity$
+declare
+  v_family constant uuid := 'f9100000-0000-4000-8000-000000000001';
+  v_tz text;
+  v_day date;
+  v_now timestamptz;
+  v_extra integer;
+  v_missing integer;
+  v_total integer;
+begin
+  foreach v_tz in array array['America/New_York', 'Pacific/Pago_Pago', 'Pacific/Kiritimati', 'Europe/Lisbon'] loop
+    update public.user_profiles set timezone = v_tz where id = 'f9000000-0000-4000-8000-000000000001';
+    foreach v_day in array array[
+      date '2026-01-31', date '2026-02-01', date '2026-02-28', date '2026-03-01', date '2026-03-02',
+      date '2026-03-03', date '2026-03-08', date '2026-03-09', date '2026-05-01', date '2026-09-30',
+      date '2026-10-01', date '2026-10-25', date '2026-10-26', date '2026-11-01', date '2026-11-02',
+      date '2026-12-01', date '2026-12-27', date '2026-12-28', date '2026-12-29', date '2026-12-30',
+      date '2026-12-31', date '2027-01-01', date '2027-01-02', date '2027-01-03', date '2027-01-04',
+      date '2027-02-28', date '2027-03-01', date '2028-02-29', date '2028-03-01', date '2028-03-02',
+      date '2028-03-03'
+    ] loop
+      delete from public.year_films where family_id = v_family;
+      v_now := (v_day + time '12:00') at time zone v_tz;
+      perform public.year_film_due(v_now);
+
+      -- year_film_due catches up the last 3 days, so a clean table holds every
+      -- film due in [local today - 2, local today].
+      select count(*) into v_extra from (
+        select kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at
+        from public.year_films where family_id = v_family
+        except
+        select kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at
+        from public.year_film_candidate_rows(v_family, v_day - 2, v_day)
+      ) x;
+      select count(*) into v_missing from (
+        select kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at
+        from public.year_film_candidate_rows(v_family, v_day - 2, v_day)
+        except
+        select kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at
+        from public.year_films where family_id = v_family
+      ) x;
+      select count(*) into v_total from public.year_films where family_id = v_family;
+
+      insert into parity_probe values (
+        v_tz, v_day, v_extra, v_missing, v_total,
+        (select count(*) from public.year_films where family_id = v_family and kind = 'birthday'),
+        (select count(*) from public.year_films where family_id = v_family and kind = 'family_month'),
+        (select count(*) from public.year_films where family_id = v_family and kind = 'family_year')
+      );
+    end loop;
+  end loop;
+  delete from public.year_films where family_id = v_family;
+end
+$parity$;
+
+select is((select count(*)::int from parity_probe), 124, 'parity sweep ran every probe date in every timezone');
+select is((select count(*)::int from parity_probe where extra <> 0 or missing <> 0), 0,
+  'parity: year_film_due inserts exactly the candidate rows due in its catch-up window (DST, UTC-11, UTC+14, year end, month ends, Feb 29)');
+select ok((select sum(birthdays) > 0 and sum(months) > 0 and sum(years) > 0 from parity_probe),
+  'parity sweep is not vacuous: birthday, monthly and year-end films were all compared');
+select ok((select bool_and(total >= 1) from parity_probe
+           where tz = 'America/New_York' and probe_date in (date '2026-03-02', date '2028-03-02')),
+  'parity sweep covers a Feb 29 birthday (due Mar 2)');
+select ok((select bool_and(total >= 1) from parity_probe where probe_date = date '2027-01-01'),
+  'parity sweep covers a Dec 30 birthday due Jan 1 of the next year');
+select is((select count(*)::int from parity_probe where probe_date = date '2026-05-01' and months > 0), 0,
+  'parity: the thin April (3 memories) never produces a May 1 recap');
+select ok((select bool_and(years = 1) from parity_probe where probe_date = date '2026-12-29'),
+  'parity: the year-end film is in its window on Dec 29 (due Dec 28)');
+
+select throws_ok(
+  $$set local role authenticated; select * from public.year_film_candidate_rows('f9100000-0000-4000-8000-000000000001', date '2026-01-01', date '2026-12-31')$$,
+  '42501', null, 'candidate rows are service-role only'
+);
+set local role postgres;
+
+-- ---------------------------------------------------------------------------
+-- 12. History backfill (silent, idempotent, gated)
+-- ---------------------------------------------------------------------------
+
+insert into public.family_members (id, family_id, name, date_of_birth, relationship) values
+  ('f9200000-0000-4000-8000-000000000101', 'f9100000-0000-4000-8000-000000000002', 'Leap', '2024-02-29', 'child'),
+  ('f9200000-0000-4000-8000-000000000102', 'f9100000-0000-4000-8000-000000000002', 'Summer', '2023-06-15', 'child');
+-- Jan 2026: 16 memories, Feb: 12, Mar: 3 (thin), Apr: 12. First memory Jan 10.
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, memory_date)
+select gen_random_uuid(), 'f9100000-0000-4000-8000-000000000002', 'f9000000-0000-4000-8000-000000000002',
+       'Backfill memory', 'text_only', 'none', d
+from (
+  select date '2026-01-09' + g as d from generate_series(1, 16) g
+  union all select date '2026-02-01' + g from generate_series(1, 12) g
+  union all select date '2026-03-01' + g from generate_series(1, 3) g
+  union all select date '2026-04-01' + g from generate_series(1, 12) g
+) s;
+
+update public.year_film_settings
+set mode = 'canary',
+    canary_family_ids = array['f9100000-0000-4000-8000-000000000002', 'f8100000-0000-4000-8000-000000000002']::uuid[];
+
+select is((select count(*)::int from public.year_film_enabled_families()), 2, 'the operator loop lists the enabled families');
+
+select results_eq(
+  $$select kind, family_member_id, age_year, scope_start_date, due_date, inserted
+    from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', true)$$,
+  $$values
+    ('family_month'::text, null::uuid, null::integer, date '2026-01-01', date '2026-02-01', true),
+    ('family_month'::text, null::uuid, null::integer, date '2026-02-01', date '2026-03-01', true),
+    ('birthday'::text, 'f9200000-0000-4000-8000-000000000101'::uuid, 2, date '2025-02-28', date '2026-03-02', true)$$,
+  'backfill dry run lists the recaps with >= 10 memories and the Feb 29 birthday, and skips the thin March'
+);
+select is((select count(*)::int from public.year_films where family_id = 'f9100000-0000-4000-8000-000000000002'), 0,
+  'a dry run inserts nothing');
+select is((select count(*)::int from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', true,
+            'family_month', date '2026-01-01')), 1,
+  'the --only filter narrows a run to one film key');
+
+-- Smoke subset first, then everything: the second run reports the first as already there.
+select results_eq(
+  $$select kind, scope_start_date, inserted from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', false,
+      'family_month', date '2026-01-01')$$,
+  $$values ('family_month'::text, date '2026-01-01', true)$$,
+  'the smoke subset inserts only the chosen film'
+);
+select is((select count(*)::int from public.year_films where family_id = 'f9100000-0000-4000-8000-000000000002'), 1,
+  'and only that row exists');
+select results_eq(
+  $$select kind, scope_start_date, inserted from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', false)$$,
+  $$values
+    ('family_month'::text, date '2026-01-01', false),
+    ('family_month'::text, date '2026-02-01', true),
+    ('birthday'::text, date '2025-02-28', true)$$,
+  'the full run inserts the rest and reports the existing film as not inserted'
+);
+select results_eq(
+  $$select kind, scope_start_date, surface_at, status, forced, notified_at is not null
+    from public.year_films where family_id = 'f9100000-0000-4000-8000-000000000002' order by scope_start_date, kind$$,
+  $$values
+    ('birthday'::text, date '2025-02-28', timestamptz '2026-03-02 09:00:00+00', 'queued'::text, false, true),
+    ('family_month'::text, date '2026-01-01', timestamptz '2026-02-01 19:00:00+00', 'queued'::text, false, true),
+    ('family_month'::text, date '2026-02-01', timestamptz '2026-03-01 19:00:00+00', 'queued'::text, false, true)$$,
+  'backfilled rows are queued, non-forced, historically timed and pre-notified'
+);
+select is((select count(*)::int from public.family_activity_events where family_id = 'f9100000-0000-4000-8000-000000000002' and kind = 'film_ready'), 0,
+  'a backfill writes no drawer events');
+select is((select count(*)::int from public.year_film_notifications_due(now()) where family_id = 'f9100000-0000-4000-8000-000000000002'), 0,
+  'and no push is ever due for backfilled films');
+select is((select count(*) filter (where inserted)::int from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', false)), 0,
+  'a repeated backfill is idempotent');
+select is((select count(*)::int from public.year_films where family_id = 'f9100000-0000-4000-8000-000000000002'), 3,
+  'and leaves exactly the three films');
+select ok((select max(due_date) <= (now() at time zone 'UTC')::date
+           from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2099-12-31', true)),
+  'p_through is clamped to the family-local today');
+
+-- Gates.
+update public.year_film_settings set mode = 'off';
+select throws_ok(
+  $$select * from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', true)$$,
+  'P0001', 'Year films are not enabled for this family', 'backfill requires the rollout to include the family'
+);
+update public.year_film_settings
+set mode = 'canary', canary_family_ids = array['f9100000-0000-4000-8000-000000000002', 'f8100000-0000-4000-8000-000000000002']::uuid[];
+select throws_ok(
+  $$select * from public.queue_year_film_backfill('f8100000-0000-4000-8000-000000000002', date '2026-04-30', true)$$,
+  'P0001', 'Billing does not allow year films for this family', 'backfill requires billing to allow the family'
+);
+update public.year_film_settings set launch_date = null;
+select ok(exists (select 1 from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', true)),
+  'backfill ignores launch_date');
+select throws_ok(
+  $$set local role authenticated; select * from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', true)$$,
+  '42501', null, 'backfill is service-role only'
+);
+set local role postgres;
 
 select * from finish();
 rollback;

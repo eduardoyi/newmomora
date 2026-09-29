@@ -130,9 +130,12 @@ export function ageYearScopes(dateOfBirth: string, today: string): AgeYearScope[
 }
 
 /** Days after the birthday a birthday film still covers, so the party is in
- * it (owner, 2026-09-27: the film comes out a few days AFTER the birthday
- * and closes on this year's celebration). The film renders the next day. */
-export const BIRTHDAY_FILM_DAYS_AFTER = 2;
+ * it (owner, 2026-09-27: the film comes out a couple of days AFTER the
+ * birthday and closes on this year's celebration). Owner 2026-09-29: the
+ * film is made 00:30 and delivered 09:00 two days after the birthday, i.e. on
+ * the day its scope ends (birthday + DAYS_AFTER + 1). Coupled to
+ * year_film_due and year_films.placement_date in SQL. */
+export const BIRTHDAY_FILM_DAYS_AFTER = 1;
 
 /** YYYY-MM-DD + n days, pure string/calendar arithmetic (no Date objects). */
 export function addDays(date: string, days: number): string {
@@ -164,9 +167,10 @@ export function birthdayFilmScope(dateOfBirth: string, ageYear: number): FilmSco
   };
 }
 
-/** The year-end family film's window: Jan 1 → Dec 11 (it renders Dec 12 and
- * surfaces Dec 15; memories after the cut-off never re-render it, plan §4.2). */
-export const FAMILY_FILM_CUTOFF = '12-12';
+/** The year-end family film's window: Jan 1 → Dec 27 (it renders Dec 28 and
+ * surfaces Dec 30 09:00; memories after the cut-off never re-render it, plan
+ * §4.2; dates: year-film-p2.md §2). */
+export const FAMILY_FILM_CUTOFF = '12-28';
 export function familyYearScope(year: number): FilmScope {
   return { start: `${year}-01-01`, endExclusive: `${year}-${FAMILY_FILM_CUTOFF}` };
 }

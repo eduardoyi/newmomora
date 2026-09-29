@@ -70,15 +70,17 @@ export function scenesFromTimeline(timeline) {
   };
 }
 
-/** The poster: middle of the close scene (the film's ending), else the
- * title scene once its cards have settled (monthly recaps have no close:
- * "Our September" + the month's photos), else 80% in. */
+/** The cover: the FIRST scene, settled (owner, 2026-09-29): the title card /
+ * cold open the film opens on ("Nuestro 2026" + the photo pile, "Recuerdos de
+ * tu tercer año, Enzo" + portraits), after its entrance animations and before
+ * the seam transition into the next scene. The `max` guards very short first
+ * scenes (below ~0.7s the 0.85 point would sit inside the transition, so fall
+ * back to the midpoint). */
 export function posterTime(timeline) {
-  const close = timeline.scenes.find((s) => s.type === 'close');
-  if (close) return +(close.start + close.duration * 0.5).toFixed(3);
-  const title = timeline.scenes.find((s) => s.type === 'title');
-  if (title) return +(title.start + title.duration * 0.65).toFixed(3);
-  return +(timeline.total * 0.8).toFixed(3);
+  const first = timeline.scenes.reduce((a, s) => (a === null || s.start < a.start ? s : a), null);
+  if (!first) return +(timeline.total * 0.8).toFixed(3);
+  const settled = Math.max(first.duration * 0.5, Math.min(first.duration * 0.85, first.duration - 0.35));
+  return +(first.start + settled).toFixed(3);
 }
 
 export function isHeic(key) {
@@ -352,11 +354,16 @@ async function render(prefix, job) {
   const timeline = JSON.parse(await fs.promises.readFile(path.join(composition, 'timeline.json'), 'utf8'));
   const poster = path.join(os.tmpdir(), 'poster.jpg');
   if (!(await ffmpeg(['-ss', String(posterTime(timeline)), '-i', out, '-frames:v', '1', '-q:v', '3', poster])).ok) throw new Error('poster');
+  // List thumbnail (360×640), scaled from the poster itself so the two are the
+  // same frame. Its key is derived from poster_key (same directory), not stored.
+  const posterThumb = path.join(os.tmpdir(), 'poster_thumb.jpg');
+  if (!(await ffmpeg(['-i', poster, '-vf', 'scale=360:640', '-frames:v', '1', '-q:v', '4', posterThumb])).ok) throw new Error('poster_thumb');
   const probed = await probe(out);
   const durationMs = Math.round((probed.duration ?? timeline.total) * 1000);
 
   await upload(`${prefix}film.mp4`, out, 'video/mp4');
   await upload(`${prefix}poster.jpg`, poster, 'image/jpeg');
+  await upload(`${prefix}poster_thumb.jpg`, posterThumb, 'image/jpeg');
   await upload(`${prefix}scenes.json`, JSON.stringify(scenesFromTimeline(timeline)), 'application/json');
   return { durationMs };
 }

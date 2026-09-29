@@ -616,6 +616,13 @@ alter table public.family_memberships
   add column activity_seen_at timestamptz;  -- nullable; null = never opened
 ```
 
+**Year Film P2 (`20260930120000_year_films_p2.sql`):** `actor_id` becomes
+nullable, `film_id uuid references public.year_films on delete cascade` is
+added, and `kind` gains `film_ready`, tied together by
+`check ((kind = 'film_ready') = (actor_id is null))` — a film is not
+something a person did, and every other kind still needs an actor. See the
+"Family activity feed" RPC notes in §2.3 for `get_family_activity_v2`.
+
 Every FK cascades, so deleting a memory/comment/invite deletes its events
 too — nothing to separately scrub. Migration
 `supabase/migrations/20260822100000_family_activity.sql` backfills recent
@@ -948,12 +955,15 @@ old constraint cannot be restored). Tests: `supabase/tests/family_relationships.
 (plus the new-table cases in `client_table_grants.sql` and
 `onboarding_anonymous_lockdown.sql`).
 
-### 2.1h Year Films (P1)
+### 2.1h Year Films (P1 + P2 amendments)
 
 Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
 [docs/plans/year-film.md](plans/year-film.md) · feature doc
-[docs/features/year-film.md](features/year-film.md). Migration
-`20260929120000_year_films.sql` (+ cron `20260929120100_schedule_year_films_cron.sql`).
+[docs/features/year-film.md](features/year-film.md) · P2 plan
+[docs/plans/year-film-p2.md](plans/year-film-p2.md). Migrations
+`20260929120000_year_films.sql` (+ cron `20260929120100_schedule_year_films_cron.sql`)
+and `20260930120000_year_films_p2.sql` (dates, `placement_date`, forced RLS,
+`film_ready`, backfill; see the P2 paragraph below).
 
 **`year_films`** — one row per scheduled film key forever (unique
 `(family_id, kind, coalesce(family_member_id, zero), scope_start_date)` where
@@ -969,12 +979,14 @@ Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
 | `referenced_memory_ids`, `referenced_asset_keys`, `referenced_member_ids`, `referenced_portrait_version_ids`, `quoted_memory_text_hashes` | stamped at curate (GIN) for invalidation and the publish check |
 | `content_epoch`, `curated_epoch` | invalidation clock; publish requires them equal |
 | `attempt_id`, `attempt_count`, `next_attempt_at`, `heartbeat_at`, `render_slot_at`, `machine_ids`, `requeue_after`, `cleanup_needed`, `last_failure_code` | attempt state (service role only) |
-| `video_key`, `poster_key`, `scenes_key`, `duration_ms`, `surface_at`, `notified_at`, `ready_at` | output under `{ownerId}/year-films/{filmId}/{attemptId}/` |
+| `video_key`, `poster_key`, `scenes_key`, `duration_ms`, `surface_at`, `notified_at`, `ready_at` | output under `{ownerId}/year-films/{filmId}/{attemptId}/` (`film.mp4`, `poster.jpg`, `poster_thumb.jpg` — the list thumbnail, key derived from `poster_key` —, `scenes.json`) |
+| `placement_date` (P2) | stored generated `date` — where the film sits in the Timeline: `birthday` → `scope_end_exclusive - 2` (the birthday), `family_month` → `scope_end_exclusive - 1` (the month's last day), `family_year` → Dec 31 of `scope_start_date`'s year. Its own `grant select (placement_date)` to `authenticated`; index `(family_id, placement_date desc)`. The birthday offset is coupled to `BIRTHDAY_FILM_DAYS_AFTER = 1` (pgTAP asserts every birthday film sits on the real birthday). |
 
 Client access: column-level `select` on safe columns only (never scripts,
 checks, quotes, keys or attempt fields); RLS = family member, video present,
 not `blocked`, and `surface_at <= now()` (owners/managers may preview
-earlier). No client writes. Also `year_film_views` (own rows),
+earlier); **P2: and `not forced`** — canary/operator films are never visible
+to members. No client writes. Also `year_film_views` (own rows),
 `year_film_render_requests` (fair use), `year_film_settings` (rollout flag
 `off | canary | all`, `canary_family_ids`, `launch_date`,
 `max_concurrent_renders`; service role), `year_film_bridge_nonces`.
@@ -1008,6 +1020,48 @@ removal blocks until re-render). Service role (scheduler): `year_film_due`,
 in-flight films. `ai_usage_events.operation` adds `year_film_quote`,
 `year_film_vision`, `year_film_audio`.
 
+**P2 amendments (`20260930120000_year_films_p2.sql`).**
+- *Dates* (`year_film_due`, structure and windows unchanged): birthday films
+  due **birthday + 2** (`scope_end_exclusive`, so the scope ends the day after
+  the birthday; TS `BIRTHDAY_FILM_DAYS_AFTER = 1`, own-child check at
+  `due_date - 2`); year-end film due **Dec 28** (scope Jan 1 – Dec 27) and
+  surfaces **Dec 30 09:00** owner-local (TS `FAMILY_FILM_CUTOFF = '12-28'`);
+  monthly unchanged (due the 1st 00:30, surfaces 19:00).
+- *Client RPC* `year_films_enabled(p_family_id) returns boolean` (definer,
+  anonymous + membership guards, `authenticated` only) — true only when the
+  rollout includes the family, `launch_date` is set and `<=` the next 1st
+  (family-local), `billing_write_allowed(family, owner)`, the family has an own
+  child, and the current family-local month already has `>= 10` memories. It
+  drives the Keepsakes "upcoming recap" card so it never promises a recap that
+  cannot come.
+- *Service role:* `year_film_candidate_rows(p_family_id, p_from, p_to)` —
+  every film due in `[p_from, p_to]` with the same constants/rules as
+  `year_film_due` (own-child rule at the film's own date, age 1–12, months with
+  ≥ 10 memories and an own child, years with an own child; ignores rollout,
+  billing and `launch_date`); pgTAP sweeps it against `year_film_due` (DST
+  days, UTC−11 / UTC+14, Dec 27 → Jan 2, month ends, Feb 29) — change the two
+  together. `queue_year_film_backfill(p_family_id, p_through, p_dry_run
+  default true, p_only_kind default null, p_only_scope_start default null)` →
+  `(kind, family_member_id, age_year, scope_start_date, due_date, inserted)`:
+  queues every candidate with `due_date >= first day of the month of the
+  family's first memory` and `<= least(p_through, family-local today)` as
+  ordinary non-forced rows with their historic `surface_at` and
+  `notified_at = now()` (**silent**: no push, no drawer event), `on conflict
+  do nothing` (idempotent; a dry run inserts nothing and `inserted` means
+  "would insert"). Requires `year_film_family_enabled` **and**
+  `billing_write_allowed`, ignores `launch_date`; errors are `P0001`. Thin
+  periods are queued too — the floors are re-checked at curate, so they end
+  `skipped`. `year_film_enabled_families()` lists the enabled families for the
+  operator's `--all-families`. Helpers: `year_film_owner_tz` (same zone rule as
+  `year_film_due_families`), `year_film_poster_thumb_key`.
+- *Poster thumb:* the render job writes `poster_thumb.jpg` beside `poster.jpg`
+  (no column; key = `dirname(poster_key)/poster_thumb.jpg`).
+  `publish_year_film` and `year_film_finish_cycle` add the derived thumb key to
+  their `delete_keys` wherever `poster_key` is listed.
+- *Drawer:* `film_ready` events and the `get_family_activity_v2` /
+  `get_family_activity_unread_v2` RPCs — see the family activity notes in §2.3.
+  `year_film_notifications_due` keeps its signature and inserts the event.
+
 ### 2.2 Indexes
 
 ```sql
@@ -1039,6 +1093,9 @@ create index idx_family_activity_events_family_created
   on public.family_activity_events (family_id, created_at desc, id desc);
 create index idx_family_activity_events_actor
   on public.family_activity_events (actor_id);
+-- Year Film P2 (film_ready events, cascade lookup):
+create index idx_family_activity_events_film
+  on public.family_activity_events (film_id) where film_id is not null;
 ```
 
 `idx_memories_user_id` and the old `idx_memories_memory_date (user_id,
@@ -1258,6 +1315,29 @@ deleted, allowing notification delivery to ignore stale/repeated writes.
 - `mark_family_activity_seen(target_family_id uuid) returns void` — same
   guards; sets the caller's own `family_memberships.activity_seen_at =
   now()`.
+- **Year Film P2 (`20260930120000_year_films_p2.sql`) — `film_ready` and the
+  v2 RPCs.** `get_family_activity` and `get_family_activity_unread` (v1,
+  signatures unchanged) now add an explicit `e.kind <> 'film_ready'`, so app
+  builds that have not taken the update never list a kind they cannot render
+  or show a dot they cannot clear. New `get_family_activity_v2(target_family_id
+  uuid)` and `get_family_activity_unread_v2(target_family_id uuid) returns
+  boolean` (definer, `set search_path = ''`, same guards and grants) return
+  the same feed plus film rows, with these differences: the caller filter is
+  `e.actor_id is distinct from auth.uid()` (a NULL actor is not dropped by
+  `<>`, so **every member sees `film_ready`, including the blocker of any
+  account**); `actor_is_former` is `false` for a NULL actor; the blocked-actor
+  `not exists` matches nothing for a NULL actor; and a `film_ready` row counts
+  only while its film is servable (`video_key is not null`, `not blocked`,
+  `not forced`, `surface_at <= now()`), so blocked/forced/deleted films drop
+  out of the list and the dot server-side. v2 adds the output columns
+  `film_id, film_kind, film_member_id, film_age_year, film_scope_start`
+  (ids and dates only — no content, no title). The retention prune has no
+  actor predicate and is unchanged.
+- `year_film_notifications_due` (service role) inserts exactly one
+  `film_ready` event per notified film **in the same statement** that stamps
+  `notified_at` (a CTE over `update … returning`), so the drawer entry exists
+  exactly when the push goes out — never earlier, never twice. History
+  backfills set `notified_at` themselves and therefore write no event.
 - All three are `revoke all ... from public, anon, authenticated` then
   `grant execute ... to authenticated`, matching every other definer RPC in
   this file.
@@ -3242,13 +3322,18 @@ posture as the other OpenAI features). Logs carry counts and error names only.
 
 Hourly (pg_cron minute 5, `x-cron-secret`, `verify_jwt = false`). Inserts due
 films (`year_film_due`: owner-local ≥ 00:30 on the due date, 3-day catch-up,
-`launch_date`, rollout, billing), promotes debounced requeues / spaced retries
+`launch_date`, rollout, billing; **due dates: birthday +2 days, the 1st for
+monthly recaps, Dec 28 for the year-end film — delivered 09:00 / 19:00 /
+Dec 30 09:00 owner-local**), promotes debounced requeues / spaced retries
 / skipped re-checks, claims up to 20 queued films and POSTs each to the
 Worker `/dispatch` (`{ filmId, attemptId }`, HMAC `x-dispatch-*` with
 `CLOUDFLARE_YEAR_FILM_WORKFLOW_SECRET`; failure → `end_cycle aborted`, no
 attempt burned), recovers stale heartbeats, sweeps non-current attempt
 directories, and sends the surfacing push once (`route: 'year-film'`,
-`filmId`; gated on `notify_new_memories`). Response: counts only.
+`filmId`; gated on `notify_new_memories`). The push and the `film_ready`
+drawer event come from the same `year_film_notifications_due` call, so they
+happen together; backfilled history (`queue_year_film_backfill`) is
+pre-notified and produces neither. Response: counts only.
 
 ### 4.28 `workflow-year-film-bridge`
 
@@ -3268,8 +3353,22 @@ rollout is off. Logs: ids and codes only.
 
 JWT (permanent accounts). Body `{ filmId }` → `{ videoUrl, posterUrl,
 scenesUrl, durationMs, expiresIn: 900 }`. Any family member once surfaced;
-owners/managers earlier. 404 for missing or not-a-member (no oracle), 409
-`film_unavailable` for blocked or unpublished films.
+owners/managers earlier. 404 `not_found` for missing, not-a-member (no
+oracle) or **forced** (operator/canary) films, 409 `film_unavailable` for
+blocked or unpublished films.
+
+**Batch mode (Year Film P2).** Body `{ filmIds: string[] }` (1–50 uuids,
+deduped; anything else is 400 `validation_error`) → `{ posters: { [filmId]:
+url }, expiresIn: 3600 }`. Each URL signs the list thumbnail
+`poster_thumb.jpg` (360×640, in the same attempt directory as `poster_key`, key
+derived — no column) with a **60-minute** TTL (short so a block stops serving
+quickly; the video stays 15 min). Per film the caller must have a role in the
+film's family, and the film must not be blocked, not forced, have a video and
+poster, and be surfaced (`surface_at <= now()` for **everyone** — no
+owner/manager early preview in batch mode). Anything else is omitted from
+`posters`, never an error. Films rendered before the thumb-writing renderer
+image have no thumb object (the presigned URL would 404); none exist in
+production after the canary cleanup.
 
 ---
 

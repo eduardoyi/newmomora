@@ -8,8 +8,9 @@ begin;
 -- get_family_activity_unread (a non-blocking third member is unaffected),
 -- retention (200-cap / 90-day), the no-direct-client-access grant posture
 -- on family_activity_events, and the memory_likes select-policy flip
--- (household-read, insert/delete still self-only).
-select plan(39);
+-- (household-read, insert/delete still self-only). Year Film P2 adds the
+-- actor-less `film_ready` kind: v2 RPCs, v1 exclusion, unread, hiding rules.
+select plan(66);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures. All base data is inserted as the connection's default (postgres)
@@ -558,6 +559,195 @@ select is(
   (select count(*)::int from public.memory_likes where memory_id = '94000000-0000-4000-8000-000000000003' and user_id = '91000000-0000-4000-8000-000000000003'),
   1,
   'a household member still cannot delete another member''s like row -- delete stays self-only'
+);
+
+-- ---------------------------------------------------------------------------
+-- Year Film P2: `film_ready` drawer events + the v2 RPCs
+-- (docs/plans/year-film-p2.md Step 1.4). Isolated fixture family so the
+-- unread arithmetic is exact. A film_ready event has no actor: every member
+-- sees it (no `<>` NULL trap), old v1 callers never do, and it disappears
+-- when its film is blocked, forced, unsurfaced or deleted.
+-- ---------------------------------------------------------------------------
+
+insert into auth.users (id, email, is_anonymous) values
+  ('98000000-0000-4000-8000-000000000001', 'film-owner@example.test', false),
+  ('98000000-0000-4000-8000-000000000002', 'film-manager@example.test', false),
+  ('98000000-0000-4000-8000-000000000003', 'film-viewer@example.test', false),
+  ('98000000-0000-4000-8000-000000000004', 'film-blocker@example.test', false);
+
+insert into public.families (id, name, owner_id)
+values ('92000000-0000-4000-8000-000000000004', 'Film activity family', '98000000-0000-4000-8000-000000000001');
+
+insert into public.family_memberships (id, family_id, user_id, role, created_at) values
+  ('93000000-0000-4000-8000-000000000041', '92000000-0000-4000-8000-000000000004', '98000000-0000-4000-8000-000000000001', 'owner', now() - interval '3 days'),
+  ('93000000-0000-4000-8000-000000000042', '92000000-0000-4000-8000-000000000004', '98000000-0000-4000-8000-000000000002', 'manager', now() - interval '3 days'),
+  ('93000000-0000-4000-8000-000000000043', '92000000-0000-4000-8000-000000000004', '98000000-0000-4000-8000-000000000003', 'viewer', now() - interval '3 days'),
+  ('93000000-0000-4000-8000-000000000044', '92000000-0000-4000-8000-000000000004', '98000000-0000-4000-8000-000000000004', 'viewer', now() - interval '3 days');
+
+-- Everyone has seen everything so far; the blocker blocked the manager.
+update public.family_memberships set activity_seen_at = now() - interval '1 hour'
+where family_id = '92000000-0000-4000-8000-000000000004';
+insert into public.blocked_family_accounts (family_id, blocker_user_id, blocked_membership_id, blocked_user_id)
+values ('92000000-0000-4000-8000-000000000004', '98000000-0000-4000-8000-000000000004',
+        '93000000-0000-4000-8000-000000000042', '98000000-0000-4000-8000-000000000002');
+
+-- A regular event by the owner (older than everyone's seen marker).
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, created_at)
+values ('94000000-0000-4000-8000-000000000041', '92000000-0000-4000-8000-000000000004', '98000000-0000-4000-8000-000000000001',
+        'A film-family memory', 'text_illustration', 'pending', now() - interval '2 hours');
+
+insert into public.year_films (id, family_id, kind, scope_start_date, scope_end_exclusive, surface_at, status,
+                               video_key, poster_key)
+values ('9a000000-0000-4000-8000-000000000001', '92000000-0000-4000-8000-000000000004', 'family_month',
+        '2026-08-01', '2026-09-01', now() - interval '1 hour', 'ready', 'o/a.mp4', 'o/a.jpg');
+update public.year_film_settings
+set mode = 'canary', canary_family_ids = array['92000000-0000-4000-8000-000000000004']::uuid[];
+
+select is(
+  (select count(*)::int from public.year_film_notifications_due(now()) where family_id = '92000000-0000-4000-8000-000000000004'),
+  1, 'notifications_due announces the surfaced film'
+);
+select is(
+  (select count(*)::int from public.family_activity_events
+   where film_id = '9a000000-0000-4000-8000-000000000001' and kind = 'film_ready' and actor_id is null),
+  1, 'and writes one actor-less film_ready event in the same statement'
+);
+select is(
+  (select count(*)::int from public.year_film_notifications_due(now()) where family_id = '92000000-0000-4000-8000-000000000004'),
+  0, 'a second notifications_due run announces nothing'
+);
+select is(
+  (select count(*)::int from public.family_activity_events where film_id = '9a000000-0000-4000-8000-000000000001'),
+  1, 'and writes no second event'
+);
+
+-- Every member sees it -- including the blocker (a NULL actor matches no block).
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '98000000-0000-4000-8000-000000000001', true);
+select is(
+  (select count(*)::int from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where kind = 'film_ready'),
+  1, 'v2: the owner sees film_ready'
+);
+select is(
+  (select count(*)::int from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where actor_id = '98000000-0000-4000-8000-000000000001'),
+  0, 'v2: the caller''s own events are still excluded'
+);
+select set_config('request.jwt.claim.sub', '98000000-0000-4000-8000-000000000002', true);
+select is(
+  (select count(*)::int from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where kind = 'film_ready'),
+  1, 'v2: the manager sees film_ready'
+);
+select is(
+  (select count(*)::int from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where kind = 'memory_added'),
+  1, 'v2: regular events are unchanged (the manager sees the owner''s memory)'
+);
+select set_config('request.jwt.claim.sub', '98000000-0000-4000-8000-000000000004', true);
+select is(
+  (select count(*)::int from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where kind = 'film_ready'),
+  1, 'v2: a member who blocked someone still sees film_ready (NULL actor tolerated)'
+);
+select set_config('request.jwt.claim.sub', '98000000-0000-4000-8000-000000000003', true);
+select is(
+  (select count(*)::int from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where kind = 'film_ready'),
+  1, 'v2: the viewer sees film_ready'
+);
+select results_eq(
+  $$select film_id, film_kind, film_member_id, film_age_year, film_scope_start, actor_id, actor_name, actor_is_former, memory_id
+    from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where kind = 'film_ready'$$,
+  $$values ('9a000000-0000-4000-8000-000000000001'::uuid, 'family_month'::text, null::uuid, null::integer, date '2026-08-01',
+            null::uuid, null::text, false, null::uuid)$$,
+  'v2: film rows carry ids and dates only, no actor, and are never "former actor"'
+);
+
+-- Old callers (v1) never see the kind and no dot they cannot clear.
+select is(
+  (select count(*)::int from public.get_family_activity('92000000-0000-4000-8000-000000000004') where kind = 'film_ready'),
+  0, 'v1 get_family_activity excludes film_ready'
+);
+select is(public.get_family_activity_unread('92000000-0000-4000-8000-000000000004'), false,
+  'v1 unread ignores film_ready');
+select is(public.get_family_activity_unread_v2('92000000-0000-4000-8000-000000000004'), true,
+  'v2 unread counts film_ready');
+select public.mark_family_activity_seen('92000000-0000-4000-8000-000000000004');
+select is(public.get_family_activity_unread_v2('92000000-0000-4000-8000-000000000004'), false,
+  'v2 unread clears after mark_family_activity_seen');
+set local role postgres;
+
+-- The film stops being servable: it drops out of the list and the dot.
+update public.family_memberships set activity_seen_at = now() - interval '1 hour'
+where family_id = '92000000-0000-4000-8000-000000000004';
+update public.year_films set blocked = true where id = '9a000000-0000-4000-8000-000000000001';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '98000000-0000-4000-8000-000000000003', true);
+select is(
+  (select count(*)::int from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where kind = 'film_ready'),
+  0, 'v2: a blocked film disappears from the drawer'
+);
+select is(public.get_family_activity_unread_v2('92000000-0000-4000-8000-000000000004'), false,
+  'v2 unread: a blocked film does not light the dot');
+set local role postgres;
+update public.year_films set blocked = false where id = '9a000000-0000-4000-8000-000000000001';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '98000000-0000-4000-8000-000000000003', true);
+select is(public.get_family_activity_unread_v2('92000000-0000-4000-8000-000000000004'), true,
+  'v2 unread: it returns once the film is servable again');
+set local role postgres;
+
+update public.year_films set forced = true where id = '9a000000-0000-4000-8000-000000000001';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '98000000-0000-4000-8000-000000000003', true);
+select is(
+  (select count(*)::int from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where kind = 'film_ready'),
+  0, 'v2: a forced (operator) film never shows'
+);
+set local role postgres;
+update public.year_films set forced = false, surface_at = now() + interval '1 day' where id = '9a000000-0000-4000-8000-000000000001';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '98000000-0000-4000-8000-000000000003', true);
+select is(
+  (select count(*)::int from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004') where kind = 'film_ready'),
+  0, 'v2: a film that has not surfaced yet never shows'
+);
+set local role postgres;
+update public.year_films set surface_at = now() - interval '1 hour' where id = '9a000000-0000-4000-8000-000000000001';
+
+-- Shape rules and access.
+select throws_ok(
+  $$insert into public.family_activity_events (family_id, actor_id, kind, film_id)
+    values ('92000000-0000-4000-8000-000000000004', '98000000-0000-4000-8000-000000000001', 'film_ready', '9a000000-0000-4000-8000-000000000001')$$,
+  '23514', null, 'a film_ready event cannot carry an actor'
+);
+select throws_ok(
+  $$insert into public.family_activity_events (family_id, kind)
+    values ('92000000-0000-4000-8000-000000000004', 'member_joined')$$,
+  '23514', null, 'every other kind still requires an actor'
+);
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', '91000000-0000-4000-8000-000000000005', true);
+select throws_ok(
+  $$select * from public.get_family_activity_v2('92000000-0000-4000-8000-000000000004')$$,
+  '42501', 'Not authorized', 'an outsider cannot read the v2 feed'
+);
+select throws_ok(
+  $$select public.get_family_activity_unread_v2('92000000-0000-4000-8000-000000000004')$$,
+  '42501', 'Not authorized', 'an outsider cannot read v2 unread state'
+);
+set local role postgres;
+
+select has_function('public', 'get_family_activity_v2', array['uuid'], 'get_family_activity_v2 exists');
+select ok(
+  has_function_privilege('authenticated', 'public.get_family_activity_v2(uuid)', 'execute')
+  and has_function_privilege('authenticated', 'public.get_family_activity_unread_v2(uuid)', 'execute')
+  and not has_function_privilege('anon', 'public.get_family_activity_v2(uuid)', 'execute')
+  and not has_function_privilege('anon', 'public.get_family_activity_unread_v2(uuid)', 'execute'),
+  'the v2 RPCs are executable by authenticated only'
+);
+
+delete from public.year_films where id = '9a000000-0000-4000-8000-000000000001';
+select is(
+  (select count(*)::int from public.family_activity_events where kind = 'film_ready' and family_id = '92000000-0000-4000-8000-000000000004'),
+  0, 'deleting a film cascades its film_ready event'
 );
 
 select * from finish();

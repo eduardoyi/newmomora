@@ -15,7 +15,7 @@
  *
  * Env: E2E_S3_HOST (default http://localhost:9100), E2E_S3_ALIAS (container
  * endpoint, default http://s3:9090), E2E_NETWORK (default yf-test),
- * E2E_OUT (where film.mp4/poster.jpg/scenes.json are copied).
+ * E2E_OUT (where film.mp4/poster.jpg/poster_thumb.jpg/scenes.json are copied).
  */
 import { GetObjectCommand, PutObjectCommand, S3Client } from 'npm:@aws-sdk/client-s3@3';
 import {
@@ -184,12 +184,28 @@ const rendered = await runMode('render', { version: 1, mode: 'render', prefix: P
 check((rendered.durationMs ?? 0) > 15_000, `film is ${Math.round((rendered.durationMs ?? 0) / 100) / 10}s`);
 await Deno.writeFile(`${OUT}/film.mp4`, await getBytes(`${PREFIX}film.mp4`));
 await Deno.writeFile(`${OUT}/poster.jpg`, await getBytes(`${PREFIX}poster.jpg`));
+await Deno.writeFile(`${OUT}/poster_thumb.jpg`, await getBytes(`${PREFIX}poster_thumb.jpg`));
 const scenes = await getJson<{ scenes: { type: string }[]; durationMs: number }>(`${PREFIX}scenes.json`);
 await Deno.writeTextFile(`${OUT}/scenes.json`, JSON.stringify(scenes, null, 2));
 const probe = JSON.parse(await sh('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,width,height', '-of', 'json', `${OUT}/film.mp4`]));
 const v = probe.streams.find((s: { codec_type: string }) => s.codec_type === 'video');
 check(v?.width === 1080 && v?.height === 1920, 'film.mp4 is 1080×1920');
 check(probe.streams.some((s: { codec_type: string }) => s.codec_type === 'audio'), 'film.mp4 has audio');
+// Cover (docs/plans/year-film-p2.md Step 2): a settled frame of the first
+// scene — full-size poster + a 360×640 list thumb, not frame 0, not flat.
+const imageSize = async (file: string) => {
+  const j = JSON.parse(await sh('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'json', file]));
+  return `${j.streams[0]?.width}x${j.streams[0]?.height}`;
+};
+check(await imageSize(`${OUT}/poster.jpg`) === '1080x1920', 'poster.jpg is 1080×1920');
+check(await imageSize(`${OUT}/poster_thumb.jpg`) === '360x640', 'poster_thumb.jpg is 360×640');
+const ssim = await sh('ffmpeg', ['-hide_banner', '-nostats', '-i', `${OUT}/poster.jpg`, '-ss', '0', '-i', `${OUT}/film.mp4`, '-frames:v', '1', '-lavfi', 'ssim', '-f', 'null', '-'], true);
+const ssimAll = Number(/All:(-?[\d.]+)/.exec(ssim)?.[1] ?? 1);
+check(ssimAll < 0.98, `the poster is not frame 0 (SSIM vs frame 0 = ${ssimAll})`);
+const stats = await sh('ffmpeg', ['-hide_banner', '-nostats', '-i', `${OUT}/poster.jpg`, '-vf', 'signalstats,metadata=print:file=-', '-f', 'null', '-'], false);
+const ymin = Number(/YMIN=(\d+)/.exec(stats)?.[1] ?? 0);
+const ymax = Number(/YMAX=(\d+)/.exec(stats)?.[1] ?? 0);
+check(ymax - ymin >= 60, `the poster is not a flat background (luma range ${ymin}..${ymax})`);
 check(scenes.scenes.length > 3, `scenes.json lists ${scenes.scenes.length} scenes`);
 // The voice must sit well above the carved bed (0.07 ≈ −23 dB, ≈ −39 dB
 // mean) in the sound scene.
