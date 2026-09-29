@@ -70,6 +70,12 @@ export function scenesFromTimeline(timeline) {
   };
 }
 
+/** H.264 CRF for the film. HyperFrames' default ("looks", CRF 16) made a 60s
+ * film 81 MB (~10.6 Mbps) — heavy to stream on cellular and to share. On Enzo's
+ * Year Three (Sep 2026): CRF 22 → 27.5 MB (VMAF 96.8), 24 → 21.6 MB (VMAF 95.8),
+ * no visible difference side by side; 23 sits in the 20–30 MB/min target. */
+export const FILM_CRF = 23;
+
 /** The cover: the FIRST scene, settled (owner, 2026-09-29): the title card /
  * cold open the film opens on ("Nuestro 2026" + the photo pile, "Recuerdos de
  * tu tercer año, Enzo" + portraits), after its entrance animations and before
@@ -349,7 +355,7 @@ async function render(prefix, job) {
   await run('node', [path.join(FILM_RENDERER, 'assemble.mjs'), 'job'], { maxBuffer: 16 * 1024 * 1024 }, 'assemble');
   await run('hyperframes', ['check'], { cwd: composition, maxBuffer: 16 * 1024 * 1024 }, 'check');
   const out = path.join(os.tmpdir(), 'film.mp4');
-  await run('hyperframes', ['render', '-o', out, '--video-frame-format', 'jpg', '--quiet'], { cwd: composition, maxBuffer: 16 * 1024 * 1024 }, 'render');
+  await run('hyperframes', ['render', '-o', out, '--video-frame-format', 'jpg', '--crf', String(FILM_CRF), '--quiet'], { cwd: composition, maxBuffer: 16 * 1024 * 1024 }, 'render');
 
   const timeline = JSON.parse(await fs.promises.readFile(path.join(composition, 'timeline.json'), 'utf8'));
   const poster = path.join(os.tmpdir(), 'poster.jpg');

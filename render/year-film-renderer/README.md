@@ -12,7 +12,7 @@ HTTP server: the job reads its input from R2 and writes its output there.
 |---|---|---|
 | `thumbs` | `thumbs/job.json` (claim-check candidate keys) | `thumbs/NNN.jpg` (512px), `thumbs/manifest.json`, `thumbs/status.json` |
 | `prepare` | `prep/job.json` (`planPrepare` items) | stills ≤1920px (upright, HEIC via `heif-convert`), ranked clip/voice cuts, 512px check frames, 16 kHz WAVs, `prep/prep.json`, `prep/status.json` |
-| `render` | `job.json` + `film.json` + `prep/**` | `film.mp4`, `poster.jpg` (1080×1920, the first scene once settled), `poster_thumb.jpg` (360×640, same frame, for lists; its key is derived from `poster_key`), `scenes.json`, `status.json` (`durationMs`) |
+| `render` | `job.json` + `film.json` + `prep/**` | `film.mp4` (H.264 CRF 23, ~25 MB per minute: `FILM_CRF`), `poster.jpg` (1080×1920, the first scene once settled), `poster_thumb.jpg` (360×640, same frame, for lists; its key is derived from `poster_key`), `scenes.json`, `status.json` (`durationMs`) |
 
 Env: `JOB_PREFIX`, `JOB_TIMEOUT_SECONDS` (hard stop → `failed/TIMEOUT`),
 `R2_ENDPOINT`, `R2_BUCKET`, and either per-machine temporary credentials

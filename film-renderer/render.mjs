@@ -31,7 +31,8 @@ for (const slug of slugs) {
     execFileSync('node', [path.join(HERE, 'assemble.mjs'), slug], { stdio: 'inherit' });
     execFileSync('npx', ['--yes', HYPERFRAMES, 'check'], { cwd: PROJECT, stdio: ['ignore', 'ignore', 'inherit'] });
     const out = `renders/${slug}.mp4`;
-    execFileSync('npx', ['--yes', HYPERFRAMES, 'render', '-o', out, '--video-frame-format', 'jpg'], { cwd: PROJECT, stdio: ['ignore', 'ignore', 'inherit'] });
+    // Same CRF as production (render/year-film-renderer/src/job.mjs FILM_CRF).
+    execFileSync('npx', ['--yes', HYPERFRAMES, 'render', '-o', out, '--video-frame-format', 'jpg', '--crf', '23'], { cwd: PROJECT, stdio: ['ignore', 'ignore', 'inherit'] });
     results.push(`${slug}: ok → composition/${out} (${Math.round((Date.now() - started) / 1000)}s)`);
   } catch (err) {
     results.push(`${slug}: FAILED (${err.message.split('\n')[0]})`);
