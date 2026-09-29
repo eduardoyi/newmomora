@@ -451,6 +451,15 @@ plus the weekday letters in Calendar view.
 - Implemented as one FlatList: `[control row, ...memories | ...months]`, with
   `stickyHeaderIndices` and the measured header feeding Calendar's
   `getItemLayout`. See memories.md, "Sticky control row + jump to a month".
+- Device fixes, same day (Android):
+  - The row is an overlay driven by the native scroll value, because touches
+    never reached a native sticky header.
+  - The month label reads the card under the row from geometry (viewability
+    flickered between months).
+  - Newer pages load 5 screens ahead, with no pull-to-refresh until the
+    newest memory is loaded.
+  - The top content returns once the anchored list reaches the newest memory.
+  - Spacing is the same in both views.
 
 ### Phase D — Year Film plan alignment (docs now, code in Film P2)
 

@@ -114,17 +114,33 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
     - `TimelineControlRow` (`src/components/timeline/timeline-control-row.tsx`)
       replaced the old "Recently" separator: the month label (also the
       "Jump to month" trigger), a rule, a contextual **Today**, and the
-      List/Calendar switcher. It is the list's only sticky element.
+      List/Calendar switcher. It is the only sticky element.
+    - **The row is an overlay above the list, not a native sticky header.**
+      On Android, touches never reached a `stickyHeaderIndices` header, so
+      the controls went dead once pinned. The list reserves an empty slot of
+      the row's fixed height (`getControlRowHeight`: 52, plus 24 weekday
+      letters in Calendar view, plus a 12pt bottom gap in both views). The
+      overlay is translated by `rowTop - scrollY`, clamped at 0, on the
+      native driver (`Animated.FlatList` +
+      `Animated.event(..., { useNativeDriver: true, listener })`). It is
+      hidden and untouchable until the top content has been measured.
     - The screen's `SafeAreaView edges={['top']}` owns the inset, so the row
       pins below the status bar.
-    - `stickyHeaderIndices` count the list header as child 0, so the row is
-      `[1]` below the top content and `[0]` when a jump hides it.
+    - Spacing is identical in both views: no `contentContainerStyle` gap.
+      Cards carry their own `paddingBottom`, and the row has the same bottom
+      gap in both views.
     - The earlier pinned `TimelineHeaderBar` (2026-09-28) is gone.
-  - **Month label** = the month of the topmost card that's ≥15% visible, always
-    with the year. It's the second pair in `viewabilityConfigCallbackPairs`;
-    the first is the existing 60% video-autoplay pair. RN forbids swapping
-    `onViewableItemsChanged`/`viewabilityConfig` on a mounted list, so both
-    pairs are fixed at mount.
+  - **Month label** = the month of the card right under the row, always with
+    the year. It's read from geometry on every scroll, not viewability.
+    Viewability counted a card hidden under the pinned row as visible, and
+    the label flickered between neighbouring months after a jump.
+    - The probe line is `max(scrollY, rowTop) + rowHeight + 1`.
+    - List view uses the cell positions reported by `MeasuredCell` (the
+      list's `CellRendererComponent`); Calendar view uses the exact month
+      offsets, which also give the grid's visible range.
+    - Programmatic scrolls record their target offset first, so a queued
+      update can't use the old one.
+    - Viewability now only drives video autoplay.
   - **Picker:** `CalendarMonthPickerSheet` (originally the Calendar tab's), fed
     `getTimelineMonthOptions` (`src/utils/timeline-anchor.ts`) with per-month
     counts from `useMemoryMonthCounts`. That hook runs one dates-only
@@ -160,7 +176,16 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
     every jump starts at offset 0 with no `scrollToIndex` or height model.
     While anchored:
     - **the top content is hidden** (no `ListHeaderComponent`), so the list
-      starts at the control row;
+      starts at the control row. Once the list has loaded up to the newest
+      memory (`!hasPreviousPage`), the top content comes back above the row
+      (`maintainVisibleContentPosition` keeps the on-screen card still) and
+      Today hides, so scrolling up reaches the title again;
+    - newer pages start loading 5 screens before the top
+      (`onStartReachedThreshold`), so a quick scroll up doesn't hit the
+      not-yet-loaded top;
+    - **no pull-to-refresh until the newest memory has loaded.** Pulling
+      re-fetched the anchor and threw the user back to the jumped-to month
+      mid-scroll;
     - it uses `maintainVisibleContentPosition` (`minIndexForVisible: 1`, the
       first memory, never the sticky row, which doesn't move when newer rows
       insert below it) + `onStartReached` → `fetchPreviousPage` to extend

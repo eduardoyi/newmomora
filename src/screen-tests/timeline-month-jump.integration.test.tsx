@@ -126,8 +126,17 @@ function lastAnchorDate() {
   return (mockUseMemories.mock.calls.at(-1)?.[0] as { anchorDate: string | null }).anchorDate;
 }
 
+// The pinned control row overlay stays hidden (and untouchable) until the
+// top content above it has been measured -- Jest runs no layout, so fire it.
+function layoutTopContent(screen: ReturnType<typeof render>) {
+  const top = screen.queryByTestId('timeline-top-sections');
+  if (top) {
+    fireEvent(top, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 600 } } });
+  }
+}
+
 function renderTimeline() {
-  return render(
+  const screen = render(
     <SafeAreaProvider
       initialMetrics={{
         frame: { height: 844, width: 390, x: 0, y: 0 },
@@ -137,6 +146,8 @@ function renderTimeline() {
       <TimelineScreen />
     </SafeAreaProvider>,
   );
+  layoutTopContent(screen);
+  return screen;
 }
 
 async function jumpToMarch2025(screen: ReturnType<typeof renderTimeline>) {
@@ -194,7 +205,7 @@ describe('Timeline month jump', () => {
     // A jump hides the top content: the list starts at the (sticky) control row.
     expect(screen.queryByTestId('timeline-week-section')).toBeNull();
     expect(screen.queryByTestId('timeline-title-section')).toBeNull();
-    expect(screen.getByTestId('timeline-memory-list').props.stickyHeaderIndices).toEqual([0]);
+    expect(screen.getByTestId('timeline-control-row-slot')).toBeTruthy();
     expect(screen.queryByTestId('timeline-recently-section')).toBeNull();
     expect(mockTrackEvent).toHaveBeenCalledWith('timeline_jumped', {
       source: 'month_picker',
@@ -207,9 +218,11 @@ describe('Timeline month jump', () => {
     await jumpToMarch2025(screen);
 
     const list = screen.getByTestId('timeline-memory-list');
-    // FlatList passes { minIndexForVisible: 0 } down; VirtualizedList shifts
-    // it by one for the ListHeaderComponent cell on the host ScrollView.
+    // The first memory (index 1), never the control row's slot.
     expect(list.props.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 1 });
+    // No pull-to-refresh until the newest memory has loaded: it would re-fetch
+    // the anchor mid-scroll.
+    expect(list.props.refreshControl).toBeUndefined();
     act(() => {
       list.props.onStartReached({ distanceFromStart: 0 });
     });
@@ -260,8 +273,12 @@ describe('Timeline Calendar view', () => {
     jest.clearAllMocks();
     AsyncStorage.getItem.mockResolvedValue(null);
     mockMonthCounts.mockReturnValue({ [currentMonthKey]: 1, '2025-03': 4 });
+    // Anchored lists still have newer pages to load (so the top content stays
+    // hidden after a jump until the newest memory is reached).
     mockUseMemories.mockImplementation((options: { anchorDate: string | null }) =>
-      hookResult(options.anchorDate ? [marchMemory] : [recentMemory]),
+      options.anchorDate
+        ? hookResult([marchMemory], { hasPreviousPage: true })
+        : hookResult([recentMemory]),
     );
     mockGridMemories.mockReturnValue([
       { ...recentMemory, id: 'grid-1', memory_date: firstOfMonth, emotion: 'joy', updated_at: 'x' },
@@ -272,6 +289,7 @@ describe('Timeline Calendar view', () => {
     await act(async () => {
       fireEvent.press(screen.getByTestId('timeline-view-calendar'));
     });
+    layoutTopContent(screen);
   }
 
   it('swaps what is below the control row for month grids, keeping the top content, and remembers the choice', async () => {
@@ -280,14 +298,13 @@ describe('Timeline Calendar view', () => {
 
     await switchToCalendar(screen);
 
-    const grid = screen.getByTestId('calendar-grid');
+    expect(screen.getByTestId('calendar-grid')).toBeTruthy();
     expect(screen.queryByTestId('timeline-memory-list')).toBeNull();
     expect(screen.getByTestId(`calendar-grid-month-${currentMonthKey}`)).toBeTruthy();
     // Weekday letters ride in the sticky control row; the title and This week stay above.
     expect(screen.getByTestId('calendar-grid-weekdays')).toBeTruthy();
     expect(screen.getByTestId('timeline-title-section')).toBeTruthy();
     expect(screen.getByTestId('timeline-week-section')).toBeTruthy();
-    expect(grid.props.stickyHeaderIndices).toEqual([1]);
     expect(screen.getByTestId('timeline-view-calendar').props.accessibilityState).toMatchObject({ selected: true });
     expect(AsyncStorage.setItem).toHaveBeenCalledWith('timeline.view', 'calendar');
     expect(mockTrackEvent).toHaveBeenCalledWith('timeline_view_switched', { view: 'calendar' });
@@ -311,7 +328,6 @@ describe('Timeline Calendar view', () => {
     expect(lastAnchorDate()).toBe(expectedAnchor);
     if (expectedAnchor) {
       expect(screen.queryByTestId('timeline-title-section')).toBeNull();
-      expect(screen.getByTestId('timeline-memory-list').props.stickyHeaderIndices).toEqual([0]);
     }
     expect(AsyncStorage.setItem).not.toHaveBeenCalled();
     expect(mockTrackEvent).toHaveBeenCalledWith('timeline_jumped', {
@@ -355,5 +371,76 @@ describe('Timeline Calendar view', () => {
     expect(screen.getByTestId('calendar-grid')).toBeTruthy();
     expect(screen.getByText('March 2025')).toBeTruthy();
     scrollSpy.mockRestore();
+  });
+});
+
+describe('Timeline control row geometry', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    AsyncStorage.getItem.mockResolvedValue(null);
+    mockMonthCounts.mockReturnValue({ [currentMonthKey]: 1, '2025-03': 4 });
+  });
+
+  function jumpToMarch(screen: ReturnType<typeof renderTimeline>) {
+    fireEvent.press(screen.getByTestId('timeline-month-trigger'));
+    act(() => {
+      fireEvent.press(screen.getByTestId('month-picker-option-2025-03-01'));
+    });
+  }
+
+  function scrollTo(screen: ReturnType<typeof renderTimeline>, y: number) {
+    fireEvent.scroll(screen.getByTestId('timeline-memory-list'), {
+      nativeEvent: {
+        contentOffset: { x: 0, y },
+        contentSize: { height: 5000, width: 390 },
+        layoutMeasurement: { height: 800, width: 390 },
+      },
+    });
+  }
+
+  it('labels the month from the card right under the row, never one hidden under it', () => {
+    const may = { ...marchMemory, id: 'may', memory_date: '2025-05-02' };
+    const april = { ...marchMemory, id: 'april', memory_date: '2025-04-20' };
+    mockUseMemories.mockImplementation(() => hookResult([may, april], { hasPreviousPage: true }));
+    const screen = renderTimeline();
+    jumpToMarch(screen);
+
+    // Anchored: no top content, so the row's slot is [0, 64) (52 + 12 gap).
+    // May occupies [64, 364), April [364, 664).
+    for (const [id, y] of [['may', 64], ['april', 364]] as const) {
+      fireEvent(screen.getByTestId(`timeline-cell-${id}`), 'layout', {
+        nativeEvent: { layout: { x: 0, y, width: 390, height: 300 } },
+      });
+    }
+
+    scrollTo(screen, 250); // line just under the pinned row: 315 -> May
+    expect(screen.getByText('May 2025')).toBeTruthy();
+
+    // May's last 44pt are still on screen but under the row -- April is the
+    // card the reader sees first.
+    scrollTo(screen, 320); // line 385 -> April
+    expect(screen.getByText('April 2025')).toBeTruthy();
+  });
+
+  it('brings the top content back once an anchored list has loaded up to the newest memory', () => {
+    mockUseMemories.mockImplementation((options: { anchorDate: string | null }) =>
+      hookResult([marchMemory], options.anchorDate ? { hasPreviousPage: false } : {}),
+    );
+    const screen = renderTimeline();
+    jumpToMarch(screen);
+
+    expect(lastAnchorDate()).toBe('2025-03-31');
+    // Nothing newer left to load: the list is back at today's top.
+    expect(screen.getByTestId('timeline-title-section')).toBeTruthy();
+    expect(screen.queryByTestId('timeline-today-button')).toBeNull();
+    expect(screen.getByTestId('timeline-memory-list').props.refreshControl).toBeTruthy();
+  });
+
+  it('keeps the control row outside the list, so it stays tappable when pinned', () => {
+    const screen = renderTimeline();
+    const list = screen.getByTestId('timeline-memory-list');
+    expect(list.findAll((node) => node.props.testID === 'timeline-control-row')).toHaveLength(0);
+    expect(list.props.stickyHeaderIndices ?? []).toEqual([]);
+    expect(screen.getByTestId('timeline-control-row')).toBeTruthy();
   });
 });

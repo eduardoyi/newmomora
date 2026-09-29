@@ -502,7 +502,9 @@ export default function SettingsScreen() {
         style={styles.container}
       >
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-          <SafeAreaView>
+          {/* Top edge only -- the default also pads the Android nav-bar inset
+              under the header (the same gap the Family tab had). */}
+          <SafeAreaView edges={['top']}>
             <View style={styles.header}>
               <Text style={styles.title}>Settings.</Text>
             </View>

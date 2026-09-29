@@ -125,7 +125,7 @@ describe('Timeline Looking Back rail integration', () => {
     });
   });
 
-  it('orders title, This week, Looking back, then the sticky control row before the feed', () => {
+  it('orders title, This week, Looking back, then the control row slot before the feed', () => {
     const screen = render(<TimelineScreen />);
     // The screen owns the top inset (the sticky control row pins below the
     // status bar). Top edge only: a bottom inset here would open an Android
@@ -153,9 +153,10 @@ describe('Timeline Looking Back rail integration', () => {
     // "Recently" is gone -- the month label + switcher row replaces it, as the
     // list's first (sticky) row, outside the top sections.
     expect(screen.queryByText('Recently')).toBeNull();
-    const list = screen.getByTestId('timeline-memory-list');
-    expect(list.findAll((node) => node.props.testID === 'timeline-control-row').length).toBeGreaterThan(0);
-    expect(list.props.stickyHeaderIndices).toEqual([1]);
+    // The list reserves the row's slot; the row itself is the pinned overlay.
+    expect(screen.getByTestId('timeline-memory-list')
+      .findAll((node) => node.props.testID === 'timeline-control-row-slot').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('timeline-control-row')).toBeTruthy();
     expect(screen.getByTestId('looking-back-rail')).toBeTruthy();
     expect(screen.getByText('Revisited today')).toBeTruthy();
   });

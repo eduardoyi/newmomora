@@ -10,14 +10,19 @@ import type { TimelineView } from '@/utils/timeline-view-preference';
 const TODAY_BUTTON_ENTERING = FadeIn.duration(160);
 const WEEKDAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
-// Fixed heights: the row is the sticky first item of the Timeline's list,
-// and in Calendar view the month grid's getItemLayout offsets are computed
-// from them (so they must match what renders, exactly).
+// Fixed heights: the list reserves exactly this much for the row, the
+// pinned overlay draws it, and Calendar view's getItemLayout offsets are
+// computed from it -- so it must match what renders, exactly.
 export const CONTROL_ROW_HEIGHT = 52;
 export const CONTROL_ROW_WEEKDAYS_HEIGHT = 24;
+// The same breathing room below the row in both views (before the first
+// memory card, or the first month).
+export const CONTROL_ROW_BOTTOM_GAP = 12;
 
 export function getControlRowHeight(view: TimelineView): number {
-  return view === 'calendar' ? CONTROL_ROW_HEIGHT + CONTROL_ROW_WEEKDAYS_HEIGHT : CONTROL_ROW_HEIGHT;
+  return CONTROL_ROW_HEIGHT
+    + (view === 'calendar' ? CONTROL_ROW_WEEKDAYS_HEIGHT : 0)
+    + CONTROL_ROW_BOTTOM_GAP;
 }
 
 const VIEW_OPTIONS: { view: TimelineView; label: string; Icon: typeof List }[] = [
@@ -70,6 +75,11 @@ export interface TimelineControlRowProps {
  * search, bell, This week, Looking Back) scrolls away; it pins when it
  * reaches the top. In Calendar view it also carries the M–S weekday
  * letters so they stay over the grid.
+ *
+ * Rendered as an overlay ABOVE the list (translated with the scroll on the
+ * native driver), not with the list's stickyHeaderIndices: on Android,
+ * touches don't reach a native sticky header, so the controls went dead
+ * once pinned. The list keeps an empty slot of the same height.
  */
 export function TimelineControlRow({
   monthLabel,

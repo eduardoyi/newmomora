@@ -133,7 +133,10 @@ export default function FamilyScreen() {
           <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.primary} />
         }
       >
-        <SafeAreaView>
+        {/* Top edge only: the default (all edges) added the Android
+            navigation-bar inset as padding under the header, a big gap above
+            the cast. */}
+        <SafeAreaView edges={['top']}>
           <View style={styles.header}>
             <Text style={styles.eyebrow}>The cast</Text>
             <Text style={styles.title}>Your people.</Text>
