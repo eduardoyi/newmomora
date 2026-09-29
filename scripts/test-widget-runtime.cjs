@@ -52,14 +52,20 @@ test('text cards are neutral and image cards render in the real isolated Expo ru
 
 test('an expired picker snapshot cannot reveal its old text, image or target', () => {
   const output = render({ ...memory, expiresAt: '2020-01-01T00:00:00Z', imageUri: 'file:///private/synthetic.jpg' });
-  assert.match(output, /Open Momora for photo memories/);
+  assert.match(output, /Your memories are waiting/);
   assert.doesNotMatch(output, /Synthetic private memory|synthetic.jpg|memoryId|September 15/);
+});
+
+test('a verified empty family gets a friendly invitation instead of a refresh prompt', () => {
+  const output = render({ kind: 'neutral', emptyState: 'no_memories', deepLink: 'momora://widget' });
+  assert.match(output, /Your memories will live here/);
+  assert.doesNotMatch(output, /Your memories are waiting/);
 });
 
 test('missing or invalid expiry fails closed even for a memory-shaped snapshot', () => {
   for (const expiresAt of [undefined, 'invalid']) {
     const output = render({ ...memory, expiresAt });
-    assert.match(output, /Open Momora for photo memories/);
+    assert.match(output, /Your memories are waiting/);
     assert.doesNotMatch(output, /Synthetic private memory|memoryId/);
   }
 });
@@ -84,7 +90,7 @@ test('photo layout resizes before fitting the widget instead of using intrinsic 
  test('old or video-shaped image snapshots are neutral until a valid photo refresh', () => {
   for (const imageKind of [undefined, 'video', 'text', 'audio']) {
     const output = render({ ...memory, imageKind, imageUri: 'file:///private/synthetic.jpg' });
-    assert.match(output, /Open Momora for photo memories/);
+    assert.match(output, /Your memories are waiting/);
     assert.doesNotMatch(output, /synthetic.jpg|memoryId|Synthetic private memory/);
   }
 });

@@ -107,8 +107,16 @@ it('schedules a neutral expiry and never puts signed image URLs in iOS props', a
   expect(timeline[0].props.deepLink).not.toContain('Private');
   expect(timeline.at(-1)).toMatchObject({
     date: new Date('2026-09-22T12:00:00.000Z'),
-    props: { kind: 'neutral' },
+    props: { kind: 'neutral', emptyState: 'needs_refresh' },
   });
+});
+
+it('marks a verified empty family so iOS can invite a first memory', async () => {
+  const adapter = loadAdapter();
+  await adapter.publishManifest({ ...manifest(), entries: [] }, {});
+  const timeline = mockTimeline.mock.calls[0][0];
+  expect(timeline).toHaveLength(1);
+  expect(timeline[0].props).toMatchObject({ kind: 'neutral', emptyState: 'no_memories' });
 });
 
 it('passes every daytime entry to the iOS timeline and exposes native capacity', async () => {
@@ -138,7 +146,7 @@ it('clears the separately persisted iOS timeline on logout', async () => {
   await adapter.clearManifest({ accountId: 'account-a', familyId: 'family-a' });
   const timeline = mockTimeline.mock.calls.at(-1)?.[0];
   expect(timeline).toHaveLength(1);
-  expect(timeline[0].props.kind).toBe('neutral');
+  expect(timeline[0].props).toMatchObject({ kind: 'neutral', emptyState: 'needs_refresh' });
   expect(JSON.stringify(timeline)).not.toContain('Private family memory');
   expect(JSON.stringify(timeline)).not.toContain('memory-a.jpg');
 });

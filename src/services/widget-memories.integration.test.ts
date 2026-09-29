@@ -101,7 +101,8 @@ describe('widget memory candidate integration', () => {
     const result = await fetchWidgetCandidateMemories('family-1');
 
     expect(result.data).toBeNull();
-    expect(result.failure).toBe('authorization');
+    // An expired JWT is a transient session state, not proof of access loss.
+    expect(result.failure).toBe('unavailable');
     expect(fetchMemoriesByIds).not.toHaveBeenCalled();
   });
 });

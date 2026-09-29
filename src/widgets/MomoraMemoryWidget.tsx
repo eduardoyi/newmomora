@@ -18,6 +18,8 @@ import {
 
 export interface MomoraMemoryWidgetProps {
   kind: 'memory' | 'neutral';
+  /** Neutral cards only: a verified empty family vs. nothing fresh cached. */
+  emptyState?: 'no_memories' | 'needs_refresh';
   imageKind?: 'photo' | 'illustration';
   familyId?: string;
   memoryId?: string;
@@ -47,12 +49,18 @@ export const MomoraMemoryWidget = createWidget<MomoraMemoryWidgetProps>(
       && (props.imageKind === 'photo' || props.imageKind === 'illustration')
       && Number.isFinite(expiresAt)
       && Date.now() < expiresAt;
-    const backgroundColor = props.backgroundColor ?? '#F2EFF8';
-    const foregroundColor = props.foregroundColor ?? '#2C2418';
-    const excerpt = isMemory ? (props.excerpt || 'A family memory') : 'Open Momora for photo memories';
+    const backgroundColor = isMemory ? (props.backgroundColor ?? '#F2EFF8') : '#FBEFF3';
+    const foregroundColor = isMemory ? (props.foregroundColor ?? '#2C2418') : '#2C2418';
+    const hasNoMemories = !isMemory && props.kind === 'neutral' && props.emptyState === 'no_memories';
+    const title = hasNoMemories ? 'Your memories will live here' : 'Your memories are waiting';
+    const excerpt = isMemory
+      ? (props.excerpt || 'A family memory')
+      : hasNoMemories
+        ? 'Add a photo or illustrated moment to see it here.'
+        : "Tap to catch up on your family's moments.";
     const dateLabel = props.dateLabel || 'Your memories';
     const deepLink = isMemory ? (props.deepLink ?? 'momora://widget') : 'momora://widget';
-    const label = isMemory ? `${dateLabel}: ${excerpt}` : 'Open Momora to refresh your memories';
+    const label = isMemory ? `${dateLabel}: ${excerpt}` : `${title}. ${excerpt}`;
     const outerModifiers = [
       containerRelativeFrame({ axes: 'both' }),
       background(backgroundColor),
@@ -79,11 +87,14 @@ export const MomoraMemoryWidget = createWidget<MomoraMemoryWidgetProps>(
     }
 
     return (
-      <VStack alignment="center" spacing={8} modifiers={[padding({ all: 12 }), ...outerModifiers]}>
-        <Text modifiers={[foregroundStyle(foregroundColor), font({ size: 18, weight: 'bold' }), lineLimit(1)]}>
-          Momora
+      <VStack alignment="center" spacing={6} modifiers={[padding({ all: 14 }), ...outerModifiers]}>
+        <Text modifiers={[foregroundStyle('#D63E78'), font({ size: 13, weight: 'bold' }), lineLimit(1)]}>
+          momora.
         </Text>
-        <Text modifiers={[foregroundStyle(foregroundColor), font({ size: 15, design: 'serif' }), lineLimit(5)]}>
+        <Text modifiers={[foregroundStyle(foregroundColor), font({ size: 16, weight: 'bold', design: 'serif' }), lineLimit(2)]}>
+          {title}
+        </Text>
+        <Text modifiers={[foregroundStyle('#6B5E57'), font({ size: 12 }), lineLimit(3)]}>
           {excerpt}
         </Text>
       </VStack>

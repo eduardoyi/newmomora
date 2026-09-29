@@ -76,6 +76,18 @@ describe('widget memory service validation', () => {
     expect(result.failure).toBe('authorization');
     expect(result.error?.code).toBe('42501');
   });
+
+  it.each([
+    ['28000', 'Authentication required'],
+    ['PGRST301', 'JWT expired'],
+  ])('treats a transient session error (%s) as unavailable, not access loss', async (code, message) => {
+    (supabase.rpc as jest.Mock).mockResolvedValue({ data: null, error: { code, message } });
+
+    const result = await fetchWidgetMemoryCandidates('family-2');
+
+    expect(result.data).toBeNull();
+    expect(result.failure).toBe('unavailable');
+  });
 });
 
 describe('widget retained memory service bounds', () => {

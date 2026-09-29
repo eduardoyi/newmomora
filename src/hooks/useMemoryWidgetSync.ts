@@ -340,6 +340,30 @@ export class MemoryWidgetSyncCoordinator {
     }
   }
 
+  private async stageWithRetry(
+    generationId: string,
+    filename: string,
+    url: string,
+    signal: AbortSignal,
+  ) {
+    try {
+      return await this.dependencies.stageImage(
+        generationId,
+        { filename, url } satisfies WidgetImageToStage,
+        { signal },
+      );
+    } catch (error) {
+      if (signal.aborted) throw error;
+      // One retry covers a dropped connection mid-download; staging removes
+      // its own partial files before throwing.
+      return this.dependencies.stageImage(
+        generationId,
+        { filename, url } satisfies WidgetImageToStage,
+        { signal },
+      );
+    }
+  }
+
   invalidate(): number {
     return this.controller.invalidate();
   }
@@ -538,9 +562,17 @@ export class MemoryWidgetSyncCoordinator {
       .flatMap((projection) => projection.image ? [projection.image] : []);
     const mediaKeys = [...new Set(imageCandidates.map((image) => image.key))];
     let signedUrls: Record<string, string> = {};
-    if (mediaKeys.length > 0) {
+    // Signing is an Edge Function call that can fail on a cold start or a
+    // flaky connection; one retry avoids losing a whole refresh to a blip.
+    for (let attempt = 0; mediaKeys.length > 0 && attempt < 2; attempt += 1) {
       const signed = await this.dependencies.signMedia(mediaKeys);
-      if (signed.data && !signed.error) signedUrls = signed.data.urls;
+      if (signed.data && !signed.error) {
+        signedUrls = signed.data.urls;
+        break;
+      }
+      if (!this.controller.isCurrent(epoch) || signal.aborted) {
+        return { published: false, cleared: false, reason: 'superseded' };
+      }
     }
 
     const generationId = `${scope.accountId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -560,11 +592,7 @@ export class MemoryWidgetSyncCoordinator {
             // selected IDs this keeps both cache bytes and native retained
             // IDs within the existing seven-item budget.
             if (!files[image.filename]) {
-              const staged = await this.dependencies.stageImage(
-                generationId,
-                { filename: image.filename, url } satisfies WidgetImageToStage,
-                { signal },
-              );
+              const staged = await this.stageWithRetry(generationId, image.filename, url, signal);
               files[staged.filename] = staged.uri;
             }
           } catch {
@@ -584,10 +612,22 @@ export class MemoryWidgetSyncCoordinator {
 
       if (successfulIds.length === 0) {
         await this.controller.cleanupGeneration(generationId);
+        // Eligible memories exist, so a total staging failure is a download
+        // or signing problem (offline blip, app frozen in the background), not
+        // an empty family. Keep the card already on the home screen rather
+        // than replacing real artwork with the "no memories yet" card. The old
+        // lease is not renewed, and the old card is kept only when every memory
+        // it references just passed the online access and safety checks above;
+        // otherwise privacy wins and it is replaced with the neutral card.
+        if (!previous || previous.entries.every((entry) => byId.has(entry.memoryId))) {
+          return { published: false, cleared: false, reason: 'images_unavailable' };
+        }
         const published = await this.controller.publish(
           scope, neutralWidgetManifest(scope, new Date(syncStartedAt)), {}, epoch,
         );
-        return { published, cleared: false, ...(published ? {} : { reason: 'superseded' as const }) };
+        return published
+          ? { published: true, cleared: false, reason: 'images_unavailable' }
+          : { published: false, cleared: false, reason: 'superseded' };
       }
       // Keep every scheduled boundary while replacing failures with a
       // successful staged image. Rotate fallback IDs so two surviving images
@@ -664,6 +704,20 @@ export interface UseMemoryWidgetSyncResult {
   manifest: WidgetManifest | null;
   syncNow: (options?: { showAnother?: boolean }) => Promise<MemoryWidgetSyncResult>;
   clear: () => Promise<void>;
+}
+
+const WIDGET_SYNC_RETRY_DELAYS_MS = [10_000, 30_000, 90_000] as const;
+const NON_RETRYABLE_SYNC_REASONS = new Set([
+  'superseded',
+  'native_unavailable',
+  'authorization_lost',
+  'not_ready',
+  'timeline_invalid',
+]);
+
+export function isRetryableWidgetSyncFailure(result: MemoryWidgetSyncResult): boolean {
+  if (result.published || result.cleared) return false;
+  return !NON_RETRYABLE_SYNC_REASONS.has(result.reason ?? 'superseded');
 }
 
 function appStateIsActive(state: AppStateStatus | null): boolean {
@@ -852,10 +906,25 @@ function useMemoryWidgetSyncInternal(): UseMemoryWidgetSyncResult {
     if (!coordinator || !scope || !isNativeAvailable || !isOnline || !isAppActive) return;
     if (profile?.deleted_at || isAuthLoading || isFamilyLoading || isProfileLoading) return;
     if (memberships.length > 0 && !memberships.some((membership) => membership.familyId === scope.familyId)) return;
-    const request = enqueueSync(scope, coordinator, lifecycleTokenRef.current);
-    void request.then((result) => {
-      if (result.published) void coordinator.read(scope).then(setManifest);
-    });
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const run = (attempt: number) => {
+      const request = enqueueSync(scope, coordinator, lifecycleTokenRef.current);
+      void request.then((result) => {
+        if (result.published) void coordinator.read(scope).then(setManifest);
+        // A transient failure would otherwise leave a stale or empty widget
+        // until the next foreground. Retry a few times while the app is open.
+        if (cancelled || !isRetryableWidgetSyncFailure(result)) return;
+        const delay = WIDGET_SYNC_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) return;
+        retryTimer = setTimeout(() => run(attempt + 1), delay);
+      });
+    };
+    run(0);
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [coordinator, enqueueSync, scope, isNativeAvailable, isOnline, isAppActive, profile?.deleted_at, isAuthLoading, isFamilyLoading, isProfileLoading, memberships]);
 
   // Reconnect and successful mutations are deliberately app-wide. This

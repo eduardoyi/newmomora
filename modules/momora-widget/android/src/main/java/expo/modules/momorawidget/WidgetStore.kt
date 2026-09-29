@@ -24,15 +24,27 @@ internal class WidgetStore(private val context: Context) {
   }
 
   fun readWidgetContent(now: Instant = Instant.now()): WidgetRenderData {
-    val active = activeSnapshot(now) ?: return WidgetRenderData(null, null, null)
-    val entry = active.entries.lastOrNull { !it.startsAt.isAfter(now) }
-      ?: active.entries.firstOrNull()
-      ?: return WidgetRenderData(active.familyId, null, null)
-    val bitmap = entry.imageFilename?.let { filename ->
-      val file = File(File(generations, active.generationId), filename)
-      decodeBitmap(file)
+    val active = activeSnapshot(now)
+      ?: return WidgetRenderData(null, null, null, WidgetEmptyState.NEEDS_REFRESH)
+    val imageEntries = active.entries.filter {
+      it.imageFilename != null && (it.kind == "photo" || it.kind == "illustration")
     }
-    return WidgetRenderData(active.familyId, entry, bitmap)
+    if (imageEntries.isEmpty()) {
+      // A validated manifest without artwork means the family has no eligible
+      // photo or illustrated memory yet.
+      return WidgetRenderData(active.familyId, null, null, WidgetEmptyState.NO_MEMORIES)
+    }
+    val current = imageEntries.lastOrNull { !it.startsAt.isAfter(now) } ?: imageEntries.first()
+    // Prefer the scheduled card, then any other image from this same verified
+    // generation, so one unreadable file never turns the widget into text.
+    val ordered = listOf(current) + imageEntries.filter { it.imageFilename != current.imageFilename }
+      .distinctBy { it.imageFilename }
+    val generation = File(generations, active.generationId)
+    for (entry in ordered) {
+      val bitmap = decodeBitmap(File(generation, entry.imageFilename!!)) ?: continue
+      return WidgetRenderData(active.familyId, entry, bitmap, null)
+    }
+    return WidgetRenderData(active.familyId, null, null, WidgetEmptyState.NEEDS_REFRESH)
   }
 
   fun publishManifest(manifestJson: String, filesJson: String) {
@@ -218,18 +230,22 @@ internal class WidgetStore(private val context: Context) {
 
   private fun decodeBitmap(file: File): android.graphics.Bitmap? {
     if (!file.isFile) return null
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(file.absolutePath, bounds)
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-    var sample = 1
-    while (bounds.outWidth / sample > WIDGET_MAX_IMAGE_EDGE
-      || bounds.outHeight / sample > WIDGET_MAX_IMAGE_EDGE) {
-      sample *= 2
+    return try {
+      val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+      BitmapFactory.decodeFile(file.absolutePath, bounds)
+      if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+      var sample = 1
+      while (bounds.outWidth / sample > WIDGET_MAX_IMAGE_EDGE
+        || bounds.outHeight / sample > WIDGET_MAX_IMAGE_EDGE) {
+        sample *= 2
+      }
+      BitmapFactory.decodeFile(
+        file.absolutePath,
+        BitmapFactory.Options().apply { inSampleSize = sample },
+      )
+    } catch (_: OutOfMemoryError) {
+      null
     }
-    return BitmapFactory.decodeFile(
-      file.absolutePath,
-      BitmapFactory.Options().apply { inSampleSize = sample },
-    )
   }
 
   private fun atomicWrite(file: File, bytes: ByteArray) {
@@ -276,8 +292,16 @@ internal class WidgetStore(private val context: Context) {
   }
 }
 
+internal enum class WidgetEmptyState {
+  /** Verified online: the family has no photo or illustrated memory yet. */
+  NO_MEMORIES,
+  /** Nothing verified is cached (signed out, expired lease, or unreadable). */
+  NEEDS_REFRESH,
+}
+
 internal data class WidgetRenderData(
   val familyId: String?,
   val entry: WidgetManifestEntry?,
   val bitmap: android.graphics.Bitmap?,
+  val emptyState: WidgetEmptyState?,
 )

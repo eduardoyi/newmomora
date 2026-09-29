@@ -1,7 +1,7 @@
 # Feature: Home-screen widget
 
 **Status:** `implemented; release validation pending`
-**Last updated:** 2026-09-17
+**Last updated:** 2026-09-29
 **PRD reference:** Journey C — Revisit
 
 ## Overview
@@ -33,9 +33,17 @@ for measured checks and remaining release gates. The backend migration is live; 
 - iOS explicitly resizes artwork to the widget container before applying cover
   cropping. Portrait/landscape photos retain their aspect ratio; square framing
   still crops their longer dimension.
-- Unavailable artwork uses another successfully staged image, or a neutral Momora
-  card when none succeeds. It never falls back to journal text. Caption fields
-  retained for schema compatibility contain only generic copy in new manifests.
+- Unavailable artwork uses another successfully staged image. When eligible
+  memories exist but no image can be signed or downloaded (offline blip, app
+  frozen in the background), the refresh keeps the card already on screen
+  instead of publishing the empty card; see “Refresh resilience” below. It
+  never falls back to journal text. Caption fields retained for schema
+  compatibility contain only generic copy in new manifests.
+- Without artwork the widget shows one of two friendly cards (brand mark,
+  title, short line and an “Open Momora” pill on Android): **“Your memories
+  will live here”** when online validation found no eligible memory, or
+  **“Your memories are waiting”** when nothing fresh is cached (signed out,
+  lease expired, unreadable cache).
 - “Show another memory” randomly selects among eligible candidates not yet shown
   in this app session, excluding the current card when alternatives exist. It
   starts a new cycle only after that pool is exhausted. History tracks displayed
@@ -120,6 +128,26 @@ account credentials and signed media URLs never enter the timeline.
 - Scope changes invalidate pending work before it can publish.
 - Native schema changes require compatible app/native versions.
 - Future sizes or interactive controls require explicit design and release work.
+
+### Refresh resilience
+
+The widget previously fell back to the text card after transient failures and
+stayed there until a manual “Show another memory”. Guarding rules now:
+
+- Only `42501` (family membership denied) counts as access loss and clears
+  the widget. `28000`/`PGRST301` (missing or expired JWT during a session
+  refresh) are `unavailable`; real sign-out clears through the auth scope
+  transition.
+- Media signing and each image download are retried once.
+- If every image fails, the sync returns `images_unavailable` and keeps the
+  previous manifest (lease not renewed) when every memory it references just
+  passed the online access and safety checks. Otherwise the neutral card
+  replaces it (privacy wins). The neutral manifest is published only when the
+  family truly has no eligible memory.
+- The automatic foreground sync retries retryable failures after 10s, 30s and
+  90s while the app stays active (`isRetryableWidgetSyncFailure`).
+- Android picks the scheduled image, then any other image in the same verified
+  generation, before falling back to the neutral card.
 
 ## Constraints & gotchas
 

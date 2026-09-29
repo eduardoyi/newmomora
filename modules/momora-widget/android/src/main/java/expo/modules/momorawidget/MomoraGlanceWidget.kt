@@ -38,6 +38,7 @@ import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.text.Text
+import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import kotlinx.coroutines.CoroutineScope
@@ -133,8 +134,7 @@ internal class MomoraWidgetSystemReceiver : android.content.BroadcastReceiver() 
 @Composable
 private fun MomoraWidgetContent(context: Context, content: WidgetRenderData) {
   val entry = content.entry?.takeIf { content.bitmap != null && (it.kind == "photo" || it.kind == "illustration") }
-  val background = entry?.backgroundColor() ?: Color(0xFFF2EFF8)
-  val foreground = entry?.foregroundColor() ?: Color(0xFF2C2418)
+  val background = entry?.backgroundColor() ?: EMPTY_BACKGROUND
   val clickAction = actionStartActivity(widgetIntent(context, content.familyId, entry))
 
   Box(
@@ -159,30 +159,7 @@ private fun MomoraWidgetContent(context: Context, content: WidgetRenderData) {
         )
 
       }
-    } else {
-      Column(
-        horizontalAlignment = Alignment.Horizontal.CenterHorizontally,
-        verticalAlignment = Alignment.Vertical.CenterVertically,
-        modifier = GlanceModifier.fillMaxSize().padding(14.dp),
-      ) {
-        Text(
-          text = "Momora",
-          style = TextStyle(
-            color = ColorProvider(foreground),
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold,
-          ),
-        )
-        Spacer(GlanceModifier.height(8.dp))
-        Text(
-          text = "Open Momora for photo memories",
-          maxLines = 2,
-          style = TextStyle(color = ColorProvider(foreground), fontSize = 13.sp),
-        )
-      }
-    }
-    // Reuse the brand asset; keep it away from the bottom caption and crop edges.
-    if (entry != null) {
+      // Reuse the brand asset; keep it away from the crop edges.
       Box(
         modifier = GlanceModifier.fillMaxSize().padding(10.dp),
         contentAlignment = Alignment.TopEnd,
@@ -193,15 +170,84 @@ private fun MomoraWidgetContent(context: Context, content: WidgetRenderData) {
           modifier = GlanceModifier.size(28.dp).cornerRadius(8.dp),
         )
       }
+    } else {
+      val copy = emptyCopy(content.emptyState ?: WidgetEmptyState.NEEDS_REFRESH)
+      Column(
+        horizontalAlignment = Alignment.Horizontal.CenterHorizontally,
+        verticalAlignment = Alignment.Vertical.CenterVertically,
+        modifier = GlanceModifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 14.dp),
+      ) {
+        Image(
+          provider = ImageProvider(R.drawable.momora_widget_brand),
+          contentDescription = null,
+          modifier = GlanceModifier.size(40.dp).cornerRadius(11.dp),
+        )
+        Spacer(GlanceModifier.height(10.dp))
+        Text(
+          text = copy.title,
+          maxLines = 2,
+          style = TextStyle(
+            color = ColorProvider(EMPTY_TITLE),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+          ),
+        )
+        Spacer(GlanceModifier.height(4.dp))
+        Text(
+          text = copy.body,
+          maxLines = 3,
+          style = TextStyle(
+            color = ColorProvider(EMPTY_BODY),
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+          ),
+        )
+        Spacer(GlanceModifier.height(12.dp))
+        Box(
+          modifier = GlanceModifier
+            .background(ColorProvider(EMPTY_ACCENT))
+            .cornerRadius(16.dp)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text = copy.action,
+            maxLines = 1,
+            style = TextStyle(
+              color = ColorProvider(Color.White),
+              fontSize = 12.sp,
+              fontWeight = FontWeight.Medium,
+            ),
+          )
+        }
+      }
     }
   }
 }
 
+private val EMPTY_BACKGROUND = Color(0xFFFBEFF3)
+private val EMPTY_TITLE = Color(0xFF2C2418)
+private val EMPTY_BODY = Color(0xFF6B5E57)
+private val EMPTY_ACCENT = Color(0xFFD63E78)
+
+internal data class WidgetEmptyCopy(val title: String, val body: String, val action: String)
+
+internal fun emptyCopy(state: WidgetEmptyState): WidgetEmptyCopy = when (state) {
+  WidgetEmptyState.NO_MEMORIES -> WidgetEmptyCopy(
+    title = "Your memories will live here",
+    body = "Add a photo or illustrated moment to see it here.",
+    action = "Open Momora",
+  )
+  WidgetEmptyState.NEEDS_REFRESH -> WidgetEmptyCopy(
+    title = "Your memories are waiting",
+    body = "Tap to catch up on your family's moments.",
+    action = "Open Momora",
+  )
+}
+
 private fun WidgetManifestEntry.backgroundColor(): Color =
   Color(AndroidColor.parseColor(background))
-
-private fun WidgetManifestEntry.foregroundColor(): Color =
-  Color(AndroidColor.parseColor(foreground))
 
 internal fun widgetIntent(context: Context, familyId: String?, entry: WidgetManifestEntry?): Intent {
   val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
