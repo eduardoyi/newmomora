@@ -402,6 +402,13 @@ function burst(s, id, { accelerate = false, bg = C.plum }) {
     return c;
   });
   const n = Math.max(4, Math.ceil((titleOffset + t) / BEAT - 1e-6));
+  // The scene rounds up to whole beats; the last frame holds through that
+  // remainder instead of leaving the bare background (a "dark flash" of up to
+  // a beat before the next scene — canary, Sep 2026).
+  if (cuts.length > 0) {
+    const last = cuts[cuts.length - 1];
+    last.d = +(n * BEAT - last.t).toFixed(4);
+  }
   const layers = cuts.map((c, i) => mediaLayer(c.f, { id: `${id}-f${i}`, start: c.t, dur: +(c.d + 0.05).toFixed(4) })).join('');
   const titleGrid = s.titles?.length ? frames.slice(0, 12).map((f) => `<i style="background-image:url(${still(f)})"></i>`).join('') : '';
   subcomp(id, {
