@@ -183,6 +183,13 @@ Emotion analysis runs fire-and-forget with **one background retry** (after the e
       title again. The List view **always** has a header, so the swap is a
       height change of child 0; adding or removing a header would shift every
       child index under `maintainVisibleContentPosition`;
+    - **a jump lands exactly under the row:** the newest memory on or before
+      the anchor date is scrolled so its top meets the pinned row's bottom
+      edge, once its cell reports a position. Without this,
+      `maintainVisibleContentPosition` held it 48pt low (where the list
+      opened, below the strip) as newer pages loaded above it. That left a
+      sliver of the next month's last card under the row, and the label read
+      that month. Picking the same month again re-lands it;
     - newer pages start loading 5 screens before the top
       (`onStartReachedThreshold`), so a quick scroll up doesn't hit the
       not-yet-loaded top;

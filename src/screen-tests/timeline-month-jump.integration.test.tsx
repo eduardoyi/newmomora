@@ -1,4 +1,4 @@
-import { act, fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { FlatList } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -486,5 +486,40 @@ describe('Timeline list stays mounted across a jump', () => {
     const after = screen.getByTestId('timeline-memory-list').props.refreshControl;
     expect(after.type).toBe(before.type);
     expect(after.props.enabled).toBe(true);
+  });
+});
+
+describe('Timeline jump lands exactly under the control row', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    AsyncStorage.getItem.mockResolvedValue(null);
+    mockMonthCounts.mockReturnValue({ [currentMonthKey]: 1, '2025-03': 4 });
+  });
+
+  it('scrolls the newest memory on or before the anchor date to sit right under the row', async () => {
+    // The anchored list already holds a newer (April) page above March -- the
+    // prepend that used to leave April's last card peeking under the row.
+    const april = { ...marchMemory, id: 'april', memory_date: '2025-04-02' };
+    mockUseMemories.mockImplementation((options: { anchorDate: string | null }) =>
+      options.anchorDate ? hookResult([april, marchMemory], { hasPreviousPage: true }) : hookResult([recentMemory]),
+    );
+    const scrollSpy = jest.spyOn(FlatList.prototype, 'scrollToOffset');
+    const screen = renderTimeline();
+    fireEvent.press(screen.getByTestId('timeline-month-trigger'));
+    act(() => {
+      fireEvent.press(screen.getByTestId('month-picker-option-2025-03-01'));
+    });
+
+    // Strip [0, 48), row slot [48, 112), April [112, 712), March from 712.
+    fireEvent(screen.getByTestId('timeline-cell-april'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 112, width: 390, height: 600 } },
+    });
+    fireEvent(screen.getByTestId('timeline-cell-march'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 712, width: 390, height: 300 } },
+    });
+
+    // March's top at the row's bottom edge (64 = 52 + 12 gap).
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ animated: false, offset: 712 - 64 }));
+    scrollSpy.mockRestore();
   });
 });

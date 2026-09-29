@@ -385,6 +385,8 @@ export default function TimelineScreen() {
   // row overlay with the content until it reaches the top.
   const [scrollY] = useState(() => new Animated.Value(0));
   const [isMonthPickerVisible, setIsMonthPickerVisible] = useState(false);
+  // Bumped to re-land an anchored list on its month (picking it again).
+  const [realignNonce, setRealignNonce] = useState(0);
   const shouldReconcileOnForeground = useCallback(
     () => scrollOffsetRef.current <= windowHeight,
     [windowHeight],
@@ -555,9 +557,21 @@ export default function TimelineScreen() {
   // Cells report on mount, resize and move (prepends shift them); coalesce to
   // one label update per frame.
   const labelFrameRef = useRef<number | null>(null);
+  // After a jump: the memory to land exactly under the control row (set once
+  // per jump, below), aligned the first time its cell reports a position.
+  const pendingAlignIdRef = useRef<string | null>(null);
+  const alignToAnchorCell = useCallback((cellY: number) => {
+    pendingAlignIdRef.current = null;
+    const offset = Math.max(0, cellY - geometryRef.current.controlRowHeight);
+    requestAnimationFrame(() => {
+      scrollOffsetRef.current = offset;
+      flatListRef.current?.scrollToOffset({ animated: false, offset });
+    });
+  }, []);
   const reportCellLayout = useCallback<CellLayoutReporter>((id, layout) => {
     if (layout) {
       cellLayoutsRef.current.set(id, layout);
+      if (pendingAlignIdRef.current === id) alignToAnchorCell(layout.y);
     } else {
       cellLayoutsRef.current.delete(id);
     }
@@ -567,7 +581,7 @@ export default function TimelineScreen() {
         updateMonthLabelRef.current();
       });
     }
-  }, []);
+  }, [alignToAnchorCell]);
   useEffect(() => () => {
     if (labelFrameRef.current !== null) cancelAnimationFrame(labelFrameRef.current);
   }, []);
@@ -636,7 +650,13 @@ export default function TimelineScreen() {
     }
     const next = getMonthAnchorDate(option);
     if (next === anchorDate) {
-      scrollToTop();
+      // Same month again: the feed goes to its top; an anchored list lands
+      // the month's newest memory under the row again (see alignTargetId).
+      if (next === null) {
+        scrollToTop();
+      } else {
+        setRealignNonce((nonce) => nonce + 1);
+      }
       return;
     }
     applyAnchor(next);
@@ -947,6 +967,30 @@ export default function TimelineScreen() {
     scrollOffsetRef.current = 0;
     cellLayoutsRef.current.clear();
   }, [listKey, scrollY]);
+
+  // A jump lands the newest memory on or before the anchor date exactly
+  // under the control row. The list opens at offset 0 with the "Loading
+  // newer memories" strip above the row; newer pages then load above the
+  // card and maintainVisibleContentPosition holds it where it is -- 48pt too
+  // low, leaving a sliver of the next month's last card under the pinned row
+  // (and the label reading that month). Aligning to the card itself is exact
+  // whether that prepend lands before or after, and scrolls the strip out of
+  // view until the user scrolls up to the not-yet-loaded top.
+  const alignTargetId = useMemo(
+    () => (view === 'list' && anchorDate
+      ? visibleMemories.find((memory) => memory.memory_date <= anchorDate)?.id ?? null
+      : null),
+    [anchorDate, view, visibleMemories],
+  );
+  const alignedJumpRef = useRef<string | null>(null);
+  useEffect(() => {
+    const jump = `${listKey}#${realignNonce}`;
+    if (!alignTargetId || alignedJumpRef.current === jump) return;
+    alignedJumpRef.current = jump;
+    pendingAlignIdRef.current = alignTargetId;
+    const known = cellLayoutsRef.current.get(alignTargetId);
+    if (known) alignToAnchorCell(known.y);
+  }, [alignTargetId, alignToAnchorCell, listKey, realignNonce]);
 
   if (isOnboardingLoading || contentSafety.isLoading) {
     return (
