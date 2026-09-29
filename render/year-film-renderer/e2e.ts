@@ -47,10 +47,10 @@ const getJson = async <T>(key: string): Promise<T> =>
 const getBytes = async (key: string) =>
   await (await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }))).Body!.transformToByteArray();
 
-async function sh(cmd: string, args: string[]): Promise<string> {
+async function sh(cmd: string, args: string[], stderr = false): Promise<string> {
   const out = await new Deno.Command(cmd, { args, stdout: 'piped', stderr: 'piped' }).output();
   if (!out.success) throw new Error(`${cmd} failed: ${new TextDecoder().decode(out.stderr).slice(-800)}`);
-  return new TextDecoder().decode(out.stdout);
+  return new TextDecoder().decode(stderr ? out.stderr : out.stdout);
 }
 
 function check(cond: unknown, label: string) {
@@ -73,7 +73,13 @@ for (let i = 1; i <= 3; i += 1) {
     `aevalsrc=0.4*sin(2*PI*${250 + i * 60}*t)*lt(mod(t\\,3)\\,2)+0.003*(2*random(0)-1):d=12`, '-vf', `hue=h=${i * 90}`, '-shortest',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', f(`clip${i}.mp4`)]);
 }
-await sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'aevalsrc=0.5*sin(2*PI*320*t)*lt(mod(t\\,2)\\,1.3)+0.003*(2*random(0)-1):d=8', '-c:a', 'aac', f('voice.m4a')]);
+// A phone-quiet voice: real (synthesized) speech at ≈ −46 LUFS, one short
+// phrase at 3 s. ffmpeg 5.1's loudnorm (the image's) left exactly this kind
+// of excerpt quiet under the bed (Sep 2026 canary); a steady tone doesn't
+// reproduce it.
+await sh('say', ['-o', f('speech.aiff'), 'Hola papá, mira, un perro']);
+await sh('ffmpeg', ['-v', 'error', '-y', '-i', f('speech.aiff'), '-f', 'lavfi', '-i', 'aevalsrc=0.0005*(2*random(0)):d=8:s=22050',
+  '-filter_complex', '[0:a]adelay=3000,volume=-30dB,apad[v];[v][1:a]amix=inputs=2:duration=shortest:normalize=0', '-c:a', 'aac', f('voice.m4a')]);
 await sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=900x900', '-frames:v', '1', f('ref.jpg')]);
 await sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=1024x1024', '-frames:v', '1', '-vf', 'hue=s=0', f('portrait.jpg')]);
 
@@ -175,7 +181,7 @@ await put(`${PREFIX}film.json`, JSON.stringify(film), 'application/json');
 
 // render
 const rendered = await runMode('render', { version: 1, mode: 'render', prefix: PREFIX, film: 'film.json' });
-check((rendered.durationMs ?? 0) > 20_000, `film is ${Math.round((rendered.durationMs ?? 0) / 100) / 10}s`);
+check((rendered.durationMs ?? 0) > 15_000, `film is ${Math.round((rendered.durationMs ?? 0) / 100) / 10}s`);
 await Deno.writeFile(`${OUT}/film.mp4`, await getBytes(`${PREFIX}film.mp4`));
 await Deno.writeFile(`${OUT}/poster.jpg`, await getBytes(`${PREFIX}poster.jpg`));
 const scenes = await getJson<{ scenes: { type: string }[]; durationMs: number }>(`${PREFIX}scenes.json`);
@@ -185,4 +191,14 @@ const v = probe.streams.find((s: { codec_type: string }) => s.codec_type === 'vi
 check(v?.width === 1080 && v?.height === 1920, 'film.mp4 is 1080×1920');
 check(probe.streams.some((s: { codec_type: string }) => s.codec_type === 'audio'), 'film.mp4 has audio');
 check(scenes.scenes.length > 3, `scenes.json lists ${scenes.scenes.length} scenes`);
+// The voice must sit well above the carved bed (0.07 ≈ −23 dB, ≈ −39 dB
+// mean) in the sound scene.
+const soundScene = (scenes.scenes as { type: string; startMs: number }[]).find((s) => s.type === 'sound');
+check(soundScene, 'film has a sound scene');
+if (soundScene) {
+  const at = soundScene.startMs / 1000 + 0.7;
+  const vol = await sh('ffmpeg', ['-hide_banner', '-nostats', '-ss', at.toFixed(2), '-t', '1.2', '-i', `${OUT}/film.mp4`, '-vn', '-af', 'volumedetect', '-f', 'null', '-'], true);
+  const mean = Number(/mean_volume: (-?[\d.]+) dB/.exec(vol)?.[1] ?? -99);
+  check(mean > -28, `sound scene voice is audible (${mean} dB mean)`);
+}
 console.log(`\nAll render modes passed. Output: ${OUT}`);

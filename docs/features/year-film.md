@@ -97,6 +97,11 @@ See TECH_SPEC §2.1h. Key rules:
 
 - **Fast capture**: no CSS `filter: blur` or `clip-path` in compositions
   (blur is baked by ffmpeg, the wipe is transform-only).
+- **Voice level**: the sound scene's voice is measured (`ebur128`) and given
+  one linear gain to −14 LUFS, capped at −1.5 dBTP. Never `loudnorm`: the
+  image's ffmpeg 5.1 leaves short, quiet speech excerpts untouched (the
+  Sep 2026 canary's voice stayed −44 LUFS under the bed). The e2e asserts the
+  voice is audible with quiet synthesized speech.
 - **Fly**: performance-8x for renders (2x fails with HyperFrames "Missing
   manifest"); machines are one-off (`auto_destroy`), named
   `yf-{attemptId}-{mode}` so a replayed create reuses them.
@@ -127,3 +132,4 @@ See TECH_SPEC §2.1h. Key rules:
 | Date | Change |
 |---|---|
 | 2026-09-29 | P1 backend: schema + scheduler + bridge + Worker + render job modes + export/deletion wiring |
+| 2026-09-29 | Canary: first production film; voice normalization no longer uses `loudnorm` (was silent-ish in the image) |

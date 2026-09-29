@@ -16,7 +16,7 @@
  * usage: node film-renderer/assemble.mjs <slug>
  * Generated files are gitignored (they carry real family data).
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -528,11 +528,39 @@ tl.fromTo(q('.face'),{scale:0},{scale:1,duration:.45,ease:'back.out(1.8)',stagge
   return { beats: n, events: events.sort((a, b) => a.t - b.t) };
 }
 
+/** Linear gain that brings a voice excerpt to VOICE_LUFS without its true
+ * peak passing VOICE_PEAK_DB. Not `loudnorm`: excerpts are often under its
+ * 3 s window, and the render image's ffmpeg 5.1 then passes them through
+ * untouched (Sep 2026 canary: a −44 LUFS voice stayed −44 under the bed). */
+const VOICE_LUFS = -14;
+const VOICE_PEAK_DB = -1.5;
+const VOICE_MAX_GAIN_DB = 40;
+function voiceGainDb(integrated, peak) {
+  const limits = [VOICE_MAX_GAIN_DB];
+  // ebur128 reports its −70 LUFS gate floor when nothing is loud enough to measure.
+  if (Number.isFinite(integrated) && integrated > -70) limits.push(VOICE_LUFS - integrated);
+  if (Number.isFinite(peak)) limits.push(VOICE_PEAK_DB - peak);
+  return limits.length === 1 ? 0 : Math.min(...limits);
+}
+
+function parseEbur128Summary(stderr) {
+  const summary = stderr.slice(stderr.lastIndexOf('Summary:'));
+  const num = (re) => {
+    const m = summary.match(re);
+    return m ? Number(m[1]) : Number.NaN;
+  };
+  return { integrated: num(/I:\s+(-?[\d.]+) LUFS/), peak: num(/Peak:\s+(-?[\d.]+) dBFS/) };
+}
+
 /** Loudness-normalized copy of the voice excerpt: phone recordings sit far
  * below the music (Enzo Y4: −33 LUFS vs the bed's −13). */
 function normalizedVoice(file) {
+  const src = path.join(OUT_ASSETS, path.basename(file));
   const out = path.join(OUT_ASSETS, `${path.basename(file, path.extname(file))}-voice.m4a`);
-  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', path.join(OUT_ASSETS, path.basename(file)), '-vn', '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11', '-ar', '48000', '-c:a', 'aac', '-b:a', '192k', out]);
+  const probe = spawnSync('ffmpeg', ['-hide_banner', '-nostats', '-i', src, '-vn', '-af', 'ebur128=peak=true', '-f', 'null', '-'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const { integrated, peak } = parseEbur128Summary(probe.stderr ?? '');
+  const gain = voiceGainDb(integrated, peak);
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-vn', '-af', `volume=${gain.toFixed(2)}dB`, '-ar', '48000', '-c:a', 'aac', '-b:a', '192k', out]);
   return `assets/film/${path.basename(out)}`;
 }
 const SOUND_ON = { es: 'Sube el volumen', en: 'Sound on' };
