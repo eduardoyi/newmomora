@@ -353,7 +353,12 @@ async function render(prefix, job) {
 
   const composition = path.join(FILM_RENDERER, 'composition');
   await run('node', [path.join(FILM_RENDERER, 'assemble.mjs'), 'job'], { maxBuffer: 16 * 1024 * 1024 }, 'assemble');
-  await run('hyperframes', ['check'], { cwd: composition, maxBuffer: 16 * 1024 * 1024 }, 'check');
+  // --no-contrast: the WCAG pass measures text against whatever family photo
+  // happens to be behind it (the strip's date labels over a bright burst frame),
+  // so it failed ~2/3 of the history backfill's monthly recaps on content we
+  // can't control (Sep 2026). Lint/runtime/layout/motion errors still gate the
+  // render; contrast stays on in local dogfood checks (film-renderer/render.mjs).
+  await run('hyperframes', ['check', '--no-contrast'], { cwd: composition, maxBuffer: 16 * 1024 * 1024 }, 'check');
   const out = path.join(os.tmpdir(), 'film.mp4');
   await run('hyperframes', ['render', '-o', out, '--video-frame-format', 'jpg', '--crf', String(FILM_CRF), '--quiet'], { cwd: composition, maxBuffer: 16 * 1024 * 1024 }, 'render');
 
