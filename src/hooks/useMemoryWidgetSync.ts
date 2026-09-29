@@ -43,6 +43,7 @@ import {
   type WidgetCandidateMemorySet,
 } from '@/services/widget-memories';
 import { getMediaUrls } from '@/services/media';
+import { setWidgetBackgroundRefreshEnabled } from '@/services/widget-background-registration';
 import { formatDisplayDate } from '@/utils/memories';
 import { isAudioContentType, isVideoContentType } from '@/utils/media-validation';
 import {
@@ -794,6 +795,18 @@ function useMemoryWidgetSyncInternal(): UseMemoryWidgetSyncResult {
     return () => subscription.remove();
   }, []);
 
+  // Background refresh keeps the widget fresh (and its lease renewed) while
+  // the app stays closed. Register once signed in on a widget-capable binary;
+  // drop it on sign-out. The task itself re-validates everything online.
+  useEffect(() => {
+    if (isAuthLoading) return;
+    if (!accountId) {
+      void setWidgetBackgroundRefreshEnabled(false);
+    } else if (isNativeAvailable) {
+      void setWidgetBackgroundRefreshEnabled(true);
+    }
+  }, [accountId, isAuthLoading, isNativeAvailable]);
+
   useEffect(() => {
     let cancelled = false;
     if (!adapter) {
@@ -980,6 +993,16 @@ export function useMemoryWidgetSync(): UseMemoryWidgetSyncResult {
 export function MemoryWidgetSyncProvider({ children }: { children: ReactNode }) {
   const value = useMemoryWidgetSyncInternal();
   return createElement(MemoryWidgetSyncContext.Provider, { value }, children);
+}
+
+/**
+ * The per-adapter coordinator shared with the provider, so a background
+ * refresh and a foreground sync in one process share one epoch fence.
+ */
+export function getMemoryWidgetSyncCoordinator(
+  adapter: WidgetNativeAdapter,
+): MemoryWidgetSyncCoordinator {
+  return coordinatorFor(adapter, null, null)!;
 }
 
 /** Explicit lifecycle hook for deletion/leave flows that do not render a scope. */

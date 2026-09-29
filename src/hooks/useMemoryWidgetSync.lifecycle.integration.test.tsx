@@ -13,6 +13,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { useIsOnline } from '@/lib/connectivity';
+import { setWidgetBackgroundRefreshEnabled } from '@/services/widget-background-registration';
 import * as widgetCache from '@/services/widget-cache';
 import * as widgetMemories from '@/services/widget-memories';
 import type { WidgetManifest, WidgetNativeAdapter } from '@/widgets/types';
@@ -31,6 +32,9 @@ jest.mock('@/services/media', () => ({
 jest.mock('@/services/widget-memories', () => ({
   fetchWidgetCandidateMemories: jest.fn(),
   fetchWidgetRetainedMemoriesByIds: jest.fn(async () => ({ data: [], error: null, failure: null })),
+}));
+jest.mock('@/services/widget-background-registration', () => ({
+  setWidgetBackgroundRefreshEnabled: jest.fn(async () => undefined),
 }));
 jest.mock('@/services/widget-cache', () => {
   // Keep the real controller and manifest parser; only local housekeeping and
@@ -179,6 +183,19 @@ describe('MemoryWidgetSyncProvider lifecycle fences', () => {
     await waitFor(() => expect(rendered.result.current.manifest?.entries[0]?.imageFilename).toBe('memory-memory-a-0.jpg'));
     expect(rendered.result.current).not.toHaveProperty('isEnabled');
     expect(rendered.result.current).not.toHaveProperty('setEnabled');
+  });
+
+  it('registers background refresh while signed in and unregisters on sign-out', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
+
+    await waitFor(() => expect(setWidgetBackgroundRefreshEnabled).toHaveBeenCalledWith(true));
+    authValue = { ...authValue, session: null, user: null };
+    familyValue = { ...familyValue, familyId: null, memberships: [] };
+    await act(async () => {
+      rendered.rerender();
+    });
+    await waitFor(() => expect(setWidgetBackgroundRefreshEnabled).toHaveBeenLastCalledWith(false));
   });
 
   it('ignores a legacy disabled preference and still prepares the active family', async () => {

@@ -1204,6 +1204,9 @@ deleted, allowing notification delivery to ignore stale/repeated writes.
   Back packages or viewed state. No new server table, Edge Function, or R2
   bucket is introduced. See [home-screen-widget.md](features/home-screen-widget.md)
   for the device snapshot and offline lease contract.
+- A client-side background task (`expo-background-task`, 4h minimum interval,
+  2026-09-29) calls the same RPCs with the persisted user session to renew
+  the widget without opening the app. It adds no server surface.
 
 **Family activity feed (2026-08-22, `docs/plans/family-activity.md`):**
 

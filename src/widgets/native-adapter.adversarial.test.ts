@@ -119,6 +119,16 @@ it('marks a verified empty family so iOS can invite a first memory', async () =>
   expect(timeline[0].props).toMatchObject({ kind: 'neutral', emptyState: 'no_memories' });
 });
 
+it('reports widget placement from native and unknown for older binaries', async () => {
+  expect(await loadAdapter().hasPlacedWidgets?.()).toBeNull();
+  (mockNative as Record<string, unknown>).hasPlacedWidgets = jest.fn(async () => false);
+  try {
+    expect(await loadAdapter().hasPlacedWidgets?.()).toBe(false);
+  } finally {
+    delete (mockNative as Record<string, unknown>).hasPlacedWidgets;
+  }
+});
+
 it('passes every daytime entry to the iOS timeline and exposes native capacity', async () => {
   const adapter = loadAdapter();
   expect(adapter.maxTimelineEntries?.()).toBe(24);

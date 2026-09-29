@@ -453,5 +453,18 @@ public class MomoraWidgetModule: Module {
     Function("reload") {
       WidgetCenter.shared.reloadAllTimelines()
     }
+
+    // Lets background refresh skip network work when no widget is placed.
+    // nil means "unknown" and callers treat it as placed.
+    AsyncFunction("hasPlacedWidgets") { (promise: Promise) in
+      WidgetCenter.shared.getCurrentConfigurations { result in
+        switch result {
+        case .success(let widgets):
+          promise.resolve(!widgets.isEmpty)
+        case .failure:
+          promise.resolve(nil)
+        }
+      }
+    }
   }
 }

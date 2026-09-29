@@ -263,6 +263,16 @@ function createAdapter(native: MomoraWidgetNativeModule | null): WidgetNativeAda
       await native.reload();
       getIosWidget()?.reload();
     },
+
+    hasPlacedWidgets: async () => {
+      if (!native?.hasPlacedWidgets) return null;
+      try {
+        const placed = await native.hasPlacedWidgets();
+        return typeof placed === 'boolean' ? placed : null;
+      } catch {
+        return null;
+      }
+    },
   };
 }
 

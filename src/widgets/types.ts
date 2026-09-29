@@ -98,4 +98,9 @@ export interface WidgetNativeAdapter {
     generationId?: string,
   ) => void | Promise<void>;
   reload: () => void | Promise<void>;
+  /**
+   * Whether any widget is on the home screen. null means unknown (older
+   * binary or query failure) and must be treated as placed.
+   */
+  hasPlacedWidgets?: () => Promise<boolean | null>;
 }

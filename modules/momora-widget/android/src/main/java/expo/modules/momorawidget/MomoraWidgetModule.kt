@@ -1,5 +1,7 @@
 package expo.modules.momorawidget
 
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -43,6 +45,13 @@ class MomoraWidgetModule : Module() {
 
     Function("reload") {
       MomoraWidgetReceiver.requestRefresh(context)
+    }
+
+    // Lets background refresh skip network work when no widget is placed.
+    AsyncFunction("hasPlacedWidgets") {
+      AppWidgetManager.getInstance(context)
+        .getAppWidgetIds(ComponentName(context, MomoraWidgetReceiver::class.java))
+        .isNotEmpty()
     }
   }
 }
