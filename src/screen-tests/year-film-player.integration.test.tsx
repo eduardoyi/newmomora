@@ -73,7 +73,7 @@ jest.mock('expo-video', () => ({
 }));
 jest.mock('lucide-react-native', () => ({
   ChevronLeft: () => null, ChevronRight: () => null, Pause: () => null, Play: () => null,
-  RotateCcw: () => null, Share2: () => null, Volume2: () => null, VolumeX: () => null, X: () => null,
+  Pencil: () => null, RotateCcw: () => null, Share2: () => null, Volume2: () => null, VolumeX: () => null, X: () => null,
 }));
 jest.mock('expo-file-system/legacy', () => ({
   cacheDirectory: 'file:///cache/',
@@ -85,6 +85,27 @@ jest.mock('expo-file-system/legacy', () => ({
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(), shareAsync: jest.fn() }));
 jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/services/year-films', () => ({ getYearFilmPlayback: jest.fn() }));
+let mockMemberships: { familyId: string; role: string }[] = [];
+jest.mock('@/hooks/use-family', () => ({ useFamily: () => ({ memberships: mockMemberships }) }));
+// The edit sheet has its own suite (film-edit-sheet.integration.test.tsx): here
+// it is a stand-in that shows whether it is open and can report a save.
+jest.mock('@/components/year-films/edit/film-edit-sheet', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Pressable, Text, View } = require('react-native');
+  return {
+    FILM_EDIT_SAVED_MESSAGE: 'Remaking your film… this takes a few minutes',
+    FilmEditSheet: ({ visible, filmId, familyId, onClose, onSaved }: {
+      visible: boolean; filmId: string; familyId: string; onClose: () => void; onSaved: () => void;
+    }) =>
+      visible ? (
+        <View testID="film-edit-sheet-stub">
+          <Text testID="film-edit-sheet-stub-ids">{`${filmId}|${familyId}`}</Text>
+          <Pressable onPress={onClose} testID="film-edit-stub-close" />
+          <Pressable onPress={onSaved} testID="film-edit-stub-save" />
+        </View>
+      ) : null,
+  };
+});
 jest.mock('@/hooks/audio-playback-coordinator', () => ({
   pauseAllAudioPlayback: jest.fn(),
   prepareAudioPlaybackMode: jest.fn(() => Promise.resolve()),
@@ -168,6 +189,7 @@ describe('Year Film player screen', () => {
     mockParams = { id: 'film-1' };
     mockPlayer = newMockPlayer();
     mockFilmResult = { film: { ...mockFilm }, title: 'September recap' };
+    mockMemberships = [{ familyId: 'family-9', role: 'owner' }];
     mockedGetPlayback.mockResolvedValue({ data: playback, error: null, unavailable: false });
     global.fetch = jest.fn(() =>
       Promise.resolve({ ok: true, json: () => Promise.resolve(scenesJson) }),
@@ -544,6 +566,83 @@ describe('Year Film player screen', () => {
 
     expect(screen.queryByTestId('year-film-motion-warning')).toBeNull();
     expect(mockPlayer.play).toHaveBeenCalled();
+  });
+
+  describe('edit', () => {
+    it.each(['owner', 'manager'])('offers Edit to a %s of the film\'s family and opens the sheet for that film', async (role) => {
+      mockMemberships = [
+        { familyId: 'family-1', role: 'viewer' },
+        { familyId: 'family-9', role: role },
+      ];
+      await renderPlayer();
+      expect(screen.queryByTestId('year-film-edit')).toBeNull();
+
+      await reachCompletion();
+      expect(screen.queryByTestId('film-edit-sheet-stub')).toBeNull();
+      fireEvent.press(screen.getByTestId('year-film-edit'));
+
+      expect(screen.getByTestId('film-edit-sheet-stub-ids').props.children).toBe('film-1|family-9');
+      fireEvent.press(screen.getByTestId('film-edit-stub-close'));
+      expect(screen.queryByTestId('film-edit-sheet-stub')).toBeNull();
+    });
+
+    it('hides Edit from a viewer', async () => {
+      mockMemberships = [{ familyId: 'family-9', role: 'viewer' }];
+      await renderPlayer();
+
+      await reachCompletion();
+
+      expect(screen.queryByTestId('year-film-edit')).toBeNull();
+      expect(screen.getByTestId('year-film-replay')).toBeTruthy();
+      expect(screen.getByTestId('year-film-share')).toBeTruthy();
+    });
+
+    it("judges the role by the film's family, not another family the user manages", async () => {
+      mockMemberships = [
+        { familyId: 'family-1', role: 'owner' },
+        { familyId: 'family-9', role: 'viewer' },
+      ];
+      await renderPlayer();
+
+      await reachCompletion();
+
+      expect(screen.queryByTestId('year-film-edit')).toBeNull();
+    });
+
+    it('hides Edit without a membership in the film\'s family', async () => {
+      mockMemberships = [];
+      await renderPlayer();
+
+      await reachCompletion();
+
+      expect(screen.queryByTestId('year-film-edit')).toBeNull();
+    });
+
+    it('after a save shows the remaking toast, then leaves the player', async () => {
+      await renderPlayer();
+      await reachCompletion();
+      fireEvent.press(screen.getByTestId('year-film-edit'));
+
+      const setTimeoutSpy = jest.spyOn(globalThis, 'setTimeout');
+      try {
+        fireEvent.press(screen.getByTestId('film-edit-stub-save'));
+
+        expect(screen.queryByTestId('film-edit-sheet-stub')).toBeNull();
+        expect(screen.getByText('Remaking your film… this takes a few minutes')).toBeTruthy();
+        expect(router.back).not.toHaveBeenCalled();
+
+        // The player leaves after ~2 s so the toast can be read: run that timer.
+        const leave = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 2200);
+        expect(leave).toBeDefined();
+        act(() => {
+          (leave![0] as () => void)();
+        });
+
+        expect(router.back).toHaveBeenCalledTimes(1);
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
+    });
   });
 
   it('offers explicit previous / pause / next controls to a screen reader', async () => {

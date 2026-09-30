@@ -4821,6 +4821,7 @@ export type Database = {
           timezone_name: string
         }[]
       }
+      get_year_film_edit_options: { Args: { p_film_id: string }; Returns: Json }
       has_family_role: {
         Args: { fam: string; roles: string[] }
         Returns: boolean

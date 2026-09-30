@@ -227,3 +227,14 @@ export function yearFilmPosterQueryKey(filmId: string) {
 export function yearFilmsEnabledQueryKey(familyId: string | null | undefined) {
   return [yearFilmsEnabledQueryKeyBase, familyId] as const;
 }
+
+/** The edit sheet's options for one film. Under the films base key so
+ * `invalidateYearFilms` (with or without a family) refreshes it too. */
+export function yearFilmEditOptionsQueryKey(filmId: string | null | undefined) {
+  return [yearFilmsQueryKeyBase, 'edit-options', filmId] as const;
+}
+
+/** The memories behind an edit sheet's moments (thumbnail lookup). */
+export function yearFilmEditFramesQueryKey(familyId: string | null | undefined, memoryIdsSignature: string) {
+  return [yearFilmsQueryKeyBase, 'edit-frames', familyId, memoryIdsSignature] as const;
+}

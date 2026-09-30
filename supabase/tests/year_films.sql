@@ -5,8 +5,9 @@ begin;
 -- idempotency, forced rows), dispatch/heartbeat/curation/render slot/publish
 -- CAS, invalidation triggers (incl. delete during an attempt and the
 -- delete+reinsert media save), cycle-end rules, edits RPC, client access,
--- notifications, recovery, the deletion fence and ledger operations.
-select plan(128);
+-- notifications, recovery, the deletion fence and ledger operations; P2 dates,
+-- backfill and the edit sheet's get_year_film_edit_options (section 12).
+select plan(156);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (postgres role; assertions switch to authenticated where needed)
@@ -860,6 +861,180 @@ select throws_ok(
   $$set local role authenticated; select * from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', true)$$,
   '42501', null, 'backfill is service-role only'
 );
+set local role postgres;
+
+-- ---------------------------------------------------------------------------
+-- 12. Edit sheet options (20260930150000_year_film_edit_options.sql)
+-- ---------------------------------------------------------------------------
+
+set local role postgres;
+insert into auth.users (id, email, is_anonymous) values
+  ('f8000000-0000-4000-8000-000000000005', 'yf-anon@example.test', true);
+
+-- A ready monthly film (scope March 2025, so the unique key is free) whose
+-- script shows memories 01-04 and 06-08 (05 sits in a counters backdrop, 10
+-- in the end-card grid, 09 has no frame; 02 repeats). Memory 11 is already
+-- removed by an earlier edit, so the re-rendered script no longer uses it.
+with frame(n, k, d) as (values
+  ('01', 'photo', '2026-09-02'), ('02', 'illustration', '2026-09-03'), ('03', 'video', '2026-09-04'),
+  ('04', 'audio', '2026-09-05'), ('05', 'photo', '2026-09-06'), ('06', 'photo', '2026-09-07'),
+  ('07', 'illustration', '2026-09-08'), ('08', 'photo', '2026-09-09'), ('10', 'photo', '2026-09-11')
+), f as (
+  select n, jsonb_build_object(
+    'memoryId', 'f8300000-0000-4000-8000-0000000000' || n, 'date', d, 'kind', k, 'key', 'k/' || n) as j
+  from frame
+), portrait as (select jsonb_build_object('memoryId', null, 'date', null, 'kind', 'portrait', 'key', 'k/p') as j)
+insert into public.year_films (
+  family_id, kind, scope_start_date, scope_end_exclusive, surface_at, status, video_key, poster_key,
+  music_bed_id, edits_version, ready_at, referenced_memory_ids, edits, film_script, quote_candidates
+)
+select 'f8100000-0000-4000-8000-000000000001', 'family_month', date '2025-03-01', date '2025-04-01', now() - interval '1 day',
+  'ready', 'films/eo.mp4', 'films/eo.jpg', 'bubbly-synth', 2, now(),
+  array(select ('f8300000-0000-4000-8000-0000000000' || n)::uuid from frame),
+  jsonb_build_object('removedMemoryIds', jsonb_build_array('f8300000-0000-4000-8000-000000000011')),
+  jsonb_build_object('scenes', jsonb_build_array(
+    jsonb_build_object('type', 'title', 'cards', jsonb_build_array((select j from f where n = '01'), (select j from f where n = '02'))),
+    jsonb_build_object('type', 'counters', 'backdrop', jsonb_build_array((select j from f where n = '05'))),
+    jsonb_build_object('type', 'burst', 'frames', jsonb_build_array((select j from f where n = '02'), (select j from f where n = '03'), (select j from portrait))),
+    jsonb_build_object('type', 'sound', 'frame', (select j from f where n = '04'), 'alternates', jsonb_build_array((select j from f where n = '10'))),
+    jsonb_build_object('type', 'line', 'memoryId', 'f8300000-0000-4000-8000-000000000006', 'quote', 'q', 'frame', (select j from f where n = '06')),
+    jsonb_build_object('type', 'starring', 'people', jsonb_build_array(jsonb_build_object(
+      'memberId', 'f8200000-0000-4000-8000-000000000001', 'portrait', (select j from portrait),
+      'moments', jsonb_build_array((select j from f where n = '07'))))),
+    jsonb_build_object('type', 'firsts', 'items', jsonb_build_array(
+      jsonb_build_object('memoryId', 'f8300000-0000-4000-8000-000000000008', 'frame', (select j from f where n = '08')),
+      jsonb_build_object('memoryId', 'f8300000-0000-4000-8000-000000000009'))),
+    jsonb_build_object('type', 'end_card', 'grid', jsonb_build_array((select j from f where n = '10')))
+  )),
+  (select jsonb_agg(jsonb_build_object(
+      'memoryId', 'f8300000-0000-4000-8000-0000000000' || c.n, 'quote', 'Quote ' || c.n, 'textHash', 'hash' || c.n,
+      'speakerId', 'f8200000-0000-4000-8000-000000000001') order by c.o)
+   from (values ('06', 1), ('02', 2), ('07', 3), ('08', 4), ('03', 5)) c(n, o))
+;
+create temp table eo on commit drop as
+select id from public.year_films
+where family_id = 'f8100000-0000-4000-8000-000000000001' and kind = 'family_month' and scope_start_date = date '2025-03-01';
+grant select on eo to authenticated;
+
+create temp table eo_forced on commit drop as
+select public.queue_year_film_forced('f8100000-0000-4000-8000-000000000001', 'family_year', null, null,
+  date '2025-01-01', date '2025-12-28', now()) as id;
+grant select on eo_forced to authenticated;
+update public.year_films set status = 'ready', video_key = 'films/forced.mp4', poster_key = 'films/forced.jpg'
+where id = (select id from eo_forced);
+
+create temp table eo_lapsed on commit drop as
+with ins as (
+  insert into public.year_films (family_id, kind, scope_start_date, scope_end_exclusive, surface_at, status, video_key, poster_key)
+  values ('f8100000-0000-4000-8000-000000000002', 'family_month', date '2025-03-01', date '2025-04-01', now(), 'ready', 'films/l.mp4', 'films/l.jpg')
+  returning id)
+select id from ins;
+grant select on eo_lapsed to authenticated;
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000001', true);
+create temp table eo_owner_result on commit drop as
+select public.get_year_film_edit_options((select id from eo)) as o;
+grant select on eo_owner_result to authenticated;
+select is((select o ->> 'editable' from eo_owner_result), 'true', 'edit options: an owner gets an editable film');
+select is((select o ->> 'kind' from eo_owner_result), 'family_month', 'edit options: kind');
+select is((select (o ->> 'editsVersion')::int from eo_owner_result), 2, 'edit options: edits version');
+select is((select o ->> 'musicBedId' from eo_owner_result), 'bubbly-synth', 'edit options: current bed');
+select is(
+  (select array(select f ->> 'memoryId' from jsonb_array_elements(o -> 'frames') f) from eo_owner_result),
+  array[
+    'f8300000-0000-4000-8000-000000000001', 'f8300000-0000-4000-8000-000000000002',
+    'f8300000-0000-4000-8000-000000000003', 'f8300000-0000-4000-8000-000000000004',
+    'f8300000-0000-4000-8000-000000000006', 'f8300000-0000-4000-8000-000000000007',
+    'f8300000-0000-4000-8000-000000000008', 'f8300000-0000-4000-8000-000000000011'
+  ],
+  'frames: film order, de-duplicated, no portraits, counters backdrop, end-card grid or alternates; removed moment last'
+);
+select is(
+  (select o -> 'frames' -> 2 from eo_owner_result),
+  '{"memoryId":"f8300000-0000-4000-8000-000000000003","date":"2026-09-04","kind":"video"}'::jsonb,
+  'frames: memoryId, date and kind from the script'
+);
+select is(
+  (select o -> 'frames' -> 7 from eo_owner_result),
+  '{"memoryId":"f8300000-0000-4000-8000-000000000011","date":"2026-09-12","kind":"illustration"}'::jsonb,
+  'frames: an already-removed moment is listed from the memory row'
+);
+select is((select o -> 'removedMemoryIds' from eo_owner_result), '["f8300000-0000-4000-8000-000000000011"]'::jsonb,
+  'edit options: current removals');
+select is((select jsonb_array_length(o -> 'quoteCandidates') from eo_owner_result), 3, 'quote candidates are capped at three');
+select is(
+  (select o -> 'quoteCandidates' -> 0 from eo_owner_result),
+  '{"memoryId":"f8300000-0000-4000-8000-000000000006","textHash":"hash06","text":"Quote 06","speakerName":"Enzo","isCurrent":true}'::jsonb,
+  'quote candidates: text, hash, speaker name, and the shown line is current'
+);
+select is((select o -> 'chosenQuote' from eo_owner_result), 'null'::jsonb, 'no chosen quote yet');
+
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000002', true);
+select is((public.get_year_film_edit_options((select id from eo))) ->> 'editable', 'true', 'edit options: a manager may edit');
+
+-- Re-sending an earlier removal alongside a new one is valid (regression);
+-- an id the film never used is still rejected.
+select throws_ok(
+  $$select public.save_year_film_edits((select id from eo), '{"removedMemoryIds":["f8300000-0000-4000-8000-000000000011","f8300000-0000-4000-8000-000000000012"]}')$$,
+  '22023', null, 'save: a moment neither in the film nor removed earlier is rejected'
+);
+select is(
+  public.save_year_film_edits((select id from eo),
+    '{"removedMemoryIds":["f8300000-0000-4000-8000-000000000011","f8300000-0000-4000-8000-000000000001"],"quote":{"memoryId":"f8300000-0000-4000-8000-000000000002","textHash":"hash02"}}') ->> 'ok',
+  'true', 'save: the full removal set may include moments removed by an earlier edit'
+);
+set local role postgres;
+select is((select edits -> 'removedMemoryIds' from public.year_films where id = (select id from eo)) @> '["f8300000-0000-4000-8000-000000000001","f8300000-0000-4000-8000-000000000011"]'::jsonb,
+  true, 'save: both removals are stored');
+
+-- Queued (re-render in flight) -> not ready; then ready+blocked -> blocked.
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000001', true);
+select is((public.get_year_film_edit_options((select id from eo))) ->> 'reason', 'not_ready', 'edit options: a film being remade is not editable');
+set local role postgres;
+update public.year_films set status = 'ready' where id = (select id from eo);
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000001', true);
+select is(
+  (public.get_year_film_edit_options((select id from eo))) ->> 'reason', 'blocked',
+  'edit options: a blocked film reports editable false (removal took it down)'
+);
+select is((public.get_year_film_edit_options((select id from eo))) ->> 'editable', 'false', 'edit options: blocked is not editable');
+set local role postgres;
+update public.year_films set blocked = false where id = (select id from eo);
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000001', true);
+select is((public.get_year_film_edit_options((select id from eo)) -> 'chosenQuote' ->> 'memoryId'), 'f8300000-0000-4000-8000-000000000002',
+  'edit options: the chosen quote is returned');
+select is(
+  (select array_agg(c ->> 'memoryId') filter (where (c ->> 'isCurrent')::boolean)
+   from jsonb_array_elements(public.get_year_film_edit_options((select id from eo)) -> 'quoteCandidates') c),
+  array['f8300000-0000-4000-8000-000000000002'],
+  'edit options: only the chosen candidate is current'
+);
+select is(
+  (select array(select f ->> 'memoryId' from jsonb_array_elements(public.get_year_film_edit_options((select id from eo)) -> 'frames') f
+    where f ->> 'memoryId' in ('f8300000-0000-4000-8000-000000000001', 'f8300000-0000-4000-8000-000000000011'))),
+  array['f8300000-0000-4000-8000-000000000001', 'f8300000-0000-4000-8000-000000000011'],
+  'frames: a newly removed moment stays listed once (de-duplicated against the script)'
+);
+
+-- Access.
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000003', true);
+select throws_ok($$select public.get_year_film_edit_options((select id from eo))$$, '42501', null, 'edit options: a viewer is denied');
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select throws_ok($$select public.get_year_film_edit_options((select id from eo))$$, '42501', null, 'edit options: a non-member is denied');
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000005', true);
+select throws_ok($$select public.get_year_film_edit_options((select id from eo))$$, '42501', null, 'edit options: an anonymous Auth user is denied');
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000001', true);
+select throws_ok($$select public.get_year_film_edit_options((select id from eo_forced))$$, '42501', null, 'edit options: a forced (operator) film is denied');
+select throws_ok($$select public.get_year_film_edit_options(gen_random_uuid())$$, '42501', null, 'edit options: an unknown film is denied');
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000004', true);
+select is((public.get_year_film_edit_options((select id from eo_lapsed))) ->> 'reason', 'subscription_required',
+  'edit options: a family whose billing lapsed cannot edit');
+set local role anon;
+select throws_ok($$select public.get_year_film_edit_options((select id from eo))$$, '42501', null, 'edit options: the anon role cannot execute it');
 set local role postgres;
 
 select * from finish();

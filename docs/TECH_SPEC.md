@@ -962,8 +962,10 @@ Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
 [docs/features/year-film.md](features/year-film.md) · P2 plan
 [docs/plans/year-film-p2.md](plans/year-film-p2.md). Migrations
 `20260929120000_year_films.sql` (+ cron `20260929120100_schedule_year_films_cron.sql`)
-and `20260930120000_year_films_p2.sql` (dates, `placement_date`, forced RLS,
-`film_ready`, backfill; see the P2 paragraph below).
+`20260930120000_year_films_p2.sql` (dates, `placement_date`, forced RLS,
+`film_ready`, backfill; see the P2 paragraph below) and
+`20260930150000_year_film_edit_options.sql` (edit sheet RPC + a
+`save_year_film_edits` fix).
 
 **`year_films`** — one row per scheduled film key forever (unique
 `(family_id, kind, coalesce(family_member_id, zero), scope_start_date)` where
@@ -1061,6 +1063,35 @@ in-flight films. `ai_usage_events.operation` adds `year_film_quote`,
 - *Drawer:* `film_ready` events and the `get_family_activity_v2` /
   `get_family_activity_unread_v2` RPCs — see the family activity notes in §2.3.
   `year_film_notifications_due` keeps its signature and inserts the event.
+
+**Edit sheet (`20260930150000_year_film_edit_options.sql`).**
+- *Client RPC* `get_year_film_edit_options(p_film_id uuid) returns jsonb`
+  (definer, empty `search_path`, anonymous + owner/manager guards via
+  `has_family_role`, `authenticated` execute only; a forced film, an unknown
+  film, a viewer or a non-member raises `42501`). It never raises for a film
+  that simply can't be edited right now: `{ "editable": false, "reason":
+  "subscription_required" | "not_ready" | "blocked" }` (billing lapsed · not
+  `ready`/no video, e.g. being remade · `blocked`). Otherwise:
+  `{ editable: true, kind, editsVersion, musicBedId, removedMemoryIds: uuid[],
+  chosenQuote: {memoryId, textHash} | null, frames: [{memoryId, date, kind}],
+  quoteCandidates: [{memoryId, textHash, text, speakerName, isCurrent}] }`.
+  `frames` are the moments the film shows, read from the stored `film_script`
+  in scene order (`cold_open`, `title` cards, `burst`, `sound`, `line`,
+  `starring` moments, `firsts`, `chapter`, `award`, `close`; the `counters`
+  backdrop and `end_card` grid are mosaics of frames already listed, sound
+  `alternates` are unused fallbacks, portraits have no memory), de-duplicated by
+  memory id, **followed by** the memories already removed by earlier edits (so
+  they show as hidden and can be restored). `quoteCandidates` are the first
+  three sticky candidates whose memory is not removed, `speakerName` from the
+  family's member row, `isCurrent` = the chosen quote, else the `line` scene the
+  film shows. Scripts and keys stay unreadable to clients; the RPC only exposes
+  memory ids, dates and kinds.
+- *`save_year_film_edits` fix.* `removedMemoryIds` is the FULL set, and an id
+  may now be one **removed by an earlier edit** as well as one the film
+  references (the re-rendered film no longer references removed memories, so
+  the P1 check `removed <@ referenced_memory_ids` rejected every later save
+  that re-sent the set). `blocked` is still only raised for NEW removals.
+- `hideNames` is not built (the render pipeline has no support for it).
 
 ### 2.2 Indexes
 

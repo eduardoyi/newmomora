@@ -8,6 +8,8 @@ import {
   invalidateYearFilms,
   useFamilyYearFilms,
   useMarkYearFilmCompleted,
+  useSaveYearFilmEdits,
+  useYearFilmEditOptions,
   useMarkYearFilmViewed,
   useYearFilmPosters,
   useYearFilmsEnabled,
@@ -17,9 +19,11 @@ import {
   fetchFamilyYearFilms,
   fetchYearFilmsEnabled,
   fetchYearFilmViews,
+  getYearFilmEditOptions,
   getYearFilmPosters,
   markYearFilmCompleted,
   markYearFilmViewed,
+  saveYearFilmEdits,
   type YearFilm,
 } from '@/services/year-films';
 
@@ -32,6 +36,8 @@ jest.mock('@/services/year-films', () => ({
   getYearFilmPosters: jest.fn(),
   markYearFilmViewed: jest.fn(),
   markYearFilmCompleted: jest.fn(),
+  getYearFilmEditOptions: jest.fn(),
+  saveYearFilmEdits: jest.fn(),
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
@@ -41,6 +47,8 @@ const mockedEnabled = fetchYearFilmsEnabled as jest.MockedFunction<typeof fetchY
 const mockedPosters = getYearFilmPosters as jest.MockedFunction<typeof getYearFilmPosters>;
 const mockedMarkViewed = markYearFilmViewed as jest.MockedFunction<typeof markYearFilmViewed>;
 const mockedMarkCompleted = markYearFilmCompleted as jest.MockedFunction<typeof markYearFilmCompleted>;
+const mockedEditOptions = getYearFilmEditOptions as jest.MockedFunction<typeof getYearFilmEditOptions>;
+const mockedSaveEdits = saveYearFilmEdits as jest.MockedFunction<typeof saveYearFilmEdits>;
 
 const clients: QueryClient[] = [];
 
@@ -291,6 +299,87 @@ describe('useYearFilms hooks', () => {
 
       await waitFor(() => expect(mockedPosters).toHaveBeenCalled());
       expect(result.current).toEqual({});
+    });
+  });
+  describe('edit sheet hooks', () => {
+    const editableOptions = {
+      editable: true as const,
+      kind: 'birthday' as const,
+      editsVersion: 0,
+      musicBedId: 'bright-pop',
+      removedMemoryIds: [],
+      chosenQuote: null,
+      frames: [],
+      quoteCandidates: [],
+    };
+
+    it('useYearFilmEditOptions loads the options for the film', async () => {
+      mockedEditOptions.mockResolvedValue({ data: editableOptions, error: null });
+
+      const { result } = renderHook(() => useYearFilmEditOptions('film-1'), { wrapper: createWrapper() });
+
+      await waitFor(() => expect(result.current.options).toEqual(editableOptions));
+      expect(mockedEditOptions).toHaveBeenCalledWith('film-1');
+    });
+
+    it('useYearFilmEditOptions does not fetch when disabled or without a film', () => {
+      renderHook(() => useYearFilmEditOptions('film-1', { enabled: false }), { wrapper: createWrapper() });
+      renderHook(() => useYearFilmEditOptions(null), { wrapper: createWrapper() });
+
+      expect(mockedEditOptions).not.toHaveBeenCalled();
+    });
+
+    it('useYearFilmEditOptions surfaces a failure', async () => {
+      mockedEditOptions.mockResolvedValue({ data: null, error: { message: 'Not authorized', code: '42501' } });
+
+      const { result } = renderHook(() => useYearFilmEditOptions('film-1'), { wrapper: createWrapper() });
+
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(result.current.options).toBeNull();
+    });
+
+    it('useSaveYearFilmEdits saves, then invalidates the films and the options', async () => {
+      mockedSaveEdits.mockResolvedValue({ data: { ok: true, editsVersion: 1 }, error: null });
+      const queryClient = makeClient();
+      const invalidate = jest.spyOn(queryClient, 'invalidateQueries');
+
+      const { result } = renderHook(() => useSaveYearFilmEdits(), { wrapper: createWrapper(queryClient) });
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current.mutateAsync({ filmId: 'film-1', edits: { removedMemoryIds: ['m-1'] } });
+      });
+
+      expect(outcome).toEqual({ ok: true, editsVersion: 1 });
+      expect(mockedSaveEdits).toHaveBeenCalledWith('film-1', { removedMemoryIds: ['m-1'] });
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['year-films'] });
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['year-films', 'edit-options', 'film-1'] });
+    });
+
+    it('useSaveYearFilmEdits resolves an expected failure without invalidating', async () => {
+      mockedSaveEdits.mockResolvedValue({ data: { ok: false, reason: 'rate_limited' }, error: null });
+      const queryClient = makeClient();
+      const invalidate = jest.spyOn(queryClient, 'invalidateQueries');
+
+      const { result } = renderHook(() => useSaveYearFilmEdits(), { wrapper: createWrapper(queryClient) });
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current.mutateAsync({ filmId: 'film-1', edits: { removedMemoryIds: [] } });
+      });
+
+      expect(outcome).toEqual({ ok: false, reason: 'rate_limited' });
+      expect(invalidate).not.toHaveBeenCalled();
+    });
+
+    it('useSaveYearFilmEdits rejects on an unexpected error', async () => {
+      mockedSaveEdits.mockResolvedValue({ data: null, error: { message: 'timeout' } });
+
+      const { result } = renderHook(() => useSaveYearFilmEdits(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await expect(
+          result.current.mutateAsync({ filmId: 'film-1', edits: { removedMemoryIds: [] } }),
+        ).rejects.toThrow('timeout');
+      });
     });
   });
 });

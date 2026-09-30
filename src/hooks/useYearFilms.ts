@@ -5,6 +5,7 @@ import { useMemo } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import {
+  yearFilmEditOptionsQueryKey,
   yearFilmPosterQueryKey,
   yearFilmsEnabledQueryKey,
   yearFilmsQueryKey,
@@ -15,10 +16,15 @@ import {
   fetchFamilyYearFilms,
   fetchYearFilmsEnabled,
   fetchYearFilmViews,
+  getYearFilmEditOptions,
   getYearFilmPosters,
   markYearFilmCompleted,
   markYearFilmViewed,
+  saveYearFilmEdits,
+  type SaveYearFilmEditsResult,
   type YearFilm,
+  type YearFilmEditOptions,
+  type YearFilmEdits,
   type YearFilmView,
 } from '@/services/year-films';
 
@@ -283,4 +289,53 @@ export function useYearFilmPosters(targets: readonly YearFilmPosterTarget[]): Re
     return posters;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `results` identity changes every render; its content is `dataSignature`
   }, [normalized, dataSignature]);
+}
+
+// --- edit sheet (docs/plans/year-film-p2.md Step 11) ------------------------
+
+/** The owner/manager edit sheet's options. Always refetched on open (the film
+ * may have been remade or blocked since it was last looked at). */
+export function useYearFilmEditOptions(filmId: string | null | undefined, options: { enabled?: boolean } = {}) {
+  const query = useQuery({
+    queryKey: yearFilmEditOptionsQueryKey(filmId),
+    queryFn: async (): Promise<YearFilmEditOptions> => {
+      const { data, error } = await getYearFilmEditOptions(filmId!);
+      if (error || !data) throw toError(error, 'Could not load the film edit options');
+      return data;
+    },
+    enabled: Boolean(filmId) && (options.enabled ?? true),
+    staleTime: 0,
+    gcTime: 60 * 1000,
+    refetchOnMount: 'always',
+  });
+
+  return {
+    options: query.data ?? null,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    refetch: query.refetch,
+  };
+}
+
+/**
+ * `mutateAsync({ filmId, edits })` resolves with `{ ok, ... }` for expected
+ * outcomes (including `rate_limited`) and throws only for unexpected errors.
+ * On success the films (list + by-id) and the options are invalidated: the
+ * film is remade, and removals take the old video down at once.
+ */
+export function useSaveYearFilmEdits() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ filmId, edits }: { filmId: string; edits: YearFilmEdits }): Promise<SaveYearFilmEditsResult> => {
+      const { data, error } = await saveYearFilmEdits(filmId, edits);
+      if (error || !data) throw toError(error, 'Could not save the film edits');
+      return data;
+    },
+    onSuccess: (result, { filmId }) => {
+      if (!result.ok) return;
+      void invalidateYearFilms(queryClient);
+      void queryClient.invalidateQueries({ queryKey: yearFilmEditOptionsQueryKey(filmId) });
+    },
+  });
 }

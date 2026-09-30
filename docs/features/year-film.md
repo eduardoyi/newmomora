@@ -1,7 +1,7 @@
 # Feature: Year Film
 
-**Status:** `in-progress` — P1 backend deployed (canary); P2 backend amendments migrated 2026-09-30 (`20260930120000_year_films_p2.sql`); P2 app next
-**Last updated:** 2026-09-29
+**Status:** `in-progress` — P1 backend deployed (canary); P2 backend amendments migrated 2026-09-30 (`20260930120000_year_films_p2.sql`); P2 app built (Timeline, player, Keepsakes, drawer, edit sheet); the edit-options migration (`20260930150000_year_film_edit_options.sql`) is local only until the owner deploys
+**Last updated:** 2026-09-30
 **Plans:** [year-film.md](../plans/year-film.md) (product, dogfood F0–F5) ·
 [year-film-p1.md](../plans/year-film-p1.md) (production backend, hardened) ·
 [year-film-p2.md](../plans/year-film-p2.md) (app surfaces, date changes, history backfill)
@@ -32,7 +32,8 @@ HyperFrames on one-off Fly machines, and stored privately in R2.
   reported: it is blocked immediately and re-made.
 - Owners/managers can edit (remove moments, choose the quote among
   candidates, pick the music) — up to 5 edit renders per film and 20 per
-  family per day. `hideNames` comes with the P2 edit sheet.
+  family per day, from the player's edit sheet (see below). `hideNames` is **not built**:
+  the render pipeline has no support for it, so the sheet doesn't offer it.
 - Rollout: `year_film_settings.mode` `off | canary | all`.
 - **History backfill (silent).** `queue_year_film_backfill` queues every past
   film of an enabled family from the month of its first memory up to
@@ -125,8 +126,8 @@ calendar`, default `timeline`) feeds `year_film_opened`.
   `family_id`, so a push that opens before the active-family switch still titles
   correctly.
 - **Completion overlay.** Replay · Share, plus an extra-actions slot
-  (`FilmCompletion.renderExtraActions`; the Step 11 edit sheet's Edit button
-  for owners/managers goes there, marked in the route).
+  (`FilmCompletion.renderExtraActions`) that carries **Edit** for owners and
+  managers of the *film's* family (see "Edit sheet").
 - **Share.** `useYearFilmShare`: fresh presigned URL → `createDownloadResumable`
   (`expo-file-system/legacy`) into `cache/film-share/{filmId}.mp4` with
   "Preparing video… N%" and Cancel → `Sharing.shareAsync(uri, { mimeType:
@@ -145,6 +146,68 @@ calendar`, default `timeline`) feeds `year_film_opened`.
   `src/utils/{year-film-scenes,film-share}.ts`. To extend: add controls to the
   route; keep every native-player call in the small adapter functions at the top
   of `useYearFilmPlayer.ts`.
+
+### Edit sheet (P2 app, Step 11)
+
+Owners and managers of the film's family see **Edit** on the completion overlay
+(role from `useFamily().memberships` for `film.family_id`, so a push into a
+non-active family judges the right role; the RPCs enforce it again). It opens
+`FilmEditSheet` (`src/components/year-films/edit/film-edit-sheet.tsx`): a
+keyboard-free bottom sheet in the house Modal + pan-to-dismiss pattern (like
+`family-activity-sheet.tsx`); the Save footer is outside the scroll area and
+above the bottom safe-area inset. The body only mounts while the sheet is open,
+and refetches `get_year_film_edit_options` every time.
+
+- **Moments.** A 4-column grid of the moments the film shows (memory
+  thumbnails; tap toggles hidden: dimmed + eye-off badge; "N hidden" in the
+  header). Memories already removed by an earlier edit are listed too, hidden,
+  so they can be restored. Thumbnails: `useYearFilmEditFrames` loads the
+  memories with `fetchMemoriesByIds` (40 per call), picks the still with
+  `searchResultThumbnail` (illustration unless reported, else the list-sized
+  preview/poster) and signs with `useBatchedMediaUrls` — no new signing path;
+  reported memories draw nothing (fail closed until reports have loaded).
+- **Line of the year** (only when the film has quote candidates, at most 3):
+  radio list of the candidates' text + speaker; the chosen quote, else the line
+  the film shows, is checked.
+- **Music.** The beds made for the film's kind (`bedsForFilmKind` in
+  `src/utils/year-film-beds.ts`; a kind with fewer than two — the year-end film
+  has one — is offered every bed; the film's current bed is always listed).
+  Each row has a play/stop button for a ~5 s preview bundled in the app
+  (`assets/audio/film-beds/<id>.m4a`, AAC 64 kbps mono, cut from the bed's
+  `drop` time with 0.2 s fades, ~42 KB each), so previews need no network and no
+  server change. `useBedPreview` follows the audio conventions: one expo-audio
+  player created per mount and re-pointed with `replace()` (never released
+  while the rows use it — commit 25ef6be), the `audio-playback-coordinator`
+  slot (a preview pauses other audio, other audio and Save pause the preview)
+  and the playback audio mode (plays with the iOS silent switch on).
+- **Save** is disabled until something changed. It sends `{ removedMemoryIds
+  (the full set), quote? , musicBedId? }` (`quote`/`musicBedId` only when
+  changed) to `save_year_film_edits`. If any NEW removal is included, an inline
+  note reads "Removing moments takes this film down until the new version is
+  ready." (the RPC blocks the old video at once). Outcomes: ok → the sheet
+  closes, the player shows a "Remaking your film… this takes a few minutes"
+  toast and leaves for the previous screen after ~2 s (`router.back()`; the
+  film may be blocked); `rate_limited` → "You've remade this film a lot today.
+  Try again tomorrow."; `film_not_editable` → "This film can't be edited right
+  now." Nothing can dismiss the sheet while a save is in flight. A film that
+  isn't editable (`subscription_required`, `not_ready`, `blocked`) shows that
+  reason instead of the form.
+- **Not built:** `hideNames` (no render support). Removing a moment excludes it
+  from the pool at curate; the quote and bed edits are sticky across re-renders.
+- **Events:** `year_film_edit_opened {kind}`, `year_film_edit_saved {kind,
+  removed_count, quote_changed, music_changed}`.
+- **Extend:** a new edit kind = the Worker's `edits` shape
+  (`cloudflare/year-film-worker/src/stages.ts`) + the `save_year_film_edits`
+  validation + a field in `get_year_film_edit_options` + a section in the
+  sheet. A new bed = `beds.json` + `YEAR_FILM_BEDS` (Deno) + the SQL allow-list +
+  `src/utils/year-film-beds.ts` + its preview (`ffmpeg -ss <drop> -t 5 -i
+  <bed>.mp3 -af afade=t=in:st=0:d=0.2,afade=t=out:st=4.8:d=0.2 -ac 1 -c:a aac
+  -b:a 64k assets/audio/film-beds/<id>.m4a`); `year-film-beds.test.ts` fails
+  until they match.
+- Code: `src/components/year-films/edit/{film-edit-sheet,edit-moments-grid,edit-quote-list,edit-music-list,edit-film-button}.tsx`,
+  `src/hooks/{useBedPreview,useYearFilmEditFrames}.ts`,
+  `useYearFilmEditOptions` / `useSaveYearFilmEdits` in `src/hooks/useYearFilms.ts`,
+  `getYearFilmEditOptions` / `saveYearFilmEdits` in `src/services/year-films.ts`.
 
 ## Architecture
 
@@ -188,6 +251,7 @@ See TECH_SPEC §2.1h. Key rules:
 | `workflow-year-film-bridge` | HMAC + nonce | TECH_SPEC §4.28 |
 | `get-year-film-url` | JWT | TECH_SPEC §4.29 |
 | `save_year_film_edits` (RPC) | JWT, owner/manager | TECH_SPEC §2.1h |
+| `get_year_film_edit_options` (RPC) | JWT, owner/manager | TECH_SPEC §2.1h |
 
 ## Code map
 
@@ -196,7 +260,7 @@ See TECH_SPEC §2.1h. Key rules:
 | Pure logic (shared by Worker, render job, eval scripts) | `supabase/functions/_shared/year-film-{eligibility,script,quotes,vision,voice,trim,i18n,assets,context,checks,beds}.ts` |
 | Worker | `cloudflare/year-film-worker/src/{index,workflow,stages,bridge,fly,r2creds,storage,openai,uuid}.ts` |
 | Render job + image | `render/year-film-renderer/{Dockerfile,build.sh,src/job.mjs}`, `film-renderer/assemble.mjs` |
-| Database | `supabase/migrations/20260929120000_year_films.sql`, `…120100_schedule_year_films_cron.sql`, `20260930120000_year_films_p2.sql` |
+| Database | `supabase/migrations/20260929120000_year_films.sql`, `…120100_schedule_year_films_cron.sql`, `20260930120000_year_films_p2.sql`, `20260930150000_year_film_edit_options.sql` |
 | Operator | `npm run year-film:queue` (`supabase/scripts/queue-year-film.ts`) — list, `--forced`, `--requeue`, `--requeue-all`, `--backfill`, `--delete-forced`, `--delete-backfilled`, `--purge-prefix` |
 | Dogfood | `npm run eval:year-film-{audit,script,assets}`, `film-renderer/render.mjs` |
 
@@ -240,7 +304,8 @@ permanent.
   `year-film-assets.ts`, `scriptReferences()` in `year-film-context.ts` (so
   invalidation covers what it shows), and the assembler module.
 - New music bed: `beds.json` + `YEAR_FILM_BEDS` + `public.year_film_bed_ids()`
-  (the parity test fails until all three match).
+  + the app manifest and bundled preview (`src/utils/year-film-beds.ts`,
+  `assets/audio/film-beds/`); the parity tests fail until all match.
 
 **Do not change without updating this doc**
 - Anything that writes `year_films` status outside the RPCs; the epoch/CAS
@@ -275,12 +340,12 @@ permanent.
 
 | Layer | Where |
 |---|---|
-| pgTAP | `supabase/tests/year_films.sql` (128: scheduling/dates, placement, forced RLS, `year_films_enabled`, candidate-row parity sweep, backfill), `supabase/tests/family_activity.sql` (`film_ready`, v2) + grants/lockdown suites |
+| pgTAP | `supabase/tests/year_films.sql` (156: scheduling/dates, placement, forced RLS, `year_films_enabled`, candidate-row parity sweep, backfill, edit options + edit re-save), `supabase/tests/family_activity.sql` (`film_ready`, v2) + grants/lockdown suites |
 | Deno | `_shared/year-film-*.test.ts`, `schedule-year-films`, `workflow-year-film-bridge`, `get-year-film-url`, `delete-family-member` |
 | Worker (vitest) | `cloudflare/year-film-worker/test/` |
 | Render job | `render/year-film-renderer/test/job.test.mjs`; container run of the sample |
 | Export | `cloudflare/momora-export-worker/test/index.test.ts` |
-| App player/share | `src/screen-tests/year-film-player.integration.test.tsx` (mocked expo-video), `src/hooks/useYearFilm.integration.test.tsx`, `src/utils/{year-film-scenes,film-share}.test.ts`, `useNotifications.test.ts` (`year-film` push); Maestro `.maestro/flows/year-film/open-from-keepsakes.yaml` |
+| App player/share | `src/screen-tests/year-film-player.integration.test.tsx` (mocked expo-video), `src/hooks/useYearFilm.integration.test.tsx`, `src/utils/{year-film-scenes,film-share,year-film-beds}.test.ts` (the bed manifest is parity-tested against `beds.json` and the SQL allow-list), `useNotifications.test.ts` (`year-film` push); edit sheet: `src/components/year-films/edit/film-edit-sheet.integration.test.tsx`, `src/hooks/{useBedPreview,useYearFilmEditFrames}.test.ts(x)`, the edit cases in `useYearFilms.integration.test.tsx` and `src/services/year-films.integration.test.ts`; Maestro `.maestro/flows/year-film/open-from-keepsakes.yaml` |
 
 ## Changelog
 
@@ -291,3 +356,4 @@ permanent.
 | 2026-09-29 | Canary: a burst's last frame holds to the scene's whole-beat end (was a plum "dark flash" of up to a beat) |
 | 2026-09-30 | P2 backend: birthday due +2, year-end Dec 28/Dec 30, `placement_date`, forced films hidden from members, `film_ready` drawer event + v2 activity RPCs, `year_films_enabled`, silent history backfill (`year_film_candidate_rows`, `queue_year_film_backfill`), operator flags, poster-thumb delete keys |
 | 2026-09-30 | P2 app: full-screen player (scene progress, tap/hold, Reduce Motion warning, URL-expiry retry), share via cache download, `year-film` push route |
+| 2026-09-30 | P2 app: owner/manager edit sheet from the completion overlay (hide moments, line of the year, music with bundled 5 s previews); `get_year_film_edit_options` RPC; `save_year_film_edits` now accepts earlier removals in the full set; `hideNames` stays unbuilt |

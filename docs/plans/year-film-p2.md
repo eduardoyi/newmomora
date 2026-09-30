@@ -375,6 +375,8 @@ Hard precondition: the migration, the new Worker (which bundles the `_shared` da
 
 ## 8. Step 11 — Edit sheet
 
+**Status (2026-09-30):** built locally. Migration `20260930150000_year_film_edit_options.sql` (not deployed), app sheet + player wiring, bundled bed previews; `hideNames` not built (no render support). See [docs/features/year-film.md](../features/year-film.md) "Edit sheet".
+
 - Definer RPC `get_year_film_edit_options(p_film_id)` (owner/manager): the montage frames (memory id, date, thumbnail key → signed), up to 3 quote candidates (text + hash), the current bed, and 3 bed previews.
 - A keyboard-free sheet from the player's completion overlay: toggle frames, pick the quote, pick the music (5 s previews). Save → `save_year_film_edits` → "Remaking your film… (a few minutes)".
 - The previous version plays until the new one publishes (except removals, which block immediately, per the P1 rule).

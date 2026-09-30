@@ -13,20 +13,27 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { BookToast } from '@/components/memory-books/book-toast';
+import { EditFilmButton } from '@/components/year-films/edit/edit-film-button';
+import { FILM_EDIT_SAVED_MESSAGE, FilmEditSheet } from '@/components/year-films/edit/film-edit-sheet';
 import { FilmCompletion } from '@/components/year-films/player/film-completion';
 import { FilmProgress } from '@/components/year-films/player/film-progress';
 import { fonts } from '@/constants/theme';
+import { useFamily } from '@/hooks/use-family';
 import { useYearFilm } from '@/hooks/useYearFilm';
 import { useYearFilmPlayer } from '@/hooks/useYearFilmPlayer';
 import { useYearFilmShare } from '@/hooks/useYearFilmShare';
 import { invalidateYearFilms, useMarkYearFilmCompleted, useMarkYearFilmViewed } from '@/hooks/useYearFilms';
 import { timelineRoute, type YearFilmOpenSource } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
+import { canEditFamilyContent } from '@/utils/roles';
 
 // Dark plum letterbox (the film's own background family). No theme token exists.
 const PLUM = '#1F1428';
 const CREAM = '#F6F1E7';
 const HOLD_MS = 220;
+/** After a saved edit the player stays this long so the "Remaking" toast can be read. */
+const LEAVE_AFTER_SAVE_MS = 2200;
 /** A tap in the left third goes back, the rest goes forward (looking-back convention). */
 const PREVIOUS_ZONE_WIDTH = '33%';
 
@@ -58,6 +65,31 @@ export default function YearFilmScreen() {
   // The film's family, not the active one: a push can open this before the
   // active-family switch completes.
   const filmFamilyId = film?.family_id ?? null;
+
+  // Edit (owners/managers of the FILM's family only; the RPC enforces it too).
+  const { memberships } = useFamily();
+  const canEditFilm = canEditFamilyContent(
+    filmFamilyId ? memberships.find((membership) => membership.familyId === filmFamilyId)?.role : null,
+  );
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+    },
+    [],
+  );
+  const closeEditSheet = useCallback(() => setIsEditOpen(false), []);
+  const onEditSaved = useCallback(() => {
+    // A removal takes the film down, so leave the player once the toast has
+    // been seen.
+    setIsEditOpen(false);
+    setToastMessage(FILM_EDIT_SAVED_MESSAGE);
+    if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+    leaveTimerRef.current = setTimeout(close, LEAVE_AFTER_SAVE_MS);
+  }, []);
+  const dismissToast = useCallback(() => setToastMessage(null), []);
 
   const player = useYearFilmPlayer({
     filmId,
@@ -286,12 +318,22 @@ export default function YearFilmScreen() {
       {player.isComplete ? (
         <FilmCompletion
           onReplay={player.replay}
-          // Step 11 (edit sheet): pass `renderExtraActions={() => <EditFilmButton />}` for
-          // owners/managers here; FilmCompletion renders it after Replay / Share.
+          renderExtraActions={canEditFilm ? () => <EditFilmButton onPress={() => setIsEditOpen(true)} /> : undefined}
           share={{ status: share.status, progress: share.progress, onShare: share.share, onCancel: share.cancel }}
           title={title}
         />
       ) : null}
+
+      {canEditFilm && filmFamilyId ? (
+        <FilmEditSheet
+          familyId={filmFamilyId}
+          filmId={filmId}
+          onClose={closeEditSheet}
+          onSaved={onEditSaved}
+          visible={isEditOpen}
+        />
+      ) : null}
+      <BookToast bottomOffset={insets.bottom + 24} message={toastMessage} onDismiss={dismissToast} />
 
       {player.phase === 'unavailable' ? (
         <View style={styles.overlayFull} testID="year-film-unavailable">

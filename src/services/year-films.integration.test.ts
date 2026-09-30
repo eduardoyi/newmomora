@@ -4,10 +4,12 @@ import {
   fetchFamilyYearFilms,
   fetchYearFilmsEnabled,
   fetchYearFilmViews,
+  getYearFilmEditOptions,
   getYearFilmPlayback,
   getYearFilmPosters,
   markYearFilmCompleted,
   markYearFilmViewed,
+  saveYearFilmEdits,
 } from '@/services/year-films';
 
 jest.mock('@/lib/supabase', () => ({
@@ -295,6 +297,113 @@ describe('year-films service', () => {
       mockedSupabase.rpc.mockResolvedValue({ data: null, error: { message: 'x', code: 'P0001' } });
 
       expect(await fetchYearFilmsEnabled('family-1')).toEqual({ data: null, error: { message: 'x', code: 'P0001' } });
+    });
+  });
+  describe('getYearFilmEditOptions', () => {
+    const rpcPayload = {
+      editable: true,
+      kind: 'birthday',
+      editsVersion: 2,
+      musicBedId: 'bright-pop',
+      removedMemoryIds: ['m-3'],
+      chosenQuote: null,
+      frames: [
+        { memoryId: 'm-1', date: '2026-09-04', kind: 'video' },
+        { memoryId: 'm-3', date: null, kind: 'illustration' },
+        { date: '2026-09-05', kind: 'photo' },
+      ],
+      quoteCandidates: [
+        { memoryId: 'm-1', textHash: 'h1', text: 'Hi', speakerName: 'Enzo', isCurrent: true },
+        { memoryId: 'm-2', textHash: 'h2', text: '', speakerName: null, isCurrent: false },
+      ],
+    };
+
+    it('calls the RPC and normalises the payload', async () => {
+      mockedSupabase.rpc.mockResolvedValue({ data: rpcPayload, error: null });
+
+      const result = await getYearFilmEditOptions('film-1');
+
+      expect(mockedSupabase.rpc).toHaveBeenCalledWith('get_year_film_edit_options', { p_film_id: 'film-1' });
+      expect(result.error).toBeNull();
+      expect(result.data).toEqual({
+        editable: true,
+        kind: 'birthday',
+        editsVersion: 2,
+        musicBedId: 'bright-pop',
+        removedMemoryIds: ['m-3'],
+        chosenQuote: null,
+        frames: [
+          { memoryId: 'm-1', date: '2026-09-04', kind: 'video' },
+          { memoryId: 'm-3', date: null, kind: 'illustration' },
+        ],
+        quoteCandidates: [{ memoryId: 'm-1', textHash: 'h1', text: 'Hi', speakerName: 'Enzo', isCurrent: true }],
+      });
+    });
+
+    it('passes a not-editable answer through', async () => {
+      mockedSupabase.rpc.mockResolvedValue({ data: { editable: false, reason: 'blocked' }, error: null });
+
+      expect(await getYearFilmEditOptions('film-1')).toEqual({
+        data: { editable: false, reason: 'blocked' },
+        error: null,
+      });
+    });
+
+    it('treats a malformed payload as not editable', async () => {
+      mockedSupabase.rpc.mockResolvedValue({ data: { editable: true, kind: 'weekly' }, error: null });
+
+      expect((await getYearFilmEditOptions('film-1')).data).toEqual({ editable: false, reason: 'not_ready' });
+    });
+
+    it('maps an error', async () => {
+      mockedSupabase.rpc.mockResolvedValue({ data: null, error: { message: 'Not authorized', code: '42501' } });
+
+      expect(await getYearFilmEditOptions('film-1')).toEqual({
+        data: null,
+        error: { message: 'Not authorized', code: '42501' },
+      });
+    });
+  });
+
+  describe('saveYearFilmEdits', () => {
+    const edits = { removedMemoryIds: ['m-1'], musicBedId: 'sparkle-pop' };
+
+    it('sends the edits and returns the new version', async () => {
+      mockedSupabase.rpc.mockResolvedValue({ data: { ok: true, edits_version: 3 }, error: null });
+
+      const result = await saveYearFilmEdits('film-1', edits);
+
+      expect(mockedSupabase.rpc).toHaveBeenCalledWith('save_year_film_edits', { p_film_id: 'film-1', p_edits: edits });
+      expect(result).toEqual({ data: { ok: true, editsVersion: 3 }, error: null });
+    });
+
+    it('reports fair use as an expected outcome', async () => {
+      mockedSupabase.rpc.mockResolvedValue({ data: { ok: false, reason: 'rate_limited' }, error: null });
+
+      expect(await saveYearFilmEdits('film-1', edits)).toEqual({
+        data: { ok: false, reason: 'rate_limited' },
+        error: null,
+      });
+    });
+
+    it.each([
+      [{ message: 'film_not_editable', code: '55000', hint: 'film_not_editable' }, 'film_not_editable'],
+      [{ message: 'invalid_edits', code: '22023', hint: 'unknown_music_bed' }, 'invalid_edits'],
+      [{ message: 'Subscription required', code: '42501' }, 'subscription_required'],
+      [{ message: 'Not authorized', code: '42501' }, 'unauthorized'],
+    ])('maps %j to %s', async (error, reason) => {
+      mockedSupabase.rpc.mockResolvedValue({ data: null, error });
+
+      expect(await saveYearFilmEdits('film-1', edits)).toEqual({ data: { ok: false, reason }, error: null });
+    });
+
+    it('returns other failures as errors', async () => {
+      mockedSupabase.rpc.mockResolvedValue({ data: null, error: { message: 'timeout', code: '57014' } });
+
+      expect(await saveYearFilmEdits('film-1', edits)).toEqual({
+        data: null,
+        error: { message: 'timeout', code: '57014' },
+      });
     });
   });
 });

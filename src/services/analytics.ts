@@ -236,6 +236,18 @@ export interface AnalyticsEventMap {
   year_film_recaps_opened: {
     year: number;
   };
+  /** Owner/manager opened the edit sheet from the player (options loaded). */
+  year_film_edit_opened: {
+    kind: 'birthday' | 'family_month' | 'family_year';
+  };
+  /** An edit was saved and the film is being remade. Counts only, no memory ids. */
+  year_film_edit_saved: {
+    kind: 'birthday' | 'family_month' | 'family_year';
+    /** Size of the full removed set after the edit. */
+    removed_count: number;
+    quote_changed: boolean;
+    music_changed: boolean;
+  };
 }
 
 // Compile-time safety net: every event's properties must satisfy
