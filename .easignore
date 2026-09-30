@@ -2,6 +2,8 @@
 # repo tooling or server-side code that ballooned the EAS upload tarball
 # (marketing assets alone are ~1.5 GB) and has no effect on the binary.
 marketing/
+store-assets/
+film-renderer/
 docs/
 cloudflare/
 supabase/
