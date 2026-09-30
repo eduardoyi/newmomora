@@ -162,3 +162,16 @@ export function portraitTimelineRoute(memberId: string): Href {
 export function memoryBooksRoute(memberId: string): Href {
   return `/(app)/keepsakes/${memberId}` as Href;
 }
+
+// Year Film player (docs/plans/year-film-p2.md Step 6): opened from the
+// Timeline card, Keepsakes, the drawer and the `year-film` push.
+// `source` feeds the player's `year_film_opened` analytics event.
+export type YearFilmOpenSource = 'timeline' | 'keepsakes' | 'push' | 'drawer' | 'calendar';
+export function yearFilmRoute(filmId: string, source?: YearFilmOpenSource): Href {
+  return (source ? `/(app)/year-film/${filmId}?source=${source}` : `/(app)/year-film/${filmId}`) as Href;
+}
+
+// "See all {year} recaps" grid in Keepsakes (Step 7).
+export function keepsakeRecapsRoute(year: number): Href {
+  return `/(app)/keepsakes/recaps/${year}` as Href;
+}

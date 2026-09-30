@@ -1,0 +1,78 @@
+appId: com.memora.app
+---
+# Year Film player (docs/features/year-film.md "Player & share"). Requires an
+# account whose family already has at least one ready, surfaced film (the
+# owner's backfilled history is the intended fixture); film tiles carry the
+# `keepsakes-film-{id}` testIDs. Opens the first film from the Keepsakes tab,
+# checks it plays, skips to the end with right-side taps, then taps Share and
+# asserts the download label or the OS share sheet appears. Nothing is
+# actually shared: a still-running download is cancelled at the end.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: tab-keepsakes
+- extendedWaitUntil:
+    visible:
+      id: keepsakes-header
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: "keepsakes-film-.*"
+    timeout: 20000
+- tapOn:
+    id: "keepsakes-film-.*"
+    index: 0
+- extendedWaitUntil:
+    visible:
+      id: year-film-player
+    timeout: 15000
+# Segmented scene progress + the close control are on screen while it plays.
+- assertVisible:
+    id: year-film-progress
+- assertVisible:
+    id: year-film-close
+# Skip to the end: taps in the right two thirds of the screen are "next
+# scene"; the last one completes the film. (Point taps: the tap zones are
+# invisible views.) A Reduce Motion warning would need its Play button first.
+- runFlow:
+    when:
+      visible:
+        id: year-film-motion-play
+    commands:
+      - tapOn:
+          id: year-film-motion-play
+- repeat:
+    while:
+      notVisible:
+        id: year-film-complete
+    times: 40
+    commands:
+      - tapOn:
+          point: "80%,55%"
+- extendedWaitUntil:
+    visible:
+      id: year-film-complete
+    timeout: 10000
+- assertVisible:
+    id: year-film-replay
+- assertVisible:
+    id: year-film-share
+- tapOn:
+    id: year-film-share
+# Either the "Preparing video… N%" label (download in flight) or, on a fast
+# connection, the OS share sheet.
+- extendedWaitUntil:
+    visible:
+      text: "(Preparing video.*|AirDrop|Save Video|Copy)"
+    timeout: 30000
+# Leave nothing behind: cancel a download that is still running.
+- runFlow:
+    when:
+      visible:
+        id: year-film-share-cancel
+    commands:
+      - tapOn:
+          id: year-film-share-cancel
+      - extendedWaitUntil:
+          visible:
+            id: year-film-share
+          timeout: 10000

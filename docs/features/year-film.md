@@ -51,6 +51,101 @@ HyperFrames on one-off Fly machines, and stored privately in R2.
   delivery time is still ahead (`notified_at` is set regardless); the launch
   runbook backfills through launch day − 1, so those times are already past.
 
+### Timeline (P2 app)
+
+Every ready film is a **permanent in-feed card** in the Timeline's List view
+(no expiry, no temporary top card): a 9:16 cover with a play glyph, the title
+("Enzo's Year Four", "September recap", "Your 2026"), a subtitle ("1 minute ·
+Oct 2025 – Oct 2026") and a **New** pill until it is watched. Tapping it opens
+the player (`yearFilmRoute(id, 'timeline')`).
+
+- **Placement.** `interleaveFilms` (`src/utils/year-films.ts`) puts a film dated
+  *d* before the first loaded memory with `memory_date <= d`, so a birthday film
+  is the latest item of the birthday, a monthly recap caps its month and the
+  year-end film caps its year (above December's recap). A film is shown only
+  where the loaded window proves its position: above every loaded memory only
+  when there are no newer pages (or, in an anchored month/day jump, when
+  `d <= anchorDate`, which is exactly the recap-caps-the-month case); below every
+  loaded memory only when there are no older pages. So a paged or anchored
+  window never shows a film out of order, and a film above the window appears
+  when the newer page lands.
+- **Jumps.** A month/day jump aligns the first *row* (film or memory) dated on
+  or before the anchor under the control row, so a month's recap card is what
+  the reader lands on. The films query is fetched at Timeline mount and an
+  anchored list waits for it to settle, so a late film insert cannot be held
+  off-screen by `maintainVisibleContentPosition`.
+- **Freshness.** The films list is refetched on Timeline focus, on
+  pull-to-refresh and on app foreground (60 s stale time).
+- **New pill.** `isNewFilm`: not in the caller's `year_film_views` and
+  `surface_at` within 14 days (backfilled history is never New); hidden while
+  the views query is loading.
+- **Calendar view.** A day with a film gets a small dot, and is pressable even
+  with no memories (recaps often land on a memory-less month-end); the tap uses
+  the normal day path (switch to List anchored at that day).
+- **Drawer.** A `film_ready` row opens the player with source `drawer`
+  (`FamilyActivitySheet.onOpenFilm`, wired in `timeline.tsx`).
+- Code: `app/(app)/(tabs)/timeline.tsx` (rows, alignment), `src/components/year-films/film-card.tsx`,
+  `src/components/timeline/calendar-month-grid.tsx`. To extend: film rows are ordinary
+  list rows keyed `film:{id}` (never add special rows at index 1 -- Android's
+  `maintainVisibleContentPosition` anchors on it).
+
+### Player & share (P2 app)
+
+Route `app/(app)/year-film/[id].tsx` (full-screen, fade), opened with
+`yearFilmRoute(id, source)`; `source` (`timeline | keepsakes | push | drawer |
+calendar`, default `timeline`) feeds `year_film_opened`.
+
+- **Playback.** `getYearFilmPlayback` (15 min presigned video, poster, scenes).
+  The poster (`contain`, dark plum letterbox) shows until the first frame.
+  Sound on; on open `pauseAllAudioPlayback()` + `prepareAudioPlaybackMode()`
+  (`playsInSilentMode`, recording off) run first, and the mode is left as is
+  (every recorder sets its own before recording). Playback also pauses on app
+  background and whenever another screen is on top of the player.
+- **Shared-object rule.** `useYearFilmPlayer` creates the expo-video player ONCE
+  (`createVideoPlayer(null)`), only ever changes source with `replaceAsync`, and
+  releases it a frame after unmount. Never `useVideoPlayer` with a changing
+  source (commit 25ef6be).
+- **Overlay.** Segmented progress from `scenes.json` (equal-width segments, the
+  looking-back look; a single segment when the file is missing or malformed),
+  tap right = next scene, tap left = previous scene (restarts the current one
+  once it has played over 1 s), hold = pause, mute, close. Tapping past the last
+  scene completes the film. With a screen reader on, explicit Previous / Pause /
+  Next buttons appear and the picture is named after the film.
+- **Reduce Motion.** Before playing, a one-line "This film has a lot of motion."
+  warning with a Play button (the motion is baked into the video).
+- **Errors.** A player error refetches the URLs once (TTL expiry), swaps them in
+  with `replaceAsync` and seeks back to the last position; a second failure shows
+  "This film couldn't be played." with Try again. A 404/409 shows "This film
+  isn't available right now." and refreshes the film lists.
+- **Views/analytics.** `year_film_views` insert on first play, `completed_at` at
+  the end; `year_film_opened {kind, source}` once, `year_film_completed
+  {kind, duration_s}`.
+- **Film + family.** The player loads the film row by id (`useYearFilm`, seeded
+  from any cached list) and titles it with the members of *its own*
+  `family_id`, so a push that opens before the active-family switch still titles
+  correctly.
+- **Completion overlay.** Replay · Share, plus an extra-actions slot
+  (`FilmCompletion.renderExtraActions`; the Step 11 edit sheet's Edit button
+  for owners/managers goes there, marked in the route).
+- **Share.** `useYearFilmShare`: fresh presigned URL → `createDownloadResumable`
+  (`expo-file-system/legacy`) into `cache/film-share/{filmId}.mp4` with
+  "Preparing video… N%" and Cancel → `Sharing.shareAsync(uri, { mimeType:
+  'video/mp4', UTI: 'public.mpeg-4', dialogTitle })` → the file is deleted on
+  every exit path (success, cancel, error, unmount). `sweepFilmShareCache()`
+  (`src/utils/film-share.ts`, called once from `AppProviders`) clears the folder
+  at app start for kills mid-download. Events: `year_film_share_tapped`,
+  `year_film_shared` (the sheet returned, not proof of a share).
+- **Push.** `route: 'year-film'` (`filmId`, `familyId`): `useNotifications`
+  switches the active family first (Timeline fallback if the recipient left that
+  family), refreshes the family's films list and opens the player with source
+  `push`; warm and cold start share the path, and on a cold start the player's
+  close replaces to the Timeline.
+- Code: `app/(app)/year-film/[id].tsx`, `src/hooks/{useYearFilmPlayer,useYearFilmShare,useYearFilm}.ts`,
+  `src/components/year-films/player/{film-progress,film-completion}.tsx`,
+  `src/utils/{year-film-scenes,film-share}.ts`. To extend: add controls to the
+  route; keep every native-player call in the small adapter functions at the top
+  of `useYearFilmPlayer.ts`.
+
 ## Architecture
 
 ```mermaid
@@ -185,6 +280,7 @@ permanent.
 | Worker (vitest) | `cloudflare/year-film-worker/test/` |
 | Render job | `render/year-film-renderer/test/job.test.mjs`; container run of the sample |
 | Export | `cloudflare/momora-export-worker/test/index.test.ts` |
+| App player/share | `src/screen-tests/year-film-player.integration.test.tsx` (mocked expo-video), `src/hooks/useYearFilm.integration.test.tsx`, `src/utils/{year-film-scenes,film-share}.test.ts`, `useNotifications.test.ts` (`year-film` push); Maestro `.maestro/flows/year-film/open-from-keepsakes.yaml` |
 
 ## Changelog
 
@@ -194,3 +290,4 @@ permanent.
 | 2026-09-29 | Canary: first production film; voice normalization no longer uses `loudnorm` (was silent-ish in the image) |
 | 2026-09-29 | Canary: a burst's last frame holds to the scene's whole-beat end (was a plum "dark flash" of up to a beat) |
 | 2026-09-30 | P2 backend: birthday due +2, year-end Dec 28/Dec 30, `placement_date`, forced films hidden from members, `film_ready` drawer event + v2 activity RPCs, `year_films_enabled`, silent history backfill (`year_film_candidate_rows`, `queue_year_film_backfill`), operator flags, poster-thumb delete keys |
+| 2026-09-30 | P2 app: full-screen player (scene progress, tap/hold, Reduce Motion warning, URL-expiry retry), share via cache download, `year-film` push route |

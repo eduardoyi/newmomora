@@ -1,11 +1,14 @@
 import { fireEvent, render } from '@testing-library/react-native';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { FamilyActivitySheet, type FamilyActivitySheetProps } from './family-activity-sheet';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyActivity, useMarkFamilyActivitySeen } from '@/hooks/useFamilyActivity';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
+import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useBatchedMediaUrls } from '@/hooks/useMediaUrls';
+import { invalidateYearFilms } from '@/hooks/useYearFilms';
 import type { FamilyActivityEvent } from '@/services/family-activity';
 
 // src/services/family-activity.ts imports the real @/lib/supabase client,
@@ -29,6 +32,14 @@ jest.mock('@/hooks/useFamilyActivity', () => ({
   useMarkFamilyActivitySeen: jest.fn(),
 }));
 jest.mock('@/hooks/useFamilyMemberProfiles', () => ({ useFamilyMemberProfiles: jest.fn() }));
+jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
+// FilmCover (film_ready rows) signs its own poster; the sheet invalidates the
+// films list when a film_ready row is present.
+jest.mock('@/hooks/useYearFilms', () => ({
+  useYearFilmPosters: jest.fn(() => ({})),
+  invalidateYearFilmPoster: jest.fn(),
+  invalidateYearFilms: jest.fn(),
+}));
 jest.mock('@/hooks/useMediaUrls', () => ({ useBatchedMediaUrls: jest.fn(() => ({})) }));
 const mockSafetyState = { isLoading: false, isError: false, reported: new Set<string>() };
 jest.mock('@/hooks/useContentSafety', () => ({
@@ -44,6 +55,8 @@ const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyActivity = useFamilyActivity as jest.MockedFunction<typeof useFamilyActivity>;
 const mockedUseMarkSeen = useMarkFamilyActivitySeen as jest.MockedFunction<typeof useMarkFamilyActivitySeen>;
 const mockedUseProfiles = useFamilyMemberProfiles as jest.MockedFunction<typeof useFamilyMemberProfiles>;
+const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof useFamilyMembers>;
+const mockedInvalidateYearFilms = invalidateYearFilms as jest.MockedFunction<typeof invalidateYearFilms>;
 const mockedUseBatchedMediaUrls = useBatchedMediaUrls as jest.MockedFunction<typeof useBatchedMediaUrls>;
 
 function makeEvent(overrides: Partial<FamilyActivityEvent> = {}): FamilyActivityEvent {
@@ -67,6 +80,11 @@ function makeEvent(overrides: Partial<FamilyActivityEvent> = {}): FamilyActivity
     commentId: null,
     commentSnippet: null,
     inviteId: null,
+    filmId: null,
+    filmKind: null,
+    filmMemberId: null,
+    filmAgeYear: null,
+    filmScopeStart: null,
     ...overrides,
   };
 }
@@ -76,11 +94,15 @@ const safeAreaMetrics = {
   insets: { bottom: 34, left: 0, right: 0, top: 47 },
 };
 
+const queryClient = new QueryClient();
+
 function wrapSheet(props: FamilyActivitySheetProps) {
   return (
-    <SafeAreaProvider initialMetrics={safeAreaMetrics}>
-      <FamilyActivitySheet {...props} />
-    </SafeAreaProvider>
+    <QueryClientProvider client={queryClient}>
+      <SafeAreaProvider initialMetrics={safeAreaMetrics}>
+        <FamilyActivitySheet {...props} />
+      </SafeAreaProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -109,8 +131,13 @@ describe('FamilyActivitySheet', () => {
   const mutate = jest.fn();
   const refetch = jest.fn();
 
+  afterEach(() => {
+    queryClient.clear();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedUseFamilyMembers.mockReturnValue({ members: [{ id: 'kid-1', name: 'Enzo' }] } as never);
     mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'owner' } as never);
     mockedUseProfiles.mockReturnValue({
       profiles: [
@@ -504,6 +531,85 @@ describe('FamilyActivitySheet', () => {
     expect(mockedUseMarkSeen).not.toHaveBeenCalled();
     expect(mockedUseProfiles).not.toHaveBeenCalled();
     expect(mutate).not.toHaveBeenCalled();
+  });
+
+  describe('film_ready rows', () => {
+    const filmEvent = (overrides: Partial<FamilyActivityEvent> = {}) =>
+      makeEvent({
+        id: 'film-event-1',
+        kind: 'film_ready',
+        actorId: null,
+        actorName: '',
+        memoryId: null,
+        memoryExcerpt: null,
+        memoryCreationSource: null,
+        filmId: 'film-1',
+        filmKind: 'birthday',
+        filmMemberId: 'kid-1',
+        filmAgeYear: 4,
+        filmScopeStart: '2025-10-01',
+        ...overrides,
+      });
+
+    beforeEach(() => {
+      mockedUseFamilyActivity.mockReturnValue({
+        events: [filmEvent()],
+        isLoading: false,
+        isRefetching: false,
+        isError: false,
+        error: null,
+        refetch,
+      });
+    });
+
+    it('renders the titled row with a film cover instead of memory thumbnails', () => {
+      const { getByTestId, getByLabelText } = renderSheet();
+
+      expect(getByLabelText("Enzo's Year Four is ready")).toBeTruthy();
+      expect(getByTestId('family-activity-film-cover-group-film-event-1')).toBeTruthy();
+    });
+
+    it('opens the film via onOpenFilm after the sheet closes', () => {
+      const onClose = jest.fn();
+      const onOpenFilm = jest.fn();
+      const { getByTestId, rerenderVisible } = renderSheet({ onClose, onOpenFilm });
+
+      fireEvent.press(getByTestId('family-activity-row-group-film-event-1'));
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onOpenFilm).not.toHaveBeenCalled();
+
+      rerenderVisible(false);
+      expect(onOpenFilm).toHaveBeenCalledWith('film-1');
+    });
+
+    it('just closes when the host does not supply onOpenFilm', () => {
+      const onClose = jest.fn();
+      const { getByTestId } = renderSheet({ onClose });
+
+      fireEvent.press(getByTestId('family-activity-row-group-film-event-1'));
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshes the films list when a film_ready row is present', () => {
+      renderSheet();
+
+      expect(mockedInvalidateYearFilms).toHaveBeenCalledWith(queryClient, 'family-1');
+    });
+
+    it('does not refresh the films list when there are no film rows', () => {
+      mockedUseFamilyActivity.mockReturnValue({
+        events: [makeEvent()],
+        isLoading: false,
+        isRefetching: false,
+        isError: false,
+        error: null,
+        refetch,
+      });
+      renderSheet();
+
+      expect(mockedInvalidateYearFilms).not.toHaveBeenCalled();
+    });
   });
 
   describe('gallery-import ephemeral row', () => {

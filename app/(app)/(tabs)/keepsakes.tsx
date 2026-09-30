@@ -3,19 +3,20 @@ import { useCallback, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { MemoryBooksBody } from '@/components/memory-books/memory-books-body';
+import { KeepsakesBody } from '@/components/memory-books/memory-books-body';
 import { colors, fonts, spacing } from '@/constants/theme';
 import { trackEvent } from '@/services/analytics';
 import { getLocalTodayIso } from '@/utils/portrait-versions';
 
 /**
  * Keepsakes tab (docs/plans/timeline-calendar-keepsakes.md C4, replaces the
- * Calendar tab): the family's Memory Books, one shelf per child, and -- once
- * Year Film P2 ships -- its films above them. See docs/features/keepsakes.md.
+ * Calendar tab): one section per year -- the family's films, then a shelf per
+ * child with birthday films and Memory Books (docs/plans/year-film-p2.md
+ * Step 7). See docs/features/keepsakes.md.
  *
  * Tab screens never unmount, so "today" (which decides the books' scope
- * options) is recomputed on every focus, and the books poll only runs while
- * this tab is focused.
+ * options and the upcoming-recap card) is recomputed on every focus, and the
+ * books poll and films refetch only run while this tab is focused.
  */
 export default function KeepsakesScreen() {
   const [todayIso, setTodayIso] = useState(() => getLocalTodayIso());
@@ -41,9 +42,7 @@ export default function KeepsakesScreen() {
           <Text style={styles.title}>Made from your moments.</Text>
         </View>
       </SafeAreaView>
-      {/* Films section slot: Year Film P2 adds the family's films and
-          upcoming-film cards here, above the books. */}
-      <MemoryBooksBody isFocused={isFocused} todayIso={todayIso} variant="tab" />
+      <KeepsakesBody isFocused={isFocused} todayIso={todayIso} variant="tab" />
     </View>
   );
 }

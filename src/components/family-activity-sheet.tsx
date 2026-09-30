@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef } from 'react';
 import { Modal, Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -9,8 +10,10 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useFamilyActivity, useMarkFamilyActivitySeen } from '@/hooks/useFamilyActivity';
+import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useBatchedMediaUrls } from '@/hooks/useMediaUrls';
+import { invalidateYearFilms } from '@/hooks/useYearFilms';
 import type { GalleryImportDriverPhase } from '@/services/gallery-import-driver';
 import { groupFamilyActivity, type FamilyActivityGroup } from '@/services/family-activity';
 import { getBottomSheetBottomPadding, shouldDismissBottomSheet } from '@/utils/bottom-sheet-dismiss';
@@ -37,6 +40,10 @@ export interface FamilyActivitySheetProps {
   onOpenComments: (memoryId: string) => void;
   onOpenApprovals: () => void;
   onInvite: () => void;
+  /** Opens a Year Film from a `film_ready` row (the host routes to the
+   * player). Optional so hosts that don't show films still compile; a
+   * `film_ready` tap just closes the sheet when it is omitted. */
+  onOpenFilm?: (filmId: string) => void;
   /** Continuous gallery-import sweep re-entry point
    * (docs/plans/gallery-import-continuous.md I4a step 3): an ephemeral row
    * pinned above the sections (and above the empty state). Unlike every
@@ -135,6 +142,7 @@ interface FamilyActivitySheetBodyProps {
   onOpenComments: (memoryId: string) => void;
   onOpenApprovals: () => void;
   onInvite: () => void;
+  onOpenFilm?: (filmId: string) => void;
   galleryImport?: FamilyActivitySheetGalleryImportProps;
 }
 
@@ -155,10 +163,14 @@ function FamilyActivitySheetBody({
   onOpenComments,
   onOpenApprovals,
   onInvite,
+  onOpenFilm,
   galleryImport,
 }: FamilyActivitySheetBodyProps) {
   const { familyId } = useFamily();
   const { profiles } = useFamilyMemberProfiles(familyId);
+  // Children/people the family tracks (not app users) -- only used to title
+  // `film_ready` rows ("Enzo's Year Four").
+  const { members } = useFamilyMembers();
   const { events, isLoading, isError, refetch } = useFamilyActivity(familyId);
   const markSeen = useMarkFamilyActivitySeen();
   const contentSafety = useContentSafety();
@@ -184,6 +196,15 @@ function FamilyActivitySheetBody({
     () => profiles.filter((profile) => profile.is_active_member).length,
     [profiles],
   );
+
+  // A film_ready row means the family's films list may have gained a film
+  // this device hasn't fetched yet: refresh it so the player / Timeline card
+  // opened from the row finds it (docs/plans/year-film-p2.md Step 3).
+  const queryClient = useQueryClient();
+  const hasFilmRows = events.some((event) => event.kind === 'film_ready');
+  useEffect(() => {
+    if (hasFilmRows) void invalidateYearFilms(queryClient, familyId);
+  }, [familyId, hasFilmRows, queryClient]);
 
   useEffect(() => {
     markSeen.mutate();
@@ -213,6 +234,15 @@ function FamilyActivitySheetBody({
       case 'member_pending':
         runAfterClose(() => onOpenApprovals());
         break;
+      case 'film_ready': {
+        const filmId = group.events[0].filmId;
+        if (filmId && onOpenFilm) {
+          runAfterClose(() => onOpenFilm(filmId));
+        } else {
+          onClose();
+        }
+        break;
+      }
       case 'member_joined':
         // No dedicated members-list callback is wired for this sheet (plan
         // §7's prop list doesn't include one) -- closing is the whole
@@ -278,7 +308,7 @@ function FamilyActivitySheetBody({
       ListHeaderComponent={galleryImportRow}
       contentContainerStyle={styles.listContent}
       keyExtractor={(group) => group.id}
-      renderItem={({ item }) => <FamilyActivityRow group={item} mediaUrls={mediaUrls} onPress={() => handleRowPress(item)} safety={safety} />}
+      renderItem={({ item }) => <FamilyActivityRow group={item} mediaUrls={mediaUrls} members={members} onPress={() => handleRowPress(item)} safety={safety} />}
       renderSectionHeader={({ section }) => <Text style={styles.sectionHeader}>{section.title}</Text>}
       sections={sections}
       showsVerticalScrollIndicator={false}
@@ -295,6 +325,7 @@ export function FamilyActivitySheet({
   onOpenComments,
   onOpenApprovals,
   onInvite,
+  onOpenFilm,
   galleryImport,
 }: FamilyActivitySheetProps) {
   const insets = useSafeAreaInsets();
@@ -408,6 +439,7 @@ export function FamilyActivitySheet({
             onInvite={onInvite}
             onOpenApprovals={onOpenApprovals}
             onOpenComments={onOpenComments}
+            onOpenFilm={onOpenFilm}
             onOpenMemory={onOpenMemory}
             runAfterClose={runAfterClose}
           />

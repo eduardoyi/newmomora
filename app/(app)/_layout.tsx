@@ -166,6 +166,7 @@ export default function AppLayout() {
         <Stack.Screen name="search" options={{ animation: 'fade' }} />
         <Stack.Screen name="memory/[id]" />
         <Stack.Screen name="looking-back/[id]" options={{ animation: 'none' }} />
+        <Stack.Screen name="year-film/[id]" options={{ animation: 'fade' }} />
         <Stack.Screen
           name="memory/[id]/edit"
           options={{ presentation: 'modal' }}

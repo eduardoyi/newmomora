@@ -215,6 +215,27 @@ export interface AnalyticsEventMap {
     duration_bucket: '0_15s' | '15_30s' | '30_60s' | '60_90s' | '90_120s';
     has_description: boolean;
   };
+
+  // Year Films (docs/plans/year-film-p2.md Step 9). Content-free: no film
+  // title, member name or scope label -- only the closed kind enum.
+  year_film_opened: {
+    kind: 'birthday' | 'family_month' | 'family_year';
+    source: 'timeline' | 'keepsakes' | 'push' | 'drawer' | 'calendar';
+  };
+  year_film_completed: {
+    kind: 'birthday' | 'family_month' | 'family_year';
+    duration_s: number;
+  };
+  year_film_share_tapped: {
+    kind: 'birthday' | 'family_month' | 'family_year';
+  };
+  /** The share sheet returned (not proof a share completed). */
+  year_film_shared: {
+    kind: 'birthday' | 'family_month' | 'family_year';
+  };
+  year_film_recaps_opened: {
+    year: number;
+  };
 }
 
 // Compile-time safety net: every event's properties must satisfy

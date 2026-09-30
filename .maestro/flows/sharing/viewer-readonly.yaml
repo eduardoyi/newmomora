@@ -51,15 +51,19 @@ appId: com.memora.app
 - tapOn:
     id: timeline-view-list
 
-# Keepsakes: viewers never see books or the Create a book CTA.
+# Keepsakes: viewers see the family's films (Year Film P2) but never books or
+# the Create a book CTA. A family without films shows the gentle empty line
+# instead, so wait for either.
 - tapOn:
     id: tab-keepsakes
 - extendedWaitUntil:
     visible:
-      id: keepsakes-viewer-empty
+      id: "keepsakes-viewer-empty|keepsakes-year-.*"
     timeout: 15000
 - assertNotVisible:
     id: memory-books-create
+- assertNotVisible:
+    id: memory-books-empty
 
 # Viewers get the trimmed Settings screen: no journaling reminder, invites,
 # family settings, or photo import. Members stays (report/block safety).

@@ -89,6 +89,18 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 | `keepsakes_opened` | — | Keepsakes tab focus |
 | `keepsakes_create_book_tapped` | `children_count` (shelves shown) | Keepsakes "Create a book" / "Go to Family" CTA |
 
+### Year Films (content-free)
+
+| Event | Properties | Fires from |
+|---|---|---|
+| `year_film_opened` | `kind: birthday\|family_month\|family_year`, `source: timeline\|keepsakes\|push\|drawer\|calendar` | Year Film player, once per open (the surface that navigated there passes `source`) |
+| `year_film_completed` | `kind`, `duration_s` (film length, whole seconds) | Player: playback reached the end |
+| `year_film_share_tapped` | `kind` | Player completion overlay: Share tapped |
+| `year_film_shared` | `kind` | Player: the share sheet returned (does not prove the share completed) |
+| `year_film_recaps_opened` | `year` | Keepsakes "See all {year} recaps" grid opened |
+
+No film title, member name, scope label or film id is sent.
+
 ### Gallery import (aggregate, content-free)
 
 | Event | Properties | Fires from |

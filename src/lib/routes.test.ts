@@ -1,4 +1,4 @@
-import { newMemoryRoute } from '@/lib/routes';
+import { keepsakeRecapsRoute, newMemoryRoute, yearFilmRoute } from '@/lib/routes';
 
 // `newMemoryRoute` gained an optional `source` param
 // (docs/plans/analytics-implementation.md WP3 item 1) so `memory_saved`
@@ -25,5 +25,15 @@ describe('newMemoryRoute', () => {
       pathname: '/(app)/new-memory',
       params: { source: 'notification' },
     });
+  });
+});
+
+describe('year film routes', () => {
+  it('builds the player route from a film id', () => {
+    expect(yearFilmRoute('film-1')).toBe('/(app)/year-film/film-1');
+  });
+
+  it('builds the recaps grid route from a year', () => {
+    expect(keepsakeRecapsRoute(2026)).toBe('/(app)/keepsakes/recaps/2026');
   });
 });

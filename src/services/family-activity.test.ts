@@ -39,6 +39,11 @@ function makeRow(overrides: Partial<FamilyActivityRpcRow> = {}): FamilyActivityR
     comment_id: null,
     comment_snippet: null,
     invite_id: null,
+    film_id: null,
+    film_kind: null,
+    film_member_id: null,
+    film_age_year: null,
+    film_scope_start: null,
     ...overrides,
   };
 }
@@ -64,6 +69,11 @@ function makeEvent(overrides: Partial<FamilyActivityEvent> = {}): FamilyActivity
     commentId: null,
     commentSnippet: null,
     inviteId: null,
+    filmId: null,
+    filmKind: null,
+    filmMemberId: null,
+    filmAgeYear: null,
+    filmScopeStart: null,
     ...overrides,
   };
 }
@@ -92,6 +102,42 @@ describe('mapFamilyActivityRow', () => {
       commentId: null,
       commentSnippet: null,
       inviteId: null,
+      filmId: null,
+      filmKind: null,
+      filmMemberId: null,
+      filmAgeYear: null,
+      filmScopeStart: null,
+    });
+  });
+
+  it('maps a film_ready row: null actor, no name, never former, film columns carried', () => {
+    const event = mapFamilyActivityRow(
+      makeRow({
+        kind: 'film_ready',
+        actor_id: null,
+        actor_name: null,
+        actor_is_former: false,
+        memory_id: null,
+        memory_excerpt: null,
+        memory_creation_source: null,
+        film_id: 'film-1',
+        film_kind: 'birthday',
+        film_member_id: 'kid-1',
+        film_age_year: 4,
+        film_scope_start: '2025-10-01',
+      }),
+    );
+
+    expect(event).toMatchObject({
+      kind: 'film_ready',
+      actorId: null,
+      actorName: '',
+      actorIsFormer: false,
+      filmId: 'film-1',
+      filmKind: 'birthday',
+      filmMemberId: 'kid-1',
+      filmAgeYear: 4,
+      filmScopeStart: '2025-10-01',
     });
   });
 
@@ -110,7 +156,7 @@ describe('mapFamilyActivityRow', () => {
 describe('fetchFamilyActivity / fetchFamilyActivityUnread / markFamilyActivitySeen', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('calls get_family_activity and sorts rows newest-first', async () => {
+  it('calls get_family_activity_v2 and sorts rows newest-first', async () => {
     mockedRpc.mockResolvedValue({
       data: [
         makeRow({ id: 'older', created_at: '2026-08-21T10:00:00Z' }),
@@ -121,7 +167,7 @@ describe('fetchFamilyActivity / fetchFamilyActivityUnread / markFamilyActivitySe
 
     const result = await fetchFamilyActivity('family-1');
 
-    expect(supabase.rpc).toHaveBeenCalledWith('get_family_activity', { target_family_id: 'family-1' });
+    expect(supabase.rpc).toHaveBeenCalledWith('get_family_activity_v2', { target_family_id: 'family-1' });
     expect(result.data?.map((event) => event.id)).toEqual(['newer', 'older']);
   });
 
@@ -132,10 +178,10 @@ describe('fetchFamilyActivity / fetchFamilyActivityUnread / markFamilyActivitySe
     expect(result.error).toEqual({ message: 'boom', code: 'x' });
   });
 
-  it('calls get_family_activity_unread and coerces to boolean', async () => {
+  it('calls get_family_activity_unread_v2 and coerces to boolean', async () => {
     mockedRpc.mockResolvedValue({ data: true, error: null });
     const result = await fetchFamilyActivityUnread('family-1');
-    expect(supabase.rpc).toHaveBeenCalledWith('get_family_activity_unread', { target_family_id: 'family-1' });
+    expect(supabase.rpc).toHaveBeenCalledWith('get_family_activity_unread_v2', { target_family_id: 'family-1' });
     expect(result.data).toBe(true);
   });
 
@@ -292,6 +338,33 @@ describe('groupFamilyActivity', () => {
     expect(sections.map((s) => s.title)).toEqual(['Today', 'Yesterday', 'This week', 'Earlier']);
   });
 
+  it('never groups film_ready rows, and one does not break or join a memory_added streak by actor', () => {
+    const film = (id: string, createdAt: string) =>
+      makeEvent({
+        id,
+        kind: 'film_ready',
+        actorId: null,
+        actorName: '',
+        memoryId: null,
+        filmId: `film-${id}`,
+        createdAt,
+      });
+    const events = [
+      film('f2', '2026-08-21T17:58:00'),
+      film('f1', '2026-08-21T17:57:00'),
+      makeEvent({ id: 'e2', createdAt: '2026-08-21T17:55:00' }),
+      makeEvent({ id: 'e1', createdAt: '2026-08-21T17:50:00' }),
+    ];
+
+    const groups = groupFamilyActivity(events, { now })[0].data;
+
+    expect(groups.map((g) => [g.kind, g.events.map((e) => e.id)])).toEqual([
+      ['film_ready', ['f2']],
+      ['film_ready', ['f1']],
+      ['memory_added', ['e2', 'e1']],
+    ]);
+  });
+
   it('never groups member_joined/member_pending/memory_commented events (always 1:1)', () => {
     const events = [
       makeEvent({ id: 'a', kind: 'member_joined', actorId: 'actor-1', createdAt: '2026-08-21T17:00:00' }),
@@ -394,5 +467,45 @@ describe('buildFamilyActivityCopy', () => {
     expect(familyActivityCopyPlainText(copy)).toBe('A former member liked a memory');
     expect(familyActivityCopyPlainText(copy)).not.toContain('your memory');
     expect(familyActivityCopyPlainText(copy)).not.toContain('Old Name');
+  });
+
+  describe('film_ready', () => {
+    const filmEvent = (overrides: Partial<FamilyActivityEvent> = {}) =>
+      makeEvent({
+        kind: 'film_ready',
+        actorId: null,
+        actorName: '',
+        memoryId: null,
+        filmId: 'film-1',
+        filmKind: 'birthday',
+        filmMemberId: 'kid-1',
+        filmAgeYear: 4,
+        filmScopeStart: '2025-10-01',
+        ...overrides,
+      });
+
+    it('renders "{title} is ready" with the film title bold', () => {
+      const copy = buildFamilyActivityCopy(group('film_ready', [filmEvent()]), {
+        members: [{ id: 'kid-1', name: 'Enzo' }],
+      });
+      expect(familyActivityCopyPlainText(copy)).toBe("Enzo's Year Four is ready");
+      expect(copy.segments[0]).toEqual({ text: "Enzo's Year Four", bold: true });
+    });
+
+    it('titles monthly and year-end films without needing members', () => {
+      const month = buildFamilyActivityCopy(
+        group('film_ready', [filmEvent({ filmKind: 'family_month', filmMemberId: null, filmAgeYear: null, filmScopeStart: '2026-09-01' })]),
+      );
+      const year = buildFamilyActivityCopy(
+        group('film_ready', [filmEvent({ filmKind: 'family_year', filmMemberId: null, filmAgeYear: null, filmScopeStart: '2026-01-01' })]),
+      );
+      expect(familyActivityCopyPlainText(month)).toBe('September recap is ready');
+      expect(familyActivityCopyPlainText(year)).toBe('Your 2026 is ready');
+    });
+
+    it('does not throw on a malformed film row', () => {
+      const copy = buildFamilyActivityCopy(group('film_ready', [filmEvent({ filmKind: null, filmScopeStart: null })]));
+      expect(familyActivityCopyPlainText(copy)).toBe('A film is ready');
+    });
   });
 });

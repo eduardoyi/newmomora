@@ -53,6 +53,13 @@ export const galleryImportCandidatesQueryKeyBase = 'gallery-import-candidates' a
 // entry point lives on that child's profile screen).
 export const memoryBooksQueryKeyBase = 'memory-books' as const;
 export const memoryBookEligibilityQueryKeyBase = 'memory-book-eligibility' as const;
+// Year Films (docs/plans/year-film-p2.md Step 3-4). None of these are on the
+// query-persistence allow-list: posters are short-lived signed URLs and the
+// film list is cheap to refetch.
+export const yearFilmsQueryKeyBase = 'year-films' as const;
+export const yearFilmViewsQueryKeyBase = 'year-film-views' as const;
+export const yearFilmPosterQueryKeyBase = 'year-film-poster' as const;
+export const yearFilmsEnabledQueryKeyBase = 'year-films-enabled' as const;
 
 export function memoriesQueryKey(familyId: string | null | undefined) {
   return [memoriesQueryKeyBase, familyId] as const;
@@ -198,4 +205,25 @@ export function memoryBookEligibilityQueryKey(
   todayIso?: string | null,
 ) {
   return [memoryBookEligibilityQueryKeyBase, familyId, childId, dateOfBirth ?? null, todayIso ?? null] as const;
+}
+
+/** A family's surfaced films (Timeline, Keepsakes, drawer). */
+export function yearFilmsQueryKey(familyId: string | null | undefined) {
+  return [yearFilmsQueryKeyBase, familyId] as const;
+}
+
+/** The caller's own view rows ("New" marker); per user so a shared device
+ * never inherits another account's viewed state. */
+export function yearFilmViewsQueryKey(userId: string | null | undefined) {
+  return [yearFilmViewsQueryKeyBase, userId] as const;
+}
+
+/** One film's signed list-thumbnail URL. Per film id so a growing list does
+ * not re-sign everything. */
+export function yearFilmPosterQueryKey(filmId: string) {
+  return [yearFilmPosterQueryKeyBase, filmId] as const;
+}
+
+export function yearFilmsEnabledQueryKey(familyId: string | null | undefined) {
+  return [yearFilmsEnabledQueryKeyBase, familyId] as const;
 }

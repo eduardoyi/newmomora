@@ -1,4 +1,5 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { FlatList } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -13,9 +14,21 @@ const mockUseMemories = jest.fn();
 const mockMonthCounts = jest.fn();
 const mockRefreshIfStale = jest.fn();
 let mockTabPressListener: (() => void) | undefined;
+// Year Films (docs/plans/year-film-p2.md Step 5): the films query and the
+// caller's views are mocked; FilmCard/FilmCover render for real (the poster
+// hook is stubbed, the cover needs a QueryClientProvider).
+let mockFilms: unknown[] = [];
+let mockFilmsFetched = true;
+let mockViewedIds = new Set<string>();
+let mockViewsLoading = false;
+const mockRefetchFilms = jest.fn();
 
 jest.mock('expo-router', () => ({
   router: { push: jest.fn() },
+  useFocusEffect: (callback: () => void) => {
+    const { useEffect } = jest.requireActual('react') as typeof import('react');
+    useEffect(callback, [callback]);
+  },
   useNavigation: () => ({
     addListener: (_event: string, listener: () => void) => {
       mockTabPressListener = listener;
@@ -27,11 +40,17 @@ jest.mock('expo-router', () => ({
 jest.mock('@/hooks/use-family', () => ({ useFamily: () => ({ role: 'owner', familyId: 'family-1' }) }));
 jest.mock('@/hooks/use-auth', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }));
 jest.mock('@/hooks/useMemories', () => ({ useMemories: (options: unknown) => mockUseMemories(options) }));
+jest.mock('@/hooks/useYearFilms', () => ({
+  useFamilyYearFilms: () => ({ films: mockFilms, isFetched: mockFilmsFetched, refetch: mockRefetchFilms }),
+  useYearFilmViews: () => ({ viewedIds: mockViewedIds, isLoading: mockViewsLoading }),
+  useYearFilmPosters: () => ({}),
+  invalidateYearFilmPoster: jest.fn(),
+}));
 jest.mock('@/hooks/useMemoryMonthCounts', () => ({
   useMemoryMonthCounts: () => ({ counts: mockMonthCounts(), isLoaded: true, refreshIfStale: mockRefreshIfStale }),
 }));
 jest.mock('@/hooks/useFamilyMembers', () => ({
-  useFamilyMembers: () => ({ members: [{ id: 'member-1' }], isLoading: false }),
+  useFamilyMembers: () => ({ members: [{ id: 'member-1', name: 'Enzo' }], isLoading: false }),
   useOnboardingStatus: () => ({ isLoading: false, needsFamilyMember: false }),
 }));
 jest.mock('@/hooks/useContentSafety', () => ({
@@ -135,17 +154,41 @@ function layoutTopContent(screen: ReturnType<typeof render>) {
   }
 }
 
-function renderTimeline() {
-  const screen = render(
-    <SafeAreaProvider
-      initialMetrics={{
-        frame: { height: 844, width: 390, x: 0, y: 0 },
-        insets: { bottom: 34, left: 0, right: 0, top: 47 },
-      }}
-    >
-      <TimelineScreen />
-    </SafeAreaProvider>,
+// requestAnimationFrame is a 0ms timer under jest: let the ones the Timeline
+// queued on its last render/layout fire before the environment is torn down.
+afterAll(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+
+const queryClient = new QueryClient();
+
+function timelineTree() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <TimelineScreen />
+      </SafeAreaProvider>
+    </QueryClientProvider>
   );
+}
+
+afterEach(() => {
+  // FilmCover's poster queries hold a 55-minute gc timer.
+  queryClient.clear();
+});
+
+beforeEach(() => {
+  mockFilms = [];
+  mockFilmsFetched = true;
+  mockViewedIds = new Set();
+  mockViewsLoading = false;
+});
+
+function renderTimeline() {
+  const screen = render(timelineTree());
   layoutTopContent(screen);
   return screen;
 }
@@ -473,16 +516,7 @@ describe('Timeline list stays mounted across a jump', () => {
     expect(before.props.enabled).toBe(false);
 
     hasPreviousPage = false;
-    screen.rerender(
-      <SafeAreaProvider
-        initialMetrics={{
-          frame: { height: 844, width: 390, x: 0, y: 0 },
-          insets: { bottom: 34, left: 0, right: 0, top: 47 },
-        }}
-      >
-        <TimelineScreen />
-      </SafeAreaProvider>,
-    );
+    screen.rerender(timelineTree());
     const after = screen.getByTestId('timeline-memory-list').props.refreshControl;
     expect(after.type).toBe(before.type);
     expect(after.props.enabled).toBe(true);
@@ -521,5 +555,198 @@ describe('Timeline jump lands exactly under the control row', () => {
     // March's top at the row's bottom edge (64 = 52 + 12 gap).
     await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ animated: false, offset: 712 - 64 }));
     scrollSpy.mockRestore();
+  });
+});
+
+// Year Film cards in the Timeline (docs/plans/year-film-p2.md Step 5).
+describe('Timeline Year Films', () => {
+  const firstOfMonth = `${currentMonthKey}-01`;
+
+  function yearFilm(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'film-mar',
+      kind: 'family_month',
+      family_member_id: null,
+      age_year: null,
+      placement_date: '2025-03-31',
+      scope_start_date: '2025-03-01',
+      duration_ms: 60000,
+      // Surfaced long ago: backfilled history is never "New".
+      surface_at: '2025-04-01T00:00:00.000Z',
+      ready_at: '2025-04-01T01:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  // Cell test ids in render order: 'recent', 'film:film-mar', 'march', ...
+  function cellOrder(screen: ReturnType<typeof renderTimeline>) {
+    return screen
+      .getAllByTestId(/^timeline-cell-/)
+      .map((node) => String(node.props.testID).replace('timeline-cell-', ''));
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    AsyncStorage.getItem.mockResolvedValue(null);
+    mockMonthCounts.mockReturnValue({ [currentMonthKey]: 1, '2025-03': 4 });
+    mockUseMemories.mockImplementation((options: { anchorDate: string | null }) =>
+      options.anchorDate
+        ? hookResult([marchMemory], { hasPreviousPage: true })
+        : hookResult([recentMemory], { hasNextPage: true }),
+    );
+  });
+
+  it('refreshes the films on screen focus and with pull-to-refresh', () => {
+    const screen = renderTimeline();
+    expect(mockRefetchFilms).toHaveBeenCalledWith({ cancelRefetch: false });
+    mockRefetchFilms.mockClear();
+
+    const onRefresh = screen.getByTestId('timeline-memory-list').props.refreshControl.props.onRefresh as () => void;
+    act(() => onRefresh());
+    expect(mockRefetchFilms).toHaveBeenCalledTimes(1);
+  });
+
+  it('interleaves a film between the memories it falls between, and only where the window proves its position', () => {
+    // Feed: 'recent' (this month) then 'march'; more older pages exist.
+    mockUseMemories.mockImplementation(() => hookResult([recentMemory, marchMemory], { hasNextPage: true }));
+    mockFilms = [
+      yearFilm(),
+      // Older than every loaded memory while older pages remain: not shown.
+      yearFilm({ id: 'film-old', placement_date: '2024-01-31', scope_start_date: '2024-01-01' }),
+    ];
+    const screen = renderTimeline();
+
+    expect(cellOrder(screen)).toEqual(['recent', 'film:film-mar', 'march']);
+    expect(screen.queryByTestId('timeline-film-film-old')).toBeNull();
+    expect(screen.getByTestId('timeline-film-film-mar-title')).toHaveTextContent('March recap');
+    expect(screen.getByTestId('timeline-film-film-mar-subtitle')).toHaveTextContent('1 minute · March 2025');
+  });
+
+  it('shows a film below the last memory once no older pages remain', () => {
+    mockUseMemories.mockImplementation(() => hookResult([recentMemory, marchMemory], { hasNextPage: false }));
+    mockFilms = [yearFilm({ id: 'film-old', placement_date: '2024-01-31', scope_start_date: '2024-01-01' })];
+    const screen = renderTimeline();
+
+    expect(cellOrder(screen)).toEqual(['recent', 'march', 'film:film-old']);
+  });
+
+  it('opens the player from the card with source timeline', () => {
+    mockUseMemories.mockImplementation(() => hookResult([recentMemory, marchMemory]));
+    mockFilms = [yearFilm()];
+    const screen = renderTimeline();
+
+    const card = screen.getByTestId('timeline-film-film-mar');
+    expect(card.props.accessibilityRole).toBe('button');
+    expect(card.props.accessibilityLabel).toBe('Play March recap');
+    fireEvent.press(card);
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/year-film/film-mar?source=timeline');
+  });
+
+  it('marks a freshly surfaced, unwatched film "New" only once the views have loaded', () => {
+    mockUseMemories.mockImplementation(() => hookResult([recentMemory, marchMemory]));
+    mockFilms = [yearFilm({ surface_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() })];
+
+    mockViewsLoading = true;
+    const loading = renderTimeline();
+    expect(loading.queryByTestId('timeline-film-film-mar-new')).toBeNull();
+    loading.unmount();
+
+    mockViewsLoading = false;
+    const loaded = renderTimeline();
+    expect(loaded.getByTestId('timeline-film-film-mar-new')).toBeTruthy();
+    loaded.unmount();
+
+    mockViewedIds = new Set(['film-mar']);
+    const watched = renderTimeline();
+    expect(watched.queryByTestId('timeline-film-film-mar-new')).toBeNull();
+  });
+
+  it('does not mark backfilled history "New"', () => {
+    mockUseMemories.mockImplementation(() => hookResult([recentMemory, marchMemory]));
+    mockFilms = [yearFilm()];
+    const screen = renderTimeline();
+    expect(screen.queryByTestId('timeline-film-film-mar-new')).toBeNull();
+  });
+
+  it('shows the recap that caps a month at the top of an anchored month jump and lands on it', async () => {
+    mockFilms = [
+      yearFilm(),
+      // April's recap is newer than the anchor: it belongs above the window.
+      yearFilm({ id: 'film-apr', placement_date: '2025-04-30', scope_start_date: '2025-04-01' }),
+    ];
+    const scrollSpy = jest.spyOn(FlatList.prototype, 'scrollToOffset');
+    const screen = renderTimeline();
+    await jumpToMarch2025(screen);
+
+    expect(lastAnchorDate()).toBe('2025-03-31');
+    expect(cellOrder(screen)).toEqual(['film:film-mar', 'march']);
+    expect(screen.queryByTestId('timeline-film-film-apr')).toBeNull();
+
+    // Strip [0, 48), row slot [48, 112), the recap card from 112: it, not
+    // March's first memory, lands under the row (64 = 52 + 12 gap).
+    fireEvent(screen.getByTestId('timeline-cell-film:film-mar'), 'layout', {
+      nativeEvent: { layout: { x: 0, y: 112, width: 390, height: 190 } },
+    });
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ animated: false, offset: 112 - 64 }));
+    scrollSpy.mockRestore();
+  });
+
+  it('adds a film that sits above the loaded window when the newer page lands', async () => {
+    mockFilms = [yearFilm({ id: 'film-mid', placement_date: '2025-04-15', scope_start_date: '2025-04-01' })];
+    const screen = renderTimeline();
+    await jumpToMarch2025(screen);
+    // Newer than the anchor and nothing newer loaded yet: position unprovable.
+    expect(screen.queryByTestId('timeline-film-film-mid')).toBeNull();
+
+    const april = { ...marchMemory, id: 'april-20', memory_date: '2025-04-20' };
+    mockUseMemories.mockImplementation(() =>
+      hookResult([april, marchMemory], { hasPreviousPage: true }),
+    );
+    screen.rerender(timelineTree());
+
+    expect(cellOrder(screen)).toEqual(['april-20', 'film:film-mid', 'march']);
+  });
+
+  it('waits for the first films response before rendering an anchored list', async () => {
+    mockFilmsFetched = false;
+    const screen = renderTimeline();
+    await jumpToMarch2025(screen);
+    expect(screen.queryByTestId('timeline-memory-list')).toBeNull();
+
+    mockFilmsFetched = true;
+    mockFilms = [yearFilm()];
+    screen.rerender(timelineTree());
+    expect(screen.getByTestId('timeline-memory-list')).toBeTruthy();
+    expect(cellOrder(screen)).toEqual(['film:film-mar', 'march']);
+  });
+
+  describe('Calendar view', () => {
+    async function switchToCalendar(screen: ReturnType<typeof renderTimeline>) {
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('timeline-view-calendar'));
+      });
+      layoutTopContent(screen);
+    }
+
+    it('dots a film day and opens the list at a film-only day', async () => {
+      mockGridMemories.mockReturnValue([
+        { ...recentMemory, id: 'grid-1', memory_date: firstOfMonth, emotion: 'joy', updated_at: 'x' },
+      ]);
+      // A memory-less day that is neither the 1st nor today.
+      const filmDay = `${currentMonthKey}-${String(now.getDate() === 2 ? 3 : 2).padStart(2, '0')}`;
+      mockFilms = [yearFilm({ id: 'film-day', placement_date: filmDay, scope_start_date: firstOfMonth })];
+      const screen = renderTimeline();
+      await switchToCalendar(screen);
+
+      expect(screen.getByTestId(`calendar-grid-day-${filmDay}-film`)).toBeTruthy();
+      const tile = screen.getByTestId(`calendar-grid-day-${filmDay}`);
+      expect(tile.props.accessibilityRole).toBe('button');
+
+      fireEvent.press(tile);
+
+      expect(lastAnchorDate()).toBe(filmDay);
+      expect(screen.getByTestId('timeline-memory-list')).toBeTruthy();
+      expect(screen.getByTestId('timeline-film-film-day')).toBeTruthy();
+    });
   });
 });

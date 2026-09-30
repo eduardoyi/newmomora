@@ -2,11 +2,21 @@ import { Platform } from 'react-native';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { router } from 'expo-router';
 import type { NotificationResponse } from 'expo-notifications';
+import type { QueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef } from 'react';
 
 import { useFamily } from '@/hooks/use-family';
+import { invalidateYearFilms } from '@/hooks/useYearFilms';
 import { useUserProfile } from '@/hooks/useUserProfile';
-import { memoryBooksRoute, memoryDetailRoute, newMemoryRoute, sharingApprovalsRoute, timelineRoute } from '@/lib/routes';
+import { queryClient } from '@/lib/query-client';
+import {
+  memoryBooksRoute,
+  memoryDetailRoute,
+  newMemoryRoute,
+  sharingApprovalsRoute,
+  timelineRoute,
+  yearFilmRoute,
+} from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
 
 /**
@@ -141,15 +151,20 @@ async function registerForPushNotifications(
  * - 'memory-book': open the Memory Books shelf for `memberId` (a book
  *   finished generating, or failed) -- falls back to the timeline if
  *   `memberId` is missing
+ * - 'year-film': open the Year Film player for `filmId` (a film was
+ *   delivered) -- falls back to the timeline if `filmId` is missing or the
+ *   recipient is no longer a member of `familyId`
  */
 export interface PushRouteData {
-  route?: 'timeline' | 'approvals' | 'new-memory' | 'memory' | 'memory-book';
+  route?: 'timeline' | 'approvals' | 'new-memory' | 'memory' | 'memory-book' | 'year-film';
   familyId?: string;
   memoryId?: string;
   /** 'memory-book' only -- the child (`family_members.id`) whose shelf to open. */
   memberId?: string;
   /** 'memory-book' only -- informational; the shelf itself is keyed off `memberId`, not `bookId`. */
   bookId?: string;
+  /** 'year-film' only -- the `year_films.id` to play. */
+  filmId?: string;
 }
 
 /**
@@ -169,6 +184,8 @@ export interface RouteFromPushDataContext {
   /** Recipient's current family memberships. Omit to skip the membership check. */
   memberFamilyIds?: readonly string[];
   setActiveFamily?: (familyId: string) => Promise<void>;
+  /** Used by 'year-film' pushes to refresh the family's films list. Omit to skip. */
+  queryClient?: QueryClient;
 }
 
 function routeToMemoryDetail(payload: PushRouteData, context: RouteFromPushDataContext): void {
@@ -255,6 +272,55 @@ function routeToMemoryBooks(payload: PushRouteData, context: RouteFromPushDataCo
     });
 }
 
+/**
+ * Routes a `'year-film'` push (a film was delivered) to the player. The push
+ * also refreshes the target family's films list, so the Timeline / Keepsakes
+ * cards are there by the time the user closes the player. Mirrors
+ * `routeToMemoryBooks`: switch the active family to the push's `familyId`
+ * first (falling back to the timeline if the recipient is no longer a
+ * member), then open the player. Warm and cold start share this path; on a
+ * cold start the player has no history to go back to, so its close button
+ * replaces to the timeline (see app/(app)/year-film/[id].tsx).
+ */
+function routeToYearFilm(payload: PushRouteData, context: RouteFromPushDataContext): void {
+  const { filmId, familyId: targetFamilyId } = payload;
+
+  if (!filmId) {
+    router.push(timelineRoute);
+    return;
+  }
+
+  const { activeFamilyId, memberFamilyIds, setActiveFamily, queryClient } = context;
+
+  if (targetFamilyId && queryClient) {
+    void invalidateYearFilms(queryClient, targetFamilyId);
+  }
+
+  const needsSwitch =
+    Boolean(targetFamilyId) && targetFamilyId !== activeFamilyId && Boolean(setActiveFamily);
+
+  if (!needsSwitch) {
+    router.push(yearFilmRoute(filmId, 'push'));
+    return;
+  }
+
+  if (memberFamilyIds && !memberFamilyIds.includes(targetFamilyId as string)) {
+    router.push(timelineRoute);
+    return;
+  }
+
+  void setActiveFamily?.(targetFamilyId as string)
+    .catch((error) => {
+      console.warn(
+        'Failed to switch active family for a year-film push deep link',
+        error instanceof Error ? error.message : 'unknown',
+      );
+    })
+    .finally(() => {
+      router.push(yearFilmRoute(filmId, 'push'));
+    });
+}
+
 // The recognized `PushRouteData.route` literals -- checked against at
 // runtime before reporting `notification_opened` so an unrecognized/garbage
 // route value (a payload typo, or a future route this build doesn't know
@@ -267,6 +333,7 @@ const RECOGNIZED_PUSH_ROUTES = new Set<NonNullable<PushRouteData['route']>>([
   'new-memory',
   'memory',
   'memory-book',
+  'year-film',
 ]);
 
 export function routeFromPushData(data: unknown, context: RouteFromPushDataContext = {}): void {
@@ -303,6 +370,11 @@ export function routeFromPushData(data: unknown, context: RouteFromPushDataConte
 
   if (payload?.route === 'memory-book') {
     routeToMemoryBooks(payload, context);
+    return;
+  }
+
+  if (payload?.route === 'year-film') {
+    routeToYearFilm(payload, context);
   }
 }
 
@@ -356,6 +428,9 @@ export function useNotificationResponseRouting(ready: boolean): void {
       activeFamilyId: familyId,
       memberFamilyIds: memberships.map((membership) => membership.familyId),
       setActiveFamily,
+      // The app-wide client (same one AppProviders mounts), so this hook
+      // needs no QueryClientProvider of its own.
+      queryClient,
     };
   });
 

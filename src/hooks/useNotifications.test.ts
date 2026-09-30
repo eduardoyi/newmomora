@@ -12,12 +12,15 @@ import {
 } from '@/hooks/useNotifications';
 import { useFamily } from '@/hooks/use-family';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { invalidateYearFilms } from '@/hooks/useYearFilms';
+import { queryClient } from '@/lib/query-client';
 import {
   memoryBooksRoute,
   memoryDetailRoute,
   newMemoryRoute,
   sharingApprovalsRoute,
   timelineRoute,
+  yearFilmRoute,
 } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
 
@@ -43,6 +46,10 @@ jest.mock('@/hooks/useUserProfile', () => ({
 
 jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
+}));
+
+jest.mock('@/hooks/useYearFilms', () => ({
+  invalidateYearFilms: jest.fn(),
 }));
 
 jest.mock('expo-notifications', () => ({
@@ -176,6 +183,7 @@ describe('routeFromPushData - notification_opened target mapping', () => {
     ['new-memory', { route: 'new-memory' as const }],
     ['memory', { route: 'memory' as const, memoryId: 'memory-1', familyId: 'family-1' }],
     ['memory-book', { route: 'memory-book' as const, memberId: 'member-1', familyId: 'family-1' }],
+    ['year-film', { route: 'year-film' as const, filmId: 'film-1', familyId: 'family-1' }],
   ])('reports the literal %s route as the notification_opened target', (target, payload) => {
     routeFromPushData(payload);
 
@@ -339,6 +347,96 @@ describe('routeFromPushData - memory-book route family-context handling', () => 
   });
 });
 
+describe('routeFromPushData - year-film route', () => {
+  const mockedInvalidateYearFilms = invalidateYearFilms as jest.MockedFunction<typeof invalidateYearFilms>;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('opens the player with the push source when the push family is the active family', () => {
+    const setActiveFamily = jest.fn();
+
+    routeFromPushData(
+      { route: 'year-film', filmId: 'film-1', familyId: 'family-1' },
+      { activeFamilyId: 'family-1', setActiveFamily },
+    );
+
+    expect(setActiveFamily).not.toHaveBeenCalled();
+    expect(mockedPush).toHaveBeenCalledWith(yearFilmRoute('film-1', 'push'));
+    expect(String(mockedPush.mock.calls[0]?.[0])).toBe('/(app)/year-film/film-1?source=push');
+  });
+
+  it('falls back to the timeline when there is no filmId', () => {
+    routeFromPushData({ route: 'year-film', familyId: 'family-1' });
+
+    expect(mockedPush).toHaveBeenCalledWith(timelineRoute);
+  });
+
+  it('switches the active family BEFORE opening the player for a non-active family', async () => {
+    let resolveSwitch: () => void = () => undefined;
+    const setActiveFamily = jest.fn(
+      () => new Promise<void>((resolve) => {
+        resolveSwitch = resolve;
+      }),
+    );
+
+    routeFromPushData(
+      { route: 'year-film', filmId: 'film-1', familyId: 'family-2' },
+      { activeFamilyId: 'family-1', memberFamilyIds: ['family-1', 'family-2'], setActiveFamily },
+    );
+
+    expect(setActiveFamily).toHaveBeenCalledWith('family-2');
+    expect(mockedPush).not.toHaveBeenCalled();
+
+    resolveSwitch();
+    await flushPromises();
+
+    expect(mockedPush).toHaveBeenCalledWith(yearFilmRoute('film-1', 'push'));
+  });
+
+  it('falls back to the timeline when the recipient is no longer a member of the film family', () => {
+    const setActiveFamily = jest.fn();
+
+    routeFromPushData(
+      { route: 'year-film', filmId: 'film-1', familyId: 'family-2' },
+      { activeFamilyId: 'family-1', memberFamilyIds: ['family-1'], setActiveFamily },
+    );
+
+    expect(setActiveFamily).not.toHaveBeenCalled();
+    expect(mockedPush).toHaveBeenCalledWith(timelineRoute);
+    expect(mockedPush).not.toHaveBeenCalledWith(yearFilmRoute('film-1', 'push'));
+  });
+
+  it('still opens the player when the family switch fails', async () => {
+    const setActiveFamily = jest.fn().mockRejectedValue(new Error('network down'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(jest.fn());
+
+    routeFromPushData(
+      { route: 'year-film', filmId: 'film-1', familyId: 'family-2' },
+      { activeFamilyId: 'family-1', memberFamilyIds: ['family-1', 'family-2'], setActiveFamily },
+    );
+    await flushPromises();
+
+    expect(mockedPush).toHaveBeenCalledWith(yearFilmRoute('film-1', 'push'));
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Failed to switch active family for a year-film push deep link',
+      'network down',
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it("refreshes the push family's films list", () => {
+    routeFromPushData(
+      { route: 'year-film', filmId: 'film-1', familyId: 'family-1' },
+      { activeFamilyId: 'family-1', queryClient },
+    );
+
+    expect(mockedInvalidateYearFilms).toHaveBeenCalledWith(queryClient, 'family-1');
+  });
+});
+
 describe('useNotificationResponseRouting cold start + dedupe', () => {
   const originalOS = Platform.OS;
   const mockedAddListener = Notifications.addNotificationResponseReceivedListener as jest.MockedFunction<
@@ -406,6 +504,28 @@ describe('useNotificationResponseRouting cold start + dedupe', () => {
     await flushPromises();
 
     expect(mockedPush).toHaveBeenCalledWith(newMemoryRoute('notification'));
+  });
+
+  it('routes a cold-start year-film push to the player and refreshes that family\'s films', async () => {
+    mockedGetLastResponse.mockResolvedValue(
+      fakeResponse('cold-start-film', { route: 'year-film', filmId: 'film-1', familyId: 'family-1' }),
+    );
+
+    renderHook(() => useNotificationResponseRouting(true));
+    await flushPromises();
+
+    expect(mockedPush).toHaveBeenCalledWith(yearFilmRoute('film-1', 'push'));
+    expect(invalidateYearFilms).toHaveBeenCalledWith(queryClient, 'family-1');
+  });
+
+  it('routes a warm year-film push (live listener) to the player', async () => {
+    renderHook(() => useNotificationResponseRouting(true));
+    await flushPromises();
+
+    const listener = mockedAddListener.mock.calls[0]?.[0] as (r: Notifications.NotificationResponse) => void;
+    listener(fakeResponse('warm-film', { route: 'year-film', filmId: 'film-2', familyId: 'family-1' }));
+
+    expect(mockedPush).toHaveBeenCalledWith(yearFilmRoute('film-2', 'push'));
   });
 
   it('handling the same response identifier twice (e.g. a remount) only navigates once', async () => {

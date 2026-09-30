@@ -2,6 +2,7 @@ import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MemoryFallbackTile } from '@/components/memory-fallback-tile';
+import { FilmCover } from '@/components/year-films/film-cover';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import type { ReportTargetType } from '@/services/content-safety';
 import type { FamilyActivityEvent, FamilyActivityGroup } from '@/services/family-activity';
@@ -9,9 +10,14 @@ import { formatEngagementTimestamp } from '@/utils/engagement';
 import { buildFamilyActivityCopy, familyActivityCopyPlainText } from '@/utils/family-activity-copy';
 import { mediaImageSource } from '@/utils/media-image-source';
 import { memoryFallbackKind, type MemoryFallbackKind } from '@/utils/memory-fallback';
+import type { YearFilmMember } from '@/utils/year-films';
 
 const THUMBNAIL_SIZE = 44;
 const MAX_THUMBNAILS = 3;
+// A film_ready row's 9:16 cover, in place of the memory thumbnail stack.
+const FILM_COVER_WIDTH = 36;
+const FILM_COVER_HEIGHT = 64;
+const FILM_COVER_RADIUS = 6;
 
 /**
  * The drawer follows the timeline's content-safety rules: a reported memory
@@ -89,14 +95,17 @@ interface FamilyActivityRowProps {
    * useBatchedMediaUrls) rather than one request per row. */
   mediaUrls: Record<string, string>;
   safety: ActivityContentSafety;
+  /** The family's members, for `film_ready` titles ("Enzo's Year Four"). */
+  members?: readonly YearFilmMember[];
   onPress: () => void;
 }
 
-export function FamilyActivityRow({ group, mediaUrls, safety, onPress }: FamilyActivityRowProps) {
+export function FamilyActivityRow({ group, mediaUrls, safety, members, onPress }: FamilyActivityRowProps) {
   const primaryEvent = group.events[0];
-  const copy = buildFamilyActivityCopy(group);
+  const copy = buildFamilyActivityCopy(group, { members });
   const label = familyActivityCopyPlainText(copy);
-  const thumbnails = collectThumbnails(group.events, safety);
+  const isFilm = group.kind === 'film_ready';
+  const thumbnails = isFilm ? [] : collectThumbnails(group.events, safety);
   const mutedLine = isMemoryHidden(primaryEvent, safety)
     ? null
     : primaryEvent.kind === 'memory_commented'
@@ -134,6 +143,15 @@ export function FamilyActivityRow({ group, mediaUrls, safety, onPress }: FamilyA
           </View>
         ) : null}
       </View>
+      {isFilm && primaryEvent.filmId ? (
+        <FilmCover
+          film={{ id: primaryEvent.filmId, ready_at: null }}
+          height={FILM_COVER_HEIGHT}
+          radius={FILM_COVER_RADIUS}
+          testID={`family-activity-film-cover-${group.id}`}
+          width={FILM_COVER_WIDTH}
+        />
+      ) : null}
       {thumbnails.length > 0 ? (
         <View style={styles.thumbnailStack}>
           {thumbnails.map((thumbnail, index) => {

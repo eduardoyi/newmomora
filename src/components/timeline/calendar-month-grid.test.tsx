@@ -29,9 +29,10 @@ const summaries = summarizeGridDays(
   (userId) => userId === 'blocked-user',
 );
 
-function renderMonth(onDayPress = jest.fn()) {
+function renderMonth(onDayPress = jest.fn(), filmDates?: ReadonlySet<string>) {
   return render(
     <CalendarGridMonth
+      filmDates={filmDates}
       isTargetReported={(_type, id) => id === 'reported'}
       month={september}
       onDayPress={onDayPress}
@@ -78,6 +79,31 @@ describe('CalendarGridMonth', () => {
     const { getByTestId } = renderMonth(onDayPress);
     fireEvent.press(getByTestId('calendar-grid-day-2026-09-02'));
     expect(onDayPress).toHaveBeenCalledWith('2026-09-02');
+  });
+
+  // Year Films (docs/plans/year-film-p2.md Step 5.4): a film dot, and a
+  // film-only day (a recap on a memory-less month-end) is a button too.
+  it('dots a day that has a film, with or without memories', () => {
+    const { getByTestId, queryByTestId } = renderMonth(jest.fn(), new Set(['2026-09-02', '2026-09-30']));
+    expect(getByTestId('calendar-grid-day-2026-09-02-film')).toBeTruthy();
+    expect(getByTestId('calendar-grid-day-2026-09-30-film')).toBeTruthy();
+    expect(getByTestId('calendar-grid-day-2026-09-02').props.accessibilityLabel).toBe('September 2, 2 memories, film');
+    expect(queryByTestId('calendar-grid-day-2026-09-10-film')).toBeNull();
+  });
+
+  it('makes a film-only day pressable and opens it like any other day', () => {
+    const onDayPress = jest.fn();
+    const { getByTestId } = renderMonth(onDayPress, new Set(['2026-09-30']));
+    const tile = getByTestId('calendar-grid-day-2026-09-30');
+    expect(tile.props.accessibilityRole).toBe('button');
+    expect(tile.props.accessibilityLabel).toBe('September 30, film');
+    fireEvent.press(tile);
+    expect(onDayPress).toHaveBeenCalledWith('2026-09-30');
+  });
+
+  it('leaves memory-less days without a film inert', () => {
+    const { getByTestId } = renderMonth(jest.fn(), new Set(['2026-09-30']));
+    expect(getByTestId('calendar-grid-day-2026-09-03').props.accessibilityRole).toBeUndefined();
   });
 
   it('never offers a create affordance (viewers included)', () => {

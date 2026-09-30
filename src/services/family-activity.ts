@@ -6,7 +6,8 @@ export type FamilyActivityKind =
   | 'memory_commented'
   | 'memory_liked'
   | 'member_joined'
-  | 'member_pending';
+  | 'member_pending'
+  | 'film_ready';
 
 export interface ServiceError {
   message: string;
@@ -18,9 +19,9 @@ function mapSupabaseError(error: { message: string; code?: string }): ServiceErr
 }
 
 type GeneratedFamilyActivityRow =
-  Database['public']['Functions']['get_family_activity']['Returns'][number];
+  Database['public']['Functions']['get_family_activity_v2']['Returns'][number];
 
-// Shape of one row returned by the `get_family_activity` RPC (plan §6,
+// Shape of one row returned by the `get_family_activity_v2` RPC (plan §6,
 // docs/plans/family-activity.md). `kind` is narrowed from the generated
 // `string` to the actual closed union the DB check constraint enforces
 // (plan §5.1). The memory/comment/invite columns are widened back to
@@ -32,6 +33,7 @@ type GeneratedFamilyActivityRow =
 export type FamilyActivityRpcRow = Omit<
   GeneratedFamilyActivityRow,
   | 'kind'
+  | 'actor_id'
   | 'actor_name'
   | 'memory_id'
   | 'memory_creation_source'
@@ -46,8 +48,15 @@ export type FamilyActivityRpcRow = Omit<
   | 'comment_id'
   | 'comment_snippet'
   | 'invite_id'
+  | 'film_id'
+  | 'film_kind'
+  | 'film_member_id'
+  | 'film_age_year'
+  | 'film_scope_start'
 > & {
   kind: FamilyActivityKind;
+  // Null only for `film_ready` rows (system events with no actor).
+  actor_id: string | null;
   actor_name: string | null;
   memory_id: string | null;
   memory_creation_source: string | null;
@@ -66,13 +75,20 @@ export type FamilyActivityRpcRow = Omit<
   comment_id: string | null;
   comment_snippet: string | null;
   invite_id: string | null;
+  // Set only on `film_ready` rows (Year Film P2).
+  film_id: string | null;
+  film_kind: string | null;
+  film_member_id: string | null;
+  film_age_year: number | null;
+  film_scope_start: string | null;
 };
 
 export interface FamilyActivityEvent {
   id: string;
   kind: FamilyActivityKind;
   createdAt: string;
-  actorId: string;
+  /** Null for `film_ready` (system event, no actor). */
+  actorId: string | null;
   actorName: string;
   actorIsFormer: boolean;
   memoryId: string | null;
@@ -88,6 +104,12 @@ export interface FamilyActivityEvent {
   commentId: string | null;
   commentSnippet: string | null;
   inviteId: string | null;
+  filmId: string | null;
+  filmKind: string | null;
+  filmMemberId: string | null;
+  filmAgeYear: number | null;
+  /** `YYYY-MM-DD`. */
+  filmScopeStart: string | null;
 }
 
 export function mapFamilyActivityRow(row: FamilyActivityRpcRow): FamilyActivityEvent {
@@ -96,8 +118,11 @@ export function mapFamilyActivityRow(row: FamilyActivityRpcRow): FamilyActivityE
     kind: row.kind,
     createdAt: row.created_at,
     actorId: row.actor_id,
-    actorName: row.actor_is_former ? 'A former member' : row.actor_name ?? 'A former member',
-    actorIsFormer: Boolean(row.actor_is_former),
+    // A film_ready row has no actor: no name, never "former".
+    actorName: row.kind === 'film_ready'
+      ? ''
+      : row.actor_is_former ? 'A former member' : row.actor_name ?? 'A former member',
+    actorIsFormer: row.kind === 'film_ready' ? false : Boolean(row.actor_is_former),
     memoryId: row.memory_id,
     memoryCreationSource: row.memory_creation_source,
     memoryExcerpt: row.memory_excerpt,
@@ -111,6 +136,11 @@ export function mapFamilyActivityRow(row: FamilyActivityRpcRow): FamilyActivityE
     commentId: row.comment_id,
     commentSnippet: row.comment_snippet,
     inviteId: row.invite_id,
+    filmId: row.film_id ?? null,
+    filmKind: row.film_kind ?? null,
+    filmMemberId: row.film_member_id ?? null,
+    filmAgeYear: row.film_age_year ?? null,
+    filmScopeStart: row.film_scope_start ?? null,
   };
 }
 
@@ -131,7 +161,7 @@ function sortNewestFirst(events: FamilyActivityEvent[]): FamilyActivityEvent[] {
 export async function fetchFamilyActivity(
   familyId: string,
 ): Promise<{ data: FamilyActivityEvent[] | null; error: ServiceError | null }> {
-  const { data, error } = await supabase.rpc('get_family_activity', {
+  const { data, error } = await supabase.rpc('get_family_activity_v2', {
     target_family_id: familyId,
   });
 
@@ -146,7 +176,7 @@ export async function fetchFamilyActivity(
 export async function fetchFamilyActivityUnread(
   familyId: string,
 ): Promise<{ data: boolean | null; error: ServiceError | null }> {
-  const { data, error } = await supabase.rpc('get_family_activity_unread', {
+  const { data, error } = await supabase.rpc('get_family_activity_unread_v2', {
     target_family_id: familyId,
   });
 
@@ -224,6 +254,14 @@ function groupEventsWithinSection(events: FamilyActivityEvent[]): FamilyActivity
   const openLikeGroupsByMemoryId = new Map<string, FamilyActivityGroup>();
 
   for (const event of events) {
+    // film_ready is a system event: never grouped, and it must not sit
+    // between two memory_added rows as an actor-grouping candidate (the
+    // adjacency check below reads the last group's kind).
+    if (event.kind === 'film_ready') {
+      groups.push(newGroup(event));
+      continue;
+    }
+
     if (event.kind === 'memory_added') {
       const lastGroup = groups[groups.length - 1];
       const lastEvent = lastGroup?.events[lastGroup.events.length - 1];
@@ -257,7 +295,7 @@ function groupEventsWithinSection(events: FamilyActivityEvent[]): FamilyActivity
       continue;
     }
 
-    // memory_commented, member_joined, member_pending: always 1:1 (plan §4
+    // memory_commented, member_joined, member_pending, film_ready: always 1:1 (plan §4
     // grouping rule 3, "Everything else is 1:1").
     groups.push(newGroup(event));
   }

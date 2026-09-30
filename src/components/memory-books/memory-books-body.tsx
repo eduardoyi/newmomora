@@ -1,7 +1,9 @@
-// Memory Books shelves -- shared by the Keepsakes tab (every shelf) and the
-// per-child route `keepsakes/[memberId]` (one shelf, opened from the child
-// profile's "See {name}'s keepsakes" link). docs/plans/timeline-calendar-keepsakes.md
-// C2-C5; supersedes the single-child screen at family/[id]/memory-books
+// Keepsakes body -- Memory Books and Year Films in ONE scroll, shared by the
+// Keepsakes tab (year sections: family films + a shelf per child) and the
+// per-child route `keepsakes/[memberId]` (birthday films above one child's
+// books, opened from the child profile's "See {name}'s keepsakes" link).
+// docs/plans/timeline-calendar-keepsakes.md C2-C5 and
+// docs/plans/year-film-p2.md Step 7; supersedes the single-child screen at family/[id]/memory-books
 // (owner-approved picker-redesign brief, 2026-09-17). See
 // docs/features/keepsakes.md for the contract.
 //
@@ -9,7 +11,7 @@
 // shelf, so shelf membership and contents can't disagree. The per-child
 // create/retry flow (useMemoryBooks: eligibility counts, example cover, the
 // generate call) only mounts once a flow starts, for that one child.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
@@ -18,6 +20,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BookCoverTile, type BookCoverTileStatus } from '@/components/memory-books/book-cover-tile';
+import { KeepsakeFilmTile } from '@/components/keepsakes/keepsake-film-tile';
+import { KeepsakeYearSection } from '@/components/keepsakes/keepsake-year-section';
 import { BookToast } from '@/components/memory-books/book-toast';
 import { ChildPickerSheet } from '@/components/memory-books/child-picker-sheet';
 import { CreateBookSheet } from '@/components/memory-books/create-book-sheet';
@@ -25,6 +29,7 @@ import { RetryBookSheet } from '@/components/memory-books/retry-book-sheet';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { useFamilyYearFilms, useYearFilmsEnabled } from '@/hooks/useYearFilms';
 import {
   buildMemoryBookRows,
   useFamilyMemoryBooks,
@@ -45,6 +50,7 @@ import {
   type MemoryBookScopeOption,
 } from '@/utils/memory-book-scope';
 import { canEditFamilyContent } from '@/utils/roles';
+import { buildKeepsakeYears } from '@/utils/year-films';
 
 const CTA_HEIGHT = 54;
 // The floating tab bar sits max(28, insets.bottom + 8) above the screen
@@ -85,10 +91,13 @@ function ShelfTile({
   row,
   childFirstName,
   onPress,
+  width,
 }: {
   row: MemoryBookScopeRow;
   childFirstName: string;
   onPress: () => void;
+  /** Fixed width inside a horizontal year shelf; the stack route's wrapped grid uses `gridItem`. */
+  width?: number;
 }) {
   const book = row.book!;
   const status = tileDisplayStatus(row);
@@ -100,7 +109,7 @@ function ShelfTile({
       accessibilityRole="button"
       disabled={status === 'generating'}
       onPress={onPress}
-      style={styles.gridItem}
+      style={width ? { width } : styles.gridItem}
       testID={`memory-book-tile-${row.key}`}
     >
       <BookCoverTile
@@ -199,7 +208,11 @@ function MemoryBookFlowHost({
   );
 }
 
-export interface MemoryBooksBodyProps {
+const SHELF_BOOK_TILE_WIDTH = 150;
+const SHELF_FIRST_BOOK_TILE_WIDTH = 190;
+const CHILD_FILM_TILE_WIDTH = 112;
+
+export interface KeepsakesBodyProps {
   variant: 'tab' | 'stack';
   // Stack variant: the one child whose shelf this is.
   memberId?: string;
@@ -207,12 +220,29 @@ export interface MemoryBooksBodyProps {
   isFocused: boolean;
 }
 
-export function MemoryBooksBody({ variant, memberId, todayIso, isFocused }: MemoryBooksBodyProps) {
+export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: KeepsakesBodyProps) {
   const { familyId, role } = useFamily();
   const canGenerate = canEditFamilyContent(role);
   const insets = useSafeAreaInsets();
   const { members, isLoading: isLoadingMembers } = useFamilyMembers();
-  const { booksByChild, isLoading, isError, refetch } = useFamilyMemoryBooks({ familyId, isFocused });
+  // Viewers never see books on the tab (owner decision 2026-09-15), so the
+  // tab doesn't even fetch them; the stack route still shows existing books
+  // read-only.
+  const { booksByChild, isLoading, isError, refetch } = useFamilyMemoryBooks({
+    familyId: variant === 'tab' && !canGenerate ? null : familyId,
+    isFocused,
+  });
+  // Films need no polling: they arrive by push, the drawer or this focus
+  // refetch (tab screens never unmount).
+  const {
+    films,
+    isLoading: isLoadingFilms,
+    refetch: refetchFilms,
+  } = useFamilyYearFilms(familyId);
+  const { enabled: upcomingEnabled } = useYearFilmsEnabled(variant === 'tab' ? familyId : null);
+  useEffect(() => {
+    if (isFocused) void refetchFilms({ cancelRefetch: false });
+  }, [isFocused, refetchFilms]);
 
   const shelves = useMemo<Shelf[]>(() => {
     const today = new Date(`${todayIso}T12:00:00`);
@@ -232,13 +262,41 @@ export function MemoryBooksBody({ variant, memberId, todayIso, isFocused }: Memo
   }, [booksByChild, memberId, members, todayIso]);
   const hasBooks = shelves.some((shelf) => shelf.shelfRows.length > 0);
 
+  // The stack route shows only this child's birthday films (all years, newest first).
+  const childFilms = useMemo(
+    () =>
+      memberId
+        ? films
+            .filter((film) => film.kind === 'birthday' && film.family_member_id === memberId)
+            .sort((a, b) => (a.placement_date < b.placement_date ? 1 : a.placement_date > b.placement_date ? -1 : 0))
+        : [],
+    [films, memberId],
+  );
+  const hasFilms = variant === 'tab' ? films.length > 0 : childFilms.length > 0;
+
+  const currentYear = Number(todayIso.slice(0, 4));
+  const keepsakeYears = useMemo(() => {
+    if (variant !== 'tab') return [];
+    const books = canGenerate ? [...booksByChild.values()].flat() : [];
+    return buildKeepsakeYears(films, books, members, todayIso);
+  }, [booksByChild, canGenerate, films, members, todayIso, variant]);
+
+  // Tab tiles come from the year sections' books, so map each book back to
+  // the scope row the shelf tile needs (pickRelevantBook may drop a
+  // superseded duplicate for the same scope).
+  const bookRowsById = useMemo(() => {
+    const map = new Map<string, MemoryBookScopeRow>();
+    for (const shelf of shelves) for (const row of shelf.shelfRows) map.set(row.book!.id, row);
+    return map;
+  }, [shelves]);
+
   // The example cover: one real photo of the (first) child -- the pitch's
   // personalized touch. Loaded only while the pitch is on screen.
   const exampleMember = shelves[0]?.member ?? null;
   const exampleCoverQuery = useQuery({
     queryKey: ['memory-book-example-cover', familyId, exampleMember?.id],
     queryFn: async () => (await fetchExampleCoverAssetKey(familyId!, exampleMember!.id)).data,
-    enabled: Boolean(familyId && exampleMember && !hasBooks && !isLoading),
+    enabled: Boolean(familyId && exampleMember && !hasBooks && !hasFilms && !isLoading),
     staleTime: 30 * 60 * 1000,
   });
 
@@ -277,19 +335,187 @@ export function MemoryBooksBody({ variant, memberId, todayIso, isFocused }: Memo
   const ctaBottom = variant === 'tab' ? tabBarBottom + TAB_BAR_HEIGHT + TAB_BAR_GAP : 20 + insets.bottom;
   const contentBottomPadding = canGenerate ? ctaBottom + CTA_HEIGHT + 24 : variant === 'tab' ? 130 : 40;
 
-  // Viewers can't reach books today (owner decision 2026-09-15, the old
-  // profile row was manager-only); the tab keeps that. The stack route
-  // shows existing books read-only, as the old screen did.
-  if (variant === 'tab' && !canGenerate) {
-    return (
-      <View style={styles.viewerEmpty} testID="keepsakes-viewer-empty">
-        <Text style={styles.viewerEmptyText}>Books and films your family makes will show up here.</Text>
-      </View>
-    );
-  }
-
   const singleShelf = variant === 'stack' ? shelves[0] : undefined;
   const ctaLabel = variant === 'tab' && shelves.length === 0 ? 'Go to Family' : 'Create a book';
+
+  // "Create {name}'s first book": owners/managers, for a child with no book
+  // at all -- and only once there's something else on screen (a family with
+  // no books and no films gets the one family pitch instead).
+  const canShowFirstBookTile = (member: FamilyMember) =>
+    canGenerate &&
+    (hasBooks || hasFilms) &&
+    (booksByChild.get(member.id)?.length ?? 0) === 0 &&
+    shelves.some((shelf) => shelf.member.id === member.id);
+
+  const renderFirstBookTile = (member: FamilyMember, inRow: boolean) => (
+    <Pressable
+      accessibilityRole="button"
+      key={`first-book-${member.id}`}
+      onPress={() => startCreate(member.id)}
+      style={({ pressed }) => [
+        styles.firstBookTile,
+        inRow && { width: SHELF_FIRST_BOOK_TILE_WIDTH },
+        pressed && styles.firstBookTilePressed,
+      ]}
+      testID={`memory-books-first-book-${member.id}`}
+    >
+      <Text style={styles.firstBookText}>Create {member.name}’s first book</Text>
+    </Pressable>
+  );
+
+  const pitch = (
+    <View style={styles.emptyState} testID="memory-books-empty">
+      <Text style={styles.emptyEyebrow}>KEEPSAKES</Text>
+      <Text style={styles.emptyHeadline}>
+        {singleShelf
+          ? `A year of ${singleShelf.member.name}, printed and bound.`
+          : 'Your family’s years, printed and bound.'}
+      </Text>
+      <Text style={styles.emptyBody}>
+        {singleShelf
+          ? `We gather ${singleShelf.member.name}’s memories: the words, the photos, the illustrations.`
+          : 'We gather your memories: the words, the photos, the illustrations.'}
+        {' '}They become a premium layflat book, ready to look through in about 3 minutes, shipped to your door.
+      </Text>
+
+      {exampleMember ? (
+        <View style={styles.exampleCoverWrap}>
+          <BookCoverTile
+            childFirstName={exampleMember.name}
+            coverAssetKey={exampleCoverQuery.data ?? null}
+            scopeLabel="Year One"
+            status="ready"
+            testID="memory-books-example-cover"
+            washId={`example-${exampleMember.id}`}
+            yearRangeLabel={(() => {
+              const birthYear = exampleMember.date_of_birth ? parseDateParts(exampleMember.date_of_birth).year : null;
+              return birthYear ? `${birthYear} – ${birthYear + 1}` : null;
+            })()}
+          />
+        </View>
+      ) : null}
+
+      <View style={styles.bulletsCard}>
+        <View style={styles.bulletRow}>
+          <Text style={styles.bulletMark}>■</Text>
+          <Text style={styles.bulletText}>
+            <Text style={styles.bulletBold}>Layflat, 8.3×8.3 inches.</Text> Thick pages that open completely,
+            so no memory is lost in the fold.
+          </Text>
+        </View>
+        <View style={styles.bulletRow}>
+          <Text style={styles.bulletMark}>■</Text>
+          <Text style={styles.bulletText}>
+            <Text style={styles.bulletBold}>Chosen for you.</Text> We pick the moments and photos that tell
+            the year, then you can change anything.
+          </Text>
+        </View>
+      </View>
+
+      {variant === 'tab' && shelves.length === 0 ? (
+        <Text style={styles.noChildHint} testID="memory-books-no-child-hint">
+          Books start from your child’s profile. Add them (with their birthday) in Family.
+        </Text>
+      ) : null}
+    </View>
+  );
+
+  const renderTab = (): ReactNode => {
+    // Viewers see films only -- no book UI (owner decision 2026-09-15 keeps
+    // books manager-only). Nothing to show yet: the gentle line.
+    if (!canGenerate && !hasFilms) {
+      return (
+        <View style={styles.viewerEmpty} testID="keepsakes-viewer-empty">
+          <Text style={styles.viewerEmptyText}>Books and films your family makes will show up here.</Text>
+        </View>
+      );
+    }
+    return (
+      <>
+        {keepsakeYears.map((year) => (
+          <KeepsakeYearSection
+            key={year.year}
+            members={members}
+            renderBookTile={(book, member) => {
+              const row = bookRowsById.get(book.id);
+              const shelf = shelves.find((candidate) => candidate.member.id === member.id);
+              if (!row || !shelf) return null;
+              return (
+                <ShelfTile
+                  childFirstName={member.name}
+                  key={row.key}
+                  onPress={() => handleTilePress(shelf, row)}
+                  row={row}
+                  width={SHELF_BOOK_TILE_WIDTH}
+                />
+              );
+            }}
+            renderShelfExtra={(member) =>
+              year.year === currentYear && canShowFirstBookTile(member) ? renderFirstBookTile(member, true) : null
+            }
+            showUpcoming={upcomingEnabled && year.year === currentYear}
+            todayIso={todayIso}
+            year={year}
+          />
+        ))}
+        {!hasBooks && !hasFilms ? pitch : null}
+      </>
+    );
+  };
+
+  const renderStack = (): ReactNode => (
+    <>
+      {childFilms.length > 0 ? (
+        <View style={styles.shelf} testID="keepsakes-child-films">
+          <View style={styles.shelfHeaderRow}>
+            <Text style={styles.eyebrow}>BIRTHDAY FILMS</Text>
+            <Text style={styles.countText}>
+              {childFilms.length} {childFilms.length === 1 ? 'film' : 'films'}
+            </Text>
+          </View>
+          <ScrollView
+            contentContainerStyle={styles.filmRow}
+            horizontal
+            nestedScrollEnabled
+            showsHorizontalScrollIndicator={false}
+          >
+            {childFilms.map((film) => (
+              <KeepsakeFilmTile film={film} key={film.id} members={members} showSubtitle width={CHILD_FILM_TILE_WIDTH} />
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
+      {hasBooks ? (
+        shelves.map((shelf) => (
+          <View key={shelf.member.id} style={styles.shelf} testID={`memory-books-shelf-${shelf.member.id}`}>
+            <Text style={styles.subtitle}>
+              Turn {shelf.member.name}’s memories into a premium keepsake book.
+            </Text>
+            <View style={styles.shelfHeaderRow}>
+              <Text style={styles.eyebrow}>YOUR BOOKS</Text>
+              <Text style={styles.countText}>
+                {shelf.shelfRows.length} {shelf.shelfRows.length === 1 ? 'book' : 'books'}
+              </Text>
+            </View>
+            <View style={styles.grid}>
+              {shelf.shelfRows.map((row) => (
+                <ShelfTile
+                  childFirstName={shelf.member.name}
+                  key={row.key}
+                  onPress={() => handleTilePress(shelf, row)}
+                  row={row}
+                />
+              ))}
+            </View>
+          </View>
+        ))
+      ) : hasFilms ? (
+        singleShelf && canGenerate ? renderFirstBookTile(singleShelf.member, false) : null
+      ) : (
+        pitch
+      )}
+    </>
+  );
 
   return (
     <View style={styles.container}>
@@ -304,100 +530,12 @@ export function MemoryBooksBody({ variant, memberId, todayIso, isFocused }: Memo
               <Text style={styles.errorStateRetry}>Try again</Text>
             </Pressable>
           </View>
-        ) : isLoading || isLoadingMembers ? (
+        ) : isLoading || isLoadingMembers || isLoadingFilms ? (
           <ActivityIndicator color={colors.primary} style={styles.loading} testID="memory-books-loading" />
-        ) : hasBooks ? (
-          shelves.map((shelf) => (
-            <View key={shelf.member.id} style={styles.shelf} testID={`memory-books-shelf-${shelf.member.id}`}>
-              {variant === 'stack' ? (
-                <Text style={styles.subtitle}>
-                  Turn {shelf.member.name}’s memories into a premium keepsake book.
-                </Text>
-              ) : null}
-              <View style={styles.shelfHeaderRow}>
-                <Text style={styles.eyebrow}>{variant === 'stack' ? 'YOUR BOOKS' : shelf.member.name}</Text>
-                <Text style={styles.countText}>
-                  {shelf.shelfRows.length} {shelf.shelfRows.length === 1 ? 'book' : 'books'}
-                </Text>
-              </View>
-              {shelf.shelfRows.length > 0 ? (
-                <View style={styles.grid}>
-                  {shelf.shelfRows.map((row) => (
-                    <ShelfTile
-                      childFirstName={shelf.member.name}
-                      key={row.key}
-                      onPress={() => handleTilePress(shelf, row)}
-                      row={row}
-                    />
-                  ))}
-                </View>
-              ) : canGenerate ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => startCreate(shelf.member.id)}
-                  style={({ pressed }) => [styles.firstBookTile, pressed && styles.firstBookTilePressed]}
-                  testID={`memory-books-first-book-${shelf.member.id}`}
-                >
-                  <Text style={styles.firstBookText}>Create {shelf.member.name}’s first book</Text>
-                </Pressable>
-              ) : null}
-            </View>
-          ))
+        ) : variant === 'tab' ? (
+          renderTab()
         ) : (
-          <View style={styles.emptyState} testID="memory-books-empty">
-            <Text style={styles.emptyEyebrow}>KEEPSAKES</Text>
-            <Text style={styles.emptyHeadline}>
-              {singleShelf
-                ? `A year of ${singleShelf.member.name}, printed and bound.`
-                : 'Your family’s years, printed and bound.'}
-            </Text>
-            <Text style={styles.emptyBody}>
-              {singleShelf
-                ? `We gather ${singleShelf.member.name}’s memories: the words, the photos, the illustrations.`
-                : 'We gather your memories: the words, the photos, the illustrations.'}
-              {' '}They become a premium layflat book, ready to look through in about 3 minutes, shipped to your door.
-            </Text>
-
-            {exampleMember ? (
-              <View style={styles.exampleCoverWrap}>
-                <BookCoverTile
-                  childFirstName={exampleMember.name}
-                  coverAssetKey={exampleCoverQuery.data ?? null}
-                  scopeLabel="Year One"
-                  status="ready"
-                  testID="memory-books-example-cover"
-                  washId={`example-${exampleMember.id}`}
-                  yearRangeLabel={(() => {
-                    const birthYear = exampleMember.date_of_birth ? parseDateParts(exampleMember.date_of_birth).year : null;
-                    return birthYear ? `${birthYear} – ${birthYear + 1}` : null;
-                  })()}
-                />
-              </View>
-            ) : null}
-
-            <View style={styles.bulletsCard}>
-              <View style={styles.bulletRow}>
-                <Text style={styles.bulletMark}>■</Text>
-                <Text style={styles.bulletText}>
-                  <Text style={styles.bulletBold}>Layflat, 8.3×8.3 inches.</Text> Thick pages that open completely,
-                  so no memory is lost in the fold.
-                </Text>
-              </View>
-              <View style={styles.bulletRow}>
-                <Text style={styles.bulletMark}>■</Text>
-                <Text style={styles.bulletText}>
-                  <Text style={styles.bulletBold}>Chosen for you.</Text> We pick the moments and photos that tell
-                  the year, then you can change anything.
-                </Text>
-              </View>
-            </View>
-
-            {variant === 'tab' && shelves.length === 0 ? (
-              <Text style={styles.noChildHint} testID="memory-books-no-child-hint">
-                Books start from your child’s profile. Add them (with their birthday) in Family.
-              </Text>
-            ) : null}
-          </View>
+          renderStack()
         )}
       </ScrollView>
 
@@ -536,6 +674,12 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontFamily: fonts.sansBold,
     fontSize: 14,
+    paddingHorizontal: 12,
+    textAlign: 'center',
+  },
+  filmRow: {
+    alignItems: 'flex-start',
+    gap: 14,
   },
   emptyState: { gap: 20 },
   emptyEyebrow: {

@@ -1,8 +1,9 @@
 import type { FamilyActivityEvent, FamilyActivityGroup } from '@/services/family-activity';
+import { filmTitle, type YearFilmMember } from '@/utils/year-films';
 
 export interface FamilyActivityCopySegment {
   text: string;
-  /** Render this segment in `fonts.semibold` -- always an actor name. */
+  /** Render this segment in bold -- an actor name, or a film title. */
   bold?: boolean;
 }
 
@@ -23,14 +24,43 @@ function uniqueActorNames(events: FamilyActivityEvent[]): string[] {
   const seen = new Set<string>();
   const names: string[] = [];
   for (const event of events) {
-    if (seen.has(event.actorId)) continue;
+    // Actor-less (film_ready) events are never grouped with actors.
+    if (!event.actorId || seen.has(event.actorId)) continue;
     seen.add(event.actorId);
     names.push(resolveActorName(event));
   }
   return names;
 }
 
-export function buildFamilyActivityCopy(group: FamilyActivityGroup): FamilyActivityCopy {
+export interface FamilyActivityCopyOptions {
+  /** The family's members, for `film_ready` titles ("Enzo's Year Four"). */
+  members?: readonly YearFilmMember[];
+}
+
+function filmReadyTitle(event: FamilyActivityEvent, members: readonly YearFilmMember[]): string {
+  // Defensive: a malformed row (unknown kind / no scope start) must not
+  // throw inside a list row.
+  if (
+    (event.filmKind !== 'birthday' && event.filmKind !== 'family_month' && event.filmKind !== 'family_year')
+    || !event.filmScopeStart
+  ) {
+    return 'A film';
+  }
+  return filmTitle(
+    {
+      kind: event.filmKind,
+      family_member_id: event.filmMemberId,
+      age_year: event.filmAgeYear,
+      scope_start_date: event.filmScopeStart,
+    },
+    members,
+  );
+}
+
+export function buildFamilyActivityCopy(
+  group: FamilyActivityGroup,
+  options: FamilyActivityCopyOptions = {},
+): FamilyActivityCopy {
   const primaryActorName = resolveActorName(group.events[0]);
 
   switch (group.kind) {
@@ -113,6 +143,15 @@ export function buildFamilyActivityCopy(group: FamilyActivityGroup): FamilyActiv
         segments: [
           { text: primaryActorName, bold: true },
           { text: ' is waiting for your approval' },
+        ],
+      };
+    }
+
+    case 'film_ready': {
+      return {
+        segments: [
+          { text: filmReadyTitle(group.events[0], options.members ?? []), bold: true },
+          { text: ' is ready' },
         ],
       };
     }

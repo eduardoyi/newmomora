@@ -19,7 +19,24 @@ import { useMemories } from '@/hooks/useMemories';
 jest.mock('expo-router', () => ({
   router: { push: jest.fn() },
   useNavigation: () => ({ addListener: () => () => undefined, isFocused: () => true }),
+  useFocusEffect: (callback: () => void) => {
+    const { useEffect } = jest.requireActual('react') as typeof import('react');
+    useEffect(callback, [callback]);
+  },
 }));
+// Year Films (docs/plans/year-film-p2.md Step 5): none in this suite -- the
+// film placement/cards are covered by timeline-month-jump.integration.test.tsx.
+jest.mock('@/hooks/useYearFilms', () => {
+  const films: unknown[] = [];
+  const viewedIds = new Set<string>();
+  const refetch = jest.fn();
+  return {
+    useFamilyYearFilms: () => ({ films, isFetched: true, refetch }),
+    useYearFilmViews: () => ({ viewedIds, isLoading: false }),
+    useYearFilmPosters: () => ({}),
+    invalidateYearFilmPoster: jest.fn(),
+  };
+});
 // Month-picker counts (docs/plans/timeline-calendar-keepsakes.md A4) -- its
 // service imports the real @/lib/supabase client. Picker behavior is covered
 // by timeline-month-jump.integration.test.tsx.
@@ -104,6 +121,10 @@ jest.mock('@/components/looking-back/package-rail', () => ({
 jest.mock('@/components/family-activity-sheet', () => ({
   FamilyActivitySheet: jest.fn(() => null),
 }));
+
+// requestAnimationFrame is a 0ms timer under jest: let the ones the Timeline
+// queued on its last render/layout fire before the environment is torn down.
+afterAll(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
 
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
@@ -364,6 +385,20 @@ describe('TimelineScreen', () => {
       borderColor: colors.primary,
       borderWidth: 1.5,
     });
+  });
+
+  // docs/plans/year-film-p2.md Step 8: a film_ready drawer row opens the
+  // player with source 'drawer' (the sheet closes itself first).
+  it('routes a drawer film tap to the player with source drawer', () => {
+    const sheet = jest.requireMock('@/components/family-activity-sheet').FamilyActivitySheet as jest.Mock;
+    const router = jest.requireMock('expo-router').router as { push: jest.Mock };
+    render(<TimelineScreen />);
+
+    const onOpenFilm = sheet.mock.calls.at(-1)?.[0].onOpenFilm as (filmId: string) => void;
+    expect(onOpenFilm).toEqual(expect.any(Function));
+    onOpenFilm('film-9');
+
+    expect(router.push).toHaveBeenCalledWith('/(app)/year-film/film-9?source=drawer');
   });
 
   // docs/plans/gallery-import-continuous.md I4a step 1/2/3: the header

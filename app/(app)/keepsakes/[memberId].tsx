@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { MemoryBooksBody } from '@/components/memory-books/memory-books-body';
+import { KeepsakesBody } from '@/components/memory-books/memory-books-body';
 import { colors, fonts } from '@/constants/theme';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { familyRosterRoute } from '@/lib/routes';
@@ -14,7 +14,7 @@ import { getLocalTodayIso } from '@/utils/portrait-versions';
  * One child's keepsakes (docs/plans/timeline-calendar-keepsakes.md C5),
  * opened from the child profile's "See {name}'s keepsakes" link and from
  * book-ready notifications (`memoryBooksRoute`). Replaces
- * family/[id]/memory-books.
+ * family/[id]/memory-books. Birthday films (all years) sit above the books.
  */
 export default function MemberKeepsakesScreen() {
   const { memberId } = useLocalSearchParams<{ memberId: string }>();
@@ -64,7 +64,7 @@ export default function MemberKeepsakesScreen() {
           <Text style={styles.notFoundText}>Person not found</Text>
         </View>
       ) : (
-        <MemoryBooksBody isFocused memberId={member.id} todayIso={todayIso} variant="stack" />
+        <KeepsakesBody isFocused memberId={member.id} todayIso={todayIso} variant="stack" />
       )}
     </View>
   );

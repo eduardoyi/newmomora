@@ -22,7 +22,16 @@ interface GridTileProps {
   summary: GridDaySummary | undefined;
   isMemoryHidden: boolean;
   isIllustrationHidden: boolean;
+  /** A Year Film is placed on this day (docs/plans/year-film-p2.md Step 5.4). */
+  hasFilm: boolean;
   onPress: (iso: string) => void;
+}
+
+// "September 2, 2 memories, film" / "September 30, film" (film-only day).
+function getTileLabel(day: GridDay, month: GridMonth, count: number, hasFilm: boolean): string {
+  const base = getGridDayAccessibilityLabel(day, month, count);
+  if (!hasFilm) return base;
+  return `${count === 0 ? base.replace(/, no memories$/, '') : base}, film`;
 }
 
 const GridTile = memo(function GridTile({
@@ -32,10 +41,30 @@ const GridTile = memo(function GridTile({
   summary,
   isMemoryHidden,
   isIllustrationHidden,
+  hasFilm,
   onPress,
 }: GridTileProps) {
   const sizeStyle = { width: size, height: size };
   const count = summary?.count ?? 0;
+
+  if (!summary && hasFilm) {
+    // Recaps often land on a memory-less month-end: still a button, opening
+    // the list at that day where the film card sits.
+    return (
+      <Pressable
+        accessibilityLabel={getTileLabel(day, month, 0, true)}
+        accessibilityRole="button"
+        onPress={() => onPress(day.iso)}
+        style={({ pressed }) => [
+          styles.tile, styles.tileFilmOnly, sizeStyle, day.isToday && styles.tileToday, pressed && styles.tilePressed,
+        ]}
+        testID={`calendar-grid-day-${day.iso}`}
+      >
+        <Text style={[styles.dayNumber, styles.dayNumberFilmOnly, day.isToday && styles.dayNumberToday]}>{day.day}</Text>
+        <View style={styles.filmDot} pointerEvents="none" testID={`calendar-grid-day-${day.iso}-film`} />
+      </Pressable>
+    );
+  }
 
   if (!summary) {
     // Empty days aren't buttons -- there's nothing to open.
@@ -52,7 +81,7 @@ const GridTile = memo(function GridTile({
 
   return (
     <Pressable
-      accessibilityLabel={getGridDayAccessibilityLabel(day, month, count)}
+      accessibilityLabel={getTileLabel(day, month, count, hasFilm)}
       accessibilityRole="button"
       onPress={() => onPress(day.iso)}
       style={({ pressed }) => [styles.tile, sizeStyle, day.isToday && styles.tileToday, pressed && styles.tilePressed]}
@@ -79,6 +108,9 @@ const GridTile = memo(function GridTile({
           <Text style={styles.countBadgeText}>+{count - 1}</Text>
         </View>
       ) : null}
+      {hasFilm ? (
+        <View style={styles.filmDot} pointerEvents="none" testID={`calendar-grid-day-${day.iso}-film`} />
+      ) : null}
     </Pressable>
   );
 });
@@ -87,6 +119,9 @@ export interface CalendarGridMonthProps {
   month: GridMonth;
   tileSize: number;
   summaries: Map<string, GridDaySummary>;
+  /** Placement dates ('YYYY-MM-DD') of the family's Year Films; those days get
+   * a film dot and are pressable even with no memories. Optional. */
+  filmDates?: ReadonlySet<string>;
   isTargetReported: (type: 'memory' | 'memory_illustration', id: string, generationId?: string | null) => boolean;
   onDayPress: (iso: string) => void;
 }
@@ -104,6 +139,7 @@ export const CalendarGridMonth = memo(function CalendarGridMonth({
   month,
   tileSize,
   summaries,
+  filmDates,
   isTargetReported,
   onDayPress,
 }: CalendarGridMonthProps) {
@@ -129,6 +165,7 @@ export const CalendarGridMonth = memo(function CalendarGridMonth({
                     ? isTargetReported('memory_illustration', memory.id, memory.illustration_generation_id)
                     : false}
                   isMemoryHidden={memory ? isTargetReported('memory', memory.id) : false}
+                  hasFilm={filmDates?.has(day.iso) ?? false}
                   key={day.iso}
                   month={month}
                   onPress={onDayPress}
@@ -168,7 +205,19 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
     borderWidth: 1.5,
   },
+  tileFilmOnly: { backgroundColor: colors.primaryTint },
   tileFuture: { opacity: 0.4 },
+  filmDot: {
+    backgroundColor: colors.primary,
+    borderColor: colors.white,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    height: 10,
+    position: 'absolute',
+    right: 3,
+    top: 3,
+    width: 10,
+  },
   tilePressed: { opacity: 0.75 },
   hiddenTile: {
     backgroundColor: colors.surface,
@@ -179,6 +228,7 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sansMedium,
     fontSize: 13,
   },
+  dayNumberFilmOnly: { color: colors.ink },
   dayNumberToday: {
     color: colors.primary,
     fontFamily: fonts.sansBold,

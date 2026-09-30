@@ -45,6 +45,18 @@ the bell shows there's something new since the viewer last opened it.
   timeline already signed, batching the rest ≤50 keys per `get-media-url`
   call) and passed to each row — rows must not call `useMediaUrls`
   themselves, which would fire one request per row.
+- **`film_ready` rows** (a Year Film finished and was announced) read
+  "**Enzo's Year Four** is ready" / "**September recap** is ready" /
+  "**Your 2026** is ready" — the bold segment is the film title from
+  `filmTitle()` (`src/utils/year-films.ts`), built client-side from the row's
+  `film_*` columns and the family's members. They have no actor, so there is
+  no avatar/name; instead a 36x64 `FilmCover` (the shared 9:16 poster tile,
+  which signs its own poster) sits on the right in place of the memory
+  thumbnails. Never grouped. Tapping closes the sheet and then calls the
+  host's `onOpenFilm(filmId)` (the timeline routes to the film player); with no
+  `onOpenFilm` it just closes. Opening the sheet with a `film_ready` row
+  present also invalidates the films list (`invalidateYearFilms`) so the
+  target film is fetched.
 - **Content safety** follows the timeline's rules (`useContentSafety`, passed
   to rows as `safety`): a reported memory shows neither its excerpt nor its
   media, a reported comment hides its snippet, and a reported illustration
@@ -157,8 +169,8 @@ only and never filter what shows up here.
 
 | Layer | Files | Responsibility |
 |-------|-------|----------------|
-| Service | `src/services/family-activity.ts` | RPC wrappers, row → `FamilyActivityEvent` mapping, the pure `groupFamilyActivity()` grouping/sectioning function |
-| Copy | `src/utils/family-activity-copy.ts` | Sentence builder (`buildFamilyActivityCopy`) — bold-name segments + verb + object, never references the memory's creator |
+| Service | `src/services/family-activity.ts` | RPC wrappers (`get_family_activity_v2` / `get_family_activity_unread_v2`), row → `FamilyActivityEvent` mapping, the pure `groupFamilyActivity()` grouping/sectioning function |
+| Copy | `src/utils/family-activity-copy.ts` | Sentence builder (`buildFamilyActivityCopy(group, { members })`) — bold-name segments + verb + object, never references the memory's creator; `film_ready` renders "{filmTitle} is ready" and is the one kind that needs `members` (passed by the sheet from `useFamilyMembers`) |
 | Hooks | `src/hooks/useFamilyActivity.ts`, `src/hooks/queryKeys.ts` | `useFamilyActivity`, `useFamilyActivityUnread`, `useMarkFamilyActivitySeen` |
 | Components | `src/components/timeline-activity-bell.tsx`, `family-activity-sheet.tsx`, `family-activity-row.tsx` | Bell + dot, sheet (loading/error/empty/sectioned list), row rendering, and (sheet only) the gallery-import ephemeral row + its copy derivation |
 | Gallery-import re-entry (not a real event — see Extension guide) | `src/utils/gallery-import-bell-seen.ts`, `src/hooks/useGalleryImport.ts`'s `useGalleryImportEntryStatus` | AsyncStorage "seen this (runId, readyCount)" check for the bell dot; device-bound checkpoint/run/driver status feeding both the dot and the sheet's pinned row |
@@ -172,7 +184,9 @@ only and never filter what shows up here.
 2. Render `<TimelineActivityBell unread={...} onPress={...} />` wherever a
    new entry point into the feed is needed, and mount
    `<FamilyActivitySheet visible={...} onClose={...} onOpenMemory={...}
-   onOpenComments={...} onOpenApprovals={...} onInvite={...} />` once nearby.
+   onOpenComments={...} onOpenApprovals={...} onInvite={...}
+   onOpenFilm={...} />` once nearby (`onOpenFilm` is optional; without it a
+   `film_ready` tap only closes the sheet).
    Don't mount a second independent sheet instance.
 3. If you add a new event kind, it needs a DB trigger + RPC column (DB side,
    out of this doc's scope) **and** a case in `buildFamilyActivityCopy()` —
@@ -192,8 +206,10 @@ their already newest-first order:
    collapse into one group, even if not adjacent (an unrelated event can sit
    between two likes on the same memory and the group still forms) — tracked
    by memory id, not list position.
-3. Everything else (`memory_commented`, `member_joined`, `member_pending`) is
-   always 1:1.
+3. Everything else (`memory_commented`, `member_joined`, `member_pending`,
+   `film_ready`) is always 1:1. `film_ready` rows have a null actor, so they
+   are skipped by the actor comparisons above and never join or split a
+   `memory_added` streak by actor.
 
 Grouping runs **per day-section**, never across one: events are bucketed into
 Today/Yesterday/This week/Earlier by local calendar day first, and only then
@@ -353,7 +369,7 @@ always the **newest** member's timestamp.
 
 | File | Covers |
 |------|--------|
-| `src/services/family-activity.test.ts` | RPC row → event mapping, actor former-member fallback, `groupFamilyActivity` windows (30min/24h), no cross-day-section grouping, day-section bucketing, `buildFamilyActivityCopy` for every event kind incl. the gallery-import variant and grouped-likes "and N others" |
+| `src/services/family-activity.test.ts` | RPC row → event mapping, actor former-member fallback, `groupFamilyActivity` windows (30min/24h), no cross-day-section grouping, day-section bucketing, `buildFamilyActivityCopy` for every event kind incl. the gallery-import variant, grouped-likes "and N others" and `film_ready` titles; the `film_ready` row mapping (null actor, never former, `film_*` carried), v2 RPC names, and `film_ready` never grouping |
 | `src/components/timeline-activity-bell.test.tsx` | Dot visibility, a11y label (plain vs. "new"), press wiring |
 | `src/utils/gallery-import-bell-seen.test.ts` | Default-unseen, persists per (userId, familyId, runId, readyCount), reads unseen again once readyCount grows or the run changes, storage-failure fallbacks |
 
@@ -362,7 +378,7 @@ always the **newest** member's timestamp.
 | File | Scenarios |
 |------|-----------|
 | `src/hooks/useFamilyActivity.integration.test.tsx` | `enabled` gating (including no-familyId), fetch on the disabled→enabled transition, `useFamilyActivityUnread` fetch, `useMarkFamilyActivitySeen` optimistic clear + rollback |
-| `src/components/family-activity-sheet.test.tsx` | Loading skeleton, error + retry, empty state (incl. solo-family invite CTA), Today/Yesterday/This week/Earlier sectioning, Review pill only on `member_pending` rows, deferred-navigation order for every tap target (route callback withheld until the sheet re-renders `visible={false}`), data hooks never called while closed, and the gallery-import ephemeral row's five-state copy priority (ready beats fair-use beats Wi-Fi beats error beats generic "still looking"), its placement above both the list and the empty state, and its own deferred-navigation order |
+| `src/components/family-activity-sheet.test.tsx` | Loading skeleton, error + retry, empty state (incl. solo-family invite CTA), Today/Yesterday/This week/Earlier sectioning, Review pill only on `member_pending` rows, deferred-navigation order for every tap target (route callback withheld until the sheet re-renders `visible={false}`), data hooks never called while closed, and the gallery-import ephemeral row's five-state copy priority (ready beats fair-use beats Wi-Fi beats error beats generic "still looking"), its placement above both the list and the empty state, and its own deferred-navigation order, plus `film_ready` rows (titled copy, film cover, `onOpenFilm` after close, close-only without the prop, films-list invalidation) |
 | `src/screen-tests/timeline.integration.test.tsx` | No header glyph/drawer; the photo invite renders at 0 and exactly 1 memories, never at 2+; the bell dot lights from an unseen ready gallery-import batch and clears on sheet-open; the `galleryImport` prop passed to `FamilyActivitySheet` (and its `onOpen` routing to review vs. progress) is omitted with no checkpoint or a terminal run |
 
 ### E2E (Maestro)
@@ -390,4 +406,5 @@ maestro test .maestro/flows/engagement/family-activity.yaml
 |------|--------|
 | 2026-08-21 | Initial implementation: bell + unread dot, bottom sheet with sectioned/grouped feed, RPC-backed service and hooks, client-side grouping and copy rules. |
 | 2026-08-23 | Continuous gallery-import sweep re-entry (docs/plans/gallery-import-continuous.md I4a): the bell's dot also lights for an unseen ready batch, and the sheet gains a non-persisted, non-grouped pinned row above the sections/empty state pointing at the review deck or progress screen. Not a new event kind — see Extension guide. |
-| 2026-09-30 | Year Film P2 backend: actor-less `film_ready` kind (`actor_id` nullable + `film_id`), `get_family_activity_v2` / `get_family_activity_unread_v2`, v1 RPCs exclude `film_ready`; `year_film_notifications_due` writes the event with the push. Client wiring (Step 8 of docs/plans/year-film-p2.md) lands separately. |
+| 2026-09-30 | Year Film P2 backend: actor-less `film_ready` kind (`actor_id` nullable + `film_id`), `get_family_activity_v2` / `get_family_activity_unread_v2`, v1 RPCs exclude `film_ready`; `year_film_notifications_due` writes the event with the push. Client wiring is the next entry. |
+| 2026-09-30 | Year Film P2 client (Step 8): service calls the v2 RPCs; `FamilyActivityKind` + `film_ready`, nullable `actorId`, `film*` fields; "{title} is ready" copy; `FilmCover` thumbnail row; sheet `onOpenFilm` prop (wired by the timeline host); the bell's unread boolean now comes from `get_family_activity_unread_v2`. |

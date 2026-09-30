@@ -1,4 +1,4 @@
-import { router, useNavigation } from 'expo-router';
+import { router, useFocusEffect, useNavigation } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -26,6 +26,7 @@ import { MemoryCard } from '@/components/memory-card';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { CalendarMonthPickerSheet } from '@/components/calendar-month-picker-sheet';
 import { FamilyActivitySheet } from '@/components/family-activity-sheet';
+import { FilmCard } from '@/components/year-films/film-card';
 import { MemoryFab } from '@/components/memory-fab';
 import { PendingMemoryUploadsBanner } from '@/components/pending-memory-uploads-banner';
 import { LookingBackPackageRail } from '@/components/looking-back/package-rail';
@@ -40,13 +41,15 @@ import { TimelineSearchButton } from '@/components/timeline-search-button';
 import { useCalendarMemoriesInRange } from '@/hooks/useCalendarMemories';
 import { useFamilyActivityUnread } from '@/hooks/useFamilyActivity';
 import { useMemories } from '@/hooks/useMemories';
+import { useFamilyYearFilms, useYearFilmViews } from '@/hooks/useYearFilms';
 import { useMemoryMonthCounts } from '@/hooks/useMemoryMonthCounts';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useGalleryImportEntryStatus } from '@/hooks/useGalleryImport';
 import { useLookingBackPackages } from '@/hooks/useLookingBackPackages';
 import { useLookingBackSession } from '@/hooks/useLookingBackSession';
 import type { MemoryWithTags } from '@/services/memories';
-import { useOnboardingStatus } from '@/hooks/useFamilyMembers';
+import type { YearFilm } from '@/services/year-films';
+import { useFamilyMembers, useOnboardingStatus } from '@/hooks/useFamilyMembers';
 import {
   addFamilyMemberRoute,
   memoryDetailCommentsRoute,
@@ -56,6 +59,7 @@ import {
   sharingApprovalsRoute,
   sharingInviteRoute,
   sharingMembersRoute,
+  yearFilmRoute,
 } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
@@ -77,6 +81,7 @@ import {
   type GridMonth,
 } from '@/utils/calendar-grid';
 import { toIsoDate } from '@/utils/dates';
+import { interleaveFilms, isNewFilm } from '@/utils/year-films';
 import { loadTimelineView, saveTimelineView, type TimelineView } from '@/utils/timeline-view-preference';
 import {
   formatTimelineMonthLabel,
@@ -98,7 +103,10 @@ const timelineViewabilityConfig: ViewabilityConfig = { viewAreaCoveragePercentTh
 type ControlsRow = { kind: 'controls' };
 type MemoryRow = { kind: 'memory'; memory: MemoryWithTags };
 type MonthRow = { kind: 'month'; month: GridMonth; monthIndex: number };
-type TimelineRow = ControlsRow | MemoryRow | MonthRow;
+// A Year Film card, placed by interleaveFilms among the loaded memories
+// (docs/plans/year-film-p2.md Step 5). An ordinary row: no special slot.
+type FilmRow = { kind: 'film'; film: YearFilm };
+type TimelineRow = ControlsRow | MemoryRow | MonthRow | FilmRow;
 const CONTROL_ROW: ControlsRow = { kind: 'controls' };
 // An anchored list starts loading newer pages this many screens before the
 // top, so a quick scroll up doesn't hit the (not-yet-loaded) top first.
@@ -113,14 +121,20 @@ const NEWER_HEADER_HEIGHT = 48;
 // under the pinned row as visible, which made the label flicker between
 // neighbouring months.
 type CellLayout = { y: number; height: number; date: string };
+const filmRowKey = (filmId: string) => `film:${filmId}`;
 type CellLayoutReporter = (id: string, layout: CellLayout | null) => void;
 const CellLayoutContext = createContext<CellLayoutReporter | null>(null);
 
 function MeasuredCell({ children, item, onLayout, style }: CellRendererProps<TimelineRow>) {
   const report = useContext(CellLayoutContext);
-  const memory = item.kind === 'memory' ? item.memory : null;
-  const id = memory?.id ?? null;
-  const date = memory?.memory_date ?? null;
+  // Memories report by id; a film reports by its film row key, dated at its
+  // placement, so the month label and the jump alignment can read it too.
+  const id = item.kind === 'memory' ? item.memory.id : item.kind === 'film' ? filmRowKey(item.film.id) : null;
+  const date = item.kind === 'memory'
+    ? item.memory.memory_date
+    : item.kind === 'film'
+      ? item.film.placement_date
+      : null;
   useEffect(() => () => {
     if (id) report?.(id, null);
   }, [id, report]);
@@ -139,6 +153,16 @@ function MeasuredCell({ children, item, onLayout, style }: CellRendererProps<Tim
       {children}
     </View>
   );
+}
+
+// The row a jump lands under the control row: the first one (film or memory)
+// dated on or before the anchor. Returns its MeasuredCell key.
+function findAlignTargetKey(rows: readonly TimelineRow[], anchorDate: string): string | null {
+  for (const row of rows) {
+    if (row.kind === 'film' && row.film.placement_date <= anchorDate) return filmRowKey(row.film.id);
+    if (row.kind === 'memory' && row.memory.memory_date <= anchorDate) return row.memory.id;
+  }
+  return null;
 }
 
 // An anchored (jumped-to-a-date) Timeline returns to today's feed once the
@@ -331,6 +355,11 @@ export default function TimelineScreen() {
   const handleActivityOpenComments = useCallback((memoryId: string) => {
     router.push(memoryDetailCommentsRoute(memoryId));
   }, []);
+  // The sheet closes itself first (runAfterClose) and refreshes the films
+  // list when it holds film rows, so the host only routes.
+  const handleActivityOpenFilm = useCallback((filmId: string) => {
+    router.push(yearFilmRoute(filmId, 'drawer'));
+  }, []);
   const handleActivityOpenApprovals = useCallback(() => {
     router.push(sharingApprovalsRoute);
   }, []);
@@ -406,6 +435,7 @@ export default function TimelineScreen() {
     isError,
     refetch,
     fetchNextPage,
+    hasNextPage,
     isFetchingNextPage,
     fetchPreviousPage,
     hasPreviousPage,
@@ -420,6 +450,28 @@ export default function TimelineScreen() {
     [isUserBlocked, memories],
   );
   const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+
+  // ── Year Films (docs/plans/year-film-p2.md Step 5) ──────────────────────
+  // Small list, fetched at mount (so an anchored jump never races a late
+  // insert), refreshed on foreground / pull-to-refresh, and on every tab
+  // focus (tab screens never unmount). `cancelRefetch: false` joins the
+  // mount fetch instead of restarting it.
+  const {
+    films,
+    isFetched: filmsFetched,
+    refetch: refetchFilms,
+  } = useFamilyYearFilms(familyId);
+  const { viewedIds, isLoading: isFilmViewsLoading } = useYearFilmViews();
+  const { members } = useFamilyMembers();
+  useFocusEffect(
+    useCallback(() => {
+      void refetchFilms({ cancelRefetch: false });
+    }, [refetchFilms]),
+  );
+  // An anchored list waits for the first films settle before it renders: a
+  // film inserted above the aligned memory after the fact would be held
+  // off-screen by maintainVisibleContentPosition. (An error settles it too.)
+  const areFilmsSettled = !familyId || filmsFetched;
 
   // ── List / Calendar view (docs/plans/timeline-calendar-keepsakes.md B1) ──
   // Both views are one FlatList: [sticky control row, ...memories | ...months]
@@ -466,6 +518,8 @@ export default function TimelineScreen() {
   );
   const { data: gridMemories = [], refetch: refetchGridMemories } = useCalendarMemoriesInRange(gridFetchRange);
   const gridSummaries = useMemo(() => summarizeGridDays(gridMemories, isUserBlocked), [gridMemories, isUserBlocked]);
+  // Days with a Year Film get a dot in the grid (and are tappable when empty).
+  const filmDates = useMemo(() => new Set(films.map((film) => film.placement_date)), [films]);
 
   // ── Top content height ───────────────────────────────────────────────────
   // Measured (not estimated): Calendar view's getItemLayout offsets start
@@ -773,6 +827,9 @@ export default function TimelineScreen() {
   const handleOpenComments = useCallback((memoryId: string) => {
     router.push(memoryDetailCommentsRoute(memoryId));
   }, []);
+  const handleFilmPress = useCallback((filmId: string) => {
+    router.push(yearFilmRoute(filmId, 'timeline'));
+  }, []);
   const handleOpenLookingBackPackage = useCallback((packageId: string, sourceGeometry: { x: number; y: number; width: number; height: number; windowWidth: number; windowHeight: number } | null) => {
     const item = lookingBack.packages.find((candidate) => candidate.id === packageId);
     if (!item) return;
@@ -792,14 +849,21 @@ export default function TimelineScreen() {
 
   // ── Rows ─────────────────────────────────────────────────────────────────
   const rows = useMemo<TimelineRow[]>(() => {
+    // Films are merged by date, and only where their position is provable
+    // from the loaded window (hasPreviousPage = newer pages above the window,
+    // hasNextPage = older pages below it).
     const content: TimelineRow[] = view === 'calendar'
       ? gridMonths.map((month, monthIndex) => ({ kind: 'month', month, monthIndex }))
-      : visibleMemories.map((memory) => ({ kind: 'memory', memory }));
+      : interleaveFilms(visibleMemories, films, {
+        hasNewer: Boolean(hasPreviousPage),
+        hasOlder: Boolean(hasNextPage),
+        anchorDate,
+      });
     // No "loading newer" row: newer pages land above the viewport, and an
     // extra row at index 1 would become maintainVisibleContentPosition's
     // anchor and then vanish.
     return [CONTROL_ROW, ...content];
-  }, [gridMonths, view, visibleMemories]);
+  }, [anchorDate, films, gridMonths, hasNextPage, hasPreviousPage, view, visibleMemories]);
 
   // Calendar view only: every row's height is known (control row, months),
   // offset by the measured top content.
@@ -822,6 +886,8 @@ export default function TimelineScreen() {
     switch (row.kind) {
       case 'memory':
         return row.memory.id;
+      case 'film':
+        return filmRowKey(row.film.id);
       case 'month':
         return `month-${row.month.key}`;
       default:
@@ -839,11 +905,24 @@ export default function TimelineScreen() {
         return (
           <CalendarGridMonth
             isTargetReported={contentSafety.isTargetReported}
+            filmDates={filmDates}
             month={item.month}
             onDayPress={handleGridDayPress}
             summaries={gridSummaries}
             tileSize={tileSize}
           />
+        );
+      }
+      if (item.kind === 'film') {
+        return (
+          <View style={styles.cardItem}>
+            <FilmCard
+              film={item.film}
+              isNew={!isFilmViewsLoading && isNewFilm(item.film, viewedIds, new Date())}
+              members={members}
+              onPress={handleFilmPress}
+            />
+          </View>
         );
       }
       const memory = item.memory;
@@ -881,7 +960,10 @@ export default function TimelineScreen() {
         </View>
       );
     },
-    [activeVideoId, contentSafety, controlRowHeight, gridSummaries, handleCardPress, handleGridDayPress, handleOpenComments, tileSize],
+    [
+      activeVideoId, contentSafety, controlRowHeight, filmDates, gridSummaries, handleCardPress, handleFilmPress,
+      handleGridDayPress, handleOpenComments, isFilmViewsLoading, members, tileSize, viewedIds,
+    ],
   );
 
   // Top content above the control row. Scrolls away; hidden while anchored.
@@ -941,8 +1023,9 @@ export default function TimelineScreen() {
       view === 'calendar' ? Promise.all([refetchGridMemories(), monthCounts.refresh()]) : refetch(),
       lookingBack.refetch(),
       refetchActivityUnread(),
+      refetchFilms(),
     ]);
-  }, [lookingBack, monthCounts, refetch, refetchActivityUnread, refetchGridMemories, view]);
+  }, [lookingBack, monthCounts, refetch, refetchActivityUnread, refetchFilms, refetchGridMemories, view]);
 
   const listFooter = view === 'list' && isFetchingNextPage ? (
     <View style={styles.listFooterLoading}>
@@ -985,21 +1068,23 @@ export default function TimelineScreen() {
   // (and the label reading that month). Aligning to the card itself is exact
   // whether that prepend lands before or after, and scrolls the strip out of
   // view until the user scrolls up to the not-yet-loaded top.
+  //
+  // The target is read from the merged rows: with Year Films, the first row --
+  // film or memory -- dated on or before the anchor (a month's recap caps its
+  // last day, so it is the row a month jump must land on).
   const alignTargetId = useMemo(
-    () => (view === 'list' && anchorDate
-      ? visibleMemories.find((memory) => memory.memory_date <= anchorDate)?.id ?? null
-      : null),
-    [anchorDate, view, visibleMemories],
+    () => (view === 'list' && anchorDate ? findAlignTargetKey(rows, anchorDate) : null),
+    [anchorDate, rows, view],
   );
   const alignedJumpRef = useRef<string | null>(null);
   useEffect(() => {
     const jump = `${listKey}#${realignNonce}`;
-    if (!alignTargetId || alignedJumpRef.current === jump) return;
+    if (!alignTargetId || !areFilmsSettled || alignedJumpRef.current === jump) return;
     alignedJumpRef.current = jump;
     pendingAlignIdRef.current = alignTargetId;
     const known = cellLayoutsRef.current.get(alignTargetId);
     if (known) alignToAnchorCell(known.y);
-  }, [alignTargetId, alignToAnchorCell, listKey, realignNonce]);
+  }, [alignTargetId, alignToAnchorCell, areFilmsSettled, listKey, realignNonce]);
 
   if (isOnboardingLoading || contentSafety.isLoading) {
     return (
@@ -1071,7 +1156,7 @@ export default function TimelineScreen() {
     // The screen owns the top inset, so the sticky control row pins below the
     // status bar and the title scrolls under a solid strip.
     <SafeAreaView edges={['top']} style={styles.container} testID="timeline-screen">
-      {view === 'list' && isLoading ? (
+      {view === 'list' && (isLoading || (isAnchored && !areFilmsSettled)) ? (
         <>
           <TimelineTitleWithStreak {...titleProps} memories={memories} showStreak={!isAnchored} />
           <View style={styles.centeredInline}>
@@ -1219,6 +1304,7 @@ export default function TimelineScreen() {
         onInvite={handleActivityInvite}
         onOpenApprovals={handleActivityOpenApprovals}
         onOpenComments={handleActivityOpenComments}
+        onOpenFilm={handleActivityOpenFilm}
         onOpenMemory={handleActivityOpenMemory}
         visible={isActivitySheetVisible}
       />

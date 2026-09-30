@@ -14,6 +14,7 @@ import {
 import { startConnectivityMonitoring } from '@/lib/connectivity';
 import { PersistedQueryProvider } from '@/lib/query-persistence';
 import { sweepAudioRecordingsDirectory } from '@/utils/audio-clip-custody';
+import { sweepFilmShareCache } from '@/utils/film-share';
 import { momoraWidgetAdapter } from '@/widgets';
 
 export function AppProviders({ children }: { children: ReactNode }) {
@@ -42,6 +43,13 @@ export function AppProviders({ children }: { children: ReactNode }) {
   // same lifecycle slot as the effects above; never blocks first paint.
   useEffect(() => {
     void sweepAudioRecordingsDirectory();
+  }, []);
+
+  // Same slot: Year Film share downloads live in cache/film-share/ and are
+  // deleted by the player on every exit path; this covers a kill mid-share
+  // (docs/plans/year-film-p2.md Step 6.7).
+  useEffect(() => {
+    void sweepFilmShareCache();
   }, []);
 
   // Native widget support is optional on older binaries and Expo Go. Register

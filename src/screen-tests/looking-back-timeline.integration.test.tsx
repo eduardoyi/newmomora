@@ -15,7 +15,24 @@ const mockIsTargetReported = jest.fn(() => false);
 jest.mock('expo-router', () => ({
   router: { push: jest.fn() },
   useNavigation: () => ({ addListener: () => () => undefined, isFocused: () => true }),
+  useFocusEffect: (callback: () => void) => {
+    const { useEffect } = jest.requireActual('react') as typeof import('react');
+    useEffect(callback, [callback]);
+  },
 }));
+// Year Films (docs/plans/year-film-p2.md Step 5): none in this suite -- the
+// film placement/cards are covered by timeline-month-jump.integration.test.tsx.
+jest.mock('@/hooks/useYearFilms', () => {
+  const films: unknown[] = [];
+  const viewedIds = new Set<string>();
+  const refetch = jest.fn();
+  return {
+    useFamilyYearFilms: () => ({ films, isFetched: true, refetch }),
+    useYearFilmViews: () => ({ viewedIds, isLoading: false }),
+    useYearFilmPosters: () => ({}),
+    invalidateYearFilmPoster: jest.fn(),
+  };
+});
 // Month-picker counts (docs/plans/timeline-calendar-keepsakes.md A4) -- its
 // service imports the real @/lib/supabase client. Picker behavior is covered
 // by timeline-month-jump.integration.test.tsx.
@@ -76,6 +93,10 @@ jest.mock('@/components/looking-back/package-rail', () => {
 
 // eslint-disable-next-line import/first
 import TimelineScreen from '../../app/(app)/(tabs)/timeline';
+
+// requestAnimationFrame is a 0ms timer under jest: let the ones the Timeline
+// queued on its last render/layout fire before the environment is torn down.
+afterAll(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mockRouter = require('expo-router').router as { push: jest.Mock };
