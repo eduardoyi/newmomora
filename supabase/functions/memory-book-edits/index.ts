@@ -722,6 +722,15 @@ function addDaysToDateOnly(dateStr: string, days: number): string {
   return `${pad(dt.getUTCFullYear(), 4)}-${pad(dt.getUTCMonth() + 1, 2)}-${pad(dt.getUTCDate(), 2)}`;
 }
 
+/** Thrown by `resolveScopeWindow` when an `everything` min/max lookup fails
+ * (DB/PostgREST error); `handlePickerPool` maps it to a 500 `internal_error`. */
+export class ScopeWindowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ScopeWindowError';
+  }
+}
+
 /** Same scope-window resolution as
  * `workflow-memory-book-bridge/index.ts`'s `handleLoadGenerationContext`
  * (frozen `scope_start_date`/`scope_end_date` for every kind but
@@ -733,7 +742,7 @@ export async function resolveScopeWindow(
   book: Pick<BookRow, 'family_id' | 'scope_kind' | 'scope_start_date' | 'scope_end_date'>,
 ): Promise<{ start: string; endExclusive: string }> {
   if (book.scope_kind === 'everything') {
-    const [{ data: earliest }, { data: latest }] = await Promise.all([
+    const [earliestResult, latestResult] = await Promise.all([
       supabase
         .from('memories')
         .select('memory_date')
@@ -749,6 +758,13 @@ export async function resolveScopeWindow(
         .limit(1)
         .maybeSingle(),
     ]);
+    // An error here must NOT collapse into the empty-window sentinel (which
+    // would read as "family has no memories" -> an empty picker pool).
+    if (earliestResult.error || latestResult.error) {
+      throw new ScopeWindowError(earliestResult.error?.message ?? latestResult.error?.message ?? 'unknown');
+    }
+    const earliest = earliestResult.data;
+    const latest = latestResult.data;
     return {
       start: earliest?.memory_date ?? EMPTY_WINDOW_SENTINEL,
       endExclusive: latest?.memory_date ? addDaysToDateOnly(latest.memory_date, 1) : EMPTY_WINDOW_SENTINEL,
@@ -934,47 +950,49 @@ async function handlePickerPool(
     memberId = memberIdInput;
   }
 
-  const scopeWindow = await resolveScopeWindow(supabase, book);
+  let scopeWindow: { start: string; endExclusive: string };
+  try {
+    scopeWindow = await resolveScopeWindow(supabase, book);
+  } catch (err) {
+    if (!(err instanceof ScopeWindowError)) throw err;
+    console.error('memory-book-edits picker_pool scope window lookup failed', err.message);
+    return errorResponse('Failed to load photo pool', 500, 'internal_error');
+  }
   const window = intersectDateWindow(scopeWindow, dateStart, dateEnd);
 
   // Item 1: the person filter goes through `memory_family_members` (the
-  // memory<->family_member tag join, migration 20260524201500) -- resolve
-  // the tagged memory ids FIRST, then narrow the media query by them. A
-  // member tagged on zero memories short-circuits to an empty, exhausted
-  // page rather than sending an empty `.in()` filter through to
-  // PostgREST (some versions treat `in.()` as "no filter" rather than
-  // "match nothing" -- not worth relying on either way).
-  let memberMemoryIds: string[] | null = null;
-  if (memberId) {
-    const { data: tagRows, error: tagError } = await supabase
-      .from('memory_family_members')
-      .select('memory_id')
-      .eq('family_member_id', memberId);
-    if (tagError) {
-      console.error('memory-book-edits picker_pool member-tag lookup failed', tagError.message);
-      return errorResponse('Failed to load photo pool', 500, 'internal_error');
-    }
-    memberMemoryIds = ((tagRows ?? []) as { memory_id: string }[]).map((row) => row.memory_id);
-    if (memberMemoryIds.length === 0) {
-      return jsonResponse({ items: [], nextCursor: null } satisfies PickerPoolResponse);
-    }
-  }
+  // memory<->family_member tag join, migration 20260524201500). It is a
+  // NESTED INNER EMBED filtered on `family_member_id`, so Postgres does the
+  // membership join itself. (The previous design resolved the member's
+  // tagged memory ids across ALL time with an unpaged lookup -- capped at
+  // PostgREST's max_rows=1000 -- and passed them to `.in('memory_id', ...)`,
+  // which silently breaks once the id list outgrows the gateway URL limit
+  // for a child with hundreds of tagged memories.) `memory_media` has one FK
+  // to `memories` and `memory_family_members` has one FK to `memories`
+  // (PK `(memory_id, family_member_id)` => at most one matching tag row per
+  // memory, so no duplicated media rows), so neither embed is ambiguous
+  // (no PGRST201). A member tagged on zero memories simply yields zero rows
+  // -> `{ items: [], nextCursor: null }`, so the former early-return (an
+  // extra query) is no longer needed.
+  const memoriesEmbed = memberId
+    ? 'memories!inner(memory_date, family_id, memory_family_members!inner(family_member_id))'
+    : 'memories!inner(memory_date, family_id)';
 
-  // `.in()` (a FILTER) must be chained before `.order()`/`.range()`
-  // (TRANSFORMS) -- supabase-js's builder narrows to a type without filter
-  // methods once a transform is applied, so this can't be tacked on after
-  // the fact the way it's applied conditionally here.
+  // Filters (`.eq`/`.gte`/`.lt`/`.like`) must be chained before
+  // `.order()`/`.range()` (TRANSFORMS) -- supabase-js's builder narrows to a
+  // type without filter methods once a transform is applied, so this can't
+  // be tacked on after the fact the way it's applied conditionally here.
   let filterQuery = supabase
     .from('memory_media')
     .select(
-      'id, memory_id, preview_object_key, object_key, aspect_ratio, content_type, memories!inner(memory_date, family_id)',
+      `id, memory_id, preview_object_key, object_key, aspect_ratio, content_type, ${memoriesEmbed}`,
     )
     .eq('memories.family_id', book.family_id)
     .gte('memories.memory_date', window.start)
     .lt('memories.memory_date', window.endExclusive)
     .like('content_type', 'image/%');
-  if (memberMemoryIds) {
-    filterQuery = filterQuery.in('memory_id', memberMemoryIds);
+  if (memberId) {
+    filterQuery = filterQuery.eq('memories.memory_family_members.family_member_id', memberId);
   }
   const { data: rows, error } = await filterQuery
     // Chronological pool (owner-reported live, 2026-09-09): ordering by an

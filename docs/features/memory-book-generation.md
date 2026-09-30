@@ -15,7 +15,7 @@ DEPLOYED at shop.usemomora.com. Checkout (5c) is shipped, deployed, and
 canary-proven end to end (see docs/features/memory-book-orders.md). Check
 [plans/memory-book-5b-web-preview.md](../../plans/memory-book-5b-web-preview.md)
 and the relevant source directly for anything this summary doesn't cover.
-**Last updated:** 2026-09-17
+**Last updated:** 2026-10-01
 **PRD reference:** none yet (Memory Book is a new premium product, not in the
 original PRD) — canonical product doc is
 [docs/plans/memory-book.md](../plans/memory-book.md), specifically
@@ -195,7 +195,7 @@ Shipped (part C):
 | Function | Role |
 |---|---|
 | `generate-memory-book` | Dispatcher, `verify_jwt = true`. JWT + owner/manager role check, `ready`/fresh-`generating` short-circuits, service-role CAS claim to `generating` with a fresh attempt UUID, HMAC dispatch of `{ bookId, attemptId }` to the Worker's `/dispatch`. |
-| `workflow-memory-book-bridge` | Signed HMAC bridge, `verify_jwt = false`, Worker-only. Operations: `load_generation_context`, `ensure_share_tokens`, `publish`, `fail`, `reconcile`. |
+| `workflow-memory-book-bridge` | Signed HMAC bridge, `verify_jwt = false`, Worker-only. Operations: `load_generation_context`, `ensure_share_tokens`, `publish`, `fail`, `reconcile`. `load_generation_context` pages and id-chunks every read and reconciles row counts — see [Generation context integrity](#generation-context-integrity-phase-0). |
 | `cloudflare/memory-book-worker` (`MemoryBookWorkflow`) | Own Wrangler deployment (own `wrangler.jsonc`/`package.json`, Node 22), sibling to `memory-illustration-worker`. Curates the outline (ported from `supabase/scripts/eval-memory-book-outline.ts`'s pure functions + the shared `_shared/memory-book-outline.ts` builders/parser), runs the shared cover-verify vision pass against R2 preview thumbnails, assembles `book_document` via `_shared/memory-book-manifest.ts`'s builders, and publishes through the bridge's CAS. |
 | `memory-book-edits` | V5b v1 edit surface, `verify_jwt = true`. Ops `save_edit`/`picker_pool` — see [Edit surface (v1)](#edit-surface-v1). |
 
@@ -206,6 +206,79 @@ this task's scope excluded schema changes) are in
 [TECH_SPEC §4.22](../TECH_SPEC.md#422-memory-book-generation-v5a-part-c).
 See [docs/durable-ai-generation-workflows.md](../durable-ai-generation-workflows.md)
 for the general pattern this follows.
+
+### Generation context integrity (Phase 0)
+
+Added 2026-10-01 after the first `everything` book printed with no photos,
+tags, milestones or engagement (plan:
+[docs/plans/memory-book-everything-fixes.md](../plans/memory-book-everything-fixes.md)).
+Root cause: `load_generation_context` passed every in-window memory id to five
+PostgREST GETs via `.in('memory_id', ids)`; ~776 uuids exceed the gateway's
+URL limit, and the unchecked errors were swallowed as `[]`. Not
+`everything`-specific — any window of roughly 400+ memories was exposed. The
+contract now:
+
+- **Paging + chunking** via `supabase/functions/_shared/paged-query.ts`
+  (`fetchAll`: 1000-row pages, optional dedupe key; `byMemoryIds`: id chunks
+  with per-chunk paging, chunk size a required parameter). The film bridge
+  uses the same helpers at 200 ids per chunk; the Memory Book bridge uses
+  **150**. Helpers THROW on any page error (`PagedQueryError`, code only, no
+  row content) — never `?? []`. Chunks run sequentially, no fan-out.
+- **Stable sort keys** (offset paging needs them): `memories`
+  `memory_date, id`; `memory_media` `id`; `memory_family_members`
+  `memory_id, family_member_id` (no `id` column); `memory_milestones` `id`
+  (dismissed rows excluded); `memory_likes` `memory_id, user_id` (composite
+  PK, no `id`); `memory_comments` `id`. Dedupe keys cover a row repeated
+  across a page boundary under concurrent inserts.
+- **Every query checks its error**: family, child, family members, portrait
+  versions, language-evidence sample, the `everything` earliest/latest window
+  queries (previously an error there became the empty-window sentinel and a
+  misleading `NO_ELIGIBLE_MEMORIES`), and all counts.
+- **Count reconciliation tripwire.** Before loading, head-only exact counts
+  (`{ count: 'exact', head: true }`, no id list) are taken for `memories`
+  (family + window) and for `memory_media` / `memory_family_members` /
+  `memory_milestones` through a `memories!inner(family_id)` embed filtered on
+  the same family + window (milestones also `status <> 'dismissed'`). Each of
+  those three tables has exactly ONE foreign key to `memories`, so the embed
+  is unambiguous (no PGRST201). After loading, the bridge fails only when
+  **loaded < expected-before** (inserts between count and load can only raise
+  the loaded side, so loaded > expected passes). On a shortfall it re-counts
+  and reloads **once**, then fails. This replaces the rejected "zero tags"
+  heuristic, which false-positives on families that don't tag (untagged
+  memories are first-class). Logs carry counts and step names only.
+- **Error classes** (the Worker retries every 5xx 3× in-call × 4 step
+  attempts, so deterministic failures must not be 5xx):
+
+  | Condition | Response | Worker behaviour |
+  |---|---|---|
+  | Real PostgREST/network error on any read or count | `500 context_load_failed` | retryable |
+  | `child_id` set but the child row is missing (would otherwise mean "every memory eligible") | `422 context_invalid` | non-retryable → `CONTEXT_LOAD_FAILED` |
+  | Count shortfall still present after the one in-bridge reload | `422 context_invalid` | non-retryable → `CONTEXT_LOAD_FAILED` |
+
+- **`ensure_share_tokens`** chunks and pages its existing-token read the same
+  way (150 ids, ordered by `token`), and dedupes input ids. The read →
+  insert-missing step is a loop of up to 3 passes: a unique violation
+  (`23505`, partial unique index `media_share_tokens_active_memory_key`)
+  means an active token appeared since the read (a concurrent or retried
+  call), which counts as success for those rows — the bulk insert is atomic
+  so nothing was written; the loop re-reads and mints only what is still
+  missing. Any other insert error, or a failed read, is a 500.
+- **Worker guards** (`cloudflare/memory-book-worker/src/workflow.ts`): the
+  load and publish steps' timeouts are 120 s (were 30 s). The load step
+  measures the context's UTF-8 size before returning (the runtime caps step
+  output around 1 MiB), logs only `memory_book_context_size`, and above
+  900 KB throws `NonRetryableError('CONTEXT_TOO_LARGE: <bytes>')` →
+  `CONTEXT_TOO_LARGE`. Every custom error class sets `this.name`, and
+  `errorCode(error, stage)` maps by `CODE:` message prefix first, then
+  `instanceof`/name, then a step timeout attributed by stage: load →
+  `CONTEXT_LOAD_FAILED`, outline + cover-verify → `OUTLINE_GENERATION_FAILED`,
+  dimensions → `DIMENSION_MEASUREMENT_FAILED`, publish →
+  `MANIFEST_BUILD_FAILED`. A publish-step timeout is an ambiguous publish
+  outcome, so the Worker reconciles before failing.
+
+**Extending:** any new Memory Book read keyed on an id list must go through
+`byMemoryIds` (or a nested `!inner` embed filter) with a stable sort key and
+an error check — never a bare `.in('memory_id', ids)`.
 
 ## In-app scope picker (5a.5)
 
@@ -531,9 +604,18 @@ the resolved scope window, never widening past it (a caller can't use these
 to see photos outside the book's own curation boundary). `memberId` (a
 `family_members.id` uuid) narrows the pool to memories tagged with that
 member via the `memory_family_members` join table (migration
-`20260524201500_initial_schema.sql`) — resolved as a separate lookup before
-the media query; a member tagged on zero memories short-circuits to an
-empty, exhausted page without querying `memory_media` at all. All three are
+`20260524201500_initial_schema.sql`) — as a nested inner embed on the media
+query itself: `memories!inner(memory_date, family_id,
+memory_family_members!inner(family_member_id))` plus
+`.eq('memories.memory_family_members.family_member_id', memberId)`. There is
+no member-tag pre-lookup and no `.in()` id list (the old pre-lookup was
+itself unpaged against `max_rows` and then fed `.in()`, which broke for a
+child tagged on hundreds of memories); the global order/offset-cursor
+semantics are unchanged. A member tagged on zero in-scope memories simply
+yields an empty page. `resolveScopeWindow` now throws the exported
+`ScopeWindowError` when an `everything` earliest/latest query errors, which
+`picker_pool` answers with a 500 `internal_error` instead of resolving an
+empty window. All three are
 optional and additive to the existing contract — an older client that never
 sends them gets the unfiltered behavior unchanged. The picker client
 (`PickerSheet.tsx`) resets its cursor and re-fetches from scratch whenever
@@ -729,6 +811,17 @@ deferred seam, not built by 5a.5.
   keys, and the caller-controlled edit VALUE is deliberately never logged
   either (it's the one field a caller fully controls; treat it like memory
   text for logging purposes even though it isn't stored in `memories`).
+- **`everything` is paused server-side.** `generate-memory-book` refuses any
+  scope in `PAUSED_SCOPE_KINDS` (currently `everything`) with 409
+  `SCOPE_PAUSED`, parking the row `failed`. The
+  `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` Edge Function secret
+  (comma-separated family ids, entries trimmed; unset/empty/malformed =
+  nobody) exempts listed families, so the owner can verify fixes on real data
+  while the app picker still offers the option. Remove the kind from the set
+  once the multi-year layout rules land (plan Phase 2).
+- **Never add an unbounded `.in('memory_id', ids)`** to a Memory Book path —
+  see [Generation context integrity](#generation-context-integrity-phase-0).
+  Deterministic data problems must be 4xx from the bridge, never 5xx.
 
 ## Dependencies
 
@@ -833,6 +926,26 @@ table's types added).
   `ensure_share_tokens` reuse-vs-mint, `load_generation_context`'s
   superseded/404/happy-path (including the `everything`-scope window
   resolution and the `scope_end_date` inclusive→exclusive conversion).
+  Phase 0 additions (the stub now supports `.range()` slicing, `.in()`
+  length recording, per-table error injection and head-count responses):
+  >1000 memories paged fully; every `.in()` ≤150 ids; each errored query →
+  500 `context_load_failed` (never an empty success, including the
+  language-evidence and `everything` window queries); count shortfall →
+  exactly one reload then 422 `context_invalid`; a shortfall the reload
+  resolves succeeds; loaded > expected passes; non-tagging families pass;
+  `age_year` book with a missing child → 422; the count-query select strings
+  (head-only, `memories!inner`); `ensure_share_tokens` chunking, duplicate
+  ids, and the `23505` conflict re-read loop.
+- `supabase/functions/_shared/paged-query.test.ts` — Deno: `fetchAll`
+  paging/exactly-full page/dedupe/error throw, `byMemoryIds` chunking,
+  sequencing, empty ids, bad chunk size. The film bridge's tests are
+  unchanged and cover its use of the helpers.
+- `memory-book-edits` tests: `picker_pool` person-filter embed shape (the
+  stub is filter-blind, so it asserts the query shape, not row filtering)
+  and `ScopeWindowError` → 500. `generate-memory-book` tests: allowlisted
+  family dispatches, others still 409, malformed value = nobody. Worker
+  tests: context size guard, `errorCode` mapping by name/prefix/timeout
+  stage, publish-timeout → reconcile.
 - `cloudflare/memory-book-worker/test/*.test.ts` — Vitest
   (`@cloudflare/vitest-pool-workers`): `crypto`, `eligibility`,
   `candidates`, `backbone`, `reading-order` (unit tests of the ported pure
@@ -902,6 +1015,7 @@ cd cloudflare/memory-book-web && npm test && npm run typecheck && npm run deploy
 
 | Date | Change |
 |------|--------|
+| 2026-10-01 | **Phase 0 — generation context integrity** (code-complete, not yet deployed; plan `docs/plans/memory-book-everything-fixes.md`). `workflow-memory-book-bridge` `load_generation_context` now pages the memories query and loads media/tags/milestones/likes/comments in sequential 150-id chunks via the new `_shared/paged-query.ts` (extracted from the film bridge, which keeps 200), with stable sort keys and deduping; every query's error is checked; head-only count reconciliation before loading (`memories!inner` embeds) with one reload on a shortfall; real query errors → 500 `context_load_failed` (retryable), null child / persistent shortfall → 422 `context_invalid` (non-retryable). `ensure_share_tokens` chunks its read and treats a `23505` active-token conflict as success via a re-read loop. `memory-book-edits` `picker_pool` person filter is a nested inner embed (no member-tag pre-lookup, no `.in()`); `resolveScopeWindow` errors → 500. Worker: load/publish step timeouts 30 s → 120 s, UTF-8 context size guard (> 900 KB → `CONTEXT_TOO_LARGE`), error classes set `name`, `errorCode` maps by `CODE:` prefix / name / stage-attributed step timeout, publish timeout → reconcile. `generate-memory-book`: `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` lets listed families bypass the `everything` pause. Live verification (plan 0.8) is pending. See [Generation context integrity](#generation-context-integrity-phase-0). |
 | 2026-09-17 | Picker redesign (owner-approved brief), app-side only: the original scope-status row list is replaced by a book-cover shelf. `app/(app)/family/[id]/memory-books.tsx` (full rewrite) renders a 2-column grid of `src/components/memory-books/book-cover-tile.tsx` tiles (ready/generating/failed, a real cover photo via the new `memory_books.cover_asset_key` column or a deterministic wash fallback) when any book exists, else a personalized empty state (a random real photo of the child via `fetchExampleCoverAssetKey`). A fixed "Create a book" CTA opens `create-book-sheet.tsx` (a short SUGGESTIONS list from the new pure `pickSuggestedScopes` helper, plus an expandable grouped list — calendar-year scopes are never suggested, only ever a deliberate pick); a failed tile opens `retry-book-sheet.tsx`; both flows show an in-screen toast (`book-toast.tsx`). `useMemoryBooks`/`memory-books.ts` extended (not rewritten) for the new column plus `exampleCoverAssetKey`; the underlying scope math, polling, dispatch-error surface, and role gating are unchanged. Also added: `PushRouteData`'s `'memory-book'` route in `src/hooks/useNotifications.ts`, deep-linking a book-ready/failed push to the shelf. See [In-app scope picker (5a.5)](#in-app-scope-picker-5a5) for the full contract and its deviations. |
 | 2026-09-15 | 5a.5 shipped: in-app scope picker, app-side only (no server/schema change). "Memory Books" row on the child profile screen (`app/(app)/family/[id]/index.tsx`, near the portrait timeline) opens `app/(app)/family/[id]/memory-books.tsx`, listing age-year/calendar-year/Everything scopes via `src/utils/memory-book-scope.ts` (a documented, byte-for-byte duplicate of the server's `addYears`/Julian-Day-Number date math — the Expo app cannot import Deno Edge Function modules). Thin scopes (< 30 eligible memories, one query per scope via `src/services/memory-books.ts#countEligibleMemoriesForScope`, approximating the Workflow's own tagged-or-untagged eligibility) show the locked "N memories in this period — books need about 30" copy instead of a Generate button. An existing `memory_books` row for a scope takes over its row (`src/hooks/useMemoryBooks.ts`): `queued`/`generating` → a ~3-minute progress state (polled every 4s while active), `ready` → "View your book" (`Linking.openURL` to `shop.usemomora.com/b/<id>` — the signed-link handoff stays a deferred seam), `failed` → the failure reason + Retry (inserts a fresh row, per the locked design). The one-active-per-scope `23505` conflict is handled by refetching, never an error wall. Viewers (non-owner/manager) see only scopes with an existing book, never the generation affordance. See [In-app scope picker (5a.5)](#in-app-scope-picker-5a5) for the full contract, its documented deviations (calendar-year ordering/no-DOB fallback, the `isPrintable` eligibility divergence, and staying English-only since the app has no i18n system yet), and its test list. `docs/plans/memory-book.md` §5a.5 marked shipped. |
 | 2026-09-09 | Owner-approved editing-UX round (4 items, all client + `memory-book-edits` `picker_pool` only): (1) picker dates under each thumbnail + a date-range filter (`dateStart`/`dateEnd`, always intersected with the scope window, never widened past it) + a person filter (`memberId`, via `memory_family_members`) — fetched client-side against `family_members` for the roster, no new response field; (2) `PickerSheet`'s "Load more" button gains an `IntersectionObserver` sentinel as the primary infinite-scroll trigger, one `fetchLockRef` guarding every caller against a double-fire; (3) duplicate-photo badges (`book/duplicateAssets.ts`) on every slot whose rendered asset file occupies 2+ photo slots across the book, clicking one cycles to the next other occurrence; (4) after an image edit saves, the viewer auto-navigates to the slot's (possibly new) page and, if it lost the `full-bleed`/`panorama-spread` treatment on refit (`book/reflowNotice.ts`'s `computeReflowResult`), the Saved/Undo toast grows one extra sentence rather than stacking a second toast. `docs/TECH_SPEC.md` intentionally NOT touched in this change (it already carried unrelated in-progress edits at the time). |

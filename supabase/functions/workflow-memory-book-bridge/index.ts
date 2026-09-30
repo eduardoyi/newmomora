@@ -14,7 +14,9 @@
  * enforces) plus the fact that every mutating operation here is ALREADY a
  * database compare-and-set keyed on `generation_attempt_id`
  * (`publish`/`fail`) or naturally idempotent (`ensure_share_tokens`'
- * select-then-insert-if-absent) -- a replayed request within the window can
+ * read-then-insert-if-absent, where a `23505` unique-active-token conflict
+ * from a concurrent/retried call is treated as success by re-reading and
+ * minting only what is still missing) -- a replayed request within the window can
  * only ever repeat a no-op, never double-publish or double-fail. A replayed
  * `load_generation_context` is a pure read. This is a real, intentional
  * trade against the playbook's stated nonce-ledger pattern; a future change
@@ -24,6 +26,7 @@
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { pickCoverAssetKey } from '../_shared/memory-book-cover.ts';
+import { byMemoryIds, fetchAll, PagedQueryError } from '../_shared/paged-query.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
 
@@ -35,6 +38,33 @@ const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
 const WINDOW_CAPTION_SPARSE_THRESHOLD = 5;
 const LANGUAGE_EVIDENCE_SAMPLE_LIMIT = 40;
 const LANGUAGE_EVIDENCE_EXCERPT_MAX_CHARS = 80;
+// Ids per `.in('memory_id', ...)` call. 36 chars/uuid => ~5.5 KB of query
+// string at 150; the year-film bridge proves 200 works in production, this
+// keeps margin for the longer select lists here.
+const MEMORY_ID_CHUNK_SIZE = 150;
+
+type Supabase = ReturnType<typeof createServiceClient>;
+
+/** A real query/network failure: retryable (HTTP 500 `context_load_failed`). */
+class ContextLoadError extends Error {
+  constructor(readonly step: string) {
+    super(`context_load_failed:${step}`);
+    this.name = 'ContextLoadError';
+  }
+}
+
+/**
+ * The data itself is deterministically unusable (null child on a child-scoped
+ * book, or loaded rows still short of the pre-load counts after one reload):
+ * NOT retryable, so HTTP 422 `context_invalid` -- a 5xx would make the worker
+ * retry the same outcome 3x in-call x 4 step attempts.
+ */
+class ContextInvalidError extends Error {
+  constructor(readonly reason: string) {
+    super(`context_invalid:${reason}`);
+    this.name = 'ContextInvalidError';
+  }
+}
 
 function hex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -130,29 +160,193 @@ function addDaysToDateOnly(dateStr: string, days: number): string {
   return `${pad(dt.getUTCFullYear(), 4)}-${pad(dt.getUTCMonth() + 1, 2)}-${pad(dt.getUTCDate(), 2)}`;
 }
 
-async function handleLoadGenerationContext(
-  supabase: ReturnType<typeof createServiceClient>,
-  bookId: string,
-  attemptId: string,
-): Promise<Response> {
-  const active = await loadActiveBook(supabase, bookId, attemptId);
-  if ('error' in active) return active.error;
-  const book = active.row;
+interface WindowRows {
+  memories: Array<{ id: string; content: string | null } & Record<string, unknown>>;
+  media: unknown[];
+  tags: unknown[];
+  milestones: unknown[];
+  likeRows: Array<{ memory_id: string }>;
+  commentRows: Array<{ memory_id: string }>;
+}
 
-  const { data: family } = await supabase
+interface WindowCounts {
+  memories: number;
+  media: number;
+  tags: number;
+  milestones: number;
+}
+
+/**
+ * Head-only exact counts that do NOT depend on an id list, so they can
+ * cross-check what the id-chunked loads return. Child tables go through a
+ * `memories!inner(...)` embed filtered on the parent's family + window.
+ * Unambiguous: memory_media, memory_family_members and memory_milestones
+ * each have exactly ONE foreign key to `memories` (memory_milestones' is the
+ * composite (memory_id, family_id) FK), so PostgREST never raises PGRST201.
+ * `memory_family_members` has no `id` column, hence `memory_id` is selected.
+ */
+async function countWindowRows(
+  supabase: Supabase,
+  familyId: string,
+  windowStart: string,
+  windowEndExclusive: string,
+): Promise<WindowCounts> {
+  const head = { count: 'exact' as const, head: true as const };
+  const check = (step: string, result: { count: number | null; error: unknown }): number => {
+    if (result.error || typeof result.count !== 'number') throw new ContextLoadError(step);
+    return result.count;
+  };
+  const memories = check('count_memories', await supabase
+    .from('memories')
+    .select('id', head)
+    .eq('family_id', familyId)
+    .gte('memory_date', windowStart)
+    .lt('memory_date', windowEndExclusive));
+  const media = check('count_media', await supabase
+    .from('memory_media')
+    .select('memory_id, memories!inner(family_id)', head)
+    .eq('memories.family_id', familyId)
+    .gte('memories.memory_date', windowStart)
+    .lt('memories.memory_date', windowEndExclusive));
+  const tags = check('count_tags', await supabase
+    .from('memory_family_members')
+    .select('memory_id, memories!inner(family_id)', head)
+    .eq('memories.family_id', familyId)
+    .gte('memories.memory_date', windowStart)
+    .lt('memories.memory_date', windowEndExclusive));
+  const milestones = check('count_milestones', await supabase
+    .from('memory_milestones')
+    .select('memory_id, memories!inner(family_id)', head)
+    .neq('status', 'dismissed')
+    .eq('memories.family_id', familyId)
+    .gte('memories.memory_date', windowStart)
+    .lt('memories.memory_date', windowEndExclusive));
+  return { memories, media, tags, milestones };
+}
+
+/** Every window read, paged (memories) or id-chunked + paged (children),
+ * each with a stable sort key and sequential chunks. Any error throws. */
+async function loadWindowRows(
+  supabase: Supabase,
+  familyId: string,
+  windowStart: string,
+  windowEndExclusive: string,
+): Promise<WindowRows> {
+  const chunk = { chunkSize: MEMORY_ID_CHUNK_SIZE };
+  const memories = await fetchAll<WindowRows['memories'][number]>(
+    (from, to) =>
+      supabase
+        .from('memories')
+        .select('id, content, memory_date, memory_type, emotion, topics, topic_details, illustration_key')
+        .eq('family_id', familyId)
+        .gte('memory_date', windowStart)
+        .lt('memory_date', windowEndExclusive)
+        .order('memory_date', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    { dedupeKey: (row) => row.id },
+  );
+  const memoryIds = memories.map((m) => m.id);
+
+  const media = await byMemoryIds<{ id: string }>(
+    memoryIds,
+    (ids, from, to) =>
+      supabase
+        .from('memory_media')
+        .select('id, memory_id, object_key, preview_object_key, content_type, position, duration_ms, aspect_ratio')
+        .in('memory_id', ids)
+        .order('id', { ascending: true })
+        .range(from, to),
+    { ...chunk, dedupeKey: (row) => row.id },
+  );
+  const tags = await byMemoryIds<{ memory_id: string; family_member_id: string }>(
+    memoryIds,
+    (ids, from, to) =>
+      supabase
+        .from('memory_family_members')
+        .select('memory_id, family_member_id')
+        .in('memory_id', ids)
+        .order('memory_id', { ascending: true })
+        .order('family_member_id', { ascending: true })
+        .range(from, to),
+    { ...chunk, dedupeKey: (row) => `${row.memory_id}|${row.family_member_id}` },
+  );
+  // (memory_id, milestone_id) is UNIQUE, so it is a safe dedupe key even
+  // though `id` (the sort key) is not selected.
+  const milestones = await byMemoryIds<{ memory_id: string; milestone_id: string }>(
+    memoryIds,
+    (ids, from, to) =>
+      supabase
+        .from('memory_milestones')
+        .select('memory_id, family_member_id, milestone_id, detail, out_of_band')
+        .neq('status', 'dismissed')
+        .in('memory_id', ids)
+        .order('id', { ascending: true })
+        .range(from, to),
+    { ...chunk, dedupeKey: (row) => `${row.memory_id}|${row.milestone_id}` },
+  );
+  // memory_likes has no `id` column: its primary key is (memory_id, user_id).
+  const likeRows = await byMemoryIds<{ memory_id: string; user_id: string }>(
+    memoryIds,
+    (ids, from, to) =>
+      supabase
+        .from('memory_likes')
+        .select('memory_id, user_id')
+        .in('memory_id', ids)
+        .order('memory_id', { ascending: true })
+        .order('user_id', { ascending: true })
+        .range(from, to),
+    { ...chunk, dedupeKey: (row) => `${row.memory_id}|${row.user_id}` },
+  );
+  const commentRows = await byMemoryIds<{ id: string; memory_id: string }>(
+    memoryIds,
+    (ids, from, to) =>
+      supabase
+        .from('memory_comments')
+        .select('id, memory_id')
+        .in('memory_id', ids)
+        .order('id', { ascending: true })
+        .range(from, to),
+    { ...chunk, dedupeKey: (row) => row.id },
+  );
+
+  return { memories, media, tags, milestones, likeRows, commentRows };
+}
+
+/** Kinds whose loaded row count is below what the pre-load head count saw. */
+function findShortfalls(expected: WindowCounts, loaded: WindowRows): Array<keyof WindowCounts> {
+  const actual: WindowCounts = {
+    memories: loaded.memories.length,
+    media: loaded.media.length,
+    tags: loaded.tags.length,
+    milestones: loaded.milestones.length,
+  };
+  return (Object.keys(expected) as Array<keyof WindowCounts>).filter((kind) => actual[kind] < expected[kind]);
+}
+
+async function buildGenerationContext(
+  supabase: Supabase,
+  book: ActiveBookRow,
+): Promise<Response> {
+  const { data: family, error: familyError } = await supabase
     .from('families')
     .select('name, gallery_caption_language')
     .eq('id', book.family_id)
     .maybeSingle();
+  if (familyError) throw new ContextLoadError('family');
 
   let child: { id: string; name: string; dateOfBirth: string | null } | null = null;
   if (book.child_id) {
-    const { data: childRow } = await supabase
+    const { data: childRow, error: childError } = await supabase
       .from('family_members')
       .select('id, name, date_of_birth')
       .eq('id', book.child_id)
       .maybeSingle();
-    if (childRow) child = { id: childRow.id, name: childRow.name, dateOfBirth: childRow.date_of_birth };
+    if (childError) throw new ContextLoadError('child');
+    // A null child on a child-scoped book would otherwise mean "no tag
+    // filter, every memory eligible" downstream -- fail instead.
+    if (!childRow) throw new ContextInvalidError('child_missing');
+    child = { id: childRow.id, name: childRow.name, dateOfBirth: childRow.date_of_birth };
   }
 
   let windowStart: string;
@@ -163,27 +357,38 @@ async function handleLoadGenerationContext(
   // than a malformed date value reaching Postgres.
   const EMPTY_WINDOW_SENTINEL = '0001-01-01';
   if (book.scope_kind === 'everything') {
-    const [{ data: earliest }, { data: latest }] = await Promise.all([
+    const [earliestResult, latestResult] = await Promise.all([
       supabase.from('memories').select('memory_date').eq('family_id', book.family_id).order('memory_date', { ascending: true }).limit(1).maybeSingle(),
       supabase.from('memories').select('memory_date').eq('family_id', book.family_id).order('memory_date', { ascending: false }).limit(1).maybeSingle(),
     ]);
-    windowStart = earliest?.memory_date ?? EMPTY_WINDOW_SENTINEL;
-    windowEndExclusive = latest?.memory_date ? addDaysToDateOnly(latest.memory_date, 1) : EMPTY_WINDOW_SENTINEL;
+    // An error here must not degrade into the empty-window sentinel (a
+    // misleading NO_ELIGIBLE_MEMORIES).
+    if (earliestResult.error || latestResult.error) throw new ContextLoadError('everything_window');
+    windowStart = earliestResult.data?.memory_date ?? EMPTY_WINDOW_SENTINEL;
+    windowEndExclusive = latestResult.data?.memory_date ? addDaysToDateOnly(latestResult.data.memory_date, 1) : EMPTY_WINDOW_SENTINEL;
   } else {
     windowStart = book.scope_start_date!;
     windowEndExclusive = addDaysToDateOnly(book.scope_end_date!, 1);
   }
 
-  const { data: memories, error: memoriesError } = await supabase
-    .from('memories')
-    .select('id, content, memory_date, memory_type, emotion, topics, topic_details, illustration_key')
-    .eq('family_id', book.family_id)
-    .gte('memory_date', windowStart)
-    .lt('memory_date', windowEndExclusive)
-    .order('memory_date', { ascending: true });
-  if (memoriesError) return errorResponse('Failed to load memories', 500, 'internal_error');
-
-  const memoryIds = (memories ?? []).map((m) => m.id);
+  // Count BEFORE loading so concurrent inserts between the two can only make
+  // loaded >= expected. Only loaded < expected fails (deletions in that gap
+  // are rare, hence one re-count + reload before giving up).
+  let expected = await countWindowRows(supabase, book.family_id, windowStart, windowEndExclusive);
+  let rows = await loadWindowRows(supabase, book.family_id, windowStart, windowEndExclusive);
+  let shortfalls = findShortfalls(expected, rows);
+  if (shortfalls.length > 0) {
+    // Counts only -- never memory content.
+    console.error('workflow memory book bridge context shortfall, reloading once', book.id, shortfalls.join(','), JSON.stringify(expected));
+    expected = await countWindowRows(supabase, book.family_id, windowStart, windowEndExclusive);
+    rows = await loadWindowRows(supabase, book.family_id, windowStart, windowEndExclusive);
+    shortfalls = findShortfalls(expected, rows);
+    if (shortfalls.length > 0) {
+      console.error('workflow memory book bridge context still short after reload', book.id, shortfalls.join(','), JSON.stringify(expected));
+      throw new ContextInvalidError(`count_mismatch:${shortfalls.join(',')}`);
+    }
+  }
+  const { memories, media, tags, milestones, likeRows, commentRows } = rows;
 
   const [familyMembersResult, portraitVersionsResult] = await Promise.all([
     supabase.from('family_members').select('id, name, date_of_birth, nicknames').eq('family_id', book.family_id),
@@ -192,30 +397,12 @@ async function handleLoadGenerationContext(
         .select('id, reference_date, illustrated_profile_key, profile_picture_key')
         .eq('family_member_id', book.child_id).eq('illustrated_profile_status', 'ready')
         .gte('reference_date', windowStart).lt('reference_date', windowEndExclusive).order('reference_date', { ascending: true })
-      : Promise.resolve({ data: [] as Array<{ id: string; reference_date: string | null; illustrated_profile_key: string | null; profile_picture_key: string | null }> }),
+      : Promise.resolve({ data: [] as Array<{ id: string; reference_date: string | null; illustrated_profile_key: string | null; profile_picture_key: string | null }>, error: null }),
   ]);
+  if (familyMembersResult.error) throw new ContextLoadError('family_members');
+  if (portraitVersionsResult.error) throw new ContextLoadError('portrait_versions');
   const familyMembers = familyMembersResult.data;
   const portraitVersions = portraitVersionsResult.data;
-
-  let media: unknown[] = [];
-  let tags: unknown[] = [];
-  let milestones: unknown[] = [];
-  let likeRows: Array<{ memory_id: string }> = [];
-  let commentRows: Array<{ memory_id: string }> = [];
-  if (memoryIds.length > 0) {
-    const [mediaResult, tagsResult, milestonesResult, likesResult, commentsResult] = await Promise.all([
-      supabase.from('memory_media').select('id, memory_id, object_key, preview_object_key, content_type, position, duration_ms, aspect_ratio').in('memory_id', memoryIds),
-      supabase.from('memory_family_members').select('memory_id, family_member_id').in('memory_id', memoryIds),
-      supabase.from('memory_milestones').select('memory_id, family_member_id, milestone_id, detail, out_of_band').neq('status', 'dismissed').in('memory_id', memoryIds),
-      supabase.from('memory_likes').select('memory_id').in('memory_id', memoryIds),
-      supabase.from('memory_comments').select('memory_id').in('memory_id', memoryIds),
-    ]);
-    media = mediaResult.data ?? [];
-    tags = tagsResult.data ?? [];
-    milestones = milestonesResult.data ?? [];
-    likeRows = likesResult.data ?? [];
-    commentRows = commentsResult.data ?? [];
-  }
 
   const engagementCounts: Record<string, number> = {};
   for (const row of likeRows) {
@@ -225,10 +412,10 @@ async function handleLoadGenerationContext(
     engagementCounts[row.memory_id] = (engagementCounts[row.memory_id] ?? 0) + 1;
   }
 
-  const inWindowNonEmptyCaptionCount = (memories ?? []).filter((m) => (m.content ?? '').trim().length > 0).length;
+  const inWindowNonEmptyCaptionCount = memories.filter((m) => (m.content ?? '').trim().length > 0).length;
   let languageEvidenceCaptions: string[] = [];
   if (inWindowNonEmptyCaptionCount < WINDOW_CAPTION_SPARSE_THRESHOLD) {
-    const { data: sample } = await supabase
+    const { data: sample, error: sampleError } = await supabase
       .from('memories')
       .select('content')
       .eq('family_id', book.family_id)
@@ -237,6 +424,7 @@ async function handleLoadGenerationContext(
       .order('memory_date', { ascending: false })
       .order('id', { ascending: false })
       .limit(LANGUAGE_EVIDENCE_SAMPLE_LIMIT);
+    if (sampleError) throw new ContextLoadError('language_evidence');
     languageEvidenceCaptions = ((sample ?? []) as Array<{ content: string }>)
       .map((row) => row.content.trim().slice(0, LANGUAGE_EVIDENCE_EXCERPT_MAX_CHARS))
       .filter((c) => c.length > 0);
@@ -256,15 +444,36 @@ async function handleLoadGenerationContext(
     child,
     familyName: family?.name ?? 'Family',
     configuredLanguage: family?.gallery_caption_language ?? null,
-    memories: memories ?? [],
-    media: media ?? [],
-    tags: tags ?? [],
-    milestones: milestones ?? [],
+    memories,
+    media,
+    tags,
+    milestones,
     engagementCounts,
     familyMembers: familyMembers ?? [],
     portraitVersions: portraitVersions ?? [],
     languageEvidenceCaptions,
   });
+}
+
+async function handleLoadGenerationContext(
+  supabase: Supabase,
+  bookId: string,
+  attemptId: string,
+): Promise<Response> {
+  const active = await loadActiveBook(supabase, bookId, attemptId);
+  if ('error' in active) return active.error;
+  try {
+    return await buildGenerationContext(supabase, active.row);
+  } catch (error) {
+    if (error instanceof ContextInvalidError) {
+      // Step name / counts only; never memory content.
+      console.error('workflow memory book bridge context invalid', bookId, error.reason);
+      return errorResponse('Memory book context is invalid', 422, 'context_invalid');
+    }
+    const step = error instanceof ContextLoadError ? error.step : error instanceof PagedQueryError ? 'paged_query' : 'unexpected';
+    console.error('workflow memory book bridge context load failed', bookId, step);
+    return errorResponse('Failed to load memory book context', 500, 'context_load_failed');
+  }
 }
 
 /** Base62 alphabet -- same generator contract as
@@ -300,24 +509,50 @@ async function handleEnsureShareTokens(
   if ('error' in active) return active.error;
   if (memoryIds.length === 0) return jsonResponse({ tokensByMemoryId: {} });
 
-  const { data: existing, error: existingError } = await supabase
-    .from('media_share_tokens')
-    .select('memory_id, token')
-    .in('memory_id', memoryIds)
-    .is('revoked_at', null);
-  if (existingError) return errorResponse('Failed to load share tokens', 500, 'internal_error');
-
+  // Duplicate ids would put two identical rows in one bulk insert and trip
+  // the unique active-token index on ourselves.
+  const uniqueIds = [...new Set(memoryIds)];
   const tokensByMemoryId: Record<string, string> = {};
-  for (const row of (existing ?? []) as Array<{ memory_id: string; token: string }>) {
-    tokensByMemoryId[row.memory_id] = row.token;
-  }
+  const readActiveTokens = async (): Promise<void> => {
+    const existing = await byMemoryIds<{ memory_id: string; token: string }>(
+      uniqueIds,
+      (ids, from, to) =>
+        supabase
+          .from('media_share_tokens')
+          .select('memory_id, token')
+          .in('memory_id', ids)
+          .is('revoked_at', null)
+          .order('token', { ascending: true })
+          .range(from, to),
+      { chunkSize: MEMORY_ID_CHUNK_SIZE, dedupeKey: (row) => row.token },
+    );
+    for (const row of existing) tokensByMemoryId[row.memory_id] = row.token;
+  };
 
-  const missingIds = memoryIds.filter((id) => !tokensByMemoryId[id]);
-  if (missingIds.length > 0) {
+  // read -> insert-the-missing. A unique violation (23505) on the partial
+  // unique index `media_share_tokens_active_memory_key` means an active
+  // token for one of these memories appeared since we read (a concurrent or
+  // retried call already minted it): that is success for those rows, so
+  // re-read and mint only what is still missing. The bulk insert is atomic,
+  // so a conflicting insert wrote nothing and the next pass retries the rest.
+  const MAX_PASSES = 3;
+  for (let pass = 0; pass < MAX_PASSES; pass += 1) {
+    try {
+      await readActiveTokens();
+    } catch {
+      return errorResponse('Failed to load share tokens', 500, 'internal_error');
+    }
+    const missingIds = uniqueIds.filter((id) => !tokensByMemoryId[id]);
+    if (missingIds.length === 0) break;
     const newRows = missingIds.map((memory_id) => ({ memory_id, token: generateShareToken() }));
     const { error: insertError } = await supabase.from('media_share_tokens').insert(newRows);
-    if (insertError) return errorResponse('Failed to mint share tokens', 500, 'internal_error');
-    for (const row of newRows) tokensByMemoryId[row.memory_id] = row.token;
+    if (!insertError) {
+      for (const row of newRows) tokensByMemoryId[row.memory_id] = row.token;
+      break;
+    }
+    if ((insertError as { code?: string }).code !== '23505' || pass === MAX_PASSES - 1) {
+      return errorResponse('Failed to mint share tokens', 500, 'internal_error');
+    }
   }
 
   return jsonResponse({ tokensByMemoryId });

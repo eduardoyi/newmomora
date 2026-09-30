@@ -3072,8 +3072,8 @@ Worker-only. Verifies a timestamped raw-body HMAC (`x-workflow-timestamp` /
 `reconcile`. *Deviation:* no nonce-replay ledger table (again, no schema
 changes in scope) — every mutating operation is already a compare-and-set
 (`publish`/`fail` key on `generation_attempt_id` + `status = 'generating'`)
-or naturally idempotent (`ensure_share_tokens`' select-then-insert-if-absent
-against `media_share_tokens`), so a replay inside the timestamp window can
+or naturally idempotent (`ensure_share_tokens`' read-then-insert-if-absent
+against `media_share_tokens`, with a `23505` active-token conflict re-read loop), so a replay inside the timestamp window can
 only repeat a no-op. `load_generation_context` re-verifies the book is still
 `generating` with a matching `generation_attempt_id` before returning
 anything (cheap bail-out for a superseded attempt, before any OpenAI call),
@@ -3083,6 +3083,27 @@ min/max `memory_date` instead), and returns every raw row the Workflow
 needs (memories, media, tags, milestones, engagement counts, family
 members, portrait versions, plus a sparse-window language-evidence caption
 sample).
+
+*`load_generation_context` integrity (2026-10-01):* the memories query is
+paged (1000-row pages, ordered `memory_date, id`) and the five id-keyed
+reads (media, tags, milestones, likes, comments) go through
+`_shared/paged-query.ts`'s `byMemoryIds` in sequential 150-id chunks with
+stable sort keys (`memory_likes`: `memory_id, user_id`;
+`memory_family_members`: `memory_id, family_member_id`; neither has an `id`
+column) — a bare `.in('memory_id', allIds)` exceeds the gateway URL limit
+from ~400 memories. Every query's error is checked. Before loading, head-only
+exact counts (`memories` for family + window; `memory_media`,
+`memory_family_members`, `memory_milestones` via a `memories!inner(family_id)`
+embed on the same filters — each has a single FK to `memories`, so no
+PGRST201) are compared after loading: only loaded < expected fails, after one
+re-count + reload. *Error semantics:* a real query/network error → `500
+context_load_failed` (retryable by the Worker); a deterministic data problem
+(`child_id` set but the child row missing; shortfall persisting after the
+reload) → `422 context_invalid` (non-retryable → `CONTEXT_LOAD_FAILED`, no
+retry storm). Success response shape unchanged. `ensure_share_tokens` chunks
+and pages its read, dedupes ids, and on a `23505` unique violation (partial
+unique active-token index) re-reads and mints only the still-missing rows
+(up to 3 passes); other insert/read errors → 500.
 
 *Ready push (memory-book shelf redesign):* `handlePublish`'s CAS `UPDATE`
 also selects back `id, family_id, child_id, scope_label, requested_by`;
@@ -3139,8 +3160,17 @@ downloads, no resizing, and therefore no measured pixel `width`/`height`/
 `originalWidth`/`originalHeight`; see `manifest.ts`'s header comment), and
 publish via the bridge's CAS. A lost/ambiguous publish reconciles rather
 than re-running the outline. Failure records a closed `failure_reason` code
-(`CONTEXT_LOAD_FAILED`, `NO_ELIGIBLE_MEMORIES`, `OUTLINE_GENERATION_FAILED`,
-`MANIFEST_BUILD_FAILED`, `UNKNOWN_ERROR`) — never the raw error message.
+(`CONTEXT_LOAD_FAILED`, `CONTEXT_TOO_LARGE`, `NO_ELIGIBLE_MEMORIES`,
+`OUTLINE_GENERATION_FAILED`, `DIMENSION_MEASUREMENT_FAILED`,
+`MANIFEST_BUILD_FAILED`, `UNKNOWN_ERROR`) — never the raw error message. The
+load and publish steps have 120 s timeouts; the load step measures the
+context's UTF-8 size and above 900 KB throws `NonRetryableError('CONTEXT_TOO_LARGE:
+<bytes>')` (logged as `memory_book_context_size`, number only). Codes are
+mapped by `CODE:` prefix, then error class/name, then a step timeout
+attributed by stage (load → `CONTEXT_LOAD_FAILED`, outline/cover-verify →
+`OUTLINE_GENERATION_FAILED`, dimensions → `DIMENSION_MEASUREMENT_FAILED`,
+publish → `MANIFEST_BUILD_FAILED`); a publish-step timeout reconciles first
+(ambiguous outcome).
 *Documented V5a simplification:* the eval CLI's own page-budget-aware
 themed-spread admission pass (`admitThemedSpreads`, driven by a
 `book-renderer` `fitBook` page-count oracle) and seasonal re-pacing pass are
@@ -3224,7 +3254,15 @@ between calls) for simplicity; it does not weaken the actual risk Decision 5
 calls out (`everything`-scope boundedness), which the `limit`/`range` cap
 still fully enforces regardless of cursor style. Keys only — the client
 presigns any thumbnails it renders through the existing `get-media-url`
-coalescer (§4.0b); this function never returns a URL.
+coalescer (§4.0b); this function never returns a URL. The optional
+`memberId` person filter is a nested inner embed on the media query
+(`memories!inner(memory_date, family_id,
+memory_family_members!inner(family_member_id))` +
+`.eq('memories.memory_family_members.family_member_id', memberId)`) — no
+member-tag pre-lookup, no `.in()` id list (2026-10-01; the old pre-lookup was
+unpaged against `max_rows` and overflowed the URL limit for heavily tagged
+members). An `everything` earliest/latest window-query error throws
+`ScopeWindowError` → 500 `internal_error`.
 
 ### 4.24 Memory Book orders & fulfillment (V5c orchestration)
 
@@ -3697,6 +3735,7 @@ per family, not per user). No style picker UI.
 | `CRON_SECRET` | Shared secret for cron-triggered functions |
 | `SENTRY_DSN` | Optional. Sentry `momora-edge-functions` DSN; when set, `_shared/sentry.ts` reports uncaught errors and `console.error` calls ([observability.md](./features/observability.md)) |
 | `EXPORT_EMAIL_BRIDGE_SECRET` | HMAC secret shared with the export Worker for `send-export-email` |
+| `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` | Optional. Comma-separated family ids (trimmed) exempt from `generate-memory-book`'s `PAUSED_SCOPE_KINDS` pause (currently `everything`, 409 `SCOPE_PAUSED` for everyone else). Unset/empty/malformed = nobody. |
 | `R2_ACCOUNT_ID` | Cloudflare account ID |
 | `R2_ACCESS_KEY_ID` | R2 S3 API access key |
 | `R2_SECRET_ACCESS_KEY` | R2 S3 API secret |

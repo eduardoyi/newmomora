@@ -297,3 +297,83 @@ Deno.test('isFreshGeneratingMemoryBook', () => {
   assertEquals(isFreshGeneratingMemoryBook(new Date(now - 1000).toISOString(), now), true);
   assertEquals(isFreshGeneratingMemoryBook(new Date(now - MEMORY_BOOK_LEASE_MS - MEMORY_BOOK_RECOVERY_GRACE_MS - 1).toISOString(), now), false);
 });
+
+const ALLOWLIST_ENV = 'MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST';
+
+async function withAllowlist<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
+  const previous = Deno.env.get(ALLOWLIST_ENV);
+  if (value === undefined) Deno.env.delete(ALLOWLIST_ENV);
+  else Deno.env.set(ALLOWLIST_ENV, value);
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) Deno.env.delete(ALLOWLIST_ENV);
+    else Deno.env.set(ALLOWLIST_ENV, previous);
+  }
+}
+
+/** Runs an 'everything' book (given status) for FAMILY_ID through the handler. */
+async function runEverything(status: string) {
+  let dispatched = false;
+  const patches: Record<string, unknown>[] = [];
+  const response = await handleGenerateMemoryBook(
+    new Request('http://localhost', { method: 'POST', body: JSON.stringify({ memoryBookId: BOOK_ID }) }),
+    {
+      getAuthenticatedUser: async () => fakeUser(),
+      createServiceClient: createStubClient(
+        { id: BOOK_ID, family_id: FAMILY_ID, scope_kind: 'everything', status, workflow_instance_id: null, generation_attempt_id: null, generation_started_at: null },
+        { onUpdate: (patch) => patches.push(patch) },
+      ),
+      getCallerFamilyRole: async () => 'owner',
+      fetch: async () => { dispatched = true; return new Response('{}', { status: 202 }); },
+    },
+  );
+  return { response, dispatched, patches };
+}
+
+Deno.test('an allowlisted family bypasses the scope pause and dispatches normally', async () => {
+  await withDispatchEnv(() => withAllowlist(`other-family, ${FAMILY_ID} ,`, async () => {
+    const { response, dispatched, patches } = await runEverything('queued');
+    assertEquals(response.status, 202);
+    assertEquals(dispatched, true);
+    // Claimed for generation, never parked as SCOPE_PAUSED.
+    assertEquals(patches.some((p) => p.failure_reason === 'SCOPE_PAUSED'), false);
+    assertEquals(patches.some((p) => p.status === 'generating'), true);
+  }));
+});
+
+Deno.test('an allowlisted family can retry a previously parked (failed) everything book', async () => {
+  await withDispatchEnv(() => withAllowlist(FAMILY_ID, async () => {
+    const { response, dispatched } = await runEverything('failed');
+    assertEquals(response.status, 202);
+    assertEquals(dispatched, true);
+  }));
+});
+
+Deno.test('a non-allowlisted family is still paused (409 + parked failed) when the allowlist names others', async () => {
+  await withDispatchEnv(() => withAllowlist('99999999-9999-4999-8999-999999999999', async () => {
+    const { response, dispatched, patches } = await runEverything('queued');
+    assertEquals(response.status, 409);
+    assertEquals((await response.json()).code, 'SCOPE_PAUSED');
+    assertEquals(dispatched, false);
+    assertEquals(patches.length, 1);
+    assertEquals(patches[0].failure_reason, 'SCOPE_PAUSED');
+  }));
+});
+
+for (const [label, value] of [
+  ['unset', undefined],
+  ['empty', ''],
+  ['whitespace/commas only', ' , ,, '],
+  ['family id embedded in a larger token', `x${FAMILY_ID}x`],
+  ['JSON-ish', `["${FAMILY_ID}"]`],
+  ['wildcard', '*'],
+] as const) {
+  Deno.test(`a malformed/empty allowlist (${label}) allows nobody`, async () => {
+    await withDispatchEnv(() => withAllowlist(value, async () => {
+      const { response, dispatched } = await runEverything('queued');
+      assertEquals(response.status, 409);
+      assertEquals(dispatched, false);
+    }));
+  });
+}

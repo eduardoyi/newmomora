@@ -17,15 +17,20 @@
  */
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { normalizeOpenAiUsage, openAiAudioTokens, priceOpenAiUsage } from '../_shared/ai-pricing.ts';
+import { byMemoryIds as byMemoryIdsChunked, fetchAll } from '../_shared/paged-query.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
 
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
-const PAGE_SIZE = 1000;
 const CHUNK_SIZE = 200;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type Client = ReturnType<typeof createServiceClient>;
+
+const byMemoryIds = <T>(
+  ids: string[],
+  page: Parameters<typeof byMemoryIdsChunked<T>>[1],
+): Promise<T[]> => byMemoryIdsChunked<T>(ids, page, { chunkSize: CHUNK_SIZE });
 
 function hex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -73,30 +78,6 @@ const OPERATIONS = new Set([...WORK_OPERATIONS, 'heartbeat', 'end_cycle', 'recon
 const USAGE_OPERATIONS = new Set(['year_film_quote', 'year_film_vision', 'year_film_audio']);
 const END_OUTCOMES = new Set(['failed', 'skipped', 'aborted']);
 const FAILURE_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
-
-async function fetchAll<T>(
-  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
-): Promise<T[]> {
-  const out: T[] = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await page(from, from + PAGE_SIZE - 1);
-    if (error) throw new Error('page_failed');
-    out.push(...(data ?? []));
-    if ((data ?? []).length < PAGE_SIZE) return out;
-  }
-}
-
-async function byMemoryIds<T>(
-  ids: string[],
-  page: (chunk: string[], from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
-): Promise<T[]> {
-  const out: T[] = [];
-  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-    const chunk = ids.slice(i, i + CHUNK_SIZE);
-    out.push(...(await fetchAll<T>((from, to) => page(chunk, from, to))));
-  }
-  return out;
-}
 
 interface FilmRow {
   id: string;

@@ -15,6 +15,7 @@ export class BridgeError extends Error {
     public readonly retryable: boolean,
   ) {
     super(code);
+    this.name = 'BridgeError';
   }
 }
 

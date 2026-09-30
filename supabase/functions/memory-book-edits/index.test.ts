@@ -1,4 +1,4 @@
-import { assertEquals, assertExists, assertStrictEquals } from 'jsr:@std/assert@1';
+import { assertEquals, assertExists, assertRejects, assertStrictEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { TEXT_TARGET_PATTERN,
   collectManifestAssetFiles,
@@ -10,6 +10,7 @@ import { TEXT_TARGET_PATTERN,
   type MemoryBookEditsDependencies,
   normalizeEdits,
   resolveScopeWindow,
+  ScopeWindowError,
 } from './index.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -55,6 +56,18 @@ function readyBook(overrides: Record<string, unknown> = {}) {
 // own branching against a given DB response shape, not PostgREST's actual
 // filter semantics (which is Postgres/PostgREST's own property, not this
 // function's).
+interface MediaQueryLog {
+  select: string[];
+  eq: [string, unknown][];
+  in: [string, unknown][];
+  order: string[];
+  range: [number, number][];
+}
+
+function newMediaQueryLog(): MediaQueryLog {
+  return { select: [], eq: [], in: [], order: [], range: [] };
+}
+
 interface StubOptions {
   book?: Record<string, unknown> | null;
   bookError?: { message: string } | null;
@@ -67,10 +80,12 @@ interface StubOptions {
   upsertError?: { message: string } | null;
   memoriesEarliest?: { memory_date: string } | null;
   memoriesLatest?: { memory_date: string } | null;
-  /** picker_pool member filter (item 1): rows `memory_family_members`
-   * resolves for a given `family_member_id`. */
-  memberTagRows?: { memory_id: string }[];
-  memberTagError?: { message: string } | null;
+  memoriesEarliestError?: { message: string } | null;
+  memoriesLatestError?: { message: string } | null;
+  /** Records the query SHAPE `memory_media` receives (the stub is
+   * filter-blind, so picker_pool's select string / filters / range are
+   * otherwise invisible to assertions). */
+  mediaQueryLog?: MediaQueryLog;
   calls?: string[];
   onUpsert?: (payload: Record<string, unknown>) => void;
   /** save_edit's cover_asset_key recompute: `memory_books.update(...)`. */
@@ -104,32 +119,41 @@ function createStubClient(options: StubOptions = {}) {
         }
 
         if (table === 'memory_media') {
+          const log = options.mediaQueryLog;
           const chain = {
-            select: () => chain,
-            eq: () => chain,
+            select: (cols: string) => {
+              log?.select.push(cols);
+              return chain;
+            },
+            eq: (col: string, value: unknown) => {
+              log?.eq.push([col, value]);
+              return chain;
+            },
             gte: () => chain,
             lt: () => chain,
             like: () => chain,
-            in: () => chain,
-            order: () => chain,
+            in: (col: string, values: unknown) => {
+              log?.in.push([col, values]);
+              return chain;
+            },
+            order: (col: string) => {
+              log?.order.push(col);
+              return chain;
+            },
             maybeSingle: async () => ({ data: options.media ?? null, error: options.mediaError ?? null }),
-            range: async () => ({ data: options.mediaPool ?? [], error: options.mediaPoolError ?? null }),
+            range: async (from: number, to: number) => {
+              log?.range.push([from, to]);
+              return { data: options.mediaPool ?? [], error: options.mediaPoolError ?? null };
+            },
           };
           return chain;
         }
 
         if (table === 'memory_family_members') {
-          // picker_pool's member filter (item 1) awaits this chain
-          // directly -- no terminal `.maybeSingle()`/`.range()` call, same
-          // as the real `PostgrestFilterBuilder` -- so the chain itself
-          // must be thenable.
-          const chain = {
-            select: () => chain,
-            eq: () => chain,
-            then: (resolve: (result: { data: unknown; error: unknown }) => void) =>
-              resolve({ data: options.memberTagRows ?? [], error: options.memberTagError ?? null }),
-          };
-          return chain;
+          // picker_pool's member filter is a nested inner embed on
+          // `memory_media` -- a separate top-level `memory_family_members`
+          // lookup (the old unpaged tag-id fetch) must never happen again.
+          throw new Error('unexpected top-level memory_family_members lookup');
         }
 
         if (table === 'memory_book_edits') {
@@ -157,7 +181,7 @@ function createStubClient(options: StubOptions = {}) {
             limit: () => chain,
             maybeSingle: async () => ({
               data: (ascending ? options.memoriesEarliest : options.memoriesLatest) ?? null,
-              error: null,
+              error: (ascending ? options.memoriesEarliestError : options.memoriesLatestError) ?? null,
             }),
           };
           return chain;
@@ -871,49 +895,133 @@ Deno.test('picker_pool: a well-formed dateStart/dateEnd range is accepted alongs
   assertEquals(body.items.length, 1);
 });
 
-Deno.test('picker_pool: memberId with zero tagged memories short-circuits to an empty, exhausted page without querying memory_media', async () => {
+Deno.test('picker_pool: memberId filter is a nested inner embed on memory_media (no separate tag lookup, no .in(memory_id))', async () => {
   const calls: string[] = [];
+  const mediaQueryLog = newMediaQueryLog();
   const response = await handleMemoryBookEdits(
-    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
-    baseDeps({
-      createServiceClient: createStubClient({ book: readyBook(), memberTagRows: [], calls }),
-    }),
-  );
-  assertEquals(response.status, 200);
-  const body = await response.json();
-  assertEquals(body, { items: [], nextCursor: null });
-  assertEquals(calls.includes('memory_media'), false);
-  assertEquals(calls.includes('memory_family_members'), true);
-});
-
-Deno.test('picker_pool: memberId with tagged memories proceeds to the normal media query', async () => {
-  const calls: string[] = [];
-  const response = await handleMemoryBookEdits(
-    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID, cursor: btoa('50'), limit: 25 }),
     baseDeps({
       createServiceClient: createStubClient({
         book: readyBook(),
-        memberTagRows: [{ memory_id: MEMORY_ID }],
         mediaPool: [poolRow()],
         editsRow: null,
         calls,
+        mediaQueryLog,
       }),
     }),
   );
   assertEquals(response.status, 200);
   const body = await response.json();
   assertEquals(body.items.length, 1);
-  assertEquals(calls.includes('memory_media'), true);
+
+  // Query SHAPE: the membership join lives in the select string + a nested eq.
+  assertEquals(mediaQueryLog.select.length, 1);
+  assertStringIncludes(
+    mediaQueryLog.select[0],
+    'memories!inner(memory_date, family_id, memory_family_members!inner(family_member_id))',
+  );
+  assertEquals(
+    mediaQueryLog.eq.some(([col, v]) => col === 'memories.memory_family_members.family_member_id' && v === MEMBER_ID),
+    true,
+  );
+  assertEquals(
+    mediaQueryLog.eq.some(([col, v]) => col === 'memories.family_id' && v === FAMILY_ID),
+    true,
+  );
+  // No `.in('memory_id', ...)` id list, and no separate tag-table lookup.
+  assertEquals(mediaQueryLog.in, []);
+  assertEquals(calls.includes('memory_family_members'), false);
+  // Global ordering + offset cursor semantics are untouched.
+  assertEquals(mediaQueryLog.order, ['memories(memory_date)', 'id']);
+  assertEquals(mediaQueryLog.range, [[50, 74]]);
 });
 
-Deno.test('picker_pool: a member-tag lookup failure surfaces as a 500, same as the media query failing', async () => {
+Deno.test('picker_pool: without memberId the select keeps the plain memories embed and no tag filter', async () => {
+  const mediaQueryLog = newMediaQueryLog();
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook(),
+        mediaPool: [poolRow()],
+        editsRow: null,
+        mediaQueryLog,
+      }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(mediaQueryLog.select[0].includes('memory_family_members'), false);
+  assertEquals(mediaQueryLog.eq.some(([col]) => col.includes('memory_family_members')), false);
+  assertEquals(mediaQueryLog.in, []);
+});
+
+Deno.test('picker_pool: a member with 200+ tagged memories needs no id list (nothing for the URL limit to truncate)', async () => {
+  const pool = Array.from({ length: 200 }, (_, i) =>
+    poolRow({
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      memory_id: `10000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      memories: { memory_date: '2026-03-01' },
+    }),
+  );
+  const mediaQueryLog = newMediaQueryLog();
+  const calls: string[] = [];
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID, limit: 50 }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook(),
+        mediaPool: pool.slice(0, 50),
+        editsRow: null,
+        mediaQueryLog,
+        calls,
+      }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.items.length, 50);
+  assertEquals(body.nextCursor, btoa('50'));
+  assertEquals(mediaQueryLog.in, []);
+  assertEquals(calls.filter((t) => t === 'memory_media').length, 1);
+});
+
+Deno.test('picker_pool: a member with no tagged memories returns an empty, exhausted page', async () => {
   const response = await handleMemoryBookEdits(
     request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
     baseDeps({
-      createServiceClient: createStubClient({ book: readyBook(), memberTagError: { message: 'boom' } }),
+      createServiceClient: createStubClient({ book: readyBook(), mediaPool: [], editsRow: null }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { items: [], nextCursor: null });
+});
+
+Deno.test('picker_pool: a media query failure with a memberId surfaces as a 500', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({ book: readyBook(), mediaPoolError: { message: 'boom' } }),
     }),
   );
   assertEquals(response.status, 500);
+});
+
+Deno.test('picker_pool: an everything-scope window lookup error surfaces as a 500, not an empty pool', async () => {
+  const mediaQueryLog = newMediaQueryLog();
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook({ scope_kind: 'everything', scope_start_date: null, scope_end_date: null }),
+        memoriesEarliestError: { message: 'boom' },
+        mediaPool: [poolRow()],
+        mediaQueryLog,
+      }),
+    }),
+  );
+  assertEquals(response.status, 500);
+  assertEquals((await response.json()).code, 'internal_error');
+  assertEquals(mediaQueryLog.select, []);
 });
 
 // ── intersectDateWindow (direct) ──────────────────────────────────────────
@@ -1012,6 +1120,28 @@ Deno.test('resolveScopeWindow: everything with zero memories collapses to the em
     { family_id: FAMILY_ID, scope_kind: 'everything', scope_start_date: null, scope_end_date: null },
   );
   assertEquals(window.start, window.endExclusive);
+});
+
+Deno.test('resolveScopeWindow: everything throws ScopeWindowError when the earliest lookup errors (never the empty sentinel)', async () => {
+  await assertRejects(
+    () =>
+      resolveScopeWindow(
+        createStubClient({ memoriesEarliestError: { message: 'boom' }, memoriesLatest: { memory_date: '2026-02-10' } })(),
+        { family_id: FAMILY_ID, scope_kind: 'everything', scope_start_date: null, scope_end_date: null },
+      ),
+    ScopeWindowError,
+  );
+});
+
+Deno.test('resolveScopeWindow: everything throws ScopeWindowError when the latest lookup errors', async () => {
+  await assertRejects(
+    () =>
+      resolveScopeWindow(
+        createStubClient({ memoriesEarliest: { memory_date: '2024-05-01' }, memoriesLatestError: { message: 'boom' } })(),
+        { family_id: FAMILY_ID, scope_kind: 'everything', scope_start_date: null, scope_end_date: null },
+      ),
+    ScopeWindowError,
+  );
 });
 
 // ── measureOriginalDimensions (direct) ────────────────────────────────────

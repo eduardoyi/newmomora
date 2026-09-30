@@ -26,40 +26,126 @@ const BRIDGE_STEP_RETRIES = { limit: 3, delay: '2 seconds', backoff: 'exponentia
  */
 type FailureCode =
   | 'CONTEXT_LOAD_FAILED'
+  | 'CONTEXT_TOO_LARGE'
   | 'NO_ELIGIBLE_MEMORIES'
   | 'OUTLINE_GENERATION_FAILED'
   | 'DIMENSION_MEASUREMENT_FAILED'
   | 'MANIFEST_BUILD_FAILED'
   | 'UNKNOWN_ERROR';
 
-function errorCode(error: unknown): FailureCode {
-  if (error instanceof NoEligibleMemoriesError) return 'NO_ELIGIBLE_MEMORIES';
-  if (error instanceof ContextLoadError || error instanceof NonRetryableError) return 'CONTEXT_LOAD_FAILED';
-  if (error instanceof OutlineStageError) return 'OUTLINE_GENERATION_FAILED';
-  if (error instanceof DimensionMeasurementError) return 'DIMENSION_MEASUREMENT_FAILED';
-  if (error instanceof ManifestStageError) return 'MANIFEST_BUILD_FAILED';
+/** Workflow step currently executing -- lets a step-timeout (which carries
+ * no class/code of our own) be attributed to the right closed failure code. */
+type Stage = 'load' | 'outline' | 'cover-verify' | 'dimensions' | 'publish';
+
+/**
+ * Cloudflare Workflows serializes a step's error across the durable-execution
+ * boundary, so after retry exhaustion the error that reaches `run()`'s catch
+ * is NOT guaranteed to be an instance of the class thrown in the step -- only
+ * `name` and `message` are reliable. Mapping therefore goes, in order, by:
+ *   1. a `CODE:` message prefix naming a FailureCode (e.g. `CONTEXT_TOO_LARGE: 123`);
+ *   2. `instanceof` OR `name` of our own classes / NonRetryableError;
+ *   3. the runtime's step-timeout error (name `WorkflowTimeoutError`, message
+ *      `Execution timed out after <N>ms` -- see workflows-shared/src/lib/
+ *      errors.ts in miniflare's binding worker), attributed via `stage`.
+ */
+const TIMEOUT_CODE_BY_STAGE: Record<Stage, FailureCode> = {
+  load: 'CONTEXT_LOAD_FAILED',
+  outline: 'OUTLINE_GENERATION_FAILED',
+  'cover-verify': 'OUTLINE_GENERATION_FAILED',
+  dimensions: 'DIMENSION_MEASUREMENT_FAILED',
+  publish: 'MANIFEST_BUILD_FAILED',
+};
+
+const CODE_PREFIXED_FAILURES: FailureCode[] = ['CONTEXT_TOO_LARGE'];
+
+function errorName(error: unknown): string {
+  if (error && typeof error === 'object' && typeof (error as { name?: unknown }).name === 'string') {
+    return (error as { name: string }).name;
+  }
+  return '';
+}
+
+function errorMessageRaw(error: unknown): string {
+  if (error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string') {
+    return (error as { message: string }).message;
+  }
+  return '';
+}
+
+function isStepTimeout(error: unknown): boolean {
+  return errorName(error) === 'WorkflowTimeoutError' || /timed? ?out|timeout/i.test(errorMessageRaw(error));
+}
+
+function errorCode(error: unknown, stage?: Stage): FailureCode {
+  const message = errorMessageRaw(error);
+  for (const code of CODE_PREFIXED_FAILURES) {
+    if (message.startsWith(`${code}:`) || message.includes(` ${code}:`)) return code;
+  }
+  const name = errorName(error);
+  if (error instanceof NoEligibleMemoriesError || name === 'NoEligibleMemoriesError') return 'NO_ELIGIBLE_MEMORIES';
+  if (
+    error instanceof ContextLoadError || error instanceof NonRetryableError
+    || name === 'ContextLoadError' || name === 'NonRetryableError' || name === 'BridgeError'
+  ) return 'CONTEXT_LOAD_FAILED';
+  if (error instanceof OutlineStageError || name === 'OutlineStageError') return 'OUTLINE_GENERATION_FAILED';
+  if (error instanceof DimensionMeasurementError || name === 'DimensionMeasurementError') return 'DIMENSION_MEASUREMENT_FAILED';
+  if (error instanceof ManifestStageError || name === 'ManifestStageError') return 'MANIFEST_BUILD_FAILED';
+  // Checked after our own (already stage-specific) classes so a stray
+  // "timeout" inside their message can't reclassify them.
+  if (isStepTimeout(error)) return stage ? TIMEOUT_CODE_BY_STAGE[stage] : 'UNKNOWN_ERROR';
   return 'UNKNOWN_ERROR';
 }
 
-class ContextLoadError extends Error {}
-class NoEligibleMemoriesError extends Error {}
-class OutlineStageError extends Error {}
+/** Bytes (UTF-8) of the load step's JSON result. Workflows caps a step's
+ * output at ~1 MiB and fails inside the runtime (before any post-step code
+ * runs) when exceeded, so the load step guards itself at 900 KB. */
+export const CONTEXT_MAX_BYTES = 900 * 1024;
+
+class ContextLoadError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'ContextLoadError';
+  }
+}
+class NoEligibleMemoriesError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'NoEligibleMemoriesError';
+  }
+}
+class OutlineStageError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'OutlineStageError';
+  }
+}
 /** `measureOriginalDimensionsForJobs` itself fails open per-asset (never
  * throws for an individual unreadable photo -- see dimensions.ts), so
  * reaching this class at all means something broke at the step level
  * (e.g. the R2 binding itself), not an ordinary "some photo couldn't be
  * measured" outcome -- those are silent, expected omissions, not failures. */
-class DimensionMeasurementError extends Error {}
+class DimensionMeasurementError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'DimensionMeasurementError';
+  }
+}
 /** Covers both manifest assembly AND the publish call itself -- they share
  * one step (see the "build manifest and publish" step.do below), so a
  * failure anywhere in it is ambiguous about whether publish was ever
  * reached; `hasAmbiguousPublishOutcome` below reconciles rather than
  * assuming either way. */
-class ManifestStageError extends Error {}
+class ManifestStageError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'ManifestStageError';
+  }
+}
 
 export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatchPayload> {
   async run(event: Readonly<WorkflowEvent<WorkflowDispatchPayload>>, step: WorkflowStep) {
     const { bookId, attemptId } = event.payload;
+    let stage: Stage = 'load';
 
     try {
       // ── step 1: load the frozen scope + every raw row the outline/
@@ -68,21 +154,36 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
       // bails here -- cheaply, before any OpenAI call. ──────────────────────
       const context = await step.do(
         'load generation context',
-        { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds' },
+        // 120s (raised from 30s): the Everything scope pages thousands of
+        // memories' rows through the bridge.
+        { retries: BRIDGE_STEP_RETRIES, timeout: '120 seconds' },
         async (): Promise<GenerationContextResponse> => {
+          let loaded: GenerationContextResponse;
           try {
-            return await loadGenerationContext(this.env, bookId, attemptId);
+            loaded = await loadGenerationContext(this.env, bookId, attemptId);
           } catch (error) {
             // A rejected (non-retryable) bridge response means the book is
-            // no longer this attempt's to work on (superseded/terminal) --
-            // stop the Workflow's own step retry loop immediately rather
-            // than spending its retry budget on a request that can never
+            // no longer this attempt's to work on (superseded/terminal), or
+            // the data is deterministically invalid (422) -- stop the
+            // Workflow's own step retry loop immediately rather than
+            // spending its retry budget on a request that can never
             // succeed.
             if (error instanceof BridgeError && !error.retryable) {
               throw new NonRetryableError(errorMessageOnly(error));
             }
             throw new ContextLoadError(errorMessageOnly(error));
           }
+          // Size guard (outside the try above so its NonRetryableError is
+          // never re-wrapped into a retryable ContextLoadError). A step
+          // result over Workflows' ~1 MiB output cap fails inside the
+          // runtime before any post-step code runs, so fail here with a
+          // precise code instead. Log the number only -- never content.
+          const contextBytes = new TextEncoder().encode(JSON.stringify(loaded)).length;
+          console.log('memory_book_context_size', { bookId, attemptId, contextBytes });
+          if (contextBytes > CONTEXT_MAX_BYTES) {
+            throw new NonRetryableError(`CONTEXT_TOO_LARGE: ${contextBytes}`);
+          }
+          return loaded;
         },
       );
 
@@ -95,6 +196,7 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
       // order). retries: 1 -- the OpenAI fetch already retries once
       // internally on 429/5xx; a Workflow-level retry here is only for an
       // infra-level step failure, not a hedge against a bad model call. ────
+      stage = 'outline';
       const outline = await step.do(
         'curate outline',
         // 300s (raised from 120s, 2026-09-15): two consecutive production
@@ -122,6 +224,7 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
 
       // ── step 3: cover-verify pass -- fails open by design (shared
       // module), so this step should never itself terminalize the book. ────
+      stage = 'cover-verify';
       const coverVerify = await step.do(
         'verify cover candidates',
         { retries: { limit: 2, delay: '3 seconds', backoff: 'exponential' }, timeout: '60 seconds' },
@@ -156,6 +259,7 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
       // throws) -- see dimensions.ts -- so this step's own retries are only
       // for an infra-level failure of the step itself, not a hedge against
       // any individual unreadable photo. ───────────────────────────────────
+      stage = 'dimensions';
       const originalDimensionsByMediaId = await step.do(
         'measure original photo dimensions',
         // 300s (raised from 90s, 2026-09-15, same production incident as
@@ -185,9 +289,11 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
       // OWN durable return value stays small ({published, bookId}) even
       // though the document itself is large in local memory -- it's handed
       // to the bridge as an HTTP body, never returned from step.do. ────────
+      stage = 'publish';
       const publishResult = await step.do(
         'build manifest and publish',
-        { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds' },
+        // 120s (raised from 30s): chunked ensureShareTokens + a large publish.
+        { retries: BRIDGE_STEP_RETRIES, timeout: '120 seconds' },
         async () => {
           try {
             const shareTokenCandidateIds = referencedMemoryIds.filter((id) => {
@@ -279,7 +385,7 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
       // an R2 object), so this is a normal terminal outcome, not a failure.
       return { bookId, status: 'superseded' as const };
     } catch (error) {
-      if (hasAmbiguousPublishOutcome(error)) {
+      if (hasAmbiguousPublishOutcome(error, stage)) {
         // The publish call itself may have landed. Reconcile rather than
         // guessing -- never generate another outline merely to resolve
         // publication ambiguity.
@@ -298,7 +404,7 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
         // handling), unlike a lost paid image generation.
       }
 
-      const code = errorCode(error);
+      const code = errorCode(error, stage);
       await step.do(
         'record generation failure',
         { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds' },
@@ -309,8 +415,13 @@ export class MemoryBookWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatch
   }
 }
 
-function hasAmbiguousPublishOutcome(error: unknown): boolean {
-  return error instanceof ManifestStageError;
+/** Also matches by name (class identity may not survive the Workflows
+ * error serialization) and a step timeout while in the publish step -- a
+ * timed-out publish request may still have landed. */
+function hasAmbiguousPublishOutcome(error: unknown, stage: Stage): boolean {
+  return error instanceof ManifestStageError
+    || errorName(error) === 'ManifestStageError'
+    || (stage === 'publish' && isStepTimeout(error));
 }
 
 /** Never forward a raw caught error's message into a persisted field or

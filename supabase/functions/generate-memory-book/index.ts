@@ -76,7 +76,19 @@ export const DEFAULT_DEPENDENCIES: GenerateMemoryBookDependencies = {
 // sub-queries (URL too long -> media/tags/milestones silently empty) and the
 // fitter/outline still assume a single year. Remove from this set once those
 // are fixed (docs/features/memory-book-generation.md).
+// Owner-only bypass: families listed (comma-separated ids) in the
+// MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST secret skip the pause and
+// generate normally, so a fix can be validated live before the pause is
+// lifted for everyone. Unset/empty = nobody; read per request.
 export const PAUSED_SCOPE_KINDS: ReadonlySet<string> = new Set(['everything']);
+
+/** Family ids exempt from PAUSED_SCOPE_KINDS. Entries are trimmed; empty
+ * entries are dropped, so an unset/empty/garbage value allows nobody (a
+ * malformed entry can only ever match a family id it is byte-equal to). */
+function pausedScopeAllowlist(): ReadonlySet<string> {
+  const raw = Deno.env.get('MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST') ?? '';
+  return new Set(raw.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0));
+}
 
 export const MEMORY_BOOK_LEASE_MS = 8 * 60_000;
 export const MEMORY_BOOK_RECOVERY_GRACE_MS = 30_000;
@@ -183,7 +195,7 @@ export async function handleGenerateMemoryBook(
 
   const now = dependencies.now();
 
-  if (PAUSED_SCOPE_KINDS.has(row.scope_kind)) {
+  if (PAUSED_SCOPE_KINDS.has(row.scope_kind) && !pausedScopeAllowlist().has(row.family_id)) {
     // Park the row as failed (never left queued, which the app renders as
     // "making it now" forever). A status-matched update so it can't clobber
     // a concurrent transition; an in-flight attempt's publish is then
