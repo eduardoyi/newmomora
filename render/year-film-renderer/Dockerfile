@@ -79,6 +79,14 @@ RUN npm install -g hyperframes@0.8.80 \
   && hyperframes browser path | tee /dev/stderr | grep -q "linux-${CHROME_VERSION}" \
   && hyperframes telemetry disable
 
+# Point HyperFrames straight at that binary. Without these, `hyperframes
+# check` resolves Chrome through its cache lookup, which dynamically imports
+# @puppeteer/browsers — and on Fly machines that import failed ("Cannot find
+# package …/@puppeteer/browsers/lib/main.js", Sep 2026 backfill) though the
+# same image passes locally. The env path is checked first and skips it.
+ENV HYPERFRAMES_BROWSER_PATH=/root/.cache/hyperframes/chrome/chrome-headless-shell/linux-${CHROME_VERSION}/chrome-headless-shell-linux64/chrome-headless-shell \
+    PRODUCER_HEADLESS_SHELL_PATH=/root/.cache/hyperframes/chrome/chrome-headless-shell/linux-${CHROME_VERSION}/chrome-headless-shell-linux64/chrome-headless-shell
+
 WORKDIR /app/film-renderer
 COPY --from=filmrenderer . .
 
