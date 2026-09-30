@@ -1,5 +1,5 @@
 import { StyleSheet } from 'react-native';
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, userEvent, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import { FilmCard, POLAROID_WIDTH_RATIO, SIDE_MARGIN, filmCardLook } from '@/components/year-films/film-card';
@@ -51,6 +51,18 @@ describe('FilmCard', () => {
     expect(queryByTestId('timeline-film-film-1-subtitle')).toBeNull();
     fireEvent.press(card);
     expect(onPress).toHaveBeenCalledWith('film-1');
+  });
+
+  it('dims (opacity) while pressed and never applies a scale transform', async () => {
+    const { getByTestId } = renderCard();
+    expect(flatStyle(getByTestId('timeline-film-film-1')).opacity).toBeUndefined();
+    const user = userEvent.setup();
+    // A long press holds the pressed state between press-in and release.
+    const pressing = user.longPress(getByTestId('timeline-film-film-1'), { duration: 300 });
+    await waitFor(() => expect(flatStyle(getByTestId('timeline-film-film-1')).opacity).toBe(0.85));
+    expect(flatStyle(getByTestId('timeline-film-film-1')).transform).toBeUndefined();
+    await pressing;
+    expect(flatStyle(getByTestId('timeline-film-film-1')).opacity).toBeUndefined();
   });
 
   it('renders the cover without its own glyph, plus the pink play button', () => {

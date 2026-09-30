@@ -53,6 +53,11 @@ const END_TOLERANCE_S = 1.5;
 const END_PLAYED_FRACTION = 0.9;
 /** `timeUpdate` at this distance from the end, while paused, also finishes the film. */
 const END_TIME_UPDATE_TOLERANCE_S = 0.3;
+/** Wait this long after an unexpected pause before re-asserting play (lets native state settle). */
+const RESUME_DELAY_MS = 200;
+/** Consecutive unexpected-pause resumes allowed without ~1s of real progress in between. */
+const MAX_UNEXPECTED_RESUMES = 3;
+const RESUME_PROGRESS_RESET_S = 1;
 
 // VideoPlayer is an imperative native shared object. Keep its mutation in
 // these adapters (as memory-media-carousel.tsx does) rather than treating the
@@ -121,6 +126,11 @@ export function useYearFilmPlayer({
   // replacement, so "ended" is only believed after time genuinely progressed.
   const hasPlayedRef = useRef(false);
   const lastTimeRef = useRef(0);
+  // Unexpected-pause recovery (Android audio focus etc.): bounded so a genuine
+  // interruption (phone call, another app taking focus) is not fought forever.
+  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resumeCountRef = useRef(0);
+  const resumeAnchorRef = useRef(0);
 
   const callbacksRef = useRef({ onFirstPlay, onComplete, onUnavailable });
   useEffect(() => {
@@ -145,19 +155,26 @@ export function useYearFilmPlayer({
   const resetPlayedState = useCallback(() => {
     hasPlayedRef.current = false;
     lastTimeRef.current = 0;
+    resumeCountRef.current = 0;
+    resumeAnchorRef.current = 0;
   }, []);
+
+  /** True when nothing (hold, blur/background, completion, motion gate) says stay paused. */
+  const wantsPlaying = useCallback(
+    () => wantsPlayRef.current && !completeRef.current && !heldRef.current && suspendRef.current.size === 0,
+    [],
+  );
 
   const applyPlayState = useCallback(() => {
     if (phaseRef.current !== 'ready' || unmountedRef.current) return;
-    const shouldPlay =
-      wantsPlayRef.current && !completeRef.current && !heldRef.current && suspendRef.current.size === 0;
+    const shouldPlay = wantsPlaying();
     try {
       if (shouldPlay) player.play();
       else player.pause();
     } catch {
       // Lost the race with release; nothing left to control.
     }
-  }, [player]);
+  }, [player, wantsPlaying]);
 
   const setPosition = useCallback(
     (ms: number) => {
@@ -303,12 +320,52 @@ export function useYearFilmPlayer({
 
   // --- player events ------------------------------------------------------
 
+  const isPlayerPlaying = useCallback(() => {
+    try {
+      return Boolean(player.playing);
+    } catch {
+      return false;
+    }
+  }, [player]);
+
+  const clearResumeTimer = useCallback(() => {
+    if (resumeTimerRef.current) {
+      clearTimeout(resumeTimerRef.current);
+      resumeTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => clearResumeTimer, [clearResumeTimer]);
+
+  /**
+   * The player stopped although the user wants the film playing (not held,
+   * suspended, completed or at its end): on Android that is typically an audio
+   * focus loss/denial or a decoder hiccup while something else was playing.
+   * Re-assert play shortly, a bounded number of times.
+   */
+  const scheduleUnexpectedPauseResume = useCallback(() => {
+    if (resumeTimerRef.current || phaseRef.current !== 'ready' || !wantsPlaying()) return;
+    if (resumeCountRef.current >= MAX_UNEXPECTED_RESUMES) return;
+    const totalS = durationRef.current ? durationRef.current / 1000 : 0;
+    // Stopping at the end is the film finishing, not an interruption.
+    if (hasPlayedRef.current && totalS > 0 && lastTimeRef.current >= totalS - END_TOLERANCE_S) return;
+    resumeTimerRef.current = setTimeout(() => {
+      resumeTimerRef.current = null;
+      if (unmountedRef.current || phaseRef.current !== 'ready' || !wantsPlaying()) return;
+      if (isPlayerPlaying()) return;
+      resumeCountRef.current += 1;
+      resumeAnchorRef.current = lastTimeRef.current;
+      applyPlayState();
+    }, RESUME_DELAY_MS);
+  }, [applyPlayState, isPlayerPlaying, wantsPlaying]);
+
   useEventListener(player, 'playingChange', ({ isPlaying: nextIsPlaying }) => {
     setIsPlaying(nextIsPlaying);
     if (nextIsPlaying && !startedRef.current) {
       startedRef.current = true;
       callbacksRef.current.onFirstPlay?.();
     }
+    if (nextIsPlaying) clearResumeTimer();
+    else scheduleUnexpectedPauseResume();
   });
 
   useEventListener(player, 'statusChange', ({ status }) => {
@@ -325,14 +382,6 @@ export function useYearFilmPlayer({
   useEventListener(player, 'sourceLoad', ({ duration }) => {
     if (Number.isFinite(duration) && duration > 0) setPlayerDurationMs(Math.round(duration * 1000));
   });
-
-  const isPlayerPlaying = useCallback(() => {
-    try {
-      return Boolean(player.playing);
-    } catch {
-      return false;
-    }
-  }, [player]);
 
   const finish = useCallback(() => {
     if (completeRef.current) return;
@@ -351,6 +400,10 @@ export function useYearFilmPlayer({
   useEventListener(player, 'timeUpdate', ({ currentTime }) => {
     if (completeRef.current) return;
     lastTimeRef.current = currentTime;
+    if (currentTime - resumeAnchorRef.current >= RESUME_PROGRESS_RESET_S) {
+      resumeCountRef.current = 0;
+      resumeAnchorRef.current = currentTime;
+    }
     if (currentTime > MIN_PLAYED_S) hasPlayedRef.current = true;
     setPosition(Math.max(0, currentTime * 1000));
     if (currentTime > 0.05) setHasFirstFrame(true);

@@ -145,7 +145,10 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xs,
     paddingTop: spacing.lg,
   },
-  wrapPressed: { transform: [{ scale: 0.98 }] },
+  // Opacity, not a scale transform: transforming the ~500pt-tall Pressable (whose
+  // child is also rotated) while pressed can make Android cancel the touch
+  // before release, so the tap never fires `onPress`.
+  wrapPressed: { opacity: 0.85 },
   polaroid: {
     backgroundColor: colors.white,
     borderRadius: 4,

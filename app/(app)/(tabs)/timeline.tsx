@@ -449,7 +449,23 @@ export default function TimelineScreen() {
     () => memories.filter((memory) => !isUserBlocked(memory.user_id)),
     [isUserBlocked, memories],
   );
-  const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+  // The viewability-derived autoplay candidate, and whether this tab screen is
+  // the focused one. Tab screens never unmount, so a route pushed on top (the
+  // Year Film player, memory detail) leaves the feed mounted underneath; a
+  // still-active feed video would keep its player playing there and, on
+  // Android, hold audio focus / a decoder against the pushed screen's own
+  // playback. Blurred => no feed video is active (MediaPage then unmounts the
+  // VideoAsset, which pauses + releases its player); refocus restores the
+  // candidate, since viewability does not re-fire for an unchanged list.
+  const [viewableVideoId, setViewableVideoId] = useState<string | null>(null);
+  const [isTimelineFocused, setIsTimelineFocused] = useState(true);
+  useFocusEffect(
+    useCallback(() => {
+      setIsTimelineFocused(true);
+      return () => setIsTimelineFocused(false);
+    }, []),
+  );
+  const activeVideoId = isTimelineFocused ? viewableVideoId : null;
 
   // ── Year Films (docs/plans/year-film-p2.md Step 5) ──────────────────────
   // Small list, fetched at mount (so an anchored jump never races a late
@@ -563,7 +579,7 @@ export default function TimelineScreen() {
       return token.isViewable && row.kind === 'memory'
         && row.memory.mediaAssets.some((asset) => isVideoContentType(asset.content_type));
     });
-    setActiveVideoId(firstVideo ? (firstVideo.item as MemoryRow).memory.id : null);
+    setViewableVideoId(firstVideo ? (firstVideo.item as MemoryRow).memory.id : null);
   }, []);
 
   // ── Month label: the row under the control row ───────────────────────────
@@ -673,7 +689,7 @@ export default function TimelineScreen() {
   // `key`, which starts it at offset 0 -- no scrollToIndex, no height model.
   const applyAnchor = useCallback((next: string | null) => {
     setTopVisibleDate(null);
-    setActiveVideoId(null);
+    setViewableVideoId(null);
     scrollOffsetRef.current = 0;
     isScrolledDeepRef.current = false;
     setIsScrolledDeep(false);
@@ -744,7 +760,7 @@ export default function TimelineScreen() {
     scrollOffsetRef.current = 0;
     isScrolledDeepRef.current = false;
     setIsScrolledDeep(false);
-    setActiveVideoId(null);
+    setViewableVideoId(null);
     setView(next);
     void saveTimelineView(next);
   }, [anchorDate, currentMonthKey, gridMonths, todayIso, topVisibleDate]);

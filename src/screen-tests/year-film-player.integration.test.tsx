@@ -3,7 +3,7 @@ import { act, fireEvent, renderAsync, screen, waitFor } from '@testing-library/r
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { createVideoPlayer } from 'expo-video';
-import { AccessibilityInfo, Alert } from 'react-native';
+import { AccessibilityInfo, Alert, AppState } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import YearFilmScreen from '../../app/(app)/year-film/[id]';
@@ -213,6 +213,7 @@ describe('Year Film player screen', () => {
       callback(0);
       return 0;
     });
+    jest.spyOn(AppState, 'addEventListener');
     jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
     jest.spyOn(AccessibilityInfo, 'isScreenReaderEnabled').mockResolvedValue(false);
     (Sharing.isAvailableAsync as jest.Mock).mockResolvedValue(true);
@@ -508,6 +509,131 @@ describe('Year Film player screen', () => {
       emit('timeUpdate', { currentTime: 11.5 });
       emit('playToEnd');
       expect(await screen.findByTestId('year-film-complete')).toBeTruthy();
+    });
+  });
+
+  describe('resumes after an unexpected pause (Android audio focus)', () => {
+    const settle = () =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      });
+
+    it('re-asserts play when the player stops although the user wants the film playing', async () => {
+      await renderPlayer();
+      emit('playingChange', { isPlaying: true });
+      emit('timeUpdate', { currentTime: 2 });
+      mockPlayer.play.mockClear();
+
+      emit('playingChange', { isPlaying: false });
+
+      await waitFor(() => expect(mockPlayer.play).toHaveBeenCalledTimes(1));
+    });
+
+    it('does not resume if playback came back by itself first', async () => {
+      await renderPlayer();
+      emit('playingChange', { isPlaying: true });
+      emit('timeUpdate', { currentTime: 2 });
+      mockPlayer.play.mockClear();
+
+      emit('playingChange', { isPlaying: false });
+      emit('playingChange', { isPlaying: true });
+      await settle();
+
+      expect(mockPlayer.play).not.toHaveBeenCalled();
+    });
+
+    it('gives up after a few resumes without progress, and earns them back with progress', async () => {
+      await renderPlayer();
+      emit('playingChange', { isPlaying: true });
+      emit('timeUpdate', { currentTime: 2 });
+      mockPlayer.play.mockClear();
+
+      for (let i = 0; i < 5; i += 1) {
+        emit('playingChange', { isPlaying: false });
+        await settle();
+      }
+      expect(mockPlayer.play).toHaveBeenCalledTimes(3);
+
+      emit('timeUpdate', { currentTime: 4 });
+      mockPlayer.play.mockClear();
+      emit('playingChange', { isPlaying: false });
+      await waitFor(() => expect(mockPlayer.play).toHaveBeenCalledTimes(1));
+    });
+
+    it('does not resume a deliberate hold', async () => {
+      await renderPlayer();
+      emit('playingChange', { isPlaying: true });
+      emit('timeUpdate', { currentTime: 1 });
+      const zone = screen.getByTestId('year-film-tap-next');
+      fireEvent(zone, 'pressIn');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      });
+      expect(mockPlayer.pause).toHaveBeenCalled();
+      mockPlayer.play.mockClear();
+
+      emit('playingChange', { isPlaying: false });
+      await settle();
+
+      expect(mockPlayer.play).not.toHaveBeenCalled();
+    });
+
+    it('does not resume while the share flow has the film paused', async () => {
+      mockedFs.createDownloadResumable.mockImplementation((() => ({
+        downloadAsync: () => new Promise(() => undefined),
+        cancelAsync: jest.fn(() => Promise.resolve()),
+      })) as never);
+      await renderPlayer();
+      emit('playingChange', { isPlaying: true });
+      emit('timeUpdate', { currentTime: 1 });
+      fireEvent.press(screen.getByTestId('year-film-share-top'));
+      await waitFor(() => expect(mockPlayer.pause).toHaveBeenCalled());
+      mockPlayer.play.mockClear();
+
+      emit('playingChange', { isPlaying: false });
+      await settle();
+
+      expect(mockPlayer.play).not.toHaveBeenCalled();
+    });
+
+    it('does not resume after completion', async () => {
+      await renderPlayer();
+      emit('playingChange', { isPlaying: true });
+      await reachCompletion();
+      mockPlayer.play.mockClear();
+
+      emit('playingChange', { isPlaying: false });
+      await settle();
+
+      expect(mockPlayer.play).not.toHaveBeenCalled();
+    });
+
+    it('does not resume when the player stopped at the very end (finishing, not interrupted)', async () => {
+      await renderPlayer();
+      emit('playingChange', { isPlaying: true });
+      emit('timeUpdate', { currentTime: 11.8 });
+      mockPlayer.play.mockClear();
+
+      emit('playingChange', { isPlaying: false });
+      await settle();
+
+      expect(mockPlayer.play).not.toHaveBeenCalled();
+    });
+
+    it('does not resume while the app is backgrounded', async () => {
+      await renderPlayer();
+      emit('playingChange', { isPlaying: true });
+      emit('timeUpdate', { currentTime: 1 });
+      const listener = (AppState.addEventListener as jest.Mock | undefined);
+      expect(listener).toBeDefined();
+      const handler = (listener as jest.Mock).mock.calls.at(-1)?.[1] as (state: string) => void;
+      act(() => handler('background'));
+      mockPlayer.play.mockClear();
+
+      emit('playingChange', { isPlaying: false });
+      await settle();
+
+      expect(mockPlayer.play).not.toHaveBeenCalled();
     });
   });
 

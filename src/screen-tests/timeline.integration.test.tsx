@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 
 import TimelineScreen from '../../app/(app)/(tabs)/timeline';
@@ -9,6 +9,7 @@ import { useFamilyActivityUnread } from '@/hooks/useFamilyActivity';
 import { useFamilyMembers, useOnboardingStatus } from '@/hooks/useFamilyMembers';
 import { useGalleryImportEntryStatus } from '@/hooks/useGalleryImport';
 import { useMemories } from '@/hooks/useMemories';
+import { MemoryCard } from '@/components/memory-card';
 
 // Workstream A4: the old useFocusEffect(refetch) is gone -- freshness comes
 // from staleTime + cache patches + pull-to-refresh + the app-foreground
@@ -19,11 +20,37 @@ import { useMemories } from '@/hooks/useMemories';
 jest.mock('expo-router', () => ({
   router: { push: jest.fn() },
   useNavigation: () => ({ addListener: () => () => undefined, isFocused: () => true }),
-  useFocusEffect: (callback: () => void) => {
+  // Focus is controllable: `mockSetTimelineFocused(false)` runs the effects'
+  // cleanups (blur), `(true)` re-runs them (focus), like a route pushed on top
+  // of the tab screen and popped again.
+  useFocusEffect: (callback: () => void | (() => void)) => {
     const { useEffect } = jest.requireActual('react') as typeof import('react');
-    useEffect(callback, [callback]);
+    useEffect(() => {
+      let cleanup: void | (() => void);
+      const entry = {
+        focus: () => {
+          cleanup = callback();
+        },
+        blur: () => {
+          if (typeof cleanup === 'function') cleanup();
+          cleanup = undefined;
+        },
+      };
+      mockFocusEntries.add(entry);
+      entry.focus();
+      return () => {
+        entry.blur();
+        mockFocusEntries.delete(entry);
+      };
+    }, [callback]);
   },
 }));
+const mockFocusEntries = new Set<{ focus: () => void; blur: () => void }>();
+function mockSetTimelineFocused(focused: boolean) {
+  act(() => {
+    mockFocusEntries.forEach((entry) => (focused ? entry.focus() : entry.blur()));
+  });
+}
 // Year Films (docs/plans/year-film-p2.md Step 5): none in this suite -- the
 // film placement/cards are covered by timeline-month-jump.integration.test.tsx.
 jest.mock('@/hooks/useYearFilms', () => {
@@ -100,7 +127,7 @@ jest.mock('@/utils/gallery-import-bell-seen', () => ({
 }));
 
 jest.mock('@/components/memory-card', () => ({
-  MemoryCard: () => null,
+  MemoryCard: jest.fn(() => null),
 }));
 jest.mock('@/components/memory-fab', () => ({
   MemoryFab: () => null,
@@ -205,6 +232,66 @@ describe('TimelineScreen', () => {
       hasNextPage: false,
       isFetchingNextPage: false,
     } as unknown as ReturnType<typeof useMemories>);
+  });
+
+  // Tab screens never unmount: a route pushed on top (Year Film player, memory
+  // detail) must not leave the feed's autoplaying video playing underneath it
+  // (on Android it holds audio focus / a decoder against the pushed screen).
+  describe('feed video autoplay vs. screen focus', () => {
+    const videoMemory = {
+      ...memory,
+      memory_type: 'video',
+      mediaAssets: [{ id: 'asset-1', content_type: 'video/mp4', object_key: 'v.mp4' }],
+    };
+    const mockedMemoryCard = MemoryCard as unknown as jest.Mock;
+    const lastVideoActive = () => mockedMemoryCard.mock.calls.at(-1)?.[0]?.isVideoActive as boolean;
+
+    beforeEach(() => {
+      mockSetTimelineFocused(true);
+      mockedUseMemories.mockReturnValue({
+        memories: [videoMemory],
+        isLoading: false,
+        isRefetching: false,
+        isError: false,
+        error: null,
+        refetch: mockedRefetch,
+        fetchNextPage: jest.fn(),
+        hasNextPage: false,
+        isFetchingNextPage: false,
+      } as unknown as ReturnType<typeof useMemories>);
+    });
+
+    function makeViewable(list: { props: { onViewableItemsChanged: (info: unknown) => void } }) {
+      act(() => {
+        list.props.onViewableItemsChanged({
+          viewableItems: [
+            { isViewable: true, item: { kind: 'memory', key: 'memory-1', memory: videoMemory } },
+          ],
+        });
+      });
+    }
+
+    it('clears the active feed video on blur and restores it on focus', () => {
+      const { getByTestId } = render(<TimelineScreen />);
+      makeViewable(getByTestId('timeline-memory-list') as never);
+      expect(lastVideoActive()).toBe(true);
+
+      mockSetTimelineFocused(false);
+      expect(lastVideoActive()).toBe(false);
+
+      mockSetTimelineFocused(true);
+      expect(lastVideoActive()).toBe(true);
+    });
+
+    it('does not activate a video that scrolls into view while blurred until focus returns', () => {
+      const { getByTestId } = render(<TimelineScreen />);
+      mockSetTimelineFocused(false);
+      makeViewable(getByTestId('timeline-memory-list') as never);
+      expect(lastVideoActive()).toBe(false);
+
+      mockSetTimelineFocused(true);
+      expect(lastVideoActive()).toBe(true);
+    });
   });
 
   it('does not call refetch merely from mounting the screen', async () => {
