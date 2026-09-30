@@ -228,10 +228,13 @@ export interface AnalyticsEventMap {
   };
   year_film_share_tapped: {
     kind: 'birthday' | 'family_month' | 'family_year';
+    /** Share button in the player's top bar (film paused) or on the end-of-film overlay. */
+    source: 'player' | 'completion';
   };
   /** The share sheet returned (not proof a share completed). */
   year_film_shared: {
     kind: 'birthday' | 'family_month' | 'family_year';
+    source: 'player' | 'completion';
   };
   year_film_recaps_opened: {
     year: number;

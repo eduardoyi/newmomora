@@ -16,12 +16,18 @@ import { filmTitle, type YearFilmMember } from '@/utils/year-films';
 
 /** Horizontal padding of the Timeline's card column (`cardItem` in timeline.tsx). */
 const COLUMN_PADDING = spacing.md;
-/** Polaroid outer width as a share of the card column. */
-const POLAROID_WIDTH_RATIO = 0.58;
+/** Polaroid outer width as a share of the card column: a big pasted print. */
+export const POLAROID_WIDTH_RATIO = 0.84;
 /** Even white border around the cover. */
 const POLAROID_PADDING = 8;
-/** Absorbs the rotated bounding box + tape overhang so nothing clips at the list edges. */
-const SIDE_MARGIN = 20;
+/**
+ * Inset from the column edge on the film's own side (the far side keeps the
+ * rest, so alternation reads as a small shift, not a blank gutter). Sized to
+ * the overhang at the top corner where the tilt swings out: ~13pt of rotated
+ * box + 16pt of corner tape, less the 16pt column padding -- so the tape clears
+ * the screen edge (>= 5pt at 375pt wide).
+ */
+export const SIDE_MARGIN = 18;
 const PLAY_SIZE = 40;
 const TAPE_OPACITY_HEX = '8C'; // ~55%
 
@@ -54,7 +60,7 @@ export function filmCardLook(id: string): FilmCardLook {
   const left = h % 2 === 0;
   return {
     side: left ? 'left' : 'right',
-    tilt: left ? -3.5 : 3,
+    tilt: left ? -3 : 2.5,
     tape: TAPE_COLORS[Math.floor(h / 2) % TAPE_COLORS.length],
   };
 }
@@ -132,11 +138,12 @@ export const FilmCard = memo(function FilmCard({ film, members, isNew, onPress }
 });
 
 const styles = StyleSheet.create({
-  // Room for the tape overhang above and the tilt below; the Timeline's
-  // cardItem adds the usual gap between rows.
+  // Room for the tape overhang + the tilted top edge above (~30pt at the
+  // larger size; the previous cell's 14pt bottom padding covers the rest) and
+  // the tilted bottom edge below, so the overhang never touches a neighbour.
   wrap: {
     paddingBottom: spacing.xs,
-    paddingTop: spacing.md,
+    paddingTop: spacing.lg,
   },
   wrapPressed: { transform: [{ scale: 0.98 }] },
   polaroid: {

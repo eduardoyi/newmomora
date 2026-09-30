@@ -95,8 +95,8 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 |---|---|---|
 | `year_film_opened` | `kind: birthday\|family_month\|family_year`, `source: timeline\|keepsakes\|push\|drawer\|calendar` | Year Film player, once per open (the surface that navigated there passes `source`) |
 | `year_film_completed` | `kind`, `duration_s` (film length, whole seconds) | Player: playback reached the end |
-| `year_film_share_tapped` | `kind` | Player completion overlay: Share tapped |
-| `year_film_shared` | `kind` | Player: the share sheet returned (does not prove the share completed) |
+| `year_film_share_tapped` | `kind`, `source` (`player`\|`completion`) | Share tapped: the player's top-bar button (film paused) or the end-of-film overlay |
+| `year_film_shared` | `kind`, `source` (`player`\|`completion`) | Player: the share sheet returned (does not prove the share completed) |
 | `year_film_recaps_opened` | `year` | Keepsakes "See all {year} recaps" grid opened |
 | `year_film_edit_opened` | `kind` | Player edit sheet: options loaded for an editable film (owners/managers only) |
 | `year_film_edit_saved` | `kind`, `removed_count` (size of the full removed set), `quote_changed`, `music_changed` | Edit sheet: `save_year_film_edits` returned ok |

@@ -135,14 +135,19 @@ calendar`, default `timeline`) feeds `year_film_opened`.
   every exit path (success, cancel, error, unmount). `sweepFilmShareCache()`
   (`src/utils/film-share.ts`, called once from `AppProviders`) clears the folder
   at app start for kills mid-download. Events: `year_film_share_tapped`,
-  `year_film_shared` (the sheet returned, not proof of a share).
+  `year_film_shared` (the sheet returned, not proof of a share), both with
+  `source: 'player' | 'completion'`. Share is reachable mid-film from the top
+  bar (`year-film-share-top`, "Share film", beside mute/close, only while the
+  film is `ready`): it `hold()`s playback, then runs the same flow with the
+  download progress + Cancel in `player/film-share-progress.tsx`. The film stays
+  paused afterwards; the next tap resumes it without skipping a scene.
 - **Push.** `route: 'year-film'` (`filmId`, `familyId`): `useNotifications`
   switches the active family first (Timeline fallback if the recipient left that
   family), refreshes the family's films list and opens the player with source
   `push`; warm and cold start share the path, and on a cold start the player's
   close replaces to the Timeline.
 - Code: `app/(app)/year-film/[id].tsx`, `src/hooks/{useYearFilmPlayer,useYearFilmShare,useYearFilm}.ts`,
-  `src/components/year-films/player/{film-progress,film-completion}.tsx`,
+  `src/components/year-films/player/{film-progress,film-completion,film-share-progress}.tsx`,
   `src/utils/{year-film-scenes,film-share}.ts`. To extend: add controls to the
   route; keep every native-player call in the small adapter functions at the top
   of `useYearFilmPlayer.ts`.

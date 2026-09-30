@@ -178,6 +178,17 @@ async function renderPlayer() {
   return view;
 }
 
+async function renderWithoutSettling() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return renderAsync(
+    <QueryClientProvider client={queryClient}>
+      <SafeAreaProvider initialMetrics={safeAreaMetrics}>
+        <YearFilmScreen />
+      </SafeAreaProvider>
+    </QueryClientProvider>,
+  );
+}
+
 async function reachCompletion() {
   // Real playback: time progressed to the end, then the player reports it.
   emit('timeUpdate', { currentTime: 11 });
@@ -544,7 +555,7 @@ describe('Year Film player screen', () => {
       handle.progress(42, 100);
 
       expect(screen.getByTestId('year-film-share-progress').props.children).toBe('Preparing video… 42%');
-      expect(mockedTrack).toHaveBeenCalledWith('year_film_share_tapped', { kind: 'family_month' });
+      expect(mockedTrack).toHaveBeenCalledWith('year_film_share_tapped', { kind: 'family_month', source: 'completion' });
 
       await act(async () => {
         download.resolve({ uri: 'file:///cache/film-share/film-1.mp4', status: 200 });
@@ -557,7 +568,7 @@ describe('Year Film player screen', () => {
           dialogTitle: 'September recap',
         }),
       );
-      await waitFor(() => expect(mockedTrack).toHaveBeenCalledWith('year_film_shared', { kind: 'family_month' }));
+      await waitFor(() => expect(mockedTrack).toHaveBeenCalledWith('year_film_shared', { kind: 'family_month', source: 'completion' }));
       await waitFor(() =>
         expect(mockedFs.deleteAsync).toHaveBeenLastCalledWith('file:///cache/film-share/film-1.mp4', { idempotent: true }),
       );
@@ -585,6 +596,114 @@ describe('Year Film player screen', () => {
       expect(mockedSharing.shareAsync).not.toHaveBeenCalled();
       expect(mockedTrack).not.toHaveBeenCalledWith('year_film_shared', expect.anything());
       expect(mockedFs.deleteAsync).toHaveBeenLastCalledWith('file:///cache/film-share/film-1.mp4', { idempotent: true });
+    });
+
+    describe('from the top bar during playback', () => {
+      it('shows the button in the top row beside mute and close', async () => {
+        await renderPlayer();
+        const button = screen.getByTestId('year-film-share-top');
+        expect(button.props.accessibilityLabel).toBe('Share film');
+        expect(screen.getByTestId('year-film-mute')).toBeTruthy();
+        expect(screen.getByTestId('year-film-close')).toBeTruthy();
+      });
+
+      it('is hidden when the film is unavailable', async () => {
+        mockedGetPlayback.mockResolvedValue({
+          data: null,
+          error: { message: 'gone', code: 'film_unavailable' },
+          unavailable: true,
+        });
+        await renderWithoutSettling();
+        await screen.findByTestId('year-film-unavailable');
+        expect(screen.queryByTestId('year-film-share-top')).toBeNull();
+      });
+
+      it('is hidden when the film could not be played', async () => {
+        mockPlayer.replaceAsync.mockRejectedValue(new Error('bad source'));
+        await renderWithoutSettling();
+        await screen.findByTestId('year-film-error');
+        expect(screen.queryByTestId('year-film-share-top')).toBeNull();
+      });
+
+      it('is hidden while the film is still loading', async () => {
+        mockedGetPlayback.mockReturnValue(new Promise(() => undefined));
+        await renderWithoutSettling();
+        expect(screen.queryByTestId('year-film-share-top')).toBeNull();
+      });
+
+      it('pauses, shows progress during playback, shares with source "player" and stays paused', async () => {
+        const download = deferred<{ uri: string; status: number }>();
+        const handle = mockDownload(() => download.promise);
+        await renderPlayer();
+        emit('timeUpdate', { currentTime: 1 });
+        mockPlayer.pause.mockClear();
+        mockPlayer.play.mockClear();
+
+        fireEvent.press(screen.getByTestId('year-film-share-top'));
+
+        expect(mockPlayer.pause).toHaveBeenCalled();
+        expect(mockedTrack).toHaveBeenCalledWith('year_film_share_tapped', { kind: 'family_month', source: 'player' });
+        await waitFor(() => expect(mockedFs.createDownloadResumable).toHaveBeenCalled());
+        handle.progress(30, 100);
+        expect(screen.queryByTestId('year-film-complete')).toBeNull();
+        expect(screen.getByTestId('year-film-share-progress').props.children).toBe('Preparing video… 30%');
+        expect(screen.getByTestId('year-film-share-cancel')).toBeTruthy();
+        expect(screen.getByTestId('year-film-share-top').props.accessibilityState?.disabled).toBe(true);
+
+        await act(async () => {
+          download.resolve({ uri: 'file:///cache/film-share/film-1.mp4', status: 200 });
+        });
+        await waitFor(() => expect(mockedSharing.shareAsync).toHaveBeenCalled());
+        await waitFor(() =>
+          expect(mockedTrack).toHaveBeenCalledWith('year_film_shared', { kind: 'family_month', source: 'player' }),
+        );
+        await waitFor(() => expect(screen.queryByTestId('year-film-share-progress')).toBeNull());
+        await waitFor(() =>
+          expect(mockedFs.deleteAsync).toHaveBeenLastCalledWith('file:///cache/film-share/film-1.mp4', { idempotent: true }),
+        );
+
+        // Still paused (never resumed by the share flow), with the Paused veil up.
+        expect(mockPlayer.play).not.toHaveBeenCalled();
+        expect(screen.getByTestId('year-film-pause-veil')).toBeTruthy();
+
+        // A tap resumes without also skipping a scene.
+        const zone = screen.getByTestId('year-film-tap-next');
+        fireEvent(zone, 'pressIn');
+        fireEvent(zone, 'pressOut');
+        fireEvent.press(zone);
+        expect(mockPlayer.play).toHaveBeenCalled();
+        expect(mockPlayer.currentTime).toBe(0);
+        expect(screen.queryByTestId('year-film-pause-veil')).toBeNull();
+      });
+
+      it('cancel leaves the film paused and never opens the share sheet', async () => {
+        const download = deferred<undefined>();
+        const handle = mockDownload(() => download.promise);
+        await renderPlayer();
+        mockPlayer.play.mockClear();
+
+        fireEvent.press(screen.getByTestId('year-film-share-top'));
+        await screen.findByTestId('year-film-share-cancel');
+        fireEvent.press(screen.getByTestId('year-film-share-cancel'));
+        expect(handle.cancelAsync).toHaveBeenCalled();
+        await act(async () => {
+          download.resolve(undefined);
+        });
+
+        await waitFor(() => expect(screen.queryByTestId('year-film-share-progress')).toBeNull());
+        expect(mockedSharing.shareAsync).not.toHaveBeenCalled();
+        expect(mockedTrack).not.toHaveBeenCalledWith('year_film_shared', expect.anything());
+        expect(mockPlayer.play).not.toHaveBeenCalled();
+        expect(screen.getByTestId('year-film-pause-veil')).toBeTruthy();
+        expect(screen.getByTestId('year-film-share-top').props.accessibilityState?.disabled).toBe(false);
+      });
+
+      it('is replaced by the completion overlay at the end', async () => {
+        await renderPlayer();
+        await reachCompletion();
+        expect(screen.queryByTestId('year-film-share-top')).toBeNull();
+        expect(screen.getByTestId('year-film-share')).toBeTruthy();
+      });
     });
 
     it('deletes the file when the download fails', async () => {

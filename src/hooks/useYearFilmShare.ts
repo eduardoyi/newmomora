@@ -16,6 +16,9 @@ type DownloadResumable = ReturnType<typeof FileSystem.createDownloadResumable>;
 
 export type YearFilmShareStatus = 'idle' | 'downloading' | 'sharing';
 
+/** Where Share was tapped: the player's top bar mid-film, or the end-of-film overlay. */
+export type YearFilmShareSource = 'player' | 'completion';
+
 interface UseYearFilmShareOptions {
   filmId: string;
   /** Null until the film row is known: analytics then skip (kind is required). */
@@ -59,11 +62,11 @@ export function useYearFilmShare({ filmId, kind, title }: UseYearFilmShareOption
     if (resumable) void resumable.cancelAsync().catch(() => undefined);
   }, []);
 
-  const share = useCallback(async () => {
+  const share = useCallback(async (source: YearFilmShareSource) => {
     if (isBusyRef.current) return;
     isBusyRef.current = true;
     cancelledRef.current = false;
-    if (kind) trackEvent('year_film_share_tapped', { kind });
+    if (kind) trackEvent('year_film_share_tapped', { kind, source });
     setProgress(0);
     setStatus('downloading');
 
@@ -120,7 +123,7 @@ export function useYearFilmShare({ filmId, kind, title }: UseYearFilmShareOption
         ...(title ? { dialogTitle: title } : {}),
       });
       // The sheet returned; this is not proof that a share completed.
-      if (kind) trackEvent('year_film_shared', { kind });
+      if (kind) trackEvent('year_film_shared', { kind, source });
     } catch {
       // A cancelled transfer surfaces as a rejection on some platforms; that is not an error.
       if (!cancelledRef.current) {

@@ -2,7 +2,7 @@ import { StyleSheet } from 'react-native';
 import { fireEvent, render } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { FilmCard, filmCardLook } from '@/components/year-films/film-card';
+import { FilmCard, POLAROID_WIDTH_RATIO, SIDE_MARGIN, filmCardLook } from '@/components/year-films/film-card';
 import type { YearFilm } from '@/services/year-films';
 
 jest.mock('@/hooks/useYearFilms', () => ({
@@ -74,7 +74,7 @@ describe('FilmCard', () => {
     expect(ids.map((id) => filmCardLook(id))).toEqual(looks);
     expect(new Set(looks.map((l) => l.side))).toEqual(new Set(['left', 'right']));
     expect(new Set(looks.map((l) => l.tape)).size).toBe(3);
-    for (const l of looks) expect(l.tilt).toBe(l.side === 'left' ? -3.5 : 3);
+    for (const l of looks) expect(l.tilt).toBe(l.side === 'left' ? -3 : 2.5);
   });
 
   it('places the polaroid on its hashed side and tilts it that way', () => {
@@ -85,6 +85,39 @@ describe('FilmCard', () => {
     l.unmount();
     const r = renderCard({ film: { ...FILM, id: right } });
     expect(flatStyle(r.getByTestId(`timeline-film-${right}`)).alignSelf).toBe('flex-end');
+  });
+
+  it('is a wide print (~84% of the column) with a small inset on its own side only', () => {
+    const left = ids('left');
+    const right = ids('right');
+    const { width: windowWidth } = jest.requireActual('react-native').Dimensions.get('window');
+    const column = windowWidth - 32;
+    const l = renderCard({ film: { ...FILM, id: left } });
+    const leftStyle = flatStyle(l.getByTestId(`timeline-film-${left}`));
+    expect(POLAROID_WIDTH_RATIO).toBe(0.84);
+    expect(leftStyle.width).toBe(Math.round(column * 0.84));
+    expect(leftStyle.marginLeft).toBe(SIDE_MARGIN);
+    expect(leftStyle.marginRight).toBe(0);
+    l.unmount();
+    const r = renderCard({ film: { ...FILM, id: right } });
+    const rightStyle = flatStyle(r.getByTestId(`timeline-film-${right}`));
+    expect(rightStyle.width).toBe(Math.round(column * 0.84));
+    expect(rightStyle.marginRight).toBe(SIDE_MARGIN);
+    expect(rightStyle.marginLeft).toBe(0);
+  });
+
+  it('keeps the rotated box + corner tape inside a 375pt screen', () => {
+    // 375pt: column 343, print 288 wide, ~500 tall (9:16 cover + 8pt border).
+    const printWidth = Math.round((375 - 32) * POLAROID_WIDTH_RATIO);
+    const printHeight = ((printWidth - 16) * 16) / 9 + 16;
+    for (const tilt of [-3, 2.5]) {
+      const rad = (Math.abs(tilt) * Math.PI) / 180;
+      const cornerSwing = (printHeight / 2) * Math.sin(rad);
+      const tapeReach = 16; // tape hangs 16pt past the print's edge
+      const leftEdge = 16 + SIDE_MARGIN - cornerSwing - tapeReach;
+      expect(leftEdge).toBeGreaterThanOrEqual(4);
+      expect(375 - (16 + SIDE_MARGIN + printWidth + cornerSwing)).toBeGreaterThanOrEqual(4);
+    }
   });
 });
 

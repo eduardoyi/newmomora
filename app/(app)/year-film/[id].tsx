@@ -8,7 +8,7 @@ import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { VideoView } from 'expo-video';
-import { ChevronLeft, ChevronRight, Pause, Play, Volume2, VolumeX, X } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, Pause, Play, Share2, Volume2, VolumeX, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,6 +18,7 @@ import { EditFilmButton } from '@/components/year-films/edit/edit-film-button';
 import { FILM_EDIT_SAVED_MESSAGE, FilmEditSheet } from '@/components/year-films/edit/film-edit-sheet';
 import { FilmCompletion } from '@/components/year-films/player/film-completion';
 import { FilmProgress } from '@/components/year-films/player/film-progress';
+import { FilmShareProgress } from '@/components/year-films/player/film-share-progress';
 import { fonts } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useYearFilm } from '@/hooks/useYearFilm';
@@ -147,9 +148,29 @@ export default function YearFilmScreen() {
     },
     [],
   );
+  // Share from the top bar pauses via `hold()`, and the film stays paused after
+  // the share finishes or is cancelled. The tap that resumes it (its pressOut
+  // already released the hold) must not also skip a scene.
+  const pausedByShareRef = useRef(false);
+  const { hold: holdPlayback, togglePaused } = player;
+  const { share: startShare } = share;
+  const onSharePlayer = useCallback(() => {
+    pausedByShareRef.current = true;
+    holdPlayback();
+    void startShare('player');
+  }, [holdPlayback, startShare]);
+  const onToggleAccessiblePause = useCallback(() => {
+    pausedByShareRef.current = false;
+    togglePaused();
+  }, [togglePaused]);
   const onTapPrevious = useCallback(() => {
     if (didHoldRef.current) {
       didHoldRef.current = false;
+      pausedByShareRef.current = false;
+      return;
+    }
+    if (pausedByShareRef.current) {
+      pausedByShareRef.current = false;
       return;
     }
     previous();
@@ -157,6 +178,11 @@ export default function YearFilmScreen() {
   const onTapNext = useCallback(() => {
     if (didHoldRef.current) {
       didHoldRef.current = false;
+      pausedByShareRef.current = false;
+      return;
+    }
+    if (pausedByShareRef.current) {
+      pausedByShareRef.current = false;
       return;
     }
     next();
@@ -169,6 +195,9 @@ export default function YearFilmScreen() {
     isPlayable && !player.hasFirstFrame && !player.needsMotionConfirm;
   const showControls = isPlayable && !player.isComplete && !player.needsMotionConfirm;
   const isPausedByHold = player.isHeld && !player.isComplete;
+  const canShareFromPlayer =
+    player.phase === 'ready' && !player.isComplete && !player.needsMotionConfirm && kind !== null;
+  const isShareBusy = share.status !== 'idle';
 
   return (
     <View style={styles.screen} testID="year-film-player">
@@ -226,6 +255,10 @@ export default function YearFilmScreen() {
         </View>
       ) : null}
 
+      {share.status === 'downloading' && !player.isComplete ? (
+        <FilmShareProgress onCancel={share.cancel} progress={share.progress} />
+      ) : null}
+
       <SafeAreaView edges={['top']} pointerEvents="box-none" style={styles.top}>
         <View pointerEvents="box-none" style={styles.topChrome}>
           {isPlayable ? (
@@ -249,6 +282,19 @@ export default function YearFilmScreen() {
                 testID="year-film-mute"
               >
                 {player.isMuted ? <VolumeX color={CREAM} size={18} /> : <Volume2 color={CREAM} size={18} />}
+              </Pressable>
+            ) : null}
+            {canShareFromPlayer ? (
+              <Pressable
+                accessibilityLabel="Share film"
+                accessibilityRole="button"
+                accessibilityState={{ disabled: isShareBusy }}
+                disabled={isShareBusy}
+                onPress={onSharePlayer}
+                style={[styles.roundButton, isShareBusy && styles.roundButtonDisabled]}
+                testID="year-film-share-top"
+              >
+                <Share2 color={CREAM} size={18} />
               </Pressable>
             ) : null}
             <Pressable
@@ -284,7 +330,7 @@ export default function YearFilmScreen() {
           <Pressable
             accessibilityLabel={player.isHeld ? 'Play film' : 'Pause film'}
             accessibilityRole="button"
-            onPress={player.togglePaused}
+            onPress={onToggleAccessiblePause}
             style={styles.accessibleButton}
           >
             {player.isHeld ? <Play color={CREAM} /> : <Pause color={CREAM} />}
@@ -319,7 +365,7 @@ export default function YearFilmScreen() {
         <FilmCompletion
           onReplay={player.replay}
           renderExtraActions={canEditFilm ? () => <EditFilmButton onPress={() => setIsEditOpen(true)} /> : undefined}
-          share={{ status: share.status, progress: share.progress, onShare: share.share, onCancel: share.cancel }}
+          share={{ status: share.status, progress: share.progress, onShare: () => void share.share('completion'), onCancel: share.cancel }}
           title={title}
         />
       ) : null}
@@ -391,6 +437,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 44,
   },
+  roundButtonDisabled: { opacity: 0.5 },
   pauseVeil: {
     ...StyleSheet.absoluteFill,
     alignItems: 'center',
