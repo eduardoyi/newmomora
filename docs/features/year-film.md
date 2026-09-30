@@ -362,6 +362,12 @@ permanent.
 
 ## Constraints & gotchas
 
+- **Monthly-rush capacity** (2026-09-30): `schedule-year-films` starts up to
+  `DISPATCH_BATCH = 60` films per hourly run (~1,000 before the 19:00
+  delivery on the 1st) and `year_film_settings.max_concurrent_renders = 12`
+  (prod value; the migration default is 4). Raise both together; the Worker
+  falls back across regions/sizes on Fly capacity errors.
+
 - **Fast capture**: no CSS `filter: blur` or `clip-path` in compositions
   (blur is baked by ffmpeg, the wipe is transform-only).
 - **Voice level**: the sound scene's voice is measured (`ebur128`) and given

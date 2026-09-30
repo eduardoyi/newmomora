@@ -18,7 +18,12 @@ import { deleteObject, listObjectKeys } from '../_shared/r2.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 
-const DISPATCH_BATCH = 20;
+// Films started per hourly run. Every family's recap is due at 00:30 local on
+// the 1st and surfaces at 19:00, so this caps the monthly rush at ~60/hour
+// (~1,000 films before delivery). Machine starts are spread by the Worker's
+// 0–45 s jitter; renders are capped separately by
+// year_film_settings.max_concurrent_renders.
+const DISPATCH_BATCH = 60;
 const CLEANUP_BATCH = 20;
 
 type Rpc = (name: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message: string } | null }>;
