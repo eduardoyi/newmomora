@@ -36,7 +36,7 @@ async function withDispatchEnv<T>(run: () => Promise<T>): Promise<T> {
  * for why this is an adequate boundary for these tests (the CAS's
  * atomicity is Postgres's own property; these tests exercise this file's
  * OWN branching on top of it). */
-function createStubClient(book: Record<string, unknown> | null, options: { onUpdate?: () => void } = {}) {
+function createStubClient(book: Record<string, unknown> | null, options: { onUpdate?: (patch: Record<string, unknown>) => void } = {}) {
   return () => ({
     from(table: string) {
       if (table !== 'memory_books') throw new Error(`unexpected table ${table}`);
@@ -44,7 +44,7 @@ function createStubClient(book: Record<string, unknown> | null, options: { onUpd
         select: () => chain,
         eq: () => chain,
         update: (patch: Record<string, unknown>) => {
-          options.onUpdate?.();
+          options.onUpdate?.(patch);
           updatedWith = patch;
           return chain;
         },
@@ -184,6 +184,63 @@ Deno.test('a failed book can be retried the same way as queued', async () => {
     );
     assertEquals(response.status, 202);
   });
+});
+
+Deno.test('a paused scope (everything) is parked as failed and never dispatched', async () => {
+  await withDispatchEnv(async () => {
+    let dispatched = false;
+    const patches: Record<string, unknown>[] = [];
+    const response = await handleGenerateMemoryBook(
+      new Request('http://localhost', { method: 'POST', body: JSON.stringify({ memoryBookId: BOOK_ID }) }),
+      {
+        getAuthenticatedUser: async () => fakeUser(),
+        createServiceClient: createStubClient(
+          { id: BOOK_ID, family_id: FAMILY_ID, scope_kind: 'everything', status: 'queued', workflow_instance_id: null, generation_attempt_id: null, generation_started_at: null },
+          { onUpdate: (patch) => patches.push(patch) },
+        ),
+        getCallerFamilyRole: async () => 'owner',
+        fetch: async () => { dispatched = true; return new Response('{}', { status: 202 }); },
+      },
+    );
+    assertEquals(response.status, 409);
+    assertEquals((await response.json()).code, 'SCOPE_PAUSED');
+    assertEquals(dispatched, false);
+    assertEquals(patches.length, 1);
+    assertEquals(patches[0].status, 'failed');
+    assertEquals(patches[0].failure_reason, 'SCOPE_PAUSED');
+  });
+});
+
+Deno.test('a paused scope retried from failed is refused without another write', async () => {
+  let dispatched = false;
+  let updates = 0;
+  const response = await handleGenerateMemoryBook(
+    new Request('http://localhost', { method: 'POST', body: JSON.stringify({ memoryBookId: BOOK_ID }) }),
+    {
+      getAuthenticatedUser: async () => fakeUser(),
+      createServiceClient: createStubClient(
+        { id: BOOK_ID, family_id: FAMILY_ID, scope_kind: 'everything', status: 'failed', workflow_instance_id: null, generation_attempt_id: null, generation_started_at: null },
+        { onUpdate: () => { updates++; } },
+      ),
+      getCallerFamilyRole: async () => 'owner',
+      fetch: async () => { dispatched = true; return new Response('{}', { status: 202 }); },
+    },
+  );
+  assertEquals(response.status, 409);
+  assertEquals(dispatched, false);
+  assertEquals(updates, 0);
+});
+
+Deno.test('an already-ready book of a paused scope still reports ready', async () => {
+  const response = await handleGenerateMemoryBook(
+    new Request('http://localhost', { method: 'POST', body: JSON.stringify({ memoryBookId: BOOK_ID }) }),
+    {
+      getAuthenticatedUser: async () => fakeUser(),
+      createServiceClient: createStubClient({ id: BOOK_ID, family_id: FAMILY_ID, scope_kind: 'everything', status: 'ready', workflow_instance_id: 'x', generation_attempt_id: 'x', generation_started_at: null }),
+      getCallerFamilyRole: async () => 'owner',
+    },
+  );
+  assertEquals(response.status, 200);
 });
 
 Deno.test('treats a 409 duplicate-instance dispatch response as success, not an error', async () => {

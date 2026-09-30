@@ -40,6 +40,7 @@ export interface GenerateMemoryBookResponse {
 interface MemoryBookRow {
   id: string;
   family_id: string;
+  scope_kind: string;
   status: 'queued' | 'generating' | 'ready' | 'failed';
   workflow_instance_id: string | null;
   generation_attempt_id: string | null;
@@ -69,6 +70,14 @@ export const DEFAULT_DEPENDENCIES: GenerateMemoryBookDependencies = {
 // this change's own report gives a real duration to calibrate against, per
 // docs/durable-ai-generation-workflows.md's warning against copying another
 // pipeline's lease "without measuring that pipeline").
+// Server-side kill switch (2026-09-30): scopes listed here are refused
+// before any claim/dispatch, for every app version. 'everything' is paused
+// because its multi-year window breaks the bridge's `.in(memoryIds)`
+// sub-queries (URL too long -> media/tags/milestones silently empty) and the
+// fitter/outline still assume a single year. Remove from this set once those
+// are fixed (docs/features/memory-book-generation.md).
+export const PAUSED_SCOPE_KINDS: ReadonlySet<string> = new Set(['everything']);
+
 export const MEMORY_BOOK_LEASE_MS = 8 * 60_000;
 export const MEMORY_BOOK_RECOVERY_GRACE_MS = 30_000;
 
@@ -154,7 +163,7 @@ export async function handleGenerateMemoryBook(
   const supabase = dependencies.createServiceClient();
   const { data: row, error: rowError } = await supabase
     .from('memory_books')
-    .select('id, family_id, status, workflow_instance_id, generation_attempt_id, generation_started_at')
+    .select('id, family_id, scope_kind, status, workflow_instance_id, generation_attempt_id, generation_started_at')
     .eq('id', body.memoryBookId)
     .maybeSingle<MemoryBookRow>();
   if (rowError) {
@@ -173,6 +182,25 @@ export async function handleGenerateMemoryBook(
   }
 
   const now = dependencies.now();
+
+  if (PAUSED_SCOPE_KINDS.has(row.scope_kind)) {
+    // Park the row as failed (never left queued, which the app renders as
+    // "making it now" forever). A status-matched update so it can't clobber
+    // a concurrent transition; an in-flight attempt's publish is then
+    // rejected by the bridge's own status CAS.
+    if (row.status !== 'failed') {
+      await supabase
+        .from('memory_books')
+        .update({
+          status: 'failed',
+          failure_reason: 'SCOPE_PAUSED',
+          generation_completed_at: new Date(now).toISOString(),
+        })
+        .eq('id', row.id)
+        .eq('status', row.status);
+    }
+    return errorResponse('This kind of book is paused for now. Try a year book instead.', 409, 'SCOPE_PAUSED');
+  }
 
   if (row.status === 'generating' && isFreshGeneratingMemoryBook(row.generation_started_at, now)) {
     // A prior request may have timed out after the CAS claim but before
