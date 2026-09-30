@@ -618,8 +618,7 @@ describe('Timeline Year Films', () => {
 
     expect(cellOrder(screen)).toEqual(['recent', 'film:film-mar', 'march']);
     expect(screen.queryByTestId('timeline-film-film-old')).toBeNull();
-    expect(screen.getByTestId('timeline-film-film-mar-title')).toHaveTextContent('March recap');
-    expect(screen.getByTestId('timeline-film-film-mar-subtitle')).toHaveTextContent('1 minute · March 2025');
+    expect(screen.getByTestId('timeline-film-film-mar').props.accessibilityLabel).toBe('Play March recap');
   });
 
   it('shows a film below the last memory once no older pages remain', () => {

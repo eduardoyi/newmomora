@@ -179,6 +179,8 @@ async function renderPlayer() {
 }
 
 async function reachCompletion() {
+  // Real playback: time progressed to the end, then the player reports it.
+  emit('timeUpdate', { currentTime: 11 });
   emit('playToEnd');
   await screen.findByTestId('year-film-complete');
 }
@@ -386,6 +388,116 @@ describe('Year Film player screen', () => {
     mockParams = { id: 'film-1', source: 'bogus' };
     await renderPlayer();
     expect(mockedTrack).toHaveBeenCalledWith('year_film_opened', { kind: 'family_month', source: 'timeline' });
+  });
+
+  describe('completion is only believed after real playback', () => {
+    it('ignores a spurious playToEnd before any time has progressed (empty item / source swap)', async () => {
+      await renderPlayer();
+
+      emit('playToEnd');
+      emit('playToEnd');
+
+      expect(screen.queryByTestId('year-film-complete')).toBeNull();
+      expect(mockMarkCompleted).not.toHaveBeenCalled();
+      expect(mockedTrack).not.toHaveBeenCalledWith('year_film_completed', expect.anything());
+    });
+
+    it('ignores a playToEnd after playback that stopped far from the end', async () => {
+      await renderPlayer();
+      emit('timeUpdate', { currentTime: 2 });
+
+      emit('playToEnd');
+
+      expect(screen.queryByTestId('year-film-complete')).toBeNull();
+    });
+
+    it('ignores a playToEnd that arrives while the source is being replaced', async () => {
+      await renderPlayer();
+      (mockPlayer as MockPlayer & { playing: boolean }).playing = true;
+      emit('timeUpdate', { currentTime: 11.9 });
+      // A recovery reload resets what counts as played for the new source.
+      emit('statusChange', { status: 'error' });
+      await act(async () => {});
+      expect(mockPlayer.replaceAsync).toHaveBeenCalledTimes(2);
+
+      emit('playToEnd');
+
+      expect(screen.queryByTestId('year-film-complete')).toBeNull();
+    });
+
+    it('finishes on playToEnd once time progressed to the end', async () => {
+      await renderPlayer();
+      emit('timeUpdate', { currentTime: 11.2 });
+      mockPlayer.currentTime = 12;
+
+      emit('playToEnd');
+
+      expect(await screen.findByTestId('year-film-complete')).toBeTruthy();
+      expect(mockMarkCompleted).toHaveBeenCalledWith('film-1');
+    });
+
+    it('finishes when timeUpdate reaches the end and the player is no longer playing', async () => {
+      await renderPlayer();
+      emit('timeUpdate', { currentTime: 6 });
+      expect(screen.queryByTestId('year-film-complete')).toBeNull();
+
+      (mockPlayer as MockPlayer & { playing: boolean }).playing = false;
+      emit('timeUpdate', { currentTime: 11.8 });
+
+      expect(await screen.findByTestId('year-film-complete')).toBeTruthy();
+    });
+
+    it('does not finish from timeUpdate near the end while the player is still playing', async () => {
+      await renderPlayer();
+      (mockPlayer as MockPlayer & { playing: boolean }).playing = true;
+
+      emit('timeUpdate', { currentTime: 11.8 });
+
+      expect(screen.queryByTestId('year-film-complete')).toBeNull();
+    });
+
+    it('never finishes from timeUpdate before any real playback', async () => {
+      await renderPlayer();
+      (mockPlayer as MockPlayer & { playing: boolean }).playing = false;
+
+      emit('timeUpdate', { currentTime: 0 });
+
+      expect(screen.queryByTestId('year-film-complete')).toBeNull();
+    });
+
+    it('sets the timeUpdate interval so progress events fire', async () => {
+      await renderPlayer();
+
+      expect(mockPlayer.timeUpdateEventInterval).toBeGreaterThan(0);
+    });
+
+    it('starts playback again when the item reports readyToPlay while play is wanted', async () => {
+      await renderPlayer();
+      mockPlayer.play.mockClear();
+
+      emit('statusChange', { status: 'readyToPlay' });
+
+      expect(mockPlayer.play).toHaveBeenCalled();
+    });
+
+    it('Replay clears completion, and a spurious playToEnd afterwards does not re-complete', async () => {
+      await renderPlayer();
+      await reachCompletion();
+      mockPlayer.play.mockClear();
+
+      fireEvent.press(screen.getByTestId('year-film-replay'));
+      expect(screen.queryByTestId('year-film-complete')).toBeNull();
+      expect(mockPlayer.currentTime).toBe(0);
+      expect(mockPlayer.play).toHaveBeenCalled();
+
+      emit('playToEnd');
+      expect(screen.queryByTestId('year-film-complete')).toBeNull();
+
+      // Playing through again completes normally.
+      emit('timeUpdate', { currentTime: 11.5 });
+      emit('playToEnd');
+      expect(await screen.findByTestId('year-film-complete')).toBeTruthy();
+    });
   });
 
   it('replays from the completion overlay', async () => {

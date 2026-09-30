@@ -1,18 +1,63 @@
-// The in-feed Year Film card (docs/plans/year-film-p2.md Step 5.3): a 9:16
-// cover with a play glyph on the left, the title and "1 minute · range"
-// subtitle on the right, and a "New" pill until the film is watched. Same
-// chrome as MemoryCard (white surface, hairline border, radius.lg) so it
-// sits in the feed like any other card. Memoized with id-based callbacks --
-// the Timeline re-renders its list on every page/refetch.
+// The in-feed Year Film card: the film's 9:16 cover pasted onto the page like a
+// taped polaroid print (no text outside the image -- the cover already carries
+// the title). Each film leans left or right, and its tape colour, both derived
+// from a hash of film.id so a film never flips when list pages load. No card
+// chrome: it should read as a keepsake pasted between memories. Memoized with
+// an id-based callback -- the Timeline re-renders its list on every
+// page/refetch; nothing here animates per frame.
 import { memo, useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { SymbolView } from 'expo-symbols';
 
 import { FilmCover } from '@/components/year-films/film-cover';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import type { YearFilm } from '@/services/year-films';
-import { filmSubtitle, filmTitle, type YearFilmMember } from '@/utils/year-films';
+import { filmTitle, type YearFilmMember } from '@/utils/year-films';
 
-export const FILM_CARD_COVER_WIDTH = 88;
+/** Horizontal padding of the Timeline's card column (`cardItem` in timeline.tsx). */
+const COLUMN_PADDING = spacing.md;
+/** Polaroid outer width as a share of the card column. */
+const POLAROID_WIDTH_RATIO = 0.58;
+/** Even white border around the cover. */
+const POLAROID_PADDING = 8;
+/** Absorbs the rotated bounding box + tape overhang so nothing clips at the list edges. */
+const SIDE_MARGIN = 20;
+const PLAY_SIZE = 40;
+const TAPE_OPACITY_HEX = '8C'; // ~55%
+
+const TAPE_COLORS = [
+  colors.sunSoft + TAPE_OPACITY_HEX,
+  colors.primarySoft + TAPE_OPACITY_HEX,
+  colors.seaSoft + TAPE_OPACITY_HEX,
+] as const;
+
+export interface FilmCardLook {
+  side: 'left' | 'right';
+  /** Degrees; negative leans left. */
+  tilt: number;
+  tape: string;
+}
+
+/** FNV-1a 32-bit -- stable across runs/devices, no dependencies. */
+function hashId(id: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i += 1) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** Side, tilt and tape colour for a film, purely a function of its id. */
+export function filmCardLook(id: string): FilmCardLook {
+  const h = hashId(id);
+  const left = h % 2 === 0;
+  return {
+    side: left ? 'left' : 'right',
+    tilt: left ? -3.5 : 3,
+    tape: TAPE_COLORS[Math.floor(h / 2) % TAPE_COLORS.length],
+  };
+}
 
 export interface FilmCardProps {
   film: YearFilm;
@@ -23,80 +68,131 @@ export interface FilmCardProps {
 }
 
 export const FilmCard = memo(function FilmCard({ film, members, isNew, onPress }: FilmCardProps) {
+  // Title is for the screen reader only; the cover art carries it visually.
   const title = useMemo(() => filmTitle(film, members), [film, members]);
-  const subtitle = useMemo(() => filmSubtitle(film), [film]);
+  const look = useMemo(() => filmCardLook(film.id), [film.id]);
+  const { width: windowWidth } = useWindowDimensions();
+
+  const polaroidWidth = Math.round((windowWidth - COLUMN_PADDING * 2) * POLAROID_WIDTH_RATIO);
+  const coverWidth = polaroidWidth - POLAROID_PADDING * 2;
+  const isLeft = look.side === 'left';
 
   return (
     <Pressable
       accessibilityLabel={`Play ${title}`}
       accessibilityRole="button"
       onPress={() => onPress(film.id)}
-      style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+      style={({ pressed }) => [
+        styles.wrap,
+        {
+          alignSelf: isLeft ? 'flex-start' : 'flex-end',
+          marginLeft: isLeft ? SIDE_MARGIN : 0,
+          marginRight: isLeft ? 0 : SIDE_MARGIN,
+          width: polaroidWidth,
+        },
+        pressed && styles.wrapPressed,
+      ]}
       testID={`timeline-film-${film.id}`}
     >
-      <FilmCover
-        film={film}
-        radius={radius.md}
-        showPlay
-        testID={`timeline-film-${film.id}-cover`}
-        width={FILM_CARD_COVER_WIDTH}
-      />
-      <View style={styles.text}>
+      <View style={[styles.polaroid, { transform: [{ rotate: `${look.tilt}deg` }] }]}>
+        <FilmCover
+          film={film}
+          radius={2}
+          testID={`timeline-film-${film.id}-cover`}
+          width={coverWidth}
+        />
+        <View
+          pointerEvents="none"
+          style={[styles.tape, styles.tapeLeft, { backgroundColor: look.tape }]}
+        />
+        <View
+          pointerEvents="none"
+          style={[styles.tape, styles.tapeRight, { backgroundColor: look.tape }]}
+        />
+        <View
+          pointerEvents="none"
+          style={styles.play}
+          testID={`timeline-film-${film.id}-play`}
+        >
+          <SymbolView
+            fallback={<Text style={styles.playFallback}>▶</Text>}
+            name={{ ios: 'play.fill', android: 'play_arrow' }}
+            size={17}
+            tintColor={colors.white}
+          />
+        </View>
         {isNew ? (
-          <View style={styles.newPill} testID={`timeline-film-${film.id}-new`}>
-            <Text style={styles.newPillText}>New</Text>
+          <View style={styles.newSticker} testID={`timeline-film-${film.id}-new`}>
+            <Text style={styles.newStickerText}>New</Text>
           </View>
         ) : null}
-        <Text numberOfLines={2} style={styles.title} testID={`timeline-film-${film.id}-title`}>
-          {title}
-        </Text>
-        <Text numberOfLines={2} style={styles.subtitle} testID={`timeline-film-${film.id}-subtitle`}>
-          {subtitle}
-        </Text>
       </View>
     </Pressable>
   );
 });
 
 const styles = StyleSheet.create({
-  card: {
-    alignItems: 'center',
+  // Room for the tape overhang above and the tilt below; the Timeline's
+  // cardItem adds the usual gap between rows.
+  wrap: {
+    paddingBottom: spacing.xs,
+    paddingTop: spacing.md,
+  },
+  wrapPressed: { transform: [{ scale: 0.98 }] },
+  polaroid: {
     backgroundColor: colors.white,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 14,
-    padding: spacing.sm + 4,
+    borderRadius: 4,
+    elevation: 3,
+    padding: POLAROID_PADDING,
+    shadowColor: colors.ink,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
   },
-  cardPressed: { opacity: 0.94 },
-  text: {
-    alignItems: 'flex-start',
-    flex: 1,
-    gap: 4,
+  tape: {
+    borderRadius: 1,
+    height: 18,
+    position: 'absolute',
+    top: -8,
+    width: 54,
   },
-  newPill: {
-    backgroundColor: colors.primaryTint,
-    borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
+  tapeLeft: {
+    left: -16,
+    transform: [{ rotate: '-38deg' }],
   },
-  newPillText: {
-    color: colors.primary,
+  tapeRight: {
+    right: -16,
+    transform: [{ rotate: '38deg' }],
+  },
+  play: {
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: PLAY_SIZE / 2,
+    bottom: POLAROID_PADDING + 10,
+    height: PLAY_SIZE,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: POLAROID_PADDING + 10,
+    width: PLAY_SIZE,
+  },
+  playFallback: {
+    color: colors.white,
+    fontSize: 14,
+  },
+  newSticker: {
+    backgroundColor: colors.sun,
+    borderRadius: radius.pill,
+    left: -10,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    position: 'absolute',
+    top: -6,
+    transform: [{ rotate: '-8deg' }],
+  },
+  newStickerText: {
+    color: colors.sunInk,
     fontFamily: fonts.sansBold,
-    fontSize: 10.5,
-    letterSpacing: 0.02 * 10.5,
-  },
-  title: {
-    color: colors.ink,
-    fontFamily: fonts.display,
-    fontSize: 22,
-    lineHeight: 1.15 * 22,
-  },
-  subtitle: {
-    color: colors.ink3,
-    fontFamily: fonts.sansMedium,
-    fontSize: 13,
-    lineHeight: 1.4 * 13,
+    fontSize: 11,
+    letterSpacing: 0.02 * 11,
   },
 });

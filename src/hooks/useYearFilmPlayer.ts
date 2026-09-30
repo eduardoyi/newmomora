@@ -45,6 +45,14 @@ interface UseYearFilmPlayerOptions {
 }
 
 const TIME_UPDATE_INTERVAL_S = 0.1;
+/** Playback must have got past this before any "ended" signal is believed. */
+const MIN_PLAYED_S = 0.5;
+/** `playToEnd` only counts within this distance of the known duration... */
+const END_TOLERANCE_S = 1.5;
+/** ...or once this fraction of it has been played. */
+const END_PLAYED_FRACTION = 0.9;
+/** `timeUpdate` at this distance from the end, while paused, also finishes the film. */
+const END_TIME_UPDATE_TOLERANCE_S = 0.3;
 
 // VideoPlayer is an imperative native shared object. Keep its mutation in
 // these adapters (as memory-media-carousel.tsx does) rather than treating the
@@ -108,6 +116,11 @@ export function useYearFilmPlayer({
   const unmountedRef = useRef(false);
   const audioReadyRef = useRef<Promise<unknown>>(Promise.resolve());
   const durationRef = useRef<number | null>(null);
+  // Real playback of the CURRENT source: expo-video (Android) emits `playToEnd`
+  // for the empty playlist of `createVideoPlayer(null)` / during source
+  // replacement, so "ended" is only believed after time genuinely progressed.
+  const hasPlayedRef = useRef(false);
+  const lastTimeRef = useRef(0);
 
   const callbacksRef = useRef({ onFirstPlay, onComplete, onUnavailable });
   useEffect(() => {
@@ -127,6 +140,11 @@ export function useYearFilmPlayer({
   const setPhase = useCallback((next: YearFilmPlayerPhase) => {
     phaseRef.current = next;
     setPhaseState(next);
+  }, []);
+
+  const resetPlayedState = useCallback(() => {
+    hasPlayedRef.current = false;
+    lastTimeRef.current = 0;
   }, []);
 
   const applyPlayState = useCallback(() => {
@@ -186,6 +204,7 @@ export function useYearFilmPlayer({
 
       await audioReadyRef.current;
       if (isStale()) return;
+      resetPlayedState();
       try {
         await player.replaceAsync({ uri: playback.videoUrl });
       } catch {
@@ -193,6 +212,8 @@ export function useYearFilmPlayer({
         return;
       }
       if (isStale()) return;
+      // Drop anything the previous/empty item reported while it was swapped out.
+      resetPlayedState();
 
       if (resumeAtMs && resumeAtMs > 0) {
         try {
@@ -204,7 +225,7 @@ export function useYearFilmPlayer({
       setPhase('ready');
       applyPlayState();
     },
-    [applyPlayState, filmId, player, setPhase],
+    [applyPlayState, filmId, player, resetPlayedState, setPhase],
   );
 
   const handlePlayerError = useCallback(() => {
@@ -292,7 +313,12 @@ export function useYearFilmPlayer({
 
   useEventListener(player, 'statusChange', ({ status }) => {
     setIsBuffering(status === 'loading');
-    if (status === 'readyToPlay') retriedRef.current = false;
+    if (status === 'readyToPlay') {
+      retriedRef.current = false;
+      // Autoplay must not hinge on the one call made when the load promise
+      // resolved: re-assert the desired play state once the item is ready.
+      applyPlayState();
+    }
     if (status === 'error') handlePlayerError();
   });
 
@@ -300,11 +326,13 @@ export function useYearFilmPlayer({
     if (Number.isFinite(duration) && duration > 0) setPlayerDurationMs(Math.round(duration * 1000));
   });
 
-  useEventListener(player, 'timeUpdate', ({ currentTime }) => {
-    if (completeRef.current) return;
-    setPosition(Math.max(0, currentTime * 1000));
-    if (currentTime > 0.05) setHasFirstFrame(true);
-  });
+  const isPlayerPlaying = useCallback(() => {
+    try {
+      return Boolean(player.playing);
+    } catch {
+      return false;
+    }
+  }, [player]);
 
   const finish = useCallback(() => {
     if (completeRef.current) return;
@@ -320,7 +348,41 @@ export function useYearFilmPlayer({
     callbacksRef.current.onComplete?.(total);
   }, [player, setPosition]);
 
-  useEventListener(player, 'playToEnd', finish);
+  useEventListener(player, 'timeUpdate', ({ currentTime }) => {
+    if (completeRef.current) return;
+    lastTimeRef.current = currentTime;
+    if (currentTime > MIN_PLAYED_S) hasPlayedRef.current = true;
+    setPosition(Math.max(0, currentTime * 1000));
+    if (currentTime > 0.05) setHasFirstFrame(true);
+    // Belt and braces for platforms where `playToEnd` is late or missing: the
+    // clock reached the end and the player stopped by itself.
+    const totalMs = durationRef.current;
+    if (
+      hasPlayedRef.current &&
+      phaseRef.current === 'ready' &&
+      totalMs &&
+      totalMs > 0 &&
+      currentTime >= totalMs / 1000 - END_TIME_UPDATE_TOLERANCE_S &&
+      !heldRef.current &&
+      suspendRef.current.size === 0 &&
+      !isPlayerPlaying()
+    ) {
+      finish();
+    }
+  });
+
+  useEventListener(player, 'playToEnd', () => {
+    if (completeRef.current || phaseRef.current !== 'ready' || !hasPlayedRef.current) return;
+    let position = lastTimeRef.current;
+    try {
+      position = Math.max(position, player.currentTime);
+    } catch {
+      // Already released; fall back to the last reported time.
+    }
+    const totalS = durationRef.current ? durationRef.current / 1000 : 0;
+    if (totalS > 0 && position < totalS - END_TOLERANCE_S && position < totalS * END_PLAYED_FRACTION) return;
+    finish();
+  });
 
   // --- interruptions (app background, another screen on top) ---------------
 
@@ -393,6 +455,7 @@ export function useYearFilmPlayer({
 
   const replay = useCallback(() => {
     completeRef.current = false;
+    resetPlayedState();
     setIsComplete(false);
     sceneIndexRef.current = 0;
     setSceneIndex(0);
@@ -404,7 +467,7 @@ export function useYearFilmPlayer({
     }
     wantsPlayRef.current = true;
     applyPlayState();
-  }, [applyPlayState, player, setPosition]);
+  }, [applyPlayState, player, resetPlayedState, setPosition]);
 
   /** The Reduce Motion "Play" button. */
   const confirmPlay = useCallback(() => {
