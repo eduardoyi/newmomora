@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ALL_FURNITURE, FURNITURE_LANGUAGES, getFurniture, getLanguage, numberWord } from '../furniture';
-import { formatIndexDate, formatLongDate, formatPortraitDate, localizeMonthLabel } from '../common/formatDate';
+import { formatIndexDate, formatLongDate, formatPortraitDate, localizeMonthLabel, parseSingleMonthLabel } from '../common/formatDate';
 
 /** Replaces every function value with a stable marker so two objects can be
  * compared structurally (key paths + leaf *shape*, not function identity). */
@@ -198,6 +198,32 @@ describe('localizeMonthLabel — backbone month-section eyebrow/title (English-o
     }
   });
 
+  it('localizes the cross-year range "Month YYYY – Month YYYY" (worker formatMonthRangeLabel shape) for es', () => {
+    expect(localizeMonthLabel('December 2025 – January 2026', 'es')).toBe('diciembre 2025 – enero 2026');
+    expect(localizeMonthLabel('September 2024 – March 2025', 'es')).toBe('septiembre 2024 – marzo 2025');
+  });
+
+  it('leaves the cross-year range unchanged for en', () => {
+    expect(localizeMonthLabel('December 2025 – January 2026', 'en')).toBe('December 2025 – January 2026');
+  });
+
+  it('localizes every shape x language (single / same-year / cross-year)', () => {
+    const cases: Array<[string, { en: string; es: string }]> = [
+      ['March 2025', { en: 'March 2025', es: 'marzo 2025' }],
+      ['March–May 2025', { en: 'March–May 2025', es: 'marzo–mayo 2025' }],
+      ['November 2025 – February 2026', { en: 'November 2025 – February 2026', es: 'noviembre 2025 – febrero 2026' }],
+    ];
+    for (const [input, expected] of cases) {
+      expect(localizeMonthLabel(input, 'en')).toBe(expected.en);
+      expect(localizeMonthLabel(input, 'es')).toBe(expected.es);
+    }
+  });
+
+  it('never garbles a cross-year lookalike whose words are not month names', () => {
+    expect(localizeMonthLabel('Whenever 2025 – January 2026', 'es')).toBe('Whenever 2025 – January 2026');
+    expect(localizeMonthLabel('December 2025 – Whenever 2026', 'es')).toBe('December 2025 – Whenever 2026');
+  });
+
   it('never touches genuine editorial text that only happens to contain a real word', () => {
     // Real backbone/themed titles and kickers from the outline generator —
     // none of these match the exact "Month[–Month] YYYY" shape, so the
@@ -209,5 +235,22 @@ describe('localizeMonthLabel — backbone month-section eyebrow/title (English-o
 
   it('never garbles a string that merely looks close to the pattern but is not a real month name', () => {
     expect(localizeMonthLabel('Whenever 2024', 'es')).toBe('Whenever 2024');
+  });
+});
+
+describe('parseSingleMonthLabel — lone "Month YYYY" only', () => {
+  it('parses a single English month label', () => {
+    expect(parseSingleMonthLabel('December 2025')).toEqual({ monthIndex: 11, year: 2025 });
+    expect(parseSingleMonthLabel('January 2026')).toEqual({ monthIndex: 0, year: 2026 });
+  });
+
+  it('returns null for same-year and cross-year ranges (no single month-end to age against)', () => {
+    expect(parseSingleMonthLabel('October–November 2024')).toBeNull();
+    expect(parseSingleMonthLabel('December 2025 – January 2026')).toBeNull();
+  });
+
+  it('returns null for editorial text and already-localized labels', () => {
+    expect(parseSingleMonthLabel('El mes en que cumpliste dos')).toBeNull();
+    expect(parseSingleMonthLabel('diciembre 2025')).toBeNull();
   });
 });

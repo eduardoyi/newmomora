@@ -249,16 +249,19 @@ year book may already be close. Treat every unbounded `.in(ids)` as a bug.
 
 ### Phase 1 — layout fixes for all books
 
-1.1 `TextPage.tsx`: wrap `<SectionHeader>` in `<SafeArea isSpread={false}>`
+Status 2026-10-01: 1.1, 1.2, 1.3, 1.4-tooling code-complete (not deployed; 1.4's
+decision — whether to design pooling — still waits on Phase 0 regenerated data).
+
+1.1 [DONE] `TextPage.tsx`: wrap `<SectionHeader>` in `<SafeArea isSpread={false}>`
     like FlexGrid/AnchorMedia. Parity rule: preview (memory-book-web) and
     the Fly print worker redeploy together. Verify with page.pdf rasters
     (not DOM) per the print-verification principle.
-1.2 Audit the three remaining books (Enzo Y1, Mara Y1, Enzo Y3) for
+1.2 [DONE — tool: `book-renderer/scripts/audit-layout.mts`; 0 section headers on text pages in all 3 books] Audit the three remaining books (Enzo Y1, Mara Y1, Enzo Y3) for
     sections opening on a text page → tells us whether any printed copy
     is affected.
-1.3 `localizeMonthLabel`: handle cross-year ranges ("December 2025 –
+1.3 [DONE] `localizeMonthLabel`: handle cross-year ranges ("December 2025 –
     January 2026" → "diciembre 2025 – enero 2026").
-1.4 After Phase 0 data is correct, measure how many lone-short-caption
+1.4 [TOOL DONE — audit reports lone-short-caption pages; 0 in all 3 existing books; re-run on a regenerated dense book] After Phase 0 data is correct, measure how many lone-short-caption
     pages remain in a regenerated dense book before designing any
     pooling change (don't design against the corrupted sample).
 

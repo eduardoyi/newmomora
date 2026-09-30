@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "book:pdf": "vite-node scripts/render-pdf.mts",
+    "audit:layout": "vite-node scripts/audit-layout.mts --",
     "dev:web": "vite --config vite.web.config.ts",
     "build:web": "tsc --noEmit && vite build --config vite.web.config.ts && npm run check:web-bundle",
     "check:web-bundle": "node scripts/check-web-bundle.mjs"

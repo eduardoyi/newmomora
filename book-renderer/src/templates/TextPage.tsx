@@ -1,6 +1,7 @@
 import type { TemplateProps } from './types';
 import { PageFrame } from './PageFrame';
 import { Folio } from './common/Folio';
+import { SafeArea } from './common/SafeArea';
 import { SectionHeader, type SectionHeaderParams } from './common/SectionHeader';
 import { formatLongDate } from './common/formatDate';
 import { getLanguage } from './furniture';
@@ -28,7 +29,14 @@ export function TextPage({ page, manifest, showGuides }: TemplateProps) {
 
   return (
     <PageFrame isSpread={false} showGuides={showGuides} className="text-page">
-      {sectionHeader && <SectionHeader {...sectionHeader} isSpread={false} />}
+      {sectionHeader && (
+        // Inside the safe zone like every other header-capable template —
+        // SectionHeader is absolute top:0/left:0, so bare in the frame it sat
+        // at the bleed origin and the trim cut its eyebrow line off.
+        <SafeArea isSpread={false}>
+          <SectionHeader {...sectionHeader} isSpread={false} />
+        </SafeArea>
+      )}
       <div
         className="text-page__inner"
         data-testid="text-page"

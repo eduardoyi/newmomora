@@ -6,7 +6,7 @@ import { makeAsset, makeElement, makeManifest, makeMemory, makeOutline } from '.
 import { TemplateRenderer } from '../index';
 import { FooterIndex } from '../common/FooterIndex';
 import { Folio } from '../common/Folio';
-import { illustratedIlloWidthMm, illustratedIlloFitHeightMm, canvasPxToTrimMm } from '../mm';
+import { illustratedIlloWidthMm, illustratedIlloFitHeightMm, canvasPxToTrimMm, getSafeInsetPct } from '../mm';
 import type { BookManifest } from '../../model/types';
 
 function renderPage(manifest: BookManifest, outline: ReturnType<typeof makeOutline>, pageIndex = 0) {
@@ -371,6 +371,34 @@ describe('template snapshots', () => {
       <TemplateRenderer page={document.pages[1]} manifest={manifest} bookSlug="test-book" showGuides={false} />,
     );
     expect(html).toContain('She said her first word today: dada!');
+  });
+
+  it('TextPage: a section header sits inside the SafeArea (never at the bleed origin, where the eyebrow is trimmed off at print)', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ text: 'A short note from a quiet day.', assets: [] }),
+    });
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:x', kind: 'backbone', title: 'December 2024', subtitle: 'The quiet month', memoryIds: ['mem-1'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const page = document.pages.find((p) => p.templateId === 'text-page' && p.params.sectionHeader);
+    expect(page).toBeTruthy();
+    const html = renderToStaticMarkup(
+      <TemplateRenderer page={page!} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+    const safeStart = html.indexOf('class="safe-area"');
+    expect(safeStart).toBeGreaterThan(-1);
+    // The header's <h2> must render after the safe-area opens, and the
+    // safe-area must close after the header (i.e. it is a descendant).
+    const h2 = html.indexOf('<h2');
+    expect(h2).toBeGreaterThan(safeStart);
+    const safeInner = html.slice(safeStart, html.indexOf('data-testid="text-page"'));
+    expect(safeInner).toContain('<h2');
+    expect(safeInner).toContain('The quiet month'); // kicker
+    // Same inset the other header-capable templates use.
+    const { x, y } = getSafeInsetPct(false);
+    expect(html).toContain(`top:${y}%`);
+    expect(html).toContain(`left:${x}%`);
   });
 
   it('WraparoundCover: mixed-voice spine text is dark ink, not white — the spine sits on paper-white paper, not the photo (item 17 bug fix; full-bleed "photo" voice removed 2026-08-31, so this is now the only photo-bearing voice)', () => {
