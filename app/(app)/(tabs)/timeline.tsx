@@ -560,10 +560,14 @@ export default function TimelineScreen() {
   // After a jump: the memory to land exactly under the control row (set once
   // per jump, below), aligned the first time its cell reports a position.
   const pendingAlignIdRef = useRef<string | null>(null);
+  // Cells report their removal while unmounting, after this screen's own
+  // cleanup ran; frames scheduled then would outlive the screen.
+  const unmountedRef = useRef(false);
   const alignToAnchorCell = useCallback((cellY: number) => {
     pendingAlignIdRef.current = null;
     const offset = Math.max(0, cellY - geometryRef.current.controlRowHeight);
     requestAnimationFrame(() => {
+      if (unmountedRef.current) return;
       scrollOffsetRef.current = offset;
       flatListRef.current?.scrollToOffset({ animated: false, offset });
     });
@@ -575,15 +579,20 @@ export default function TimelineScreen() {
     } else {
       cellLayoutsRef.current.delete(id);
     }
-    if (labelFrameRef.current === null) {
+    if (labelFrameRef.current === null && !unmountedRef.current) {
       labelFrameRef.current = requestAnimationFrame(() => {
         labelFrameRef.current = null;
         updateMonthLabelRef.current();
       });
     }
   }, [alignToAnchorCell]);
-  useEffect(() => () => {
-    if (labelFrameRef.current !== null) cancelAnimationFrame(labelFrameRef.current);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      if (labelFrameRef.current !== null) cancelAnimationFrame(labelFrameRef.current);
+      labelFrameRef.current = null;
+    };
   }, []);
 
   // ── Scrolling helpers ────────────────────────────────────────────────────
