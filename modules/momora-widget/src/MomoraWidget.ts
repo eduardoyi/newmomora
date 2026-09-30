@@ -15,6 +15,8 @@ export interface MomoraWidgetNativeModule {
   publishManifest: (manifestJson: string, filesJson: string) => Promise<void>;
   clearManifest: (scopeJson?: string, generationId?: string) => Promise<boolean | void>;
   reload: () => void | Promise<void>;
+  /** Absent on binaries built before background refresh; null = unknown. */
+  hasPlacedWidgets?: () => Promise<boolean | null>;
 }
 
 /**

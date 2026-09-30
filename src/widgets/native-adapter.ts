@@ -21,6 +21,7 @@ interface MomoraIosTimelineEntry {
   date: Date;
   props: {
     kind: 'memory' | 'neutral';
+    emptyState?: 'no_memories' | 'needs_refresh';
     imageKind?: 'photo' | 'illustration';
     familyId?: string;
     memoryId?: string;
@@ -130,14 +131,18 @@ function timelineForManifest(
     },
   }));
   if (entries.length === 0) {
-    return [{ date: new Date(manifest.verifiedAt), props: { kind: 'neutral', deepLink: 'momora://widget' } }];
+    // A published manifest without artwork is a verified empty family.
+    return [{
+      date: new Date(manifest.verifiedAt),
+      props: { kind: 'neutral', emptyState: 'no_memories', deepLink: 'momora://widget' },
+    }];
   }
   // WidgetKit's .atEnd policy is not a hard expiry guarantee, but the
   // explicit neutral entry prevents a valid old card from being the planned
   // post-lease timeline value.
   entries.push({
     date: new Date(manifest.expiresAt),
-    props: { kind: 'neutral', deepLink: 'momora://widget' },
+    props: { kind: 'neutral', emptyState: 'needs_refresh', deepLink: 'momora://widget' },
   });
   return entries;
 }
@@ -240,7 +245,7 @@ function createAdapter(native: MomoraWidgetNativeModule | null): WidgetNativeAda
         try {
           widget.updateTimeline([{
             date: new Date(),
-            props: { kind: 'neutral', deepLink: 'momora://widget' },
+            props: { kind: 'neutral', emptyState: 'needs_refresh', deepLink: 'momora://widget' },
           }]);
         } catch (error) {
           throw new Error(
@@ -257,6 +262,16 @@ function createAdapter(native: MomoraWidgetNativeModule | null): WidgetNativeAda
       if (!native) return;
       await native.reload();
       getIosWidget()?.reload();
+    },
+
+    hasPlacedWidgets: async () => {
+      if (!native?.hasPlacedWidgets) return null;
+      try {
+        const placed = await native.hasPlacedWidgets();
+        return typeof placed === 'boolean' ? placed : null;
+      } catch {
+        return null;
+      }
     },
   };
 }

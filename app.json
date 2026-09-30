@@ -68,6 +68,7 @@
       "./plugins/withAndroidAllowBackup",
       "./plugins/withAndroidLaunchMode",
       "./plugins/withMomoraWidget",
+      "expo-background-task",
       "expo-router",
       [
         "expo-widgets",

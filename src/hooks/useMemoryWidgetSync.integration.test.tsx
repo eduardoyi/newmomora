@@ -1,4 +1,5 @@
 import {
+  isRetryableWidgetSyncFailure,
   MemoryWidgetSyncCoordinator,
   type MemoryWidgetSyncDependencies,
 } from './useMemoryWidgetSync';
@@ -403,13 +404,80 @@ it('publishes a neutral widget when the only illustration is reported', async ()
   expect(adapter.getManifest()?.entries).toEqual([]);
 });
 
-it('uses neutral content instead of text when every eligible image fails to stage', async () => {
+it('does not publish the empty card when every eligible image fails to stage', async () => {
   const adapter = makeAdapter();
+  const stageImage = jest.fn(async () => { throw new Error('download failed'); });
   const result = await new MemoryWidgetSyncCoordinator(adapter.native, dependencies([memory('broken')], {
-    stageImage: async () => { throw new Error('download failed'); },
+    stageImage,
+  })).sync(scope);
+  expect(result).toEqual({ published: false, cleared: false, reason: 'images_unavailable' });
+  expect(adapter.native.publishManifest).not.toHaveBeenCalled();
+  // One retry per image before giving up.
+  expect(stageImage).toHaveBeenCalledTimes(2);
+});
+
+it('keeps the current artwork when a refresh cannot download any image', async () => {
+  const previous = manifestWithEntries(['memory-a']);
+  const adapter = makeAdapter(previous);
+  const memories = [memory('memory-a'), memory('memory-b')];
+  const result = await new MemoryWidgetSyncCoordinator(adapter.native, dependencies(memories, {
+    fetchRetained: async () => ({ data: [memories[0]], error: null, failure: null }),
+    stageImage: async () => { throw new Error('offline'); },
+  })).sync(scope);
+  expect(result).toEqual({ published: false, cleared: false, reason: 'images_unavailable' });
+  expect(adapter.getManifest()).toBe(previous);
+});
+
+it('keeps the current artwork when media signing fails', async () => {
+  const previous = manifestWithEntries(['memory-a']);
+  const adapter = makeAdapter(previous);
+  const memories = [memory('memory-a')];
+  const signMedia = jest.fn(async () => ({ data: null, error: { message: 'edge function unavailable' } }));
+  const result = await new MemoryWidgetSyncCoordinator(adapter.native, dependencies(memories, {
+    fetchRetained: async () => ({ data: memories, error: null, failure: null }),
+    signMedia,
+  })).sync(scope);
+  expect(result).toEqual({ published: false, cleared: false, reason: 'images_unavailable' });
+  expect(signMedia).toHaveBeenCalledTimes(2);
+  expect(adapter.getManifest()).toBe(previous);
+});
+
+it('replaces a card whose memory is no longer accessible even when staging fails', async () => {
+  const adapter = makeAdapter(manifestWithEntries(['deleted']));
+  const result = await new MemoryWidgetSyncCoordinator(adapter.native, dependencies([memory('memory-b')], {
+    fetchRetained: async () => ({ data: [], error: null, failure: null }),
+    stageImage: async () => { throw new Error('offline'); },
   })).sync(scope);
   expect(result.published).toBe(true);
   expect(adapter.getManifest()?.entries).toEqual([]);
+});
+
+it('recovers from one failed download and one failed signing attempt', async () => {
+  const adapter = makeAdapter();
+  let stageCalls = 0;
+  let signCalls = 0;
+  const result = await new MemoryWidgetSyncCoordinator(adapter.native, dependencies([memory('memory-a')], {
+    signMedia: async (keys) => {
+      signCalls += 1;
+      if (signCalls === 1) return { data: null, error: { message: 'timeout' } };
+      return { data: { urls: Object.fromEntries(keys.map((key) => [key, `https://example.test/${key}`])) }, error: null };
+    },
+    stageImage: async (_generation, image) => {
+      stageCalls += 1;
+      if (stageCalls === 1) throw new Error('connection reset');
+      return { filename: image.filename, uri: `file://${image.filename}`, sizeBytes: 10 };
+    },
+  })).sync(scope);
+  expect(result).toEqual({ published: true, cleared: false });
+  expect(adapter.getManifest()?.entries.every((entry) => entry.imageFilename)).toBe(true);
+});
+
+it('classifies which sync failures are worth retrying', () => {
+  expect(isRetryableWidgetSyncFailure({ published: false, cleared: false, reason: 'images_unavailable' })).toBe(true);
+  expect(isRetryableWidgetSyncFailure({ published: false, cleared: false, reason: 'candidate_unavailable' })).toBe(true);
+  expect(isRetryableWidgetSyncFailure({ published: false, cleared: false, reason: 'superseded' })).toBe(false);
+  expect(isRetryableWidgetSyncFailure({ published: false, cleared: true, reason: 'authorization_lost' })).toBe(false);
+  expect(isRetryableWidgetSyncFailure({ published: true, cleared: false })).toBe(false);
 });
 
 it('fills failed artwork slots with a successfully staged image and preserves all seven dates', async () => {

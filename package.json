@@ -1,6 +1,6 @@
 {
   "name": "momora",
-  "main": "expo-router/entry",
+  "main": "index.ts",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -70,6 +70,7 @@
     "expo-asset": "~56.0.19",
     "expo-audio": "~56.0.13",
     "expo-auth-session": "~56.0.16",
+    "expo-background-task": "~56.0.25",
     "expo-constants": "~56.0.15",
     "expo-crypto": "~56.0.4",
     "expo-dev-client": "~56.0.24",
@@ -90,6 +91,7 @@
     "expo-splash-screen": "~56.0.14",
     "expo-status-bar": "~56.0.4",
     "expo-symbols": "~56.0.7",
+    "expo-task-manager": "~56.0.25",
     "expo-updates": "~56.0.24",
     "expo-video": "~56.1.4",
     "expo-video-thumbnails": "^56.0.3",

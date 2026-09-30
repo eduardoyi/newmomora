@@ -60,9 +60,11 @@ function mapSupabaseError(error: { message: string; code?: string }): ServiceErr
 }
 
 function failureForError(error: { code?: string }): WidgetMemoryFetchFailure {
-  return error.code === '42501' || error.code === '28000' || error.code === 'PGRST301'
-    ? 'authorization'
-    : 'unavailable';
+  // Only an explicit family-membership denial proves access loss. A missing or
+  // expired JWT (28000 / PGRST301) happens transiently while the session is
+  // refreshing after the app wakes; clearing then blanked a valid widget.
+  // Real sign-out clears the widget through the auth scope transition.
+  return error.code === '42501' ? 'authorization' : 'unavailable';
 }
 
 function isIsoDate(value: string | null): value is string {
