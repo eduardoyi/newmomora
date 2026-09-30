@@ -10,6 +10,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { NonRetryableError } from 'cloudflare:workflows';
 import { AttemptStopped, createBridge } from './bridge';
 import { createFly, FlyCapacityError } from './fly';
+import { dispatchJitterSeconds } from './jitter';
 import { createChat } from './openai';
 import { mintMachineCredentials } from './r2creds';
 import {
@@ -17,6 +18,7 @@ import {
   claimRenderSlot,
   pickQuote,
   type PollState,
+  pollFailureCode,
   pollMachine,
   publish,
   runClaimChecks,
@@ -85,10 +87,18 @@ export class YearFilmWorkflow extends WorkflowEntrypoint<Env, DispatchPayload> {
     for (let i = 0; i < POLLS[mode]; i += 1) {
       const state: PollState = await step.do(`${mode}:poll:${i}`, STEP, guard(() => pollMachine(deps, statusKey, machineId, null)));
       if (state === 'done') return;
-      if (state === 'failed' || state === 'crashed') throw new StageFailure('MACHINE_FAILED');
+      const failure = pollFailureCode(state);
+      if (failure) throw new StageFailure(failure);
       await step.sleep(`${mode}:wait:${i}`, `${POLL_SECONDS} seconds`);
     }
     throw new StageFailure('MACHINE_TIMEOUT');
+  }
+
+  /** Durable, deterministic 0-45 s pause before a machine is created, so a
+   * batch of films doesn't start a burst of machines in the same second. */
+  private async jitter(step: WorkflowStep, attemptId: string, mode: 'thumbs' | 'prepare' | 'render'): Promise<void> {
+    const seconds = dispatchJitterSeconds(attemptId, mode);
+    if (seconds > 0) await step.sleep(`${mode}:jitter`, `${seconds} seconds`);
   }
 
   async run(event: WorkflowEvent<DispatchPayload>, step: WorkflowStep): Promise<unknown> {
@@ -98,6 +108,7 @@ export class YearFilmWorkflow extends WorkflowEntrypoint<Env, DispatchPayload> {
     let prefix: string | null = null;
 
     try {
+      await this.jitter(step, attemptId, 'thumbs');
       const thumbs = await step.do('curate:thumbs', STEP, guard(() => startThumbs(deps)));
       if (thumbs.skipped) return { outcome: 'skipped' };
       prefix = thumbs.prefix;
@@ -111,6 +122,7 @@ export class YearFilmWorkflow extends WorkflowEntrypoint<Env, DispatchPayload> {
       const built = await step.do('curate:build', STEP, guard(() => buildAndSave(deps)));
       if (!built.saved) return { outcome: 'skipped' };
 
+      await this.jitter(step, attemptId, 'prepare');
       const prepare = await step.do('prepare:start', STEP, guard(() => startPrepare(deps, prefix!)));
       machines.push(prepare.machineId);
       await this.poll(step, deps, 'prepare', `${prefix}prep/status.json`, prepare.machineId);
@@ -134,6 +146,7 @@ export class YearFilmWorkflow extends WorkflowEntrypoint<Env, DispatchPayload> {
       }
       if (!slot) throw new StageFailure('RENDER_QUEUE_TIMEOUT');
 
+      await this.jitter(step, attemptId, 'render');
       const render = await step.do('render:start', STEP, guard(() => startRender(deps, prefix!)));
       machines.push(render.machineId);
       await this.poll(step, deps, 'render', `${prefix}status.json`, render.machineId);

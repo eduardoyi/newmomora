@@ -324,6 +324,17 @@ permanent.
 - **Fly**: performance-8x for renders (2x fails with HyperFrames "Missing
   manifest"); machines are one-off (`auto_destroy`), named
   `yf-{attemptId}-{mode}` so a replayed create reuses them.
+- **Fly partial root filesystem** (Sep 2026): machines started at the same
+  moment from a fresh image sometimes miss files that are in the image
+  (`Cannot find package …/@puppeteer/browsers/lib/main.js`, `Missing browser
+  script layout-audit.browser.js`), surfacing as `STEP_CHECK`. Two defenses:
+  the image writes `/app/image-manifest.txt` and `job.mjs` verifies it at
+  startup (waits up to 60 s, else `status.json` `failed` / `IMAGE_INCOMPLETE`,
+  which the Worker maps to the `IMAGE_INCOMPLETE` failure code so the cycle
+  ends and retries on a fresh machine), and the Worker sleeps a deterministic
+  0-45 s (`step.sleep('<mode>:jitter')`, derived from attempt id + mode) before
+  creating each thumbs/prepare/render machine. New root-level paths the job
+  needs must be added to the Dockerfile's manifest `find`.
 - **R2 credentials** are minted per machine (object-scoped read,
   attempt-prefix write) when `CF_API_TOKEN`/`R2_PARENT_ACCESS_KEY_ID` are
   set; otherwise the machine uses the Fly app's R2 secrets (accepted
@@ -357,3 +368,4 @@ permanent.
 | 2026-09-30 | P2 backend: birthday due +2, year-end Dec 28/Dec 30, `placement_date`, forced films hidden from members, `film_ready` drawer event + v2 activity RPCs, `year_films_enabled`, silent history backfill (`year_film_candidate_rows`, `queue_year_film_backfill`), operator flags, poster-thumb delete keys |
 | 2026-09-30 | P2 app: full-screen player (scene progress, tap/hold, Reduce Motion warning, URL-expiry retry), share via cache download, `year-film` push route |
 | 2026-09-30 | P2 app: owner/manager edit sheet from the completion overlay (hide moments, line of the year, music with bundled 5 s previews); `get_year_film_edit_options` RPC; `save_year_film_edits` now accepts earlier removals in the full set; `hideNames` stays unbuilt |
+| 2026-09-30 | Render job: image-manifest startup guard (`IMAGE_INCOMPLETE`) + Worker dispatch jitter against Fly partial-rootfs machine starts |

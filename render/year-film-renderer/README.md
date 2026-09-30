@@ -20,6 +20,30 @@ Env: `JOB_PREFIX`, `JOB_TIMEOUT_SECONDS` (hard stop → `failed/TIMEOUT`),
 prefix) or the Fly app secrets `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`.
 Logs carry counts and codes only.
 
+## Startup integrity guard (`/app/image-manifest.txt`)
+
+Fly quirk (Sep 2026): when ~20 one-off machines start the same freshly pushed
+image at once, some see an **incomplete root filesystem** (files present in
+the image missing at runtime: `@puppeteer/browsers/lib/main.js`,
+`layout-audit.browser.js`). The same image succeeds elsewhere and on a retry.
+
+- The Dockerfile's last step writes `/app/image-manifest.txt`: every regular
+  file (paths only, sorted) under `/usr/local/lib/node_modules/hyperframes`,
+  `/root/.cache/hyperframes/chrome`, `/app/film-renderer`,
+  `/app/render/year-film-renderer` (with `node_modules`) and `/app/supabase`,
+  plus `/usr/bin/ffmpeg` and `/usr/bin/ffprobe`. It is generated in the image,
+  so it always matches it; keep it after every `COPY`/`RUN`.
+- `main()` (`src/job.mjs`, `verifyImage`) stats every manifest path before any
+  R2 call. Missing files: log `image: N missing (first: <path>)`, re-check
+  every 5 s for up to 60 s (`image: complete after Xs` and carry on if they
+  appear), else write `status.json` `failed` / **`IMAGE_INCOMPLETE`** and exit
+  1. The Worker maps that code to its own failure code (retried on a fresh
+  machine). No manifest file (local dev, tests) skips the guard.
+- The S3 client and `year-film-trim.ts` are imported lazily so a missing
+  `node_modules` file cannot crash the job at link time, before the guard.
+- The Worker also spreads machine starts with a 0-45 s deterministic jitter
+  (`cloudflare/year-film-worker/src/jitter.ts`).
+
 ## What's inside
 
 - Node 22, Chrome's libraries, ffmpeg, ImageMagick + libheif, the pinned

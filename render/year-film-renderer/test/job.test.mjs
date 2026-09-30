@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { checkFailureLines, isHeic, jobKey, posterTime, scenesFromTimeline, statusKey } from '../src/job.mjs';
+import { checkFailureLines, isHeic, jobKey, missingPaths, parseManifest, posterTime, scenesFromTimeline, statusKey, verifyImage } from '../src/job.mjs';
 
 const prefix = 'owner/year-films/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/';
 
@@ -70,4 +70,71 @@ test('checkFailureLines keeps only the failing rule lines, ANSI-free and capped'
   assert.equal(lines[1], 'TimeoutError: render-ready after 3000ms');
   assert.equal(lines.length, 12);
   assert.ok(lines.every((l) => !l.includes('Fix:')));
+});
+
+test('parseManifest and missingPaths: paths in manifest order, blanks ignored', () => {
+  const paths = parseManifest('/a/one\n\n/a/two \n/a/three\n');
+  assert.deepEqual(paths, ['/a/one', '/a/two', '/a/three']);
+  const present = new Set(['/a/two']);
+  assert.deepEqual(missingPaths(paths, (p) => present.has(p)), ['/a/one', '/a/three']);
+  assert.deepEqual(missingPaths(paths, () => true), []);
+  assert.deepEqual(missingPaths([], () => false), []);
+});
+
+function guardHarness({ manifest = '/a\n/b\n', existsAt }) {
+  let t = 0;
+  const logs = [];
+  const sleeps = [];
+  return {
+    logs,
+    sleeps,
+    options: {
+      manifestPath: '/app/image-manifest.txt',
+      readFile: () => {
+        if (manifest === null) throw new Error('ENOENT');
+        return manifest;
+      },
+      existsFn: (p) => existsAt(p, t),
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        t += ms;
+      },
+      now: () => t,
+      log: (line) => logs.push(line),
+    },
+  };
+}
+
+test('verifyImage: no manifest (local dev/tests) skips the guard', async () => {
+  const h = guardHarness({ manifest: null, existsAt: () => false });
+  assert.deepEqual(await verifyImage(h.options), { ok: true, skipped: true });
+  assert.deepEqual(h.logs, []);
+});
+
+test('verifyImage: a complete image passes without waiting or logging a miss', async () => {
+  const h = guardHarness({ existsAt: () => true });
+  const r = await verifyImage(h.options);
+  assert.equal(r.ok, true);
+  assert.equal(r.files, 2);
+  assert.equal(r.recovered, false);
+  assert.deepEqual(h.sleeps, []);
+  assert.deepEqual(h.logs, []);
+});
+
+test('verifyImage: files that appear during the wait continue, logging the recovery', async () => {
+  const h = guardHarness({ existsAt: (p, t) => p !== '/b' || t >= 10000 });
+  const r = await verifyImage(h.options);
+  assert.equal(r.ok, true);
+  assert.equal(r.recovered, true);
+  assert.deepEqual(h.sleeps, [5000, 5000]);
+  assert.deepEqual(h.logs, ['image: 1 missing (first: /b)', 'image: 1 missing (first: /b)', 'image: complete after 10.0s']);
+});
+
+test('verifyImage: still missing after ~60 s fails (paths and counts only)', async () => {
+  const h = guardHarness({ existsAt: (p) => p === '/a' });
+  const r = await verifyImage(h.options);
+  assert.deepEqual({ ok: r.ok, missing: r.missing, first: r.first }, { ok: false, missing: 1, first: '/b' });
+  assert.equal(r.waitedMs, 60000);
+  assert.equal(h.sleeps.length, 12);
+  assert.ok(h.logs.every((l) => l === 'image: 1 missing (first: /b)'));
 });

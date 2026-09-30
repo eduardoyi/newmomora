@@ -22,16 +22,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import {
-  BURST_CLIP_SECONDS,
-  parseRmsLevels,
-  parseSceneScores,
-  rankClipWindows,
-  rankVoiceWindows,
-  VERIFIED_CLIP_SECONDS,
-  voicedSegments,
-} from '../../../supabase/functions/_shared/year-film-trim.ts';
+
+// The S3 client and the trim module are loaded lazily (`s3()` / `trim()`),
+// not with static imports: a static import of a file missing from an
+// incomplete image fails at link time, before main() — and the startup
+// integrity guard (below) — could report IMAGE_INCOMPLETE.
+let s3Module;
+const s3 = async () => (s3Module ??= await import('@aws-sdk/client-s3'));
+let trimModule;
+const trim = async () => (trimModule ??= await import('../../../supabase/functions/_shared/year-film-trim.ts'));
 
 const execFileP = promisify(execFile);
 
@@ -113,7 +112,8 @@ export function isHeic(key) {
 
 // ── R2 ────────────────────────────────────────────────────────────────────
 
-function client(kind) {
+async function client(kind) {
+  const { S3Client } = await s3();
   const prefix = kind === 'read' ? 'R2_READ_' : 'R2_WRITE_';
   const temp = process.env[`${prefix}ACCESS_KEY_ID`];
   return new S3Client({
@@ -131,22 +131,25 @@ function client(kind) {
 const BUCKET = () => process.env.R2_BUCKET;
 let readClient;
 let writeClient;
-const reader = () => (readClient ??= client('read'));
-const writer = () => (writeClient ??= client('write'));
+const reader = async () => (readClient ??= await client('read'));
+const writer = async () => (writeClient ??= await client('write'));
 
 async function download(key, dest, which = 'read') {
-  const res = await (which === 'read' ? reader() : writer()).send(new GetObjectCommand({ Bucket: BUCKET(), Key: key }));
+  const { GetObjectCommand } = await s3();
+  const res = await (await (which === 'read' ? reader() : writer())).send(new GetObjectCommand({ Bucket: BUCKET(), Key: key }));
   await fs.promises.writeFile(dest, Buffer.from(await res.Body.transformToByteArray()));
 }
 
 async function readJson(key) {
-  const res = await writer().send(new GetObjectCommand({ Bucket: BUCKET(), Key: key }));
+  const { GetObjectCommand } = await s3();
+  const res = await (await writer()).send(new GetObjectCommand({ Bucket: BUCKET(), Key: key }));
   return JSON.parse(await res.Body.transformToString());
 }
 
 async function upload(key, filePathOrBody, contentType) {
   const body = typeof filePathOrBody === 'string' && fs.existsSync(filePathOrBody) ? await fs.promises.readFile(filePathOrBody) : filePathOrBody;
-  await writer().send(new PutObjectCommand({ Bucket: BUCKET(), Key: key, Body: body, ContentType: contentType }));
+  const { PutObjectCommand } = await s3();
+  await (await writer()).send(new PutObjectCommand({ Bucket: BUCKET(), Key: key, Body: body, ContentType: contentType }));
 }
 
 async function writeStatus(prefix, mode, status) {
@@ -220,6 +223,7 @@ async function checkImage(src, key, dst, at = null) {
 }
 
 async function measure(src, withMotion) {
+  const { parseRmsLevels, parseSceneScores } = await trim();
   const loud = await ffmpeg(['-i', src, '-vn', '-af', 'aresample=16000,asetnsamples=n=4000:p=0,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-', '-f', 'null', '-']);
   const motion = withMotion
     ? await ffmpeg(['-i', src, '-an', '-vf', "fps=4,scale=160:-2,select='gte(scene,0)',metadata=print:file=-", '-f', 'null', '-'])
@@ -271,6 +275,7 @@ async function thumbs(prefix, job, work) {
 }
 
 async function prepare(prefix, job, work) {
+  const { BURST_CLIP_SECONDS, rankClipWindows, rankVoiceWindows, VERIFIED_CLIP_SECONDS, voicedSegments } = await trim();
   const assets = {};
   let n = 0;
   const rel = (name) => `prep/assets/${name}`;
@@ -399,11 +404,86 @@ async function render(prefix, job) {
   return { durationMs };
 }
 
+
+// ── Image integrity guard ─────────────────────────────────────────────────
+// Sep 2026: when ~20 Fly machines start a freshly pushed image at once, some
+// see an INCOMPLETE root filesystem (files present in the image missing at
+// runtime: @puppeteer/browsers/lib/main.js, layout-audit.browser.js). The
+// Dockerfile writes /app/image-manifest.txt (every regular file of the trees
+// the job depends on); main() checks it before doing anything, waits for the
+// filesystem to settle, and otherwise fails fast with IMAGE_INCOMPLETE so the
+// Worker retries on a fresh machine instead of burning a prepare/render cycle.
+
+export const IMAGE_MANIFEST = '/app/image-manifest.txt';
+export const IMAGE_GUARD_WAIT_SECONDS = 60;
+export const IMAGE_GUARD_INTERVAL_MS = 5000;
+
+/** Manifest text → path list (blank lines ignored). */
+export function parseManifest(text) {
+  return String(text).split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+/** The paths `existsFn` does not find, in manifest order. */
+export function missingPaths(paths, existsFn) {
+  const missing = [];
+  for (const p of paths) if (!existsFn(p)) missing.push(p);
+  return missing;
+}
+
+/**
+ * Verifies the image against its manifest, re-checking every `intervalMs`
+ * until `waitSeconds` have passed. Injectable for tests. Returns
+ * `{ ok: true, skipped: true }` without a manifest (local dev/tests),
+ * `{ ok: true, files, waitedMs }` when complete, `{ ok: false, missing, waitedMs }`
+ * (missing = count of the last check) when it never settled.
+ * Logs paths and counts only.
+ */
+export async function verifyImage({
+  manifestPath = process.env.IMAGE_MANIFEST ?? IMAGE_MANIFEST,
+  readFile = (p) => fs.readFileSync(p, 'utf8'),
+  existsFn = (p) => fs.existsSync(p),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = () => Date.now(),
+  waitSeconds = IMAGE_GUARD_WAIT_SECONDS,
+  intervalMs = IMAGE_GUARD_INTERVAL_MS,
+  log = (line) => console.log(line),
+} = {}) {
+  let paths;
+  try {
+    paths = parseManifest(readFile(manifestPath));
+  } catch {
+    return { ok: true, skipped: true };
+  }
+  const started = now();
+  let missing = missingPaths(paths, existsFn);
+  const first = missing.length;
+  while (missing.length > 0) {
+    log(`image: ${missing.length} missing (first: ${missing[0]})`);
+    if (now() - started + intervalMs > waitSeconds * 1000) return { ok: false, missing: missing.length, first: missing[0], waitedMs: now() - started };
+    await sleep(intervalMs);
+    missing = missingPaths(paths, existsFn);
+  }
+  const waitedMs = now() - started;
+  if (first > 0) log(`image: complete after ${(waitedMs / 1000).toFixed(1)}s`);
+  return { ok: true, files: paths.length, waitedMs, recovered: first > 0 };
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────
 
 export async function main(mode, prefix) {
   if (!['thumbs', 'prepare', 'render'].includes(mode)) throw new Error(`unknown mode ${mode}`);
   if (!prefix || !/\/year-films\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/$/i.test(prefix)) throw new Error('bad JOB_PREFIX');
+
+  // Before any R2 call or work: is this machine's filesystem the whole image?
+  const image = await verifyImage();
+  if (!image.ok) {
+    console.error(`year film ${mode}: failed IMAGE_INCOMPLETE`);
+    await writeStatus(prefix, mode, { state: 'failed', code: 'IMAGE_INCOMPLETE' }).catch(() => {});
+    process.exitCode = 1;
+    return;
+  }
+  if (!image.skipped) console.log(`image: ok (${image.files} files, ${image.waitedMs}ms)`);
+
   const timeoutSeconds = Number(process.env.JOB_TIMEOUT_SECONDS ?? 1500);
   const timer = setTimeout(async () => {
     console.error(`year film ${mode}: timeout`);

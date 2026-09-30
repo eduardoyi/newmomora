@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AttemptStopped, type BridgeClient } from '../src/bridge';
 import type { FlyClient } from '../src/fly';
 import type { ChatFn } from '../src/openai';
-import { pollMachine, publish, runFrameChecks, runVoiceChecks, type StageDeps, startThumbs } from '../src/stages';
+import { pollFailureCode, pollMachine, publish, runFrameChecks, runVoiceChecks, type StageDeps, startThumbs } from '../src/stages';
 import type { Storage } from '../src/storage';
 import { assetId, type PrepareManifest } from '../../../supabase/functions/_shared/year-film-assets.ts';
 
@@ -80,6 +80,25 @@ describe('pollMachine', () => {
   it('stops when the attempt is superseded', async () => {
     const { bridge } = fakeBridge({ heartbeat: () => ({ state: 'epoch_changed' }) });
     await expect(pollMachine(deps({ bridge }), `${PREFIX}status.json`, 'm1', null)).rejects.toBeInstanceOf(AttemptStopped);
+  });
+
+  it('surfaces the job\'s IMAGE_INCOMPLETE startup-guard code as its own state, other failures as failed', async () => {
+    const { bridge } = fakeBridge({ heartbeat: () => ({ state: 'ok' }) });
+    const key = `${PREFIX}status.json`;
+    const incomplete = memoryStorage({ [key]: { state: 'failed', code: 'IMAGE_INCOMPLETE' } });
+    expect(await pollMachine(deps({ bridge, storage: incomplete }), key, 'm1', null)).toBe('image_incomplete');
+    const step = memoryStorage({ [key]: { state: 'failed', code: 'STEP_CHECK' } });
+    expect(await pollMachine(deps({ bridge, storage: step }), key, 'm1', null)).toBe('failed');
+    const bare = memoryStorage({ [key]: { state: 'failed' } });
+    expect(await pollMachine(deps({ bridge, storage: bare }), key, 'm1', null)).toBe('failed');
+  });
+
+  it('maps terminal poll states to closed failure codes', () => {
+    expect(pollFailureCode('image_incomplete')).toBe('IMAGE_INCOMPLETE');
+    expect(pollFailureCode('failed')).toBe('MACHINE_FAILED');
+    expect(pollFailureCode('crashed')).toBe('MACHINE_FAILED');
+    expect(pollFailureCode('running')).toBeNull();
+    expect(pollFailureCode('done')).toBeNull();
   });
 
   it('reads the status, and treats a machine that vanished without one as a crash', async () => {

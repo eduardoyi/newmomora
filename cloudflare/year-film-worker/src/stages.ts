@@ -202,14 +202,27 @@ export async function startThumbs(deps: StageDeps): Promise<{ skipped: true; rea
 
 // ── Machine polling ──────────────────────────────────────────────────────
 
-export type PollState = 'running' | 'done' | 'failed' | 'crashed';
+export type PollState = 'running' | 'done' | 'failed' | 'image_incomplete' | 'crashed';
+
+/** A status.json `failed` with the job's startup-guard code: the machine saw
+ * an incomplete image filesystem (Fly partial-rootfs quirk) and did no work. */
+export const IMAGE_INCOMPLETE_CODE = 'IMAGE_INCOMPLETE';
+
+/** The closed failure code a terminal poll state ends the cycle with. */
+export function pollFailureCode(state: PollState): 'MACHINE_FAILED' | 'IMAGE_INCOMPLETE' | null {
+  return state === 'image_incomplete' ? 'IMAGE_INCOMPLETE' : state === 'failed' || state === 'crashed' ? 'MACHINE_FAILED' : null;
+}
+
+export function failedPollState(status: { state?: string; code?: string } | null): 'failed' | 'image_incomplete' {
+  return status?.code === IMAGE_INCOMPLETE_CODE ? 'image_incomplete' : 'failed';
+}
 
 export async function pollMachine(deps: StageDeps, statusKey: string, machineId: string, epoch: number | null): Promise<PollState> {
   const { state } = await deps.bridge.call<{ state: string }>('heartbeat', epoch === null ? {} : { epoch });
   if (state !== 'ok') throw new AttemptStopped(state);
-  const status = await deps.storage.getJson<{ state?: string }>(statusKey);
+  const status = await deps.storage.getJson<{ state?: string; code?: string }>(statusKey);
   if (status?.state === 'done') return 'done';
-  if (status?.state === 'failed') return 'failed';
+  if (status?.state === 'failed') return failedPollState(status);
   const machine = await deps.fly.get(machineId);
   if (!machine || machine.state === 'destroyed' || machine.state === 'stopped' || machine.state === 'failed') {
     // Gone without a status: re-read once (the status write may have just landed).

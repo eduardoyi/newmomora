@@ -102,6 +102,19 @@ RUN chmod +x /app/bench.sh
 COPY --from=job . /app/
 RUN cd /app/render/year-film-renderer && npm ci --omit=dev --no-audit --no-fund
 
+# Integrity manifest, LAST so it describes exactly what this image contains:
+# every regular file of the trees the job depends on (paths only, sorted).
+# src/job.mjs verifies it before doing any work — Fly machines starting a
+# fresh image concurrently sometimes see an incomplete root filesystem
+# (docs/features/year-film.md gotchas). Keep it after every COPY/RUN above.
+RUN { find /usr/local/lib/node_modules/hyperframes /root/.cache/hyperframes/chrome \
+        /app/film-renderer /app/render/year-film-renderer /app/supabase -type f; \
+      printf '%s\n' /usr/bin/ffmpeg /usr/bin/ffprobe; } \
+    | LC_ALL=C sort > /app/image-manifest.txt \
+  && test -s /app/image-manifest.txt \
+  && echo "image-manifest: $(wc -l < /app/image-manifest.txt) files" \
+  && for f in /usr/bin/ffmpeg /usr/bin/ffprobe; do test -f "$f"; done
+
 ENV FILM_RENDERER_DIR=/app/film-renderer
 WORKDIR /app/render/year-film-renderer
 # Machines pass the mode as init.cmd (thumbs | prepare | render).
