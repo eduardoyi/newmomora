@@ -45,6 +45,12 @@ async function run(cmd, args, options = {}, step = cmd) {
     const wrapped = new Error(`step ${step} failed (${error?.code ?? 'error'})`);
     wrapped.code = `STEP_${String(step).toUpperCase()}`;
     if (process.env.JOB_DEBUG === '1') wrapped.debug = String(error?.stderr ?? error?.message ?? '').slice(-2000);
+    // `hyperframes check` prints its report on stdout: log only the failing
+    // rule lines (rule ids, selectors, asset file names — never memory text),
+    // capped, so a Fly-only failure is diagnosable from `fly logs`.
+    if (step === 'check') {
+      for (const line of checkFailureLines(`${error?.stdout ?? ''}\n${error?.stderr ?? ''}`)) console.log(`check: ${line}`);
+    }
     throw wrapped;
   }
 }
@@ -52,6 +58,18 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FILM_RENDERER = process.env.FILM_RENDERER_DIR ?? path.resolve(HERE, '../../../film-renderer');
 
 // ── Pure helpers (tested in test/job.test.mjs) ────────────────────────────
+
+/** The `✗` issue lines of a `hyperframes check` report (ANSI stripped),
+ * at most 12, each cut at 240 chars. */
+export function checkFailureLines(report) {
+  return String(report)
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('✗') || /^(Error|TimeoutError)\b/.test(line))
+    .slice(0, 12)
+    .map((line) => line.slice(0, 240));
+}
 
 export function statusKey(prefix, mode) {
   return mode === 'thumbs' ? `${prefix}thumbs/status.json` : mode === 'prepare' ? `${prefix}prep/status.json` : `${prefix}status.json`;
@@ -358,7 +376,9 @@ async function render(prefix, job) {
   // so it failed ~2/3 of the history backfill's monthly recaps on content we
   // can't control (Sep 2026). Lint/runtime/layout/motion errors still gate the
   // render; contrast stays on in local dogfood checks (film-renderer/render.mjs).
-  await run('hyperframes', ['check', '--no-contrast'], { cwd: composition, maxBuffer: 16 * 1024 * 1024 }, 'check');
+  // --timeout 15000: the default 3 s page-ready budget is tight on a busy Fly
+  // machine (local runs of the same film pass; Sep 2026 backfill).
+  await run('hyperframes', ['check', '--no-contrast', '--timeout', '15000'], { cwd: composition, maxBuffer: 16 * 1024 * 1024 }, 'check');
   const out = path.join(os.tmpdir(), 'film.mp4');
   await run('hyperframes', ['render', '-o', out, '--video-frame-format', 'jpg', '--crf', String(FILM_CRF), '--quiet'], { cwd: composition, maxBuffer: 16 * 1024 * 1024 }, 'render');
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isHeic, jobKey, posterTime, scenesFromTimeline, statusKey } from '../src/job.mjs';
+import { checkFailureLines, isHeic, jobKey, posterTime, scenesFromTimeline, statusKey } from '../src/job.mjs';
 
 const prefix = 'owner/year-films/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/';
 
@@ -61,4 +61,13 @@ test('posterTime: the first scene, settled (cold open, title, very short first s
 test('HEIC detection', () => {
   assert.equal(isHeic('u/memories/a/IMG_1.HEIC'), true);
   assert.equal(isHeic('u/memories/a/IMG_1.jpg'), false);
+});
+
+test('checkFailureLines keeps only the failing rule lines, ANSI-free and capped', () => {
+  const report = ['\x1b[36mLint\x1b[39m', '  \x1b[31m✗\x1b[39m missing_local_asset: assets/film/025.mp4', '    Fix: add the file', '  ◇ 0 errors', 'TimeoutError: render-ready after 3000ms', ...Array.from({ length: 20 }, (_, i) => `✗ rule ${i}`)].join('\n');
+  const lines = checkFailureLines(report);
+  assert.equal(lines[0], '✗ missing_local_asset: assets/film/025.mp4');
+  assert.equal(lines[1], 'TimeoutError: render-ready after 3000ms');
+  assert.equal(lines.length, 12);
+  assert.ok(lines.every((l) => !l.includes('Fix:')));
 });
