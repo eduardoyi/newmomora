@@ -84,6 +84,13 @@ RUN npm install -g hyperframes@0.8.80 \
 # @puppeteer/browsers — and on Fly machines that import failed ("Cannot find
 # package …/@puppeteer/browsers/lib/main.js", Sep 2026 backfill) though the
 # same image passes locally. The env path is checked first and skips it.
+# The CLI otherwise checks npm for a newer release and, for a global npm
+# install, spawns a background `npm install -g hyperframes@latest` — which
+# rewrote the package WHILE the job ran (files vanished mid-check:
+# layout-audit.browser.js, @puppeteer/browsers; Sep 2026). The image pins its
+# version; never self-update.
+ENV HYPERFRAMES_NO_UPDATE_CHECK=1 \
+    HYPERFRAMES_NO_AUTO_INSTALL=1
 ENV HYPERFRAMES_BROWSER_PATH=/root/.cache/hyperframes/chrome/chrome-headless-shell/linux-${CHROME_VERSION}/chrome-headless-shell-linux64/chrome-headless-shell \
     PRODUCER_HEADLESS_SHELL_PATH=/root/.cache/hyperframes/chrome/chrome-headless-shell/linux-${CHROME_VERSION}/chrome-headless-shell-linux64/chrome-headless-shell
 
