@@ -4,15 +4,22 @@
 // from a hash of film.id so a film never flips when list pages load. No card
 // chrome: it should read as a keepsake pasted between memories. Memoized with
 // an id-based callback -- the Timeline re-renders its list on every
-// page/refetch; nothing here animates per frame.
+// page/refetch; nothing here animates per frame (the remaking placeholder's
+// pulse runs on the UI thread).
+//
+// Two extra states (`filmDisplayState`): 'remaking' keeps the exact frame,
+// tilt, tape and placement but swaps the cover for a placeholder and is NOT
+// pressable (the old video is blocked); 'updating' is the normal, playable
+// card with an "Updating..." sticker in the New sticker's slot.
 import { memo, useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 
 import { FilmCover } from '@/components/year-films/film-cover';
+import { RemakingPlaceholder, REMAKING_CARD_SUBTITLE } from '@/components/year-films/remaking-placeholder';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import type { YearFilm } from '@/services/year-films';
-import { filmTitle, type YearFilmMember } from '@/utils/year-films';
+import { filmDisplayState, filmTitle, type YearFilmMember } from '@/utils/year-films';
 
 /** Horizontal padding of the Timeline's card column (`cardItem` in timeline.tsx). */
 const COLUMN_PADDING = spacing.md;
@@ -82,22 +89,55 @@ export const FilmCard = memo(function FilmCard({ film, members, isNew, onPress }
   const polaroidWidth = Math.round((windowWidth - COLUMN_PADDING * 2) * POLAROID_WIDTH_RATIO);
   const coverWidth = polaroidWidth - POLAROID_PADDING * 2;
   const isLeft = look.side === 'left';
+  const displayState = filmDisplayState(film);
+  const isRemaking = displayState === 'remaking';
+  const isUpdating = displayState === 'updating';
+
+  // Filtered out upstream (`useFamilyYearFilms`); never draw one that slips through.
+  if (displayState === 'hidden') return null;
+
+  const wrapStyle = {
+    alignSelf: isLeft ? ('flex-start' as const) : ('flex-end' as const),
+    marginLeft: isLeft ? SIDE_MARGIN : 0,
+    marginRight: isLeft ? 0 : SIDE_MARGIN,
+    width: polaroidWidth,
+  };
+  const tapes = (
+    <>
+      <View pointerEvents="none" style={[styles.tape, styles.tapeLeft, { backgroundColor: look.tape }]} />
+      <View pointerEvents="none" style={[styles.tape, styles.tapeRight, { backgroundColor: look.tape }]} />
+    </>
+  );
+
+  if (isRemaking) {
+    // Same wrap/polaroid/tape geometry as the playable card so nothing jumps
+    // when the film comes back; a plain View, so a tap does nothing.
+    return (
+      <View
+        accessibilityLabel={`${title}, remaking. ${REMAKING_CARD_SUBTITLE}`}
+        accessible
+        style={[styles.wrap, wrapStyle]}
+        testID={`timeline-film-${film.id}-remaking`}
+      >
+        <View style={[styles.polaroid, { transform: [{ rotate: `${look.tilt}deg` }] }]}>
+          <RemakingPlaceholder
+            radius={2}
+            testID={`timeline-film-${film.id}-remaking-cover`}
+            variant="card"
+            width={coverWidth}
+          />
+          {tapes}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <Pressable
-      accessibilityLabel={`Play ${title}`}
+      accessibilityLabel={isUpdating ? `Play ${title}, updating` : `Play ${title}`}
       accessibilityRole="button"
       onPress={() => onPress(film.id)}
-      style={({ pressed }) => [
-        styles.wrap,
-        {
-          alignSelf: isLeft ? 'flex-start' : 'flex-end',
-          marginLeft: isLeft ? SIDE_MARGIN : 0,
-          marginRight: isLeft ? 0 : SIDE_MARGIN,
-          width: polaroidWidth,
-        },
-        pressed && styles.wrapPressed,
-      ]}
+      style={({ pressed }) => [styles.wrap, wrapStyle, pressed && styles.wrapPressed]}
       testID={`timeline-film-${film.id}`}
     >
       <View style={[styles.polaroid, { transform: [{ rotate: `${look.tilt}deg` }] }]}>
@@ -107,14 +147,7 @@ export const FilmCard = memo(function FilmCard({ film, members, isNew, onPress }
           testID={`timeline-film-${film.id}-cover`}
           width={coverWidth}
         />
-        <View
-          pointerEvents="none"
-          style={[styles.tape, styles.tapeLeft, { backgroundColor: look.tape }]}
-        />
-        <View
-          pointerEvents="none"
-          style={[styles.tape, styles.tapeRight, { backgroundColor: look.tape }]}
-        />
+        {tapes}
         <View
           pointerEvents="none"
           style={styles.play}
@@ -127,8 +160,12 @@ export const FilmCard = memo(function FilmCard({ film, members, isNew, onPress }
             tintColor={colors.white}
           />
         </View>
-        {isNew ? (
-          <View style={styles.newSticker} testID={`timeline-film-${film.id}-new`}>
+        {isUpdating ? (
+          <View style={[styles.sticker, styles.updatingSticker]} testID={`timeline-film-${film.id}-updating`}>
+            <Text style={styles.updatingStickerText}>Updating…</Text>
+          </View>
+        ) : isNew ? (
+          <View style={[styles.sticker, styles.newSticker]} testID={`timeline-film-${film.id}-new`}>
             <Text style={styles.newStickerText}>New</Text>
           </View>
         ) : null}
@@ -189,8 +226,7 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: 14,
   },
-  newSticker: {
-    backgroundColor: colors.sun,
+  sticker: {
     borderRadius: radius.pill,
     left: -10,
     paddingHorizontal: 10,
@@ -198,6 +234,14 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -6,
     transform: [{ rotate: '-8deg' }],
+  },
+  newSticker: { backgroundColor: colors.sun },
+  updatingSticker: { backgroundColor: colors.primarySoft },
+  updatingStickerText: {
+    color: colors.primaryDark,
+    fontFamily: fonts.sansBold,
+    fontSize: 11,
+    letterSpacing: 0.02 * 11,
   },
   newStickerText: {
     color: colors.sunInk,

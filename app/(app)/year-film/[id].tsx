@@ -35,6 +35,9 @@ const CREAM = '#F6F1E7';
 const HOLD_MS = 220;
 /** After a saved edit the player stays this long so the "Remaking" toast can be read. */
 const LEAVE_AFTER_SAVE_MS = 2200;
+const UNAVAILABLE_MESSAGE = "This film isn't available right now.";
+// The row is `blocked` while an edit that removed moments is being remade.
+const UNAVAILABLE_REMAKING_MESSAGE = 'This film is being remade. Check back in a few minutes.';
 /** A tap in the left third goes back, the rest goes forward (looking-back convention). */
 const PREVIOUS_ZONE_WIDTH = '33%';
 
@@ -58,7 +61,7 @@ export default function YearFilmScreen() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
 
-  const { film, title } = useYearFilm(filmId);
+  const { film, title, refetch: refetchFilm } = useYearFilm(filmId);
   const markViewed = useMarkYearFilmViewed();
   const markCompleted = useMarkYearFilmCompleted();
 
@@ -102,6 +105,8 @@ export default function YearFilmScreen() {
     },
     onUnavailable: () => {
       void invalidateYearFilms(queryClient, filmFamilyId);
+      // The by-id row decides the copy below ("being remade" when blocked).
+      void refetchFilm();
     },
   });
 
@@ -383,7 +388,9 @@ export default function YearFilmScreen() {
 
       {player.phase === 'unavailable' ? (
         <View style={styles.overlayFull} testID="year-film-unavailable">
-          <Text style={styles.message}>This film isn&apos;t available right now.</Text>
+          <Text style={styles.message}>
+            {film?.blocked ? UNAVAILABLE_REMAKING_MESSAGE : UNAVAILABLE_MESSAGE}
+          </Text>
           <Pressable
             accessibilityLabel="Close"
             accessibilityRole="button"

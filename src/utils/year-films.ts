@@ -85,6 +85,52 @@ export function filmSubtitle(
   return duration ? `${duration} · ${range}` : range;
 }
 
+/** How a film is shown while it is (re)made. See `filmDisplayState`. */
+export type FilmDisplayState = 'ready' | 'remaking' | 'updating' | 'hidden';
+
+/** `year_films.status` values of a render cycle that is still running. */
+const IN_PROGRESS_STATUSES: ReadonlySet<string> = new Set(['queued', 'curating', 'preparing', 'rendering']);
+
+/**
+ * What the app shows for a film row (RLS lets a member see any film that has
+ * EVER been ready, including one being remade):
+ * - `hidden`: blocked and the remake ended `failed`/`skipped` -- a blocked
+ *   film that can't be remade has lost its video, so it is rendered nowhere;
+ * - `remaking`: blocked (the old video contained content the family removed
+ *   and is never served) -- a placeholder, no poster, not playable;
+ * - `updating`: not blocked, `stale` and a render cycle is running -- the old
+ *   film still plays, with an "Updating..." sticker;
+ * - `ready`: everything else (including a stale film whose re-render
+ *   `failed`: the old, good film keeps serving).
+ * Hidden films are filtered out once, in `useFamilyYearFilms`.
+ */
+export function filmDisplayState(film: Pick<YearFilm, 'status' | 'blocked' | 'stale'>): FilmDisplayState {
+  if (film.blocked) {
+    return film.status === 'failed' || film.status === 'skipped' ? 'hidden' : 'remaking';
+  }
+  if (film.stale && IN_PROGRESS_STATUSES.has(film.status)) return 'updating';
+  return 'ready';
+}
+
+/** The films list is refetched this often while a film is remaking/updating and the screen is focused. */
+export const YEAR_FILMS_POLL_INTERVAL_MS = 20_000;
+
+/** True while any film is `remaking` or `updating`: the list should keep polling. */
+export function hasFilmInProgress(films: readonly Pick<YearFilm, 'status' | 'blocked' | 'stale'>[] | null | undefined): boolean {
+  return (films ?? []).some((film) => {
+    const state = filmDisplayState(film);
+    return state === 'remaking' || state === 'updating';
+  });
+}
+
+/** `refetchInterval` for the films query: the poll period, or `false` (stop). */
+export function yearFilmsRefetchInterval(
+  films: readonly Pick<YearFilm, 'status' | 'blocked' | 'stale'>[] | null | undefined,
+  isFocused: boolean,
+): number | false {
+  return isFocused && hasFilmInProgress(films) ? YEAR_FILMS_POLL_INTERVAL_MS : false;
+}
+
 /** Same-day order in the newest-first Timeline: year above month above birthday. */
 const KIND_RANK: Record<YearFilm['kind'], number> = { family_year: 0, family_month: 1, birthday: 2 };
 

@@ -22,6 +22,7 @@ let mockFilmsFetched = true;
 let mockViewedIds = new Set<string>();
 let mockViewsLoading = false;
 const mockRefetchFilms = jest.fn();
+const mockUseFamilyYearFilms = jest.fn();
 
 jest.mock('expo-router', () => ({
   router: { push: jest.fn() },
@@ -41,7 +42,10 @@ jest.mock('@/hooks/use-family', () => ({ useFamily: () => ({ role: 'owner', fami
 jest.mock('@/hooks/use-auth', () => ({ useAuth: () => ({ user: { id: 'user-1' } }) }));
 jest.mock('@/hooks/useMemories', () => ({ useMemories: (options: unknown) => mockUseMemories(options) }));
 jest.mock('@/hooks/useYearFilms', () => ({
-  useFamilyYearFilms: () => ({ films: mockFilms, isFetched: mockFilmsFetched, refetch: mockRefetchFilms }),
+  useFamilyYearFilms: (...args: unknown[]) => {
+    mockUseFamilyYearFilms(...args);
+    return { films: mockFilms, isFetched: mockFilmsFetched, refetch: mockRefetchFilms };
+  },
   useYearFilmViews: () => ({ viewedIds: mockViewedIds, isLoading: mockViewsLoading }),
   useYearFilmPosters: () => ({}),
   invalidateYearFilmPoster: jest.fn(),
@@ -619,6 +623,38 @@ describe('Timeline Year Films', () => {
     expect(cellOrder(screen)).toEqual(['recent', 'film:film-mar', 'march']);
     expect(screen.queryByTestId('timeline-film-film-old')).toBeNull();
     expect(screen.getByTestId('timeline-film-film-mar').props.accessibilityLabel).toBe('Play March recap');
+  });
+
+  it('polls the films only while the Timeline is focused (passes its focus state to the hook)', () => {
+    renderTimeline();
+    expect(mockUseFamilyYearFilms).toHaveBeenCalledWith('family-1', { isFocused: true });
+  });
+
+  it('keeps a remaking film in its place as a non-pressable placeholder', () => {
+    mockUseMemories.mockImplementation(() => hookResult([recentMemory, marchMemory], { hasNextPage: true }));
+    mockFilms = [yearFilm({ blocked: true, stale: true, status: 'rendering' })];
+    const screen = renderTimeline();
+
+    // Same cell, same order as the playable card.
+    expect(cellOrder(screen)).toEqual(['recent', 'film:film-mar', 'march']);
+    const placeholder = screen.getByTestId('timeline-film-film-mar-remaking');
+    expect(placeholder.props.accessibilityRole).not.toBe('button');
+    expect(screen.getByText('Remaking your film…')).toBeTruthy();
+    expect(screen.getByText('This takes a few minutes')).toBeTruthy();
+    expect(screen.queryByTestId('timeline-film-film-mar')).toBeNull();
+    expect(screen.queryByTestId('timeline-film-film-mar-play')).toBeNull();
+    fireEvent.press(placeholder);
+    expect(mockRouter.push).not.toHaveBeenCalledWith('/(app)/year-film/film-mar?source=timeline');
+  });
+
+  it('shows an updating film as a playable card with an Updating sticker', () => {
+    mockUseMemories.mockImplementation(() => hookResult([recentMemory, marchMemory]));
+    mockFilms = [yearFilm({ blocked: false, stale: true, status: 'curating' })];
+    const screen = renderTimeline();
+
+    expect(screen.getByTestId('timeline-film-film-mar-updating')).toHaveTextContent('Updating…');
+    fireEvent.press(screen.getByTestId('timeline-film-film-mar'));
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/year-film/film-mar?source=timeline');
   });
 
   it('shows a film below the last memory once no older pages remain', () => {

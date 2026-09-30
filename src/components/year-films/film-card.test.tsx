@@ -80,6 +80,70 @@ describe('FilmCard', () => {
     expect(on.getByTestId('timeline-film-film-1-new')).toHaveTextContent('New');
   });
 
+  describe('remaking (blocked while the film is remade)', () => {
+    const REMAKING = { ...FILM, blocked: true, stale: true, status: 'rendering' } as YearFilm;
+
+    it('renders a placeholder in the same polaroid frame: no button, no play, no cover, no poster request', () => {
+      const { getByTestId, queryByTestId, getByText, onPress } = renderCard({ film: REMAKING });
+      const card = getByTestId('timeline-film-film-1-remaking');
+      expect(card).toBeTruthy();
+      expect(card.props.accessibilityRole).not.toBe('button');
+      expect(card.props.accessibilityLabel).toBe("Enzo's Year Four, remaking. This takes a few minutes");
+      expect(getByText('Remaking your film…')).toBeTruthy();
+      expect(getByText('This takes a few minutes')).toBeTruthy();
+      expect(queryByTestId('timeline-film-film-1')).toBeNull();
+      expect(queryByTestId('timeline-film-film-1-play')).toBeNull();
+      expect(queryByTestId('timeline-film-film-1-cover')).toBeNull();
+      expect(queryByTestId('timeline-film-film-1-new')).toBeNull();
+      // A plain View: no press responder at all (RNTL would otherwise walk up to FilmCard's own onPress prop).
+      expect(card.props.onResponderGrant).toBeUndefined();
+      expect(card.props.onClick).toBeUndefined();
+      fireEvent.press(card);
+      expect(onPress).not.toHaveBeenCalledWith('film-1');
+    });
+
+    it('keeps the exact wrap geometry of the playable card (side, inset, width) so nothing jumps', () => {
+      const left = ids('left');
+      const right = ids('right');
+      const playable = renderCard({ film: { ...FILM, id: left } });
+      const playableStyle = flatStyle(playable.getByTestId(`timeline-film-${left}`));
+      playable.unmount();
+      const remaking = renderCard({ film: { ...FILM, id: left, blocked: true, status: 'queued' } as YearFilm });
+      const remakingStyle = flatStyle(remaking.getByTestId(`timeline-film-${left}-remaking`));
+      expect(remakingStyle).toEqual(playableStyle);
+      remaking.unmount();
+      const r = renderCard({ film: { ...FILM, id: right, blocked: true, status: 'queued' } as YearFilm });
+      expect(flatStyle(r.getByTestId(`timeline-film-${right}-remaking`)).alignSelf).toBe('flex-end');
+    });
+
+    it('draws nothing for a hidden film (blocked and failed) if one slips past the hook', () => {
+      const { queryByTestId } = renderCard({ film: { ...REMAKING, status: 'failed' } as YearFilm });
+      expect(queryByTestId('timeline-film-film-1')).toBeNull();
+      expect(queryByTestId('timeline-film-film-1-remaking')).toBeNull();
+    });
+  });
+
+  describe('updating (stale, unblocked, mid-render)', () => {
+    const UPDATING = { ...FILM, blocked: false, stale: true, status: 'rendering' } as YearFilm;
+
+    it('stays a playable card with an Updating sticker', () => {
+      const { getByTestId, onPress } = renderCard({ film: UPDATING });
+      const card = getByTestId('timeline-film-film-1');
+      expect(card.props.accessibilityRole).toBe('button');
+      expect(card.props.accessibilityLabel).toBe("Play Enzo's Year Four, updating");
+      expect(getByTestId('timeline-film-film-1-play')).toBeTruthy();
+      expect(getByTestId('timeline-film-film-1-updating')).toHaveTextContent('Updating…');
+      fireEvent.press(card);
+      expect(onPress).toHaveBeenCalledWith('film-1');
+    });
+
+    it('takes the New sticker\'s slot instead of stacking on it', () => {
+      const { getByTestId, queryByTestId } = renderCard({ film: UPDATING, isNew: true });
+      expect(getByTestId('timeline-film-film-1-updating')).toBeTruthy();
+      expect(queryByTestId('timeline-film-film-1-new')).toBeNull();
+    });
+  });
+
   it('derives side, tilt and tape colour from the id only (stable, both sides occur)', () => {
     const ids = Array.from({ length: 40 }, (_, i) => `film-${i}`);
     const looks = ids.map((id) => filmCardLook(id));

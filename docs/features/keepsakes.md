@@ -48,6 +48,14 @@ keepsakes" link into that child's shelf.
   - Film tiles (`keepsakes-film-{filmId}`) open the player:
     `router.push(yearFilmRoute(id, 'keepsakes'))`. Titles come from
     `filmTitle`; covers are `FilmCover`.
+  - **Tile states** (`filmDisplayState`, see [year-film.md](./year-film.md)
+    "Remaking"): a film whose edit removed moments is *remaking* -- the same
+    tile slot shows a paper placeholder with a soft pulse and "Remaking…"
+    (`keepsakes-film-{filmId}-remaking`, not pressable, no poster request);
+    a film re-rendering for a music/quote edit is *updating* -- the normal
+    playable tile plus an "Updating…" badge (`keepsakes-film-{filmId}-updating`).
+    A blocked film whose remake failed is hidden (filtered in the hook). The
+    recaps grid and the child page use the same tile, so the states apply there.
 - **Empty state** (no books **and** no films anywhere): **one family-level
   pitch**, not one per child, below whatever year sections exist (e.g. the
   upcoming card).
@@ -90,7 +98,7 @@ flowchart LR
   Route[keepsakes/memberId] --> Body
   Body -->|one query, polls while active + focused| Fam[useFamilyMemoryBooks]
   Fam --> DB[(memory_books)]
-  Body -->|focus refetch, no polling| Films[useFamilyYearFilms]
+  Body -->|focus refetch; polls 20s only while a film is remaking/updating| Films[useFamilyYearFilms]
   Films --> FDB[(year_films)]
   Body -->|buildKeepsakeYears| Years[KeepsakeYearSection per year]
   Years --> Covers[FilmCover posters]
@@ -110,9 +118,12 @@ flowchart LR
   - Polls every 4s only while a book is queued/generating **and** the screen
     is focused, because tab screens never unmount.
 - **Films** come from `useFamilyYearFilms` (one family query, `placement_date`
-  desc). Books poll while a book is generating; films don't -- they arrive by
-  push, the drawer, or the body's refetch each time the tab is focused (tab
-  screens never unmount). The tab doesn't fetch books for viewers.
+  desc, minus `hidden` films). Books poll while a book is generating; films
+  normally don't -- they arrive by push, the drawer, or the body's refetch each
+  time the tab is focused (tab screens never unmount). The exception: while a
+  film is `remaking`/`updating` the hook refetches every 20 s, and only while
+  the screen is focused (`KeepsakesBody` passes its `isFocused`; the recaps
+  route uses `useIsFocused`). The tab doesn't fetch books for viewers.
 - **`KeepsakesBody`** (`memory-books-body.tsx`) owns the one ScrollView, the
   CTA overlay, the toast, the pitch and the create/retry host;
   `KeepsakeYearSection` (`src/components/keepsakes/`) is presentational and
@@ -187,13 +198,16 @@ generation pipeline.
     book UI, `keepsakes-viewer-empty` only with no films, focus refetch;
   - recaps grid: that year's recaps newest first, `year_film_recaps_opened`,
     empty state + Back.
+  `remaking` tile (placeholder, not pressable) and `updating` badge (still
+  pressable) in the tab and the recaps grid, focus state passed to the hook.
 - `src/components/year-films/film-cover.test.tsx` (poster, placeholder, sizes,
-  re-sign on error), `src/components/keepsakes/upcoming-recap-card.test.tsx`
+  re-sign on error, no poster request for a blocked film),
+  `src/components/year-films/remaking-placeholder.test.tsx`, `src/components/keepsakes/upcoming-recap-card.test.tsx`
   (label incl. December).
 - `src/hooks/useMemoryBooks.integration.test.tsx` (`useFamilyMemoryBooks`
   grouping, focus-gated polling, family invalidation after generate).
 - `src/utils/family-relationships.test.ts` (`isOwnChild`),
-  `src/utils/year-films.test.ts` (`buildKeepsakeYears`).
+  `src/utils/year-films.test.ts` (`buildKeepsakeYears`, `filmDisplayState`, polling condition).
 - `src/components/floating-tab-bar.test.tsx`.
 - Maestro: `keepsakes/open-keepsakes.yaml`, `check-icons.yaml`,
   `sharing/viewer-readonly.yaml` (viewers see films or the empty line, never
@@ -205,3 +219,4 @@ generation pipeline.
 |------|--------|
 | 2026-09-29 | Keepsakes tab replaces Calendar; books move off the child profile (plan Phase C) |
 | 2026-09-29 | Year Film P2: tab restructured into year sections (Family films, upcoming-recap card, child shelves with birthday films + books), recaps grid route, films on the child page, viewers see films (books still hidden), `MemoryBooksBody` → `KeepsakesBody`, shelf test ids → `keepsakes-shelf-{year}-{memberId}` |
+| 2026-09-30 | Film tiles get *remaking* (placeholder, not pressable) and *updating* (badge) states; the films query polls every 20 s while focused and any film is in progress |

@@ -121,8 +121,9 @@ const mockFilm = {
   duration_ms: 60_000,
   ready_at: '2026-10-01T00:00:00Z',
 };
-let mockFilmResult: { film: typeof mockFilm | null; title: string | null };
-jest.mock('@/hooks/useYearFilm', () => ({ useYearFilm: () => mockFilmResult }));
+let mockFilmResult: { film: (typeof mockFilm & { blocked?: boolean }) | null; title: string | null };
+const mockRefetchFilm = jest.fn();
+jest.mock('@/hooks/useYearFilm', () => ({ useYearFilm: () => ({ ...mockFilmResult, refetch: mockRefetchFilm }) }));
 
 const mockMarkViewed = jest.fn();
 const mockMarkCompleted = jest.fn();
@@ -355,6 +356,22 @@ describe('Year Film player screen', () => {
 
     fireEvent.press(screen.getByTestId('year-film-unavailable-close'));
     expect(router.back).toHaveBeenCalledTimes(1);
+  });
+
+  it('says the film is being remade when the unavailable film is blocked', async () => {
+    mockFilmResult = { film: { ...mockFilm, blocked: true }, title: 'September recap' };
+    mockedGetPlayback.mockResolvedValue({
+      data: null,
+      error: { message: 'blocked', code: 'film_unavailable' },
+      unavailable: true,
+    });
+
+    await renderPlayer_unavailable();
+
+    expect(await screen.findByText('This film is being remade. Check back in a few minutes.')).toBeTruthy();
+    expect(screen.queryByText("This film isn't available right now.")).toBeNull();
+    // The by-id row is re-read so the copy follows the server's current state.
+    expect(mockRefetchFilm).toHaveBeenCalled();
   });
 
   it('closes to the Timeline when there is no history (cold-start push)', async () => {

@@ -1,7 +1,8 @@
 // Year Films client service layer (docs/plans/year-film-p2.md Steps 3-4,
 // feature doc docs/features/year-film.md). Reads the client-granted
-// `year_films` columns under RLS (member, video present, not blocked, not
-// forced, surfaced -- owners/managers additionally see un-surfaced rows, so
+// `year_films` columns under RLS (member, ever ready, not forced, surfaced --
+// blocked rows are visible too: a film being remade shows as a placeholder,
+// see `filmDisplayState`; owners/managers additionally see un-surfaced rows, so
 // the list filters `surface_at <= now` again), the caller's own
 // `year_film_views`, and signs playback / list-thumbnail URLs through the
 // `get-year-film-url` Edge Function.
@@ -89,6 +90,8 @@ function isYearFilmKind(kind: string): kind is YearFilmKind {
  * The family's surfaced films, newest placement first. Belt on top of RLS:
  * rows with `surface_at` in the future (visible to owners/managers early) are
  * dropped, since a permanent surface must never show a not-yet-delivered film.
+ * Blocked rows (a film being remade) are returned on purpose; `hidden` ones
+ * (blocked + failed/skipped) are dropped by `useFamilyYearFilms`, not here.
  */
 export async function fetchFamilyYearFilms(
   familyId: string,

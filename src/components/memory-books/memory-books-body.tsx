@@ -232,13 +232,14 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
     familyId: variant === 'tab' && !canGenerate ? null : familyId,
     isFocused,
   });
-  // Films need no polling: they arrive by push, the drawer or this focus
-  // refetch (tab screens never unmount).
+  // Films arrive by push, the drawer or this focus refetch (tab screens never
+  // unmount); only while one is remaking/updating does the hook poll (every
+  // 20 s, and only while this screen is focused).
   const {
     films,
     isLoading: isLoadingFilms,
     refetch: refetchFilms,
-  } = useFamilyYearFilms(familyId);
+  } = useFamilyYearFilms(familyId, { isFocused });
   const { enabled: upcomingEnabled } = useYearFilmsEnabled(variant === 'tab' ? familyId : null);
   useEffect(() => {
     if (isFocused) void refetchFilms({ cancelRefetch: false });

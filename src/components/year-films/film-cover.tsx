@@ -13,7 +13,8 @@ import { invalidateYearFilmPoster, useYearFilmPosters } from '@/hooks/useYearFil
 import type { YearFilm } from '@/services/year-films';
 
 export interface FilmCoverProps {
-  film: Pick<YearFilm, 'id' | 'ready_at'>;
+  /** A blocked film is never signed (it is being remade), so no poster is requested for it. */
+  film: Pick<YearFilm, 'id' | 'ready_at'> & { blocked?: boolean };
   width: number;
   /** Defaults to `width * 16 / 9`. */
   height?: number;
@@ -25,7 +26,7 @@ export interface FilmCoverProps {
 
 export function FilmCover({ film, width, height, radius = 12, showPlay = false, testID }: FilmCoverProps) {
   const queryClient = useQueryClient();
-  const posters = useYearFilmPosters([film]);
+  const posters = useYearFilmPosters(film.blocked ? [] : [film]);
   const poster = posters[film.id];
   const resolvedHeight = height ?? Math.round((width * 16) / 9);
   const playSize = Math.max(22, Math.min(44, Math.round(width * 0.3)));

@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams, type Href } from 'expo-router';
+import { router, useIsFocused, useLocalSearchParams, type Href } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useMemo } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
@@ -24,7 +24,8 @@ export default function KeepsakeRecapsScreen() {
   const year = Number(yearParam);
   const { familyId } = useFamily();
   const { members } = useFamilyMembers();
-  const { films, isLoading } = useFamilyYearFilms(familyId);
+  const isFocused = useIsFocused();
+  const { films, isLoading } = useFamilyYearFilms(familyId, { isFocused });
   const { width } = useWindowDimensions();
   const tileWidth = Math.floor((width - spacing.md * 2 - GAP * (COLUMNS - 1)) / COLUMNS);
 

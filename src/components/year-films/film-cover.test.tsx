@@ -59,6 +59,13 @@ describe('FilmCover', () => {
     expect(queryByTestId('cover-play')).toBeNull();
   });
 
+  it('never asks for a poster of a blocked film (it is being remade)', () => {
+    mockedPosters.mockReturnValue({});
+    renderCover(<FilmCover film={{ ...FILM, blocked: true }} testID="cover" width={90} />);
+
+    expect(mockedPosters).toHaveBeenCalledWith([]);
+  });
+
   it('honours height and radius overrides', () => {
     mockedPosters.mockReturnValue({});
     const { getByTestId } = renderCover(<FilmCover film={FILM} height={100} radius={20} testID="cover" width={90} />);

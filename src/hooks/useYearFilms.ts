@@ -27,6 +27,7 @@ import {
   type YearFilmEdits,
   type YearFilmView,
 } from '@/services/year-films';
+import { filmDisplayState, yearFilmsRefetchInterval } from '@/utils/year-films';
 
 /** Posters are signed for 60 min (POSTER_URL_TTL_SECONDS in get-year-film-url);
  * refresh well inside that so an on-screen tile never holds a dead URL. */
@@ -74,21 +75,38 @@ export function invalidateYearFilms(queryClient: QueryClient, familyId?: string 
   });
 }
 
+/** The one place `hidden` films (blocked and the remake failed/skipped: the
+ * video is gone) are dropped, so no surface renders them. The cache keeps the
+ * raw rows (the player seeds from it). */
+function selectVisibleFilms(films: YearFilm[]): YearFilm[] {
+  return films.filter((film) => filmDisplayState(film) !== 'hidden');
+}
+
 /**
- * The family's surfaced films, newest placement first. Refetches on app
- * foreground (`refetchOnWindowFocus`, wired to AppState in app-providers) and
- * on mount when stale; tab screens never unmount, so screen-focus callers
- * should also call `refetch()` in their own focus effect. A film that
- * disappears server-side (blocked, deleted) drops out on the next refetch.
+ * The family's surfaced films, newest placement first, minus `hidden` ones
+ * (see `selectVisibleFilms`). Members also see a film being remade (blocked,
+ * `filmDisplayState` = `remaking`), so a save does not make it vanish.
+ * Refetches on app foreground (`refetchOnWindowFocus`, wired to AppState in
+ * app-providers) and on mount when stale; tab screens never unmount, so
+ * screen-focus callers should also call `refetch()` in their own focus effect.
+ *
+ * While any film is `remaking` or `updating` AND `isFocused`, the list is
+ * refetched every 20 s (`refetchInterval` computed from the cached data), so
+ * the placeholder turns into the film without a manual refresh. Tab screens
+ * never unmount, so they MUST pass their real focus state; the default
+ * (`true`) is for screens that are only mounted while on top.
  */
 export function useFamilyYearFilms(
   familyId: string | null | undefined,
-  options: { enabled?: boolean } = {},
+  options: { enabled?: boolean; isFocused?: boolean } = {},
 ) {
+  const isFocused = options.isFocused ?? true;
   const query = useQuery({
     ...familyYearFilmsQueryOptions(familyId),
     enabled: Boolean(familyId) && (options.enabled ?? true),
     refetchOnWindowFocus: true,
+    refetchInterval: (q) => yearFilmsRefetchInterval(q.state.data, isFocused),
+    select: selectVisibleFilms,
   });
 
   return {

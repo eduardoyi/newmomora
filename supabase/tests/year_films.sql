@@ -7,7 +7,7 @@ begin;
 -- delete+reinsert media save), cycle-end rules, edits RPC, client access,
 -- notifications, recovery, the deletion fence and ledger operations; P2 dates,
 -- backfill and the edit sheet's get_year_film_edit_options (section 12).
-select plan(156);
+select plan(172);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (postgres role; assertions switch to authenticated where needed)
@@ -316,7 +316,7 @@ select ok((select blocked and stale and content_epoch = (select e from epoch_bef
   'deleting a referenced memory blocks the film and bumps its epoch');
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000003', true);
-select is((select count(*)::int from public.year_films where id = (select id from enzo)), 0, 'a blocked film is invisible to members');
+select is((select count(*)::int from public.year_films where id = (select id from enzo)), 0, 'a blocked film that was never ready is invisible to members');
 set local role postgres;
 
 -- Delete during an attempt: the publish CAS refuses and the film starts over.
@@ -473,12 +473,12 @@ select is((select placement_date from public.year_films where id = (select id fr
   'placement_date: the year-end film sits on Dec 31');
 
 insert into public.year_films (id, family_id, kind, forced, scope_start_date, scope_end_exclusive, surface_at, status,
-                               video_key, poster_key, scenes_key)
+                               video_key, poster_key, scenes_key, ready_at)
 values
   ('f8400000-0000-4000-8000-000000000002', 'f8100000-0000-4000-8000-000000000001', 'family_month', true,
-   '2025-05-01', '2025-06-01', now() - interval '1 hour', 'ready', 'o/f2.mp4', 'o/f2.jpg', 'o/f2.json'),
+   '2025-05-01', '2025-06-01', now() - interval '1 hour', 'ready', 'o/f2.mp4', 'o/f2.jpg', 'o/f2.json', now()),
   ('f8400000-0000-4000-8000-000000000003', 'f8100000-0000-4000-8000-000000000001', 'family_month', false,
-   '2025-06-01', '2025-07-01', now() - interval '1 hour', 'ready', 'o/f3.mp4', 'o/f3.jpg', 'o/f3.json');
+   '2025-06-01', '2025-07-01', now() - interval '1 hour', 'ready', 'o/f3.mp4', 'o/f3.jpg', 'o/f3.json', now());
 select is((select placement_date from public.year_films where id = 'f8400000-0000-4000-8000-000000000003'), date '2025-06-30',
   'placement_date: a monthly recap sits on the last day of its month');
 select ok(has_column_privilege('authenticated', 'public.year_films', 'placement_date', 'SELECT'),
@@ -499,6 +499,82 @@ select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000001
 select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000002'), 0,
   'a forced film is invisible to the owner');
 set local role postgres;
+
+-- ---------------------------------------------------------------------------
+-- 9b. Remaking visibility (20260930180000): a film that has ever been ready
+-- stays visible while blocked / being remade; keys stay ungranted.
+-- ---------------------------------------------------------------------------
+
+-- Remaking: was ready, then blocked by a removal edit (old video still in the
+-- row until the cycle ends, no new one yet). Four more shapes around it.
+insert into public.year_films (id, family_id, kind, forced, scope_start_date, scope_end_exclusive, surface_at, status,
+                               video_key, poster_key, scenes_key, ready_at, blocked, stale)
+values
+  ('f8400000-0000-4000-8000-000000000011', 'f8100000-0000-4000-8000-000000000001', 'family_month', false,
+   '2025-07-01', '2025-08-01', now() - interval '1 hour', 'rendering',
+   'o/f11.mp4', 'o/f11.jpg', 'o/f11.json', now() - interval '1 day', true, true),
+  -- never ready: queued for its first render
+  ('f8400000-0000-4000-8000-000000000012', 'f8100000-0000-4000-8000-000000000001', 'family_month', false,
+   '2025-08-01', '2025-09-01', now() - interval '1 hour', 'rendering',
+   null, null, null, null, false, false),
+  -- was ready, blocked, remake failed and the video was deleted
+  ('f8400000-0000-4000-8000-000000000013', 'f8100000-0000-4000-8000-000000000001', 'family_month', false,
+   '2025-09-01', '2025-10-01', now() - interval '1 hour', 'failed',
+   null, null, null, now() - interval '1 day', true, true),
+  -- was ready, blocked, forced (operator)
+  ('f8400000-0000-4000-8000-000000000014', 'f8100000-0000-4000-8000-000000000001', 'family_month', true,
+   '2025-10-01', '2025-11-01', now() - interval '1 hour', 'rendering',
+   'o/f14.mp4', 'o/f14.jpg', 'o/f14.json', now() - interval '1 day', true, true),
+  -- was ready, blocked, not yet surfaced
+  ('f8400000-0000-4000-8000-000000000015', 'f8100000-0000-4000-8000-000000000001', 'family_month', false,
+   '2025-11-01', '2025-12-01', now() + interval '2 days', 'rendering',
+   'o/f15.mp4', 'o/f15.jpg', 'o/f15.json', now() - interval '1 day', true, true);
+
+select ok(not has_column_privilege('authenticated', 'public.year_films', 'video_key', 'SELECT'),
+  'remaking: video_key stays ungranted');
+select ok(not has_column_privilege('authenticated', 'public.year_films', 'poster_key', 'SELECT'),
+  'remaking: poster_key stays ungranted');
+select ok(not has_column_privilege('authenticated', 'public.year_films', 'scenes_key', 'SELECT'),
+  'remaking: scenes_key stays ungranted');
+select ok(not has_column_privilege('authenticated', 'public.year_films', 'film_script', 'SELECT'),
+  'remaking: film_script stays ungranted');
+select ok(has_column_privilege('authenticated', 'public.year_films', 'status', 'SELECT')
+  and has_column_privilege('authenticated', 'public.year_films', 'blocked', 'SELECT')
+  and has_column_privilege('authenticated', 'public.year_films', 'stale', 'SELECT')
+  and has_column_privilege('authenticated', 'public.year_films', 'ready_at', 'SELECT'),
+  'remaking: status, blocked, stale and ready_at are granted to clients');
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000003', true);
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000011'), 1,
+  'remaking: a blocked film that was ready is visible to a viewer');
+select is((select blocked and stale and status = 'rendering' from public.year_films where id = 'f8400000-0000-4000-8000-000000000011'), true,
+  'remaking: a viewer can read blocked, stale and status of it');
+select throws_ok($$select video_key from public.year_films where id = 'f8400000-0000-4000-8000-000000000011'$$,
+  '42501', null, 'remaking: a viewer still cannot read video_key of a blocked film');
+select throws_ok($$select poster_key from public.year_films where id = 'f8400000-0000-4000-8000-000000000011'$$,
+  '42501', null, 'remaking: a viewer still cannot read poster_key of a blocked film');
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000012'), 0,
+  'remaking: a film that was never ready is invisible to a viewer');
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000013'), 1,
+  'remaking: a ready-then-blocked film whose remake failed is still a visible row (the app hides it by status)');
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000014'), 0,
+  'remaking: a forced film is invisible to a viewer even when it was ready');
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000015'), 0,
+  'remaking: an unsurfaced film is invisible to a viewer');
+select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000002', true);
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000015'), 1,
+  'remaking: an unsurfaced film is visible early to a manager (as before)');
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000014'), 0,
+  'remaking: a forced film is invisible to a manager');
+select is((select count(*)::int from public.year_films where id = 'f8400000-0000-4000-8000-000000000012'), 0,
+  'remaking: a never-ready film is invisible to a manager');
+set local role postgres;
+
+delete from public.year_films where id in (
+  'f8400000-0000-4000-8000-000000000011', 'f8400000-0000-4000-8000-000000000012',
+  'f8400000-0000-4000-8000-000000000013', 'f8400000-0000-4000-8000-000000000014',
+  'f8400000-0000-4000-8000-000000000015');
 
 -- Notification: the returned row and exactly one film_ready event per film.
 create temp table nd on commit drop as

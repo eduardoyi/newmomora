@@ -1,11 +1,15 @@
 import type { MemoryBookListRow } from '@/services/memory-books';
 import type { YearFilm } from '@/services/year-films';
 import {
+  YEAR_FILMS_POLL_INTERVAL_MS,
   buildKeepsakeYears,
+  filmDisplayState,
   filmSubtitle,
   filmTitle,
+  hasFilmInProgress,
   interleaveFilms,
   isNewFilm,
+  yearFilmsRefetchInterval,
 } from '@/utils/year-films';
 
 function film(overrides: Partial<YearFilm> = {}): YearFilm {
@@ -356,5 +360,69 @@ describe('buildKeepsakeYears', () => {
     ];
     const [y26] = buildKeepsakeYears([], books, kids, today);
     expect(y26.children.find((c) => c.member.id === 'enzo')!.books.map((b) => b.id)).toEqual(['new', 'old']);
+  });
+});
+
+describe('filmDisplayState', () => {
+  it.each(['queued', 'curating', 'preparing', 'rendering'])(
+    'a blocked film in %s is remaking',
+    (status) => {
+      expect(filmDisplayState(film({ blocked: true, stale: true, status }))).toBe('remaking');
+    },
+  );
+
+  it('a blocked film whose remake failed or was skipped is hidden (its video is gone)', () => {
+    expect(filmDisplayState(film({ blocked: true, stale: true, status: 'failed' }))).toBe('hidden');
+    expect(filmDisplayState(film({ blocked: true, stale: true, status: 'skipped' }))).toBe('hidden');
+  });
+
+  it('a blocked film is never ready, whatever its status says', () => {
+    expect(filmDisplayState(film({ blocked: true, status: 'ready' }))).toBe('remaking');
+  });
+
+  it.each(['queued', 'curating', 'preparing', 'rendering'])(
+    'a stale, unblocked film in %s is updating (the old film still plays)',
+    (status) => {
+      expect(filmDisplayState(film({ blocked: false, stale: true, status }))).toBe('updating');
+    },
+  );
+
+  it('a stale film whose re-render failed keeps serving the old film', () => {
+    expect(filmDisplayState(film({ stale: true, status: 'failed' }))).toBe('ready');
+    expect(filmDisplayState(film({ stale: true, status: 'skipped' }))).toBe('ready');
+  });
+
+  it('a settled film is ready, and a non-stale film mid-cycle is ready too', () => {
+    expect(filmDisplayState(film({ status: 'ready', stale: false, blocked: false }))).toBe('ready');
+    expect(filmDisplayState(film({ status: 'rendering', stale: false, blocked: false }))).toBe('ready');
+    expect(filmDisplayState(film({ status: 'ready', stale: true, blocked: false }))).toBe('ready');
+  });
+});
+
+describe('film polling condition', () => {
+  const remaking = film({ id: 'r', blocked: true, stale: true, status: 'rendering' });
+  const updating = film({ id: 'u', stale: true, status: 'queued' });
+  const plain = film({ id: 'p' });
+  const hidden = film({ id: 'h', blocked: true, stale: true, status: 'failed' });
+
+  it('polls while any film is remaking or updating', () => {
+    expect(hasFilmInProgress([plain, remaking])).toBe(true);
+    expect(hasFilmInProgress([updating])).toBe(true);
+  });
+
+  it('does not poll for ready, hidden or missing data', () => {
+    expect(hasFilmInProgress([plain, hidden])).toBe(false);
+    expect(hasFilmInProgress([])).toBe(false);
+    expect(hasFilmInProgress(undefined)).toBe(false);
+    expect(hasFilmInProgress(null)).toBe(false);
+  });
+
+  it('refetches every 20 s only when a film is in progress AND the screen is focused', () => {
+    expect(YEAR_FILMS_POLL_INTERVAL_MS).toBe(20_000);
+    expect(yearFilmsRefetchInterval([remaking], true)).toBe(20_000);
+    expect(yearFilmsRefetchInterval([updating], true)).toBe(20_000);
+    expect(yearFilmsRefetchInterval([remaking], false)).toBe(false);
+    expect(yearFilmsRefetchInterval([plain], true)).toBe(false);
+    expect(yearFilmsRefetchInterval(undefined, true)).toBe(false);
   });
 });

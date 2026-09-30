@@ -476,7 +476,7 @@ export default function TimelineScreen() {
     films,
     isFetched: filmsFetched,
     refetch: refetchFilms,
-  } = useFamilyYearFilms(familyId);
+  } = useFamilyYearFilms(familyId, { isFocused: isTimelineFocused });
   const { viewedIds, isLoading: isFilmViewsLoading } = useYearFilmViews();
   const { members } = useFamilyMembers();
   useFocusEffect(

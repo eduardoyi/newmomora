@@ -29,7 +29,9 @@ HyperFrames on one-off Fly machines, and stored privately in R2.
   column, readable by clients; the app orders/interleaves Timeline cards on it.
 - **Operator/canary (`forced`) films are never visible to members** (RLS).
 - A film never shows content the family removed, edited out of a quote or
-  reported: it is blocked immediately and re-made.
+  reported: it is blocked immediately and re-made. While it is remade the app
+  keeps a "Remaking your film…" placeholder in its place (see "Remaking and
+  updating states").
 - Owners/managers can edit (remove moments, choose the quote among
   candidates, pick the music) — up to 5 edit renders per film and 20 per
   family per day, from the player's edit sheet (see below). `hideNames` is **not built**:
@@ -76,7 +78,8 @@ the player (`yearFilmRoute(id, 'timeline')`).
   anchored list waits for it to settle, so a late film insert cannot be held
   off-screen by `maintainVisibleContentPosition`.
 - **Freshness.** The films list is refetched on Timeline focus, on
-  pull-to-refresh and on app foreground (60 s stale time).
+  pull-to-refresh and on app foreground (60 s stale time), and every 20 s while
+  a film is remaking/updating (see "Remaking and updating states").
 - **New pill.** `isNewFilm`: not in the caller's `year_film_views` and
   `surface_at` within 14 days (backfilled history is never New); hidden while
   the views query is loading.
@@ -89,6 +92,46 @@ the player (`yearFilmRoute(id, 'timeline')`).
   `src/components/timeline/calendar-month-grid.tsx`. To extend: film rows are ordinary
   list rows keyed `film:{id}` (never add special rows at index 1 -- Android's
   `maintainVisibleContentPosition` anchors on it).
+
+### Remaking and updating states (P2 app)
+
+Saving an edit that **removes moments** blocks the old video at once
+(`save_year_film_edits`), and the remake takes ~15 minutes. So that the film
+doesn't vanish meanwhile, the client SELECT policy
+(`20260930180000_year_films_remaking_visibility.sql`) shows a member any film
+that is `ready_at is not null` (ever ready), `not forced`, surfaced -- with **no**
+`blocked`/`video_key` condition. No key column is granted and
+`get-year-film-url` still refuses a blocked film (409; omitted from the poster
+batch), so only the row's status is visible, never the old video.
+
+`filmDisplayState(film)` (`src/utils/year-films.ts`) turns the row into one of:
+
+| State | Rule | Shown as |
+|---|---|---|
+| `hidden` | `blocked` and status `failed`/`skipped` (the video is gone) | nothing, anywhere |
+| `remaking` | `blocked` (not hidden) | Timeline: same polaroid frame/tilt/tape/placement with a paper placeholder, soft pulse, spinner, "Remaking your film…" / "This takes a few minutes", no play button, not pressable (`timeline-film-{id}-remaking`). Keepsakes/recaps/child tile: placeholder tile "Remaking…" (`keepsakes-film-{id}-remaking`), not pressable |
+| `updating` | not `blocked`, `stale`, status `queued`/`curating`/`preparing`/`rendering` (music/quote-only edit) | the normal playable card/tile plus an "Updating…" sticker/badge (`…-updating`; on the Timeline it takes the "New" sticker's slot) |
+| `ready` | everything else (a stale film whose re-render failed keeps serving) | normal |
+
+- **Where `hidden` is filtered:** once, in `useFamilyYearFilms` (`select`), so no
+  list surface sees it; the cached raw rows still feed the player's seed.
+  `FilmCard`/`KeepsakeFilmTile` also return `null` for `hidden` as a belt.
+- **Polling:** `useFamilyYearFilms(familyId, { isFocused })` refetches every 20 s
+  (`YEAR_FILMS_POLL_INTERVAL_MS`, `refetchInterval` computed from the data via
+  `yearFilmsRefetchInterval`) while any film is `remaking`/`updating` **and**
+  the caller's screen is focused. Tab screens never unmount, so the Timeline
+  (`isTimelineFocused`) and the Keepsakes body (`isFocused`) pass their focus
+  state; the recaps route passes `useIsFocused()`. When the publish lands the
+  row turns `ready` and the poll stops by itself.
+- **Posters:** `FilmCover` never requests a poster for a `blocked` film; a
+  `remaking` film renders no `FilmCover` at all.
+- **Player:** opened anyway (push, drawer), a 409 shows "This film is being
+  remade. Check back in a few minutes." when the film row is `blocked` (the row
+  is re-read on the 409), else the generic "isn't available" copy. The
+  notifications drawer still omits blocked films (its RPCs filter them).
+- **Extend:** a new in-progress look = a new `FilmDisplayState` + its render in
+  `film-card.tsx` and `keepsake-film-tile.tsx`; keep the frame geometry equal to
+  the playable card so nothing jumps.
 
 ### Player & share (P2 app)
 
@@ -265,7 +308,7 @@ See TECH_SPEC §2.1h. Key rules:
 | Pure logic (shared by Worker, render job, eval scripts) | `supabase/functions/_shared/year-film-{eligibility,script,quotes,vision,voice,trim,i18n,assets,context,checks,beds}.ts` |
 | Worker | `cloudflare/year-film-worker/src/{index,workflow,stages,bridge,fly,r2creds,storage,openai,uuid}.ts` |
 | Render job + image | `render/year-film-renderer/{Dockerfile,build.sh,src/job.mjs}`, `film-renderer/assemble.mjs` |
-| Database | `supabase/migrations/20260929120000_year_films.sql`, `…120100_schedule_year_films_cron.sql`, `20260930120000_year_films_p2.sql`, `20260930150000_year_film_edit_options.sql` |
+| Database | `supabase/migrations/20260929120000_year_films.sql`, `…120100_schedule_year_films_cron.sql`, `20260930120000_year_films_p2.sql`, `20260930150000_year_film_edit_options.sql`, `20260930180000_year_films_remaking_visibility.sql` |
 | Operator | `npm run year-film:queue` (`supabase/scripts/queue-year-film.ts`) — list, `--forced`, `--requeue`, `--requeue-all`, `--backfill`, `--delete-forced`, `--delete-backfilled`, `--purge-prefix` |
 | Dogfood | `npm run eval:year-film-{audit,script,assets}`, `film-renderer/render.mjs` |
 
@@ -356,11 +399,12 @@ permanent.
 
 | Layer | Where |
 |---|---|
-| pgTAP | `supabase/tests/year_films.sql` (156: scheduling/dates, placement, forced RLS, `year_films_enabled`, candidate-row parity sweep, backfill, edit options + edit re-save), `supabase/tests/family_activity.sql` (`film_ready`, v2) + grants/lockdown suites |
+| pgTAP | `supabase/tests/year_films.sql` (172: scheduling/dates, placement, forced RLS, `year_films_enabled`, candidate-row parity sweep, backfill, edit options + edit re-save, remaking visibility), `supabase/tests/family_activity.sql` (`film_ready`, v2) + grants/lockdown suites |
 | Deno | `_shared/year-film-*.test.ts`, `schedule-year-films`, `workflow-year-film-bridge`, `get-year-film-url`, `delete-family-member` |
 | Worker (vitest) | `cloudflare/year-film-worker/test/` |
 | Render job | `render/year-film-renderer/test/job.test.mjs`; container run of the sample |
 | Export | `cloudflare/momora-export-worker/test/index.test.ts` |
+| App remaking/updating | `src/utils/year-films.test.ts` (`filmDisplayState`, polling condition), `useYearFilms.integration.test.tsx` (hidden filtered, poll interval per focus), `film-card.test.tsx`, `remaking-placeholder.test.tsx`, `film-cover.test.tsx`, `src/screen-tests/{timeline-month-jump,keepsakes}.integration.test.tsx`, unavailable copy in `year-film-player.integration.test.tsx` |
 | App player/share | `src/screen-tests/year-film-player.integration.test.tsx` (mocked expo-video), `src/hooks/useYearFilm.integration.test.tsx`, `src/utils/{year-film-scenes,film-share,year-film-beds}.test.ts` (the bed manifest is parity-tested against `beds.json` and the SQL allow-list), `useNotifications.test.ts` (`year-film` push); edit sheet: `src/components/year-films/edit/film-edit-sheet.integration.test.tsx`, `src/hooks/{useBedPreview,useYearFilmEditFrames}.test.ts(x)`, the edit cases in `useYearFilms.integration.test.tsx` and `src/services/year-films.integration.test.ts`; Maestro `.maestro/flows/year-film/open-from-keepsakes.yaml` |
 
 ## Changelog
@@ -374,3 +418,4 @@ permanent.
 | 2026-09-30 | P2 app: full-screen player (scene progress, tap/hold, Reduce Motion warning, URL-expiry retry), share via cache download, `year-film` push route |
 | 2026-09-30 | P2 app: owner/manager edit sheet from the completion overlay (hide moments, line of the year, music with bundled 5 s previews); `get_year_film_edit_options` RPC; `save_year_film_edits` now accepts earlier removals in the full set; `hideNames` stays unbuilt |
 | 2026-09-30 | Render job: image-manifest startup guard (`IMAGE_INCOMPLETE`) + Worker dispatch jitter against Fly partial-rootfs machine starts |
+| 2026-09-30 | Remaking visibility: members keep seeing a film that was ever ready while it is blocked/remade (RLS `ready_at is not null`); `filmDisplayState` (`ready`/`remaking`/`updating`/`hidden`), Timeline + Keepsakes placeholders and "Updating…" stickers, 20 s focused polling, "being remade" player copy |

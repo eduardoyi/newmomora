@@ -31,6 +31,7 @@ jest.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ memberId: mockMemberId, year: mockYear }),
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   useFocusEffect: (effect: () => void) => require('react').useEffect(effect, [effect]),
+  useIsFocused: () => true,
 }));
 jest.mock('expo-symbols', () => ({ SymbolView: () => null }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: () => null }));
@@ -488,6 +489,39 @@ describe('Keepsakes tab', () => {
     expect(queryByTestId('memory-books-create')).toBeNull();
   });
 
+  it('shows a remaking film as a non-pressable placeholder tile and an updating film as a playable tile with a badge', () => {
+    mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
+    mockFilms([
+      film({ id: 'recap-09', kind: 'family_month', scope_start_date: '2026-09-01', placement_date: '2026-09-30', blocked: true, stale: true, status: 'rendering' }),
+      film({ id: 'recap-08', kind: 'family_month', scope_start_date: '2026-08-01', placement_date: '2026-08-31', stale: true, status: 'curating' }),
+      film({ id: 'recap-07', kind: 'family_month', scope_start_date: '2026-07-01', placement_date: '2026-07-31' }),
+    ]);
+    mockBooks([]);
+    const { getByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+    // Remaking: placeholder, same tile, no pressable tile, no updating badge.
+    expect(getByTestId('keepsakes-film-recap-09-remaking')).toBeTruthy();
+    expect(getByText('Remaking…')).toBeTruthy();
+    expect(queryByTestId('keepsakes-film-recap-09')).toBeNull();
+    fireEvent.press(getByTestId('keepsakes-film-recap-09-remaking'));
+    expect(mockRouter.push).not.toHaveBeenCalled();
+
+    // Updating: still a playable tile, with the badge.
+    expect(getByTestId('keepsakes-film-recap-08-updating')).toHaveTextContent('Updating…');
+    fireEvent.press(getByTestId('keepsakes-film-recap-08'));
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/year-film/recap-08?source=keepsakes');
+
+    // A settled film has neither.
+    expect(queryByTestId('keepsakes-film-recap-07-updating')).toBeNull();
+    expect(queryByTestId('keepsakes-film-recap-07-remaking')).toBeNull();
+  });
+
+  it('passes the tab focus state to the films hook so polling stops when the tab is blurred', () => {
+    mockBooks([]);
+    renderWithQuery(<KeepsakesScreen />);
+    expect(mockedUseFamilyYearFilms).toHaveBeenCalledWith('family-1', { isFocused: true });
+  });
+
   it('refetches the films each time the tab is focused', () => {
     const refetch = jest.fn();
     mockedUseFamilyYearFilms.mockReturnValue({
@@ -516,6 +550,18 @@ describe('Recaps grid (keepsakes/recaps/[year])', () => {
 
     fireEvent.press(getByTestId('keepsakes-film-recap-09'));
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/year-film/recap-09?source=keepsakes');
+  });
+
+  it('shows a remaking recap as a placeholder in its grid slot, not pressable', () => {
+    mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
+    mockFilms([recap(9), film({ id: 'recap-08', blocked: true, stale: true, status: 'queued', placement_date: '2026-08-31', scope_start_date: '2026-08-01' })]);
+    const { getByTestId, getAllByTestId } = renderWithQuery(<KeepsakeRecapsScreen />);
+    expect(getAllByTestId(/^keepsakes-film-/).map((node) => node.props.testID)).toEqual([
+      'keepsakes-film-recap-09',
+      'keepsakes-film-recap-08-remaking',
+    ]);
+    fireEvent.press(getByTestId('keepsakes-film-recap-08-remaking'));
+    expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
   it('shows an empty state for a year without recaps and goes back', () => {

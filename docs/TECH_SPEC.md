@@ -965,7 +965,8 @@ Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
 `20260930120000_year_films_p2.sql` (dates, `placement_date`, forced RLS,
 `film_ready`, backfill; see the P2 paragraph below) and
 `20260930150000_year_film_edit_options.sql` (edit sheet RPC + a
-`save_year_film_edits` fix).
+`save_year_film_edits` fix) and `20260930180000_year_films_remaking_visibility.sql`
+(client SELECT policy: visible once ever ready).
 
 **`year_films`** — one row per scheduled film key forever (unique
 `(family_id, kind, coalesce(family_member_id, zero), scope_start_date)` where
@@ -985,10 +986,18 @@ Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
 | `placement_date` (P2) | stored generated `date` — where the film sits in the Timeline: `birthday` → `scope_end_exclusive - 2` (the birthday), `family_month` → `scope_end_exclusive - 1` (the month's last day), `family_year` → Dec 31 of `scope_start_date`'s year. Its own `grant select (placement_date)` to `authenticated`; index `(family_id, placement_date desc)`. The birthday offset is coupled to `BIRTHDAY_FILM_DAYS_AFTER = 1` (pgTAP asserts every birthday film sits on the real birthday). |
 
 Client access: column-level `select` on safe columns only (never scripts,
-checks, quotes, keys or attempt fields); RLS = family member, video present,
-not `blocked`, and `surface_at <= now()` (owners/managers may preview
-earlier); **P2: and `not forced`** — canary/operator films are never visible
-to members. No client writes. Also `year_film_views` (own rows),
+checks, quotes, keys or attempt fields); RLS ("Year films: select") = family
+member, `ready_at is not null` (the film has EVER been ready), `not forced`
+(canary/operator films are never visible to members), and `surface_at <= now()`
+(owners/managers may preview earlier). **Remaking visibility
+(`20260930180000_year_films_remaking_visibility.sql`):** the policy no longer
+requires `video_key` or `not blocked`, so a film blocked for a removal edit
+stays a visible row (`blocked`, `status`, `stale` are granted) while it is
+remade; the app renders a "Remaking" placeholder from those columns. No key
+column is granted, and `get-year-film-url` still refuses a blocked film (409 /
+omitted from the batch), so nothing about the old video is exposed. A film
+that never became ready stays invisible; a blocked film whose remake ends
+`failed`/`skipped` is a visible row the app hides. No client writes. Also `year_film_views` (own rows),
 `year_film_render_requests` (fair use), `year_film_settings` (rollout flag
 `off | canary | all`, `canary_family_ids`, `launch_date`,
 `max_concurrent_renders`; service role), `year_film_bridge_nonces`.

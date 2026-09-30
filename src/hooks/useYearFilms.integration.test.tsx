@@ -159,6 +159,72 @@ describe('useYearFilms hooks', () => {
     });
   });
 
+  describe('useFamilyYearFilms remaking / updating', () => {
+    const remaking = () => film({ id: 'remaking', blocked: true, stale: true, status: 'rendering' });
+    const hidden = () => film({ id: 'hidden', blocked: true, stale: true, status: 'failed' });
+
+    function refetchIntervalOf(queryClient: QueryClient) {
+      const query = queryClient.getQueryCache().find({ queryKey: yearFilmsQueryKey('family-1') });
+      const observer = query?.observers[0];
+      const option = observer?.options.refetchInterval;
+      if (typeof option !== 'function') throw new Error('refetchInterval should be computed from the data');
+      return option(query as never);
+    }
+
+    it('keeps a remaking film in the list but drops a hidden one (blocked and failed)', async () => {
+      mockedFetchFilms.mockResolvedValue({ data: [film({ id: 'a' }), remaking(), hidden()], error: null });
+
+      const { result } = renderHook(() => useFamilyYearFilms('family-1'), { wrapper: createWrapper() });
+
+      await waitFor(() => expect(result.current.isFetched).toBe(true));
+      expect(result.current.films.map((f) => f.id)).toEqual(['a', 'remaking']);
+    });
+
+    it('polls every 20 s while a film is remaking and the screen is focused', async () => {
+      const queryClient = makeClient();
+      mockedFetchFilms.mockResolvedValue({ data: [film({ id: 'a' }), remaking()], error: null });
+
+      const { result } = renderHook(() => useFamilyYearFilms('family-1', { isFocused: true }), {
+        wrapper: createWrapper(queryClient),
+      });
+
+      await waitFor(() => expect(result.current.isFetched).toBe(true));
+      expect(refetchIntervalOf(queryClient)).toBe(20_000);
+    });
+
+    it('polls while a film is updating (not blocked, stale, mid-render)', async () => {
+      const queryClient = makeClient();
+      mockedFetchFilms.mockResolvedValue({ data: [film({ stale: true, status: 'curating' })], error: null });
+
+      const { result } = renderHook(() => useFamilyYearFilms('family-1'), { wrapper: createWrapper(queryClient) });
+
+      await waitFor(() => expect(result.current.isFetched).toBe(true));
+      expect(refetchIntervalOf(queryClient)).toBe(20_000);
+    });
+
+    it('does not poll when the screen is not focused', async () => {
+      const queryClient = makeClient();
+      mockedFetchFilms.mockResolvedValue({ data: [remaking()], error: null });
+
+      const { result } = renderHook(() => useFamilyYearFilms('family-1', { isFocused: false }), {
+        wrapper: createWrapper(queryClient),
+      });
+
+      await waitFor(() => expect(result.current.isFetched).toBe(true));
+      expect(refetchIntervalOf(queryClient)).toBe(false);
+    });
+
+    it('does not poll when every film is ready (or only hidden ones remain)', async () => {
+      const queryClient = makeClient();
+      mockedFetchFilms.mockResolvedValue({ data: [film({ id: 'a' }), hidden()], error: null });
+
+      const { result } = renderHook(() => useFamilyYearFilms('family-1'), { wrapper: createWrapper(queryClient) });
+
+      await waitFor(() => expect(result.current.isFetched).toBe(true));
+      expect(refetchIntervalOf(queryClient)).toBe(false);
+    });
+  });
+
   describe('invalidateYearFilms', () => {
     it('invalidates one family, or all when no family is given', async () => {
       const queryClient = makeClient();
