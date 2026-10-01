@@ -12,7 +12,9 @@
 //    `birthday`, whose recurring match also fires from the deterministic DOB
 //    join (see docs/plans/milestone-catalog.md "Notes for implementation"
 //    and analyze-memory-core.ts's birthday resolution) -- that is a database
-//    fact lookup, not model inference.
+//    fact lookup, not model inference. Enforced in code by the explicit-
+//    evidence gate (memory-milestone-evidence.ts: per-entry rules, one per id
+//    here -- add a rule there when adding an entry here).
 // 2. CELEBRATION, NEVER TRACKING. No surface may ever show a "missing" or
 //    "late" milestone, cross-child comparisons, or developmental norms. An
 //    explicit claim outside the age band is not rejected -- it is kept and

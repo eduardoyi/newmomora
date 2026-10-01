@@ -147,7 +147,7 @@ describe('planChapterDemotions — Phase 2c balance over ordinary + Tier C', () 
     const firstsIds: string[] = [];
     for (let i = 0; i < 8; i++) {
       firstsIds.push(`f-${i}`);
-      firstsMemories[`f-${i}`] = makeMemory({ date: `2021-0${3 + (i % 5)}-${10 + i}`, assets: [makeAsset({ aspectRatio: 1 })], milestones: [{ id: `m${i}`, name: 'First', detail: '' }] });
+      firstsMemories[`f-${i}`] = makeMemory({ date: `2021-0${3 + (i % 5)}-${10 + i}`, assets: [makeAsset({ aspectRatio: 1 })], milestones: [{ id: `m${i}`, name: 'First', detail: '', status: 'confirmed' }] });
     }
     const manifest = makeManifest({ ...a.memories, ...b.memories, ...firstsMemories });
     const outline = makeOutline([...a.elements, ...b.elements, makeElement({ id: 'firsts', kind: 'firsts', title: 'Firsts', memoryIds: firstsIds })]);
@@ -359,7 +359,7 @@ describe('chapter-mode compact firsts', () => {
       type: 'text_illustration',
       text,
       assets: [],
-      milestones: [{ id: 'first-steps', name: 'First steps', detail: '' }],
+      milestones: [{ id: 'first-steps', name: 'First steps', detail: '', status: 'confirmed' }],
       illustration: { file: `illustrations/${date}.png`, width: 1024, height: 1024, aspectRatio: 1 },
     });
   const firstsPhoto = (date: string, text: string, aspect = 1.5): ManifestMemory =>
@@ -367,7 +367,7 @@ describe('chapter-mode compact firsts', () => {
       date,
       text,
       assets: [makeAsset({ aspectRatio: aspect })],
-      milestones: [{ id: 'first-smile', name: 'First smile', detail: '' }],
+      milestones: [{ id: 'first-smile', name: 'First smile', detail: '', status: 'confirmed' }],
     });
 
   /** Two chapters + a firsts section with the given members (in order), then a closing. */

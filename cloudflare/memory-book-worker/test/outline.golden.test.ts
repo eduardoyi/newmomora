@@ -297,9 +297,11 @@ function buildLlmResponse(context: GenerationContextResponse, body: Record<strin
 
   // Segment ids in prompt order: "[3] 2024-04_2024-05 "April–May 2024" -- 9 memories ..."
   const segments = [...user.matchAll(/^\[(\d+)\] (\S+) "/gm)].map((m) => ({ index: Number(m[1]), id: m[2] }));
-  const flaggedSegmentIds = [...user.matchAll(/^\[\d+\] (\S+) "[^"]*" -- \d+ memories -- FLAGGED: (birth month|birthday month \(turns (\d+)\))/gm)].map((m) => ({
+  // Mock titles mirror the prompt's rule: single-month birthday -> "The month
+  // you turned N"; multi-month "birthday period" -> "When you turned N".
+  const flaggedSegmentIds = [...user.matchAll(/^\[\d+\] (\S+) "[^"]*" -- \d+ memories -- FLAGGED: (birth month|birthday month \(turns (\d+)\)|birthday period \(turns (\d+);)/gm)].map((m) => ({
     id: m[1],
-    title: m[3] ? `The month you turned ${m[3]}` : 'The month you were born',
+    title: m[3] ? `The month you turned ${m[3]}` : m[4] ? `When you turned ${m[4]}` : 'The month you were born',
   }));
   const candidates = [...user.matchAll(/^- candidate_id="([^"]+)" \[[^\]]+\] \("[^"]*"\) -- \d+ member memories: (.*)$/gm)].map((m) => ({
     id: m[1],

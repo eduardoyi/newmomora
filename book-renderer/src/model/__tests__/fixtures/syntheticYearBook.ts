@@ -421,7 +421,13 @@ export function buildSyntheticYearBook(options: SyntheticYearBookOptions): Synth
     const d = milestoneCandidates[Math.floor(rng() * milestoneCandidates.length)];
     if (d.memory.milestones.some((m) => m.id === FIRSTS_MILESTONE_IDS[i])) continue;
     if (firstsIds.length >= 12 && !firstsIds.includes(d.id)) continue;
-    const milestone: ManifestMilestone = { id: FIRSTS_MILESTONE_IDS[i], name: FIRSTS_MILESTONE_IDS[i].replace(/-/g, ' '), detail: '' };
+    // Fit-time Firsts gate (2026-10-01): every other milestone is parent-
+    // confirmed so the golden keeps Firsts coverage; the rest (lorem text,
+    // no first-time language) are reassigned to their backbone month.
+    const milestone: ManifestMilestone = {
+      id: FIRSTS_MILESTONE_IDS[i], name: FIRSTS_MILESTONE_IDS[i].replace(/-/g, ' '), detail: '',
+      ...(i % 2 === 0 ? { status: 'confirmed' } : {}),
+    };
     d.memory.milestones.push(milestone);
     if (!firstsIds.includes(d.id)) firstsIds.push(d.id);
   }

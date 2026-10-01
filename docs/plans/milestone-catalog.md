@@ -1,6 +1,6 @@
 # Milestone Catalog — Draft v1
 
-**Status:** Draft v1.1 — 14 entries cut by Eduardo 2026-08-17; birthdays made recurring
+**Status:** Draft v1.2 — 14 entries cut by Eduardo 2026-08-17; birthdays made recurring; explicit-evidence rule enforced 2026-10-01
 **Date:** 2026-08-17
 **Parent plan:** [memory-book.md](memory-book.md) §5 Stage A (`analyze-memory` milestone axis)
 
@@ -11,7 +11,10 @@
    dates, and ages never *detect* a milestone; the age band below is only a
    sanity filter on what the text already claims. Matching is semantic and
    multilingual, not keyword-based — the cues column is illustrative, not a
-   pattern list.
+   pattern list. **Enforced in code (2026-10-01):** the model must return a
+   verbatim `evidence` quote for every claim, and a deterministic post-gate
+   drops any claim whose quote is not in the memory text or lacks the explicit
+   language its catalog entry needs — see "Explicit-evidence rule" below.
 2. **Celebration, never tracking.** The catalog exists to honor what parents
    chose to record. No surface anywhere may show "missing" or "late"
    milestones, comparisons between children, or developmental norms. Age
@@ -156,3 +159,70 @@
   explicit-text-only rule — a friend's party outside the window never
   matches.
 - Storage decision (constant file vs table) is plan open-question §10.8.
+
+## Explicit-evidence rule (owner rule, 2026-10-01)
+
+**Never assume or infer a milestone unless the parent's memory text explicitly
+states it.** An activity merely *happening* is not a milestone: a caption about
+a haircut at the barber is not `first-haircut`, Enzo asking a question is not
+`first-question`, a balance-bike ride with no "first"/"learned" wording is not
+`balance-bike`. (Before this rule was enforced, only ~1 in 5 detector-tagged
+"firsts" on the owner's books had first-time language.)
+
+Each catalog entry has an evidence **kind**, defined as data in
+`supabase/functions/_shared/memory-milestone-evidence.ts`
+(`MILESTONE_EVIDENCE_RULES`, one rule per id; a test enforces exact coverage of
+this catalog):
+
+- **`first`** — inherently "first X": first-smile, first-steps,
+  first-somersault, first-laugh, first-word, first-question, first-joke,
+  second-language-word, first-solid-food, tries-notable-food, first-tooth,
+  loses-first-tooth, first-chore, stays-with-sitter, says-i-love-you,
+  first-friend, first-day-daycare/preschool/school, first-drawing,
+  first-medal, and every "Firsts & experiences" entry except birthday. The
+  quote must contain explicit first-time wording (es/en/pt: primer / primera /
+  primeros / primeras, por primera vez, first, for the first time, primeiro /
+  primeira…) **and** the entry's subject (e.g. pelo / haircut / cabelo for
+  first-haircut).
+- **`achievement`** — skills and states: holds-head-up, rolls-over, sits-up,
+  crawling, pulls-to-stand, walking, climbing, running, first-jump,
+  balance-bike, bike-training-wheels, bike-no-training-wheels,
+  swims-unassisted, catches-ball, first-babble, says-mama-dada,
+  first-sentence, says-own-name, counts-to-ten, knows-alphabet, sings-song,
+  feeds-self, drinks-from-cup, uses-fork-spoon, last-bottle,
+  sleeps-through-night, own-room, big-kid-bed, potty-trained, dresses-self,
+  brushes-teeth-self, ties-shoelaces, waves-bye, blows-kiss, meets-sibling,
+  meets-grandparents, writes-name, learns-to-read. The quote must contain
+  first-time wording **or** explicit achievement wording (aprendió a, ya, por
+  fin, logró, sin ayuda, learned to, can now, already, finally, started to, by
+  herself, aprendeu, já, sozinho…) **and** the entry's subject. A few entries
+  also accept entry-specific complete phrases ("no more training wheels",
+  "slept through the night", "no more diapers", "last time nursing", "big kid
+  bed", "meeting her little brother").
+- **`event`** — birthday, graduation: the event itself must be stated (turned
+  three, cumple 2, graduation day). `birthday` additionally keeps its
+  sanctioned deterministic DOB-join path.
+
+Never inferred from photos, dates, ages, tagged people or topics. Sequencing
+uses of "first" ("first we went to the park", "at first") do not count; Spanish
+"primero" (adverb) does not count.
+
+The "Example explicit cues" column in the tables above is illustrative only: a
+bare cue such as "she's crawling!" or "sang the whole ABC" does not by itself
+satisfy the gate (no first-time or achievement wording); the stricter rule
+wins.
+
+**Gate (code, applied after the model call):** keep a claim only if
+(a) its `evidence` quote is a verbatim substring of the memory text (case,
+diacritics, whitespace and punctuation-insensitive), (b) the quote carries the
+language its kind requires, and (c) the quote mentions the entry's subject.
+Otherwise the claim is dropped (the reason code is logged with ids, never
+text). Same function checks stored rows in the backfill below, where it runs on
+each sentence (and each adjacent sentence pair) of the memory text because old
+rows have no stored quote.
+
+**Cleanup of existing rows:** `npm run eval:milestone-honesty` (dry run, counts
+only) then `-- --apply` dismisses `candidate` rows the memory text does not
+support; `confirmed` rows are never touched; `birthday` rows are exempt; a
+rollback file makes it reversible. See
+[memory-analysis.md](../features/memory-analysis.md#explicit-evidence-gate-2026-10-01).

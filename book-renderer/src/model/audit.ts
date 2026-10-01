@@ -11,6 +11,7 @@ import type {
 } from './types';
 // Round-13: pure-TS `.types.ts` companions, not the `.tsx` files — see the
 // same note in `fitter.ts`. `audit.ts` has no React/DOM dependency either.
+import { reassignUnqualifiedFirsts } from './firstsGate';
 import type { FooterIndexEntry } from '../templates/common/FooterIndex.types';
 import type { SectionHeaderParams } from '../templates/common/SectionHeader.types';
 import { tallSoloCanSitBesideHeader,
@@ -111,6 +112,10 @@ export function auditBookDocument(
   manifest: BookManifest,
   options: AuditOptions = {},
 ): IntegrityViolation[] {
+  // The fitter lays out the outline AFTER the fit-time Firsts honesty gate
+  // (reassignUnqualifiedFirsts); audit against the same normalised outline so
+  // a reassigned memory is not reported as orphaned/duplicated. Idempotent.
+  outline = reassignUnqualifiedFirsts(outline, manifest);
   return [
     ...auditMonthContinuity(document, outline, manifest),
     ...auditSectionTitleOrphans(document, outline),
@@ -989,6 +994,7 @@ export function summarizeAssetCoverage(
   omittedMemoryIds: Iterable<string> = [],
 ): AssetCoverage {
   const omitted = new Set(omittedMemoryIds);
+  outline = reassignUnqualifiedFirsts(outline, manifest);
   const capped = isChapterMode(outline);
   const kept = new Set<string>();
   for (const element of outline.elements) {

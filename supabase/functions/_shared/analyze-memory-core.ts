@@ -34,6 +34,11 @@ import {
   TOPICS_VERSION,
   type TopicDefinition,
 } from './memory-topics.ts';
+import {
+  describeEvidenceRequirement,
+  verifyMilestoneEvidence,
+  type EvidenceRejection,
+} from './memory-milestone-evidence.ts';
 import { stripUrls } from './link-preview.ts';
 import { normalizeEmotionLabel, prepareVisionImageFromBytes } from './media-emotion.ts';
 import { chatJsonWithVisionMulti, type ChatVisionUsage, type VisionImageInput } from './openai.ts';
@@ -295,7 +300,12 @@ const MAX_LABELS = 10;
 export interface ParsedMilestoneClaim {
   claim: string;
   catalogId: string | null;
+  /** Free-text qualifier ("mango", the age turned) -- NOT evidence. */
   detail: string | null;
+  /** The model's verbatim quote from the parent's text that states the
+   * milestone (explicit-evidence rule, 2026-10-01). Absent/blank -> the
+   * claim cannot pass `gateMilestoneClaim`. Never stored or logged. */
+  evidence: string | null;
 }
 
 export function parseMilestoneClaim(value: unknown): ParsedMilestoneClaim | null {
@@ -311,8 +321,40 @@ export function parseMilestoneClaim(value: unknown): ParsedMilestoneClaim | null
   const rawCatalogId = typeof obj.catalog_id === 'string' ? obj.catalog_id : null;
   const catalogId = rawCatalogId && getMilestoneById(rawCatalogId) ? rawCatalogId : null;
   const detail = typeof obj.detail === 'string' && obj.detail.trim() ? obj.detail.trim() : null;
+  const evidence = firstStringValue([obj.evidence, obj.evidence_quote, obj.quote])?.trim() || null;
 
-  return { claim: obj.claim.trim(), catalogId, detail };
+  return { claim: obj.claim.trim(), catalogId, detail, evidence };
+}
+
+export interface GatedMilestoneClaim {
+  claim: ParsedMilestoneClaim | null;
+  /** Why a claim was dropped (ids/reasons only -- never memory text). */
+  rejected: EvidenceRejection | null;
+}
+
+/**
+ * Deterministic explicit-evidence post-gate (owner rule, 2026-10-01: never
+ * assume or infer a milestone unless the parent's text explicitly states it).
+ * Keeps the model's claim only when its verbatim `evidence` quote is found in
+ * the memory text AND carries the explicit language the catalog entry needs
+ * (first-time wording for "first X" entries; first-time or achievement wording
+ * for skill entries; the event phrase for birthday/graduation) AND mentions
+ * the milestone's subject. See memory-milestone-evidence.ts for the per-entry
+ * rules. A claim with no catalog id is passed through untouched (it produces
+ * no row downstream anyway).
+ */
+export function gateMilestoneClaim(
+  claim: ParsedMilestoneClaim | null,
+  memoryText: string | null,
+): GatedMilestoneClaim {
+  if (!claim || !claim.catalogId) {
+    return { claim, rejected: null };
+  }
+  const verdict = verifyMilestoneEvidence(claim.catalogId, claim.evidence, memoryText);
+  if (!verdict.ok) {
+    return { claim: null, rejected: verdict.reason };
+  }
+  return { claim, rejected: null };
 }
 
 // ── Full model-output parsing ────────────────────────────────────────────
@@ -487,6 +529,16 @@ export function computeMilestoneRows(input: ComputeMilestoneRowsInput): MemoryMi
 // memory-topics.ts/memory-milestones.ts import inside this Deno-only module
 // avoids coupling that unrelated build to this feature's dependency graph.
 
+function formatMilestoneCatalogWithRequirements(entries: readonly MilestoneDefinition[]): string {
+  const base = formatMilestoneCatalogForPrompt(entries).split('\n');
+  return entries
+    .map((entry, index) => {
+      const requirement = describeEvidenceRequirement(entry.id);
+      return requirement ? `${base[index]} [${requirement}]` : base[index];
+    })
+    .join('\n');
+}
+
 function formatTopicVocabularyForPrompt(topics: readonly TopicDefinition[]): string {
   return topics.map((topic) => `${topic.id} — ${topic.pageTitle}: ${topic.definition}`).join('\n');
 }
@@ -529,10 +581,14 @@ export function buildMemoryAnalysisSystemPrompt(input: {
     '- `labels`: 3-10 concrete descriptive labels for search (objects, setting, activities, weather, food items, animals...).',
     '- `description`: one dense, neutral factual sentence describing the entry; may use tagged first names. This is never shown to the parent -- write for future search, not for display.',
     `- \`emotion\`: exactly one of [${emotionList}], judged from text and images together; videos/photos without text still get an emotion. Parenting is not always joyful -- when the moment is genuinely hard, name it honestly (worry, weary, sad, bittersweet) rather than rounding up to a positive emotion.`,
-    '- `milestone`: null, or {"claim": short paraphrase, "catalog_id": one of the provided catalog ids or null, "detail": string|null}. STRICT RULE: a milestone exists ONLY when the parent\'s TEXT explicitly records a first/milestone ("first steps", "dijo su primera palabra", "turned three"). Never infer a milestone from images, dates, or ages. If there is no text, milestone must be null.',
+    '- `milestone`: null, or {"claim": short paraphrase, "catalog_id": one of the provided catalog ids or null, "detail": string|null, "evidence": string}. STRICT RULES -- a wrongly-claimed milestone is far worse than a missed one, so when in doubt return null:',
+    '  1. EXPLICIT TEXT ONLY: the parent\'s TEXT must itself state the achievement ("took her first steps", "dijo su primera palabra", "learned to ride without training wheels", "turned three"). Never infer a milestone from images, dates, ages, who is tagged, the topic, or what is plausible for the child\'s age. If there is no text, milestone must be null.',
+    '  2. An activity merely HAPPENING is not a milestone. A haircut, a question, a bike ride, a swim, a trip, a tooth, a first-day outfit, a pet photo -- none of these is "first haircut", "first question", "balance bike", etc. unless the text says so. Catalog entries that are inherently a "first X" (first-haircut, first-question, first-beach, first-trip, ...) need the text to say it was the FIRST time (primera vez / primer / primera / primeros / first / for the first time / primeiro / primeira / por primera vez); entries tagged "first-time or achievement wording" also accept explicit achievement wording (aprendió a, ya sabe, learned to, can now, finally, started to, sem ajuda...). Each catalog entry below says which applies.',
+    '  3. `evidence` (REQUIRED whenever milestone is not null): copy, character for character, the shortest span of the parent\'s text that states the milestone -- it must include the first-time/achievement wording AND what it is about (e.g. "hoy le cortaron el pelo por primera vez"). No paraphrase, no translation, no ellipsis, no words that are not in the text. The server discards any milestone whose evidence is not found verbatim in the text or does not contain that explicit wording. If you cannot quote such a span, milestone must be null.',
+    '  4. Return at most one milestone: the clearest explicitly-stated one.',
     '',
-    'Milestone catalog (id — name (age band)):',
-    formatMilestoneCatalogForPrompt(input.milestoneCatalog),
+    'Milestone catalog (id — name (age band) [what the text must contain]):',
+    formatMilestoneCatalogWithRequirements(input.milestoneCatalog),
   ];
 
   return lines.join('\n');
@@ -605,8 +661,16 @@ export async function runMemoryAnalysis(input: RunMemoryAnalysisInput): Promise<
 
   const textPresent = Boolean(text);
   // Explicit-text-only rule: no text -> no milestone, even if the model
-  // claims one.
-  const milestoneClaim = textPresent ? parsed.milestoneClaim : null;
+  // claims one. With text, the claim must additionally pass the deterministic
+  // explicit-evidence gate (verbatim quote + first/achievement language +
+  // subject, per catalog entry) -- the model's claim is never trusted on its
+  // own (owner rule 2026-10-01).
+  const gated = textPresent ? gateMilestoneClaim(parsed.milestoneClaim, text) : { claim: null, rejected: null };
+  if (gated.rejected && parsed.milestoneClaim?.catalogId) {
+    // Ids and reason codes only -- never the claim, quote, or memory text.
+    console.log('analyze-memory milestone dropped', memory.id, parsed.milestoneClaim.catalogId, gated.rejected);
+  }
+  const milestoneClaim = gated.claim;
 
   const { topics: dateGatedTopics } = gateTopicsByDate(parsed.topics, memory.memoryDate);
 

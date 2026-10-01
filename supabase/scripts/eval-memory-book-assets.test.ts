@@ -870,6 +870,14 @@ Deno.test('buildManifestMilestone falls back to the raw id when unknown', () => 
   assertEquals(result, { id: 'totally-unknown-milestone', name: 'totally-unknown-milestone', detail: 'a detail' });
 });
 
+Deno.test('buildManifestMilestone carries the row status only when present (additive, optional)', () => {
+  assertEquals(buildManifestMilestone('first-steps', null, 'confirmed').status, 'confirmed');
+  assertEquals(buildManifestMilestone('first-steps', null, 'candidate').status, 'candidate');
+  for (const absent of [undefined, null, '']) {
+    assertEquals('status' in buildManifestMilestone('first-steps', null, absent), false);
+  }
+});
+
 Deno.test('buildManifestAsset prefers the DB aspect ratio, falls back to width/height', () => {
   assertEquals(
     buildManifestAsset({ file: 'assets/a.jpg', width: 1000, height: 500, kind: 'photo', durationMs: null, dbAspectRatio: 1.5 }),

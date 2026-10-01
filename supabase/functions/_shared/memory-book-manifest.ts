@@ -358,6 +358,12 @@ export interface ManifestMilestone {
   id: string;
   name: string;
   detail: string | null;
+  /** The milestone row's status from the bridge ('confirmed' | 'candidate' | ...).
+   * Additive/optional: absent on older manifests and when the bridge omits it;
+   * the renderer's Firsts fit-time gate treats absent as a plain candidate
+   * (only 'confirmed' qualifies a memory for Firsts without explicit
+   * first-time language in its own text). */
+  status?: string;
 }
 
 // ── Share tokens (Round-19 -- revocable QR links, docs/plans/memory-book.md
@@ -419,8 +425,14 @@ export function memoryNeedsShareToken(memoryType: string, assets: Array<{ kind: 
   return memoryType === 'media' && assets.some((asset) => asset.kind === 'video-poster');
 }
 
-export function buildManifestMilestone(milestoneId: string, detail: string | null): ManifestMilestone {
-  return { id: milestoneId, name: getMilestoneById(milestoneId)?.name ?? milestoneId, detail };
+export function buildManifestMilestone(
+  milestoneId: string,
+  detail: string | null,
+  status?: string | null,
+): ManifestMilestone {
+  const milestone: ManifestMilestone = { id: milestoneId, name: getMilestoneById(milestoneId)?.name ?? milestoneId, detail };
+  if (typeof status === 'string' && status.length > 0) milestone.status = status;
+  return milestone;
 }
 
 export interface ManifestTaggedMember {
